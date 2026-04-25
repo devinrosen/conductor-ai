@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::dsl::ScriptNode;
 use crate::engine::{
@@ -12,6 +12,34 @@ use crate::traits::persistence::{NewStep, StepUpdate};
 use crate::traits::run_context::RunContext;
 
 use super::p_err;
+
+/// Create a named temp file that persists after the handle is dropped.
+///
+/// Logs a warning on any failure mode so the caller can see why capture is missing.
+fn make_temp_file(step_name: &str, purpose: &str) -> Option<PathBuf> {
+    match tempfile::NamedTempFile::new() {
+        Ok(f) => {
+            let path = f.path().to_path_buf();
+            match f.keep() {
+                Ok(_) => Some(path),
+                Err(e) => {
+                    tracing::warn!(
+                        "script '{}': failed to persist temp {purpose} file: {e}",
+                        step_name
+                    );
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                "script '{}': failed to create temp {purpose} file: {e}",
+                step_name
+            );
+            None
+        }
+    }
+}
 
 pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: u32) -> Result<()> {
     let pos = state.position;
@@ -152,34 +180,9 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
 
     // Execute the script
     let working_dir = &state.worktree_ctx.working_dir;
-    let output_file = match tempfile::NamedTempFile::new() {
-        Ok(f) => {
-            let path = f.path().to_path_buf();
-            match f.keep() {
-                Ok(_) => Some(path),
-                Err(e) => {
-                    tracing::warn!(
-                        "script '{}': failed to persist temp output file: {e}",
-                        node.name
-                    );
-                    None
-                }
-            }
-        }
-        Err(e) => {
-            tracing::warn!(
-                "script '{}': failed to create temp output file, stdout will not be captured: {e}",
-                node.name
-            );
-            None
-        }
-    };
-
-    // Create a temp file to capture stderr and prevent it from leaking to the TUI.
-    let stderr_file = tempfile::NamedTempFile::new().ok().and_then(|f| {
-        let path = f.path().to_path_buf();
-        f.keep().ok().map(|_| path)
-    });
+    let output_file = make_temp_file(&node.name, "stdout");
+    // Redirect stderr to a temp file so it never leaks to the TUI terminal.
+    let stderr_file = make_temp_file(&node.name, "stderr");
 
     let mut cmd = std::process::Command::new("sh");
     cmd.arg("-c").arg(&script_cmd);

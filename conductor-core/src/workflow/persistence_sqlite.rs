@@ -56,11 +56,22 @@ fn lock_err() -> EngineError {
     EngineError::Persistence("SqliteWorkflowPersistence: mutex poisoned".into())
 }
 
+impl SqliteWorkflowPersistence {
+    /// Acquire the connection lock, instantiate a `WorkflowManager`, run `f`,
+    /// and map any `ConductorError` to `EngineError::Persistence`.
+    fn with_manager<F, T>(&self, f: F) -> Result<T, EngineError>
+    where
+        F: for<'c> FnOnce(WorkflowManager<'c>) -> crate::error::Result<T>,
+    {
+        let guard = self.conn.lock().map_err(|_| lock_err())?;
+        f(WorkflowManager::new(&guard)).map_err(to_engine_err)
+    }
+}
+
 impl WorkflowPersistence for SqliteWorkflowPersistence {
     fn create_run(&self, new_run: NewRun) -> Result<WorkflowRun, EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .create_workflow_run_with_targets(
+        self.with_manager(|mgr| {
+            mgr.create_workflow_run_with_targets(
                 &new_run.workflow_name,
                 new_run.worktree_id.as_deref(),
                 new_run.ticket_id.as_deref(),
@@ -72,24 +83,18 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
                 new_run.parent_workflow_run_id.as_deref(),
                 new_run.target_label.as_deref(),
             )
-            .map_err(to_engine_err)
+        })
     }
 
     fn get_run(&self, run_id: &str) -> Result<Option<WorkflowRun>, EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .get_workflow_run(run_id)
-            .map_err(to_engine_err)
+        self.with_manager(|mgr| mgr.get_workflow_run(run_id))
     }
 
     fn list_active_runs(
         &self,
         statuses: &[WorkflowRunStatus],
     ) -> Result<Vec<WorkflowRun>, EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .list_active_workflow_runs(statuses)
-            .map_err(to_engine_err)
+        self.with_manager(|mgr| mgr.list_active_workflow_runs(statuses))
     }
 
     fn update_run_status(
@@ -99,10 +104,7 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
         result_summary: Option<&str>,
         error: Option<&str>,
     ) -> Result<(), EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .update_workflow_status(run_id, status, result_summary, error)
-            .map_err(to_engine_err)
+        self.with_manager(|mgr| mgr.update_workflow_status(run_id, status, result_summary, error))
     }
 
     fn insert_step(&self, new_step: NewStep) -> Result<String, EngineError> {
@@ -149,10 +151,7 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
     }
 
     fn get_steps(&self, run_id: &str) -> Result<Vec<WorkflowRunStep>, EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .get_workflow_steps(run_id)
-            .map_err(to_engine_err)
+        self.with_manager(|mgr| mgr.get_workflow_steps(run_id))
     }
 
     fn insert_fan_out_item(
@@ -162,10 +161,7 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
         item_id: &str,
         item_ref: &str,
     ) -> Result<String, EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .insert_fan_out_item(step_run_id, item_type, item_id, item_ref)
-            .map_err(to_engine_err)
+        self.with_manager(|mgr| mgr.insert_fan_out_item(step_run_id, item_type, item_id, item_ref))
     }
 
     fn update_fan_out_item(
@@ -191,18 +187,12 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
         step_run_id: &str,
         status_filter: Option<FanOutItemStatus>,
     ) -> Result<Vec<FanOutItemRow>, EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
         let status_str = status_filter.map(|s| s.as_str());
-        WorkflowManager::new(&guard)
-            .get_fan_out_items(step_run_id, status_str)
-            .map_err(to_engine_err)
+        self.with_manager(|mgr| mgr.get_fan_out_items(step_run_id, status_str))
     }
 
     fn get_gate_approval(&self, step_id: &str) -> Result<GateApprovalState, EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .get_gate_approval_state(step_id)
-            .map_err(to_engine_err)
+        self.with_manager(|mgr| mgr.get_gate_approval_state(step_id))
     }
 
     fn approve_gate(
@@ -212,10 +202,7 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
         feedback: Option<&str>,
         selections: Option<&[String]>,
     ) -> Result<(), EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .approve_gate(step_id, approved_by, feedback, selections)
-            .map_err(to_engine_err)
+        self.with_manager(|mgr| mgr.approve_gate(step_id, approved_by, feedback, selections))
     }
 
     fn reject_gate(
@@ -224,10 +211,7 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
         rejected_by: &str,
         feedback: Option<&str>,
     ) -> Result<(), EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .reject_gate(step_id, rejected_by, feedback)
-            .map_err(to_engine_err)
+        self.with_manager(|mgr| mgr.reject_gate(step_id, rejected_by, feedback))
     }
 }
 

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use chrono::Utc;
 use rusqlite::named_params;
 
@@ -451,9 +453,11 @@ impl<'a> WorkflowManager<'a> {
             ));
         }
 
+        let allowed_set: HashSet<&str> = allowed_values.iter().map(|s| s.as_str()).collect();
+
         // Validate that all selections are in the allowed values
         for selection in selections {
-            if !allowed_values.contains(selection) {
+            if !allowed_set.contains(selection.as_str()) {
                 return Err(ConductorError::InvalidInput(format!(
                     "Invalid gate selection '{}' - not in allowed options: [{}]",
                     selection,

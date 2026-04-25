@@ -30,6 +30,7 @@ pub(crate) mod prompt_builder;
 pub(crate) mod rk_types;
 pub(crate) mod run_context;
 pub(crate) mod runkon_bridge;
+pub(crate) mod runkon_gate_bridge;
 pub(crate) mod script_env_provider;
 pub(crate) mod status;
 pub(crate) mod types;

@@ -296,3 +296,76 @@ pub fn gate_approval_to_rk(s: CoreGateApprovalState) -> RkGateApprovalState {
         CoreGateApprovalState::Rejected { feedback } => RkGateApprovalState::Rejected { feedback },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workflow::status::WorkflowStepStatus as CoreStepStatus;
+
+    fn make_core_step(gate_type: Option<crate::workflow_dsl::GateType>) -> CoreStep {
+        CoreStep {
+            id: "step-1".to_string(),
+            workflow_run_id: "run-1".to_string(),
+            step_name: "test".to_string(),
+            role: "actor".to_string(),
+            can_commit: false,
+            condition_expr: None,
+            status: CoreStepStatus::Completed,
+            child_run_id: None,
+            position: 0,
+            started_at: None,
+            ended_at: None,
+            result_text: None,
+            condition_met: None,
+            iteration: 0,
+            parallel_group_id: None,
+            context_out: None,
+            markers_out: None,
+            retry_count: 0,
+            gate_type,
+            gate_prompt: None,
+            gate_timeout: None,
+            gate_approved_by: None,
+            gate_approved_at: None,
+            gate_feedback: None,
+            structured_output: None,
+            output_file: None,
+            gate_options: None,
+            gate_selections: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            fan_out_total: None,
+            fan_out_completed: 0,
+            fan_out_failed: 0,
+            fan_out_skipped: 0,
+            step_error: None,
+        }
+    }
+
+    #[test]
+    fn step_to_rk_with_recognised_gate_type_preserves_gate() {
+        let step = make_core_step(Some(crate::workflow_dsl::GateType::HumanApproval));
+        let rk = step_to_rk(step);
+        assert_eq!(
+            rk.gate_type,
+            Some(runkon_flow::dsl::GateType::HumanApproval),
+            "recognised gate type should round-trip"
+        );
+    }
+
+    #[test]
+    fn step_to_rk_with_no_gate_type_is_none() {
+        let step = make_core_step(None);
+        let rk = step_to_rk(step);
+        assert!(rk.gate_type.is_none(), "missing gate type should stay None");
+    }
+
+    #[test]
+    fn step_to_rk_status_roundtrip() {
+        let step = make_core_step(None);
+        let rk = step_to_rk(step);
+        assert_eq!(rk.status, runkon_flow::status::WorkflowStepStatus::Completed);
+    }
+}

@@ -1,3 +1,8 @@
+//! Bridge adapters: runkon-flow gate resolver traits → conductor-core gate resolvers.
+//!
+//! Lives at the `workflow` module level (not inside `executors/`) so that all
+//! runkon-flow bridge code is co-located in the same module boundary.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -10,11 +15,11 @@ use runkon_flow::traits::gate_resolver::{
 use runkon_flow::traits::persistence::WorkflowPersistence as RkPersistence;
 use runkon_flow::FlowEngineBuilder;
 
-use super::gate_resolver::{
+use super::executors::gate_resolver::{
     GateContext as CoreGateContext, GateParams as CoreGateParams, GatePoll as CoreGatePoll,
     GateResolver as CoreGateResolver, GitHubTokenCache,
 };
-use super::resolvers::{PrApprovalGateResolver, PrChecksGateResolver};
+use super::executors::resolvers::{PrApprovalGateResolver, PrChecksGateResolver};
 
 // ---------------------------------------------------------------------------
 // Human gates (human_approval + human_review)

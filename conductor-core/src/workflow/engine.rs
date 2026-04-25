@@ -270,6 +270,87 @@ pub fn apply_workflow_input_defaults(
     Ok(())
 }
 
+/// Validate that all agent definitions, prompt snippets, and output schemas
+/// referenced in the workflow are resolvable from the given directories.
+///
+/// Called by both `execute_workflow` and `execute_workflow_standalone` before
+/// any DB writes, so the function must be idempotent and free of side effects.
+fn validate_workflow_resources(
+    workflow: &WorkflowDef,
+    working_dir: &str,
+    repo_path: &str,
+    extra_plugin_dirs: &[String],
+) -> Result<()> {
+    let mut all_agents = workflow_dsl::collect_agent_names(&workflow.body);
+    all_agents.extend(workflow_dsl::collect_agent_names(&workflow.always));
+    all_agents.sort();
+    all_agents.dedup();
+
+    let specs: Vec<AgentSpec> = all_agents.iter().map(AgentSpec::from).collect();
+    let mut all_plugin_dirs = extra_plugin_dirs.to_vec();
+    for dir in workflow.collect_all_plugin_dirs() {
+        if !all_plugin_dirs.contains(&dir) {
+            all_plugin_dirs.push(dir);
+        }
+    }
+    let missing_agents = crate::agent_config::find_missing_agents(
+        working_dir,
+        repo_path,
+        &specs,
+        Some(&workflow.name),
+        &all_plugin_dirs,
+    );
+    if !missing_agents.is_empty() {
+        return Err(ConductorError::Workflow(format!(
+            "Missing agent definitions: {}. Run 'conductor workflow validate' for details.",
+            missing_agents.join(", ")
+        )));
+    }
+
+    let all_snippets = workflow.collect_all_snippet_refs();
+    if !all_snippets.is_empty() {
+        let missing_snippets = crate::prompt_config::find_missing_snippets(
+            working_dir,
+            repo_path,
+            &all_snippets,
+            Some(&workflow.name),
+        );
+        if !missing_snippets.is_empty() {
+            return Err(ConductorError::Workflow(format!(
+                "Missing prompt snippets: {}. Check .conductor/prompts/ directory.",
+                missing_snippets.join(", ")
+            )));
+        }
+    }
+
+    let all_schemas = workflow.collect_all_schema_refs();
+    if !all_schemas.is_empty() {
+        let schema_issues = crate::schema_config::check_schemas(
+            working_dir,
+            repo_path,
+            &all_schemas,
+            Some(&workflow.name),
+        );
+        if !schema_issues.is_empty() {
+            let details: Vec<String> = schema_issues
+                .iter()
+                .map(|issue| match issue {
+                    SchemaIssue::Missing(name) => format!("missing: {name}"),
+                    SchemaIssue::Invalid { name, error } => {
+                        format!("invalid: {name}: {error}")
+                    }
+                })
+                .collect();
+            return Err(ConductorError::Workflow(format!(
+                "Schema validation failed: {}",
+                details.join(", ")
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 fn inject_worktree_variables(
     wt: &crate::worktree::Worktree,
     repo_default_branch: &str,
@@ -308,77 +389,13 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         String::new()
     };
 
-    // Validate all referenced agents exist before starting
-    let mut all_agents = workflow_dsl::collect_agent_names(&workflow.body);
-    all_agents.extend(workflow_dsl::collect_agent_names(&workflow.always));
-    all_agents.sort();
-    all_agents.dedup();
-
-    let specs: Vec<AgentSpec> = all_agents.iter().map(AgentSpec::from).collect();
-    // Combine CLI extra_plugin_dirs with per-call plugin_dirs from the .wf file.
-    let mut all_plugin_dirs = input.extra_plugin_dirs.clone();
-    for dir in workflow.collect_all_plugin_dirs() {
-        if !all_plugin_dirs.contains(&dir) {
-            all_plugin_dirs.push(dir);
-        }
-    }
-    let missing_agents = crate::agent_config::find_missing_agents(
+    // Validate agents, snippets, and schemas referenced by this workflow.
+    validate_workflow_resources(
+        workflow,
         input.working_dir,
         input.repo_path,
-        &specs,
-        Some(&workflow.name),
-        &all_plugin_dirs,
-    );
-    if !missing_agents.is_empty() {
-        return Err(ConductorError::Workflow(format!(
-            "Missing agent definitions: {}. Run 'conductor workflow validate' for details.",
-            missing_agents.join(", ")
-        )));
-    }
-
-    // Validate all referenced prompt snippets exist before starting
-    let all_snippets = workflow.collect_all_snippet_refs();
-
-    if !all_snippets.is_empty() {
-        let missing_snippets = crate::prompt_config::find_missing_snippets(
-            input.working_dir,
-            input.repo_path,
-            &all_snippets,
-            Some(&workflow.name),
-        );
-        if !missing_snippets.is_empty() {
-            return Err(ConductorError::Workflow(format!(
-                "Missing prompt snippets: {}. Check .conductor/prompts/ directory.",
-                missing_snippets.join(", ")
-            )));
-        }
-    }
-
-    // Validate all referenced output schemas exist and parse correctly
-    let all_schemas = workflow.collect_all_schema_refs();
-    if !all_schemas.is_empty() {
-        let schema_issues = crate::schema_config::check_schemas(
-            input.working_dir,
-            input.repo_path,
-            &all_schemas,
-            Some(&workflow.name),
-        );
-        if !schema_issues.is_empty() {
-            let details: Vec<String> = schema_issues
-                .iter()
-                .map(|issue| match issue {
-                    SchemaIssue::Missing(name) => format!("missing: {name}"),
-                    SchemaIssue::Invalid { name, error } => {
-                        format!("invalid: {name}: {error}")
-                    }
-                })
-                .collect();
-            return Err(ConductorError::Workflow(format!(
-                "Schema validation failed: {}",
-                details.join(", ")
-            )));
-        }
-    }
+        &input.extra_plugin_dirs,
+    )?;
 
     // Snapshot the definition
     let snapshot_json = serde_json::to_string(workflow).map_err(|e| {
@@ -919,75 +936,13 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         let agent_mgr = AgentManager::new(conn);
         let wf_mgr = WorkflowManager::new(conn);
 
-        // Validate agents, snippets, schemas — same checks as execute_workflow.
-        let mut all_agents = workflow_dsl::collect_agent_names(&workflow.body);
-        all_agents.extend(workflow_dsl::collect_agent_names(&workflow.always));
-        all_agents.sort();
-        all_agents.dedup();
-
-        let specs: Vec<AgentSpec> = all_agents.iter().map(AgentSpec::from).collect();
-        let mut all_plugin_dirs = params.extra_plugin_dirs.clone();
-        for dir in workflow.collect_all_plugin_dirs() {
-            if !all_plugin_dirs.contains(&dir) {
-                all_plugin_dirs.push(dir);
-            }
-        }
-        let missing_agents = crate::agent_config::find_missing_agents(
+        // Validate agents, snippets, and schemas referenced by this workflow.
+        validate_workflow_resources(
+            workflow,
             &params.working_dir,
             &params.repo_path,
-            &specs,
-            Some(&workflow.name),
-            &all_plugin_dirs,
-        );
-        if !missing_agents.is_empty() {
-            return Err(ConductorError::Workflow(format!(
-                "Missing agent definitions: {}. Run 'conductor workflow validate' for details.",
-                missing_agents.join(", ")
-            )));
-        }
-
-        let all_snippets = workflow.collect_all_snippet_refs();
-        if !all_snippets.is_empty() {
-            let missing_snippets = crate::prompt_config::find_missing_snippets(
-                &params.working_dir,
-                &params.repo_path,
-                &all_snippets,
-                Some(&workflow.name),
-            );
-            if !missing_snippets.is_empty() {
-                return Err(ConductorError::Workflow(format!(
-                    "Missing prompt snippets: {}. Check .conductor/prompts/ directory.",
-                    missing_snippets.join(", ")
-                )));
-            }
-        }
-
-        let all_schemas = workflow.collect_all_schema_refs();
-        if !all_schemas.is_empty() {
-            let schema_issues = crate::schema_config::check_schemas(
-                &params.working_dir,
-                &params.repo_path,
-                &all_schemas,
-                Some(&workflow.name),
-            );
-            if !schema_issues.is_empty() {
-                let details: Vec<String> = schema_issues
-                    .iter()
-                    .map(|issue| match issue {
-                        crate::schema_config::SchemaIssue::Missing(name) => {
-                            format!("missing: {name}")
-                        }
-                        crate::schema_config::SchemaIssue::Invalid { name, error } => {
-                            format!("invalid: {name}: {error}")
-                        }
-                    })
-                    .collect();
-                return Err(ConductorError::Workflow(format!(
-                    "Schema validation failed: {}",
-                    details.join(", ")
-                )));
-            }
-        }
+            &params.extra_plugin_dirs,
+        )?;
 
         // Snapshot the definition.
         let snapshot_json = serde_json::to_string(workflow).map_err(|e| {

@@ -178,9 +178,9 @@ pub fn execute_foreach(
     };
 
     if total_items > 0 {
-        // Update or set the fan_out_total (always recalculate from all items).
-        let actual_total = state.wf_mgr.get_fan_out_items(&step_id, None)?.len() as i64;
-        state.wf_mgr.set_fan_out_total(&step_id, actual_total)?;
+        // total_items is already the authoritative count: newly inserted + pre-existing.
+        // No need for a second get_fan_out_items query here.
+        state.wf_mgr.set_fan_out_total(&step_id, total_items)?;
     }
 
     tracing::info!(

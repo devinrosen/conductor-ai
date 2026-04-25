@@ -272,7 +272,13 @@ pub fn execute_parallel(
     for pr in &results {
         match &pr.result {
             Ok(output) => {
-                let markers_json = serde_json::to_string(&output.markers).unwrap_or_default();
+                let markers_json = serde_json::to_string(&output.markers).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        "parallel: '{}': failed to serialize markers: {e}",
+                        pr.agent_name
+                    );
+                    "[]".to_string()
+                });
                 let context = output.context.clone().unwrap_or_default();
 
                 state
@@ -567,6 +573,64 @@ mod tests {
         assert!(
             state.total_cost > 0.0,
             "cost should be accumulated from ActionOutput"
+        );
+    }
+
+    /// Verifies that a panicking executor is caught by `catch_unwind` and recorded as a
+    /// Failed step rather than crashing the whole process.
+    #[test]
+    fn parallel_panicking_executor_is_caught_and_step_is_failed() {
+        struct PanicExec;
+        impl ActionExecutor for PanicExec {
+            fn name(&self) -> &str {
+                "panic_exec"
+            }
+            fn execute(
+                &self,
+                _ectx: &crate::traits::action_executor::ExecutionContext,
+                _params: &ActionParams,
+            ) -> Result<ActionOutput, EngineError> {
+                panic!("deliberate panic in test executor");
+            }
+        }
+
+        let mut named = HashMap::new();
+        named.insert(
+            "panic_exec".to_string(),
+            Box::new(PanicExec) as Box<dyn ActionExecutor>,
+        );
+        let registry = crate::traits::action_executor::ActionRegistry::new(named, None);
+
+        let (persistence, run_id) = make_persistence_with_run();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone(), registry);
+
+        let node = ParallelNode {
+            fail_fast: false,
+            min_success: None,
+            calls: vec![AgentRef::Name("panic_exec".to_string())],
+            output: None,
+            call_outputs: HashMap::new(),
+            with: vec![],
+            call_with: HashMap::new(),
+            call_if: HashMap::new(),
+        };
+
+        // execute_parallel should succeed (the panic is caught internally).
+        execute_parallel(&mut state, &node, 0).unwrap();
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        assert_eq!(steps.len(), 1, "expected one step record");
+        let step = &steps[0];
+        assert_eq!(
+            step.status,
+            WorkflowStepStatus::Failed,
+            "panicking executor should produce a Failed step; got {:?}",
+            step.status
+        );
+        let error_msg = step.step_error.as_deref().unwrap_or("");
+        assert!(
+            error_msg.contains("panic_exec"),
+            "step_error should name the executor; got: {error_msg:?}"
         );
     }
 
