@@ -654,4 +654,49 @@ mod tests {
             "total_turns should match the num_turns argument"
         );
     }
+
+    /// `gate_approval_to_rk` must preserve `feedback` on the `Approved` variant
+    /// through the rk-trait path — a field swap would make `feedback` return None.
+    #[test]
+    fn get_gate_approval_rk_approved_preserves_feedback() {
+        let (p, parent_id) = make_persistence();
+        let run = WorkflowPersistence::create_run(&p, make_new_run(parent_id)).unwrap();
+        let step_id = WorkflowPersistence::insert_step(
+            &p,
+            NewStep {
+                workflow_run_id: run.id,
+                step_name: "approval-gate".to_string(),
+                role: "gate".to_string(),
+                can_commit: false,
+                position: 0,
+                iteration: 0,
+                retry_count: None,
+            },
+        )
+        .unwrap();
+
+        WorkflowPersistence::approve_gate(&p, &step_id, "human", Some("lgtm"), None).unwrap();
+
+        let state =
+            runkon_flow::traits::persistence::WorkflowPersistence::get_gate_approval(&p, &step_id)
+                .unwrap();
+
+        match state {
+            runkon_flow::traits::persistence::GateApprovalState::Approved {
+                feedback,
+                selections,
+            } => {
+                assert_eq!(
+                    feedback,
+                    Some("lgtm".to_string()),
+                    "feedback must survive gate_approval_to_rk conversion"
+                );
+                assert!(
+                    selections.is_none(),
+                    "selections should be None when not provided"
+                );
+            }
+            other => panic!("expected Approved, got {other:?}"),
+        }
+    }
 }

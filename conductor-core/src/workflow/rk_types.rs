@@ -221,18 +221,12 @@ fn blocked_on_to_rk(b: CoreBlockedOn) -> RkBlockedOn {
 }
 
 pub fn step_to_rk(s: CoreStep) -> RkStep {
-    let gate_type = s.gate_type.as_ref().and_then(|gt| {
-        let gt_str = gt.to_string();
-        gt_str
-            .parse::<runkon_flow::dsl::GateType>()
-            .map_err(|_| {
-                tracing::warn!(
-                    step_id = %s.id,
-                    gate_type = %gt_str,
-                    "Unrecognised gate type in step; treating as None",
-                );
-            })
-            .ok()
+    let gate_type = s.gate_type.as_ref().map(|gt| match gt {
+        crate::workflow_dsl::GateType::HumanApproval => runkon_flow::dsl::GateType::HumanApproval,
+        crate::workflow_dsl::GateType::HumanReview => runkon_flow::dsl::GateType::HumanReview,
+        crate::workflow_dsl::GateType::PrApproval => runkon_flow::dsl::GateType::PrApproval,
+        crate::workflow_dsl::GateType::PrChecks => runkon_flow::dsl::GateType::PrChecks,
+        crate::workflow_dsl::GateType::QualityGate => runkon_flow::dsl::GateType::QualityGate,
     });
     RkStep {
         id: s.id,

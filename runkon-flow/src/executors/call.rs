@@ -267,7 +267,11 @@ fn execute_call_inner(
                             markers_out: None,
                             retry_count: Some(attempt as i64),
                             structured_output: None,
-                            step_error: Some("step timed out".to_string()),
+                            step_error: Some(format!(
+                                "step '{}' timed out after {}",
+                                agent_label,
+                                node.timeout.as_deref().unwrap_or("?"),
+                            )),
                         },
                     )
                     .map_err(|e| EngineError::Persistence(e.to_string()))?;
@@ -277,7 +281,10 @@ fn execute_call_inner(
 
         match dispatch_result {
             Ok(output) => {
-                let markers_json = serde_json::to_string(&output.markers).unwrap_or_default();
+                let markers_json = crate::helpers::serialize_or_empty_array(
+                    &output.markers,
+                    &format!("call '{agent_label}'"),
+                );
                 let context = output.context.clone().unwrap_or_default();
 
                 tracing::info!(
