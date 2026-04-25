@@ -212,9 +212,21 @@ echo "${REVIEW_BODY}" > "${REVIEW_BODY_FILE}"
 # ---------------------------------------------------------------------------
 # 6. Submit formal review
 # ---------------------------------------------------------------------------
+
+# GitHub disallows REQUEST_CHANGES on your own PR — detect and fall back to COMMENT.
+PR_AUTHOR=$(gh pr view "${PR_NUMBER}" --json author -q .author.login 2>/dev/null || true)
+CURRENT_USER=$(gh api user -q .login 2>/dev/null || true)
+IS_OWN_PR="false"
+if [ -n "${PR_AUTHOR}" ] && [ -n "${CURRENT_USER}" ] && [ "${PR_AUTHOR}" = "${CURRENT_USER}" ]; then
+  IS_OWN_PR="true"
+fi
+
 if [ "${OVERALL_APPROVED}" = "true" ]; then
   echo "Submitting APPROVE review for PR #${PR_NUMBER}…"
   gh pr review "${PR_NUMBER}" --approve --body-file "${REVIEW_BODY_FILE}"
+elif [ "${IS_OWN_PR}" = "true" ]; then
+  echo "PR author matches current user — submitting COMMENT review (GitHub disallows REQUEST_CHANGES on own PRs)…"
+  gh pr review "${PR_NUMBER}" --comment --body-file "${REVIEW_BODY_FILE}"
 else
   echo "Submitting REQUEST CHANGES review for PR #${PR_NUMBER}…"
   gh pr review "${PR_NUMBER}" --request-changes --body-file "${REVIEW_BODY_FILE}"
