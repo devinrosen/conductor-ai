@@ -169,6 +169,12 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
         }
     };
 
+    // Create a temp file to capture stderr and prevent it from leaking to the TUI.
+    let stderr_file = tempfile::NamedTempFile::new().ok().and_then(|f| {
+        let path = f.path().to_path_buf();
+        f.keep().ok().map(|_| path)
+    });
+
     let mut cmd = std::process::Command::new("sh");
     cmd.arg("-c").arg(&script_cmd);
     cmd.current_dir(working_dir);
@@ -191,6 +197,21 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
         }
     }
 
+    // Redirect stderr to a temp file so it never leaks to the TUI terminal.
+    if let Some(ref err_path) = stderr_file {
+        match std::fs::File::create(err_path) {
+            Ok(file) => {
+                cmd.stderr(file);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "script '{}': failed to open stderr capture file: {e}",
+                    node.name
+                );
+            }
+        }
+    }
+
     let start = std::time::Instant::now();
     let result = cmd.status();
     let duration_ms = start.elapsed().as_millis() as i64;
@@ -202,6 +223,11 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                 node.name,
                 duration_ms
             );
+
+            // Clean up stderr capture file on success.
+            if let Some(ref p) = stderr_file {
+                let _ = std::fs::remove_file(p);
+            }
 
             // Read stdout and parse the CONDUCTOR_OUTPUT block so markers like
             // `has_code_changes` are available to downstream `if` conditions.
@@ -270,7 +296,22 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
         }
         Ok(status) => {
             let exit_code = status.code().unwrap_or(-1);
-            let err_msg = format!("Script '{}' exited with code {}", node.name, exit_code);
+
+            // Read captured stderr (up to 2 000 chars) to include in the error.
+            let captured_stderr = stderr_file.as_ref().and_then(|p| {
+                std::fs::read_to_string(p)
+                    .ok()
+                    .map(|s| s.trim().chars().take(2000).collect::<String>())
+                    .filter(|s| !s.is_empty())
+            });
+
+            let err_msg = match &captured_stderr {
+                Some(stderr) => format!(
+                    "Script '{}' exited with code {}\n{}",
+                    node.name, exit_code, stderr
+                ),
+                None => format!("Script '{}' exited with code {}", node.name, exit_code),
+            };
             tracing::warn!("{}", err_msg);
 
             state
@@ -290,8 +331,11 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                 )
                 .map_err(p_err)?;
 
-            // Clean up output file on failure
+            // Clean up output file and stderr file on failure
             if let Some(ref p) = output_file {
+                let _ = std::fs::remove_file(p);
+            }
+            if let Some(ref p) = stderr_file {
                 let _ = std::fs::remove_file(p);
             }
 
@@ -323,6 +367,10 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                     },
                 )
                 .map_err(p_err)?;
+
+            if let Some(ref p) = stderr_file {
+                let _ = std::fs::remove_file(p);
+            }
 
             match &node.on_fail {
                 Some(crate::dsl::OnFail::Continue) => {
