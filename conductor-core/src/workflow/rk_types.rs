@@ -602,4 +602,177 @@ mod tests {
             other => panic!("expected Rejected, got {other:?}"),
         }
     }
+
+    // ---------------------------------------------------------------------------
+    // run_to_rk — field mapping correctness
+    // ---------------------------------------------------------------------------
+
+    fn make_core_run() -> CoreRun {
+        CoreRun {
+            id: "run-1".to_string(),
+            workflow_name: "wf".to_string(),
+            worktree_id: Some("wt-1".to_string()),
+            parent_run_id: "parent".to_string(),
+            status: crate::workflow::status::WorkflowRunStatus::Completed,
+            dry_run: false,
+            trigger: "manual".to_string(),
+            started_at: "2024-01-01T00:00:00Z".to_string(),
+            ended_at: Some("2024-01-01T01:00:00Z".to_string()),
+            result_summary: Some("ok".to_string()),
+            error: None,
+            definition_snapshot: None,
+            inputs: std::collections::HashMap::new(),
+            ticket_id: None,
+            repo_id: Some("repo-1".to_string()),
+            parent_workflow_run_id: None,
+            target_label: None,
+            default_bot_name: None,
+            iteration: 0,
+            blocked_on: None,
+            workflow_title: Some("My Workflow".to_string()),
+            total_input_tokens: Some(10),
+            total_output_tokens: Some(20),
+            total_cache_read_input_tokens: Some(5),
+            total_cache_creation_input_tokens: Some(2),
+            total_turns: Some(3),
+            total_cost_usd: Some(0.5),
+            total_duration_ms: Some(1000),
+            model: Some("claude-3".to_string()),
+            dismissed: false,
+        }
+    }
+
+    #[test]
+    fn run_to_rk_maps_all_fields() {
+        let rk = run_to_rk(make_core_run());
+        assert_eq!(rk.id, "run-1");
+        assert_eq!(rk.workflow_name, "wf");
+        assert_eq!(rk.worktree_id, Some("wt-1".to_string()));
+        assert_eq!(rk.parent_run_id, "parent");
+        assert_eq!(rk.status, runkon_flow::status::WorkflowRunStatus::Completed);
+        assert!(!rk.dry_run);
+        assert_eq!(rk.trigger, "manual");
+        assert_eq!(rk.started_at, "2024-01-01T00:00:00Z");
+        assert_eq!(rk.ended_at, Some("2024-01-01T01:00:00Z".to_string()));
+        assert_eq!(rk.result_summary, Some("ok".to_string()));
+        assert!(rk.error.is_none());
+        assert_eq!(rk.repo_id, Some("repo-1".to_string()));
+        assert_eq!(rk.workflow_title, Some("My Workflow".to_string()));
+        assert_eq!(rk.total_input_tokens, Some(10));
+        assert_eq!(rk.total_output_tokens, Some(20));
+        assert_eq!(rk.total_cache_read_input_tokens, Some(5));
+        assert_eq!(rk.total_cache_creation_input_tokens, Some(2));
+        assert_eq!(rk.total_turns, Some(3));
+        assert_eq!(rk.total_cost_usd, Some(0.5));
+        assert_eq!(rk.total_duration_ms, Some(1000));
+        assert_eq!(rk.model, Some("claude-3".to_string()));
+        assert!(!rk.dismissed);
+    }
+
+    #[test]
+    fn run_to_rk_blocked_on_none_stays_none() {
+        let rk = run_to_rk(make_core_run());
+        assert!(rk.blocked_on.is_none());
+    }
+
+    // ---------------------------------------------------------------------------
+    // blocked_on_to_rk — all 4 variants
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn blocked_on_human_approval_preserves_fields() {
+        let b = CoreBlockedOn::HumanApproval {
+            gate_name: "approve-gate".to_string(),
+            prompt: Some("approve?".to_string()),
+            options: vec![],
+        };
+        match run_to_rk(CoreRun {
+            blocked_on: Some(b),
+            ..make_core_run()
+        })
+        .blocked_on
+        .unwrap()
+        {
+            RkBlockedOn::HumanApproval {
+                gate_name,
+                prompt,
+                options,
+            } => {
+                assert_eq!(gate_name, "approve-gate");
+                assert_eq!(prompt.as_deref(), Some("approve?"));
+                assert!(options.is_empty());
+            }
+            other => panic!("expected HumanApproval, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn blocked_on_human_review_preserves_fields() {
+        let b = CoreBlockedOn::HumanReview {
+            gate_name: "review-gate".to_string(),
+            prompt: None,
+            options: vec!["opt-a".to_string()],
+        };
+        match run_to_rk(CoreRun {
+            blocked_on: Some(b),
+            ..make_core_run()
+        })
+        .blocked_on
+        .unwrap()
+        {
+            RkBlockedOn::HumanReview {
+                gate_name,
+                prompt,
+                options,
+            } => {
+                assert_eq!(gate_name, "review-gate");
+                assert!(prompt.is_none());
+                assert_eq!(options, vec!["opt-a".to_string()]);
+            }
+            other => panic!("expected HumanReview, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn blocked_on_pr_approval_preserves_fields() {
+        let b = CoreBlockedOn::PrApproval {
+            gate_name: "pr-gate".to_string(),
+            approvals_needed: 2,
+        };
+        match run_to_rk(CoreRun {
+            blocked_on: Some(b),
+            ..make_core_run()
+        })
+        .blocked_on
+        .unwrap()
+        {
+            RkBlockedOn::PrApproval {
+                gate_name,
+                approvals_needed,
+            } => {
+                assert_eq!(gate_name, "pr-gate");
+                assert_eq!(approvals_needed, 2u32);
+            }
+            other => panic!("expected PrApproval, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn blocked_on_pr_checks_preserves_gate_name() {
+        let b = CoreBlockedOn::PrChecks {
+            gate_name: "checks-gate".to_string(),
+        };
+        match run_to_rk(CoreRun {
+            blocked_on: Some(b),
+            ..make_core_run()
+        })
+        .blocked_on
+        .unwrap()
+        {
+            RkBlockedOn::PrChecks { gate_name } => {
+                assert_eq!(gate_name, "checks-gate");
+            }
+            other => panic!("expected PrChecks, got {other:?}"),
+        }
+    }
 }

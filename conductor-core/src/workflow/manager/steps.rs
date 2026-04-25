@@ -301,7 +301,7 @@ impl<'a> WorkflowManager<'a> {
         if position == 0 {
             return Ok(true);
         }
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT 1 FROM workflow_run_steps \
              WHERE workflow_run_id = :wrid AND position = :pos \
              AND status = 'completed' LIMIT 1",
@@ -328,7 +328,7 @@ impl<'a> WorkflowManager<'a> {
         iteration: i64,
         step_name: &str,
     ) -> Result<bool> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT 1 FROM workflow_run_steps \
              WHERE workflow_run_id = :wrid AND position = :pos AND iteration = :iter \
              AND step_name = :name \
