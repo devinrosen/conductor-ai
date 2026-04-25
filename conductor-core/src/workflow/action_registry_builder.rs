@@ -1,6 +1,3 @@
-// TODO(Phase 3.3): rename this file to action_registry_builder.rs — the current name
-// mirrors runkon-flow/src/flow_engine.rs (the actual FlowEngine), creating confusion.
-
 use std::collections::HashMap;
 
 use crate::error::{ConductorError, Result};

@@ -1674,7 +1674,7 @@ fn test_schema_step_routes_through_registry_when_api_key_present() {
     use crate::workflow::action_executor::{
         ActionExecutor, ActionOutput, ActionParams, ExecutionContext,
     };
-    use crate::workflow::flow_engine::ActionRegistryBuilder;
+    use crate::workflow::action_registry_builder::ActionRegistryBuilder;
     use crate::workflow_dsl::{AgentRef, CallNode};
     use std::sync::{
         atomic::{AtomicBool, Ordering},

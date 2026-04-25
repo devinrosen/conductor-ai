@@ -82,7 +82,7 @@ fn build_default_action_registry(
     let api_executor: Box<dyn crate::workflow::action_executor::ActionExecutor> = Box::new(
         crate::workflow::api_call_executor::ApiCallExecutor::new(config.clone()),
     );
-    crate::workflow::flow_engine::ActionRegistryBuilder::new()
+    crate::workflow::action_registry_builder::ActionRegistryBuilder::new()
         .action_fallback(Box::new(
             crate::workflow::claude_agent_executor::ClaudeAgentExecutor::new(
                 config.clone(),
