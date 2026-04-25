@@ -169,6 +169,10 @@ impl FlowEngine {
         def: &WorkflowDef,
         state: &mut ExecutionState,
     ) -> crate::engine_error::Result<WorkflowResult> {
+        debug_assert!(
+            state.resume_ctx.is_none(),
+            "resume() requires resume_ctx to be None on entry"
+        );
         let steps = state
             .persistence
             .get_steps(&state.workflow_run_id)
@@ -178,12 +182,18 @@ impl FlowEngine {
                     state.workflow_run_id
                 ))
             })?;
-        let step_map: HashMap<_, _> = steps
+        let (step_map, skip_completed): (HashMap<_, _>, HashSet<_>) = steps
             .into_iter()
             .filter(|s| s.status == crate::status::WorkflowStepStatus::Completed)
-            .map(|s| ((s.step_name.clone(), s.iteration as u32), s))
-            .collect();
-        let skip_completed: HashSet<_> = step_map.keys().cloned().collect();
+            .fold(
+                (HashMap::new(), HashSet::new()),
+                |(mut map, mut set), s| {
+                    let key = (s.step_name.clone(), s.iteration as u32);
+                    set.insert(key.clone());
+                    map.insert(key, s);
+                    (map, set)
+                },
+            );
         if !skip_completed.is_empty() {
             state.resume_ctx = Some(crate::engine::ResumeContext {
                 skip_completed,
