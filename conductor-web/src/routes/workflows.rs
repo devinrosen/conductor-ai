@@ -1832,9 +1832,10 @@ pub async fn approve_gate(
 
     let step = find_waiting_gate_or_err(&mgr, &id)?;
 
+    let approved_by = std::env::var("USER").unwrap_or_else(|_| "user".to_string());
     mgr.approve_gate(
         &step.id,
-        "user",
+        &approved_by,
         req.feedback.as_deref(),
         req.selections.as_deref(),
     )?;
@@ -1875,7 +1876,8 @@ pub async fn reject_gate(
 
     let step = find_waiting_gate_or_err(&mgr, &id)?;
 
-    mgr.reject_gate(&step.id, "user", None)?;
+    let rejected_by = std::env::var("USER").unwrap_or_else(|_| "user".to_string());
+    mgr.reject_gate(&step.id, &rejected_by, None)?;
 
     state
         .events

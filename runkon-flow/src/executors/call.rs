@@ -15,6 +15,8 @@ use crate::status::WorkflowStepStatus;
 use crate::traits::action_executor::{ActionParams, ExecutionContext};
 use crate::traits::persistence::{NewStep, StepUpdate};
 
+use super::p_err;
+
 fn parse_duration(s: &str) -> std::result::Result<std::time::Duration, String> {
     if let Some(n) = s.strip_suffix("ms") {
         let ms = n
@@ -130,7 +132,7 @@ fn execute_call_inner(
                 iteration: iteration as i64,
                 retry_count: Some(attempt as i64),
             })
-            .map_err(|e| EngineError::Persistence(e.to_string()))?;
+            .map_err(p_err)?;
 
         emit_event(
             state,
@@ -274,7 +276,7 @@ fn execute_call_inner(
                             )),
                         },
                     )
-                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                    .map_err(p_err)?;
                 return Err(EngineError::Cancelled(CancellationReason::Timeout));
             }
         }
@@ -311,7 +313,7 @@ fn execute_call_inner(
                             step_error: None,
                         },
                     )
-                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                    .map_err(p_err)?;
 
                 emit_event(
                     state,
@@ -359,7 +361,7 @@ fn execute_call_inner(
                             step_error: None,
                         },
                     )
-                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                    .map_err(p_err)?;
                 return Err(EngineError::Cancelled(reason));
             }
             Err(e) => {
@@ -386,7 +388,7 @@ fn execute_call_inner(
                             step_error: Some(err_msg.clone()),
                         },
                     )
-                    .map_err(|persist_err| EngineError::Persistence(persist_err.to_string()))?;
+                    .map_err(p_err)?;
                 last_error = err_msg;
                 continue;
             }

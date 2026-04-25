@@ -433,7 +433,10 @@ pub fn execute_nodes(
         {
             let now_secs = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
+                .unwrap_or_else(|e| {
+                    tracing::warn!("system clock regressed: {e}; heartbeat suppressed");
+                    e.duration()
+                })
                 .as_secs() as i64;
             let last = state.last_heartbeat_at.load(Ordering::Relaxed);
             if now_secs - last >= 5 {

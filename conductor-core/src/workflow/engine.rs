@@ -1349,6 +1349,8 @@ pub fn resume_workflow_standalone(params: &WorkflowResumeStandalone) -> Result<W
         db_path: Some(db),
     };
 
+    // NOTE: resume uses the legacy run_workflow_engine path. Migration to FlowEngine
+    // is planned for Phase 3.2. Do not assume this is equivalent to execute_workflow_standalone.
     resume_workflow(&input)
 }
 

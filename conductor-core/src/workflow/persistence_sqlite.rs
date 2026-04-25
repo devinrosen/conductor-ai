@@ -108,35 +108,33 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
     }
 
     fn insert_step(&self, new_step: NewStep) -> Result<String, EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        let mgr = WorkflowManager::new(&guard);
-        if let Some(retry_count) = new_step.retry_count {
-            mgr.insert_step_running(
-                &new_step.workflow_run_id,
-                &new_step.step_name,
-                &new_step.role,
-                new_step.can_commit,
-                new_step.position,
-                new_step.iteration,
-                retry_count,
-            )
-        } else {
-            mgr.insert_step(
-                &new_step.workflow_run_id,
-                &new_step.step_name,
-                &new_step.role,
-                new_step.can_commit,
-                new_step.position,
-                new_step.iteration,
-            )
-        }
-        .map_err(to_engine_err)
+        self.with_manager(|mgr| {
+            if let Some(retry_count) = new_step.retry_count {
+                mgr.insert_step_running(
+                    &new_step.workflow_run_id,
+                    &new_step.step_name,
+                    &new_step.role,
+                    new_step.can_commit,
+                    new_step.position,
+                    new_step.iteration,
+                    retry_count,
+                )
+            } else {
+                mgr.insert_step(
+                    &new_step.workflow_run_id,
+                    &new_step.step_name,
+                    &new_step.role,
+                    new_step.can_commit,
+                    new_step.position,
+                    new_step.iteration,
+                )
+            }
+        })
     }
 
     fn update_step(&self, step_id: &str, update: StepUpdate) -> Result<(), EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .update_step_status_full(
+        self.with_manager(|mgr| {
+            mgr.update_step_status_full(
                 step_id,
                 update.status,
                 update.child_run_id.as_deref(),
@@ -147,7 +145,7 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
                 update.structured_output.as_deref(),
                 update.step_error.as_deref(),
             )
-            .map_err(to_engine_err)
+        })
     }
 
     fn get_steps(&self, run_id: &str) -> Result<Vec<WorkflowRunStep>, EngineError> {
@@ -169,17 +167,14 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
         item_id: &str,
         update: FanOutItemUpdate,
     ) -> Result<(), EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        let mgr = WorkflowManager::new(&guard);
-        match update {
+        self.with_manager(|mgr| match update {
             FanOutItemUpdate::Running { child_run_id } => {
                 mgr.update_fan_out_item_running(item_id, &child_run_id)
             }
             FanOutItemUpdate::Terminal { status } => {
                 mgr.update_fan_out_item_terminal(item_id, status.as_str())
             }
-        }
-        .map_err(to_engine_err)
+        })
     }
 
     fn get_fan_out_items(
@@ -379,10 +374,7 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for SqliteWorkflowPer
     }
 
     fn tick_heartbeat(&self, run_id: &str) -> Result<(), EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .tick_heartbeat(run_id)
-            .map_err(to_engine_err)
+        self.with_manager(|mgr| mgr.tick_heartbeat(run_id))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -397,9 +389,8 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for SqliteWorkflowPer
         num_turns: i64,
         duration_ms: i64,
     ) -> Result<(), EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .persist_workflow_metrics(
+        self.with_manager(|mgr| {
+            mgr.persist_workflow_metrics(
                 run_id,
                 input_tokens,
                 output_tokens,
@@ -410,7 +401,7 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for SqliteWorkflowPer
                 duration_ms,
                 None,
             )
-            .map_err(to_engine_err)
+        })
     }
 }
 
