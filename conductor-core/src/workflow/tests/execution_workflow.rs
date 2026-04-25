@@ -856,3 +856,71 @@ fn test_parent_step_id_writes_child_run_id_to_step() {
         "child_run_id must be written back to the parent step immediately on child run creation"
     );
 }
+
+/// `execute_workflow_standalone` with `parent_step_id` set must also write the
+/// child run ID back to the parent step (same as `execute_workflow`, but via the
+/// standalone path that opens its own DB connection).
+#[test]
+fn test_standalone_parent_step_id_links_child_run() {
+    let (_tmp, db_path) = make_standalone_db();
+
+    let parent_step_id = {
+        let conn = crate::db::open_database(&db_path).expect("open db");
+        let agent_mgr = AgentManager::new(&conn);
+        let parent_agent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        let parent_run = wf_mgr
+            .create_workflow_run(
+                "parent-wf",
+                Some("w1"),
+                &parent_agent.id,
+                false,
+                "manual",
+                None,
+            )
+            .unwrap();
+        wf_mgr
+            .insert_step(&parent_run.id, "call-child", "workflow", false, 0, 0)
+            .unwrap()
+    };
+
+    let params = crate::workflow::types::WorkflowExecStandalone {
+        config: Config::default(),
+        workflow: make_empty_workflow(),
+        worktree_id: Some("w1".to_string()),
+        working_dir: "/tmp/ws/feat-test".to_string(),
+        repo_path: "/tmp/repo".to_string(),
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: WorkflowExecConfig::default(),
+        inputs: HashMap::new(),
+        target_label: None,
+        run_id_notify: None,
+        triggered_by_hook: false,
+        conductor_bin_dir: None,
+        force: false,
+        extra_plugin_dirs: vec![],
+        db_path: Some(db_path.clone()),
+        parent_workflow_run_id: None,
+        depth: 1,
+        parent_step_id: Some(parent_step_id.clone()),
+        default_bot_name: None,
+        iteration: 0,
+    };
+
+    let result = execute_workflow_standalone(&params).unwrap();
+    let child_run_id = result.workflow_run_id;
+
+    let conn = crate::db::open_database(&db_path).expect("open db");
+    let wf_mgr = WorkflowManager::new(&conn);
+    let step = wf_mgr
+        .get_step_by_id(&parent_step_id)
+        .expect("db query ok")
+        .expect("step should exist");
+    assert_eq!(
+        step.child_run_id.as_deref(),
+        Some(child_run_id.as_str()),
+        "standalone parent_step_id path must write child_run_id back to the parent step"
+    );
+}
