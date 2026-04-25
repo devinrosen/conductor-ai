@@ -574,7 +574,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         let core_result = crate::workflow::engine::execute_workflow_standalone(&standalone_params)
             .map_err(|e| EngineError::Workflow(e.to_string()))?;
 
-        Ok(core_workflow_result_to_rk(core_result))
+        Ok(super::rk_types::core_workflow_result_to_rk(core_result))
     }
 
     fn resume_child(
@@ -602,7 +602,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             ))
         })?;
 
-        Ok(core_workflow_result_to_rk(core_result))
+        Ok(super::rk_types::core_workflow_result_to_rk(core_result))
     }
 
     fn find_resumable_child(
@@ -618,25 +618,6 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             .map_err(|e| EngineError::Workflow(format!("failed to find resumable child run for parent='{parent_run_id}' workflow='{workflow_name}': {e}")))?;
 
         Ok(core_run.map(crate::workflow::rk_types::run_to_rk))
-    }
-}
-
-/// Convert a conductor-core `WorkflowResult` to a runkon-flow `WorkflowResult`.
-fn core_workflow_result_to_rk(
-    core: crate::workflow::types::WorkflowResult,
-) -> runkon_flow::types::WorkflowResult {
-    runkon_flow::types::WorkflowResult {
-        workflow_run_id: core.workflow_run_id,
-        worktree_id: core.worktree_id,
-        workflow_name: core.workflow_name,
-        all_succeeded: core.all_succeeded,
-        total_cost: core.total_cost,
-        total_turns: core.total_turns,
-        total_duration_ms: core.total_duration_ms,
-        total_input_tokens: core.total_input_tokens,
-        total_output_tokens: core.total_output_tokens,
-        total_cache_read_input_tokens: core.total_cache_read_input_tokens,
-        total_cache_creation_input_tokens: core.total_cache_creation_input_tokens,
     }
 }
 

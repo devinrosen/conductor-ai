@@ -283,6 +283,24 @@ pub fn fan_out_item_to_rk(r: CoreFanOutItemRow) -> RkFanOutItemRow {
     }
 }
 
+pub fn core_workflow_result_to_rk(
+    core: crate::workflow::types::WorkflowResult,
+) -> runkon_flow::types::WorkflowResult {
+    runkon_flow::types::WorkflowResult {
+        workflow_run_id: core.workflow_run_id,
+        worktree_id: core.worktree_id,
+        workflow_name: core.workflow_name,
+        all_succeeded: core.all_succeeded,
+        total_cost: core.total_cost,
+        total_turns: core.total_turns,
+        total_duration_ms: core.total_duration_ms,
+        total_input_tokens: core.total_input_tokens,
+        total_output_tokens: core.total_output_tokens,
+        total_cache_read_input_tokens: core.total_cache_read_input_tokens,
+        total_cache_creation_input_tokens: core.total_cache_creation_input_tokens,
+    }
+}
+
 pub fn rk_workflow_result_to_core(
     r: runkon_flow::types::WorkflowResult,
 ) -> crate::workflow::types::WorkflowResult {
