@@ -144,6 +144,15 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
         env_vars.insert(format!("CONDUCTOR_{}", k.to_uppercase()), v.clone());
     }
 
+    // Inject explicit env vars from the workflow `env = { ... }` block.
+    // Template variables (e.g. `{{prior_output}}`) are substituted using the raw
+    // (non-shell-quoted) variable map because values are passed as discrete env
+    // var values, not interpolated into a shell command string.
+    for (k, v) in &node.env {
+        let resolved = crate::prompt_builder::substitute_variables(v, &vars);
+        env_vars.insert(k.clone(), resolved);
+    }
+
     // Execute the script
     let working_dir = &state.worktree_ctx.working_dir;
     let output_file = match tempfile::NamedTempFile::new() {
