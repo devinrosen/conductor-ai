@@ -114,6 +114,41 @@ fn fix_backslash_escapes(s: &str) -> String {
     out
 }
 
+/// Parse a human-readable duration string into a `std::time::Duration`.
+///
+/// Supported suffixes: `ms` (milliseconds), `h` (hours), `m` (minutes), `s` (seconds).
+/// A bare integer is treated as seconds.
+pub(crate) fn parse_duration(s: &str) -> std::result::Result<std::time::Duration, String> {
+    if let Some(n) = s.strip_suffix("ms") {
+        let ms = n
+            .parse::<u64>()
+            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
+        return Ok(std::time::Duration::from_millis(ms));
+    }
+    if let Some(n) = s.strip_suffix('h') {
+        let h = n
+            .parse::<u64>()
+            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
+        return Ok(std::time::Duration::from_secs(h * 3600));
+    }
+    if let Some(n) = s.strip_suffix('m') {
+        let m = n
+            .parse::<u64>()
+            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
+        return Ok(std::time::Duration::from_secs(m * 60));
+    }
+    if let Some(n) = s.strip_suffix('s') {
+        let sec = n
+            .parse::<u64>()
+            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
+        return Ok(std::time::Duration::from_secs(sec));
+    }
+    let sec = s
+        .parse::<u64>()
+        .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
+    Ok(std::time::Duration::from_secs(sec))
+}
+
 /// Serialize `v` to a JSON string; on failure log a warning with `ctx` and return `"[]"`.
 pub fn serialize_or_empty_array<T: serde::Serialize>(v: &T, ctx: &str) -> String {
     serde_json::to_string(v).unwrap_or_else(|e| {

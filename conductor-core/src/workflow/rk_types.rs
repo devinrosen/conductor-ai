@@ -389,4 +389,29 @@ mod tests {
             runkon_flow::status::WorkflowStepStatus::Completed
         );
     }
+
+    // ---------------------------------------------------------------------------
+    // run_status_to_rk / run_status_to_core — all 8 variants in both directions
+    // ---------------------------------------------------------------------------
+
+    macro_rules! run_status_roundtrip {
+        ($name:ident, $core:expr, $rk:expr) => {
+            #[test]
+            fn $name() {
+                use crate::workflow::status::WorkflowRunStatus as Core;
+                use runkon_flow::status::WorkflowRunStatus as Rk;
+                assert_eq!(run_status_to_rk($core), $rk, "core→rk");
+                assert_eq!(run_status_to_core($rk), $core, "rk→core");
+            }
+        };
+    }
+
+    run_status_roundtrip!(run_status_pending, Core::Pending, Rk::Pending);
+    run_status_roundtrip!(run_status_running, Core::Running, Rk::Running);
+    run_status_roundtrip!(run_status_completed, Core::Completed, Rk::Completed);
+    run_status_roundtrip!(run_status_failed, Core::Failed, Rk::Failed);
+    run_status_roundtrip!(run_status_cancelled, Core::Cancelled, Rk::Cancelled);
+    run_status_roundtrip!(run_status_waiting, Core::Waiting, Rk::Waiting);
+    run_status_roundtrip!(run_status_needs_resume, Core::NeedsResume, Rk::NeedsResume);
+    run_status_roundtrip!(run_status_cancelling, Core::Cancelling, Rk::Cancelling);
 }

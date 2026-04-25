@@ -17,37 +17,6 @@ use crate::traits::persistence::{NewStep, StepUpdate};
 
 use super::p_err;
 
-fn parse_duration(s: &str) -> std::result::Result<std::time::Duration, String> {
-    if let Some(n) = s.strip_suffix("ms") {
-        let ms = n
-            .parse::<u64>()
-            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
-        return Ok(std::time::Duration::from_millis(ms));
-    }
-    if let Some(n) = s.strip_suffix('h') {
-        let h = n
-            .parse::<u64>()
-            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
-        return Ok(std::time::Duration::from_secs(h * 3600));
-    }
-    if let Some(n) = s.strip_suffix('m') {
-        let m = n
-            .parse::<u64>()
-            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
-        return Ok(std::time::Duration::from_secs(m * 60));
-    }
-    if let Some(n) = s.strip_suffix('s') {
-        let sec = n
-            .parse::<u64>()
-            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
-        return Ok(std::time::Duration::from_secs(sec));
-    }
-    let sec = s
-        .parse::<u64>()
-        .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
-    Ok(std::time::Duration::from_secs(sec))
-}
-
 pub fn execute_call(state: &mut ExecutionState, node: &CallNode, iteration: u32) -> Result<()> {
     // Call-level output overrides block-level; if neither is set, use None.
     let effective_output: Option<String> = match (&node.output, &state.block_output) {
@@ -202,7 +171,7 @@ fn execute_call_inner(
             .timeout
             .as_deref()
             .map(|t| -> Result<_> {
-                let duration = parse_duration(t).map_err(EngineError::Workflow)?;
+                let duration = crate::helpers::parse_duration(t).map_err(EngineError::Workflow)?;
                 let tok = state.cancellation.child();
                 let tok2 = tok.clone();
                 let done = Arc::clone(&timer_done);

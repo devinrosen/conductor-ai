@@ -240,13 +240,23 @@ pub fn execute_gate(state: &mut ExecutionState, node: &GateNode, iteration: u32)
         }
 
         // Check cancellation
-        if let Ok(true) = state.persistence.is_run_cancelled(&state.workflow_run_id) {
-            state
-                .cancellation
-                .cancel(crate::cancellation_reason::CancellationReason::UserRequested(None));
-            return Err(EngineError::Cancelled(
-                crate::cancellation_reason::CancellationReason::UserRequested(None),
-            ));
+        match state.persistence.is_run_cancelled(&state.workflow_run_id) {
+            Ok(true) => {
+                state
+                    .cancellation
+                    .cancel(crate::cancellation_reason::CancellationReason::UserRequested(None));
+                return Err(EngineError::Cancelled(
+                    crate::cancellation_reason::CancellationReason::UserRequested(None),
+                ));
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(
+                    "Database error during cancellation check for gate '{}': {}",
+                    node.name,
+                    e
+                );
+            }
         }
     }
 }
