@@ -134,7 +134,8 @@ impl<'a> WorkflowManager<'a> {
             )?;
         } else if is_terminal {
             self.conn.execute(
-                "UPDATE workflow_run_steps SET status = :status, child_run_id = :child_run_id, \
+                "UPDATE workflow_run_steps SET status = :status, \
+                 child_run_id = COALESCE(:child_run_id, child_run_id), \
                  ended_at = :ended_at, result_text = :result_text, context_out = :context_out, \
                  markers_out = :markers_out, \
                  retry_count = COALESCE(:retry_count, retry_count), \
