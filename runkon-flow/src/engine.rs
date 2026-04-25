@@ -738,6 +738,29 @@ pub fn restore_completed_step(
     let markers = parse_markers_out(step.markers_out.as_deref(), step_key);
     let context = step.context_out.clone().unwrap_or_default();
 
+    // Accumulate costs from the step's joined agent run metrics.
+    if let Some(cost) = step.cost_usd {
+        state.total_cost += cost;
+    }
+    if let Some(turns) = step.num_turns {
+        state.total_turns += turns;
+    }
+    if let Some(dur) = step.duration_ms {
+        state.total_duration_ms += dur;
+    }
+    if let Some(t) = step.input_tokens {
+        state.total_input_tokens += t;
+    }
+    if let Some(t) = step.output_tokens {
+        state.total_output_tokens += t;
+    }
+    if let Some(t) = step.cache_read_input_tokens {
+        state.total_cache_read_input_tokens += t;
+    }
+    if let Some(t) = step.cache_creation_input_tokens {
+        state.total_cache_creation_input_tokens += t;
+    }
+
     // Restore gate feedback if this was a gate step
     if let Some(ref feedback) = step.gate_feedback {
         state.last_gate_feedback = Some(feedback.clone());

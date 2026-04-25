@@ -133,6 +133,12 @@ pub struct WorkflowRunStep {
     pub output_tokens: Option<i64>,
     pub cache_read_input_tokens: Option<i64>,
     pub cache_creation_input_tokens: Option<i64>,
+    /// Cost of the child agent run, populated from the persistence layer.
+    pub cost_usd: Option<f64>,
+    /// Turn count from the child agent run, populated from the persistence layer.
+    pub num_turns: Option<i64>,
+    /// Wall-clock duration of the child agent run in ms, populated from the persistence layer.
+    pub duration_ms: Option<i64>,
     pub fan_out_total: Option<i64>,
     pub fan_out_completed: i64,
     pub fan_out_failed: i64,

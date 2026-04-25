@@ -26,10 +26,24 @@ pub fn handle_workflow(
         }
         {
             let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-            match wf_mgr.reap_heartbeat_stuck_runs(config, 60, conductor_bin_dir.clone()) {
-                Ok(n) if n > 0 => eprintln!("Info: auto-resuming {n} stuck workflow run(s)"),
+            match wf_mgr.claim_heartbeat_stuck_runs(config, 60) {
+                Ok(claimed) if !claimed.is_empty() => {
+                    eprintln!(
+                        "Info: auto-resuming {} stuck workflow run(s)",
+                        claimed.len()
+                    );
+                    for (run_id, wf_name, label) in claimed {
+                        conductor_core::workflow::spawn_heartbeat_resume(
+                            run_id,
+                            wf_name,
+                            label,
+                            config.clone(),
+                            conductor_bin_dir.clone(),
+                        );
+                    }
+                }
                 Ok(_) => {}
-                Err(e) => eprintln!("Warning: reap_heartbeat_stuck_runs failed: {e}"),
+                Err(e) => eprintln!("Warning: claim_heartbeat_stuck_runs failed: {e}"),
             }
             let auto_resume_limit = config.general.auto_resume_limit;
             if auto_resume_limit > 0 {
@@ -40,8 +54,17 @@ pub fn handle_workflow(
                     Ok(_) => {}
                     Err(e) => eprintln!("Warning: classify_resumable_workflows failed: {e}"),
                 }
-                if let Err(e) = wf_mgr.watchdog_needs_resume_workflows(config, conductor_bin_dir) {
-                    eprintln!("Warning: watchdog_needs_resume_workflows failed: {e}");
+                match wf_mgr.claim_needs_resume_runs(config) {
+                    Ok(claimed) => {
+                        for run_id in claimed {
+                            conductor_core::workflow::spawn_workflow_resume(
+                                run_id,
+                                config.clone(),
+                                conductor_bin_dir.clone(),
+                            );
+                        }
+                    }
+                    Err(e) => eprintln!("Warning: claim_needs_resume_runs failed: {e}"),
                 }
             }
         }

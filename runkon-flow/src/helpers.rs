@@ -257,15 +257,20 @@ pub fn find_max_completed_while_iteration(state: &ExecutionState, node: &WhileNo
         return 0;
     }
 
-    // Build a map from iteration -> set of completed step names to avoid per-key
-    // String clones inside the inner all() check.
+    let body_key_set: std::collections::HashSet<&str> =
+        body_keys.iter().map(String::as_str).collect();
+
+    // Build a map from iteration -> set of completed step names, restricted to body
+    // keys only — non-body steps from other parts of the workflow are irrelevant here.
     let mut completed_by_iter: std::collections::HashMap<u32, std::collections::HashSet<&str>> =
         std::collections::HashMap::new();
     for (name, iter) in step_map.keys() {
-        completed_by_iter
-            .entry(*iter)
-            .or_default()
-            .insert(name.as_str());
+        if body_key_set.contains(name.as_str()) {
+            completed_by_iter
+                .entry(*iter)
+                .or_default()
+                .insert(name.as_str());
+        }
     }
 
     // Find the highest iteration where all body nodes are completed

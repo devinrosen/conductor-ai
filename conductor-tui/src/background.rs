@@ -516,12 +516,17 @@ pub fn poll_data(
                 } else {
                     None
                 };
-                if let Err(e) = wf_mgr.auto_resume_stuck_workflows(
-                    &config,
-                    configurable_threshold,
-                    conductor_bin_dir.clone(),
-                ) {
-                    tracing::warn!("auto_resume_stuck_workflows failed: {e}");
+                match wf_mgr.claim_stuck_workflows(&config, configurable_threshold) {
+                    Ok(claimed) => {
+                        for run_id in claimed {
+                            conductor_core::workflow::spawn_workflow_resume(
+                                run_id,
+                                config.clone(),
+                                conductor_bin_dir.clone(),
+                            );
+                        }
+                    }
+                    Err(e) => tracing::warn!("claim_stuck_workflows failed: {e}"),
                 }
                 let auto_resume_limit = config.general.auto_resume_limit;
                 if auto_resume_limit > 0 {
@@ -532,10 +537,17 @@ pub fn poll_data(
                         Ok(_) => {}
                         Err(e) => tracing::warn!("classify_resumable_workflows failed: {e}"),
                     }
-                    if let Err(e) =
-                        wf_mgr.watchdog_needs_resume_workflows(&config, conductor_bin_dir)
-                    {
-                        tracing::warn!("watchdog_needs_resume_workflows failed: {e}");
+                    match wf_mgr.claim_needs_resume_runs(&config) {
+                        Ok(claimed) => {
+                            for run_id in claimed {
+                                conductor_core::workflow::spawn_workflow_resume(
+                                    run_id,
+                                    config.clone(),
+                                    conductor_bin_dir.clone(),
+                                );
+                            }
+                        }
+                        Err(e) => tracing::warn!("claim_needs_resume_runs failed: {e}"),
                     }
                 }
             }

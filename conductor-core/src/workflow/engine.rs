@@ -1328,6 +1328,77 @@ pub fn resume_workflow_standalone(params: &WorkflowResumeStandalone) -> Result<W
     resume_workflow(&input)
 }
 
+/// Spawn a background thread to resume a workflow run.
+///
+/// Designed for the TUI/CLI watchdog callers so they are not blocked and the
+/// WorkflowManager (data-access layer) does not need to call engine-layer code.
+pub fn spawn_workflow_resume(
+    run_id: String,
+    config: Config,
+    conductor_bin_dir: Option<std::path::PathBuf>,
+) {
+    std::thread::spawn(move || {
+        let params = WorkflowResumeStandalone {
+            config,
+            workflow_run_id: run_id.clone(),
+            model: None,
+            from_step: None,
+            restart: false,
+            db_path: None,
+            conductor_bin_dir,
+        };
+        if let Err(e) = resume_workflow_standalone(&params) {
+            tracing::warn!(run_id = %run_id, "spawn_workflow_resume: auto-resume failed: {e}");
+        }
+    });
+}
+
+/// Spawn a background thread to resume a heartbeat-stuck workflow run.
+///
+/// Fires `fire_heartbeat_stuck_failed_notification` on failure so callers do
+/// not need to inline this notification logic.
+pub fn spawn_heartbeat_resume(
+    run_id: String,
+    workflow_name: String,
+    target_label: Option<String>,
+    config: Config,
+    conductor_bin_dir: Option<std::path::PathBuf>,
+) {
+    std::thread::spawn(move || {
+        let params = WorkflowResumeStandalone {
+            config: config.clone(),
+            workflow_run_id: run_id.clone(),
+            model: None,
+            from_step: None,
+            restart: false,
+            db_path: None,
+            conductor_bin_dir,
+        };
+        if let Err(e) = resume_workflow_standalone(&params) {
+            tracing::warn!(
+                run_id = %run_id,
+                "spawn_heartbeat_resume: auto-resume failed: {e}"
+            );
+            if let Ok(db) = crate::db::open_database(&crate::config::db_path()) {
+                crate::notify::fire_heartbeat_stuck_failed_notification(
+                    &db,
+                    &config.notifications,
+                    &config.notify.hooks,
+                    &run_id,
+                    &workflow_name,
+                    target_label.as_deref(),
+                    &e.to_string(),
+                );
+            } else {
+                tracing::warn!(
+                    run_id = %run_id,
+                    "spawn_heartbeat_resume: could not open DB to fire stuck-run notification"
+                );
+            }
+        }
+    });
+}
+
 /// Resume a failed or stalled workflow run from the point of failure.
 ///
 /// Loads the workflow definition from the run's `definition_snapshot`, rebuilds

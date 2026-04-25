@@ -67,7 +67,8 @@ pub fn injected_variable_keys() -> &'static [&'static str] {
 
 pub use engine::{
     apply_workflow_input_defaults, execute_workflow, execute_workflow_standalone, resume_workflow,
-    resume_workflow_standalone, validate_resume_preconditions,
+    resume_workflow_standalone, spawn_heartbeat_resume, spawn_workflow_resume,
+    validate_resume_preconditions,
 };
 pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
 pub use manager::recovery::{ReapedStaleRun, StaleWorkflowRun};

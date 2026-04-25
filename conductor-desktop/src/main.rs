@@ -74,9 +74,17 @@ fn main() {
                 use conductor_core::workflow::WorkflowManager;
                 let wf_mgr = WorkflowManager::new(&conn);
                 let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-                if let Err(e) = wf_mgr.auto_resume_stuck_workflows(&config, None, conductor_bin_dir)
-                {
-                    tracing::warn!("auto_resume_stuck_workflows failed on startup: {e}");
+                match wf_mgr.claim_stuck_workflows(&config, None) {
+                    Ok(claimed) => {
+                        for run_id in claimed {
+                            conductor_core::workflow::spawn_workflow_resume(
+                                run_id,
+                                config.clone(),
+                                conductor_bin_dir.clone(),
+                            );
+                        }
+                    }
+                    Err(e) => tracing::warn!("claim_stuck_workflows failed on startup: {e}"),
                 }
             }
 
@@ -169,12 +177,19 @@ fn main() {
                                 } else {
                                     None
                                 };
-                                if let Err(e) = wf_mgr.auto_resume_stuck_workflows(
-                                    &cfg,
-                                    configurable_threshold,
-                                    conductor_bin_dir,
-                                ) {
-                                    tracing::warn!("auto_resume_stuck_workflows failed: {e}");
+                                match wf_mgr.claim_stuck_workflows(&cfg, configurable_threshold) {
+                                    Ok(claimed) => {
+                                        for run_id in claimed {
+                                            conductor_core::workflow::spawn_workflow_resume(
+                                                run_id,
+                                                cfg.clone(),
+                                                conductor_bin_dir.clone(),
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("claim_stuck_workflows failed: {e}")
+                                    }
                                 }
                             })
                             .await

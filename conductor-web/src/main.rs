@@ -148,12 +148,24 @@ async fn main() -> Result<()> {
         }
         {
             let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-            match wf_mgr.reap_heartbeat_stuck_runs(&config, 60, conductor_bin_dir) {
-                Ok(n) if n > 0 => {
-                    tracing::info!("Auto-resuming {n} stuck workflow run(s) on startup")
+            match wf_mgr.claim_heartbeat_stuck_runs(&config, 60) {
+                Ok(claimed) if !claimed.is_empty() => {
+                    tracing::info!(
+                        "Auto-resuming {} stuck workflow run(s) on startup",
+                        claimed.len()
+                    );
+                    for (run_id, wf_name, label) in claimed {
+                        conductor_core::workflow::spawn_heartbeat_resume(
+                            run_id,
+                            wf_name,
+                            label,
+                            config.clone(),
+                            conductor_bin_dir.clone(),
+                        );
+                    }
                 }
                 Ok(_) => {}
-                Err(e) => tracing::warn!("reap_heartbeat_stuck_runs failed on startup: {e}"),
+                Err(e) => tracing::warn!("claim_heartbeat_stuck_runs failed on startup: {e}"),
             }
         }
     }
@@ -236,12 +248,21 @@ async fn main() -> Result<()> {
                 }
                 {
                     let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-                    match wf_mgr.reap_heartbeat_stuck_runs(&cfg, 60, conductor_bin_dir.clone()) {
-                        Ok(n) if n > 0 => {
-                            tracing::info!("Auto-resuming {n} stuck workflow run(s)")
+                    match wf_mgr.claim_heartbeat_stuck_runs(&cfg, 60) {
+                        Ok(claimed) if !claimed.is_empty() => {
+                            tracing::info!("Auto-resuming {} stuck workflow run(s)", claimed.len());
+                            for (run_id, wf_name, label) in claimed {
+                                conductor_core::workflow::spawn_heartbeat_resume(
+                                    run_id,
+                                    wf_name,
+                                    label,
+                                    (*cfg).clone(),
+                                    conductor_bin_dir.clone(),
+                                );
+                            }
                         }
                         Ok(_) => {}
-                        Err(e) => tracing::warn!("reap_heartbeat_stuck_runs failed: {e}"),
+                        Err(e) => tracing::warn!("claim_heartbeat_stuck_runs failed: {e}"),
                     }
                     let auto_resume_limit = cfg.general.auto_resume_limit;
                     if auto_resume_limit > 0 {
@@ -254,10 +275,17 @@ async fn main() -> Result<()> {
                             Ok(_) => {}
                             Err(e) => tracing::warn!("classify_resumable_workflows failed: {e}"),
                         }
-                        if let Err(e) =
-                            wf_mgr.watchdog_needs_resume_workflows(&cfg, conductor_bin_dir)
-                        {
-                            tracing::warn!("watchdog_needs_resume_workflows failed: {e}");
+                        match wf_mgr.claim_needs_resume_runs(&cfg) {
+                            Ok(claimed) => {
+                                for run_id in claimed {
+                                    conductor_core::workflow::spawn_workflow_resume(
+                                        run_id,
+                                        (*cfg).clone(),
+                                        conductor_bin_dir.clone(),
+                                    );
+                                }
+                            }
+                            Err(e) => tracing::warn!("claim_needs_resume_runs failed: {e}"),
                         }
                     }
                 }

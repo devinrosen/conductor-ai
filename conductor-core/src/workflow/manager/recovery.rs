@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use rusqlite::{named_params, OptionalExtension};
@@ -13,7 +12,7 @@ use super::helpers::{purge_where_clause, row_to_workflow_run};
 use super::WorkflowManager;
 use crate::workflow::constants::RUN_COLUMNS;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
-use crate::workflow::types::{StepKey, WorkflowResumeStandalone, WorkflowRun};
+use crate::workflow::types::{StepKey, WorkflowRun};
 
 macro_rules! reset_sql {
     ($where:literal) => {
@@ -518,20 +517,22 @@ impl<'a> WorkflowManager<'a> {
     /// background thread to resume it.
     ///
     /// Returns the count of runs resumed.
-    pub fn auto_resume_stuck_workflows(
+    /// CAS-claim stuck workflow runs and fire the orphan-resumed notification.
+    ///
+    /// Returns the IDs of runs successfully claimed (flipped from `running` to
+    /// `failed`). Callers are responsible for spawning resume threads via
+    /// [`crate::workflow::engine::spawn_workflow_resume`].
+    pub fn claim_stuck_workflows(
         &self,
         config: &Config,
         configurable_threshold_secs: Option<i64>,
-        conductor_bin_dir: Option<PathBuf>,
-    ) -> Result<usize> {
-        use crate::workflow::WorkflowResumeStandalone;
-
+    ) -> Result<Vec<String>> {
         // Use the smallest threshold so we catch all stuck runs in a single query.
         let threshold = configurable_threshold_secs.map(|t| t.min(60)).unwrap_or(60);
 
         let stuck_ids = self.detect_stuck_workflow_run_ids(threshold)?;
         if stuck_ids.is_empty() {
-            return Ok(0);
+            return Ok(vec![]);
         }
 
         // CAS flip each run from running → failed before resuming.
@@ -550,13 +551,13 @@ impl<'a> WorkflowManager<'a> {
             } else {
                 tracing::debug!(
                     run_id = %run_id,
-                    "auto_resume_stuck_workflows: CAS lost race (already claimed)"
+                    "claim_stuck_workflows: CAS lost race (already claimed)"
                 );
             }
         }
 
         if flipped_ids.is_empty() {
-            return Ok(0);
+            return Ok(vec![]);
         }
 
         let n = flipped_ids.len();
@@ -568,36 +569,19 @@ impl<'a> WorkflowManager<'a> {
             &flipped_ids,
         );
 
-        for run_id in flipped_ids {
-            let cfg_clone = config.clone();
-            let bin_dir = conductor_bin_dir.clone();
-            let rid = run_id.clone();
-            std::thread::spawn(move || {
-                let params = WorkflowResumeStandalone {
-                    config: cfg_clone,
-                    workflow_run_id: rid.clone(),
-                    model: None,
-                    from_step: None,
-                    restart: false,
-                    db_path: None,
-                    conductor_bin_dir: bin_dir,
-                };
-                if let Err(e) = crate::workflow::engine::resume_workflow_standalone(&params) {
-                    tracing::warn!(run_id = %rid, "Auto-resume of stuck workflow run failed: {e}");
-                }
-            });
-        }
-
-        Ok(n)
+        Ok(flipped_ids)
     }
 
-    /// Returns the count of runs successfully resumed.
-    pub fn reap_heartbeat_stuck_runs(
+    /// CAS-claim heartbeat-stuck runs and fire the batch orphan-resumed notification.
+    ///
+    /// Returns `(run_id, workflow_name, target_label)` tuples for claimed runs.
+    /// Callers are responsible for spawning resume threads via
+    /// [`crate::workflow::engine::spawn_heartbeat_resume`].
+    pub fn claim_heartbeat_stuck_runs(
         &self,
         config: &Config,
         threshold_secs: i64,
-        conductor_bin_dir: Option<PathBuf>,
-    ) -> Result<usize> {
+    ) -> Result<Vec<(String, String, Option<String>)>> {
         // Step 1: find orphaned root runs (including zero-step runs — the
         // executor may have died before creating any steps).
         let orphaned: Vec<(String, String, Option<String>)> = query_collect(
@@ -625,11 +609,10 @@ impl<'a> WorkflowManager<'a> {
         )?;
 
         if orphaned.is_empty() {
-            return Ok(0);
+            return Ok(vec![]);
         }
 
-        let mut resumed = 0usize;
-        let mut resumed_ids: Vec<String> = Vec::new();
+        let mut claimed: Vec<(String, String, Option<String>)> = Vec::new();
 
         for (run_id, workflow_name, target_label) in orphaned {
             // Step 2: CAS flip running → failed.
@@ -645,72 +628,31 @@ impl<'a> WorkflowManager<'a> {
             if changed != 1 {
                 tracing::debug!(
                     run_id = %run_id,
-                    "reap_heartbeat_stuck_runs: CAS lost race for run (already reaped)"
+                    "claim_heartbeat_stuck_runs: CAS lost race for run (already reaped)"
                 );
                 continue;
             }
 
             tracing::info!(
                 run_id = %run_id,
-                "reap_heartbeat_stuck_runs: reaped orphaned run, resuming"
+                "claim_heartbeat_stuck_runs: reaped orphaned run, resuming"
             );
 
-            // Step 3: resume — status is now `failed`, which validate_resume_preconditions accepts.
-            let config_clone = config.clone();
-            let bin_dir = conductor_bin_dir.clone();
-            let run_id_clone = run_id.clone();
-            let workflow_name_clone = workflow_name.clone();
-            let target_label_clone = target_label.clone();
-            std::thread::spawn(move || {
-                let params = WorkflowResumeStandalone {
-                    config: config_clone.clone(),
-                    workflow_run_id: run_id_clone.clone(),
-                    model: None,
-                    from_step: None,
-                    restart: false,
-                    db_path: None,
-                    conductor_bin_dir: bin_dir,
-                };
-                if let Err(e) = crate::workflow::engine::resume_workflow_standalone(&params) {
-                    tracing::warn!(
-                        run_id = %run_id_clone,
-                        "reap_heartbeat_stuck_runs: auto-resume failed: {e}"
-                    );
-                    // Best-effort: fire a notification that this run failed to auto-resume.
-                    if let Ok(db) = crate::db::open_database(&crate::config::db_path()) {
-                        crate::notify::fire_heartbeat_stuck_failed_notification(
-                            &db,
-                            &config_clone.notifications,
-                            &config_clone.notify.hooks,
-                            &run_id_clone,
-                            &workflow_name_clone,
-                            target_label_clone.as_deref(),
-                            &e.to_string(),
-                        );
-                    } else {
-                        tracing::warn!(
-                            run_id = %run_id_clone,
-                            "reap_heartbeat_stuck_runs: could not open DB to fire stuck-run notification"
-                        );
-                    }
-                }
-            });
-
-            resumed_ids.push(run_id);
-            resumed += 1;
+            claimed.push((run_id, workflow_name, target_label));
         }
 
         // Fire a single batch notification for all runs that were claimed for resumption.
-        if !resumed_ids.is_empty() {
+        if !claimed.is_empty() {
+            let claimed_ids: Vec<String> = claimed.iter().map(|(id, _, _)| id.clone()).collect();
             crate::notify::fire_orphan_resumed_notification(
                 self.conn,
                 &config.notifications,
                 &config.notify.hooks,
-                &resumed_ids,
+                &claimed_ids,
             );
         }
 
-        Ok(resumed)
+        Ok(claimed)
     }
 
     /// Directly finalize workflow runs that are stuck in `running` status because
@@ -1182,37 +1124,29 @@ impl<'a> WorkflowManager<'a> {
     /// 4. Fire a batch orphan-resumed notification.
     ///
     /// Returns the number of runs handed off to resume threads.
-    pub fn watchdog_needs_resume_workflows(
-        &self,
-        config: &Config,
-        conductor_bin_dir: Option<PathBuf>,
-    ) -> Result<usize> {
-        use crate::workflow::WorkflowResumeStandalone;
-
+    /// CAS-claim `needs_resume` runs and fire the orphan-resumed notification.
+    ///
+    /// Returns the IDs of runs successfully claimed (flipped from `needs_resume` to
+    /// `failed`). Callers are responsible for spawning resume threads via
+    /// [`crate::workflow::engine::spawn_workflow_resume`].
+    pub fn claim_needs_resume_runs(&self, config: &Config) -> Result<Vec<String>> {
         // Step 1: find all needs_resume root runs.
-        let candidates: Vec<(String, String, Option<String>)> = query_collect(
+        let candidates: Vec<String> = query_collect(
             self.conn,
-            "SELECT id, workflow_name, target_label FROM workflow_runs \
+            "SELECT id FROM workflow_runs \
              WHERE status = 'needs_resume' \
                AND parent_workflow_run_id IS NULL",
             [],
-            |row| {
-                Ok((
-                    row.get("id")?,
-                    row.get("workflow_name")?,
-                    row.get("target_label")?,
-                ))
-            },
+            |row| row.get("id"),
         )?;
 
         if candidates.is_empty() {
-            return Ok(0);
+            return Ok(vec![]);
         }
 
-        let mut resumed = 0usize;
-        let mut resumed_ids: Vec<String> = Vec::new();
+        let mut claimed_ids: Vec<String> = Vec::new();
 
-        for (run_id, _workflow_name, _target_label) in candidates {
+        for run_id in candidates {
             // Step 2: CAS flip needs_resume → failed.
             // If another watchdog already won the race, changes() == 0 and we skip.
             let changed = self.conn.execute(
@@ -1226,53 +1160,30 @@ impl<'a> WorkflowManager<'a> {
             if changed != 1 {
                 tracing::debug!(
                     run_id = %run_id,
-                    "watchdog_needs_resume_workflows: CAS lost race (already claimed)"
+                    "claim_needs_resume_runs: CAS lost race (already claimed)"
                 );
                 continue;
             }
 
             tracing::info!(
                 run_id = %run_id,
-                "watchdog_needs_resume_workflows: resuming orphaned run"
+                "claim_needs_resume_runs: claimed orphaned run for resumption"
             );
 
-            // Step 3: spawn resume thread.
-            let config_clone = config.clone();
-            let bin_dir = conductor_bin_dir.clone();
-            let run_id_clone = run_id.clone();
-            std::thread::spawn(move || {
-                let params = WorkflowResumeStandalone {
-                    config: config_clone,
-                    workflow_run_id: run_id_clone.clone(),
-                    model: None,
-                    from_step: None,
-                    restart: false,
-                    db_path: None,
-                    conductor_bin_dir: bin_dir,
-                };
-                if let Err(e) = crate::workflow::engine::resume_workflow_standalone(&params) {
-                    tracing::warn!(
-                        run_id = %run_id_clone,
-                        "watchdog_needs_resume_workflows: auto-resume failed: {e}"
-                    );
-                }
-            });
-
-            resumed_ids.push(run_id);
-            resumed += 1;
+            claimed_ids.push(run_id);
         }
 
-        // Step 4: batch notification for all runs handed off.
-        if !resumed_ids.is_empty() {
+        // Batch notification for all runs handed off.
+        if !claimed_ids.is_empty() {
             crate::notify::fire_orphan_resumed_notification(
                 self.conn,
                 &config.notifications,
                 &config.notify.hooks,
-                &resumed_ids,
+                &claimed_ids,
             );
         }
 
-        Ok(resumed)
+        Ok(claimed_ids)
     }
 }
 
@@ -1440,7 +1351,7 @@ mod tests {
         assert_eq!(run_status(&conn, "run1"), "running");
     }
 
-    // ── watchdog_needs_resume_workflows ───────────────────────────────────────
+    // ── claim_needs_resume_runs ───────────────────────────────────────────────
 
     #[test]
     fn test_watchdog_cas_flip_needs_resume_to_failed() {
@@ -1457,10 +1368,14 @@ mod tests {
 
         let mgr = WorkflowManager::new(&conn);
         let config = Config::default();
-        let count = mgr.watchdog_needs_resume_workflows(&config, None).unwrap();
+        let claimed = mgr.claim_needs_resume_runs(&config).unwrap();
 
         // Watchdog should have claimed the run (CAS flip to failed).
-        assert_eq!(count, 1, "watchdog should claim the needs_resume run");
+        assert_eq!(
+            claimed.len(),
+            1,
+            "watchdog should claim the needs_resume run"
+        );
         // Status is flipped to 'failed' so resume_workflow_standalone can validate it.
         assert_eq!(
             run_status(&conn, "run1"),
@@ -1476,9 +1391,12 @@ mod tests {
 
         let mgr = WorkflowManager::new(&conn);
         let config = Config::default();
-        let count = mgr.watchdog_needs_resume_workflows(&config, None).unwrap();
+        let claimed = mgr.claim_needs_resume_runs(&config).unwrap();
 
-        assert_eq!(count, 0, "watchdog should not touch non-needs_resume runs");
+        assert!(
+            claimed.is_empty(),
+            "watchdog should not touch non-needs_resume runs"
+        );
         assert_eq!(run_status(&conn, "run1"), "failed");
     }
 
@@ -1497,9 +1415,9 @@ mod tests {
         assert_eq!(classified, 1);
         assert_eq!(run_status(&conn, "run1"), "needs_resume");
 
-        // Phase 2: watchdog CAS-flips to failed and spawns resume.
-        let resumed = mgr.watchdog_needs_resume_workflows(&config, None).unwrap();
-        assert_eq!(resumed, 1);
+        // Phase 2: watchdog CAS-flips to failed.
+        let claimed = mgr.claim_needs_resume_runs(&config).unwrap();
+        assert_eq!(claimed.len(), 1);
         assert_eq!(run_status(&conn, "run1"), "failed");
     }
 

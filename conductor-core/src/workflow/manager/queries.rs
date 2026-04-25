@@ -42,12 +42,12 @@ fn granularity_to_strftime_format(granularity: TimeGranularity) -> &'static str 
 }
 
 impl<'a> WorkflowManager<'a> {
-    /// Token columns from the agent_runs join, used in gate step queries.
+    /// Cost and token columns from the agent_runs join, used in gate step queries.
     const AGENT_RUN_TOKEN_COLS: &'static str =
-        "ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens";
+        "ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens, ar.cost_usd, ar.num_turns, ar.duration_ms";
 
-    /// Common SELECT clause for step queries with agent run token data.
-    const STEP_SELECT_WITH_TOKENS: &'static str = "SELECT {cols}, ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens \
+    /// Common SELECT clause for step queries with agent run token and cost data.
+    const STEP_SELECT_WITH_TOKENS: &'static str = "SELECT {cols}, ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens, ar.cost_usd, ar.num_turns, ar.duration_ms \
                  FROM workflow_run_steps s \
                  LEFT JOIN agent_runs ar ON s.child_run_id = ar.id";
 
@@ -790,7 +790,7 @@ impl<'a> WorkflowManager<'a> {
             Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
         );
         let steps: Vec<WorkflowRunStep> = {
-            let mut stmt = self.conn.prepare_cached(&sql)?;
+            let mut stmt = self.conn.prepare(&sql)?;
             let rows = stmt.query_map(
                 rusqlite::params_from_iter(run_ids.iter().copied()),
                 row_to_workflow_step,
@@ -2064,6 +2064,119 @@ mod tests {
         assert_eq!(step.output_tokens, Some(200));
         assert_eq!(step.cache_read_input_tokens, Some(50));
         assert_eq!(step.cache_creation_input_tokens, Some(75));
+    }
+
+    #[test]
+    fn find_waiting_gates_for_runs_empty_input_returns_empty() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let result = mgr.find_waiting_gates_for_runs(&[]).unwrap();
+        assert!(
+            result.is_empty(),
+            "empty input should return empty map without querying DB"
+        );
+    }
+
+    #[test]
+    fn find_waiting_gates_for_runs_returns_highest_position_gate_per_run() {
+        let conn = setup_db();
+
+        for run_id in &["run-g-1", "run-g-2"] {
+            conn.execute(
+                "INSERT INTO workflow_runs \
+                 (id, workflow_name, worktree_id, parent_run_id, status, started_at) \
+                 VALUES (:id, 'test-wf', NULL, 'dummy-ar', 'running', datetime('now'))",
+                rusqlite::named_params! { ":id": run_id },
+            )
+            .unwrap();
+        }
+
+        // run-g-1: two gate steps at positions 0 and 2 — should return position 2
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position, gate_type) \
+             VALUES ('sg-1a', 'run-g-1', 'approve-a', 'gate', 'waiting', 0, 'human_approval')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position, gate_type) \
+             VALUES ('sg-1b', 'run-g-1', 'approve-b', 'gate', 'running', 2, 'human_approval')",
+            [],
+        )
+        .unwrap();
+
+        // run-g-2: one gate step at position 1
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position, gate_type) \
+             VALUES ('sg-2', 'run-g-2', 'review', 'gate', 'waiting', 1, 'human_review')",
+            [],
+        )
+        .unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let result = mgr
+            .find_waiting_gates_for_runs(&["run-g-1", "run-g-2"])
+            .unwrap();
+
+        assert_eq!(result.len(), 2, "both runs should have an entry");
+        assert_eq!(
+            result["run-g-1"].id, "sg-1b",
+            "run-g-1 should return the highest-position gate (position 2)"
+        );
+        assert_eq!(
+            result["run-g-2"].id, "sg-2",
+            "run-g-2 should return its only gate step"
+        );
+    }
+
+    #[test]
+    fn find_waiting_gates_for_runs_excludes_runs_with_no_waiting_gate() {
+        let conn = setup_db();
+
+        for run_id in &["run-h-1", "run-h-2"] {
+            conn.execute(
+                "INSERT INTO workflow_runs \
+                 (id, workflow_name, worktree_id, parent_run_id, status, started_at) \
+                 VALUES (:id, 'test-wf', NULL, 'dummy-ar', 'running', datetime('now'))",
+                rusqlite::named_params! { ":id": run_id },
+            )
+            .unwrap();
+        }
+
+        // run-h-1: a completed (already approved) gate — should NOT appear
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position, gate_type, gate_approved_at) \
+             VALUES ('sh-1', 'run-h-1', 'approve', 'gate', 'completed', 0, 'human_approval', datetime('now'))",
+            [],
+        )
+        .unwrap();
+
+        // run-h-2: a waiting gate — should appear
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position, gate_type) \
+             VALUES ('sh-2', 'run-h-2', 'review', 'gate', 'waiting', 0, 'human_review')",
+            [],
+        )
+        .unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let result = mgr
+            .find_waiting_gates_for_runs(&["run-h-1", "run-h-2"])
+            .unwrap();
+
+        assert!(
+            !result.contains_key("run-h-1"),
+            "run with no unapproved gate should be absent"
+        );
+        assert!(
+            result.contains_key("run-h-2"),
+            "run with waiting gate should be present"
+        );
     }
 
     /// Verify that `find_waiting_gate` returns `None` for a token-only step that has no

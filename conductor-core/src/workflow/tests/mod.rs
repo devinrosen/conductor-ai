@@ -22,17 +22,14 @@ pub(super) use super::engine::{
     ResumeContext,
 };
 
-/// Thin wrapper around `runkon_flow::engine::completed_keys_from_steps` to avoid
-/// duplicating the implementation. Converts core steps to runkon-flow types first.
 pub(super) fn completed_keys_from_steps(
     steps: &[WorkflowRunStep],
 ) -> std::collections::HashSet<StepKey> {
-    let rk_steps: Vec<_> = steps
+    steps
         .iter()
-        .cloned()
-        .map(super::rk_types::step_to_rk)
-        .collect();
-    runkon_flow::engine::completed_keys_from_steps(&rk_steps)
+        .filter(|s| s.status == WorkflowStepStatus::Completed)
+        .map(|s| (s.step_name.clone(), s.iteration as u32))
+        .collect()
 }
 pub(super) use super::executors::{
     execute_call, execute_call_workflow, execute_do, execute_do_while, execute_unless,
