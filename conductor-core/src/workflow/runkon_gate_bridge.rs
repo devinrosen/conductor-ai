@@ -180,3 +180,113 @@ pub(in crate::workflow) fn register_rk_gate_resolvers(
             db_path,
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use runkon_flow::persistence_memory::InMemoryWorkflowPersistence;
+    use runkon_flow::traits::gate_resolver::{GateContext as RkGateContext, GateParams as RkGateParams};
+    use runkon_flow::traits::persistence::{NewRun, NewStep, WorkflowPersistence};
+
+    fn make_persistence_with_step() -> (Arc<InMemoryWorkflowPersistence>, String) {
+        let p = Arc::new(InMemoryWorkflowPersistence::new());
+        let run = p
+            .create_run(NewRun {
+                workflow_name: "wf".to_string(),
+                worktree_id: None,
+                ticket_id: None,
+                repo_id: None,
+                parent_run_id: String::new(),
+                dry_run: false,
+                trigger: "manual".to_string(),
+                definition_snapshot: None,
+                parent_workflow_run_id: None,
+                target_label: None,
+            })
+            .unwrap();
+        let step_id = p
+            .insert_step(NewStep {
+                workflow_run_id: run.id,
+                step_name: "gate".to_string(),
+                role: "gate".to_string(),
+                can_commit: false,
+                position: 0,
+                iteration: 0,
+                retry_count: None,
+            })
+            .unwrap();
+        (p, step_id)
+    }
+
+    fn make_resolver(p: Arc<InMemoryWorkflowPersistence>) -> RkHumanApprovalGateResolver {
+        RkHumanApprovalGateResolver {
+            persistence: p,
+            gate_type_str: "human_approval",
+        }
+    }
+
+    fn make_params(step_id: &str) -> RkGateParams {
+        RkGateParams {
+            step_id: step_id.to_string(),
+            gate_name: "gate".to_string(),
+            prompt: None,
+            min_approvals: 1,
+            approval_mode: runkon_flow::dsl::ApprovalMode::MinApprovals,
+            timeout_secs: 0,
+            bot_name: None,
+            options: vec![],
+        }
+    }
+
+    fn make_ctx(step_id: &str) -> RkGateContext {
+        RkGateContext {
+            run_id: "run-1".to_string(),
+            step_id: step_id.to_string(),
+        }
+    }
+
+    #[test]
+    fn poll_returns_pending_when_not_yet_approved() {
+        let (p, step_id) = make_persistence_with_step();
+        let resolver = make_resolver(p);
+        let poll = resolver.poll("run-1", &make_params(&step_id), &make_ctx(&step_id)).unwrap();
+        assert!(matches!(poll, RkGatePoll::Pending));
+    }
+
+    #[test]
+    fn poll_returns_approved_with_feedback() {
+        let (p, step_id) = make_persistence_with_step();
+        p.approve_gate(&step_id, "reviewer", Some("lgtm"), None).unwrap();
+        let resolver = make_resolver(p);
+        let poll = resolver.poll("run-1", &make_params(&step_id), &make_ctx(&step_id)).unwrap();
+        assert!(
+            matches!(&poll, RkGatePoll::Approved(Some(s)) if s == "lgtm"),
+            "expected Approved(Some(\"lgtm\")), got {poll:?}"
+        );
+    }
+
+    #[test]
+    fn poll_returns_rejected_with_message() {
+        let (p, step_id) = make_persistence_with_step();
+        p.reject_gate(&step_id, "reviewer", Some("not good")).unwrap();
+        let resolver = make_resolver(p);
+        let poll = resolver.poll("run-1", &make_params(&step_id), &make_ctx(&step_id)).unwrap();
+        assert!(
+            matches!(&poll, RkGatePoll::Rejected(s) if s == "not good"),
+            "expected Rejected(\"not good\"), got {poll:?}"
+        );
+    }
+
+    #[test]
+    fn poll_rejected_uses_gate_name_fallback_when_no_feedback() {
+        let (p, step_id) = make_persistence_with_step();
+        p.reject_gate(&step_id, "reviewer", None).unwrap();
+        let resolver = make_resolver(p);
+        let params = make_params(&step_id);
+        let poll = resolver.poll("run-1", &params, &make_ctx(&step_id)).unwrap();
+        assert!(
+            matches!(&poll, RkGatePoll::Rejected(s) if s.contains("gate")),
+            "expected fallback rejection message containing gate name, got {poll:?}"
+        );
+    }
+}

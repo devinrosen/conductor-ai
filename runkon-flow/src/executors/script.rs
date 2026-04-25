@@ -41,6 +41,21 @@ fn make_temp_file(step_name: &str, purpose: &str) -> Option<PathBuf> {
     }
 }
 
+fn apply_script_on_fail(
+    state: &mut ExecutionState,
+    step_name: &str,
+    on_fail: &Option<crate::dsl::OnFail>,
+    err_msg: String,
+) -> Result<()> {
+    match on_fail {
+        Some(crate::dsl::OnFail::Continue) => {
+            record_step_skipped(state, step_name.to_string(), step_name);
+            Ok(())
+        }
+        _ => record_step_failure(state, step_name.to_string(), step_name, err_msg, 1, true),
+    }
+}
+
 pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: u32) -> Result<()> {
     let pos = state.position;
     state.position += 1;
@@ -309,6 +324,12 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
             // Read captured stderr (up to 2 000 chars) to include in the error.
             let captured_stderr = stderr_file.as_ref().and_then(|p| {
                 std::fs::read_to_string(p)
+                    .map_err(|e| {
+                        tracing::warn!(
+                            "script '{}': failed to read captured stderr: {e}",
+                            node.name
+                        )
+                    })
                     .ok()
                     .map(|s| s.trim().chars().take(2000).collect::<String>())
                     .filter(|s| !s.is_empty())
@@ -348,13 +369,7 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                 let _ = std::fs::remove_file(p);
             }
 
-            match &node.on_fail {
-                Some(crate::dsl::OnFail::Continue) => {
-                    record_step_skipped(state, node.name.clone(), &node.name);
-                    Ok(())
-                }
-                _ => record_step_failure(state, node.name.clone(), &node.name, err_msg, 1, true),
-            }
+            apply_script_on_fail(state, &node.name, &node.on_fail, err_msg)
         }
         Err(e) => {
             let err_msg = format!("Script '{}' failed to execute: {e}", node.name);
@@ -381,13 +396,7 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                 let _ = std::fs::remove_file(p);
             }
 
-            match &node.on_fail {
-                Some(crate::dsl::OnFail::Continue) => {
-                    record_step_skipped(state, node.name.clone(), &node.name);
-                    Ok(())
-                }
-                _ => record_step_failure(state, node.name.clone(), &node.name, err_msg, 1, true),
-            }
+            apply_script_on_fail(state, &node.name, &node.on_fail, err_msg)
         }
     }
 }
@@ -565,6 +574,76 @@ mod tests {
         assert!(
             ctx.contains("hello"),
             "valid key should be injected as CONDUCTOR_VALID_KEY; context: {ctx:?}"
+        );
+    }
+
+    /// env block vars from node.env are passed to the subprocess.
+    #[test]
+    fn node_env_vars_are_injected_into_subprocess() {
+        let (persistence, run_id) = make_persistence();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone());
+
+        let mut env = HashMap::new();
+        env.insert("MY_TEST_VAR".to_string(), "expected_value".to_string());
+        let node = ScriptNode {
+            name: "env-inject".to_string(),
+            run: "echo $MY_TEST_VAR".to_string(),
+            env,
+            timeout: None,
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        };
+        execute_script(&mut state, &node, 0).unwrap();
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        let step = &steps[0];
+        assert_eq!(step.status, WorkflowStepStatus::Completed);
+        let ctx = step.context_out.as_deref().unwrap_or("");
+        assert!(
+            ctx.contains("expected_value"),
+            "MY_TEST_VAR should be injected from node.env; context: {ctx:?}"
+        );
+    }
+
+    /// Template variables in node.env values are substituted from workflow state.
+    #[test]
+    fn node_env_vars_support_template_substitution() {
+        let (persistence, run_id) = make_persistence();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone());
+        // prior_context comes from state.contexts.last().context in build_variable_map
+        state.contexts.push(crate::types::ContextEntry {
+            step: "prev-step".to_string(),
+            iteration: 0,
+            context: "substituted".to_string(),
+            markers: vec![],
+            structured_output: None,
+            output_file: None,
+        });
+
+        let mut env = HashMap::new();
+        env.insert(
+            "TEMPLATED_VAR".to_string(),
+            "{{prior_context}}".to_string(),
+        );
+        let node = ScriptNode {
+            name: "env-template".to_string(),
+            run: "echo $TEMPLATED_VAR".to_string(),
+            env,
+            timeout: None,
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        };
+        execute_script(&mut state, &node, 0).unwrap();
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        let step = &steps[0];
+        assert_eq!(step.status, WorkflowStepStatus::Completed);
+        let ctx = step.context_out.as_deref().unwrap_or("");
+        assert!(
+            ctx.contains("substituted"),
+            "template in env value should be substituted; context: {ctx:?}"
         );
     }
 }

@@ -577,15 +577,13 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         workflow_run_id: &str,
         model: Option<&str>,
     ) -> runkon_flow::engine_error::Result<runkon_flow::types::WorkflowResult> {
-        let conn = crate::db::open_database(&self.db_path).map_err(|e| {
-            EngineError::Workflow(format!(
-                "failed to open database at {}: {e}",
-                self.db_path.display()
-            ))
-        })?;
+        let guard = self
+            .conn
+            .lock()
+            .map_err(|e| EngineError::Workflow(format!("db mutex poisoned: {e}")))?;
 
         let input = crate::workflow::types::WorkflowResumeInput {
-            conn: &conn,
+            conn: &guard,
             config: &self.config,
             workflow_run_id,
             model,

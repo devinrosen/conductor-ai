@@ -288,8 +288,10 @@ fn validate_workflow_resources(
 
     let specs: Vec<AgentSpec> = all_agents.iter().map(AgentSpec::from).collect();
     let mut all_plugin_dirs = extra_plugin_dirs.to_vec();
+    let mut seen: std::collections::HashSet<String> =
+        all_plugin_dirs.iter().cloned().collect();
     for dir in workflow.collect_all_plugin_dirs() {
-        if !all_plugin_dirs.contains(&dir) {
+        if seen.insert(dir.clone()) {
             all_plugin_dirs.push(dir);
         }
     }

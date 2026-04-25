@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 
 use crate::error::ConductorError;
 use crate::workflow::engine_error::EngineError;
@@ -375,19 +375,7 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for SqliteWorkflowPer
     }
 
     fn is_run_cancelled(&self, run_id: &str) -> Result<bool, EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        let status: Option<String> = guard
-            .query_row(
-                "SELECT status FROM workflow_runs WHERE id = ?1",
-                rusqlite::params![run_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| EngineError::Persistence(e.to_string()))?;
-        Ok(matches!(
-            status.as_deref(),
-            Some("cancelled") | Some("cancelling")
-        ))
+        self.with_manager(|mgr| mgr.is_run_cancelled(run_id))
     }
 
     fn tick_heartbeat(&self, run_id: &str) -> Result<(), EngineError> {
