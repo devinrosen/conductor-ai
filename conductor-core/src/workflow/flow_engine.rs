@@ -1,15 +1,12 @@
+// TODO(Phase 3.3): rename this file to action_registry_builder.rs — the current name
+// mirrors runkon-flow/src/flow_engine.rs (the actual FlowEngine), creating confusion.
+
 use std::collections::HashMap;
 
 use crate::error::{ConductorError, Result};
 
 use super::action_executor::{ActionExecutor, ActionRegistry};
 
-/// Builder for constructing an `ActionRegistry`.
-///
-/// Call `.action()` to register named executors and `.action_fallback()` to
-/// set the catch-all executor. Calling `.action_fallback()` more than once
-/// causes the second call to return an error (enforced at call time, not at
-/// `build()` time, so the builder chain remains infallible after the first call).
 /// Builder for constructing an `ActionRegistry` used by the legacy conductor-core engine path.
 ///
 /// Note: `runkon-flow` exports its own `FlowEngineBuilder` that constructs a full `FlowEngine`.

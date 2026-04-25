@@ -77,7 +77,7 @@ pub(super) fn run_gh_json(
 /// without spawning a real subprocess.
 fn process_gh_output(success: bool, stdout: &[u8], stderr: &[u8]) -> Option<serde_json::Value> {
     if !success {
-        // Truncate and redact stderr before logging: gh CLI can include auth tokens/scopes
+        // Truncate stderr before logging: gh CLI can include auth tokens/scopes
         // in 401/403 error messages, so we emit only the first 200 characters.
         let stderr_str = String::from_utf8_lossy(stderr);
         let excerpt = stderr_str.trim();

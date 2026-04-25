@@ -924,3 +924,94 @@ fn test_standalone_parent_step_id_links_child_run() {
         "standalone parent_step_id path must write child_run_id back to the parent step"
     );
 }
+
+/// `execute_workflow_standalone` must persist `default_bot_name` on the created
+/// workflow run so it is available when the run is resumed.
+#[test]
+fn test_standalone_default_bot_name_persisted() {
+    let (_tmp, db_path) = make_standalone_db();
+
+    let params = crate::workflow::types::WorkflowExecStandalone {
+        config: Config::default(),
+        workflow: make_empty_workflow(),
+        worktree_id: Some("w1".to_string()),
+        working_dir: "/tmp/ws/feat-test".to_string(),
+        repo_path: "/tmp/repo".to_string(),
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: WorkflowExecConfig::default(),
+        inputs: HashMap::new(),
+        target_label: None,
+        run_id_notify: None,
+        triggered_by_hook: false,
+        conductor_bin_dir: None,
+        force: false,
+        extra_plugin_dirs: vec![],
+        db_path: Some(db_path.clone()),
+        parent_workflow_run_id: None,
+        depth: 1,
+        parent_step_id: None,
+        default_bot_name: Some("conductor".to_string()),
+        iteration: 0,
+    };
+
+    let result = execute_workflow_standalone(&params).unwrap();
+
+    let conn = crate::db::open_database(&db_path).expect("open db");
+    let wf_mgr = WorkflowManager::new(&conn);
+    let run = wf_mgr
+        .get_workflow_run(&result.workflow_run_id)
+        .unwrap()
+        .expect("run should exist");
+    assert_eq!(
+        run.default_bot_name.as_deref(),
+        Some("conductor"),
+        "default_bot_name must be persisted on the workflow run"
+    );
+}
+
+/// `execute_workflow_standalone` must persist `iteration` on the created
+/// workflow run so foreach sub-workflow runs are correctly tracked.
+#[test]
+fn test_standalone_iteration_persisted() {
+    let (_tmp, db_path) = make_standalone_db();
+
+    let params = crate::workflow::types::WorkflowExecStandalone {
+        config: Config::default(),
+        workflow: make_empty_workflow(),
+        worktree_id: Some("w1".to_string()),
+        working_dir: "/tmp/ws/feat-test".to_string(),
+        repo_path: "/tmp/repo".to_string(),
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: WorkflowExecConfig::default(),
+        inputs: HashMap::new(),
+        target_label: None,
+        run_id_notify: None,
+        triggered_by_hook: false,
+        conductor_bin_dir: None,
+        force: false,
+        extra_plugin_dirs: vec![],
+        db_path: Some(db_path.clone()),
+        parent_workflow_run_id: None,
+        depth: 1,
+        parent_step_id: None,
+        default_bot_name: None,
+        iteration: 2,
+    };
+
+    let result = execute_workflow_standalone(&params).unwrap();
+
+    let conn = crate::db::open_database(&db_path).expect("open db");
+    let wf_mgr = WorkflowManager::new(&conn);
+    let run = wf_mgr
+        .get_workflow_run(&result.workflow_run_id)
+        .unwrap()
+        .expect("run should exist");
+    assert_eq!(
+        run.iteration, 2,
+        "iteration must be persisted on the workflow run for foreach sub-workflow tracking"
+    );
+}

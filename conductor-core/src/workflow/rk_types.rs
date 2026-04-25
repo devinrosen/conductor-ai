@@ -283,6 +283,24 @@ pub fn fan_out_item_to_rk(r: CoreFanOutItemRow) -> RkFanOutItemRow {
     }
 }
 
+pub fn rk_workflow_result_to_core(
+    r: runkon_flow::types::WorkflowResult,
+) -> crate::workflow::types::WorkflowResult {
+    crate::workflow::types::WorkflowResult {
+        workflow_run_id: r.workflow_run_id,
+        worktree_id: r.worktree_id,
+        workflow_name: r.workflow_name,
+        all_succeeded: r.all_succeeded,
+        total_cost: r.total_cost,
+        total_turns: r.total_turns,
+        total_duration_ms: r.total_duration_ms,
+        total_input_tokens: r.total_input_tokens,
+        total_output_tokens: r.total_output_tokens,
+        total_cache_read_input_tokens: r.total_cache_read_input_tokens,
+        total_cache_creation_input_tokens: r.total_cache_creation_input_tokens,
+    }
+}
+
 pub fn gate_approval_to_rk(s: CoreGateApprovalState) -> RkGateApprovalState {
     match s {
         CoreGateApprovalState::Pending => RkGateApprovalState::Pending,

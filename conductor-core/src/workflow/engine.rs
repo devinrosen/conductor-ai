@@ -1230,7 +1230,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         runkon_flow::FlowEngineBuilder::new().with_event_sinks(&rk_state.event_sinks),
         Arc::clone(&persistence),
         params.working_dir.clone(),
-        None,
+        params.default_bot_name.clone(),
         config.clone(),
         db,
     )
@@ -1278,19 +1278,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         }
     }
 
-    Ok(WorkflowResult {
-        workflow_run_id: rk_result.workflow_run_id,
-        worktree_id: rk_result.worktree_id,
-        workflow_name: rk_result.workflow_name,
-        all_succeeded: rk_result.all_succeeded,
-        total_cost: rk_result.total_cost,
-        total_turns: rk_result.total_turns,
-        total_duration_ms: rk_result.total_duration_ms,
-        total_input_tokens: rk_result.total_input_tokens,
-        total_output_tokens: rk_result.total_output_tokens,
-        total_cache_read_input_tokens: rk_result.total_cache_read_input_tokens,
-        total_cache_creation_input_tokens: rk_result.total_cache_creation_input_tokens,
-    })
+    Ok(super::rk_types::rk_workflow_result_to_core(rk_result))
 }
 
 /// Validate resume preconditions that can be checked from status alone.
@@ -1665,19 +1653,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         .run(&rk_def, &mut rk_state)
         .map_err(|e| ConductorError::Workflow(e.to_string()))?;
 
-    Ok(WorkflowResult {
-        workflow_run_id: rk_result.workflow_run_id,
-        worktree_id: rk_result.worktree_id,
-        workflow_name: rk_result.workflow_name,
-        all_succeeded: rk_result.all_succeeded,
-        total_cost: rk_result.total_cost,
-        total_turns: rk_result.total_turns,
-        total_duration_ms: rk_result.total_duration_ms,
-        total_input_tokens: rk_result.total_input_tokens,
-        total_output_tokens: rk_result.total_output_tokens,
-        total_cache_read_input_tokens: rk_result.total_cache_read_input_tokens,
-        total_cache_creation_input_tokens: rk_result.total_cache_creation_input_tokens,
-    })
+    Ok(super::rk_types::rk_workflow_result_to_core(rk_result))
 }
 
 /// Walk a list of workflow nodes, dispatching to the appropriate handler.

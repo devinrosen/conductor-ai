@@ -9,6 +9,6 @@ pub mod script;
 use crate::engine_error::EngineError;
 
 #[inline]
-pub(super) fn p_err(e: EngineError) -> EngineError {
+pub(super) fn p_err(e: impl std::fmt::Display) -> EngineError {
     EngineError::Persistence(e.to_string())
 }
