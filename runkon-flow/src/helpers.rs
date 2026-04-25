@@ -119,29 +119,15 @@ fn fix_backslash_escapes(s: &str) -> String {
 /// Supported suffixes: `ms` (milliseconds), `h` (hours), `m` (minutes), `s` (seconds).
 /// A bare integer is treated as seconds.
 pub(crate) fn parse_duration(s: &str) -> std::result::Result<std::time::Duration, String> {
-    if let Some(n) = s.strip_suffix("ms") {
-        let ms = n
-            .parse::<u64>()
-            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
-        return Ok(std::time::Duration::from_millis(ms));
-    }
-    if let Some(n) = s.strip_suffix('h') {
-        let h = n
-            .parse::<u64>()
-            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
-        return Ok(std::time::Duration::from_secs(h * 3600));
-    }
-    if let Some(n) = s.strip_suffix('m') {
-        let m = n
-            .parse::<u64>()
-            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
-        return Ok(std::time::Duration::from_secs(m * 60));
-    }
-    if let Some(n) = s.strip_suffix('s') {
-        let sec = n
-            .parse::<u64>()
-            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
-        return Ok(std::time::Duration::from_secs(sec));
+    // "ms" must precede "s" so "3ms" is not partially matched by the "s" entry.
+    for (suffix, millis_per_unit) in &[("ms", 1u64), ("h", 3_600_000), ("m", 60_000), ("s", 1_000)]
+    {
+        if let Some(n) = s.strip_suffix(suffix) {
+            let count = n
+                .parse::<u64>()
+                .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
+            return Ok(std::time::Duration::from_millis(count * millis_per_unit));
+        }
     }
     let sec = s
         .parse::<u64>()

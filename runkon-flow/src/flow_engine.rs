@@ -257,17 +257,14 @@ impl FlowEngine {
             }
         }
 
-        let mut visited: HashSet<String> = HashSet::new();
-        validate_workflow_sections(
+        let ctx = ValidateCtx {
             action_registry,
             item_provider_registry,
             gate_resolver_registry,
-            &self.workflow_resolver,
-            &def.body,
-            &def.always,
-            &mut errors,
-            &mut visited,
-        );
+            workflow_resolver: &self.workflow_resolver,
+        };
+        let mut visited: HashSet<String> = HashSet::new();
+        validate_workflow_sections(&ctx, &def.body, &def.always, &mut errors, &mut visited);
 
         if errors.is_empty() {
             Ok(())
@@ -277,42 +274,26 @@ impl FlowEngine {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+struct ValidateCtx<'a> {
+    action_registry: &'a ActionRegistry,
+    item_provider_registry: &'a ItemProviderRegistry,
+    gate_resolver_registry: &'a GateResolverRegistry,
+    workflow_resolver: &'a Option<Arc<dyn WorkflowResolver>>,
+}
+
 fn validate_workflow_sections(
-    action_registry: &ActionRegistry,
-    item_provider_registry: &ItemProviderRegistry,
-    gate_resolver_registry: &GateResolverRegistry,
-    workflow_resolver: &Option<Arc<dyn WorkflowResolver>>,
+    ctx: &ValidateCtx<'_>,
     body: &[WorkflowNode],
     always: &[WorkflowNode],
     errors: &mut Vec<ValidationError>,
     visited: &mut HashSet<String>,
 ) {
-    validate_nodes_impl(
-        action_registry,
-        item_provider_registry,
-        gate_resolver_registry,
-        workflow_resolver,
-        body,
-        errors,
-        visited,
-    );
-    validate_nodes_impl(
-        action_registry,
-        item_provider_registry,
-        gate_resolver_registry,
-        workflow_resolver,
-        always,
-        errors,
-        visited,
-    );
+    validate_nodes_impl(ctx, body, errors, visited);
+    validate_nodes_impl(ctx, always, errors, visited);
 }
 
 fn validate_nodes_impl(
-    action_registry: &ActionRegistry,
-    item_provider_registry: &ItemProviderRegistry,
-    gate_resolver_registry: &GateResolverRegistry,
-    workflow_resolver: &Option<Arc<dyn WorkflowResolver>>,
+    ctx: &ValidateCtx<'_>,
     nodes: &[WorkflowNode],
     errors: &mut Vec<ValidationError>,
     visited: &mut HashSet<String>,
@@ -321,7 +302,7 @@ fn validate_nodes_impl(
         match node {
             WorkflowNode::Call(n) => {
                 let name = n.agent.label();
-                if !action_registry.has_action(name) {
+                if !ctx.action_registry.has_action(name) {
                     errors.push(ValidationError {
                         message: format!(
                             "call '{}': no registered ActionExecutor for '{}'",
@@ -338,7 +319,7 @@ fn validate_nodes_impl(
             WorkflowNode::Parallel(n) => {
                 for agent_ref in &n.calls {
                     let name = agent_ref.label();
-                    if !action_registry.has_action(name) {
+                    if !ctx.action_registry.has_action(name) {
                         errors.push(ValidationError {
                             message: format!(
                                 "parallel call '{}': no registered ActionExecutor for '{}'",
@@ -354,7 +335,7 @@ fn validate_nodes_impl(
                 }
             }
             WorkflowNode::ForEach(n) => {
-                if item_provider_registry.get(&n.over).is_none() {
+                if ctx.item_provider_registry.get(&n.over).is_none() {
                     errors.push(ValidationError {
                         message: format!(
                             "foreach '{}': no registered ItemProvider for '{}'",
@@ -371,7 +352,7 @@ fn validate_nodes_impl(
                 // QualityGate is evaluated inline and never goes through a GateResolver.
                 if n.gate_type != GateType::QualityGate {
                     let type_str = n.gate_type.to_string();
-                    if !gate_resolver_registry.has_type(&type_str) {
+                    if !ctx.gate_resolver_registry.has_type(&type_str) {
                         errors.push(ValidationError {
                             message: format!(
                                 "gate '{}': no registered GateResolver for type '{}'",
@@ -388,15 +369,12 @@ fn validate_nodes_impl(
             WorkflowNode::CallWorkflow(n) => {
                 if !visited.contains(&n.workflow) {
                     visited.insert(n.workflow.clone());
-                    if let Some(resolver) = workflow_resolver {
+                    if let Some(resolver) = ctx.workflow_resolver {
                         match resolver.resolve(&n.workflow).map(|d| (*d).clone()) {
                             Ok(sub_def) => {
                                 let mut sub_errors = Vec::new();
                                 validate_workflow_sections(
-                                    action_registry,
-                                    item_provider_registry,
-                                    gate_resolver_registry,
-                                    workflow_resolver,
+                                    ctx,
                                     &sub_def.body,
                                     &sub_def.always,
                                     &mut sub_errors,
@@ -429,15 +407,7 @@ fn validate_nodes_impl(
             }
             _ => {
                 if let Some(body) = node.body() {
-                    validate_nodes_impl(
-                        action_registry,
-                        item_provider_registry,
-                        gate_resolver_registry,
-                        workflow_resolver,
-                        body,
-                        errors,
-                        visited,
-                    );
+                    validate_nodes_impl(ctx, body, errors, visited);
                 }
             }
         }
