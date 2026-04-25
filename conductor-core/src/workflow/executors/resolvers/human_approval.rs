@@ -6,18 +6,18 @@ use crate::workflow::persistence::{GateApprovalState, WorkflowPersistence};
 
 /// Distinguishes the two human gate types so a single struct can register
 /// under both `"human_approval"` and `"human_review"`.
-pub(in crate::workflow::executors) enum HumanGateKind {
+pub(in crate::workflow) enum HumanGateKind {
     HumanApproval,
     HumanReview,
 }
 
-pub(in crate::workflow::executors) struct HumanApprovalGateResolver {
+pub(in crate::workflow) struct HumanApprovalGateResolver {
     persistence: Arc<dyn WorkflowPersistence>,
     kind: HumanGateKind,
 }
 
 impl HumanApprovalGateResolver {
-    pub(in crate::workflow::executors) fn new(
+    pub(in crate::workflow) fn new(
         persistence: Arc<dyn WorkflowPersistence>,
         kind: HumanGateKind,
     ) -> Self {

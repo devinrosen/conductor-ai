@@ -913,6 +913,128 @@ fn test_child_workflow_not_blocked_by_parent() {
     );
 }
 
+/// Helper: create a file-based temp db with schema + worktree "w1" pre-inserted.
+fn make_standalone_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
+    let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+    let path = tmp.path().to_path_buf();
+    {
+        let conn = crate::db::open_database(&path).expect("open temp db");
+        crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+        crate::test_helpers::insert_test_worktree(&conn, "w1", "r1", "feat-test", "/tmp/ws/feat-test");
+    }
+    (tmp, path)
+}
+
+/// `execute_workflow_standalone` with `force=true` must cancel an active run and
+/// allow a new one to start (mirrors the same coverage for `execute_workflow`).
+#[test]
+fn test_standalone_force_cancels_active_run() {
+    let (_tmp, db_path) = make_standalone_db();
+
+    let active_run_id = {
+        let conn = crate::db::open_database(&db_path).expect("open db");
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("running-wf", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+        wf_mgr
+            .update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
+            .unwrap();
+        run.id
+    };
+
+    let params = crate::workflow::types::WorkflowExecStandalone {
+        config: Config::default(),
+        workflow: make_empty_workflow(),
+        worktree_id: Some("w1".to_string()),
+        working_dir: "/tmp/ws/feat-test".to_string(),
+        repo_path: "/tmp/repo".to_string(),
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: WorkflowExecConfig::default(),
+        inputs: HashMap::new(),
+        target_label: None,
+        run_id_notify: None,
+        triggered_by_hook: false,
+        conductor_bin_dir: None,
+        force: true,
+        extra_plugin_dirs: vec![],
+        db_path: Some(db_path.clone()),
+        parent_workflow_run_id: None,
+        depth: 0,
+        parent_step_id: None,
+        default_bot_name: None,
+        iteration: 0,
+    };
+    let result = execute_workflow_standalone(&params);
+    assert!(
+        !matches!(result, Err(ConductorError::WorkflowRunAlreadyActive { .. })),
+        "force=true should bypass WorkflowRunAlreadyActive, got: {result:?}"
+    );
+
+    let conn = crate::db::open_database(&db_path).expect("open db");
+    let wf_mgr = WorkflowManager::new(&conn);
+    let old_run = wf_mgr.get_workflow_run(&active_run_id).unwrap().unwrap();
+    assert_eq!(
+        old_run.status.to_string(),
+        "cancelled",
+        "force=true should cancel the previously active run"
+    );
+}
+
+/// `execute_workflow_standalone` with `depth > 0` must skip the active-run guard
+/// so child workflows are never blocked by their parent run.
+#[test]
+fn test_standalone_depth_nonzero_skips_active_run_guard() {
+    let (_tmp, db_path) = make_standalone_db();
+
+    {
+        let conn = crate::db::open_database(&db_path).expect("open db");
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("parent-wf", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+        wf_mgr
+            .update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
+            .unwrap();
+    }
+
+    let params = crate::workflow::types::WorkflowExecStandalone {
+        config: Config::default(),
+        workflow: make_empty_workflow(),
+        worktree_id: Some("w1".to_string()),
+        working_dir: "/tmp/ws/feat-test".to_string(),
+        repo_path: "/tmp/repo".to_string(),
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: WorkflowExecConfig::default(),
+        inputs: HashMap::new(),
+        target_label: None,
+        run_id_notify: None,
+        triggered_by_hook: false,
+        conductor_bin_dir: None,
+        force: false,
+        extra_plugin_dirs: vec![],
+        db_path: Some(db_path.clone()),
+        parent_workflow_run_id: None,
+        depth: 1,
+        parent_step_id: None,
+        default_bot_name: None,
+        iteration: 0,
+    };
+    let result = execute_workflow_standalone(&params);
+    assert!(
+        !matches!(result, Err(ConductorError::WorkflowRunAlreadyActive { .. })),
+        "depth=1 should bypass WorkflowRunAlreadyActive; got: {result:?}"
+    );
+}
+
 #[test]
 fn test_run_id_notify_slot_is_populated() {
     // Verify that execute_workflow writes the newly-created run ID into

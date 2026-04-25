@@ -8,12 +8,12 @@ use crate::workflow::executors::gate_resolver::{
 
 use super::GhGateCommon;
 
-pub(in crate::workflow::executors) struct PrChecksGateResolver {
+pub(in crate::workflow) struct PrChecksGateResolver {
     common: GhGateCommon,
 }
 
 impl PrChecksGateResolver {
-    pub(in crate::workflow::executors) fn new(
+    pub(in crate::workflow) fn new(
         working_dir: String,
         default_bot_name: Option<String>,
         token_cache: Arc<GitHubTokenCache>,

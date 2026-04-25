@@ -257,25 +257,14 @@ impl FlowEngine {
             }
         }
 
+        let ctx = ValidateCtx {
+            action_registry,
+            item_provider_registry,
+            gate_resolver_registry,
+            workflow_resolver: &self.workflow_resolver,
+        };
         let mut visited: HashSet<String> = HashSet::new();
-        validate_nodes_impl(
-            action_registry,
-            item_provider_registry,
-            gate_resolver_registry,
-            &self.workflow_resolver,
-            &def.body,
-            &mut errors,
-            &mut visited,
-        );
-        validate_nodes_impl(
-            action_registry,
-            item_provider_registry,
-            gate_resolver_registry,
-            &self.workflow_resolver,
-            &def.always,
-            &mut errors,
-            &mut visited,
-        );
+        validate_workflow_sections(&ctx, &def.body, &def.always, &mut errors, &mut visited);
 
         if errors.is_empty() {
             Ok(())
@@ -285,11 +274,26 @@ impl FlowEngine {
     }
 }
 
+struct ValidateCtx<'a> {
+    action_registry: &'a ActionRegistry,
+    item_provider_registry: &'a ItemProviderRegistry,
+    gate_resolver_registry: &'a GateResolverRegistry,
+    workflow_resolver: &'a Option<Arc<dyn WorkflowResolver>>,
+}
+
+fn validate_workflow_sections(
+    ctx: &ValidateCtx<'_>,
+    body: &[WorkflowNode],
+    always: &[WorkflowNode],
+    errors: &mut Vec<ValidationError>,
+    visited: &mut HashSet<String>,
+) {
+    validate_nodes_impl(ctx, body, errors, visited);
+    validate_nodes_impl(ctx, always, errors, visited);
+}
+
 fn validate_nodes_impl(
-    action_registry: &ActionRegistry,
-    item_provider_registry: &ItemProviderRegistry,
-    gate_resolver_registry: &GateResolverRegistry,
-    workflow_resolver: &Option<Arc<dyn WorkflowResolver>>,
+    ctx: &ValidateCtx<'_>,
     nodes: &[WorkflowNode],
     errors: &mut Vec<ValidationError>,
     visited: &mut HashSet<String>,
@@ -298,7 +302,7 @@ fn validate_nodes_impl(
         match node {
             WorkflowNode::Call(n) => {
                 let name = n.agent.label();
-                if !action_registry.has_action(name) {
+                if !ctx.action_registry.has_action(name) {
                     errors.push(ValidationError {
                         message: format!(
                             "call '{}': no registered ActionExecutor for '{}'",
@@ -315,7 +319,7 @@ fn validate_nodes_impl(
             WorkflowNode::Parallel(n) => {
                 for agent_ref in &n.calls {
                     let name = agent_ref.label();
-                    if !action_registry.has_action(name) {
+                    if !ctx.action_registry.has_action(name) {
                         errors.push(ValidationError {
                             message: format!(
                                 "parallel call '{}': no registered ActionExecutor for '{}'",
@@ -331,7 +335,7 @@ fn validate_nodes_impl(
                 }
             }
             WorkflowNode::ForEach(n) => {
-                if item_provider_registry.get(&n.over).is_none() {
+                if ctx.item_provider_registry.get(&n.over).is_none() {
                     errors.push(ValidationError {
                         message: format!(
                             "foreach '{}': no registered ItemProvider for '{}'",
@@ -348,7 +352,7 @@ fn validate_nodes_impl(
                 // QualityGate is evaluated inline and never goes through a GateResolver.
                 if n.gate_type != GateType::QualityGate {
                     let type_str = n.gate_type.to_string();
-                    if !gate_resolver_registry.has_type(&type_str) {
+                    if !ctx.gate_resolver_registry.has_type(&type_str) {
                         errors.push(ValidationError {
                             message: format!(
                                 "gate '{}': no registered GateResolver for type '{}'",
@@ -365,24 +369,13 @@ fn validate_nodes_impl(
             WorkflowNode::CallWorkflow(n) => {
                 if !visited.contains(&n.workflow) {
                     visited.insert(n.workflow.clone());
-                    if let Some(resolver) = workflow_resolver {
+                    if let Some(resolver) = ctx.workflow_resolver {
                         match resolver.resolve(&n.workflow).map(|d| (*d).clone()) {
                             Ok(sub_def) => {
                                 let mut sub_errors = Vec::new();
-                                validate_nodes_impl(
-                                    action_registry,
-                                    item_provider_registry,
-                                    gate_resolver_registry,
-                                    workflow_resolver,
+                                validate_workflow_sections(
+                                    ctx,
                                     &sub_def.body,
-                                    &mut sub_errors,
-                                    visited,
-                                );
-                                validate_nodes_impl(
-                                    action_registry,
-                                    item_provider_registry,
-                                    gate_resolver_registry,
-                                    workflow_resolver,
                                     &sub_def.always,
                                     &mut sub_errors,
                                     visited,
@@ -414,15 +407,7 @@ fn validate_nodes_impl(
             }
             _ => {
                 if let Some(body) = node.body() {
-                    validate_nodes_impl(
-                        action_registry,
-                        item_provider_registry,
-                        gate_resolver_registry,
-                        workflow_resolver,
-                        body,
-                        errors,
-                        visited,
-                    );
+                    validate_nodes_impl(ctx, body, errors, visited);
                 }
             }
         }
@@ -523,6 +508,13 @@ impl FlowEngineBuilder {
     /// emitted to all sinks in registration order.
     pub fn event_sink(mut self, sink: Box<dyn EventSink>) -> Self {
         self.event_sinks.push(Arc::from(sink));
+        self
+    }
+
+    /// Register multiple event sinks from an existing `Arc<[Arc<dyn EventSink>]>`.
+    /// Sinks are appended in slice order after any already registered.
+    pub fn with_event_sinks(mut self, sinks: &Arc<[Arc<dyn EventSink>]>) -> Self {
+        self.event_sinks.extend(sinks.iter().cloned());
         self
     }
 
@@ -1280,6 +1272,88 @@ mod tests {
         assert!(has_run_completed, "should have RunCompleted event");
     }
 
+    // Test: with_event_sinks appends pre-built sinks and they all receive events
+    #[test]
+    fn with_event_sinks_accumulates_sinks() {
+        let sink_a = VecSink::new();
+        let sink_b = VecSink::new();
+
+        let pre_built: Arc<[Arc<dyn EventSink>]> = Arc::from(vec![
+            Arc::clone(&sink_a) as Arc<dyn EventSink>,
+            Arc::clone(&sink_b) as Arc<dyn EventSink>,
+        ]);
+
+        let engine = FlowEngineBuilder::new()
+            .action(Box::new(AlphaExecutor))
+            .with_event_sinks(&pre_built)
+            .build()
+            .unwrap();
+
+        let def = make_single_step_def();
+        let mut state = make_state_with_persistence("wf");
+        let result = engine.run(&def, &mut state);
+        assert!(result.is_ok(), "run should succeed: {:?}", result);
+
+        let events_a = sink_a.collected();
+        let events_b = sink_b.collected();
+        assert!(
+            !events_a.is_empty(),
+            "sink_a registered via with_event_sinks should receive events"
+        );
+        assert_eq!(
+            events_a.len(),
+            events_b.len(),
+            "both sinks should receive the same number of events"
+        );
+        assert!(
+            events_a
+                .iter()
+                .any(|e| matches!(e.event, EngineEvent::RunStarted { .. })),
+            "should have RunStarted event"
+        );
+    }
+
+    // Test: mixing event_sink() and with_event_sinks() accumulates all sinks
+    #[test]
+    fn event_sink_and_with_event_sinks_both_accumulate() {
+        let sink_a = VecSink::new();
+        let sink_b = VecSink::new();
+        let sink_c = VecSink::new();
+
+        let pre_built: Arc<[Arc<dyn EventSink>]> = Arc::from(vec![
+            Arc::clone(&sink_b) as Arc<dyn EventSink>,
+            Arc::clone(&sink_c) as Arc<dyn EventSink>,
+        ]);
+
+        let engine = FlowEngineBuilder::new()
+            .action(Box::new(AlphaExecutor))
+            .event_sink(Box::new(ForwardSink(Arc::clone(&sink_a))))
+            .with_event_sinks(&pre_built)
+            .with_event_sinks(&pre_built) // second call appends, not replaces
+            .build()
+            .unwrap();
+
+        let def = make_single_step_def();
+        let mut state = make_state_with_persistence("wf");
+        engine.run(&def, &mut state).unwrap();
+
+        // sink_a (via event_sink) and sink_b/sink_c (via with_event_sinks) all fire
+        assert!(
+            !sink_a.collected().is_empty(),
+            "event_sink sink should receive events"
+        );
+        assert_eq!(
+            sink_b.collected().len(),
+            sink_a.collected().len() * 2,
+            "sink_b registered twice via with_event_sinks should receive 2x events"
+        );
+        assert_eq!(
+            sink_b.collected().len(),
+            sink_c.collected().len(),
+            "both with_event_sinks sinks should receive the same count"
+        );
+    }
+
     // Test: panicking sink doesn't abort the run; the non-panicking sink still receives events
     #[test]
     fn event_sinks_panic_safety() {
@@ -1545,16 +1619,18 @@ mod tests {
 
         engine.run(&def, &mut state).ok(); // may fail due to min_success
 
-        // The fail_fast scope token skips branches after the first failure.
-        // Exactly one branch should have been dispatched and failed; the rest are skipped.
+        // With true parallel execution all branches are spawned simultaneously. The scope
+        // token is cancelled as soon as the first failure result is processed; branches
+        // that haven't dispatched yet will see the cancellation and return early. At minimum
+        // the explicitly-failing branch must be recorded as Failed.
         let steps = persistence.get_steps(&run.id).unwrap();
         let failed = steps
             .iter()
             .filter(|s| s.status == crate::status::WorkflowStepStatus::Failed)
             .count();
-        assert_eq!(
-            failed, 1,
-            "only the first (failing) branch should be Failed; got steps: {:?}",
+        assert!(
+            failed >= 1,
+            "at least the first (failing) branch should be Failed; got steps: {:?}",
             steps
         );
     }

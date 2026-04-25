@@ -479,6 +479,7 @@ impl Parser {
             with,
             bot_name,
             plugin_dirs,
+            timeout: None,
         })
     }
 

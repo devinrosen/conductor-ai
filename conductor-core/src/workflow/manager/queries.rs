@@ -94,6 +94,21 @@ impl<'a> WorkflowManager<'a> {
         Ok(map)
     }
 
+    pub fn is_run_cancelled(&self, run_id: &str) -> Result<bool> {
+        let status: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT status FROM workflow_runs WHERE id = ?1",
+                rusqlite::params![run_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(matches!(
+            status.as_deref(),
+            Some("cancelled") | Some("cancelling")
+        ))
+    }
+
     pub fn get_workflow_run(&self, id: &str) -> Result<Option<WorkflowRun>> {
         Ok(self
             .conn
@@ -259,7 +274,7 @@ impl<'a> WorkflowManager<'a> {
             .iter()
             .copied()
             .chain(status_filter.unwrap_or_default().iter().copied());
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = self.conn.prepare_cached(&sql)?;
         let steps = stmt
             .query_map(rusqlite::params_from_iter(combined), row_to_workflow_step)?
             .collect::<rusqlite::Result<Vec<_>>>()?;

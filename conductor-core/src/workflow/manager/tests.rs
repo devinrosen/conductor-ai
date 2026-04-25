@@ -1175,6 +1175,7 @@ fn test_validate_single_surfaces_warnings_for_unknown_bot() {
         with: vec![],
         bot_name: Some("unknown-bot".to_string()),
         plugin_dirs: vec![],
+        timeout: None,
     }));
     // known_bots is empty, so "unknown-bot" should produce a warning
     let known_bots = std::collections::HashSet::new();
@@ -1211,6 +1212,7 @@ fn test_validate_single_reports_errors_for_missing_agent() {
         with: vec![],
         bot_name: None,
         plugin_dirs: vec![],
+        timeout: None,
     }));
     let known_bots = std::collections::HashSet::new();
     let path = tmp.path().to_str().unwrap();
@@ -1221,6 +1223,43 @@ fn test_validate_single_reports_errors_for_missing_agent() {
     assert!(
         !entry.errors.is_empty(),
         "expected validation errors for missing agent"
+    );
+}
+
+#[test]
+fn test_update_step_preserves_child_run_id_when_none_passed() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_worktree_run(&conn, "w1");
+
+    let step_id = mgr
+        .insert_step(&run.id, "step-with-child", "actor", false, 0, 0)
+        .unwrap();
+
+    // Link a child_run_id to the step.
+    mgr.update_step_child_run_id(&step_id, "child-run-123")
+        .unwrap();
+
+    // Update to a terminal status passing child_run_id = None.
+    mgr.update_step_status_full(
+        &step_id,
+        crate::workflow::status::WorkflowStepStatus::Completed,
+        None, // child_run_id intentionally None
+        Some("done"),
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    let step = steps.iter().find(|s| s.id == step_id).unwrap();
+    assert_eq!(
+        step.child_run_id.as_deref(),
+        Some("child-run-123"),
+        "child_run_id must be preserved when None is passed in a terminal update"
     );
 }
 
@@ -4320,4 +4359,93 @@ fn test_set_dismissed_unknown_id_is_noop() {
     let mgr = WorkflowManager::new(&conn);
     // Should not error for an unknown run ID.
     assert!(mgr.set_dismissed("nonexistent-id", true).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// get_gate_approval_state()
+// ---------------------------------------------------------------------------
+
+#[test]
+fn get_gate_approval_state_returns_pending_for_missing_step() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let state = mgr.get_gate_approval_state("nonexistent-step-id").unwrap();
+    assert!(
+        matches!(
+            state,
+            crate::workflow::persistence::GateApprovalState::Pending
+        ),
+        "unknown step_id should return Pending, got {state:?}"
+    );
+}
+
+#[test]
+fn get_gate_approval_state_returns_approved_after_approval() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_worktree_run(&conn, "w1");
+    let step_id = mgr
+        .insert_step(&run.id, "approval-gate", "gate", false, 0, 0)
+        .unwrap();
+    mgr.approve_gate(&step_id, "alice", Some("looks good"), None)
+        .unwrap();
+    let state = mgr.get_gate_approval_state(&step_id).unwrap();
+    assert!(
+        matches!(
+            state,
+            crate::workflow::persistence::GateApprovalState::Approved { .. }
+        ),
+        "should be Approved after approve_gate, got {state:?}"
+    );
+}
+
+#[test]
+fn get_gate_approval_state_returns_rejected_after_rejection() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_worktree_run(&conn, "w1");
+    let step_id = mgr
+        .insert_step(&run.id, "review-gate", "gate", false, 0, 0)
+        .unwrap();
+    mgr.reject_gate(&step_id, "bob", Some("needs rework"))
+        .unwrap();
+    let state = mgr.get_gate_approval_state(&step_id).unwrap();
+    assert!(
+        matches!(
+            state,
+            crate::workflow::persistence::GateApprovalState::Rejected { .. }
+        ),
+        "should be Rejected after reject_gate, got {state:?}"
+    );
+}
+
+#[test]
+fn get_gate_approval_state_handles_unrecognised_status_without_panic() {
+    use rusqlite::named_params;
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_worktree_run(&conn, "w1");
+    let step_id = mgr
+        .insert_step(&run.id, "gate-step", "gate", false, 0, 0)
+        .unwrap();
+    // Disable the CHECK constraint temporarily to inject an unrecognised status value,
+    // exercising the warn+fallback path in get_gate_approval_state.
+    conn.execute_batch("PRAGMA ignore_check_constraints = 1")
+        .unwrap();
+    conn.execute(
+        "UPDATE workflow_run_steps SET status = 'unknown_status' WHERE id = :id",
+        named_params![":id": &step_id],
+    )
+    .unwrap();
+    conn.execute_batch("PRAGMA ignore_check_constraints = 0")
+        .unwrap();
+    // Must not panic; should fall back to Waiting (i.e. return Pending since no approved_at).
+    let state = mgr.get_gate_approval_state(&step_id).unwrap();
+    assert!(
+        matches!(
+            state,
+            crate::workflow::persistence::GateApprovalState::Pending
+        ),
+        "unrecognised status with no approved_at should return Pending, got {state:?}"
+    );
 }

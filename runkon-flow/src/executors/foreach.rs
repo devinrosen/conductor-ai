@@ -19,10 +19,7 @@ use crate::traits::persistence::{
 };
 use crate::traits::script_env_provider::ScriptEnvProvider;
 
-#[inline]
-fn p_err(e: EngineError) -> EngineError {
-    EngineError::Persistence(e.to_string())
-}
+use super::p_err;
 
 /// Shared parent-state snapshot captured before thread spawning.
 ///
@@ -343,18 +340,15 @@ pub fn execute_foreach(
     };
 
     // Lookup maps built once from the initial pending set.
-    let db_id_to_item_id: HashMap<String, String> = pending_items
-        .iter()
-        .map(|i| (i.id.clone(), i.item_id.clone()))
-        .collect();
-    let item_id_to_db_id: HashMap<String, String> = pending_items
-        .iter()
-        .map(|i| (i.item_id.clone(), i.id.clone()))
-        .collect();
-    let item_ref_map: HashMap<String, String> = pending_items
-        .iter()
-        .map(|i| (i.item_id.clone(), i.item_ref.clone()))
-        .collect();
+    let cap = pending_items.len();
+    let mut db_id_to_item_id: HashMap<String, String> = HashMap::with_capacity(cap);
+    let mut item_id_to_db_id: HashMap<String, String> = HashMap::with_capacity(cap);
+    let mut item_ref_map: HashMap<String, String> = HashMap::with_capacity(cap);
+    for i in &pending_items {
+        db_id_to_item_id.insert(i.id.clone(), i.item_id.clone());
+        item_id_to_db_id.insert(i.item_id.clone(), i.id.clone());
+        item_ref_map.insert(i.item_id.clone(), i.item_ref.clone());
+    }
 
     // Channel: spawned threads send (fan_out_item_db_id, succeeded).
     let (tx, rx) = mpsc::channel::<(String, bool)>();
@@ -414,8 +408,20 @@ pub fn execute_foreach(
             let item_id = db_id_to_item_id
                 .get(&item_db_id)
                 .cloned()
-                .unwrap_or_default();
-            let item_ref = item_ref_map.get(&item_id).cloned().unwrap_or_default();
+                .unwrap_or_else(|| {
+                    tracing::warn!(
+                        item_db_id = %item_db_id,
+                        "foreach: dispatch map miss for completed item — item_id will be empty"
+                    );
+                    String::new()
+                });
+            let item_ref = item_ref_map.get(&item_id).cloned().unwrap_or_else(|| {
+                tracing::warn!(
+                    item_id = %item_id,
+                    "foreach: item_ref map miss for item — item_ref will be empty"
+                );
+                String::new()
+            });
 
             state
                 .persistence
@@ -499,6 +505,7 @@ pub fn execute_foreach(
         }
 
         // 3. Dispatch new items while slots are available and we're not halted.
+        let mut no_more_eligible = false;
         if !halt {
             while in_flight < max_slots {
                 let eligible_pos = pending
@@ -507,7 +514,10 @@ pub fn execute_foreach(
 
                 let item = match eligible_pos {
                     Some(pos) => pending.swap_remove(pos),
-                    None => break,
+                    None => {
+                        no_more_eligible = true;
+                        break;
+                    }
                 };
 
                 emit_event(
@@ -578,12 +588,7 @@ pub fn execute_foreach(
         }
 
         // 4. Exit when all work is done.
-        let has_eligible = !halt
-            && pending
-                .iter()
-                .any(|item| is_eligible(&item.item_id, &dep_map, &terminal_ids));
-
-        if in_flight == 0 && !has_eligible {
+        if in_flight == 0 && (halt || no_more_eligible) {
             break;
         }
     }
@@ -593,19 +598,18 @@ pub fn execute_foreach(
         .persistence
         .get_fan_out_items(&step_id, None)
         .map_err(p_err)?;
-    let completed_count = fan_out_items
-        .iter()
-        .filter(|i| i.status == "completed")
-        .count();
-    let failed_count = fan_out_items
-        .iter()
-        .filter(|i| i.status == "failed")
-        .count();
-    let skipped_count = fan_out_items
-        .iter()
-        .filter(|i| i.status == "skipped")
-        .count();
     let total = fan_out_items.len();
+    let (completed_count, failed_count, skipped_count) =
+        fan_out_items
+            .iter()
+            .fold((0usize, 0usize, 0usize), |(c, f, s), i| {
+                match i.status.as_str() {
+                    "completed" => (c + 1, f, s),
+                    "failed" => (c, f + 1, s),
+                    "skipped" => (c, f, s + 1),
+                    _ => (c, f, s),
+                }
+            });
 
     let context = format!(
         "foreach {}: {completed_count} completed, {failed_count} failed, {skipped_count} skipped of {total} {}",

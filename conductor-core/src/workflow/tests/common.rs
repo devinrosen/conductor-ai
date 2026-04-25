@@ -11,6 +11,25 @@ pub(super) fn setup_db() -> Connection {
     crate::test_helpers::setup_db()
 }
 
+/// Create a temp-file SQLite database pre-populated with repo `r1` and worktree `w1`.
+/// Used by tests that call `execute_workflow_standalone` (which opens its own connection).
+pub(super) fn make_standalone_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
+    let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+    let path = tmp.path().to_path_buf();
+    {
+        let conn = crate::db::open_database(&path).expect("open temp db");
+        crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+        crate::test_helpers::insert_test_worktree(
+            &conn,
+            "w1",
+            "r1",
+            "feat-test",
+            "/tmp/ws/feat-test",
+        );
+    }
+    (tmp, path)
+}
+
 /// Set a step's status without touching any optional fields.
 pub(super) fn set_step_status(mgr: &WorkflowManager, step_id: &str, status: WorkflowStepStatus) {
     mgr.update_step_status(step_id, status, None, None, None, None, None)

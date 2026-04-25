@@ -140,6 +140,7 @@ fn test_collect_agent_names_skips_on_fail_continue() {
         with: vec![],
         bot_name: None,
         plugin_dirs: vec![],
+        timeout: None,
     })];
 
     let refs = collect_agent_names(&nodes);
@@ -160,6 +161,7 @@ fn test_collect_agent_names_includes_on_fail_agent() {
         with: vec![],
         bot_name: None,
         plugin_dirs: vec![],
+        timeout: None,
     })];
 
     let refs = collect_agent_names(&nodes);
