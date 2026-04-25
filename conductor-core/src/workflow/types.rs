@@ -572,6 +572,9 @@ pub struct WorkflowResumeInput<'a> {
     pub conductor_bin_dir: Option<std::path::PathBuf>,
     /// Event sinks for run observability. Defaults to empty (no sinks).
     pub event_sinks: Vec<std::sync::Arc<dyn runkon_flow::events::EventSink>>,
+    /// Database path for the FlowEngine execution phase.
+    /// When `None`, falls back to `crate::config::db_path()`.
+    pub db_path: Option<std::path::PathBuf>,
 }
 
 /// Resolve the directory containing the current executable.

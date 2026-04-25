@@ -1181,7 +1181,10 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         effective_repo_id_owned.clone(),
     ));
 
-    let script_env_provider = super::runkon_bridge::build_rk_script_env_provider(config, params);
+    let script_env_provider = super::runkon_bridge::build_rk_script_env_provider(
+        params.conductor_bin_dir.clone(),
+        params.extra_plugin_dirs.clone(),
+    );
 
     let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> = Arc::new(
         super::runkon_bridge::ConductorChildWorkflowRunner::new(db.clone(), config.clone()),
@@ -1384,6 +1387,7 @@ pub fn resume_workflow_standalone(params: &WorkflowResumeStandalone) -> Result<W
         restart: params.restart,
         conductor_bin_dir: params.conductor_bin_dir.clone(),
         event_sinks: vec![],
+        db_path: Some(db),
     };
 
     resume_workflow(&input)
@@ -1444,7 +1448,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     // Determine execution paths based on target type.
     // - Worktree run: look up worktree and derive repo from it.
     // - Repo/ticket run: look up repo directly (via repo_id or ticket.repo_id).
-    let (worktree_path, worktree_slug, repo_path) =
+    let (worktree_path, _worktree_slug, repo_path) =
         if let Some(wt_id) = wf_run.worktree_id.as_deref() {
             let worktree = wt_mgr.get_by_id(wt_id)?;
             let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&worktree.repo_id)?;
@@ -1540,33 +1544,25 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         keys
     };
 
-    // Build the step map from `all_steps` (only the keys still in skip_completed
-    // survived any --from-step pruning, so filter by membership).
-    let step_map: HashMap<StepKey, WorkflowRunStep> = all_steps
+    // Build the rk step map (convert to runkon-flow types for FlowEngine resume context).
+    let rk_step_map: HashMap<StepKey, runkon_flow::types::WorkflowRunStep> = all_steps
         .into_iter()
         .filter(|s| s.status == WorkflowStepStatus::Completed)
         .map(|s| {
             let key = (s.step_name.clone(), s.iteration as u32);
-            (key, s)
+            let rk_step = super::persistence_sqlite::rk_conv::step_to_rk(s);
+            (key, rk_step)
         })
         .filter(|(key, _)| skip_completed.contains(key))
         .collect();
 
-    // Batch-load child agent runs in a single query to avoid N+1 during cost accumulation
-    let agent_mgr = AgentManager::new(conn);
-    let child_run_ids: Vec<&str> = step_map
-        .values()
-        .filter_map(|s| s.child_run_id.as_deref())
-        .collect();
-    let child_runs = agent_mgr.get_runs_by_ids(&child_run_ids)?;
-
-    let resume_ctx = if skip_completed.is_empty() {
+    let skip_count = skip_completed.len();
+    let rk_resume_ctx = if skip_completed.is_empty() {
         None
     } else {
-        Some(ResumeContext {
+        Some(runkon_flow::engine::ResumeContext {
             skip_completed,
-            step_map,
-            child_runs,
+            step_map: rk_step_map,
         })
     };
 
@@ -1577,31 +1573,88 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         "Resuming workflow '{}' (run {}), {} completed steps to skip",
         workflow.name,
         wf_run.id,
-        resume_ctx
-            .as_ref()
-            .map_or(0, |ctx| ctx.skip_completed.len()),
+        skip_count,
     );
 
-    let mut state = ExecutionState {
-        conn,
+    // -----------------------------------------------------------------------
+    // Build the FlowEngine and execution state — mirrors execute_workflow_standalone.
+    // -----------------------------------------------------------------------
+    let db = input.db_path.clone().unwrap_or_else(crate::config::db_path);
+    let raw_conn = crate::db::open_database(&db)?;
+    let shared_conn = Arc::new(std::sync::Mutex::new(raw_conn));
+
+    let rk_def: runkon_flow::dsl::WorkflowDef =
+        serde_json::from_str(snapshot).map_err(|e| {
+            ConductorError::Workflow(format!("Failed to deserialize workflow definition: {e}"))
+        })?;
+
+    let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> = Arc::new(
+        super::persistence_sqlite::SqliteWorkflowPersistence::from_shared_connection(
+            Arc::clone(&shared_conn),
+        ),
+    );
+
+    let action_registry = Arc::new(super::runkon_bridge::build_rk_action_registry(
         config,
+        Arc::clone(&shared_conn),
+        &db,
+    ));
+
+    let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(
+        Arc::clone(&shared_conn),
+        config,
+        wf_run.repo_id.clone(),
+    ));
+
+    let script_env_provider = super::runkon_bridge::build_rk_script_env_provider(
+        input.conductor_bin_dir.clone(),
+        vec![],
+    );
+
+    let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> = Arc::new(
+        super::runkon_bridge::ConductorChildWorkflowRunner::new(db.clone(), config.clone()),
+    );
+
+    let workflow_name_for_resolver = workflow.name.clone();
+    #[allow(clippy::type_complexity)]
+    let schema_resolver: Arc<
+        dyn Fn(
+                &str,
+                &str,
+                &str,
+            )
+                -> runkon_flow::engine_error::Result<runkon_flow::output_schema::OutputSchema>
+            + Send
+            + Sync,
+    > = Arc::new(move |working_dir, repo_path, name| {
+        let schema_ref = crate::schema_config::SchemaRef::from_str_value(name);
+        crate::schema_config::load_schema(
+            working_dir,
+            repo_path,
+            &schema_ref,
+            Some(&workflow_name_for_resolver),
+        )
+        .map(super::runkon_bridge::core_schema_to_rk)
+        .map_err(|e| runkon_flow::engine_error::EngineError::Workflow(e.to_string()))
+    });
+
+    let mut rk_state = runkon_flow::engine::ExecutionState {
+        persistence: Arc::clone(&persistence),
+        action_registry,
+        script_env_provider,
         workflow_run_id: wf_run.id.clone(),
         workflow_name: workflow.name.clone(),
-        worktree_ctx: WorktreeContext {
+        worktree_ctx: runkon_flow::engine::WorktreeContext {
             worktree_id: wf_run.worktree_id.clone(),
-            working_dir: worktree_path,
-            worktree_slug,
+            working_dir: worktree_path.clone(),
             repo_path,
             ticket_id: wf_run.ticket_id.clone(),
             repo_id: wf_run.repo_id.clone(),
-            conductor_bin_dir: input.conductor_bin_dir.clone(),
             extra_plugin_dirs: vec![],
         },
         model: input.model.map(String::from),
-        exec_config: WorkflowExecConfig::default(),
+        exec_config: runkon_flow::types::WorkflowExecConfig::default(),
         inputs: wf_run.inputs.clone(),
-        agent_mgr: AgentManager::new(conn),
-        wf_mgr: WorkflowManager::new(conn),
         parent_run_id: wf_run.parent_run_id.clone(),
         depth: 0,
         target_label: wf_run.target_label.clone(),
@@ -1619,28 +1672,51 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         last_gate_feedback: None,
         block_output: None,
         block_with: Vec::new(),
-        resume_ctx,
+        resume_ctx: rk_resume_ctx,
         default_bot_name: wf_run.default_bot_name.clone(),
         triggered_by_hook: wf_run.is_triggered_by_hook(),
-        last_heartbeat_at: ExecutionState::new_heartbeat(),
-        registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry(
-            wf_run.repo_id.as_deref(),
-            wf_run.worktree_id.as_deref(),
-        )),
-        action_registry: std::sync::Arc::new(build_default_action_registry(config)),
-        event_sinks: std::sync::Arc::from(input.event_sinks.clone()),
-        cancel_reason: None,
+        schema_resolver: Some(schema_resolver),
+        child_runner: Some(child_runner),
+        last_heartbeat_at: runkon_flow::engine::ExecutionState::new_heartbeat(),
+        registry: item_registry,
+        event_sinks: Arc::from(input.event_sinks.clone()),
+        cancellation: runkon_flow::CancellationToken::new(),
+        current_execution_id: Arc::new(std::sync::Mutex::new(None)),
     };
 
-    // TODO(#2568-resume): resume_workflow still calls run_workflow_engine() (the old
-    // conductor-core engine) while execute_workflow_standalone now delegates to
-    // runkon_flow::FlowEngine::run(). The two paths have divergent capabilities: the
-    // FlowEngine path has schema_resolver, ConductorChildWorkflowRunner, CancellationToken,
-    // and the full RkItemProviderRegistry; the resume path has none of these. Workflows that
-    // use `call workflow {}` steps, schema-constrained calls, or rely on precise cancellation
-    // will behave differently on resume vs. a fresh run. Migrating resume to FlowEngine is
-    // tracked as a phase-3.x follow-up.
-    run_workflow_engine(&mut state, &workflow)
+    let engine = super::executors::register_rk_gate_resolvers(
+        runkon_flow::FlowEngineBuilder::new(),
+        Arc::clone(&persistence),
+        worktree_path,
+        wf_run.default_bot_name.clone(),
+        config.clone(),
+        db,
+    )
+    .build()
+    .map_err(|e| {
+        ConductorError::Workflow(format!(
+            "failed to build engine for '{}': {e}",
+            workflow.name
+        ))
+    })?;
+
+    let rk_result = engine
+        .run(&rk_def, &mut rk_state)
+        .map_err(|e| ConductorError::Workflow(e.to_string()))?;
+
+    Ok(WorkflowResult {
+        workflow_run_id: rk_result.workflow_run_id,
+        worktree_id: rk_result.worktree_id,
+        workflow_name: rk_result.workflow_name,
+        all_succeeded: rk_result.all_succeeded,
+        total_cost: rk_result.total_cost,
+        total_turns: rk_result.total_turns,
+        total_duration_ms: rk_result.total_duration_ms,
+        total_input_tokens: rk_result.total_input_tokens,
+        total_output_tokens: rk_result.total_output_tokens,
+        total_cache_read_input_tokens: rk_result.total_cache_read_input_tokens,
+        total_cache_creation_input_tokens: rk_result.total_cache_creation_input_tokens,
+    })
 }
 
 /// Walk a list of workflow nodes, dispatching to the appropriate handler.

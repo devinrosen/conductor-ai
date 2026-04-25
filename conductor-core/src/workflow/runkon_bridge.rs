@@ -641,6 +641,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             restart: false,
             conductor_bin_dir: None,
             event_sinks: vec![],
+            db_path: Some(self.db_path.clone()),
         };
 
         let core_result = crate::workflow::engine::resume_workflow(&input)
@@ -735,14 +736,13 @@ pub(super) fn build_rk_item_provider_registry(
 /// Uses `ConductorScriptEnvProvider` so that script steps inherit the
 /// conductor binary directory and any extra plugin directories on `PATH`.
 pub(super) fn build_rk_script_env_provider(
-    config: &crate::config::Config,
-    params: &crate::workflow::types::WorkflowExecStandalone,
+    conductor_bin_dir: Option<std::path::PathBuf>,
+    extra_plugin_dirs: Vec<String>,
 ) -> Arc<dyn runkon_flow::traits::script_env_provider::ScriptEnvProvider> {
-    let _ = config;
     Arc::new(
         crate::workflow::script_env_provider::ConductorScriptEnvProvider::new(
-            params.conductor_bin_dir.clone(),
-            params.extra_plugin_dirs.clone(),
+            conductor_bin_dir,
+            extra_plugin_dirs,
         ),
     )
 }
