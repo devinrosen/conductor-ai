@@ -340,9 +340,10 @@ pub fn execute_foreach(
     };
 
     // Lookup maps built once from the initial pending set.
-    let mut db_id_to_item_id: HashMap<String, String> = HashMap::new();
-    let mut item_id_to_db_id: HashMap<String, String> = HashMap::new();
-    let mut item_ref_map: HashMap<String, String> = HashMap::new();
+    let cap = pending_items.len();
+    let mut db_id_to_item_id: HashMap<String, String> = HashMap::with_capacity(cap);
+    let mut item_id_to_db_id: HashMap<String, String> = HashMap::with_capacity(cap);
+    let mut item_ref_map: HashMap<String, String> = HashMap::with_capacity(cap);
     for i in &pending_items {
         db_id_to_item_id.insert(i.id.clone(), i.item_id.clone());
         item_id_to_db_id.insert(i.item_id.clone(), i.id.clone());

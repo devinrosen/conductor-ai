@@ -369,7 +369,7 @@ mod parse_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_leaf_step_keys, serialize_or_empty_array};
+    use super::{collect_leaf_step_keys, parse_duration, serialize_or_empty_array};
     use crate::dsl::{
         AgentRef, AlwaysNode, CallNode, CallWorkflowNode, Condition, DoNode, ForEachNode, GateNode,
         GateType, IfNode, OnMaxIter, ParallelNode, ScriptNode, UnlessNode, WhileNode, WorkflowNode,
@@ -569,6 +569,65 @@ mod tests {
         });
         let keys = collect_leaf_step_keys(&node);
         assert_eq!(keys, vec!["plan".to_string()]);
+    }
+
+    // ---------------------------------------------------------------------------
+    // parse_duration — all suffix branches and bare-integer fallback
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn parse_duration_milliseconds() {
+        assert_eq!(
+            parse_duration("250ms").unwrap(),
+            std::time::Duration::from_millis(250)
+        );
+    }
+
+    #[test]
+    fn parse_duration_hours() {
+        assert_eq!(
+            parse_duration("2h").unwrap(),
+            std::time::Duration::from_secs(7200)
+        );
+    }
+
+    #[test]
+    fn parse_duration_minutes() {
+        assert_eq!(
+            parse_duration("30m").unwrap(),
+            std::time::Duration::from_secs(1800)
+        );
+    }
+
+    #[test]
+    fn parse_duration_seconds() {
+        assert_eq!(
+            parse_duration("10s").unwrap(),
+            std::time::Duration::from_secs(10)
+        );
+    }
+
+    #[test]
+    fn parse_duration_bare_integer_treated_as_seconds() {
+        assert_eq!(
+            parse_duration("5").unwrap(),
+            std::time::Duration::from_secs(5)
+        );
+    }
+
+    #[test]
+    fn parse_duration_ms_not_matched_by_s_suffix() {
+        // "3ms" must not be misinterpreted as "3m" + trailing "s"
+        assert_eq!(
+            parse_duration("3ms").unwrap(),
+            std::time::Duration::from_millis(3)
+        );
+    }
+
+    #[test]
+    fn parse_duration_invalid_returns_err() {
+        assert!(parse_duration("abc").is_err());
+        assert!(parse_duration("1x").is_err());
     }
 
     // ---------------------------------------------------------------------------
