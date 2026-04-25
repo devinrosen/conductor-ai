@@ -43,6 +43,7 @@ pub fn execute_call_workflow(
     }
 
     let step_key = node.workflow.clone();
+    let mut last_error = String::new();
 
     // Require a child runner to be configured
     let child_runner = match &state.child_runner {
@@ -210,10 +211,8 @@ pub fn execute_call_workflow(
         }
         Ok(None) => {}
         Err(e) => {
-            tracing::warn!(
-                "call_workflow '{}': failed to find resumable child run: {e}",
-                node.workflow
-            );
+            last_error = format!("failed to find resumable child run: {e}");
+            tracing::warn!("call_workflow '{}': {last_error}", node.workflow);
         }
     }
 
@@ -224,7 +223,6 @@ pub fn execute_call_workflow(
     // The child runner is responsible for loading the workflow def.
 
     let max_attempts = 1 + node.retries;
-    let mut last_error = String::new();
 
     for attempt in 0..max_attempts {
         let step_id = state

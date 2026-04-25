@@ -258,20 +258,12 @@ impl FlowEngine {
         }
 
         let mut visited: HashSet<String> = HashSet::new();
-        validate_nodes_impl(
+        validate_workflow_sections(
             action_registry,
             item_provider_registry,
             gate_resolver_registry,
             &self.workflow_resolver,
             &def.body,
-            &mut errors,
-            &mut visited,
-        );
-        validate_nodes_impl(
-            action_registry,
-            item_provider_registry,
-            gate_resolver_registry,
-            &self.workflow_resolver,
             &def.always,
             &mut errors,
             &mut visited,
@@ -283,6 +275,37 @@ impl FlowEngine {
             Err(errors)
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_workflow_sections(
+    action_registry: &ActionRegistry,
+    item_provider_registry: &ItemProviderRegistry,
+    gate_resolver_registry: &GateResolverRegistry,
+    workflow_resolver: &Option<Arc<dyn WorkflowResolver>>,
+    body: &[WorkflowNode],
+    always: &[WorkflowNode],
+    errors: &mut Vec<ValidationError>,
+    visited: &mut HashSet<String>,
+) {
+    validate_nodes_impl(
+        action_registry,
+        item_provider_registry,
+        gate_resolver_registry,
+        workflow_resolver,
+        body,
+        errors,
+        visited,
+    );
+    validate_nodes_impl(
+        action_registry,
+        item_provider_registry,
+        gate_resolver_registry,
+        workflow_resolver,
+        always,
+        errors,
+        visited,
+    );
 }
 
 fn validate_nodes_impl(
@@ -369,20 +392,12 @@ fn validate_nodes_impl(
                         match resolver.resolve(&n.workflow).map(|d| (*d).clone()) {
                             Ok(sub_def) => {
                                 let mut sub_errors = Vec::new();
-                                validate_nodes_impl(
+                                validate_workflow_sections(
                                     action_registry,
                                     item_provider_registry,
                                     gate_resolver_registry,
                                     workflow_resolver,
                                     &sub_def.body,
-                                    &mut sub_errors,
-                                    visited,
-                                );
-                                validate_nodes_impl(
-                                    action_registry,
-                                    item_provider_registry,
-                                    gate_resolver_registry,
-                                    workflow_resolver,
                                     &sub_def.always,
                                     &mut sub_errors,
                                     visited,
@@ -1285,6 +1300,47 @@ mod tests {
             .any(|e| matches!(e.event, EngineEvent::RunCompleted { .. }));
         assert!(has_run_started, "should have RunStarted event");
         assert!(has_run_completed, "should have RunCompleted event");
+    }
+
+    // Test: with_event_sinks appends pre-built sinks and they all receive events
+    #[test]
+    fn with_event_sinks_accumulates_sinks() {
+        let sink_a = VecSink::new();
+        let sink_b = VecSink::new();
+
+        let pre_built: Arc<[Arc<dyn EventSink>]> = Arc::from(vec![
+            Arc::clone(&sink_a) as Arc<dyn EventSink>,
+            Arc::clone(&sink_b) as Arc<dyn EventSink>,
+        ]);
+
+        let engine = FlowEngineBuilder::new()
+            .action(Box::new(AlphaExecutor))
+            .with_event_sinks(&pre_built)
+            .build()
+            .unwrap();
+
+        let def = make_single_step_def();
+        let mut state = make_state_with_persistence("wf");
+        let result = engine.run(&def, &mut state);
+        assert!(result.is_ok(), "run should succeed: {:?}", result);
+
+        let events_a = sink_a.collected();
+        let events_b = sink_b.collected();
+        assert!(
+            !events_a.is_empty(),
+            "sink_a registered via with_event_sinks should receive events"
+        );
+        assert_eq!(
+            events_a.len(),
+            events_b.len(),
+            "both sinks should receive the same number of events"
+        );
+        assert!(
+            events_a
+                .iter()
+                .any(|e| matches!(e.event, EngineEvent::RunStarted { .. })),
+            "should have RunStarted event"
+        );
     }
 
     // Test: panicking sink doesn't abort the run; the non-panicking sink still receives events

@@ -182,6 +182,10 @@ pub(super) fn core_action_output_to_rk(
 
 /// Wraps conductor-core's `ClaudeAgentExecutor` behind the runkon-flow
 /// `ActionExecutor` trait.
+fn bridge_lock_err(e: impl std::fmt::Display) -> EngineError {
+    EngineError::Workflow(format!("db mutex poisoned: {e}"))
+}
+
 ///
 /// The runkon-flow `ExecutionContext` does not carry `db_path`, so we store it
 /// in the adapter and inject it when constructing the core `ExecutionContext`.
@@ -228,10 +232,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
         // use its ID as run_id. We also link it back to the step via child_run_id so
         // the TUI can drill in while the agent is running.
         let child_run_id = {
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|e| EngineError::Workflow(format!("db mutex poisoned: {e}")))?;
+            let conn = self.conn.lock().map_err(bridge_lock_err)?;
             let agent_mgr = crate::agent::AgentManager::new(&conn);
             let child_run = agent_mgr
                 .create_child_run(
@@ -252,8 +253,9 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                 let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
                 if let Err(e) = wf_mgr.update_step_child_run_id(&ectx.step_id, &child_run.id) {
                     tracing::warn!(
-                        "step '{}': failed to link child_run_id {}: {e}",
+                        "step '{}' (step_id={}): failed to link child_run_id {}: {e}",
                         params.name,
+                        ectx.step_id,
                         child_run.id,
                     );
                 }
@@ -355,9 +357,7 @@ fn delegate_items<P: ItemProvider>(
     existing_set: &HashSet<String>,
     provider: P,
 ) -> Result<Vec<runkon_flow::traits::item_provider::FanOutItem>, EngineError> {
-    let guard = conn
-        .lock()
-        .map_err(|e| EngineError::Workflow(format!("mutex poisoned: {e}")))?;
+    let guard = conn.lock().map_err(bridge_lock_err)?;
     let core_ctx = crate::workflow::item_provider::ProviderContext {
         conn: &guard,
         config,
@@ -582,10 +582,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         workflow_run_id: &str,
         model: Option<&str>,
     ) -> runkon_flow::engine_error::Result<runkon_flow::types::WorkflowResult> {
-        let guard = self
-            .conn
-            .lock()
-            .map_err(|e| EngineError::Workflow(format!("db mutex poisoned: {e}")))?;
+        let guard = self.conn.lock().map_err(bridge_lock_err)?;
 
         let input = crate::workflow::types::WorkflowResumeInput {
             conn: &guard,
@@ -613,10 +610,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         parent_run_id: &str,
         workflow_name: &str,
     ) -> runkon_flow::engine_error::Result<Option<runkon_flow::types::WorkflowRun>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| EngineError::Workflow(format!("db mutex poisoned: {e}")))?;
+        let conn = self.conn.lock().map_err(bridge_lock_err)?;
 
         let mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let core_run = mgr
