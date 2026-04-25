@@ -349,6 +349,7 @@ impl<'a> WorkflowManager<'a> {
         step_id: &str,
     ) -> Result<crate::workflow::persistence::GateApprovalState> {
         use rusqlite::OptionalExtension;
+        #[allow(clippy::type_complexity)]
         let row: Option<(Option<String>, String, Option<String>, Option<String>)> = self
             .conn
             .query_row(
@@ -385,12 +386,14 @@ impl<'a> WorkflowManager<'a> {
                 .ok()
         });
 
-        Ok(crate::workflow::persistence::gate_approval_state_from_fields(
-            approved_at.as_deref(),
-            status,
-            feedback,
-            selections,
-        ))
+        Ok(
+            crate::workflow::persistence::gate_approval_state_from_fields(
+                approved_at.as_deref(),
+                status,
+                feedback,
+                selections,
+            ),
+        )
     }
 
     /// Validate that gate selections are within the allowed options for this step.

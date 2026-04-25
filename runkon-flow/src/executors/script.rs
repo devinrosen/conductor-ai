@@ -11,6 +11,11 @@ use crate::status::WorkflowStepStatus;
 use crate::traits::persistence::{NewStep, StepUpdate};
 use crate::traits::run_context::RunContext;
 
+#[inline]
+fn p_err(e: EngineError) -> EngineError {
+    EngineError::Persistence(e.to_string())
+}
+
 pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: u32) -> Result<()> {
     let pos = state.position;
     state.position += 1;
@@ -33,7 +38,7 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
             iteration: iteration as i64,
             retry_count: Some(0),
         })
-        .map_err(|e| EngineError::Persistence(e.to_string()))?;
+        .map_err(p_err)?;
 
     if state.exec_config.dry_run {
         tracing::info!("script '{}': dry-run, skipping execution", node.name);
@@ -52,7 +57,7 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                     step_error: None,
                 },
             )
-            .map_err(|e| EngineError::Persistence(e.to_string()))?;
+            .map_err(p_err)?;
 
         record_step_success(
             state,
@@ -124,8 +129,18 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
         env_vars.extend(provider_env);
     }
 
-    // Inject all current workflow inputs as env vars (prefixed with CONDUCTOR_)
+    // Inject all current workflow inputs as env vars (prefixed with CONDUCTOR_).
+    // Validate that keys consist only of alphanumeric characters and underscores to
+    // prevent malformed env var names if a key contains `=` or a null byte.
     for (k, v) in &state.inputs {
+        if !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            tracing::warn!(
+                "script '{}': input key {:?} contains characters invalid in an env var name, skipping",
+                node.name,
+                k
+            );
+            continue;
+        }
         env_vars.insert(format!("CONDUCTOR_{}", k.to_uppercase()), v.clone());
     }
 
@@ -163,8 +178,16 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
 
     // Optionally capture stdout to output file
     if let Some(ref out_path) = output_file {
-        if let Ok(file) = std::fs::File::create(out_path) {
-            cmd.stdout(file);
+        match std::fs::File::create(out_path) {
+            Ok(file) => {
+                cmd.stdout(file);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "script '{}': failed to open stdout file for writing: {e}",
+                    node.name
+                );
+            }
         }
     }
 
@@ -221,7 +244,7 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                         step_error: None,
                     },
                 )
-                .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                .map_err(p_err)?;
 
             record_step_success(
                 state,
@@ -265,7 +288,7 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                         step_error: Some(err_msg.clone()),
                     },
                 )
-                .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                .map_err(p_err)?;
 
             // Clean up output file on failure
             if let Some(ref p) = output_file {
@@ -299,7 +322,7 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                         step_error: Some(err_msg.clone()),
                     },
                 )
-                .map_err(|e2| EngineError::Persistence(e2.to_string()))?;
+                .map_err(p_err)?;
 
             match &node.on_fail {
                 Some(crate::dsl::OnFail::Continue) => {
@@ -309,5 +332,152 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                 _ => record_step_failure(state, node.name.clone(), &node.name, err_msg, 1, true),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dsl::ScriptNode;
+    use crate::engine::{ExecutionState, WorktreeContext};
+    use crate::persistence_memory::InMemoryWorkflowPersistence;
+    use crate::traits::action_executor::ActionRegistry;
+    use crate::traits::item_provider::ItemProviderRegistry;
+    use crate::traits::persistence::{NewRun, WorkflowPersistence};
+    use crate::traits::script_env_provider::NoOpScriptEnvProvider;
+    use crate::types::WorkflowExecConfig;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn make_persistence() -> (Arc<InMemoryWorkflowPersistence>, String) {
+        let p = Arc::new(InMemoryWorkflowPersistence::new());
+        let run = p
+            .create_run(NewRun {
+                workflow_name: "wf".to_string(),
+                worktree_id: None,
+                ticket_id: None,
+                repo_id: None,
+                parent_run_id: String::new(),
+                dry_run: false,
+                trigger: "manual".to_string(),
+                definition_snapshot: None,
+                parent_workflow_run_id: None,
+                target_label: None,
+            })
+            .unwrap();
+        (p, run.id)
+    }
+
+    fn make_state(persistence: Arc<InMemoryWorkflowPersistence>, run_id: String) -> ExecutionState {
+        ExecutionState {
+            persistence,
+            action_registry: Arc::new(ActionRegistry::new(HashMap::new(), None)),
+            script_env_provider: Arc::new(NoOpScriptEnvProvider),
+            workflow_run_id: run_id,
+            workflow_name: "wf".to_string(),
+            worktree_ctx: WorktreeContext {
+                worktree_id: None,
+                working_dir: std::env::temp_dir().to_string_lossy().to_string(),
+                repo_path: String::new(),
+                ticket_id: None,
+                repo_id: None,
+                extra_plugin_dirs: vec![],
+            },
+            model: None,
+            exec_config: WorkflowExecConfig::default(),
+            inputs: HashMap::new(),
+            parent_run_id: String::new(),
+            depth: 0,
+            target_label: None,
+            step_results: HashMap::new(),
+            contexts: vec![],
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cache_read_input_tokens: 0,
+            total_cache_creation_input_tokens: 0,
+            last_gate_feedback: None,
+            block_output: None,
+            block_with: vec![],
+            resume_ctx: None,
+            default_bot_name: None,
+            triggered_by_hook: false,
+            schema_resolver: None,
+            child_runner: None,
+            last_heartbeat_at: ExecutionState::new_heartbeat(),
+            registry: Arc::new(ItemProviderRegistry::new()),
+            event_sinks: Arc::from(vec![]),
+            cancellation: crate::cancellation::CancellationToken::new(),
+            current_execution_id: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    fn make_node(name: &str, run: &str) -> ScriptNode {
+        ScriptNode {
+            name: name.to_string(),
+            run: run.to_string(),
+            env: Default::default(),
+            timeout: None,
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        }
+    }
+
+    /// When the script emits a valid CONDUCTOR_OUTPUT block, markers and context
+    /// must be extracted and stored on the step record.
+    #[test]
+    fn conductor_output_markers_propagate_to_step_record() {
+        let (persistence, run_id) = make_persistence();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone());
+        // Use printf to avoid shell newline differences across platforms.
+        let script = concat!(
+            "printf '<<<CONDUCTOR_OUTPUT>>>\\n",
+            r#"{"markers":["test_passed"],"context":"step ctx"}"#,
+            "\\n<<<END_CONDUCTOR_OUTPUT>>>\\n'"
+        );
+        let node = make_node("check", script);
+        execute_script(&mut state, &node, 0).unwrap();
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        assert_eq!(steps.len(), 1);
+        let step = &steps[0];
+        assert_eq!(step.status, WorkflowStepStatus::Completed);
+        let markers: Vec<String> = step
+            .markers_out
+            .as_deref()
+            .and_then(|m| serde_json::from_str(m).ok())
+            .unwrap_or_default();
+        assert_eq!(markers, vec!["test_passed"]);
+        assert_eq!(step.context_out.as_deref(), Some("step ctx"));
+    }
+
+    /// When the script produces no CONDUCTOR_OUTPUT block, context falls back to
+    /// raw stdout truncated to 2000 characters.
+    #[test]
+    fn falls_back_to_raw_stdout_when_no_conductor_output_block() {
+        let (persistence, run_id) = make_persistence();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone());
+        let node = make_node("info", "echo 'plain output'");
+        execute_script(&mut state, &node, 0).unwrap();
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        let step = &steps[0];
+        assert_eq!(step.status, WorkflowStepStatus::Completed);
+        let ctx = step.context_out.as_deref().unwrap_or("");
+        assert!(
+            ctx.contains("plain output"),
+            "context should contain stdout: {ctx:?}"
+        );
+        let markers: Vec<String> = step
+            .markers_out
+            .as_deref()
+            .and_then(|m| serde_json::from_str(m).ok())
+            .unwrap_or_default();
+        assert!(markers.is_empty(), "no markers expected for plain stdout");
     }
 }

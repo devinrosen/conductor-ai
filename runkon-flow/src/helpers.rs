@@ -20,13 +20,14 @@ pub fn parse_conductor_output(text: &str) -> Option<ConductorOutput> {
     const START: &str = "<<<CONDUCTOR_OUTPUT>>>";
     const END: &str = "<<<END_CONDUCTOR_OUTPUT>>>";
 
-    // Find the last START marker that is immediately followed by `{` or whitespace
-    // (guards against occurrences inside JSON string values or code examples).
+    // Find the last START marker whose content starts with `{`, `[`, or a markdown
+    // code fence (``` …) — guards against occurrences inside JSON string values or
+    // plain prose where the marker appears as a literal string.
     let start_pos = text
         .rmatch_indices(START)
         .find(|(pos, _)| {
             let after = text[pos + START.len()..].trim_start();
-            after.starts_with('{') || after.starts_with('[')
+            after.starts_with('{') || after.starts_with('[') || after.starts_with('`')
         })
         .map(|(pos, _)| pos)?;
 
@@ -80,7 +81,7 @@ fn strip_trailing_commas(s: &str) -> String {
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         if c == ',' {
-            let rest = chars.clone().skip_while(|ch| ch.is_whitespace()).next();
+            let rest = chars.clone().find(|ch| !ch.is_whitespace());
             if matches!(rest, Some('}') | Some(']')) {
                 continue;
             }
@@ -115,10 +116,16 @@ fn fix_backslash_escapes(s: &str) -> String {
 
 /// Build a human-readable summary of a workflow execution.
 pub fn build_workflow_summary(state: &ExecutionState) -> String {
-    let steps = state
-        .persistence
-        .get_steps(&state.workflow_run_id)
-        .unwrap_or_default();
+    let steps = match state.persistence.get_steps(&state.workflow_run_id) {
+        Ok(steps) => steps,
+        Err(e) => {
+            tracing::warn!(
+                "build_workflow_summary: failed to fetch steps for run {}: {e}",
+                state.workflow_run_id
+            );
+            vec![]
+        }
+    };
 
     let total = steps.len();
     let count_status =
@@ -230,6 +237,101 @@ pub fn find_max_completed_while_iteration(state: &ExecutionState, node: &WhileNo
     }
     // iter is now the first incomplete iteration — start there
     iter
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::parse_conductor_output;
+
+    #[test]
+    fn parses_well_formed_block_with_markers_and_context() {
+        let text = concat!(
+            "some preamble\n",
+            "<<<CONDUCTOR_OUTPUT>>>\n",
+            r#"{"markers":["a","b"],"context":"hello world"}"#,
+            "\n",
+            "<<<END_CONDUCTOR_OUTPUT>>>\n",
+            "some suffix"
+        );
+        let out = parse_conductor_output(text).unwrap();
+        assert_eq!(out.markers, vec!["a", "b"]);
+        assert_eq!(out.context, "hello world");
+    }
+
+    #[test]
+    fn strips_trailing_commas_before_braces() {
+        let text = concat!(
+            "<<<CONDUCTOR_OUTPUT>>>\n",
+            r#"{"markers":["x",],"context":"ctx",}"#,
+            "\n",
+            "<<<END_CONDUCTOR_OUTPUT>>>"
+        );
+        let out = parse_conductor_output(text).unwrap();
+        assert_eq!(out.markers, vec!["x"]);
+        assert_eq!(out.context, "ctx");
+    }
+
+    #[test]
+    fn fixes_invalid_backslash_escapes() {
+        // \p is not a valid JSON escape sequence; fix_backslash_escapes doubles it
+        // so the JSON becomes parseable.
+        let text = concat!(
+            "<<<CONDUCTOR_OUTPUT>>>\n",
+            r#"{"markers":[],"context":"C:\path\to\file"}"#,
+            "\n",
+            "<<<END_CONDUCTOR_OUTPUT>>>"
+        );
+        let out = parse_conductor_output(text).unwrap();
+        // Successfully parsed despite the invalid backslash sequences.
+        assert!(out.context.contains("path"));
+    }
+
+    #[test]
+    fn strips_markdown_code_fence() {
+        let text = concat!(
+            "<<<CONDUCTOR_OUTPUT>>>\n",
+            "```json\n",
+            r#"{"markers":["fenced"],"context":"fenced context"}"#,
+            "\n",
+            "```\n",
+            "<<<END_CONDUCTOR_OUTPUT>>>"
+        );
+        let out = parse_conductor_output(text).unwrap();
+        assert_eq!(out.markers, vec!["fenced"]);
+        assert_eq!(out.context, "fenced context");
+    }
+
+    #[test]
+    fn returns_none_when_no_block_present() {
+        assert!(parse_conductor_output("no conductor output block here").is_none());
+        assert!(parse_conductor_output("").is_none());
+    }
+
+    #[test]
+    fn markers_field_missing_defaults_to_empty_vec() {
+        let text = concat!(
+            "<<<CONDUCTOR_OUTPUT>>>\n",
+            r#"{"context":"only context, no markers"}"#,
+            "\n",
+            "<<<END_CONDUCTOR_OUTPUT>>>"
+        );
+        let out = parse_conductor_output(text).unwrap();
+        assert!(out.markers.is_empty());
+        assert_eq!(out.context, "only context, no markers");
+    }
+
+    #[test]
+    fn context_field_missing_defaults_to_empty_string() {
+        let text = concat!(
+            "<<<CONDUCTOR_OUTPUT>>>\n",
+            r#"{"markers":["m1"]}"#,
+            "\n",
+            "<<<END_CONDUCTOR_OUTPUT>>>"
+        );
+        let out = parse_conductor_output(text).unwrap();
+        assert_eq!(out.markers, vec!["m1"]);
+        assert_eq!(out.context, "");
+    }
 }
 
 #[cfg(test)]

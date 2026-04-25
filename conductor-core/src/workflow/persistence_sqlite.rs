@@ -886,4 +886,56 @@ mod tests {
             "run written via persistence should be visible through shared conn"
         );
     }
+
+    // ---------------------------------------------------------------------------
+    // is_run_cancelled()
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn is_run_cancelled_returns_true_for_cancelled_status() {
+        let (p, parent_id) = make_persistence();
+        let run = p.create_run(make_new_run(parent_id)).unwrap();
+        p.update_run_status(&run.id, WorkflowRunStatus::Cancelled, None, None)
+            .unwrap();
+        assert!(
+            runkon_flow::traits::persistence::WorkflowPersistence::is_run_cancelled(&p, &run.id)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn is_run_cancelled_returns_true_for_cancelling_status() {
+        let (p, parent_id) = make_persistence();
+        let run = p.create_run(make_new_run(parent_id)).unwrap();
+        p.update_run_status(&run.id, WorkflowRunStatus::Cancelling, None, None)
+            .unwrap();
+        assert!(
+            runkon_flow::traits::persistence::WorkflowPersistence::is_run_cancelled(&p, &run.id)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn is_run_cancelled_returns_false_for_running_status() {
+        let (p, parent_id) = make_persistence();
+        let run = p.create_run(make_new_run(parent_id)).unwrap();
+        p.update_run_status(&run.id, WorkflowRunStatus::Running, None, None)
+            .unwrap();
+        assert!(
+            !runkon_flow::traits::persistence::WorkflowPersistence::is_run_cancelled(&p, &run.id)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn is_run_cancelled_returns_false_for_nonexistent_run() {
+        let (p, _) = make_persistence();
+        assert!(
+            !runkon_flow::traits::persistence::WorkflowPersistence::is_run_cancelled(
+                &p,
+                "nonexistent-run-id"
+            )
+            .unwrap()
+        );
+    }
 }

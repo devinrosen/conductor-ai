@@ -5,8 +5,6 @@
 //!
 //! All items are `pub(super)` — visible to the parent `workflow` module only.
 
-#![allow(dead_code)]
-
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
@@ -230,7 +228,10 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
         // use its ID as run_id. We also link it back to the step via child_run_id so
         // the TUI can drill in while the agent is running.
         let child_run_id = {
-            let conn = self.conn.lock().map_err(|e| EngineError::Workflow(format!("db mutex poisoned: {e}")))?;
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| EngineError::Workflow(format!("db mutex poisoned: {e}")))?;
             let agent_mgr = crate::agent::AgentManager::new(&conn);
             let child_run = agent_mgr
                 .create_child_run(
@@ -307,11 +308,11 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
 
 /// Convert a runkon-flow `ForeachScope` to a conductor-core `ForeachScope` via
 /// direct match (both types share identical variants).
-fn rk_scope_to_core(
-    scope: &runkon_flow::dsl::ForeachScope,
-) -> crate::workflow_dsl::ForeachScope {
+fn rk_scope_to_core(scope: &runkon_flow::dsl::ForeachScope) -> crate::workflow_dsl::ForeachScope {
+    use crate::workflow_dsl::{
+        ForeachScope as Core, TicketScope as CoreTicket, WorktreeScope as CoreWorktree,
+    };
     use runkon_flow::dsl::{ForeachScope as Rk, TicketScope as RkTicket};
-    use crate::workflow_dsl::{ForeachScope as Core, TicketScope as CoreTicket, WorktreeScope as CoreWorktree};
     match scope {
         Rk::Ticket(ts) => Core::Ticket(match ts {
             RkTicket::TicketId(id) => CoreTicket::TicketId(id.clone()),

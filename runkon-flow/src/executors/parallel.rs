@@ -9,6 +9,11 @@ use crate::traits::action_executor::{ActionOutput, ActionParams, ExecutionContex
 use crate::traits::persistence::{NewStep, StepUpdate};
 use crate::types::{ContextEntry, StepResult};
 
+#[inline]
+fn p_err(e: EngineError) -> EngineError {
+    EngineError::Persistence(e.to_string())
+}
+
 pub fn execute_parallel(
     state: &mut ExecutionState,
     node: &ParallelNode,
@@ -123,7 +128,7 @@ pub fn execute_parallel(
                         iteration: iteration as i64,
                         retry_count: None,
                     })
-                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                    .map_err(p_err)?;
                 state
                     .persistence
                     .update_step(
@@ -141,7 +146,7 @@ pub fn execute_parallel(
                             step_error: None,
                         },
                     )
-                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                    .map_err(p_err)?;
                 skipped_count += 1;
                 continue;
             }
@@ -205,8 +210,11 @@ pub fn execute_parallel(
     // Spawn all agents concurrently. Each thread checks the scope token before dispatching
     // so that a fail_fast cancellation from a result that arrives while threads are still
     // starting will prevent those threads from doing any work.
-    let (completion_tx, completion_rx) =
-        std::sync::mpsc::channel::<(String, String, std::result::Result<ActionOutput, EngineError>)>();
+    let (completion_tx, completion_rx) = std::sync::mpsc::channel::<(
+        String,
+        String,
+        std::result::Result<ActionOutput, EngineError>,
+    )>();
 
     for dispatch_input in dispatch_queue {
         let tx = completion_tx.clone();
@@ -216,11 +224,14 @@ pub fn execute_parallel(
             let result = if scope.is_cancelled() {
                 Err(EngineError::Cancelled(CancellationReason::FailFast))
             } else {
-                registry.dispatch(
-                    &dispatch_input.params.name,
-                    &dispatch_input.ectx,
-                    &dispatch_input.params,
-                )
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    registry.dispatch(
+                        &dispatch_input.params.name,
+                        &dispatch_input.ectx,
+                        &dispatch_input.params,
+                    )
+                }))
+                .unwrap_or_else(|_| Err(EngineError::Workflow("executor panicked".to_string())))
             };
             let _ = tx.send((dispatch_input.step_id, dispatch_input.agent_name, result));
         });
@@ -269,7 +280,7 @@ pub fn execute_parallel(
                             step_error: None,
                         },
                     )
-                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                    .map_err(p_err)?;
 
                 tracing::info!(
                     "parallel: '{}' completed (cost=${:.4})",
@@ -321,7 +332,7 @@ pub fn execute_parallel(
                             step_error: Some(e.to_string()),
                         },
                     )
-                    .map_err(|e2| EngineError::Persistence(e2.to_string()))?;
+                    .map_err(p_err)?;
                 failures += 1;
             }
         }
@@ -549,10 +560,15 @@ mod tests {
         );
     }
 
-    /// Verifies that fail_fast cancels remaining branches after the first failure.
-    /// With true parallel execution, all branches are spawned simultaneously; the
-    /// scope token is cancelled as soon as the first failure result arrives, so
-    /// any branches that haven't dispatched yet will see the cancellation and skip.
+    /// Verifies that fail_fast marks the workflow as not-all-succeeded after the first failure.
+    ///
+    /// With true parallel execution all branches are spawned before any result is processed.
+    /// The scope token is cancelled only when the first failure result is dequeued by the
+    /// main thread; branches that already called `dispatch()` before the cancel fires will
+    /// complete normally (Ok or Err depending on the executor). The exact count of Failed
+    /// steps is therefore non-deterministic: it is at least 1 (the failing branch) but may
+    /// be higher if racing branches also see the cancellation check. The meaningful invariant
+    /// is that `all_succeeded` becomes false and at least one step is recorded as Failed.
     #[test]
     fn parallel_fail_fast_stops_after_first_failure() {
         struct FailExec;

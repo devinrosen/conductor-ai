@@ -10,12 +10,17 @@ use super::action_executor::{ActionExecutor, ActionRegistry};
 /// set the catch-all executor. Calling `.action_fallback()` more than once
 /// causes the second call to return an error (enforced at call time, not at
 /// `build()` time, so the builder chain remains infallible after the first call).
-pub struct FlowEngineBuilder {
+/// Builder for constructing an `ActionRegistry` used by the legacy conductor-core engine path.
+///
+/// Note: `runkon-flow` exports its own `FlowEngineBuilder` that constructs a full `FlowEngine`.
+/// This type builds only an `ActionRegistry`; it is named `ActionRegistryBuilder` to avoid
+/// confusion with the runkon-flow builder that exists in the same dependency tree.
+pub struct ActionRegistryBuilder {
     named: HashMap<String, Box<dyn ActionExecutor>>,
     fallback: Option<Box<dyn ActionExecutor>>,
 }
 
-impl FlowEngineBuilder {
+impl ActionRegistryBuilder {
     pub fn new() -> Self {
         Self {
             named: HashMap::new(),
@@ -49,7 +54,7 @@ impl FlowEngineBuilder {
     }
 }
 
-impl Default for FlowEngineBuilder {
+impl Default for ActionRegistryBuilder {
     fn default() -> Self {
         Self::new()
     }
@@ -129,7 +134,7 @@ mod tests {
 
     #[test]
     fn build_with_named_executor() {
-        let registry = FlowEngineBuilder::new()
+        let registry = ActionRegistryBuilder::new()
             .action(Box::new(AlphaExecutor))
             .build()
             .unwrap();
@@ -141,7 +146,7 @@ mod tests {
 
     #[test]
     fn build_with_fallback() {
-        let registry = FlowEngineBuilder::new()
+        let registry = ActionRegistryBuilder::new()
             .action_fallback(Box::new(BetaExecutor))
             .unwrap()
             .build()
@@ -154,7 +159,7 @@ mod tests {
 
     #[test]
     fn named_takes_precedence_over_fallback() {
-        let registry = FlowEngineBuilder::new()
+        let registry = ActionRegistryBuilder::new()
             .action(Box::new(AlphaExecutor))
             .action_fallback(Box::new(BetaExecutor))
             .unwrap()
@@ -168,7 +173,7 @@ mod tests {
 
     #[test]
     fn second_action_fallback_returns_err() {
-        let result = FlowEngineBuilder::new()
+        let result = ActionRegistryBuilder::new()
             .action_fallback(Box::new(AlphaExecutor))
             .unwrap()
             .action_fallback(Box::new(BetaExecutor));

@@ -82,7 +82,7 @@ fn build_default_action_registry(
     let api_executor: Box<dyn crate::workflow::action_executor::ActionExecutor> = Box::new(
         crate::workflow::api_call_executor::ApiCallExecutor::new(config.clone()),
     );
-    crate::workflow::flow_engine::FlowEngineBuilder::new()
+    crate::workflow::flow_engine::ActionRegistryBuilder::new()
         .action_fallback(Box::new(
             crate::workflow::claude_agent_executor::ClaudeAgentExecutor::new(
                 config.clone(),
@@ -91,7 +91,7 @@ fn build_default_action_registry(
         ))
         .expect("single fallback — cannot fail on first call")
         .build()
-        .expect("FlowEngineBuilder::build is infallible when fallback_count <= 1")
+        .expect("ActionRegistryBuilder::build is infallible when fallback_count <= 1")
 }
 
 /// If the workflow's ticket is a Vantage deliverable, resolve the lifecycle hooks.
@@ -1169,7 +1169,11 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         )),
     );
 
-    let action_registry = Arc::new(super::runkon_bridge::build_rk_action_registry(config, Arc::clone(&shared_conn), &db));
+    let action_registry = Arc::new(super::runkon_bridge::build_rk_action_registry(
+        config,
+        Arc::clone(&shared_conn),
+        &db,
+    ));
 
     let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(
         Arc::clone(&shared_conn),
@@ -1269,7 +1273,12 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         db,
     )
     .build()
-    .map_err(|e| ConductorError::Workflow(format!("failed to build engine for '{}': {e}", workflow.name)))?;
+    .map_err(|e| {
+        ConductorError::Workflow(format!(
+            "failed to build engine for '{}': {e}",
+            workflow.name
+        ))
+    })?;
 
     let rk_result = engine
         .run(&rk_def, &mut rk_state)
@@ -1282,7 +1291,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         let guard = shared_conn
             .lock()
             .map_err(|e| ConductorError::Workflow(format!("db mutex poisoned: {e}")))?;
-        let agent_mgr = AgentManager::new(&*guard);
+        let agent_mgr = AgentManager::new(&guard);
         let summary = format!("Workflow '{}' completed", workflow.name);
         if rk_result.all_succeeded {
             if let Err(e) = agent_mgr.update_run_completed(
@@ -1623,6 +1632,14 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         cancel_reason: None,
     };
 
+    // TODO(#2568-resume): resume_workflow still calls run_workflow_engine() (the old
+    // conductor-core engine) while execute_workflow_standalone now delegates to
+    // runkon_flow::FlowEngine::run(). The two paths have divergent capabilities: the
+    // FlowEngine path has schema_resolver, ConductorChildWorkflowRunner, CancellationToken,
+    // and the full RkItemProviderRegistry; the resume path has none of these. Workflows that
+    // use `call workflow {}` steps, schema-constrained calls, or rely on precise cancellation
+    // will behave differently on resume vs. a fresh run. Migrating resume to FlowEngine is
+    // tracked as a phase-3.x follow-up.
     run_workflow_engine(&mut state, &workflow)
 }
 
