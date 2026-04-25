@@ -1313,6 +1313,47 @@ mod tests {
         );
     }
 
+    // Test: mixing event_sink() and with_event_sinks() accumulates all sinks
+    #[test]
+    fn event_sink_and_with_event_sinks_both_accumulate() {
+        let sink_a = VecSink::new();
+        let sink_b = VecSink::new();
+        let sink_c = VecSink::new();
+
+        let pre_built: Arc<[Arc<dyn EventSink>]> = Arc::from(vec![
+            Arc::clone(&sink_b) as Arc<dyn EventSink>,
+            Arc::clone(&sink_c) as Arc<dyn EventSink>,
+        ]);
+
+        let engine = FlowEngineBuilder::new()
+            .action(Box::new(AlphaExecutor))
+            .event_sink(Box::new(ForwardSink(Arc::clone(&sink_a))))
+            .with_event_sinks(&pre_built)
+            .with_event_sinks(&pre_built) // second call appends, not replaces
+            .build()
+            .unwrap();
+
+        let def = make_single_step_def();
+        let mut state = make_state_with_persistence("wf");
+        engine.run(&def, &mut state).unwrap();
+
+        // sink_a (via event_sink) and sink_b/sink_c (via with_event_sinks) all fire
+        assert!(
+            !sink_a.collected().is_empty(),
+            "event_sink sink should receive events"
+        );
+        assert_eq!(
+            sink_b.collected().len(),
+            sink_a.collected().len() * 2,
+            "sink_b registered twice via with_event_sinks should receive 2x events"
+        );
+        assert_eq!(
+            sink_b.collected().len(),
+            sink_c.collected().len(),
+            "both with_event_sinks sinks should receive the same count"
+        );
+    }
+
     // Test: panicking sink doesn't abort the run; the non-panicking sink still receives events
     #[test]
     fn event_sinks_panic_safety() {

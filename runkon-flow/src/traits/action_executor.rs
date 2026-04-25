@@ -96,9 +96,9 @@ impl ActionRegistry {
         Self { named, fallback }
     }
 
-    /// Construct a registry for external consumers such as integration-test harnesses.
-    ///
-    /// Production code should use [`FlowEngineBuilder::action`] to register executors.
+    /// Construct a registry for external consumers that build registries outside the
+    /// `FlowEngineBuilder` pipeline — such as bridge adapters or integration-test harnesses
+    /// — that cannot use the builder's fluent API.
     pub fn from_executors(
         named: HashMap<String, Box<dyn ActionExecutor>>,
         fallback: Option<Box<dyn ActionExecutor>>,

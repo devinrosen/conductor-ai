@@ -274,7 +274,7 @@ impl<'a> WorkflowManager<'a> {
             .iter()
             .copied()
             .chain(status_filter.unwrap_or_default().iter().copied());
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = self.conn.prepare_cached(&sql)?;
         let steps = stmt
             .query_map(rusqlite::params_from_iter(combined), row_to_workflow_step)?
             .collect::<rusqlite::Result<Vec<_>>>()?;

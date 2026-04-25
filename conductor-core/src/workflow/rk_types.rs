@@ -775,4 +775,59 @@ mod tests {
             other => panic!("expected PrChecks, got {other:?}"),
         }
     }
+
+    // ---------------------------------------------------------------------------
+    // new_run_to_core / new_step_to_core — field-mapping correctness
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn new_run_to_core_maps_all_fields() {
+        let rk = RkNewRun {
+            workflow_name: "my-wf".to_string(),
+            worktree_id: Some("wt-1".to_string()),
+            ticket_id: Some("ticket-1".to_string()),
+            repo_id: Some("repo-1".to_string()),
+            parent_run_id: "parent".to_string(),
+            dry_run: true,
+            trigger: "manual".to_string(),
+            definition_snapshot: Some("{}".to_string()),
+            parent_workflow_run_id: Some("parent-wf-run".to_string()),
+            target_label: Some("label".to_string()),
+        };
+        let core = new_run_to_core(rk);
+        assert_eq!(core.workflow_name, "my-wf");
+        assert_eq!(core.worktree_id, Some("wt-1".to_string()));
+        assert_eq!(core.ticket_id, Some("ticket-1".to_string()));
+        assert_eq!(core.repo_id, Some("repo-1".to_string()));
+        assert_eq!(core.parent_run_id, "parent");
+        assert!(core.dry_run);
+        assert_eq!(core.trigger, "manual");
+        assert_eq!(core.definition_snapshot, Some("{}".to_string()));
+        assert_eq!(
+            core.parent_workflow_run_id,
+            Some("parent-wf-run".to_string())
+        );
+        assert_eq!(core.target_label, Some("label".to_string()));
+    }
+
+    #[test]
+    fn new_step_to_core_maps_all_fields() {
+        let rk = RkNewStep {
+            workflow_run_id: "run-1".to_string(),
+            step_name: "my-step".to_string(),
+            role: "actor".to_string(),
+            can_commit: true,
+            position: 3,
+            iteration: 2,
+            retry_count: Some(1),
+        };
+        let core = new_step_to_core(rk);
+        assert_eq!(core.workflow_run_id, "run-1");
+        assert_eq!(core.step_name, "my-step");
+        assert_eq!(core.role, "actor");
+        assert!(core.can_commit);
+        assert_eq!(core.position, 3);
+        assert_eq!(core.iteration, 2);
+        assert_eq!(core.retry_count, Some(1));
+    }
 }
