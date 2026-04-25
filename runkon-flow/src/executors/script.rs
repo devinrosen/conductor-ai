@@ -188,6 +188,15 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
     // Template variables (e.g. `{{prior_output}}`) are substituted using the raw
     // (non-shell-quoted) variable map because values are passed as discrete env
     // var values, not interpolated into a shell command string.
+    const SENSITIVE_ENV_VARS: &[&str] = &[
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "PATH",
+        "DYLD_INSERT_LIBRARIES",
+        "PYTHONPATH",
+        "RUBYLIB",
+        "NODE_PATH",
+    ];
     for (k, v) in &node.env {
         if k.contains('=') || k.contains('\0') {
             tracing::warn!(
@@ -196,6 +205,13 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                 k
             );
             continue;
+        }
+        if SENSITIVE_ENV_VARS.contains(&k.as_str()) {
+            tracing::warn!(
+                "script '{}': env block overrides security-sensitive variable {:?}",
+                node.name,
+                k
+            );
         }
         let resolved = crate::prompt_builder::substitute_variables(v, &vars);
         env_vars.insert(k.clone(), resolved);

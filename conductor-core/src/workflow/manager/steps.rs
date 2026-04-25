@@ -439,7 +439,7 @@ impl<'a> WorkflowManager<'a> {
             })?;
 
         // Extract allowed values from the options (assuming format [{"value": "...", "label": "..."}, ...])
-        let allowed_values: Vec<String> = allowed_options
+        let allowed_set: HashSet<String> = allowed_options
             .iter()
             .filter_map(|opt: &serde_json::Value| {
                 opt.get("value")
@@ -447,21 +447,21 @@ impl<'a> WorkflowManager<'a> {
             })
             .collect();
 
-        if allowed_values.is_empty() {
+        if allowed_set.is_empty() {
             return Err(ConductorError::InvalidInput(
                 "No valid options found in gate configuration".to_string(),
             ));
         }
 
-        let allowed_set: HashSet<&str> = allowed_values.iter().map(|s| s.as_str()).collect();
-
         // Validate that all selections are in the allowed values
         for selection in selections {
             if !allowed_set.contains(selection.as_str()) {
+                let mut sorted: Vec<&str> = allowed_set.iter().map(|s| s.as_str()).collect();
+                sorted.sort_unstable();
                 return Err(ConductorError::InvalidInput(format!(
                     "Invalid gate selection '{}' - not in allowed options: [{}]",
                     selection,
-                    allowed_values.join(", ")
+                    sorted.join(", ")
                 )));
             }
         }

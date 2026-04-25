@@ -25,7 +25,7 @@ pub(crate) mod output;
 pub mod persistence;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod persistence_memory;
-pub mod persistence_sqlite;
+pub(crate) mod persistence_sqlite;
 pub(crate) mod prompt_builder;
 pub(crate) mod rk_types;
 pub(crate) mod run_context;
