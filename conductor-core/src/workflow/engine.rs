@@ -1337,8 +1337,6 @@ pub fn resume_workflow_standalone(params: &WorkflowResumeStandalone) -> Result<W
         db_path: Some(db),
     };
 
-    // NOTE: resume uses the legacy run_workflow_engine path. Migration to FlowEngine
-    // is planned for Phase 3.2. Do not assume this is equivalent to execute_workflow_standalone.
     resume_workflow(&input)
 }
 
@@ -1493,27 +1491,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         keys
     };
 
-    // Build the rk step map (convert to runkon-flow types for FlowEngine resume context).
-    let rk_step_map: HashMap<StepKey, runkon_flow::types::WorkflowRunStep> = all_steps
-        .into_iter()
-        .filter(|s| s.status == WorkflowStepStatus::Completed)
-        .map(|s| {
-            let key = (s.step_name.clone(), s.iteration as u32);
-            let rk_step = super::rk_types::step_to_rk(s);
-            (key, rk_step)
-        })
-        .filter(|(key, _)| skip_completed.contains(key))
-        .collect();
-
     let skip_count = skip_completed.len();
-    let rk_resume_ctx = if skip_completed.is_empty() {
-        None
-    } else {
-        Some(runkon_flow::engine::ResumeContext {
-            skip_completed,
-            step_map: rk_step_map,
-        })
-    };
 
     // Reset run status to Running
     wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Running, None, None)?;
@@ -1621,7 +1599,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         last_gate_feedback: None,
         block_output: None,
         block_with: Vec::new(),
-        resume_ctx: rk_resume_ctx,
+        resume_ctx: None,
         default_bot_name: wf_run.default_bot_name.clone(),
         triggered_by_hook: wf_run.is_triggered_by_hook(),
         schema_resolver: Some(schema_resolver),
@@ -1650,7 +1628,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     })?;
 
     let rk_result = engine
-        .run(&rk_def, &mut rk_state)
+        .resume(&rk_def, &mut rk_state)
         .map_err(|e| ConductorError::Workflow(e.to_string()))?;
 
     Ok(super::rk_types::rk_workflow_result_to_core(rk_result))
