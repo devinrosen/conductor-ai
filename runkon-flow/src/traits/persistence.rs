@@ -32,6 +32,7 @@ pub struct NewStep {
 }
 
 /// Fields to update on an existing workflow step.
+#[derive(Default)]
 pub struct StepUpdate {
     pub status: WorkflowStepStatus,
     pub child_run_id: Option<String>,

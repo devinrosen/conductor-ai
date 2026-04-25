@@ -19,7 +19,7 @@ use super::resolvers::{
 
 /// Outcome of a single poll tick from a `GateResolver`.
 #[derive(Debug)]
-pub(super) enum GatePoll {
+pub(in crate::workflow) enum GatePoll {
     Approved(Option<String>),
     Rejected(String),
     Pending,
@@ -27,7 +27,7 @@ pub(super) enum GatePoll {
 
 /// All gate configuration passed to `GateResolver::poll`.
 #[allow(dead_code)] // fields are available for resolver use; not all are consumed in Phase 1
-pub(super) struct GateParams {
+pub(in crate::workflow) struct GateParams {
     pub gate_name: String,
     pub prompt: Option<String>,
     pub min_approvals: u32,
@@ -44,7 +44,7 @@ pub(super) struct GateParams {
 /// This struct is intentionally concrete and minimal for Phase 1. It will be
 /// replaced by `&dyn RunContext` when Step 1.1 lands.
 #[allow(dead_code)] // db_path is available for resolver use; not all consumed
-pub(super) struct GateContext<'a> {
+pub(in crate::workflow) struct GateContext<'a> {
     pub config: &'a Config,
     pub db_path: &'a Path,
 }
@@ -53,7 +53,7 @@ pub(super) struct GateContext<'a> {
 // GateResolver trait
 // ---------------------------------------------------------------------------
 
-pub(super) trait GateResolver: Send + Sync {
+pub(in crate::workflow) trait GateResolver: Send + Sync {
     fn gate_type(&self) -> &str;
     fn poll(&self, run_id: &str, params: &GateParams, ctx: &GateContext<'_>) -> Result<GatePoll>;
 }
@@ -66,13 +66,13 @@ pub(super) trait GateResolver: Send + Sync {
 ///
 /// One `gh auth token` shell-out per TTL window (55 min on success, 30 s on
 /// failure).  `token_override` short-circuits the shell-out for tests.
-pub(super) struct GitHubTokenCache {
+pub(in crate::workflow) struct GitHubTokenCache {
     cache: Mutex<Option<(Option<String>, Instant)>>,
     override_token: Option<String>,
 }
 
 impl GitHubTokenCache {
-    pub(super) fn new(token_override: Option<String>) -> Self {
+    pub(in crate::workflow) fn new(token_override: Option<String>) -> Self {
         Self {
             cache: Mutex::new(None),
             override_token: token_override,
@@ -80,7 +80,11 @@ impl GitHubTokenCache {
     }
 
     #[cfg(test)]
-    pub(super) fn set_cache_for_test(&self, token: Option<String>, fetched_at: Instant) {
+    pub(in crate::workflow) fn set_cache_for_test(
+        &self,
+        token: Option<String>,
+        fetched_at: Instant,
+    ) {
         *self.cache.lock().expect("token cache mutex poisoned") = Some((token, fetched_at));
     }
 
@@ -88,7 +92,11 @@ impl GitHubTokenCache {
     ///
     /// Returns `None` when no GitHub App is configured and no override is set.
     /// Never sets `GH_TOKEN=""` — callers must only set the env var when `Some`.
-    pub(super) fn get(&self, config: &Config, bot_name: Option<&str>) -> Option<String> {
+    pub(in crate::workflow) fn get(
+        &self,
+        config: &Config,
+        bot_name: Option<&str>,
+    ) -> Option<String> {
         if let Some(ref t) = self.override_token {
             return Some(t.clone());
         }
@@ -128,7 +136,7 @@ fn register(map: &mut HashMap<String, Box<dyn GateResolver>>, resolver: Box<dyn 
     map.insert(key, resolver);
 }
 
-pub(super) fn build_default_gate_resolvers(
+pub(in crate::workflow) fn build_default_gate_resolvers(
     persistence: Arc<dyn WorkflowPersistence>,
     working_dir: String,
     default_bot_name: Option<String>,

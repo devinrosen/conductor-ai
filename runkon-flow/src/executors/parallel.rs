@@ -9,6 +9,8 @@ use crate::traits::action_executor::{ActionOutput, ActionParams, ExecutionContex
 use crate::traits::persistence::{NewStep, StepUpdate};
 use crate::types::{ContextEntry, StepResult};
 
+use super::p_err;
+
 pub fn execute_parallel(
     state: &mut ExecutionState,
     node: &ParallelNode,
@@ -36,6 +38,13 @@ pub fn execute_parallel(
         step_id: String,
         result: std::result::Result<ActionOutput, EngineError>,
         attempt: u32,
+    }
+
+    struct DispatchInput {
+        step_id: String,
+        agent_name: String,
+        ectx: ExecutionContext,
+        params: ActionParams,
     }
 
     let mut skipped_count = 0u32;
@@ -68,36 +77,39 @@ pub fn execute_parallel(
             .transpose()?;
         let effective_schema = call_schema.as_ref().or(block_schema.as_ref()).cloned();
 
-        // Combine block-level `with` + per-call `with` additions
-        let mut effective_with = node.with.clone();
-        if let Some(extra) = node.call_with.get(&i.to_string()) {
-            effective_with.extend(extra.iter().cloned());
-        }
+        // Combine block-level `with` + per-call `with` additions. Only clone when
+        // there are per-call extras to avoid N × snippet_total allocations.
+        let effective_with = if let Some(extra) = node.call_with.get(&i.to_string()) {
+            let mut w = node.with.clone();
+            w.extend(extra.iter().cloned());
+            w
+        } else {
+            node.with.clone()
+        };
 
         call_inputs.push((i, agent_step_key.clone(), effective_schema, effective_with));
     }
 
-    // Second pass: execute each non-skipped agent synchronously via action registry
-    // Note: in the full implementation these would be parallel; here we serialize for simplicity
-    // The conductor-core parallel executor handles true parallelism via headless subprocesses.
-    let mut results: Vec<ParallelCallResult> = Vec::new();
-    let mut merged_markers: Vec<String> = Vec::new();
-    let mut successes = 0u32;
-    let mut failures = 0u32;
+    // Pre-dispatch pass: evaluate per-call `if` conditions, create step records, and build
+    // the dispatch queue. All records are created before any thread is spawned so the DB
+    // reflects the full parallel block immediately (important for UI and resume).
+    let mut dispatch_queue: Vec<DispatchInput> = Vec::new();
 
-    // Parallel-scope token: child of the run root. Cancelling it prevents later branches
-    // from executing when fail_fast fires.
+    // Build the variable map once — state doesn't change between branches so there is
+    // no need to re-serialize state.contexts for every parallel branch.
+    let shared_inputs: Arc<std::collections::HashMap<String, String>> = Arc::new({
+        let var_map = crate::prompt_builder::build_variable_map(state);
+        var_map
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+    });
+
+    // Parallel-scope token: child of the run root. Cancelling it signals running branches
+    // to exit early when fail_fast fires.
     let scope_token = state.cancellation.child();
 
     for (i, _agent_step_key, call_schema, effective_with) in call_inputs {
-        // Check scope token before dispatching each branch (fail_fast from a prior branch).
-        if scope_token.is_cancelled() {
-            tracing::info!(
-                "parallel: scope token cancelled (fail_fast), skipping remaining branches"
-            );
-            break;
-        }
-
         let pos = pos_base + i as i64;
         let agent_ref = &node.calls[i];
         let agent_label = agent_ref.label();
@@ -127,7 +139,7 @@ pub fn execute_parallel(
                         iteration: iteration as i64,
                         retry_count: None,
                     })
-                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                    .map_err(p_err)?;
                 state
                     .persistence
                     .update_step(
@@ -145,7 +157,7 @@ pub fn execute_parallel(
                             step_error: None,
                         },
                     )
-                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                    .map_err(p_err)?;
                 skipped_count += 1;
                 continue;
             }
@@ -162,15 +174,9 @@ pub fn execute_parallel(
                 iteration: iteration as i64,
                 retry_count: Some(0),
             })
-            .map_err(|e| EngineError::Persistence(e.to_string()))?;
+            .map_err(p_err)?;
 
-        let inputs: std::collections::HashMap<String, String> = {
-            let var_map = crate::prompt_builder::build_variable_map(state);
-            var_map
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v))
-                .collect()
-        };
+        let inputs = Arc::clone(&shared_inputs);
 
         let ectx = ExecutionContext {
             run_id: step_id.clone(),
@@ -195,16 +201,60 @@ pub fn execute_parallel(
             snippets: effective_with,
             dry_run: state.exec_config.dry_run,
             gate_feedback: state.last_gate_feedback.clone(),
-            schema: call_schema.clone(),
+            schema: call_schema,
         };
 
-        let registry = Arc::clone(&state.action_registry);
-        let result = registry.dispatch(&params.name, &ectx, &params);
+        dispatch_queue.push(DispatchInput {
+            step_id,
+            agent_name: agent_label.to_string(),
+            ectx,
+            params,
+        });
+    }
 
-        // If fail_fast and this branch failed, cancel the scope token to stop remaining branches.
+    // Spawn all agents concurrently. Each thread checks the scope token before dispatching
+    // so that a fail_fast cancellation from a result that arrives while threads are still
+    // starting will prevent those threads from doing any work.
+    let (completion_tx, completion_rx) = std::sync::mpsc::channel::<(
+        String,
+        String,
+        std::result::Result<ActionOutput, EngineError>,
+    )>();
+
+    for dispatch_input in dispatch_queue {
+        let tx = completion_tx.clone();
+        let registry = Arc::clone(&state.action_registry);
+        let scope = scope_token.clone();
+        std::thread::spawn(move || {
+            let result = if scope.is_cancelled() {
+                Err(EngineError::Cancelled(CancellationReason::FailFast))
+            } else {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    registry.dispatch(
+                        &dispatch_input.params.name,
+                        &dispatch_input.ectx,
+                        &dispatch_input.params,
+                    )
+                }))
+                .unwrap_or_else(|_| {
+                    Err(EngineError::Workflow(format!(
+                        "executor '{}' panicked",
+                        dispatch_input.params.name
+                    )))
+                })
+            };
+            let _ = tx.send((dispatch_input.step_id, dispatch_input.agent_name, result));
+        });
+    }
+    // Drop the sender so the receiver knows when all threads have completed.
+    drop(completion_tx);
+
+    // Collect results as threads complete, triggering fail_fast cancellation as needed.
+    let mut results: Vec<ParallelCallResult> = Vec::new();
+    for (step_id, agent_name, result) in completion_rx {
         let failed = result.is_err();
         results.push(ParallelCallResult {
-            agent_name: agent_label.to_string(),
+            agent_name,
             step_id,
             result,
             attempt: 0,
@@ -215,10 +265,17 @@ pub fn execute_parallel(
     }
 
     // Process results
+    let mut merged_markers: Vec<String> = Vec::new();
+    let mut successes = 0u32;
+    let mut failures = 0u32;
+
     for pr in &results {
         match &pr.result {
             Ok(output) => {
-                let markers_json = serde_json::to_string(&output.markers).unwrap_or_default();
+                let markers_json = crate::helpers::serialize_or_empty_array(
+                    &output.markers,
+                    &format!("parallel: '{}'", pr.agent_name),
+                );
                 let context = output.context.clone().unwrap_or_default();
 
                 state
@@ -236,7 +293,7 @@ pub fn execute_parallel(
                             step_error: None,
                         },
                     )
-                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                    .map_err(p_err)?;
 
                 tracing::info!(
                     "parallel: '{}' completed (cost=${:.4})",
@@ -288,7 +345,7 @@ pub fn execute_parallel(
                             step_error: Some(e.to_string()),
                         },
                     )
-                    .map_err(|e2| EngineError::Persistence(e2.to_string()))?;
+                    .map_err(p_err)?;
                 failures += 1;
             }
         }
@@ -516,7 +573,73 @@ mod tests {
         );
     }
 
-    /// Verifies that fail_fast cancels remaining branches after the first failure.
+    /// Verifies that a panicking executor is caught by `catch_unwind` and recorded as a
+    /// Failed step rather than crashing the whole process.
+    #[test]
+    fn parallel_panicking_executor_is_caught_and_step_is_failed() {
+        struct PanicExec;
+        impl ActionExecutor for PanicExec {
+            fn name(&self) -> &str {
+                "panic_exec"
+            }
+            fn execute(
+                &self,
+                _ectx: &crate::traits::action_executor::ExecutionContext,
+                _params: &ActionParams,
+            ) -> Result<ActionOutput, EngineError> {
+                panic!("deliberate panic in test executor");
+            }
+        }
+
+        let mut named = HashMap::new();
+        named.insert(
+            "panic_exec".to_string(),
+            Box::new(PanicExec) as Box<dyn ActionExecutor>,
+        );
+        let registry = crate::traits::action_executor::ActionRegistry::new(named, None);
+
+        let (persistence, run_id) = make_persistence_with_run();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone(), registry);
+
+        let node = ParallelNode {
+            fail_fast: false,
+            min_success: None,
+            calls: vec![AgentRef::Name("panic_exec".to_string())],
+            output: None,
+            call_outputs: HashMap::new(),
+            with: vec![],
+            call_with: HashMap::new(),
+            call_if: HashMap::new(),
+        };
+
+        // execute_parallel should succeed (the panic is caught internally).
+        execute_parallel(&mut state, &node, 0).unwrap();
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        assert_eq!(steps.len(), 1, "expected one step record");
+        let step = &steps[0];
+        assert_eq!(
+            step.status,
+            WorkflowStepStatus::Failed,
+            "panicking executor should produce a Failed step; got {:?}",
+            step.status
+        );
+        let error_msg = step.step_error.as_deref().unwrap_or("");
+        assert!(
+            error_msg.contains("panic_exec"),
+            "step_error should name the executor; got: {error_msg:?}"
+        );
+    }
+
+    /// Verifies that fail_fast marks the workflow as not-all-succeeded after the first failure.
+    ///
+    /// With true parallel execution all branches are spawned before any result is processed.
+    /// The scope token is cancelled only when the first failure result is dequeued by the
+    /// main thread; branches that already called `dispatch()` before the cancel fires will
+    /// complete normally (Ok or Err depending on the executor). The exact count of Failed
+    /// steps is therefore non-deterministic: it is at least 1 (the failing branch) but may
+    /// be higher if racing branches also see the cancellation check. The meaningful invariant
+    /// is that `all_succeeded` becomes false and at least one step is recorded as Failed.
     #[test]
     fn parallel_fail_fast_stops_after_first_failure() {
         struct FailExec;
@@ -572,10 +695,15 @@ mod tests {
             .iter()
             .filter(|s| s.status == WorkflowStepStatus::Failed)
             .count();
-        assert_eq!(
-            failed, 1,
-            "only the first (failing) branch should be Failed; steps: {:?}",
+        assert!(
+            failed >= 1,
+            "at least one branch should be Failed; steps: {:?}",
             steps
+        );
+        // The overall workflow should be marked as not all-succeeded
+        assert!(
+            !state.all_succeeded,
+            "all_succeeded should be false when fail_fast fires"
         );
     }
 }

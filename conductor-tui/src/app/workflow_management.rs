@@ -150,8 +150,13 @@ impl App {
                 if let Some(ref tx) = self.bg_tx {
                     let tx = tx.clone();
                     std::thread::spawn(move || {
-                        let (defs, warnings) =
-                            WorkflowManager::list_defs(&wt_path, &rp).unwrap_or_default();
+                        let (defs, warnings) = match WorkflowManager::list_defs(&wt_path, &rp) {
+                            Ok(result) => result,
+                            Err(e) => {
+                                tracing::warn!("Failed to load workflow definitions: {e}");
+                                (vec![], vec![])
+                            }
+                        };
                         let _ = tx.send(Action::WorkflowDefsReloaded { defs, warnings });
                     });
                 }
@@ -1168,6 +1173,10 @@ impl App {
                 extra_plugin_dirs: vec![],
                 db_path: None,
                 parent_workflow_run_id: None,
+                depth: 0,
+                parent_step_id: None,
+                default_bot_name: None,
+                iteration: 0,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1225,6 +1234,10 @@ impl App {
                 extra_plugin_dirs,
                 db_path: None,
                 parent_workflow_run_id: None,
+                depth: 0,
+                parent_step_id: None,
+                default_bot_name: None,
+                iteration: 0,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1281,6 +1294,10 @@ impl App {
                 extra_plugin_dirs,
                 db_path: None,
                 parent_workflow_run_id: None,
+                depth: 0,
+                parent_step_id: None,
+                default_bot_name: None,
+                iteration: 0,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1334,6 +1351,10 @@ impl App {
                 extra_plugin_dirs: vec![],
                 db_path: None,
                 parent_workflow_run_id: None,
+                depth: 0,
+                parent_step_id: None,
+                default_bot_name: None,
+                iteration: 0,
             };
 
             let result = execute_workflow_standalone(&params);

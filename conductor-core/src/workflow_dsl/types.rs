@@ -398,6 +398,9 @@ pub struct CallNode {
     /// specialist plugins (e.g. `/usr/local/bsg/agent-architecture/planner`).
     #[serde(default)]
     pub plugin_dirs: Vec<String>,
+    /// Optional per-step timeout (e.g. "5m", "30s", "1h"). If the step does not
+    /// complete within this duration it is cancelled.
+    pub timeout: Option<String>,
 }
 
 /// A sub-workflow invocation node.

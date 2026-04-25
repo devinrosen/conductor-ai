@@ -15,36 +15,7 @@ use crate::status::WorkflowStepStatus;
 use crate::traits::action_executor::{ActionParams, ExecutionContext};
 use crate::traits::persistence::{NewStep, StepUpdate};
 
-fn parse_duration(s: &str) -> std::result::Result<std::time::Duration, String> {
-    if let Some(n) = s.strip_suffix("ms") {
-        let ms = n
-            .parse::<u64>()
-            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
-        return Ok(std::time::Duration::from_millis(ms));
-    }
-    if let Some(n) = s.strip_suffix('h') {
-        let h = n
-            .parse::<u64>()
-            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
-        return Ok(std::time::Duration::from_secs(h * 3600));
-    }
-    if let Some(n) = s.strip_suffix('m') {
-        let m = n
-            .parse::<u64>()
-            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
-        return Ok(std::time::Duration::from_secs(m * 60));
-    }
-    if let Some(n) = s.strip_suffix('s') {
-        let sec = n
-            .parse::<u64>()
-            .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
-        return Ok(std::time::Duration::from_secs(sec));
-    }
-    let sec = s
-        .parse::<u64>()
-        .map_err(|e| format!("invalid timeout '{s}': {e}"))?;
-    Ok(std::time::Duration::from_secs(sec))
-}
+use super::p_err;
 
 pub fn execute_call(state: &mut ExecutionState, node: &CallNode, iteration: u32) -> Result<()> {
     // Call-level output overrides block-level; if neither is set, use None.
@@ -130,7 +101,7 @@ fn execute_call_inner(
                 iteration: iteration as i64,
                 retry_count: Some(attempt as i64),
             })
-            .map_err(|e| EngineError::Persistence(e.to_string()))?;
+            .map_err(p_err)?;
 
         emit_event(
             state,
@@ -140,13 +111,13 @@ fn execute_call_inner(
         );
 
         // Build variable map and inputs for this attempt
-        let inputs: HashMap<String, String> = {
+        let inputs: Arc<HashMap<String, String>> = Arc::new({
             let var_map = build_variable_map(state);
             var_map
                 .into_iter()
                 .map(|(k, v)| (k.to_string(), v))
                 .collect()
-        };
+        });
 
         let effective_bot_name = node
             .bot_name
@@ -200,7 +171,7 @@ fn execute_call_inner(
             .timeout
             .as_deref()
             .map(|t| -> Result<_> {
-                let duration = parse_duration(t).map_err(EngineError::Workflow)?;
+                let duration = crate::helpers::parse_duration(t).map_err(EngineError::Workflow)?;
                 let tok = state.cancellation.child();
                 let tok2 = tok.clone();
                 let done = Arc::clone(&timer_done);
@@ -267,17 +238,24 @@ fn execute_call_inner(
                             markers_out: None,
                             retry_count: Some(attempt as i64),
                             structured_output: None,
-                            step_error: Some("step timed out".to_string()),
+                            step_error: Some(format!(
+                                "step '{}' timed out after {}",
+                                agent_label,
+                                node.timeout.as_deref().unwrap_or("?"),
+                            )),
                         },
                     )
-                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                    .map_err(p_err)?;
                 return Err(EngineError::Cancelled(CancellationReason::Timeout));
             }
         }
 
         match dispatch_result {
             Ok(output) => {
-                let markers_json = serde_json::to_string(&output.markers).unwrap_or_default();
+                let markers_json = crate::helpers::serialize_or_empty_array(
+                    &output.markers,
+                    &format!("call '{agent_label}'"),
+                );
                 let context = output.context.clone().unwrap_or_default();
 
                 tracing::info!(
@@ -304,7 +282,7 @@ fn execute_call_inner(
                             step_error: None,
                         },
                     )
-                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                    .map_err(p_err)?;
 
                 emit_event(
                     state,
@@ -352,7 +330,7 @@ fn execute_call_inner(
                             step_error: None,
                         },
                     )
-                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                    .map_err(p_err)?;
                 return Err(EngineError::Cancelled(reason));
             }
             Err(e) => {
@@ -379,7 +357,7 @@ fn execute_call_inner(
                             step_error: Some(err_msg.clone()),
                         },
                     )
-                    .map_err(|persist_err| EngineError::Persistence(persist_err.to_string()))?;
+                    .map_err(p_err)?;
                 last_error = err_msg;
                 continue;
             }

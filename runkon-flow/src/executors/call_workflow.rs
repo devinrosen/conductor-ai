@@ -8,6 +8,8 @@ use crate::prompt_builder::build_variable_map;
 use crate::status::WorkflowStepStatus;
 use crate::traits::persistence::{NewStep, StepUpdate};
 
+use super::p_err;
+
 pub fn execute_call_workflow(
     state: &mut ExecutionState,
     node: &CallWorkflowNode,
@@ -41,6 +43,7 @@ pub fn execute_call_workflow(
     }
 
     let step_key = node.workflow.clone();
+    let mut last_error = String::new();
 
     // Require a child runner to be configured
     let child_runner = match &state.child_runner {
@@ -68,7 +71,7 @@ pub fn execute_call_workflow(
                     iteration: iteration as i64,
                     retry_count: Some(0),
                 })
-                .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                .map_err(p_err)?;
 
             tracing::info!(
                 "Step 'workflow:{}': resuming prior child run '{}'",
@@ -90,7 +93,10 @@ pub fn execute_call_workflow(
                         &result.workflow_run_id,
                     );
 
-                    let markers_json = serde_json::to_string(&markers).unwrap_or_default();
+                    let markers_json = crate::helpers::serialize_or_empty_array(
+                        &markers,
+                        &format!("call_workflow '{}'", node.workflow),
+                    );
 
                     state
                         .persistence
@@ -110,7 +116,7 @@ pub fn execute_call_workflow(
                                 step_error: None,
                             },
                         )
-                        .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                        .map_err(p_err)?;
 
                     record_step_success(
                         state,
@@ -163,7 +169,7 @@ pub fn execute_call_workflow(
                                 step_error: Some(msg.clone()),
                             },
                         )
-                        .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                        .map_err(p_err)?;
                     msg
                 }
                 Err(e) => {
@@ -188,7 +194,7 @@ pub fn execute_call_workflow(
                                 step_error: Some(msg.clone()),
                             },
                         )
-                        .map_err(|e2| EngineError::Persistence(e2.to_string()))?;
+                        .map_err(p_err)?;
                     msg
                 }
             };
@@ -205,10 +211,8 @@ pub fn execute_call_workflow(
         }
         Ok(None) => {}
         Err(e) => {
-            tracing::warn!(
-                "call_workflow '{}': failed to find resumable child run: {e}",
-                node.workflow
-            );
+            last_error = format!("failed to find resumable child run: {e}");
+            tracing::warn!("call_workflow '{}': {last_error}", node.workflow);
         }
     }
 
@@ -219,7 +223,6 @@ pub fn execute_call_workflow(
     // The child runner is responsible for loading the workflow def.
 
     let max_attempts = 1 + node.retries;
-    let mut last_error = String::new();
 
     for attempt in 0..max_attempts {
         let step_id = state
@@ -233,7 +236,7 @@ pub fn execute_call_workflow(
                 iteration: iteration as i64,
                 retry_count: Some(attempt as i64),
             })
-            .map_err(|e| EngineError::Persistence(e.to_string()))?;
+            .map_err(p_err)?;
 
         tracing::info!(
             "Step 'workflow:{}' (attempt {}/{}): executing sub-workflow",
@@ -311,7 +314,7 @@ pub fn execute_call_workflow(
                                 step_error: Some(msg.clone()),
                             },
                         )
-                        .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                        .map_err(p_err)?;
                     last_error = msg;
                     continue;
                 }
@@ -345,7 +348,10 @@ pub fn execute_call_workflow(
                         &result.workflow_run_id,
                     );
 
-                    let markers_json = serde_json::to_string(&markers).unwrap_or_default();
+                    let markers_json = crate::helpers::serialize_or_empty_array(
+                        &markers,
+                        &format!("call_workflow '{}'", node.workflow),
+                    );
 
                     state
                         .persistence
@@ -365,7 +371,7 @@ pub fn execute_call_workflow(
                                 step_error: None,
                             },
                         )
-                        .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                        .map_err(p_err)?;
 
                     record_step_success(
                         state,
@@ -413,7 +419,7 @@ pub fn execute_call_workflow(
                                 step_error: Some(msg.clone()),
                             },
                         )
-                        .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                        .map_err(p_err)?;
                     last_error = msg;
                     continue;
                 }
@@ -436,7 +442,7 @@ pub fn execute_call_workflow(
                             step_error: Some(msg.clone()),
                         },
                     )
-                    .map_err(|e2| EngineError::Persistence(e2.to_string()))?;
+                    .map_err(p_err)?;
                 last_error = msg;
                 continue;
             }

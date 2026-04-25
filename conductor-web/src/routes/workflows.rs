@@ -539,6 +539,10 @@ pub async fn run_workflow(
             extra_plugin_dirs: vec![],
             db_path: Some(db_path.clone()),
             parent_workflow_run_id: None,
+            depth: 0,
+            parent_step_id: None,
+            default_bot_name: None,
+            iteration: 0,
         };
 
         let result = conductor_core::workflow::execute_workflow_standalone(&params);
@@ -1793,6 +1797,17 @@ pub async fn resume_workflow_endpoint(
     ))
 }
 
+fn find_waiting_gate_or_err(
+    mgr: &WorkflowManager<'_>,
+    run_id: &str,
+) -> Result<WorkflowRunStep, ApiError> {
+    mgr.find_waiting_gate(run_id)?.ok_or_else(|| {
+        ApiError::Core(ConductorError::Workflow(
+            "No waiting gate found for this workflow run".to_string(),
+        ))
+    })
+}
+
 #[utoipa::path(
     post,
     path = "/api/workflows/runs/{id}/gate/approve",
@@ -1815,15 +1830,12 @@ pub async fn approve_gate(
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
 
-    let step = mgr.find_waiting_gate(&id)?.ok_or_else(|| {
-        ApiError::Core(ConductorError::Workflow(
-            "No waiting gate found for this workflow run".to_string(),
-        ))
-    })?;
+    let step = find_waiting_gate_or_err(&mgr, &id)?;
 
+    let approved_by = std::env::var("USER").unwrap_or_else(|_| "user".to_string());
     mgr.approve_gate(
         &step.id,
-        "user",
+        &approved_by,
         req.feedback.as_deref(),
         req.selections.as_deref(),
     )?;
@@ -1862,13 +1874,10 @@ pub async fn reject_gate(
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
 
-    let step = mgr.find_waiting_gate(&id)?.ok_or_else(|| {
-        ApiError::Core(ConductorError::Workflow(
-            "No waiting gate found for this workflow run".to_string(),
-        ))
-    })?;
+    let step = find_waiting_gate_or_err(&mgr, &id)?;
 
-    mgr.reject_gate(&step.id, "user", None)?;
+    let rejected_by = std::env::var("USER").unwrap_or_else(|_| "user".to_string());
+    mgr.reject_gate(&step.id, &rejected_by, None)?;
 
     state
         .events

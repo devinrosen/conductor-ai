@@ -2285,6 +2285,7 @@ mod tests {
             with: vec![],
             bot_name: None,
             plugin_dirs: vec![],
+            timeout: None,
         })
     }
 

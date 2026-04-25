@@ -1475,6 +1475,7 @@ fn test_call_headless_spawn_fail() {
         output: None,
         with: vec![],
         plugin_dirs: vec![],
+        timeout: None,
     };
 
     // execute_call is expected to fail (spawn fails; all retries exhausted)
@@ -1540,6 +1541,7 @@ fn test_call_shutdown_during_drain() {
         output: None,
         with: vec![],
         plugin_dirs: vec![],
+        timeout: None,
     };
 
     // If spawn fails (no conductor binary), retries are exhausted → record_step_failure
@@ -1672,7 +1674,7 @@ fn test_schema_step_routes_through_registry_when_api_key_present() {
     use crate::workflow::action_executor::{
         ActionExecutor, ActionOutput, ActionParams, ExecutionContext,
     };
-    use crate::workflow::flow_engine::FlowEngineBuilder;
+    use crate::workflow::action_registry_builder::ActionRegistryBuilder;
     use crate::workflow_dsl::{AgentRef, CallNode};
     use std::sync::{
         atomic::{AtomicBool, Ordering},
@@ -1721,7 +1723,7 @@ fn test_schema_step_routes_through_registry_when_api_key_present() {
         called: Arc::clone(&called),
     };
 
-    let registry = FlowEngineBuilder::new()
+    let registry = ActionRegistryBuilder::new()
         .action(Box::new(spy))
         .build()
         .unwrap();
@@ -1758,6 +1760,7 @@ fn test_schema_step_routes_through_registry_when_api_key_present() {
         output: Some("spy-output".into()),
         with: vec![],
         plugin_dirs: vec![],
+        timeout: None,
     };
 
     let result = execute_call(&mut state, &node, 0);

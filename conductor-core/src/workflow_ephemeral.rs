@@ -382,6 +382,7 @@ mod tests {
             model: None,
             conductor_bin_dir: None,
             event_sinks: vec![],
+            db_path: None,
         };
 
         let err = resume_workflow(&input).unwrap_err();

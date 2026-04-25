@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use chrono::Utc;
 use rusqlite::named_params;
 
@@ -134,7 +136,8 @@ impl<'a> WorkflowManager<'a> {
             )?;
         } else if is_terminal {
             self.conn.execute(
-                "UPDATE workflow_run_steps SET status = :status, child_run_id = :child_run_id, \
+                "UPDATE workflow_run_steps SET status = :status, \
+                 child_run_id = COALESCE(:child_run_id, child_run_id), \
                  ended_at = :ended_at, result_text = :result_text, context_out = :context_out, \
                  markers_out = :markers_out, \
                  retry_count = COALESCE(:retry_count, retry_count), \
@@ -298,7 +301,7 @@ impl<'a> WorkflowManager<'a> {
         if position == 0 {
             return Ok(true);
         }
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT 1 FROM workflow_run_steps \
              WHERE workflow_run_id = :wrid AND position = :pos \
              AND status = 'completed' LIMIT 1",
@@ -325,7 +328,7 @@ impl<'a> WorkflowManager<'a> {
         iteration: i64,
         step_name: &str,
     ) -> Result<bool> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT 1 FROM workflow_run_steps \
              WHERE workflow_run_id = :wrid AND position = :pos AND iteration = :iter \
              AND step_name = :name \
@@ -340,6 +343,59 @@ impl<'a> WorkflowManager<'a> {
             ])
             .map_err(ConductorError::Database)?;
         Ok(exists)
+    }
+
+    /// Query a step's gate approval state from the DB.
+    pub fn get_gate_approval_state(
+        &self,
+        step_id: &str,
+    ) -> Result<crate::workflow::persistence::GateApprovalState> {
+        use rusqlite::OptionalExtension;
+        #[allow(clippy::type_complexity)]
+        let row: Option<(Option<String>, String, Option<String>, Option<String>)> = self
+            .conn
+            .query_row(
+                "SELECT gate_approved_at, status, gate_feedback, gate_selections \
+                 FROM workflow_run_steps WHERE id = ?1",
+                rusqlite::params![step_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(ConductorError::Database)?;
+
+        let Some((approved_at, status_str, feedback, selections_json)) = row else {
+            return Ok(crate::workflow::persistence::GateApprovalState::Pending);
+        };
+
+        let status = status_str
+            .parse::<WorkflowStepStatus>()
+            .unwrap_or_else(|_| {
+                tracing::warn!(
+                    step_id = %step_id,
+                    status = %status_str,
+                    "get_gate_approval_state: unrecognised step status; treating as Waiting",
+                );
+                WorkflowStepStatus::Waiting
+            });
+        let selections = selections_json.and_then(|json| {
+            serde_json::from_str::<Vec<String>>(&json)
+                .map_err(|e| {
+                    tracing::warn!(
+                        step_id = %step_id,
+                        "get_gate_approval_state: failed to deserialize gate_selections: {e}",
+                    );
+                })
+                .ok()
+        });
+
+        Ok(
+            crate::workflow::persistence::gate_approval_state_from_fields(
+                approved_at.as_deref(),
+                status,
+                feedback,
+                selections,
+            ),
+        )
     }
 
     /// Validate that gate selections are within the allowed options for this step.
@@ -383,7 +439,7 @@ impl<'a> WorkflowManager<'a> {
             })?;
 
         // Extract allowed values from the options (assuming format [{"value": "...", "label": "..."}, ...])
-        let allowed_values: Vec<String> = allowed_options
+        let allowed_set: HashSet<String> = allowed_options
             .iter()
             .filter_map(|opt: &serde_json::Value| {
                 opt.get("value")
@@ -391,7 +447,7 @@ impl<'a> WorkflowManager<'a> {
             })
             .collect();
 
-        if allowed_values.is_empty() {
+        if allowed_set.is_empty() {
             return Err(ConductorError::InvalidInput(
                 "No valid options found in gate configuration".to_string(),
             ));
@@ -399,11 +455,13 @@ impl<'a> WorkflowManager<'a> {
 
         // Validate that all selections are in the allowed values
         for selection in selections {
-            if !allowed_values.contains(selection) {
+            if !allowed_set.contains(selection.as_str()) {
+                let mut sorted: Vec<&str> = allowed_set.iter().map(|s| s.as_str()).collect();
+                sorted.sort_unstable();
                 return Err(ConductorError::InvalidInput(format!(
                     "Invalid gate selection '{}' - not in allowed options: [{}]",
                     selection,
-                    allowed_values.join(", ")
+                    sorted.join(", ")
                 )));
             }
         }

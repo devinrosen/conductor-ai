@@ -4,15 +4,16 @@ mod call_workflow;
 mod control_flow;
 mod foreach;
 mod gate;
-mod gate_resolver;
+pub(super) mod gate_resolver;
 mod parallel;
-mod resolvers;
+pub(super) mod resolvers;
 mod script;
 
 #[cfg(test)]
 mod tests;
 
 // Public API — used by engine.rs and workflow/tests/
+pub(super) use super::runkon_gate_bridge::register_rk_gate_resolvers;
 pub(super) use call::execute_call;
 pub(super) use call_workflow::execute_call_workflow;
 pub(super) use control_flow::{

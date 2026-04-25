@@ -311,6 +311,7 @@ fn test_find_max_completed_while_iteration_none_completed() {
             with: vec![],
             bot_name: None,
             plugin_dirs: vec![],
+            timeout: None,
         })],
     };
 
@@ -346,6 +347,7 @@ fn test_find_max_completed_while_iteration_two_completed() {
             with: vec![],
             bot_name: None,
             plugin_dirs: vec![],
+            timeout: None,
         })],
     };
 
@@ -406,6 +408,7 @@ fn test_find_max_completed_while_iteration_partial_body() {
                 with: vec![],
                 bot_name: None,
                 plugin_dirs: vec![],
+                timeout: None,
             }),
             WorkflowNode::Call(CallNode {
                 agent: crate::workflow_dsl::AgentRef::Name("step-b".to_string()),
@@ -415,6 +418,7 @@ fn test_find_max_completed_while_iteration_partial_body() {
                 with: vec![],
                 bot_name: None,
                 plugin_dirs: vec![],
+                timeout: None,
             }),
         ],
     };

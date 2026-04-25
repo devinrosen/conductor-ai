@@ -178,9 +178,9 @@ pub fn execute_foreach(
     };
 
     if total_items > 0 {
-        // Update or set the fan_out_total (always recalculate from all items).
-        let actual_total = state.wf_mgr.get_fan_out_items(&step_id, None)?.len() as i64;
-        state.wf_mgr.set_fan_out_total(&step_id, actual_total)?;
+        // total_items is already the authoritative count: newly inserted + pre-existing.
+        // No need for a second get_fan_out_items query here.
+        state.wf_mgr.set_fan_out_total(&step_id, total_items)?;
     }
 
     tracing::info!(
@@ -714,6 +714,10 @@ fn build_child_dispatch_params(
         extra_plugin_dirs: extra_plugin_dirs.clone(),
         db_path: None,
         parent_workflow_run_id: Some(state.workflow_run_id.clone()),
+        depth: 0,
+        parent_step_id: None,
+        default_bot_name: None,
+        iteration: 0,
     })
 }
 
