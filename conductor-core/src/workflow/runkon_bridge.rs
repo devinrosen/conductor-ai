@@ -575,7 +575,9 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         };
 
         let core_result = crate::workflow::engine::execute_workflow_standalone(&standalone_params)
-            .map_err(|e| EngineError::Workflow(e.to_string()))?;
+            .map_err(|e| {
+                EngineError::Workflow(format!("child workflow '{}' failed: {e}", child_def.name))
+            })?;
 
         Ok(super::rk_types::core_workflow_result_to_rk(core_result))
     }

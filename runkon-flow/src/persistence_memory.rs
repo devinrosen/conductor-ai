@@ -101,6 +101,12 @@ fn lock_err() -> EngineError {
     EngineError::Persistence("InMemoryWorkflowPersistence: mutex poisoned".into())
 }
 
+impl InMemoryWorkflowPersistence {
+    fn lock(&self) -> Result<std::sync::MutexGuard<InMemoryStore>, EngineError> {
+        self.store.lock().map_err(|_| lock_err())
+    }
+}
+
 impl WorkflowPersistence for InMemoryWorkflowPersistence {
     fn create_run(&self, new_run: NewRun) -> Result<WorkflowRun, EngineError> {
         let id = ulid::Ulid::new().to_string();
@@ -137,13 +143,13 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
             model: None,
             dismissed: false,
         };
-        let mut store = self.store.lock().map_err(|_| lock_err())?;
+        let mut store = self.lock()?;
         store.runs.insert(id, run.clone());
         Ok(run)
     }
 
     fn get_run(&self, run_id: &str) -> Result<Option<WorkflowRun>, EngineError> {
-        let store = self.store.lock().map_err(|_| lock_err())?;
+        let store = self.lock()?;
         Ok(store.runs.get(run_id).cloned())
     }
 
@@ -151,7 +157,7 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         &self,
         statuses: &[WorkflowRunStatus],
     ) -> Result<Vec<WorkflowRun>, EngineError> {
-        let store = self.store.lock().map_err(|_| lock_err())?;
+        let store = self.lock()?;
         let mut runs: Vec<WorkflowRun> = store
             .runs
             .values()
@@ -174,7 +180,7 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
                 "Use set_waiting_blocked_on to transition to Waiting status".into(),
             ));
         }
-        let mut store = self.store.lock().map_err(|_| lock_err())?;
+        let mut store = self.lock()?;
         let run = store
             .runs
             .get_mut(run_id)
@@ -243,13 +249,13 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
             output_file: None,
             step_error: None,
         };
-        let mut store = self.store.lock().map_err(|_| lock_err())?;
+        let mut store = self.lock()?;
         store.steps.insert(id.clone(), step);
         Ok(id)
     }
 
     fn update_step(&self, step_id: &str, update: StepUpdate) -> Result<(), EngineError> {
-        let mut store = self.store.lock().map_err(|_| lock_err())?;
+        let mut store = self.lock()?;
         let step = store
             .steps
             .get_mut(step_id)
@@ -286,7 +292,7 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         if self.fail_get_steps.load(Ordering::Relaxed) {
             return Err(EngineError::Workflow("injected get_steps failure".into()));
         }
-        let store = self.store.lock().map_err(|_| lock_err())?;
+        let store = self.lock()?;
         let mut steps: Vec<WorkflowRunStep> = store
             .steps
             .values()
@@ -304,7 +310,7 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         item_id: &str,
         item_ref: &str,
     ) -> Result<String, EngineError> {
-        let mut store = self.store.lock().map_err(|_| lock_err())?;
+        let mut store = self.lock()?;
         // Idempotent: O(1) lookup via secondary index.
         let index_key = (step_run_id.to_string(), item_id.to_string());
         if let Some(existing_id) = store.fan_out_index.get(&index_key) {
@@ -335,7 +341,7 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         item_id: &str,
         update: FanOutItemUpdate,
     ) -> Result<(), EngineError> {
-        let mut store = self.store.lock().map_err(|_| lock_err())?;
+        let mut store = self.lock()?;
         let item = store
             .fan_out_items
             .get_mut(item_id)
@@ -365,7 +371,7 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
                 "injected get_fan_out_items failure".into(),
             ));
         }
-        let store = self.store.lock().map_err(|_| lock_err())?;
+        let store = self.lock()?;
         // Iterate in insertion order (mirrors SQLite rowid order) so callers get a
         // stable, deterministic sequence regardless of ULID timestamp collisions.
         let items: Vec<FanOutItemRow> = store
@@ -384,7 +390,7 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
     }
 
     fn get_gate_approval(&self, step_id: &str) -> Result<GateApprovalState, EngineError> {
-        let store = self.store.lock().map_err(|_| lock_err())?;
+        let store = self.lock()?;
         let Some(step) = store.steps.get(step_id) else {
             return Ok(GateApprovalState::Pending);
         };
@@ -413,7 +419,7 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         feedback: Option<&str>,
         selections: Option<&[String]>,
     ) -> Result<(), EngineError> {
-        let mut store = self.store.lock().map_err(|_| lock_err())?;
+        let mut store = self.lock()?;
         let now = Utc::now().to_rfc3339();
         let step = store
             .steps
@@ -446,7 +452,7 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         rejected_by: &str,
         feedback: Option<&str>,
     ) -> Result<(), EngineError> {
-        let mut store = self.store.lock().map_err(|_| lock_err())?;
+        let mut store = self.lock()?;
         let now = Utc::now().to_rfc3339();
         let step = store
             .steps
@@ -460,7 +466,7 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
     }
 
     fn is_run_cancelled(&self, run_id: &str) -> Result<bool, EngineError> {
-        let store = self.store.lock().map_err(|_| lock_err())?;
+        let store = self.lock()?;
         Ok(store
             .runs
             .get(run_id)

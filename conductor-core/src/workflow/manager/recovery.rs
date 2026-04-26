@@ -460,61 +460,84 @@ impl<'a> WorkflowManager<'a> {
         }
 
         let agent_mgr = crate::agent::AgentManager::new(self.conn);
-        let mut reaped = Vec::new();
 
-        for s in stale {
-            // If the subprocess is still alive, the agent is running — just slow.
-            #[cfg(unix)]
-            if let Some(pid) = s.subprocess_pid {
-                if crate::process_utils::pid_is_alive(pid as u32) {
-                    continue;
+        // Wrap all updates in a savepoint so they commit in one round-trip instead
+        // of N separate auto-commit transactions (mirrors recover_stuck_steps).
+        self.conn
+            .execute_batch("SAVEPOINT reap_stale_workflow_runs")?;
+        let result: Result<Vec<ReapedStaleRun>> = (|| {
+            let mut reaped = Vec::new();
+
+            for s in stale {
+                // If the subprocess is still alive, the agent is running — just slow.
+                #[cfg(unix)]
+                if let Some(pid) = s.subprocess_pid {
+                    if crate::process_utils::pid_is_alive(pid as u32) {
+                        continue;
+                    }
                 }
+
+                // Agent process is dead. Mark child agent run as failed.
+                if let Some(child_run_id) = &s.child_run_id {
+                    if let Err(e) = agent_mgr.update_run_failed(
+                        child_run_id,
+                        "Stale workflow watchdog: agent process died",
+                    ) {
+                        tracing::warn!(
+                            child_run_id = %child_run_id,
+                            error = %e,
+                            "Failed to mark child agent run as failed during stale workflow cleanup"
+                        );
+                    }
+                }
+
+                // Mark the workflow step as failed.
+                self.fail_step_with_message(
+                    &s.step_id,
+                    "Agent process died — marked by stale workflow watchdog",
+                )?;
+
+                // Mark the workflow run as failed.
+                self.update_workflow_status(
+                    &s.run_id,
+                    WorkflowRunStatus::Failed,
+                    Some("Stale workflow watchdog: agent process died, run marked as failed"),
+                    None,
+                )?;
+
+                tracing::info!(
+                    run_id = %s.run_id,
+                    step_name = %s.step_name,
+                    running_minutes = s.running_minutes,
+                    "Reaped stale workflow run — agent process was dead"
+                );
+
+                reaped.push(ReapedStaleRun {
+                    run_id: s.run_id,
+                    workflow_name: s.workflow_name,
+                    target_label: s.target_label,
+                    step_name: s.step_name,
+                    running_minutes: s.running_minutes,
+                });
             }
 
-            // Agent process is dead. Mark child agent run as failed.
-            if let Some(child_run_id) = &s.child_run_id {
-                if let Err(e) = agent_mgr
-                    .update_run_failed(child_run_id, "Stale workflow watchdog: agent process died")
-                {
-                    tracing::warn!(
-                        child_run_id = %child_run_id,
-                        error = %e,
-                        "Failed to mark child agent run as failed during stale workflow cleanup"
-                    );
-                }
+            Ok(reaped)
+        })();
+
+        match result {
+            Ok(reaped) => {
+                self.conn
+                    .execute_batch("RELEASE reap_stale_workflow_runs")?;
+                Ok(reaped)
             }
-
-            // Mark the workflow step as failed.
-            self.fail_step_with_message(
-                &s.step_id,
-                "Agent process died — marked by stale workflow watchdog",
-            )?;
-
-            // Mark the workflow run as failed.
-            self.update_workflow_status(
-                &s.run_id,
-                WorkflowRunStatus::Failed,
-                Some("Stale workflow watchdog: agent process died, run marked as failed"),
-                None,
-            )?;
-
-            tracing::info!(
-                run_id = %s.run_id,
-                step_name = %s.step_name,
-                running_minutes = s.running_minutes,
-                "Reaped stale workflow run — agent process was dead"
-            );
-
-            reaped.push(ReapedStaleRun {
-                run_id: s.run_id,
-                workflow_name: s.workflow_name,
-                target_label: s.target_label,
-                step_name: s.step_name,
-                running_minutes: s.running_minutes,
-            });
+            Err(e) => {
+                let _ = self
+                    .conn
+                    .execute_batch("ROLLBACK TO SAVEPOINT reap_stale_workflow_runs");
+                let _ = self.conn.execute_batch("RELEASE reap_stale_workflow_runs");
+                Err(e)
+            }
         }
-
-        Ok(reaped)
     }
 
     /// Detect and auto-resume workflow runs stuck in `running` status.
@@ -533,17 +556,21 @@ impl<'a> WorkflowManager<'a> {
     /// background thread to resume it.
     ///
     /// Returns the count of runs resumed.
-    /// Atomically flip a workflow run from `running` to `failed` (watchdog orphan error).
+    /// Atomically flip a workflow run from `from_status` to `failed`.
     ///
     /// Returns `true` when the row was updated (this process won the CAS race),
     /// `false` when another watchdog already claimed the run.
-    fn cas_flip_run_to_failed(&self, run_id: &str) -> Result<bool> {
+    fn cas_flip_run_to_failed_from(
+        &self,
+        run_id: &str,
+        from_status: &str,
+        error_msg: &str,
+    ) -> Result<bool> {
         let changed = self.conn.execute(
             "UPDATE workflow_runs \
-             SET status = 'failed', \
-                 error  = 'Orphaned: executor died between steps — auto-resumed by watchdog' \
-             WHERE id = :id AND status = 'running'",
-            named_params![":id": run_id],
+             SET status = 'failed', error = :error \
+             WHERE id = :id AND status = :from",
+            named_params![":id": run_id, ":from": from_status, ":error": error_msg],
         )?;
         Ok(changed == 1)
     }
@@ -570,7 +597,11 @@ impl<'a> WorkflowManager<'a> {
         // Only runs we successfully flip get resumed — losers of the race are skipped.
         let mut flipped_ids: Vec<String> = Vec::new();
         for run_id in &stuck_ids {
-            if self.cas_flip_run_to_failed(run_id)? {
+            if self.cas_flip_run_to_failed_from(
+                run_id,
+                "running",
+                "Orphaned: executor died between steps — auto-resumed by watchdog",
+            )? {
                 flipped_ids.push(run_id.clone());
             } else {
                 tracing::debug!(
@@ -641,7 +672,11 @@ impl<'a> WorkflowManager<'a> {
         for (run_id, workflow_name, target_label) in orphaned {
             // Step 2: CAS flip running → failed.
             // If another watchdog already won the race, changes() == 0 and we skip.
-            if !self.cas_flip_run_to_failed(&run_id)? {
+            if !self.cas_flip_run_to_failed_from(
+                &run_id,
+                "running",
+                "Orphaned: executor died between steps — auto-resumed by watchdog",
+            )? {
                 tracing::debug!(
                     run_id = %run_id,
                     "claim_heartbeat_stuck_runs: CAS lost race for run (already reaped)"
@@ -1167,15 +1202,11 @@ impl<'a> WorkflowManager<'a> {
         for run_id in candidates {
             // Step 2: CAS flip needs_resume → failed.
             // If another watchdog already won the race, changes() == 0 and we skip.
-            let changed = self.conn.execute(
-                "UPDATE workflow_runs \
-                 SET status = 'failed', \
-                     error  = 'Orphaned: parent agent run died — auto-resumed by watchdog' \
-                 WHERE id = :id AND status = 'needs_resume'",
-                named_params![":id": run_id],
-            )?;
-
-            if changed != 1 {
+            if !self.cas_flip_run_to_failed_from(
+                &run_id,
+                "needs_resume",
+                "Orphaned: parent agent run died — auto-resumed by watchdog",
+            )? {
                 tracing::debug!(
                     run_id = %run_id,
                     "claim_needs_resume_runs: CAS lost race (already claimed)"

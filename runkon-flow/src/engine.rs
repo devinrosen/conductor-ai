@@ -573,13 +573,33 @@ pub fn record_step_success(
     };
     state.step_results.insert(step_key, step_result);
 
+    push_context_entry(
+        state,
+        step_name,
+        iteration,
+        context,
+        markers_for_ctx,
+        structured_output_for_ctx,
+        output_file_for_ctx,
+    );
+}
+
+fn push_context_entry(
+    state: &mut ExecutionState,
+    step_name: &str,
+    iteration: u32,
+    context: String,
+    markers: Vec<String>,
+    structured_output: Option<String>,
+    output_file: Option<String>,
+) {
     state.contexts.push(ContextEntry {
         step: step_name.to_string(),
         iteration,
         context,
-        markers: markers_for_ctx,
-        structured_output: structured_output_for_ctx,
-        output_file: output_file_for_ctx,
+        markers,
+        structured_output,
+        output_file,
     });
 }
 
@@ -773,14 +793,15 @@ pub fn restore_completed_step(
     };
     state.step_results.insert(step_key.to_string(), step_result);
 
-    state.contexts.push(ContextEntry {
-        step: step_key.to_string(),
+    push_context_entry(
+        state,
+        step_key,
         iteration,
         context,
-        markers: markers_for_ctx,
-        structured_output: step.structured_output.clone(),
-        output_file: step.output_file.clone(),
-    });
+        markers_for_ctx,
+        step.structured_output.clone(),
+        step.output_file.clone(),
+    );
 }
 
 /// Fetch both the final step output (markers + context) and all completed step
@@ -800,13 +821,13 @@ pub fn fetch_child_completion_data(
         }
     };
 
-    // Derive final output from the last completed step.
-    let last_completed = steps
-        .iter()
+    // Collect completed steps once; derive both final output and bubble-up map from it.
+    let completed: Vec<_> = steps
+        .into_iter()
         .filter(|s| s.status == WorkflowStepStatus::Completed)
-        .max_by_key(|s| s.position);
+        .collect();
 
-    let final_output = match last_completed {
+    let final_output = match completed.iter().max_by_key(|s| s.position) {
         Some(step) => {
             let markers = parse_markers_out(step.markers_out.as_deref(), &step.step_name);
             let context = step.context_out.clone().unwrap_or_default();
@@ -816,9 +837,8 @@ pub fn fetch_child_completion_data(
     };
 
     // Build bubble-up map from all completed steps.
-    let child_steps = steps
+    let child_steps = completed
         .into_iter()
-        .filter(|s| s.status == WorkflowStepStatus::Completed)
         .map(|s| {
             let markers = parse_markers_out(s.markers_out.as_deref(), &s.step_name);
             let context = s.context_out.clone().unwrap_or_default();
