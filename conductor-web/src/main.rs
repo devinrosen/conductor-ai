@@ -161,6 +161,7 @@ async fn main() -> Result<()> {
                             label,
                             config.clone(),
                             conductor_bin_dir.clone(),
+                            None,
                         );
                     }
                 }
@@ -258,6 +259,7 @@ async fn main() -> Result<()> {
                                     label,
                                     (*cfg).clone(),
                                     conductor_bin_dir.clone(),
+                                    None,
                                 );
                             }
                         }

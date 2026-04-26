@@ -23,6 +23,7 @@ pub mod workflow_resolver_memory;
 pub use cancellation::CancellationToken;
 pub use cancellation_reason::CancellationReason;
 pub use dsl::ValidationError;
+pub use engine::ENGINE_INJECTED_KEYS;
 pub use events::{EngineEvent, EngineEventData, EventSink};
 pub use flow_engine::{FlowEngine, FlowEngineBuilder};
 pub use traits::action_executor::ActionRegistry;

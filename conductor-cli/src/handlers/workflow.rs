@@ -39,6 +39,7 @@ pub fn handle_workflow(
                             label,
                             config.clone(),
                             conductor_bin_dir.clone(),
+                            None,
                         );
                     }
                 }
@@ -703,7 +704,6 @@ pub fn handle_workflow(
             restart,
         } => {
             let resume_input = conductor_core::workflow::WorkflowResumeInput {
-                conn,
                 config,
                 workflow_run_id: &id,
                 model: model.as_deref(),

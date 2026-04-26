@@ -654,6 +654,14 @@ pub fn poll_data(
             })
             .collect();
 
+        // Batch-fetch steps for all active runs to avoid one query per run.
+        let active_est_run_ids: Vec<String> = active_runs.iter().map(|r| r.id.clone()).collect();
+        let active_est_run_id_refs: Vec<&str> =
+            active_est_run_ids.iter().map(|s| s.as_str()).collect();
+        let all_steps_by_run = wf_mgr
+            .get_steps_for_runs(&active_est_run_id_refs)
+            .unwrap_or_default();
+
         // Cache step histories per workflow name to avoid redundant queries
         let mut step_history_cache: std::collections::HashMap<
             String,
@@ -695,8 +703,9 @@ pub fn poll_data(
             }
 
             let step_ests = estimation::estimate_all_steps(step_histories);
-            let steps = wf_mgr.get_workflow_steps(&run.id).unwrap_or_default();
-            if let Some(live_est) = estimation::live_remaining_estimate(&steps, &step_ests) {
+            let empty = vec![];
+            let steps = all_steps_by_run.get(&run.id).unwrap_or(&empty);
+            if let Some(live_est) = estimation::live_remaining_estimate(steps, &step_ests) {
                 estimates.insert(run.id.clone(), live_est);
             }
         }

@@ -119,7 +119,8 @@ fn test_reset_steps_from_position() {
 
 #[test]
 fn test_resume_rejects_completed_run() {
-    let conn = setup_db();
+    let (_tmp, db_path) = make_standalone_db();
+    let conn = crate::db::open_database(&db_path).unwrap();
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
@@ -139,7 +140,6 @@ fn test_resume_rejects_completed_run() {
         .unwrap();
 
     let input = WorkflowResumeInput {
-        conn: &conn,
         config,
         workflow_run_id: &run.id,
         model: None,
@@ -147,7 +147,7 @@ fn test_resume_rejects_completed_run() {
         restart: false,
         conductor_bin_dir: None,
         event_sinks: vec![],
-        db_path: None,
+        db_path: Some(db_path.clone()),
     };
     let err = resume_workflow(&input).unwrap_err();
     assert!(
@@ -158,7 +158,8 @@ fn test_resume_rejects_completed_run() {
 
 #[test]
 fn test_resume_rejects_cancelled_run() {
-    let conn = setup_db();
+    let (_tmp, db_path) = make_standalone_db();
+    let conn = crate::db::open_database(&db_path).unwrap();
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
@@ -178,7 +179,6 @@ fn test_resume_rejects_cancelled_run() {
         .unwrap();
 
     let input = WorkflowResumeInput {
-        conn: &conn,
         config,
         workflow_run_id: &run.id,
         model: None,
@@ -186,7 +186,7 @@ fn test_resume_rejects_cancelled_run() {
         restart: false,
         conductor_bin_dir: None,
         event_sinks: vec![],
-        db_path: None,
+        db_path: Some(db_path.clone()),
     };
     let err = resume_workflow(&input).unwrap_err();
     assert!(
@@ -206,7 +206,8 @@ fn test_resume_rejects_running_run() {
 
 #[test]
 fn test_resume_rejects_restart_and_from_step_together() {
-    let conn = setup_db();
+    let (_tmp, db_path) = make_standalone_db();
+    let conn = crate::db::open_database(&db_path).unwrap();
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
@@ -226,7 +227,6 @@ fn test_resume_rejects_restart_and_from_step_together() {
         .unwrap();
 
     let input = WorkflowResumeInput {
-        conn: &conn,
         config,
         workflow_run_id: &run.id,
         model: None,
@@ -234,7 +234,7 @@ fn test_resume_rejects_restart_and_from_step_together() {
         restart: true,
         conductor_bin_dir: None,
         event_sinks: vec![],
-        db_path: None,
+        db_path: Some(db_path.clone()),
     };
     let err = resume_workflow(&input).unwrap_err();
     assert!(
@@ -246,7 +246,8 @@ fn test_resume_rejects_restart_and_from_step_together() {
 
 #[test]
 fn test_resume_rejects_missing_snapshot() {
-    let conn = setup_db();
+    let (_tmp, db_path) = make_standalone_db();
+    let conn = crate::db::open_database(&db_path).unwrap();
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
@@ -260,7 +261,6 @@ fn test_resume_rejects_missing_snapshot() {
         .unwrap();
 
     let input = WorkflowResumeInput {
-        conn: &conn,
         config,
         workflow_run_id: &run.id,
         model: None,
@@ -268,7 +268,7 @@ fn test_resume_rejects_missing_snapshot() {
         restart: false,
         conductor_bin_dir: None,
         event_sinks: vec![],
-        db_path: None,
+        db_path: Some(db_path.clone()),
     };
     let err = resume_workflow(&input).unwrap_err();
     assert!(
@@ -279,10 +279,9 @@ fn test_resume_rejects_missing_snapshot() {
 
 #[test]
 fn test_resume_rejects_nonexistent_run() {
-    let conn = setup_db();
+    let (_tmp, db_path) = make_standalone_db();
     let config = make_resume_config();
     let input = WorkflowResumeInput {
-        conn: &conn,
         config,
         workflow_run_id: "nonexistent-id",
         model: None,
@@ -290,7 +289,7 @@ fn test_resume_rejects_nonexistent_run() {
         restart: false,
         conductor_bin_dir: None,
         event_sinks: vec![],
-        db_path: None,
+        db_path: Some(db_path.clone()),
     };
     let err = resume_workflow(&input).unwrap_err();
     assert!(
@@ -301,7 +300,8 @@ fn test_resume_rejects_nonexistent_run() {
 
 #[test]
 fn test_resume_rejects_nonexistent_from_step() {
-    let conn = setup_db();
+    let (_tmp, db_path) = make_standalone_db();
+    let conn = crate::db::open_database(&db_path).unwrap();
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
@@ -337,7 +337,6 @@ fn test_resume_rejects_nonexistent_from_step() {
         .unwrap();
 
     let input = WorkflowResumeInput {
-        conn: &conn,
         config,
         workflow_run_id: &run.id,
         model: None,
@@ -345,7 +344,7 @@ fn test_resume_rejects_nonexistent_from_step() {
         restart: false,
         conductor_bin_dir: None,
         event_sinks: vec![],
-        db_path: None,
+        db_path: Some(db_path.clone()),
     };
     let err = resume_workflow(&input).unwrap_err();
     assert!(
@@ -359,7 +358,8 @@ fn test_resume_rejects_nonexistent_from_step() {
 /// setup_db() creates worktree `w1` with path `/tmp/ws/feat-test` — absent on disk.
 #[test]
 fn test_resume_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
-    let conn = setup_db();
+    let (_tmp, db_path) = make_standalone_db();
+    let conn = crate::db::open_database(&db_path).unwrap();
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
@@ -387,7 +387,6 @@ fn test_resume_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
         .unwrap();
 
     let input = WorkflowResumeInput {
-        conn: &conn,
         config,
         workflow_run_id: &run.id,
         model: None,
@@ -395,7 +394,7 @@ fn test_resume_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
         restart: false,
         conductor_bin_dir: None,
         event_sinks: vec![],
-        db_path: None,
+        db_path: Some(db_path.clone()),
     };
 
     let result = resume_workflow(&input).expect(
@@ -758,7 +757,8 @@ fn test_from_step_skip_set_and_step_map() {
 
 #[test]
 fn test_resume_allows_restart_on_completed_run() {
-    let conn = setup_db();
+    let (_tmp, db_path) = make_standalone_db();
+    let conn = crate::db::open_database(&db_path).unwrap();
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
@@ -779,7 +779,6 @@ fn test_resume_allows_restart_on_completed_run() {
 
     // Without restart, completed run should be rejected
     let input = WorkflowResumeInput {
-        conn: &conn,
         config,
         workflow_run_id: &run.id,
         model: None,
@@ -787,14 +786,13 @@ fn test_resume_allows_restart_on_completed_run() {
         restart: false,
         conductor_bin_dir: None,
         event_sinks: vec![],
-        db_path: None,
+        db_path: Some(db_path.clone()),
     };
     assert!(resume_workflow(&input).is_err());
 
     // With restart, completed run should pass the status check
     // (will fail later due to missing worktree, but the status check should pass)
     let input = WorkflowResumeInput {
-        conn: &conn,
         config,
         workflow_run_id: &run.id,
         model: None,
@@ -802,7 +800,7 @@ fn test_resume_allows_restart_on_completed_run() {
         restart: true,
         conductor_bin_dir: None,
         event_sinks: vec![],
-        db_path: None,
+        db_path: Some(db_path.clone()),
     };
     let err = resume_workflow(&input).unwrap_err();
     // Should fail on worktree resolution, NOT on "Cannot resume a completed"
@@ -875,7 +873,8 @@ fn test_parallel_min_success_with_skipped_resume_agents() {
 
 #[test]
 fn test_resume_workflow_ephemeral_run_rejected() {
-    let conn = setup_db();
+    let (_tmp, db_path) = make_standalone_db();
+    let conn = crate::db::open_database(&db_path).unwrap();
     let config = Config::default();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
@@ -901,7 +900,6 @@ fn test_resume_workflow_ephemeral_run_rejected() {
         .unwrap();
 
     let result = resume_workflow(&WorkflowResumeInput {
-        conn: &conn,
         config: &config,
         workflow_run_id: &run.id,
         model: None,
@@ -909,7 +907,7 @@ fn test_resume_workflow_ephemeral_run_rejected() {
         restart: false,
         conductor_bin_dir: None,
         event_sinks: vec![],
-        db_path: None,
+        db_path: Some(db_path.clone()),
     });
     assert!(result.is_err(), "ephemeral run resume should be rejected");
     let err = result.unwrap_err().to_string();
@@ -921,7 +919,8 @@ fn test_resume_workflow_ephemeral_run_rejected() {
 
 #[test]
 fn test_resume_workflow_repo_target() {
-    let conn = setup_db();
+    let (_tmp, db_path) = make_standalone_db();
+    let conn = crate::db::open_database(&db_path).unwrap();
     let config = Config::default();
     let exec_config = WorkflowExecConfig::default();
     let workflow = make_empty_workflow();
@@ -950,7 +949,6 @@ fn test_resume_workflow_repo_target() {
         .unwrap();
 
     let resume_result = resume_workflow(&WorkflowResumeInput {
-        conn: &conn,
         config: &config,
         workflow_run_id: &result.workflow_run_id,
         model: None,
@@ -958,7 +956,7 @@ fn test_resume_workflow_repo_target() {
         restart: false,
         conductor_bin_dir: None,
         event_sinks: vec![],
-        db_path: None,
+        db_path: Some(db_path.clone()),
     });
     assert!(
         resume_result.is_ok(),
@@ -969,7 +967,8 @@ fn test_resume_workflow_repo_target() {
 
 #[test]
 fn test_resume_workflow_ticket_target() {
-    let conn = setup_db();
+    let (_tmp, db_path) = make_standalone_db();
+    let conn = crate::db::open_database(&db_path).unwrap();
     let config = Config::default();
     let exec_config = WorkflowExecConfig::default();
     let workflow = make_empty_workflow();
@@ -1000,7 +999,6 @@ fn test_resume_workflow_ticket_target() {
         .unwrap();
 
     let resume_result = resume_workflow(&WorkflowResumeInput {
-        conn: &conn,
         config: &config,
         workflow_run_id: &result.workflow_run_id,
         model: None,
@@ -1008,7 +1006,7 @@ fn test_resume_workflow_ticket_target() {
         restart: false,
         conductor_bin_dir: None,
         event_sinks: vec![],
-        db_path: None,
+        db_path: Some(db_path.clone()),
     });
     assert!(
         resume_result.is_ok(),
@@ -1025,7 +1023,8 @@ fn test_resume_workflow_ticket_target() {
 /// path re-inserts and re-runs the step), but they pollute step history.
 #[test]
 fn test_resume_deletes_orphaned_pending_steps() {
-    let conn = setup_db();
+    let (_tmp, db_path) = make_standalone_db();
+    let conn = crate::db::open_database(&db_path).unwrap();
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
@@ -1082,7 +1081,6 @@ fn test_resume_deletes_orphaned_pending_steps() {
     // resume_workflow calls delete_orphaned_pending_steps before building the
     // skip set, so the orphaned row must be gone by the time execution starts.
     let result = resume_workflow(&WorkflowResumeInput {
-        conn: &conn,
         config,
         workflow_run_id: &run.id,
         model: None,
@@ -1090,7 +1088,7 @@ fn test_resume_deletes_orphaned_pending_steps() {
         restart: false,
         conductor_bin_dir: None,
         event_sinks: vec![],
-        db_path: None,
+        db_path: Some(db_path.clone()),
     });
     assert!(
         result.is_ok(),
@@ -1171,7 +1169,6 @@ fn test_resume_workflow_skips_completed_steps_via_flow_engine() {
 
     // Pass the temp DB path so FlowEngine opens the same on-disk DB.
     let result = resume_workflow(&WorkflowResumeInput {
-        conn: &conn,
         config: &config,
         workflow_run_id: &run.id,
         model: None,
@@ -1195,5 +1192,43 @@ fn test_resume_workflow_skips_completed_steps_via_flow_engine() {
         step.status,
         WorkflowStepStatus::Completed,
         "completed step must not be reset during resume"
+    );
+}
+
+/// `spawn_heartbeat_resume` must complete without panicking when the resume
+/// fails (e.g. missing definition snapshot) and leave the run in Failed status.
+#[test]
+fn test_spawn_heartbeat_resume_handles_failed_resume_gracefully() {
+    let (_tmp, db_path) = make_standalone_db();
+    let conn = crate::db::open_database(&db_path).unwrap();
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+    let wf_mgr = WorkflowManager::new(&conn);
+    // No definition_snapshot → resume will fail with "no definition snapshot"
+    let run = wf_mgr
+        .create_workflow_run("test-flow", Some("w1"), &parent.id, false, "manual", None)
+        .unwrap();
+    wf_mgr
+        .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("seed error"), None)
+        .unwrap();
+
+    let handle = spawn_heartbeat_resume(
+        run.id.clone(),
+        run.workflow_name.clone(),
+        None,
+        Config::default(),
+        None,
+        Some(db_path.clone()),
+    );
+    handle
+        .join()
+        .expect("spawn_heartbeat_resume thread panicked");
+
+    // Resume failed before touching run status, so it must remain Failed.
+    let updated = wf_mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert_eq!(
+        updated.status,
+        WorkflowRunStatus::Failed,
+        "run should remain Failed after unsuccessful resume attempt"
     );
 }

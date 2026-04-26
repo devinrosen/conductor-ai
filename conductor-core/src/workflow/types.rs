@@ -564,8 +564,12 @@ pub struct WorkflowResumeStandalone {
 }
 
 /// Input parameters for resuming a workflow run.
+///
+/// `resume_workflow` is fully self-contained: it opens its own database connection
+/// from `db_path` (defaulting to `crate::config::db_path()` when `None`), using
+/// a single connection for both the pre-execution phase and the FlowEngine execution
+/// phase. This matches the `execute_workflow_standalone` pattern.
 pub struct WorkflowResumeInput<'a> {
-    pub conn: &'a rusqlite::Connection,
     pub config: &'a crate::config::Config,
     pub workflow_run_id: &'a str,
     /// Optional model override for agent steps.
@@ -578,8 +582,7 @@ pub struct WorkflowResumeInput<'a> {
     pub conductor_bin_dir: Option<std::path::PathBuf>,
     /// Event sinks for run observability. Defaults to empty (no sinks).
     pub event_sinks: Vec<std::sync::Arc<dyn runkon_flow::events::EventSink>>,
-    /// Database path for the FlowEngine execution phase.
-    /// When `None`, falls back to `crate::config::db_path()`.
+    /// Database path. When `None`, falls back to `crate::config::db_path()`.
     pub db_path: Option<std::path::PathBuf>,
 }
 

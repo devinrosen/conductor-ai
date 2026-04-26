@@ -213,24 +213,40 @@ impl<'a> WorkflowManager<'a> {
             })
             .collect();
 
-        let mut recovered = 0usize;
-
-        for (step_id, child_run_id, step_status, result_text) in stuck {
-            self.update_step_status_full(
-                &step_id,
-                step_status,
-                Some(&child_run_id),
-                result_text.as_deref(),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )?;
-            recovered += 1;
+        // Wrap all updates in a savepoint so they commit in one round-trip
+        // instead of N separate auto-commit transactions.
+        self.conn.execute_batch("SAVEPOINT recover_stuck_steps")?;
+        let result: Result<usize> = (|| {
+            let mut recovered = 0usize;
+            for (step_id, child_run_id, step_status, result_text) in stuck {
+                self.update_step_status_full(
+                    &step_id,
+                    step_status,
+                    Some(&child_run_id),
+                    result_text.as_deref(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )?;
+                recovered += 1;
+            }
+            Ok(recovered)
+        })();
+        match result {
+            Ok(n) => {
+                self.conn.execute_batch("RELEASE recover_stuck_steps")?;
+                Ok(n)
+            }
+            Err(e) => {
+                let _ = self
+                    .conn
+                    .execute_batch("ROLLBACK TO SAVEPOINT recover_stuck_steps");
+                let _ = self.conn.execute_batch("RELEASE recover_stuck_steps");
+                Err(e)
+            }
         }
-
-        Ok(recovered)
     }
 
     /// Reap workflow runs that are stuck in `waiting` status because the executor
@@ -517,6 +533,21 @@ impl<'a> WorkflowManager<'a> {
     /// background thread to resume it.
     ///
     /// Returns the count of runs resumed.
+    /// Atomically flip a workflow run from `running` to `failed` (watchdog orphan error).
+    ///
+    /// Returns `true` when the row was updated (this process won the CAS race),
+    /// `false` when another watchdog already claimed the run.
+    fn cas_flip_run_to_failed(&self, run_id: &str) -> Result<bool> {
+        let changed = self.conn.execute(
+            "UPDATE workflow_runs \
+             SET status = 'failed', \
+                 error  = 'Orphaned: executor died between steps — auto-resumed by watchdog' \
+             WHERE id = :id AND status = 'running'",
+            named_params![":id": run_id],
+        )?;
+        Ok(changed == 1)
+    }
+
     /// CAS-claim stuck workflow runs and fire the orphan-resumed notification.
     ///
     /// Returns the IDs of runs successfully claimed (flipped from `running` to
@@ -539,14 +570,7 @@ impl<'a> WorkflowManager<'a> {
         // Only runs we successfully flip get resumed — losers of the race are skipped.
         let mut flipped_ids: Vec<String> = Vec::new();
         for run_id in &stuck_ids {
-            let changed = self.conn.execute(
-                "UPDATE workflow_runs \
-                 SET status = 'failed', \
-                     error  = 'Orphaned: executor died between steps — auto-resumed by watchdog' \
-                 WHERE id = :id AND status = 'running'",
-                named_params![":id": run_id],
-            )?;
-            if changed == 1 {
+            if self.cas_flip_run_to_failed(run_id)? {
                 flipped_ids.push(run_id.clone());
             } else {
                 tracing::debug!(
@@ -617,15 +641,7 @@ impl<'a> WorkflowManager<'a> {
         for (run_id, workflow_name, target_label) in orphaned {
             // Step 2: CAS flip running → failed.
             // If another watchdog already won the race, changes() == 0 and we skip.
-            let changed = self.conn.execute(
-                "UPDATE workflow_runs \
-                 SET status = 'failed', \
-                     error  = 'Orphaned: executor died between steps — auto-resumed by watchdog' \
-                 WHERE id = :id AND status = 'running'",
-                named_params![":id": run_id],
-            )?;
-
-            if changed != 1 {
+            if !self.cas_flip_run_to_failed(&run_id)? {
                 tracing::debug!(
                     run_id = %run_id,
                     "claim_heartbeat_stuck_runs: CAS lost race for run (already reaped)"
@@ -927,7 +943,9 @@ impl<'a> WorkflowManager<'a> {
 
     /// Return the set of completed step keys as `(step_name, iteration)` pairs.
     ///
-    /// Used by tests to verify the skip set after a resume.
+    /// Used by tests to verify which steps were completed before a resume.
+    /// Skip-set construction for the resume execution path is handled internally
+    /// by `FlowEngine::resume()`.
     pub fn get_completed_step_keys(&self, workflow_run_id: &str) -> Result<HashSet<StepKey>> {
         let steps = self.get_workflow_steps(workflow_run_id)?;
         Ok(steps

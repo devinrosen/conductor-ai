@@ -194,6 +194,24 @@ pub fn emit_event(state: &ExecutionState, event: EngineEvent) {
     crate::events::emit_to_sinks(&state.workflow_run_id, event, &state.event_sinks);
 }
 
+/// Input keys that the workflow engine injects automatically from the run context.
+///
+/// These keys are populated from `WorktreeContext` fields at execution time; callers
+/// should treat them as read-only and avoid defining workflow inputs with these names.
+pub const ENGINE_INJECTED_KEYS: &[&str] = &[
+    "ticket_id",
+    "ticket_source_id",
+    "ticket_source_type",
+    "ticket_title",
+    "ticket_body",
+    "ticket_url",
+    "ticket_raw_json",
+    "repo_id",
+    "repo_path",
+    "repo_name",
+    "workflow_run_id",
+];
+
 /// Extract completed step keys from a slice of step records.
 pub fn completed_keys_from_steps(steps: &[WorkflowRunStep]) -> HashSet<StepKey> {
     steps

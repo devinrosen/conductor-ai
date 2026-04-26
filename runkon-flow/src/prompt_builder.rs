@@ -1,23 +1,6 @@
 use std::collections::HashMap;
 
-use crate::engine::ExecutionState;
-
-/// Keys injected automatically from the run context (ticket/repo metadata + run ID).
-/// Listed here to exclude them from the user-defined variable section of the variable map,
-/// since they are added explicitly from `WorktreeContext` below.
-const ENGINE_INJECTED_KEYS: &[&str] = &[
-    "ticket_id",
-    "ticket_source_id",
-    "ticket_source_type",
-    "ticket_title",
-    "ticket_body",
-    "ticket_url",
-    "ticket_raw_json",
-    "repo_id",
-    "repo_path",
-    "repo_name",
-    "workflow_run_id",
-];
+use crate::engine::{ExecutionState, ENGINE_INJECTED_KEYS};
 
 fn substitute_variables_impl(
     template: &str,

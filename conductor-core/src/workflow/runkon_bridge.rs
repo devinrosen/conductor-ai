@@ -582,10 +582,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         workflow_run_id: &str,
         model: Option<&str>,
     ) -> runkon_flow::engine_error::Result<runkon_flow::types::WorkflowResult> {
-        let guard = self.conn.lock().map_err(bridge_lock_err)?;
-
         let input = crate::workflow::types::WorkflowResumeInput {
-            conn: &guard,
             config: &self.config,
             workflow_run_id,
             model,

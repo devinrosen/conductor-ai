@@ -134,7 +134,6 @@ pub fn execute_call_workflow(
         );
 
         let resume_input = crate::workflow::types::WorkflowResumeInput {
-            conn: state.conn,
             config: state.config,
             workflow_run_id: &prior_child.id,
             model: state.model.as_deref(),
