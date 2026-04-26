@@ -4,7 +4,7 @@ use rusqlite::Connection;
 
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
-use crate::workflow_dsl::ForeachScope;
+use runkon_flow::dsl::ForeachScope;
 use crate::worktree::{Worktree, WorktreeManager};
 
 use super::{FanOutItem, ItemProvider, ProviderContext};
@@ -176,7 +176,7 @@ fn dependencies_impl(
 mod tests {
     use super::*;
     use crate::test_helpers;
-    use crate::workflow_dsl::WorktreeScope;
+    use runkon_flow::dsl::WorktreeScope;
 
     #[test]
     fn test_worktrees_items_missing_repo_id_returns_error() {

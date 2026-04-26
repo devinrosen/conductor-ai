@@ -266,21 +266,20 @@ pub fn handle_workflow(
                     workflow.name, node_count, repo_slug
                 );
 
-                run_and_report(&conductor_core::workflow::WorkflowExecInput {
-                    conn,
-                    config,
-                    workflow: &workflow,
+                run_and_report(conductor_core::workflow::WorkflowExecStandalone {
+                    config: config.clone(),
+                    workflow,
                     worktree_id: None,
-                    working_dir: &r.local_path,
-                    repo_path: &r.local_path,
+                    working_dir: r.local_path.clone(),
+                    repo_path: r.local_path.clone(),
                     ticket_id: None,
-                    repo_id: Some(&r.id),
-                    model: model.as_deref(),
-                    exec_config: &exec_config,
+                    repo_id: Some(r.id.clone()),
+                    model: model.clone(),
+                    exec_config: exec_config.clone(),
                     inputs: input_map,
                     depth: 0,
                     parent_workflow_run_id: None,
-                    target_label: Some(r.slug.as_str()),
+                    target_label: Some(r.slug.clone()),
                     default_bot_name: None,
                     iteration: 0,
                     run_id_notify: None,
@@ -289,6 +288,7 @@ pub fn handle_workflow(
                     force: false,
                     extra_plugin_dirs: plugin_dirs.clone(),
                     parent_step_id: None,
+                    db_path: None,
                 })?;
             } else if let Some(run_id) = workflow_run {
                 // Workflow-run targeted run (e.g. postmortem workflows)
@@ -311,21 +311,20 @@ pub fn handle_workflow(
                     workflow.name, node_count, run_id
                 );
 
-                run_and_report(&conductor_core::workflow::WorkflowExecInput {
-                    conn,
-                    config,
-                    workflow: &workflow,
-                    worktree_id: ctx.worktree_id.as_deref(),
-                    working_dir: &ctx.working_dir,
-                    repo_path: &ctx.repo_path,
+                run_and_report(conductor_core::workflow::WorkflowExecStandalone {
+                    config: config.clone(),
+                    workflow,
+                    worktree_id: ctx.worktree_id.clone(),
+                    working_dir: ctx.working_dir.clone(),
+                    repo_path: ctx.repo_path.clone(),
                     ticket_id: None,
-                    repo_id: ctx.repo_id.as_deref(),
-                    model: model.as_deref(),
-                    exec_config: &exec_config,
+                    repo_id: ctx.repo_id.clone(),
+                    model: model.clone(),
+                    exec_config: exec_config.clone(),
                     inputs: input_map,
                     depth: 0,
                     parent_workflow_run_id: None,
-                    target_label: Some(run_id.as_str()),
+                    target_label: Some(run_id.clone()),
                     default_bot_name: None,
                     iteration: 0,
                     run_id_notify: None,
@@ -334,6 +333,7 @@ pub fn handle_workflow(
                     force: false,
                     extra_plugin_dirs: plugin_dirs.clone(),
                     parent_step_id: None,
+                    db_path: None,
                 })?;
             } else if let Some(ticket_id) = ticket {
                 let syncer = TicketSyncer::new(conn);
@@ -353,21 +353,20 @@ pub fn handle_workflow(
                     ticket_id
                 );
 
-                run_and_report(&conductor_core::workflow::WorkflowExecInput {
-                    conn,
-                    config,
-                    workflow: &workflow,
+                run_and_report(conductor_core::workflow::WorkflowExecStandalone {
+                    config: config.clone(),
+                    workflow,
                     worktree_id: None,
-                    working_dir: &repo.local_path,
-                    repo_path: &repo.local_path,
-                    ticket_id: Some(&ticket_id),
-                    repo_id: Some(&ticket.repo_id),
-                    model: model.as_deref(),
-                    exec_config: &exec_config,
+                    working_dir: repo.local_path.clone(),
+                    repo_path: repo.local_path.clone(),
+                    ticket_id: Some(ticket_id.clone()),
+                    repo_id: Some(ticket.repo_id.clone()),
+                    model: model.clone(),
+                    exec_config: exec_config.clone(),
                     inputs: input_map,
                     depth: 0,
                     parent_workflow_run_id: None,
-                    target_label: Some(repo.slug.as_str()),
+                    target_label: Some(repo.slug.clone()),
                     default_bot_name: None,
                     iteration: 0,
                     run_id_notify: None,
@@ -376,6 +375,7 @@ pub fn handle_workflow(
                     force: false,
                     extra_plugin_dirs: plugin_dirs.clone(),
                     parent_step_id: None,
+                    db_path: None,
                 })?;
             } else {
                 // Normal registered repo/worktree run
@@ -435,21 +435,20 @@ pub fn handle_workflow(
                     workflow.name, node_count, repo_slug, worktree_slug
                 );
 
-                run_and_report(&conductor_core::workflow::WorkflowExecInput {
-                    conn,
-                    config,
-                    workflow: &workflow,
-                    worktree_id: Some(&wt.id),
-                    working_dir: &wt.path,
-                    repo_path: &r.local_path,
-                    ticket_id: wt.ticket_id.as_deref(),
-                    repo_id: Some(&r.id),
-                    model: model.as_deref(),
-                    exec_config: &exec_config,
+                run_and_report(conductor_core::workflow::WorkflowExecStandalone {
+                    config: config.clone(),
+                    workflow,
+                    worktree_id: Some(wt.id.clone()),
+                    working_dir: wt.path.clone(),
+                    repo_path: r.local_path.clone(),
+                    ticket_id: wt.ticket_id.clone(),
+                    repo_id: Some(r.id.clone()),
+                    model: model.clone(),
+                    exec_config: exec_config.clone(),
                     inputs: input_map,
                     depth: 0,
                     parent_workflow_run_id: None,
-                    target_label: Some(&wt_label),
+                    target_label: Some(wt_label.clone()),
                     default_bot_name: None,
                     iteration: 0,
                     run_id_notify: None,
@@ -458,6 +457,7 @@ pub fn handle_workflow(
                     force: false,
                     extra_plugin_dirs: plugin_dirs,
                     parent_step_id: None,
+                    db_path: None,
                 })?;
             }
         }
@@ -995,8 +995,8 @@ pub fn handle_workflow(
 }
 
 /// Execute a workflow and report the result.
-fn run_and_report(input: &conductor_core::workflow::WorkflowExecInput) -> Result<()> {
-    let result = conductor_core::workflow::execute_workflow(input)
+fn run_and_report(input: conductor_core::workflow::WorkflowExecStandalone) -> Result<()> {
+    let result = conductor_core::workflow::execute_workflow_standalone(&input)
         .map_err(|e| anyhow::anyhow!("Workflow execution failed: {e}"))?;
     report_workflow_result(result);
     Ok(())

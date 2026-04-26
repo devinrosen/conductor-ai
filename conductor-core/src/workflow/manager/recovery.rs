@@ -9,6 +9,23 @@ use crate::db::query_collect;
 use crate::error::Result;
 
 use super::helpers::{purge_where_clause, row_to_workflow_run};
+
+fn parse_duration_secs(s: &str) -> std::result::Result<u64, String> {
+    let s = s.trim().trim_matches('"');
+    if let Some(h) = s.strip_suffix('h') {
+        h.parse::<u64>()
+            .map_err(|e| format!("Invalid duration '{s}': {e}"))
+            .and_then(|n| n.checked_mul(3600).ok_or_else(|| format!("overflow: '{s}'")))
+    } else if let Some(m) = s.strip_suffix('m') {
+        m.parse::<u64>()
+            .map_err(|e| format!("Invalid duration '{s}': {e}"))
+            .and_then(|n| n.checked_mul(60).ok_or_else(|| format!("overflow: '{s}'")))
+    } else if let Some(sec) = s.strip_suffix('s') {
+        sec.parse().map_err(|e| format!("Invalid duration '{s}': {e}"))
+    } else {
+        s.parse().map_err(|e| format!("Invalid duration '{s}': {e}"))
+    }
+}
 use super::WorkflowManager;
 use crate::workflow::constants::RUN_COLUMNS;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
@@ -298,7 +315,7 @@ impl<'a> WorkflowManager<'a> {
             let gate_step = gate_steps.get(&run_id);
             let gate_timed_out = gate_step.is_some_and(|step| {
                 let timeout_secs = step.gate_timeout.as_deref().and_then(|s| {
-                    match crate::workflow_dsl::parse_duration_str(s) {
+                    match parse_duration_secs(s) {
                         Ok(n) => i64::try_from(n).ok(),
                         Err(_) => {
                             tracing::warn!(

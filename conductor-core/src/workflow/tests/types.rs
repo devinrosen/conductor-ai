@@ -5,7 +5,7 @@ use crate::workflow::types::{
     BlockedOn, ContextEntry, MetadataEntry, WorkflowExecConfig, WorkflowRunStep,
     WorkflowStepSummary,
 };
-use crate::workflow_dsl::GateType;
+use runkon_flow::dsl::GateType;
 
 // ---------------------------------------------------------------------------
 // BlockedOn serde roundtrips

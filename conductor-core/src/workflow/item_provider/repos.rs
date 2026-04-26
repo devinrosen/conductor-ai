@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::error::Result;
-use crate::workflow_dsl::ForeachScope;
+use runkon_flow::dsl::ForeachScope;
 
 use super::{FanOutItem, ItemProvider, ProviderContext};
 

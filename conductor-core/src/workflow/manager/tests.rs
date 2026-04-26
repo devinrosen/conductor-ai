@@ -3,7 +3,7 @@ use crate::agent::AgentManager;
 use crate::db::sql_placeholders;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::workflow::types::{TimeGranularity, WorkflowRun};
-use crate::workflow_dsl::GateType;
+use runkon_flow::dsl::GateType;
 
 fn setup_db() -> rusqlite::Connection {
     let conn = crate::test_helpers::setup_db();
@@ -1115,12 +1115,12 @@ fn test_set_workflow_run_iteration() {
 // -----------------------------------------------------------------------
 
 /// Helper to build a minimal WorkflowDef for validation tests.
-fn minimal_workflow(name: &str) -> crate::workflow_dsl::WorkflowDef {
-    crate::workflow_dsl::WorkflowDef {
+fn minimal_workflow(name: &str) -> runkon_flow::dsl::WorkflowDef {
+    runkon_flow::dsl::WorkflowDef {
         name: name.to_string(),
         title: None,
         description: "test workflow".to_string(),
-        trigger: crate::workflow_dsl::WorkflowTrigger::Manual,
+        trigger: runkon_flow::dsl::WorkflowTrigger::Manual,
         targets: vec![],
         group: None,
         inputs: vec![],
@@ -1160,7 +1160,7 @@ fn test_validate_single_returns_entry_for_valid_workflow() {
 
 #[test]
 fn test_validate_single_surfaces_warnings_for_unknown_bot() {
-    use crate::workflow_dsl::{AgentRef, CallNode, WorkflowNode};
+    use runkon_flow::dsl::{AgentRef, CallNode, WorkflowNode};
 
     let tmp = tempfile::tempdir().unwrap();
     let wf_src = "workflow bot-wf {\n  meta {\n    description = \"test\"\n    trigger = \"manual\"\n    targets = [\"worktree\"]\n  }\n  call some-step { as = \"unknown-bot\" }\n}\n";
@@ -1197,7 +1197,7 @@ fn test_validate_single_surfaces_warnings_for_unknown_bot() {
 
 #[test]
 fn test_validate_single_reports_errors_for_missing_agent() {
-    use crate::workflow_dsl::{AgentRef, CallNode, WorkflowNode};
+    use runkon_flow::dsl::{AgentRef, CallNode, WorkflowNode};
 
     let tmp = tempfile::tempdir().unwrap();
     let wf_src = "workflow bad-wf {\n  meta {\n    description = \"test\"\n    trigger = \"manual\"\n    targets = [\"worktree\"]\n  }\n  call nonexistent-agent\n}\n";

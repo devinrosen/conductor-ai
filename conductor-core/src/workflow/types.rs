@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::workflow_dsl::GateType;
+use runkon_flow::dsl::GateType;
 
 use super::status::{WorkflowRunStatus, WorkflowStepStatus};
 
@@ -173,6 +173,7 @@ pub struct WorkflowRunStep {
     pub context_out: Option<String>,
     pub markers_out: Option<String>,
     pub retry_count: i64,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
     pub gate_type: Option<GateType>,
     pub gate_prompt: Option<String>,
     pub gate_timeout: Option<String>,
@@ -452,7 +453,7 @@ pub struct ActiveWorkflowCounts {
 pub struct WorkflowExecInput<'a> {
     pub conn: &'a rusqlite::Connection,
     pub config: &'a crate::config::Config,
-    pub workflow: &'a crate::workflow_dsl::WorkflowDef,
+    pub workflow: &'a runkon_flow::dsl::WorkflowDef,
     /// `None` for ephemeral PR runs with no registered worktree.
     pub worktree_id: Option<&'a str>,
     pub working_dir: &'a str,
@@ -507,7 +508,7 @@ pub struct WorkflowExecInput<'a> {
 /// when spawning background threads.
 pub struct WorkflowExecStandalone {
     pub config: crate::config::Config,
-    pub workflow: crate::workflow_dsl::WorkflowDef,
+    pub workflow: runkon_flow::dsl::WorkflowDef,
     /// `None` for ephemeral PR runs with no registered worktree.
     pub worktree_id: Option<String>,
     pub working_dir: String,

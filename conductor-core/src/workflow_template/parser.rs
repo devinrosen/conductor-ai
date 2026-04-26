@@ -1,5 +1,5 @@
 use crate::error::{ConductorError, Result};
-use crate::workflow_dsl::parse_workflow_str;
+use runkon_flow::dsl::parse_workflow_str;
 
 use super::types::{TemplateFrontmatter, WorkflowTemplate};
 
@@ -54,7 +54,7 @@ pub fn parse_wft(input: &str, source: &str) -> Result<WorkflowTemplate> {
     })?;
 
     // Validate the .wf body
-    parse_workflow_str(&body, source)?;
+    parse_workflow_str(&body, source).map_err(|e| ConductorError::Workflow(e))?;
 
     Ok(WorkflowTemplate { metadata, body })
 }

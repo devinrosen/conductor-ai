@@ -827,26 +827,28 @@ fn test_resume_workflow_repo_target() {
     let (_tmp, db_path) = make_standalone_db();
     let conn = crate::db::open_database(&db_path).unwrap();
     let config = Config::default();
-    let exec_config = WorkflowExecConfig::default();
-    let workflow = make_empty_workflow();
 
-    let input = WorkflowExecInput {
-        repo_id: Some("r1"),
-        ..make_exec_input(
-            &conn,
-            &config,
-            &workflow,
-            "/tmp/repo",
-            "/tmp/repo",
-            &exec_config,
-        )
-    };
-    let result = execute_workflow(&input).unwrap();
-
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
+    let snapshot = serde_json::to_string(&make_empty_workflow()).unwrap();
+    let run = wf_mgr
+        .create_workflow_run_with_targets(
+            "test-wf",
+            None,
+            None,
+            Some("r1"),
+            &parent.id,
+            false,
+            "manual",
+            Some(&snapshot),
+            None,
+            None,
+        )
+        .unwrap();
     wf_mgr
         .update_workflow_status(
-            &result.workflow_run_id,
+            &run.id,
             WorkflowRunStatus::Failed,
             Some("step failed"),
             None,
@@ -855,7 +857,7 @@ fn test_resume_workflow_repo_target() {
 
     let resume_result = resume_workflow(&WorkflowResumeInput {
         config: &config,
-        workflow_run_id: &result.workflow_run_id,
+        workflow_run_id: &run.id,
         model: None,
         from_step: None,
         restart: false,
@@ -876,28 +878,30 @@ fn test_resume_workflow_ticket_target() {
     let (_tmp, db_path) = make_standalone_db();
     let conn = crate::db::open_database(&db_path).unwrap();
     let config = Config::default();
-    let exec_config = WorkflowExecConfig::default();
-    let workflow = make_empty_workflow();
 
     insert_test_ticket(&conn, "tkt-1", "r1");
 
-    let input = WorkflowExecInput {
-        ticket_id: Some("tkt-1"),
-        ..make_exec_input(
-            &conn,
-            &config,
-            &workflow,
-            "/tmp/repo",
-            "/tmp/repo",
-            &exec_config,
-        )
-    };
-    let result = execute_workflow(&input).unwrap();
-
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
     let wf_mgr = WorkflowManager::new(&conn);
+    let snapshot = serde_json::to_string(&make_empty_workflow()).unwrap();
+    let run = wf_mgr
+        .create_workflow_run_with_targets(
+            "test-wf",
+            None,
+            Some("tkt-1"),
+            None,
+            &parent.id,
+            false,
+            "manual",
+            Some(&snapshot),
+            None,
+            None,
+        )
+        .unwrap();
     wf_mgr
         .update_workflow_status(
-            &result.workflow_run_id,
+            &run.id,
             WorkflowRunStatus::Failed,
             Some("step failed"),
             None,
@@ -906,7 +910,7 @@ fn test_resume_workflow_ticket_target() {
 
     let resume_result = resume_workflow(&WorkflowResumeInput {
         config: &config,
-        workflow_run_id: &result.workflow_run_id,
+        workflow_run_id: &run.id,
         model: None,
         from_step: None,
         restart: false,

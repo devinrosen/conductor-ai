@@ -14,7 +14,7 @@ pub(crate) mod cancellation;
 pub(crate) mod cancellation_reason;
 pub(crate) mod claude_agent_executor;
 pub(crate) mod constants;
-pub(crate) mod engine;
+pub(crate) mod coordinator;
 pub(crate) mod engine_error;
 pub mod estimation;
 pub(crate) mod executors;
@@ -36,7 +36,7 @@ pub(crate) mod status;
 pub(crate) mod types;
 
 // Re-export DSL types so consumers go through `workflow::` instead of `workflow_dsl::` directly.
-pub use crate::workflow_dsl::{
+pub use runkon_flow::dsl::{
     collect_agent_names, collect_workflow_refs, default_skills_dir, detect_workflow_cycles,
     load_workflow_by_name, make_script_resolver, parse_workflow_str, resolve_script_path,
     validate_script_steps, validate_workflow_semantics, AgentRef, AlwaysNode, CallNode,
@@ -62,11 +62,11 @@ pub use constants::{
 ///
 /// Use this instead of importing `ENGINE_INJECTED_KEYS` directly.
 pub fn injected_variable_keys() -> &'static [&'static str] {
-    engine::ENGINE_INJECTED_KEYS
+    coordinator::ENGINE_INJECTED_KEYS
 }
 
-pub use engine::{
-    apply_workflow_input_defaults, execute_workflow, execute_workflow_standalone, resume_workflow,
+pub use coordinator::{
+    apply_workflow_input_defaults, execute_workflow_standalone, resume_workflow,
     resume_workflow_standalone, spawn_claimed_runs, spawn_heartbeat_resume, spawn_workflow_resume,
     validate_resume_preconditions,
 };

@@ -221,13 +221,7 @@ fn blocked_on_to_rk(b: CoreBlockedOn) -> RkBlockedOn {
 }
 
 pub fn step_to_rk(s: CoreStep) -> RkStep {
-    let gate_type = s.gate_type.as_ref().map(|gt| match gt {
-        crate::workflow_dsl::GateType::HumanApproval => runkon_flow::dsl::GateType::HumanApproval,
-        crate::workflow_dsl::GateType::HumanReview => runkon_flow::dsl::GateType::HumanReview,
-        crate::workflow_dsl::GateType::PrApproval => runkon_flow::dsl::GateType::PrApproval,
-        crate::workflow_dsl::GateType::PrChecks => runkon_flow::dsl::GateType::PrChecks,
-        crate::workflow_dsl::GateType::QualityGate => runkon_flow::dsl::GateType::QualityGate,
-    });
+    let gate_type = s.gate_type;
     RkStep {
         id: s.id,
         workflow_run_id: s.workflow_run_id,
@@ -341,7 +335,7 @@ mod tests {
     use super::*;
     use crate::workflow::status::WorkflowStepStatus as CoreStepStatus;
 
-    fn make_core_step(gate_type: Option<crate::workflow_dsl::GateType>) -> CoreStep {
+    fn make_core_step(gate_type: Option<runkon_flow::dsl::GateType>) -> CoreStep {
         CoreStep {
             id: "step-1".to_string(),
             workflow_run_id: "run-1".to_string(),
@@ -388,7 +382,7 @@ mod tests {
 
     #[test]
     fn step_to_rk_with_recognised_gate_type_preserves_gate() {
-        let step = make_core_step(Some(crate::workflow_dsl::GateType::HumanApproval));
+        let step = make_core_step(Some(runkon_flow::dsl::GateType::HumanApproval));
         let rk = step_to_rk(step);
         assert_eq!(
             rk.gate_type,

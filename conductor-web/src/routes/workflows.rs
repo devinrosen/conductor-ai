@@ -8,13 +8,14 @@ use serde::{Deserialize, Serialize};
 use conductor_core::error::ConductorError;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
-    apply_workflow_input_defaults, estimation, execute_workflow, validate_resume_preconditions,
-    FanOutItemRow, GateAnalyticsRow, InputDecl, PendingGateAnalyticsRow, RunIdSlot,
-    StepFailureHeatmapRow, StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity,
-    WorkflowDef, WorkflowExecConfig, WorkflowExecInput, WorkflowFailureRateTrendRow,
-    WorkflowManager, WorkflowPercentiles, WorkflowRegressionSignal, WorkflowResumeStandalone,
-    WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus,
-    WorkflowTokenAggregate, WorkflowTokenTrendRow, REGRESSION_MIN_RECENT_RUNS,
+    apply_workflow_input_defaults, estimation, execute_workflow_standalone,
+    validate_resume_preconditions, FanOutItemRow, GateAnalyticsRow, InputDecl,
+    PendingGateAnalyticsRow, RunIdSlot, StepFailureHeatmapRow, StepRetryAnalyticsRow,
+    StepTokenHeatmapRow, TimeGranularity, WorkflowDef, WorkflowExecConfig, WorkflowExecStandalone,
+    WorkflowFailureRateTrendRow, WorkflowManager, WorkflowPercentiles, WorkflowRegressionSignal,
+    WorkflowResumeStandalone, WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus,
+    WorkflowRunStep, WorkflowStepStatus, WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    REGRESSION_MIN_RECENT_RUNS,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -804,25 +805,25 @@ pub async fn post_workflow_run(
             ..Default::default()
         };
 
-        let input = WorkflowExecInput {
-            conn: &conn,
-            config: &config,
-            workflow: &def,
-            worktree_id: wt_id_clone.as_deref(),
-            working_dir: &wt_path,
-            repo_path: &repo_path,
-            ticket_id: wt_ticket_id.as_deref(),
-            repo_id: if wt_id_clone.is_none() {
-                Some(&repo_id)
-            } else {
-                None
-            },
-            model: model.as_deref(),
-            exec_config: &exec_config,
-            inputs: inputs.clone(),
+        let repo_id_for_exec = if wt_id_clone.is_none() {
+            Some(repo_id.clone())
+        } else {
+            None
+        };
+        let input = WorkflowExecStandalone {
+            config: config.clone(),
+            workflow: def,
+            worktree_id: wt_id_clone.clone(),
+            working_dir: wt_path,
+            repo_path,
+            ticket_id: wt_ticket_id,
+            repo_id: repo_id_for_exec,
+            model,
+            exec_config,
+            inputs,
             depth: 0,
             parent_workflow_run_id: None,
-            target_label: Some(&target_label),
+            target_label: Some(target_label.clone()),
             default_bot_name: None,
             iteration: 0,
             run_id_notify: Some(std::sync::Arc::clone(&run_id_slot)),
@@ -831,9 +832,10 @@ pub async fn post_workflow_run(
             extra_plugin_dirs: vec![],
             force: false,
             parent_step_id: None,
+            db_path: Some(db_path),
         };
 
-        let result = execute_workflow(&input);
+        let result = execute_workflow_standalone(&input);
         let notifications = config.notifications.clone();
         let notify_hooks = config.notify.hooks.clone();
 

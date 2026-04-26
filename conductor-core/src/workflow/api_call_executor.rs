@@ -1,8 +1,80 @@
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
+use crate::schema_config::{schema_to_tool_json, OutputSchema};
 use crate::workflow::action_executor::{
     ActionExecutor, ActionOutput, ActionParams, ExecutionContext,
 };
+
+const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_API_VERSION: &str = "2023-06-01";
+const MAX_TOKENS: u64 = 8192;
+
+const DEFAULT_API_MODEL: &str = "claude-sonnet-4-6";
+
+struct ApiCallResult {
+    json: serde_json::Value,
+    json_string: String,
+    input_tokens: i64,
+    output_tokens: i64,
+}
+
+fn execute_via_api(
+    prompt: &str,
+    schema: &OutputSchema,
+    model: &str,
+    timeout: std::time::Duration,
+    api_key: &str,
+) -> std::result::Result<ApiCallResult, String> {
+    let tool_json = schema_to_tool_json(schema);
+    let body = serde_json::json!({
+        "model": model,
+        "max_tokens": MAX_TOKENS,
+        "tools": [tool_json],
+        "tool_choice": {"type": "tool", "name": schema.name},
+        "messages": [{"role": "user", "content": prompt}]
+    });
+    let agent = ureq::AgentBuilder::new().timeout(timeout).build();
+    let response_result = agent
+        .post(ANTHROPIC_API_URL)
+        .set("x-api-key", api_key)
+        .set("anthropic-version", ANTHROPIC_API_VERSION)
+        .set("content-type", "application/json")
+        .send_json(&body);
+    let response_value: serde_json::Value = match response_result {
+        Ok(resp) => resp
+            .into_json()
+            .map_err(|e| format!("Failed to parse API response JSON: {e}"))?,
+        Err(ureq::Error::Status(status, resp)) => {
+            let body_text = resp.into_string().unwrap_or_default();
+            return Err(format!("API call failed: {status} {body_text}"));
+        }
+        Err(e) => return Err(format!("API call failed: {e}")),
+    };
+    let input = extract_tool_use_input(&response_value)?;
+    let json_string = serde_json::to_string(&input)
+        .map_err(|e| format!("Failed to serialize tool_use input: {e}"))?;
+    let usage = response_value.get("usage").unwrap_or(&serde_json::Value::Null);
+    let input_tokens = usage.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+    let output_tokens = usage.get("output_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+    Ok(ApiCallResult { json: input, json_string, input_tokens, output_tokens })
+}
+
+fn extract_tool_use_input(
+    response_value: &serde_json::Value,
+) -> std::result::Result<serde_json::Value, String> {
+    let content = response_value
+        .get("content")
+        .and_then(|c| c.as_array())
+        .ok_or_else(|| "API response missing 'content' array".to_string())?;
+    let tool_use_block = content
+        .iter()
+        .find(|block| block.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+        .ok_or_else(|| "API response contained no tool_use block".to_string())?;
+    tool_use_block
+        .get("input")
+        .ok_or_else(|| "tool_use block missing 'input' field".to_string())
+        .cloned()
+}
 
 /// Wraps `execute_via_api` behind the `ActionExecutor` trait for schema-constrained steps.
 ///
@@ -36,12 +108,9 @@ impl ActionExecutor for ApiCallExecutor {
 
         let (_agent_def, prompt) = super::helpers::load_agent_and_build_prompt(ectx, params)?;
 
-        let model = ectx
-            .model
-            .as_deref()
-            .unwrap_or(crate::workflow::executors::api_call::DEFAULT_API_MODEL);
+        let model = ectx.model.as_deref().unwrap_or(DEFAULT_API_MODEL);
 
-        let result = crate::workflow::executors::api_call::execute_via_api(
+        let result = execute_via_api(
             &prompt,
             schema,
             model,

@@ -316,26 +316,6 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
 // 4. RkItemProvider adapters
 // ---------------------------------------------------------------------------
 
-/// Convert a runkon-flow `ForeachScope` to a conductor-core `ForeachScope` via
-/// direct match (both types share identical variants).
-fn rk_scope_to_core(scope: &runkon_flow::dsl::ForeachScope) -> crate::workflow_dsl::ForeachScope {
-    use crate::workflow_dsl::{
-        ForeachScope as Core, TicketScope as CoreTicket, WorktreeScope as CoreWorktree,
-    };
-    use runkon_flow::dsl::{ForeachScope as Rk, TicketScope as RkTicket};
-    match scope {
-        Rk::Ticket(ts) => Core::Ticket(match ts {
-            RkTicket::TicketId(id) => CoreTicket::TicketId(id.clone()),
-            RkTicket::Label(l) => CoreTicket::Label(l.clone()),
-            RkTicket::Unlabeled => CoreTicket::Unlabeled,
-        }),
-        Rk::Worktree(ws) => Core::Worktree(CoreWorktree {
-            base_branch: ws.base_branch.clone(),
-            has_open_pr: ws.has_open_pr,
-        }),
-    }
-}
-
 /// Convert a conductor-core `FanOutItem` to a runkon-flow `FanOutItem`.
 fn core_fan_out_item_to_rk(
     item: crate::workflow::item_provider::FanOutItem,
@@ -365,9 +345,8 @@ fn delegate_items<P: ItemProvider>(
         conn: &guard,
         config,
     };
-    let core_scope = scope.map(rk_scope_to_core);
     provider
-        .items(&core_ctx, core_scope.as_ref(), filter, existing_set)
+        .items(&core_ctx, scope, filter, existing_set)
         .map(|items: Vec<crate::workflow::item_provider::FanOutItem>| {
             items.into_iter().map(core_fan_out_item_to_rk).collect()
         })
@@ -525,7 +504,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         // Load the real workflow definition from disk. The caller passes a placeholder
         // WorkflowDef with body=[] — the child runner is responsible for resolving the
         // actual definition by name from the worktree/repo .conductor/workflows/ directory.
-        let core_def = crate::workflow_dsl::load_workflow_by_name(
+        let core_def = runkon_flow::dsl::load_workflow_by_name(
             &parent_state.worktree_ctx.working_dir,
             &parent_state.worktree_ctx.repo_path,
             &child_def.name,
@@ -574,7 +553,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             iteration: params.iteration,
         };
 
-        let core_result = crate::workflow::engine::execute_workflow_standalone(&standalone_params)
+        let core_result = super::coordinator::execute_workflow_standalone(&standalone_params)
             .map_err(|e| {
                 EngineError::Workflow(format!("child workflow '{}' failed: {e}", child_def.name))
             })?;
@@ -599,7 +578,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             shutdown: None,
         };
 
-        let core_result = crate::workflow::engine::resume_workflow(&input).map_err(|e| {
+        let core_result = super::coordinator::resume_workflow(&input).map_err(|e| {
             EngineError::Workflow(format!(
                 "failed to resume child workflow run '{workflow_run_id}': {e}"
             ))

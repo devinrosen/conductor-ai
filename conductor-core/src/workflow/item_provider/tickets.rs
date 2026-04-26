@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::Connection;
 
 use crate::error::{ConductorError, Result};
-use crate::workflow_dsl::{ForeachScope, TicketScope};
+use runkon_flow::dsl::{ForeachScope, TicketScope};
 
 use super::{FanOutItem, ItemProvider, ProviderContext};
 
@@ -249,7 +249,7 @@ mod tests {
         let conn = test_helpers::setup_db();
         let config = crate::config::Config::default();
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
-        let scope = ForeachScope::Worktree(crate::workflow_dsl::WorktreeScope {
+        let scope = ForeachScope::Worktree(runkon_flow::dsl::WorktreeScope {
             base_branch: None,
             has_open_pr: None,
         });

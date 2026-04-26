@@ -7,7 +7,7 @@ use crate::workflow::persistence::WorkflowPersistence;
 
 use crate::config::Config;
 use crate::error::Result;
-use crate::workflow_dsl::ApprovalMode;
+use runkon_flow::dsl::ApprovalMode;
 
 use super::resolvers::{
     HumanApprovalGateResolver, HumanGateKind, PrApprovalGateResolver, PrChecksGateResolver,
@@ -276,7 +276,7 @@ mod tests {
         );
     }
 
-    fn make_params(mode: crate::workflow_dsl::ApprovalMode) -> GateParams {
+    fn make_params(mode: runkon_flow::dsl::ApprovalMode) -> GateParams {
         GateParams {
             gate_name: "test-gate".into(),
             prompt: None,
@@ -291,7 +291,7 @@ mod tests {
 
     fn poll_resolver_with_unavailable_gh(
         resolver_key: &str,
-        mode: crate::workflow_dsl::ApprovalMode,
+        mode: runkon_flow::dsl::ApprovalMode,
     ) -> GatePoll {
         let token_cache = Arc::new(GitHubTokenCache::new(None));
         let resolvers = build_default_gate_resolvers(
@@ -318,7 +318,7 @@ mod tests {
     fn test_pr_approval_resolver_poll_returns_pending_when_gh_unavailable() {
         let poll = poll_resolver_with_unavailable_gh(
             "pr_approval",
-            crate::workflow_dsl::ApprovalMode::MinApprovals,
+            runkon_flow::dsl::ApprovalMode::MinApprovals,
         );
         assert!(
             matches!(poll, GatePoll::Pending),
@@ -330,7 +330,7 @@ mod tests {
     fn test_pr_approval_resolver_poll_review_decision_pending_when_gh_unavailable() {
         let poll = poll_resolver_with_unavailable_gh(
             "pr_approval",
-            crate::workflow_dsl::ApprovalMode::ReviewDecision,
+            runkon_flow::dsl::ApprovalMode::ReviewDecision,
         );
         assert!(
             matches!(poll, GatePoll::Pending),
@@ -342,7 +342,7 @@ mod tests {
     fn test_pr_checks_resolver_poll_returns_pending_when_gh_unavailable() {
         let poll = poll_resolver_with_unavailable_gh(
             "pr_checks",
-            crate::workflow_dsl::ApprovalMode::MinApprovals,
+            runkon_flow::dsl::ApprovalMode::MinApprovals,
         );
         assert!(
             matches!(poll, GatePoll::Pending),

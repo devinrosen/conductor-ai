@@ -17,8 +17,8 @@ use tempfile::TempDir;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::workflow::{
-    apply_workflow_input_defaults, execute_workflow, WorkflowExecConfig, WorkflowExecInput,
-    WorkflowManager, WorkflowResult,
+    apply_workflow_input_defaults, execute_workflow_standalone, WorkflowExecConfig,
+    WorkflowExecStandalone, WorkflowManager, WorkflowResult,
 };
 
 /// A parsed GitHub PR reference.
@@ -187,7 +187,7 @@ pub fn checkout_pr(pr: &PrRef, dir: &Path) -> Result<String> {
 /// 7. Return the `WorkflowResult`
 #[allow(clippy::too_many_arguments)]
 pub fn run_workflow_on_pr(
-    conn: &Connection,
+    _conn: &Connection,
     config: &Config,
     pr_ref: &PrRef,
     workflow_name: &str,
@@ -237,21 +237,20 @@ pub fn run_workflow_on_pr(
     };
 
     let pr_target_label = format!("{}/{}#{}", pr_ref.owner, pr_ref.repo, pr_ref.number);
-    let input = WorkflowExecInput {
-        conn,
-        config,
-        workflow: &workflow,
+    let input = WorkflowExecStandalone {
+        config: config.clone(),
+        workflow,
         worktree_id: None,
-        working_dir: clone_path_str,
-        repo_path: clone_path_str,
+        working_dir: clone_path_str.to_string(),
+        repo_path: clone_path_str.to_string(),
         ticket_id: None,
         repo_id: None,
-        model,
-        exec_config: &exec_config,
+        model: model.map(String::from),
+        exec_config,
         inputs,
         depth: 0,
         parent_workflow_run_id: None,
-        target_label: Some(&pr_target_label),
+        target_label: Some(pr_target_label),
         default_bot_name: None,
         iteration: 0,
         run_id_notify: None,
@@ -260,10 +259,11 @@ pub fn run_workflow_on_pr(
         force: false,
         extra_plugin_dirs: vec![],
         parent_step_id: None,
+        db_path: None,
     };
 
-    // `temp_dir` is dropped after execute_workflow returns, cleaning up the cloned repo.
-    execute_workflow(&input)
+    // `temp_dir` is dropped after execute_workflow_standalone returns, cleaning up the cloned repo.
+    execute_workflow_standalone(&input)
 }
 
 #[cfg(test)]

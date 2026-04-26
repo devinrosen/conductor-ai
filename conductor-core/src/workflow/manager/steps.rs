@@ -4,7 +4,7 @@ use chrono::Utc;
 use rusqlite::named_params;
 
 use crate::error::{ConductorError, Result};
-use crate::workflow_dsl::GateType;
+use runkon_flow::dsl::GateType;
 
 use super::WorkflowManager;
 use crate::workflow::status::WorkflowStepStatus;
@@ -207,7 +207,7 @@ impl<'a> WorkflowManager<'a> {
         self.conn.execute(
             "UPDATE workflow_run_steps SET gate_type = :gate_type, gate_prompt = :gate_prompt, \
              gate_timeout = :gate_timeout WHERE id = :id",
-            named_params![":gate_type": gate_type, ":gate_prompt": gate_prompt, ":gate_timeout": gate_timeout, ":id": step_id],
+            named_params![":gate_type": gate_type.to_string(), ":gate_prompt": gate_prompt, ":gate_timeout": gate_timeout, ":id": step_id],
         )?;
         Ok(())
     }

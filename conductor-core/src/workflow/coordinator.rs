@@ -1,0 +1,1006 @@
+//! Workflow coordinator: execute and resume workflow definitions via `runkon_flow::FlowEngine`.
+//!
+//! Contains the public entry-points (`execute_workflow_standalone`, `resume_workflow`, …) and
+//! the private helpers they share.  The old conductor-core execution stack (`engine.rs`) has
+//! been removed; this module is the canonical home for workflow orchestration logic.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use rusqlite::Connection;
+
+use crate::agent::AgentManager;
+use crate::agent_config::AgentSpec;
+use crate::config::Config;
+use crate::error::{ConductorError, Result};
+use crate::schema_config::SchemaIssue;
+use crate::worktree::WorktreeManager;
+use runkon_flow::dsl::WorkflowDef;
+
+use super::manager::WorkflowManager;
+use super::status::{WorkflowRunStatus, WorkflowStepStatus};
+use super::types::{
+    SpawnHeartbeatResumeParams, WorkflowExecStandalone, WorkflowResult, WorkflowResumeInput,
+    WorkflowResumeStandalone,
+};
+
+/// Input keys that the workflow engine injects automatically from the run context
+/// (ticket and repo metadata). Consumers can use this slice to identify inputs
+/// that are read-only from the user's perspective.
+///
+/// Canonical definition lives in `runkon_flow::engine::ENGINE_INJECTED_KEYS`.
+pub(crate) use runkon_flow::ENGINE_INJECTED_KEYS;
+
+/// Validate required workflow inputs are present and apply default values.
+///
+/// Returns an error if a required input is missing.
+pub fn apply_workflow_input_defaults(
+    workflow: &WorkflowDef,
+    inputs: &mut HashMap<String, String>,
+) -> Result<()> {
+    use runkon_flow::dsl::InputType;
+    for input_decl in &workflow.inputs {
+        if input_decl.required && !inputs.contains_key(&input_decl.name) {
+            return Err(ConductorError::Workflow(format!(
+                "Missing required input: '{}'. Use --input {}=<value>.",
+                input_decl.name, input_decl.name
+            )));
+        }
+        if let Some(ref default) = input_decl.default {
+            inputs
+                .entry(input_decl.name.clone())
+                .or_insert_with(|| default.clone());
+        }
+        // Boolean inputs default to "false" when absent.
+        if input_decl.input_type == InputType::Boolean {
+            inputs
+                .entry(input_decl.name.clone())
+                .or_insert_with(|| "false".to_string());
+        }
+    }
+    Ok(())
+}
+
+/// Validate that all agent definitions, prompt snippets, and output schemas
+/// referenced in the workflow are resolvable from the given directories.
+///
+/// Called by both `execute_workflow` and `execute_workflow_standalone` before
+/// any DB writes, so the function must be idempotent and free of side effects.
+fn validate_workflow_resources(
+    workflow: &WorkflowDef,
+    working_dir: &str,
+    repo_path: &str,
+    extra_plugin_dirs: &[String],
+) -> Result<()> {
+    let mut all_agents = runkon_flow::dsl::collect_agent_names(&workflow.body);
+    all_agents.extend(runkon_flow::dsl::collect_agent_names(&workflow.always));
+    all_agents.sort();
+    all_agents.dedup();
+
+    let specs: Vec<AgentSpec> = all_agents.iter().map(AgentSpec::from).collect();
+    let mut all_plugin_dirs = extra_plugin_dirs.to_vec();
+    let mut seen: std::collections::HashSet<String> = all_plugin_dirs.iter().cloned().collect();
+    for dir in workflow.collect_all_plugin_dirs() {
+        if seen.insert(dir.clone()) {
+            all_plugin_dirs.push(dir);
+        }
+    }
+    let missing_agents = crate::agent_config::find_missing_agents(
+        working_dir,
+        repo_path,
+        &specs,
+        Some(&workflow.name),
+        &all_plugin_dirs,
+    );
+    if !missing_agents.is_empty() {
+        return Err(ConductorError::Workflow(format!(
+            "Missing agent definitions: {}. Run 'conductor workflow validate' for details.",
+            missing_agents.join(", ")
+        )));
+    }
+
+    let all_snippets = workflow.collect_all_snippet_refs();
+    if !all_snippets.is_empty() {
+        let missing_snippets = crate::prompt_config::find_missing_snippets(
+            working_dir,
+            repo_path,
+            &all_snippets,
+            Some(&workflow.name),
+        );
+        if !missing_snippets.is_empty() {
+            return Err(ConductorError::Workflow(format!(
+                "Missing prompt snippets: {}. Check .conductor/prompts/ directory.",
+                missing_snippets.join(", ")
+            )));
+        }
+    }
+
+    let all_schemas = workflow.collect_all_schema_refs();
+    if !all_schemas.is_empty() {
+        let schema_issues = crate::schema_config::check_schemas(
+            working_dir,
+            repo_path,
+            &all_schemas,
+            Some(&workflow.name),
+        );
+        if !schema_issues.is_empty() {
+            let details: Vec<String> = schema_issues
+                .iter()
+                .map(|issue| match issue {
+                    SchemaIssue::Missing(name) => format!("missing: {name}"),
+                    SchemaIssue::Invalid { name, error } => {
+                        format!("invalid: {name}: {error}")
+                    }
+                })
+                .collect();
+            return Err(ConductorError::Workflow(format!(
+                "Schema validation failed: {}",
+                details.join(", ")
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn inject_worktree_variables(
+    wt: &crate::worktree::Worktree,
+    repo_default_branch: &str,
+    merged_inputs: &mut HashMap<String, String>,
+) {
+    let base = wt.effective_base(repo_default_branch);
+    merged_inputs
+        .entry("feature_base_branch".to_string())
+        .or_insert_with(|| base.to_string());
+    merged_inputs
+        .entry("worktree_branch".to_string())
+        .or_insert_with(|| wt.branch.clone());
+}
+
+/// Acquire the shared SQLite connection mutex, mapping a poison error to a `ConductorError`.
+fn lock_shared(
+    conn: &Arc<std::sync::Mutex<Connection>>,
+) -> Result<std::sync::MutexGuard<'_, Connection>> {
+    conn.lock()
+        .map_err(|e| ConductorError::Workflow(format!("db mutex poisoned: {e}")))
+}
+
+/// Execute a workflow in a self-contained manner using `runkon_flow::FlowEngine::run()`.
+///
+/// Opens its own database connection and builds all bridge adapters so the
+/// caller does not need to share a `&Connection` or know about internal engine
+/// types.  Designed for use in background threads (TUI, web, CLI sub-commands).
+pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<WorkflowResult> {
+    let db = params
+        .db_path
+        .clone()
+        .unwrap_or_else(crate::config::db_path);
+
+    let raw_conn = crate::db::open_database(&db)?;
+    let shared_conn = Arc::new(std::sync::Mutex::new(raw_conn));
+
+    let config = &params.config;
+    let workflow = &params.workflow;
+
+    // -----------------------------------------------------------------------
+    // Setup phase — acquire lock once, do all pre-run work, release.
+    // -----------------------------------------------------------------------
+    let (wf_run_id, parent_run_id, merged_inputs, effective_repo_id_owned, snapshot_json) = {
+        let guard = lock_shared(&shared_conn)?;
+        let conn: &Connection = &guard;
+
+        let agent_mgr = AgentManager::new(conn);
+        let wf_mgr = WorkflowManager::new(conn);
+
+        // Validate agents, snippets, and schemas referenced by this workflow.
+        validate_workflow_resources(
+            workflow,
+            &params.working_dir,
+            &params.repo_path,
+            &params.extra_plugin_dirs,
+        )?;
+
+        // Snapshot the definition.
+        let snapshot_json = serde_json::to_string(workflow).map_err(|e| {
+            ConductorError::Workflow(format!("Failed to serialize workflow definition: {e}"))
+        })?;
+
+        // Guard active runs at depth 0 only — child workflows (depth > 0) run
+        // concurrently with their parent and must not trigger this check.
+        if params.depth == 0 {
+            if let Some(ref wt_id) = params.worktree_id {
+                if let Some(active) = wf_mgr.get_active_run_for_worktree(wt_id)? {
+                    if params.force {
+                        tracing::info!(
+                            "Force override: cancelling active run {} to start new run",
+                            active.id
+                        );
+                        wf_mgr.cancel_run(&active.id, "force override: new run requested")?;
+                    } else {
+                        return Err(ConductorError::WorkflowRunAlreadyActive {
+                            name: active.workflow_name,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Create parent agent run.
+        let parent_prompt = format!("Workflow: {} — {}", workflow.name, workflow.description);
+        let parent_run = agent_mgr.create_run(
+            params.worktree_id.as_deref(),
+            &parent_prompt,
+            params.model.as_deref(),
+        )?;
+
+        // Derive repo_id from worktree when not explicitly provided.
+        let derived_repo_id = match (&params.repo_id, &params.worktree_id) {
+            (None, Some(wt_id)) => {
+                match crate::worktree::WorktreeManager::new(conn, config).get_by_id(wt_id) {
+                    Ok(wt) => Some(wt.repo_id),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to look up worktree '{wt_id}' for repo_id derivation: {e}"
+                        );
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+        let effective_repo_id: Option<String> = params.repo_id.clone().or(derived_repo_id);
+
+        let trigger_str = if params.triggered_by_hook {
+            "hook".to_string()
+        } else {
+            workflow.trigger.to_string()
+        };
+
+        let wf_run = wf_mgr.create_workflow_run_with_targets(
+            &workflow.name,
+            params.worktree_id.as_deref(),
+            params.ticket_id.as_deref(),
+            effective_repo_id.as_deref(),
+            &parent_run.id,
+            params.exec_config.dry_run,
+            &trigger_str,
+            Some(&snapshot_json),
+            params.parent_workflow_run_id.as_deref(),
+            params.target_label.as_deref(),
+        )?;
+
+        // Write child run ID back to parent step immediately so TUI can drill in while running.
+        if let Some(ref step_id) = params.parent_step_id {
+            wf_mgr.update_step_child_run_id(step_id, &wf_run.id)?;
+        }
+
+        // Notify any waiting caller of the freshly-created run ID.
+        if let Some(pair) = &params.run_id_notify {
+            let (lock, cvar) = pair.as_ref();
+            *lock.lock().unwrap_or_else(|e| e.into_inner()) = Some(wf_run.id.clone());
+            cvar.notify_one();
+        }
+
+        // Persist default_bot_name so it can be restored on resume.
+        if let Some(ref bot_name) = params.default_bot_name {
+            wf_mgr.set_workflow_run_default_bot_name(&wf_run.id, bot_name)?;
+        }
+
+        // Persist loop iteration number for sub-workflow runs.
+        if params.iteration > 0 {
+            wf_mgr.set_workflow_run_iteration(&wf_run.id, params.iteration as i64)?;
+        }
+
+        // Build merged inputs, injecting ticket/repo/worktree variables.
+        let mut merged_inputs = params.inputs.clone();
+        if let Some(ref tid) = params.ticket_id {
+            let ticket = crate::tickets::TicketSyncer::new(conn).get_by_id(tid)?;
+            merged_inputs
+                .entry("ticket_id".to_string())
+                .or_insert_with(|| ticket.id.clone());
+            merged_inputs
+                .entry("ticket_source_id".to_string())
+                .or_insert_with(|| ticket.source_id.clone());
+            merged_inputs
+                .entry("ticket_source_type".to_string())
+                .or_insert_with(|| ticket.source_type.clone());
+            merged_inputs
+                .entry("ticket_title".to_string())
+                .or_insert_with(|| ticket.title.clone());
+            merged_inputs
+                .entry("ticket_body".to_string())
+                .or_insert_with(|| ticket.body.clone());
+            merged_inputs
+                .entry("ticket_url".to_string())
+                .or_insert_with(|| ticket.url.clone());
+            merged_inputs
+                .entry("ticket_raw_json".to_string())
+                .or_insert_with(|| ticket.raw_json.clone());
+        }
+        let fetched_repo = if let Some(ref rid) = effective_repo_id {
+            let repo = crate::repo::RepoManager::new(conn, config).get_by_id(rid)?;
+            merged_inputs
+                .entry("repo_id".to_string())
+                .or_insert_with(|| repo.id.clone());
+            merged_inputs
+                .entry("repo_path".to_string())
+                .or_insert_with(|| repo.local_path.clone());
+            merged_inputs
+                .entry("repo_name".to_string())
+                .or_insert_with(|| repo.slug.clone());
+            Some(repo)
+        } else {
+            None
+        };
+        if let Some(ref wt_id) = params.worktree_id {
+            let wt = crate::worktree::WorktreeManager::new(conn, config).get_by_id(wt_id)?;
+            // Reuse the already-fetched repo when the IDs match (the common case where
+            // effective_repo_id was derived from this same worktree).
+            let default_branch = if let Some(ref r) = fetched_repo {
+                r.default_branch.clone()
+            } else {
+                crate::repo::RepoManager::new(conn, config)
+                    .get_by_id(&wt.repo_id)?
+                    .default_branch
+            };
+            inject_worktree_variables(&wt, &default_branch, &mut merged_inputs);
+        }
+
+        // Persist inputs.
+        if !merged_inputs.is_empty() {
+            wf_mgr.set_workflow_run_inputs(&wf_run.id, &merged_inputs)?;
+        }
+
+        // Mark as running.
+        wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Running, None, None)?;
+
+        (
+            wf_run.id,
+            parent_run.id,
+            merged_inputs,
+            effective_repo_id,
+            snapshot_json,
+        )
+        // guard drops here — connection lock released
+    };
+
+    // -----------------------------------------------------------------------
+    // Build the runkon-flow engine and execution state.
+    // -----------------------------------------------------------------------
+
+    // Reuse the snapshot JSON already computed during setup to avoid a second serialization.
+    let rk_def: runkon_flow::dsl::WorkflowDef =
+        serde_json::from_str(&snapshot_json).map_err(|e| {
+            ConductorError::Workflow(format!("Failed to deserialize workflow definition: {e}"))
+        })?;
+
+    let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> = Arc::new(
+        super::persistence_sqlite::SqliteWorkflowPersistence::from_shared_connection(Arc::clone(
+            &shared_conn,
+        )),
+    );
+
+    let action_registry = Arc::new(super::runkon_bridge::build_rk_action_registry(
+        config,
+        Arc::clone(&shared_conn),
+        &db,
+    ));
+
+    let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(
+        Arc::clone(&shared_conn),
+        config,
+        effective_repo_id_owned.clone(),
+    ));
+
+    let script_env_provider = super::runkon_bridge::build_rk_script_env_provider(
+        params.conductor_bin_dir.clone(),
+        params.extra_plugin_dirs.clone(),
+    );
+
+    let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> =
+        Arc::new(super::runkon_bridge::ConductorChildWorkflowRunner::new(
+            db.clone(),
+            config.clone(),
+            Arc::clone(&shared_conn),
+        ));
+
+    let workflow_name_for_resolver = workflow.name.clone();
+    #[allow(clippy::type_complexity)]
+    let schema_resolver: Arc<
+        dyn Fn(
+                &str,
+                &str,
+                &str,
+            )
+                -> runkon_flow::engine_error::Result<runkon_flow::output_schema::OutputSchema>
+            + Send
+            + Sync,
+    > = Arc::new(move |working_dir, repo_path, name| {
+        let schema_ref = crate::schema_config::SchemaRef::from_str_value(name);
+        crate::schema_config::load_schema(
+            working_dir,
+            repo_path,
+            &schema_ref,
+            Some(&workflow_name_for_resolver),
+        )
+        .map(super::runkon_bridge::core_schema_to_rk)
+        .map_err(|e| runkon_flow::engine_error::EngineError::Workflow(e.to_string()))
+    });
+
+    let rk_exec_config = runkon_flow::types::WorkflowExecConfig {
+        poll_interval: params.exec_config.poll_interval,
+        step_timeout: params.exec_config.step_timeout,
+        fail_fast: params.exec_config.fail_fast,
+        dry_run: params.exec_config.dry_run,
+        shutdown: params.exec_config.shutdown.clone(),
+    };
+
+    let mut rk_state = runkon_flow::engine::ExecutionState {
+        persistence: Arc::clone(&persistence),
+        action_registry,
+        script_env_provider,
+        workflow_run_id: wf_run_id,
+        workflow_name: workflow.name.clone(),
+        worktree_ctx: runkon_flow::engine::WorktreeContext {
+            worktree_id: params.worktree_id.clone(),
+            working_dir: params.working_dir.clone(),
+            repo_path: params.repo_path.clone(),
+            ticket_id: params.ticket_id.clone(),
+            repo_id: effective_repo_id_owned,
+            extra_plugin_dirs: params.extra_plugin_dirs.clone(),
+        },
+        model: params.model.clone(),
+        exec_config: rk_exec_config,
+        inputs: merged_inputs,
+        parent_run_id: parent_run_id.clone(),
+        depth: params.depth,
+        target_label: params.target_label.clone(),
+        step_results: HashMap::new(),
+        contexts: Vec::new(),
+        position: 0,
+        all_succeeded: true,
+        total_cost: 0.0,
+        total_turns: 0,
+        total_duration_ms: 0,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        total_cache_read_input_tokens: 0,
+        total_cache_creation_input_tokens: 0,
+        last_gate_feedback: None,
+        block_output: None,
+        block_with: Vec::new(),
+        resume_ctx: None,
+        default_bot_name: params.default_bot_name.clone(),
+        triggered_by_hook: params.triggered_by_hook,
+        schema_resolver: Some(schema_resolver),
+        child_runner: Some(child_runner),
+        last_heartbeat_at: runkon_flow::engine::ExecutionState::new_heartbeat(),
+        registry: item_registry,
+        event_sinks: Arc::from(params.exec_config.event_sinks.clone()),
+        cancellation: runkon_flow::CancellationToken::new(),
+        current_execution_id: Arc::new(std::sync::Mutex::new(None)),
+    };
+
+    let engine = super::runkon_gate_bridge::register_rk_gate_resolvers(
+        runkon_flow::FlowEngineBuilder::new().with_event_sinks(&rk_state.event_sinks),
+        Arc::clone(&persistence),
+        params.working_dir.clone(),
+        params.default_bot_name.clone(),
+        config.clone(),
+        db,
+    )
+    .build()
+    .map_err(|e| {
+        ConductorError::Workflow(format!(
+            "failed to build engine for '{}': {e}",
+            workflow.name
+        ))
+    })?;
+
+    let rk_result = engine
+        .run(&rk_def, &mut rk_state)
+        .map_err(|e| ConductorError::Workflow(e.to_string()))?;
+
+    // Close the parent agent run. It was created without a subprocess_pid (workflow
+    // parent runs never spawn a subprocess), so the orphan reaper would sweep it the
+    // moment the workflow_run becomes terminal unless we explicitly mark it done here.
+    {
+        let guard = lock_shared(&shared_conn)?;
+        let agent_mgr = AgentManager::new(&guard);
+        let summary = format!("Workflow '{}' completed", workflow.name);
+        if rk_result.all_succeeded {
+            if let Err(e) = agent_mgr.update_run_completed(
+                &parent_run_id,
+                None,
+                Some(&summary),
+                Some(rk_result.total_cost),
+                Some(rk_result.total_turns),
+                Some(rk_result.total_duration_ms),
+                Some(rk_result.total_input_tokens),
+                Some(rk_result.total_output_tokens),
+                Some(rk_result.total_cache_read_input_tokens),
+                Some(rk_result.total_cache_creation_input_tokens),
+            ) {
+                tracing::warn!("Failed to mark parent run {parent_run_id} completed: {e}");
+            }
+        } else if let Err(e) = agent_mgr.update_run_failed(
+            &parent_run_id,
+            &format!("Workflow '{}' failed", workflow.name),
+        ) {
+            tracing::warn!("Failed to mark parent run {parent_run_id} failed: {e}");
+        }
+    }
+
+    Ok(super::rk_types::rk_workflow_result_to_core(rk_result))
+}
+
+/// Validate resume preconditions that can be checked from status alone.
+///
+/// Shared by the core `resume_workflow` function and the web endpoint so that
+/// validation rules and error strings stay in a single place.
+pub fn validate_resume_preconditions(
+    status: &WorkflowRunStatus,
+    restart: bool,
+    from_step: Option<&str>,
+) -> Result<()> {
+    if matches!(status, WorkflowRunStatus::Completed) && !restart {
+        return Err(ConductorError::Workflow(
+            "Cannot resume a completed workflow run. Use --restart to re-run from the beginning."
+                .to_string(),
+        ));
+    }
+    if matches!(status, WorkflowRunStatus::Running) {
+        return Err(ConductorError::Workflow(
+            "Cannot resume a workflow run that is already running.".to_string(),
+        ));
+    }
+    if matches!(status, WorkflowRunStatus::Cancelled) {
+        return Err(ConductorError::Workflow(
+            "Cannot resume a cancelled workflow run.".to_string(),
+        ));
+    }
+    if restart && from_step.is_some() {
+        return Err(ConductorError::Workflow(
+            "Cannot use --restart and --from-step together: --restart re-runs all steps, \
+             --from-step resumes from a specific step."
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Resume a workflow in a self-contained manner: opens its own database
+/// connection. Designed for use in background threads.
+pub fn resume_workflow_standalone(params: &WorkflowResumeStandalone) -> Result<WorkflowResult> {
+    let db = params
+        .db_path
+        .clone()
+        .unwrap_or_else(crate::config::db_path);
+
+    let input = WorkflowResumeInput {
+        config: &params.config,
+        workflow_run_id: &params.workflow_run_id,
+        model: params.model.as_deref(),
+        from_step: params.from_step.as_deref(),
+        restart: params.restart,
+        conductor_bin_dir: params.conductor_bin_dir.clone(),
+        event_sinks: vec![],
+        db_path: Some(db),
+        shutdown: params.shutdown.clone(),
+    };
+
+    resume_workflow(&input)
+}
+
+/// Build the standard [`WorkflowResumeStandalone`] for a watchdog-spawned resume.
+///
+/// Centralises the five constant fields so `spawn_workflow_resume` and
+/// `spawn_heartbeat_resume` share one construction path.
+fn make_resume_params(
+    config: Config,
+    run_id: String,
+    conductor_bin_dir: Option<std::path::PathBuf>,
+    db_path: Option<std::path::PathBuf>,
+) -> WorkflowResumeStandalone {
+    WorkflowResumeStandalone {
+        config,
+        workflow_run_id: run_id,
+        model: None,
+        from_step: None,
+        restart: false,
+        db_path,
+        conductor_bin_dir,
+        shutdown: None,
+    }
+}
+
+/// Spawn a background thread to resume a workflow run.
+///
+/// Designed for the TUI/CLI watchdog callers so they are not blocked and the
+/// WorkflowManager (data-access layer) does not need to call engine-layer code.
+///
+/// Returns the thread `JoinHandle` so callers can optionally join for testing;
+/// production callers may drop it to detach.
+pub fn spawn_workflow_resume(
+    run_id: String,
+    config: Config,
+    conductor_bin_dir: Option<std::path::PathBuf>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let params = make_resume_params(config, run_id.clone(), conductor_bin_dir, None);
+        if let Err(e) = resume_workflow_standalone(&params) {
+            tracing::warn!(run_id = %run_id, "spawn_workflow_resume: auto-resume failed: {e}");
+        }
+    })
+}
+
+/// Spawn a background thread to resume a heartbeat-stuck workflow run.
+///
+/// Fires `fire_heartbeat_stuck_failed_notification` on failure so callers do
+/// not need to inline this notification logic.
+///
+/// Returns the thread `JoinHandle` so callers can optionally wait for
+/// completion (production callers may drop it to detach).
+pub fn spawn_heartbeat_resume(p: SpawnHeartbeatResumeParams) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let effective_db = p.db_path.clone().unwrap_or_else(crate::config::db_path);
+        let params = make_resume_params(
+            p.config.clone(),
+            p.run_id.clone(),
+            p.conductor_bin_dir,
+            Some(effective_db.clone()),
+        );
+        if let Err(e) = resume_workflow_standalone(&params) {
+            tracing::warn!(run_id = %p.run_id, "spawn_heartbeat_resume: auto-resume failed: {e}");
+            match crate::db::open_database(&effective_db) {
+                Ok(db) => {
+                    crate::notify::fire_heartbeat_stuck_failed_notification(
+                        &db,
+                        &p.config.notifications,
+                        &p.config.notify.hooks,
+                        &p.run_id,
+                        &p.workflow_name,
+                        p.target_label.as_deref(),
+                        &e.to_string(),
+                    );
+                }
+                Err(db_err) => {
+                    tracing::warn!(
+                        run_id = %p.run_id,
+                        error = %db_err,
+                        "spawn_heartbeat_resume: could not open DB to fire stuck-run notification"
+                    );
+                }
+            }
+        }
+    })
+}
+
+/// Spawn a resume thread for each claimed run ID.
+///
+/// Consolidates the claim-then-spawn loop used by TUI and CLI watchdogs so
+/// the pattern lives in one place.
+pub fn spawn_claimed_runs(
+    claimed: Vec<String>,
+    config: Config,
+    conductor_bin_dir: Option<std::path::PathBuf>,
+) {
+    for run_id in claimed {
+        spawn_workflow_resume(run_id, config.clone(), conductor_bin_dir.clone());
+    }
+}
+
+/// Resume a failed or stalled workflow run from the point of failure.
+///
+/// Loads the workflow definition from the run's `definition_snapshot`, rebuilds
+/// the skip set from completed steps, resets failed steps to pending, and
+/// re-enters the execution loop.
+pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult> {
+    let config = input.config;
+    let db = input.db_path.clone().unwrap_or_else(crate::config::db_path);
+    let raw_conn = crate::db::open_database(&db)?;
+    let shared_conn = Arc::new(std::sync::Mutex::new(raw_conn));
+
+    // Pre-execution phase: validate, reset, and prepare. Lock shared_conn for the
+    // duration so all mutations complete before the FlowEngine takes over.
+    let (wf_run, worktree_path, repo_path, snapshot_string) = {
+        let guard = lock_shared(&shared_conn)?;
+        let conn: &Connection = &guard;
+        let wf_mgr = WorkflowManager::new(conn);
+        let wt_mgr = WorktreeManager::new(conn, config);
+
+        // Load and validate the workflow run
+        let wf_run = wf_mgr
+            .get_workflow_run(input.workflow_run_id)?
+            .ok_or_else(|| {
+                ConductorError::Workflow(format!(
+                    "Workflow run not found: {}",
+                    input.workflow_run_id
+                ))
+            })?;
+
+        validate_resume_preconditions(&wf_run.status, input.restart, input.from_step)?;
+
+        // Load steps for --from-step validation and skip-count logging.
+        // Note: FlowEngine::resume() issues a second get_steps() query after all
+        // DB resets complete, so it reads the accurate post-reset state.
+        let all_steps = wf_mgr.get_workflow_steps(&wf_run.id)?;
+
+        // Validate --from-step early (fail-fast before heavier worktree/snapshot operations)
+        if let Some(from_step) = input.from_step {
+            if !input.restart && !all_steps.iter().any(|s| s.step_name == from_step) {
+                return Err(ConductorError::Workflow(format!(
+                    "Step '{}' not found in workflow run '{}'",
+                    from_step, wf_run.id
+                )));
+            }
+        }
+
+        // Fail early for ephemeral PR runs (no worktree_id, repo_id, or ticket_id).
+        if wf_run.worktree_id.is_none() && wf_run.repo_id.is_none() && wf_run.ticket_id.is_none() {
+            return Err(ConductorError::Workflow(format!(
+            "Workflow run '{}' was an ephemeral PR run with no registered worktree — cannot resume.",
+            wf_run.id
+        )));
+        }
+
+        // Deserialize definition from snapshot
+        let snapshot_string = wf_run
+            .definition_snapshot
+            .as_deref()
+            .ok_or_else(|| {
+                ConductorError::Workflow(format!(
+                    "Workflow run '{}' has no definition snapshot — cannot resume.",
+                    wf_run.id
+                ))
+            })?
+            .to_string();
+
+        // Determine execution paths based on target type.
+        // - Worktree run: look up worktree and derive repo from it.
+        // - Repo/ticket run: look up repo directly (via repo_id or ticket.repo_id).
+        let (worktree_path, _worktree_slug, repo_path) = if let Some(wt_id) =
+            wf_run.worktree_id.as_deref()
+        {
+            let worktree = wt_mgr.get_by_id(wt_id)?;
+            let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&worktree.repo_id)?;
+            if std::path::Path::new(&worktree.path).exists() {
+                (
+                    worktree.path.clone(),
+                    worktree.slug.clone(),
+                    repo.local_path.clone(),
+                )
+            } else {
+                tracing::warn!(
+                    "Worktree path '{}' does not exist; falling back to repo root '{}'",
+                    worktree.path,
+                    repo.local_path
+                );
+                (
+                    repo.local_path.clone(),
+                    String::new(),
+                    repo.local_path.clone(),
+                )
+            }
+        } else {
+            // Resolve repo_id from the run or via the linked ticket.
+            // (The ephemeral guard above ensures at least one FK is set.)
+            let effective_repo_id = if let Some(rid) = wf_run.repo_id.as_deref() {
+                rid.to_string()
+            } else {
+                let tid = wf_run.ticket_id.as_deref().expect("ticket_id is Some when worktree_id and repo_id are both None — enforced by the ephemeral run guard above");
+                crate::tickets::TicketSyncer::new(conn)
+                    .get_by_id(tid)
+                    .map_err(|e| {
+                        ConductorError::Workflow(format!(
+                            "Cannot resolve repo for ticket '{}' during resume: {e}",
+                            tid
+                        ))
+                    })?
+                    .repo_id
+            };
+            let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&effective_repo_id)?;
+            let path = repo.local_path.clone();
+            (path.clone(), String::new(), path)
+        };
+
+        // Warn if any running steps have live subprocesses — terminate_subprocesses
+        // (called inside reset_failed_steps below) will kill them, but the warning
+        // helps diagnose concurrent executor races (see issue #2221).
+        let live_count = wf_mgr.count_live_subprocess_steps(&wf_run.id)?;
+        if live_count > 0 {
+            tracing::warn!(
+                run_id = %wf_run.id,
+                live_count,
+                "resume_workflow: {live_count} running step(s) have live subprocesses — \
+                 terminating before reset"
+            );
+        }
+
+        // Remove orphaned pending steps (registered but never started) before building the
+        // skip set. These rows carry no useful state and would otherwise pollute step history.
+        wf_mgr.delete_orphaned_pending_steps(&wf_run.id)?;
+
+        // Perform DB resets and count how many completed steps will be skipped (for logging).
+        let skip_count: usize = if input.restart {
+            // Restart: clear all step results — skip nothing
+            wf_mgr.reset_failed_steps(&wf_run.id)?;
+            wf_mgr.reset_completed_steps(&wf_run.id)?;
+            0
+        } else {
+            let completed_count = all_steps
+                .iter()
+                .filter(|s| s.status == WorkflowStepStatus::Completed)
+                .count();
+
+            let skip_count = if let Some(from_step) = input.from_step {
+                // Safety: from_step existence was validated above
+                let pos = all_steps
+                    .iter()
+                    .find(|s| s.step_name == from_step)
+                    .expect("from_step validated above")
+                    .position;
+
+                let reset_count = all_steps
+                    .iter()
+                    .filter(|s| s.position >= pos && s.status == WorkflowStepStatus::Completed)
+                    .count();
+                // Reset those steps in DB
+                wf_mgr.reset_steps_from_position(&wf_run.id, pos)?;
+                completed_count - reset_count
+            } else {
+                completed_count
+            };
+
+            // Reset non-completed steps
+            wf_mgr.reset_failed_steps(&wf_run.id)?;
+            skip_count
+        };
+
+        // Reset run status to Running
+        wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Running, None, None)?;
+
+        tracing::info!(
+            "Resuming workflow '{}' (run {}), {} completed steps to skip",
+            wf_run.workflow_name,
+            wf_run.id,
+            skip_count,
+        );
+
+        (wf_run, worktree_path, repo_path, snapshot_string)
+    };
+
+    // -----------------------------------------------------------------------
+    // Build the FlowEngine and execution state — mirrors execute_workflow_standalone.
+    // -----------------------------------------------------------------------
+
+    let rk_def: runkon_flow::dsl::WorkflowDef =
+        serde_json::from_str(&snapshot_string).map_err(|e| {
+            ConductorError::Workflow(format!("Failed to deserialize workflow definition: {e}"))
+        })?;
+
+    let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> = Arc::new(
+        super::persistence_sqlite::SqliteWorkflowPersistence::from_shared_connection(Arc::clone(
+            &shared_conn,
+        )),
+    );
+
+    let action_registry = Arc::new(super::runkon_bridge::build_rk_action_registry(
+        config,
+        Arc::clone(&shared_conn),
+        &db,
+    ));
+
+    let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(
+        Arc::clone(&shared_conn),
+        config,
+        wf_run.repo_id.clone(),
+    ));
+
+    let script_env_provider =
+        super::runkon_bridge::build_rk_script_env_provider(input.conductor_bin_dir.clone(), vec![]);
+
+    let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> =
+        Arc::new(super::runkon_bridge::ConductorChildWorkflowRunner::new(
+            db.clone(),
+            config.clone(),
+            Arc::clone(&shared_conn),
+        ));
+
+    let workflow_name_for_resolver = wf_run.workflow_name.clone();
+    #[allow(clippy::type_complexity)]
+    let schema_resolver: Arc<
+        dyn Fn(
+                &str,
+                &str,
+                &str,
+            )
+                -> runkon_flow::engine_error::Result<runkon_flow::output_schema::OutputSchema>
+            + Send
+            + Sync,
+    > = Arc::new(move |working_dir, repo_path, name| {
+        let schema_ref = crate::schema_config::SchemaRef::from_str_value(name);
+        crate::schema_config::load_schema(
+            working_dir,
+            repo_path,
+            &schema_ref,
+            Some(&workflow_name_for_resolver),
+        )
+        .map(super::runkon_bridge::core_schema_to_rk)
+        .map_err(|e| runkon_flow::engine_error::EngineError::Workflow(e.to_string()))
+    });
+
+    let mut rk_state = runkon_flow::engine::ExecutionState {
+        persistence: Arc::clone(&persistence),
+        action_registry,
+        script_env_provider,
+        workflow_run_id: wf_run.id.clone(),
+        workflow_name: wf_run.workflow_name.clone(),
+        worktree_ctx: runkon_flow::engine::WorktreeContext {
+            worktree_id: wf_run.worktree_id.clone(),
+            working_dir: worktree_path.clone(),
+            repo_path,
+            ticket_id: wf_run.ticket_id.clone(),
+            repo_id: wf_run.repo_id.clone(),
+            extra_plugin_dirs: vec![],
+        },
+        model: input.model.map(String::from),
+        exec_config: runkon_flow::types::WorkflowExecConfig {
+            shutdown: input.shutdown.clone(),
+            ..runkon_flow::types::WorkflowExecConfig::default()
+        },
+        inputs: wf_run.inputs.clone(),
+        parent_run_id: wf_run.parent_run_id.clone(),
+        depth: 0,
+        target_label: wf_run.target_label.clone(),
+        step_results: HashMap::new(),
+        contexts: Vec::new(),
+        position: 0,
+        all_succeeded: true,
+        total_cost: 0.0,
+        total_turns: 0,
+        total_duration_ms: 0,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        total_cache_read_input_tokens: 0,
+        total_cache_creation_input_tokens: 0,
+        last_gate_feedback: None,
+        block_output: None,
+        block_with: Vec::new(),
+        resume_ctx: None,
+        default_bot_name: wf_run.default_bot_name.clone(),
+        triggered_by_hook: wf_run.is_triggered_by_hook(),
+        schema_resolver: Some(schema_resolver),
+        child_runner: Some(child_runner),
+        last_heartbeat_at: runkon_flow::engine::ExecutionState::new_heartbeat(),
+        registry: item_registry,
+        event_sinks: Arc::from(input.event_sinks.clone()),
+        cancellation: runkon_flow::CancellationToken::new(),
+        current_execution_id: Arc::new(std::sync::Mutex::new(None)),
+    };
+
+    let engine = super::runkon_gate_bridge::register_rk_gate_resolvers(
+        runkon_flow::FlowEngineBuilder::new().with_event_sinks(&rk_state.event_sinks),
+        Arc::clone(&persistence),
+        worktree_path,
+        wf_run.default_bot_name.clone(),
+        config.clone(),
+        db,
+    )
+    .build()
+    .map_err(|e| {
+        ConductorError::Workflow(format!(
+            "failed to build engine for '{}': {e}",
+            wf_run.workflow_name
+        ))
+    })?;
+
+    let rk_result = engine.resume(&rk_def, &mut rk_state).map_err(|e| {
+        ConductorError::Workflow(format!(
+            "workflow '{}' resume failed: {e}",
+            wf_run.workflow_name
+        ))
+    })?;
+
+    Ok(super::rk_types::rk_workflow_result_to_core(rk_result))
+}

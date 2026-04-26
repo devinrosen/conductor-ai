@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::config::Config;
 use crate::error::Result;
-use crate::workflow_dsl::ForeachScope;
+use runkon_flow::dsl::ForeachScope;
 
 pub mod repos;
 pub mod tickets;
@@ -108,7 +108,7 @@ mod tests {
         fn items(
             &self,
             _ctx: &ProviderContext<'_>,
-            _scope: Option<&crate::workflow_dsl::ForeachScope>,
+            _scope: Option<&runkon_flow::dsl::ForeachScope>,
             _filter: &HashMap<String, String>,
             _existing_set: &HashSet<String>,
         ) -> Result<Vec<FanOutItem>> {

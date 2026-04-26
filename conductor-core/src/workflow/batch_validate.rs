@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use crate::agent_config::{self, AgentSpec};
 use crate::prompt_config;
 use crate::schema_config;
-use crate::workflow_dsl::{
+use runkon_flow::dsl::{
     default_skills_dir, detect_workflow_cycles, make_script_resolver, validate_script_steps,
     validate_workflow_semantics, AgentRef, ValidationError, WorkflowDef,
 };
@@ -266,7 +266,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow_dsl::parse_workflow_str;
+    use runkon_flow::dsl::parse_workflow_str;
 
     /// Build a minimal WorkflowDef by parsing a .wf string.
     fn parse_wf(src: &str) -> WorkflowDef {
