@@ -311,17 +311,15 @@ impl<'a> WorkflowManager<'a> {
             let gate_step = gate_steps.get(&run_id);
             let gate_timed_out = gate_step.is_some_and(|step| {
                 let timeout_secs = step.gate_timeout.as_deref().and_then(|s| {
-                    match runkon_flow::dsl::parse_duration_str(s) {
-                        Ok(n) => i64::try_from(n).ok(),
-                        Err(_) => {
-                            tracing::warn!(
-                                run_id = %run_id,
-                                gate_timeout = %s,
-                                "gate_timeout value could not be parsed — timeout will not be enforced"
-                            );
-                            None
-                        }
+                    let result = crate::workflow::helpers::parse_gate_timeout_secs(s);
+                    if result.is_none() {
+                        tracing::warn!(
+                            run_id = %run_id,
+                            gate_timeout = %s,
+                            "gate_timeout value could not be parsed — timeout will not be enforced"
+                        );
                     }
+                    result
                 });
                 let started_at = step.started_at.as_deref().and_then(|s| {
                     match DateTime::parse_from_rfc3339(s) {

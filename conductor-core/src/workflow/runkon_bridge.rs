@@ -629,7 +629,181 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Helper builder functions
+// 6. PersistenceAdapter
+// ---------------------------------------------------------------------------
+
+/// Bridges the conductor-core `WorkflowPersistence` trait to the runkon-flow
+/// `WorkflowPersistence` trait, performing type conversion at the boundary.
+///
+/// This is the single place in conductor-core that implements
+/// `runkon_flow::traits::persistence::WorkflowPersistence`; all other modules
+/// interact with the core trait only.
+pub(super) struct PersistenceAdapter(
+    pub(super) Arc<dyn crate::workflow::persistence::WorkflowPersistence>,
+);
+
+impl runkon_flow::traits::persistence::WorkflowPersistence for PersistenceAdapter {
+    fn create_run(
+        &self,
+        new_run: runkon_flow::traits::persistence::NewRun,
+    ) -> Result<runkon_flow::types::WorkflowRun, EngineError> {
+        let core_run = self.0.create_run(new_run.into())?;
+        Ok(crate::workflow::rk_types::run_to_rk(core_run))
+    }
+
+    fn get_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<runkon_flow::types::WorkflowRun>, EngineError> {
+        let result = self.0.get_run(run_id)?;
+        Ok(result.map(crate::workflow::rk_types::run_to_rk))
+    }
+
+    fn list_active_runs(
+        &self,
+        statuses: &[runkon_flow::status::WorkflowRunStatus],
+    ) -> Result<Vec<runkon_flow::types::WorkflowRun>, EngineError> {
+        let core_statuses: Vec<crate::workflow::status::WorkflowRunStatus> =
+            statuses.iter().map(|s| s.clone().into()).collect();
+        let result = self.0.list_active_runs(&core_statuses)?;
+        Ok(result
+            .into_iter()
+            .map(crate::workflow::rk_types::run_to_rk)
+            .collect())
+    }
+
+    fn update_run_status(
+        &self,
+        run_id: &str,
+        status: runkon_flow::status::WorkflowRunStatus,
+        result_summary: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<(), EngineError> {
+        self.0
+            .update_run_status(run_id, status.into(), result_summary, error)
+    }
+
+    fn insert_step(
+        &self,
+        new_step: runkon_flow::traits::persistence::NewStep,
+    ) -> Result<String, EngineError> {
+        self.0.insert_step(new_step.into())
+    }
+
+    fn update_step(
+        &self,
+        step_id: &str,
+        update: runkon_flow::traits::persistence::StepUpdate,
+    ) -> Result<(), EngineError> {
+        self.0.update_step(step_id, update.into())
+    }
+
+    fn get_steps(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<runkon_flow::types::WorkflowRunStep>, EngineError> {
+        let result = self.0.get_steps(run_id)?;
+        Ok(result
+            .into_iter()
+            .map(crate::workflow::rk_types::step_to_rk)
+            .collect())
+    }
+
+    fn insert_fan_out_item(
+        &self,
+        step_run_id: &str,
+        item_type: &str,
+        item_id: &str,
+        item_ref: &str,
+    ) -> Result<String, EngineError> {
+        self.0
+            .insert_fan_out_item(step_run_id, item_type, item_id, item_ref)
+    }
+
+    fn update_fan_out_item(
+        &self,
+        item_id: &str,
+        update: runkon_flow::traits::persistence::FanOutItemUpdate,
+    ) -> Result<(), EngineError> {
+        self.0.update_fan_out_item(item_id, update.into())
+    }
+
+    fn get_fan_out_items(
+        &self,
+        step_run_id: &str,
+        status_filter: Option<runkon_flow::traits::persistence::FanOutItemStatus>,
+    ) -> Result<Vec<runkon_flow::types::FanOutItemRow>, EngineError> {
+        let core_filter = status_filter.map(Into::into);
+        let result = self.0.get_fan_out_items(step_run_id, core_filter)?;
+        Ok(result
+            .into_iter()
+            .map(crate::workflow::rk_types::fan_out_item_to_rk)
+            .collect())
+    }
+
+    fn get_gate_approval(
+        &self,
+        step_id: &str,
+    ) -> Result<runkon_flow::traits::persistence::GateApprovalState, EngineError> {
+        let result = self.0.get_gate_approval(step_id)?;
+        Ok(crate::workflow::rk_types::gate_approval_to_rk(result))
+    }
+
+    fn approve_gate(
+        &self,
+        step_id: &str,
+        approved_by: &str,
+        feedback: Option<&str>,
+        selections: Option<&[String]>,
+    ) -> Result<(), EngineError> {
+        self.0
+            .approve_gate(step_id, approved_by, feedback, selections)
+    }
+
+    fn reject_gate(
+        &self,
+        step_id: &str,
+        rejected_by: &str,
+        feedback: Option<&str>,
+    ) -> Result<(), EngineError> {
+        self.0.reject_gate(step_id, rejected_by, feedback)
+    }
+
+    fn is_run_cancelled(&self, run_id: &str) -> Result<bool, EngineError> {
+        self.0.is_run_cancelled(run_id)
+    }
+
+    fn tick_heartbeat(&self, run_id: &str) -> Result<(), EngineError> {
+        self.0.tick_heartbeat(run_id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn persist_metrics(
+        &self,
+        run_id: &str,
+        input_tokens: i64,
+        output_tokens: i64,
+        cache_read_input_tokens: i64,
+        cache_creation_input_tokens: i64,
+        cost_usd: f64,
+        num_turns: i64,
+        duration_ms: i64,
+    ) -> Result<(), EngineError> {
+        self.0.persist_metrics(
+            run_id,
+            input_tokens,
+            output_tokens,
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
+            cost_usd,
+            num_turns,
+            duration_ms,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 7. Helper builder functions
 // ---------------------------------------------------------------------------
 
 /// Build a runkon-flow `ActionRegistry` backed by a `RkActionExecutorAdapter`

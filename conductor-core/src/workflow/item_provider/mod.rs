@@ -34,7 +34,6 @@ pub trait ItemProvider: Send + Sync {
         existing_set: &HashSet<String>,
     ) -> Result<Vec<FanOutItem>>;
 
-    #[allow(dead_code)]
     fn dependencies(
         &self,
         conn: &Connection,
@@ -45,7 +44,6 @@ pub trait ItemProvider: Send + Sync {
         Ok(vec![])
     }
 
-    #[allow(dead_code)]
     fn supports_ordered(&self) -> bool {
         false
     }

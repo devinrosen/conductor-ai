@@ -86,7 +86,12 @@ macro_rules! impl_pr_gate_resolver {
                     db_path: &self.db_path,
                 };
                 let result = CoreGateResolver::poll(&self.inner, run_id, &core_params, &ctx)
-                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                    .map_err(|e| {
+                        EngineError::Workflow(format!(
+                            "pr gate '{}' poll failed: {e}",
+                            $gate_type_str
+                        ))
+                    })?;
                 Ok(gate_poll_to_rk(result))
             }
         }

@@ -1,5 +1,16 @@
 use super::action_executor::{ActionParams, ExecutionContext};
 
+/// Parse a gate timeout string (e.g. `"1h"`, `"30m"`) into seconds.
+///
+/// Wraps `runkon_flow::dsl::parse_duration_str` so callers outside the bridge
+/// layer do not import runkon-flow directly.
+pub(crate) fn parse_gate_timeout_secs(s: &str) -> Option<i64> {
+    match runkon_flow::dsl::parse_duration_str(s) {
+        Ok(n) => i64::try_from(n).ok(),
+        Err(_) => None,
+    }
+}
+
 pub(super) fn load_agent_and_build_prompt(
     ectx: &ExecutionContext,
     params: &ActionParams,

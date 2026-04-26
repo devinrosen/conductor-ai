@@ -184,6 +184,23 @@ pub trait WorkflowPersistence: Send + Sync {
         rejected_by: &str,
         feedback: Option<&str>,
     ) -> Result<(), EngineError>;
+
+    // --- Engine lifecycle hooks ---
+
+    fn is_run_cancelled(&self, run_id: &str) -> Result<bool, EngineError>;
+    fn tick_heartbeat(&self, run_id: &str) -> Result<(), EngineError>;
+    #[allow(clippy::too_many_arguments)]
+    fn persist_metrics(
+        &self,
+        run_id: &str,
+        input_tokens: i64,
+        output_tokens: i64,
+        cache_read_input_tokens: i64,
+        cache_creation_input_tokens: i64,
+        cost_usd: f64,
+        num_turns: i64,
+        duration_ms: i64,
+    ) -> Result<(), EngineError>;
 }
 
 #[cfg(test)]

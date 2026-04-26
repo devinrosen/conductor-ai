@@ -393,6 +393,29 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         step.ended_at = Some(now);
         Ok(())
     }
+
+    fn is_run_cancelled(&self, _run_id: &str) -> Result<bool, EngineError> {
+        Ok(false)
+    }
+
+    fn tick_heartbeat(&self, _run_id: &str) -> Result<(), EngineError> {
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn persist_metrics(
+        &self,
+        _run_id: &str,
+        _input_tokens: i64,
+        _output_tokens: i64,
+        _cache_read_input_tokens: i64,
+        _cache_creation_input_tokens: i64,
+        _cost_usd: f64,
+        _num_turns: i64,
+        _duration_ms: i64,
+    ) -> Result<(), EngineError> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

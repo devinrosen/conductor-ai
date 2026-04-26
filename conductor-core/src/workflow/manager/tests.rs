@@ -4419,6 +4419,26 @@ fn get_gate_approval_state_returns_rejected_after_rejection() {
 }
 
 #[test]
+fn gate_kind_human_approval_roundtrips_through_db() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_worktree_run(&conn, "w1");
+
+    let step_id = mgr
+        .insert_step(&run.id, "gate-step", "gate", false, 0, 0)
+        .unwrap();
+    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
+        .unwrap();
+
+    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    assert_eq!(
+        step.gate_type,
+        Some(GateKind::HumanApproval),
+        "GateKind::HumanApproval must survive a write/read DB roundtrip"
+    );
+}
+
+#[test]
 fn get_gate_approval_state_handles_unrecognised_status_without_panic() {
     use rusqlite::named_params;
     let conn = setup_db();

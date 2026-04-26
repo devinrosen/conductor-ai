@@ -208,157 +208,6 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
     ) -> Result<(), EngineError> {
         self.with_manager(|mgr| mgr.reject_gate(step_id, rejected_by, feedback))
     }
-}
-
-// ---------------------------------------------------------------------------
-// Type converters between runkon-flow and conductor-core persistence types
-// ---------------------------------------------------------------------------
-// Re-exported from rk_types so call-sites in this file continue to use the
-// `rk_conv::*` name without modification.
-pub(super) use super::rk_types as rk_conv;
-
-// ---------------------------------------------------------------------------
-// runkon-flow WorkflowPersistence impl — delegates to the core trait impl
-// ---------------------------------------------------------------------------
-
-impl runkon_flow::traits::persistence::WorkflowPersistence for SqliteWorkflowPersistence {
-    fn create_run(
-        &self,
-        new_run: runkon_flow::traits::persistence::NewRun,
-    ) -> Result<runkon_flow::types::WorkflowRun, EngineError> {
-        let core_run = <Self as WorkflowPersistence>::create_run(self, new_run.into())?;
-        Ok(rk_conv::run_to_rk(core_run))
-    }
-
-    fn get_run(
-        &self,
-        run_id: &str,
-    ) -> Result<Option<runkon_flow::types::WorkflowRun>, EngineError> {
-        let result = <Self as WorkflowPersistence>::get_run(self, run_id)?;
-        Ok(result.map(rk_conv::run_to_rk))
-    }
-
-    fn list_active_runs(
-        &self,
-        statuses: &[runkon_flow::status::WorkflowRunStatus],
-    ) -> Result<Vec<runkon_flow::types::WorkflowRun>, EngineError> {
-        let core_statuses: Vec<crate::workflow::status::WorkflowRunStatus> = statuses
-            .iter()
-            .map(|s| crate::workflow::status::WorkflowRunStatus::from(s.clone()))
-            .collect();
-        let result = <Self as WorkflowPersistence>::list_active_runs(self, &core_statuses)?;
-        Ok(result.into_iter().map(rk_conv::run_to_rk).collect())
-    }
-
-    fn update_run_status(
-        &self,
-        run_id: &str,
-        status: runkon_flow::status::WorkflowRunStatus,
-        result_summary: Option<&str>,
-        error: Option<&str>,
-    ) -> Result<(), EngineError> {
-        <Self as WorkflowPersistence>::update_run_status(
-            self,
-            run_id,
-            status.into(),
-            result_summary,
-            error,
-        )
-    }
-
-    fn insert_step(
-        &self,
-        new_step: runkon_flow::traits::persistence::NewStep,
-    ) -> Result<String, EngineError> {
-        <Self as WorkflowPersistence>::insert_step(self, new_step.into())
-    }
-
-    fn update_step(
-        &self,
-        step_id: &str,
-        update: runkon_flow::traits::persistence::StepUpdate,
-    ) -> Result<(), EngineError> {
-        <Self as WorkflowPersistence>::update_step(self, step_id, update.into())
-    }
-
-    fn get_steps(
-        &self,
-        run_id: &str,
-    ) -> Result<Vec<runkon_flow::types::WorkflowRunStep>, EngineError> {
-        let result = <Self as WorkflowPersistence>::get_steps(self, run_id)?;
-        Ok(result.into_iter().map(rk_conv::step_to_rk).collect())
-    }
-
-    fn insert_fan_out_item(
-        &self,
-        step_run_id: &str,
-        item_type: &str,
-        item_id: &str,
-        item_ref: &str,
-    ) -> Result<String, EngineError> {
-        <Self as WorkflowPersistence>::insert_fan_out_item(
-            self,
-            step_run_id,
-            item_type,
-            item_id,
-            item_ref,
-        )
-    }
-
-    fn update_fan_out_item(
-        &self,
-        item_id: &str,
-        update: runkon_flow::traits::persistence::FanOutItemUpdate,
-    ) -> Result<(), EngineError> {
-        <Self as WorkflowPersistence>::update_fan_out_item(self, item_id, update.into())
-    }
-
-    fn get_fan_out_items(
-        &self,
-        step_run_id: &str,
-        status_filter: Option<runkon_flow::traits::persistence::FanOutItemStatus>,
-    ) -> Result<Vec<runkon_flow::types::FanOutItemRow>, EngineError> {
-        let core_filter = status_filter.map(Into::into);
-        let result =
-            <Self as WorkflowPersistence>::get_fan_out_items(self, step_run_id, core_filter)?;
-        Ok(result
-            .into_iter()
-            .map(rk_conv::fan_out_item_to_rk)
-            .collect())
-    }
-
-    fn get_gate_approval(
-        &self,
-        step_id: &str,
-    ) -> Result<runkon_flow::traits::persistence::GateApprovalState, EngineError> {
-        let result = <Self as WorkflowPersistence>::get_gate_approval(self, step_id)?;
-        Ok(rk_conv::gate_approval_to_rk(result))
-    }
-
-    fn approve_gate(
-        &self,
-        step_id: &str,
-        approved_by: &str,
-        feedback: Option<&str>,
-        selections: Option<&[String]>,
-    ) -> Result<(), EngineError> {
-        <Self as WorkflowPersistence>::approve_gate(
-            self,
-            step_id,
-            approved_by,
-            feedback,
-            selections,
-        )
-    }
-
-    fn reject_gate(
-        &self,
-        step_id: &str,
-        rejected_by: &str,
-        feedback: Option<&str>,
-    ) -> Result<(), EngineError> {
-        <Self as WorkflowPersistence>::reject_gate(self, step_id, rejected_by, feedback)
-    }
 
     fn is_run_cancelled(&self, run_id: &str) -> Result<bool, EngineError> {
         self.with_manager(|mgr| mgr.is_run_cancelled(run_id))
@@ -387,8 +236,8 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for SqliteWorkflowPer
                 output_tokens,
                 cache_read_input_tokens,
                 cache_creation_input_tokens,
-                num_turns, // rk pos 7 → core pos 6
-                cost_usd,  // rk pos 6 → core pos 7
+                num_turns, // positional swap: rk cost_usd pos 6 maps to core pos 7
+                cost_usd,
                 duration_ms,
                 None,
             )
@@ -555,10 +404,7 @@ mod tests {
         let run = p.create_run(make_new_run(parent_id)).unwrap();
         p.update_run_status(&run.id, WorkflowRunStatus::Cancelled, None, None)
             .unwrap();
-        assert!(
-            runkon_flow::traits::persistence::WorkflowPersistence::is_run_cancelled(&p, &run.id)
-                .unwrap()
-        );
+        assert!(p.is_run_cancelled(&run.id).unwrap());
     }
 
     #[test]
@@ -567,10 +413,7 @@ mod tests {
         let run = p.create_run(make_new_run(parent_id)).unwrap();
         p.update_run_status(&run.id, WorkflowRunStatus::Cancelling, None, None)
             .unwrap();
-        assert!(
-            runkon_flow::traits::persistence::WorkflowPersistence::is_run_cancelled(&p, &run.id)
-                .unwrap()
-        );
+        assert!(p.is_run_cancelled(&run.id).unwrap());
     }
 
     #[test]
@@ -579,52 +422,32 @@ mod tests {
         let run = p.create_run(make_new_run(parent_id)).unwrap();
         p.update_run_status(&run.id, WorkflowRunStatus::Running, None, None)
             .unwrap();
-        assert!(
-            !runkon_flow::traits::persistence::WorkflowPersistence::is_run_cancelled(&p, &run.id)
-                .unwrap()
-        );
+        assert!(!p.is_run_cancelled(&run.id).unwrap());
     }
 
     #[test]
     fn is_run_cancelled_returns_false_for_nonexistent_run() {
         let (p, _) = make_persistence();
-        assert!(
-            !runkon_flow::traits::persistence::WorkflowPersistence::is_run_cancelled(
-                &p,
-                "nonexistent-run-id"
-            )
-            .unwrap()
-        );
+        assert!(!p.is_run_cancelled("nonexistent-run-id").unwrap());
     }
 
-    /// `persist_metrics` swaps `cost_usd` (rk pos 6) and `num_turns` (rk pos 7) when
+    /// `persist_metrics` swaps `cost_usd` (pos 6) and `num_turns` (pos 7) when
     /// forwarding to `persist_workflow_metrics`, which expects `total_turns` before
     /// `total_cost_usd`. This test guards against a future signature drift that would
     /// silently swap the columns in the DB.
     #[test]
     fn persist_metrics_maps_cost_and_turns_to_correct_columns() {
         let (p, parent_id) = make_persistence();
-        // Create the run via the Core trait before bringing the Rk trait into scope
-        // to avoid ambiguous `create_run` calls.
-        let run_id = {
-            let run = WorkflowPersistence::create_run(&p, make_new_run(parent_id)).unwrap();
-            run.id
-        };
+        let run = p.create_run(make_new_run(parent_id)).unwrap();
 
         // Use distinguishable values so a swap is immediately visible.
         let cost_usd = 42.5_f64;
         let num_turns = 7_i64;
 
-        // Explicitly disambiguate using the runkon-flow trait path.
-        runkon_flow::traits::persistence::WorkflowPersistence::persist_metrics(
-            &p, &run_id, 0, 0, 0, 0, cost_usd, num_turns, 1000,
-        )
-        .unwrap();
+        p.persist_metrics(&run.id, 0, 0, 0, 0, cost_usd, num_turns, 1000)
+            .unwrap();
 
-        let fetched = runkon_flow::traits::persistence::WorkflowPersistence::get_run(&p, &run_id)
-            .unwrap()
-            .expect("run should exist");
-
+        let fetched = p.get_run(&run.id).unwrap().expect("run should exist");
         assert_eq!(
             fetched.total_cost_usd,
             Some(cost_usd),
@@ -637,15 +460,13 @@ mod tests {
         );
     }
 
-    /// `gate_approval_to_rk` must preserve `feedback` on the `Approved` variant
-    /// through the rk-trait path — a field swap would make `feedback` return None.
+    /// `get_gate_approval` must preserve `feedback` on the `Approved` variant.
     #[test]
-    fn get_gate_approval_rk_approved_preserves_feedback() {
+    fn get_gate_approval_approved_preserves_feedback() {
         let (p, parent_id) = make_persistence();
-        let run = WorkflowPersistence::create_run(&p, make_new_run(parent_id)).unwrap();
-        let step_id = WorkflowPersistence::insert_step(
-            &p,
-            NewStep {
+        let run = p.create_run(make_new_run(parent_id)).unwrap();
+        let step_id = p
+            .insert_step(NewStep {
                 workflow_run_id: run.id,
                 step_name: "approval-gate".to_string(),
                 role: "gate".to_string(),
@@ -653,25 +474,22 @@ mod tests {
                 position: 0,
                 iteration: 0,
                 retry_count: None,
-            },
-        )
-        .unwrap();
+            })
+            .unwrap();
 
-        WorkflowPersistence::approve_gate(&p, &step_id, "human", Some("lgtm"), None).unwrap();
+        p.approve_gate(&step_id, "human", Some("lgtm"), None)
+            .unwrap();
 
-        let state =
-            runkon_flow::traits::persistence::WorkflowPersistence::get_gate_approval(&p, &step_id)
-                .unwrap();
-
+        let state = p.get_gate_approval(&step_id).unwrap();
         match state {
-            runkon_flow::traits::persistence::GateApprovalState::Approved {
+            GateApprovalState::Approved {
                 feedback,
                 selections,
             } => {
                 assert_eq!(
                     feedback,
                     Some("lgtm".to_string()),
-                    "feedback must survive gate_approval_to_rk conversion"
+                    "feedback must survive the approve_gate/get_gate_approval roundtrip"
                 );
                 assert!(
                     selections.is_none(),

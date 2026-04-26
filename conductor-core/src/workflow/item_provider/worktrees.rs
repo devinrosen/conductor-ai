@@ -64,9 +64,12 @@ impl ItemProvider for WorktreesProvider {
             .collect();
 
         if let Some(want_open_pr) = wt_scope_opt.and_then(|s| s.has_open_pr) {
-            let repo = crate::repo::RepoManager::new(ctx.conn, ctx.config).get_by_id(repo_id)?;
-            let open_prs = crate::github::list_open_prs(&repo.remote_url)?;
-            candidates = filter_by_open_pr(candidates, want_open_pr, open_prs);
+            if !candidates.is_empty() {
+                let repo =
+                    crate::repo::RepoManager::new(ctx.conn, ctx.config).get_by_id(repo_id)?;
+                let open_prs = crate::github::list_open_prs(&repo.remote_url)?;
+                candidates = filter_by_open_pr(candidates, want_open_pr, open_prs);
+            }
         }
 
         Ok(candidates
