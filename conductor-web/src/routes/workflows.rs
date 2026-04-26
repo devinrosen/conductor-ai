@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -1829,10 +1829,16 @@ fn find_waiting_gate_or_err(
 )]
 /// POST /api/workflows/runs/{id}/gate/approve
 pub async fn approve_gate(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(req): Json<GateActionRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    if !peer.ip().is_loopback() {
+        return Err(ApiError::Core(conductor_core::error::ConductorError::InvalidInput(
+            "gate approval is only permitted from localhost".to_string(),
+        )));
+    }
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
 
@@ -1874,9 +1880,15 @@ pub async fn approve_gate(
 )]
 /// POST /api/workflows/runs/{id}/gate/reject
 pub async fn reject_gate(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    if !peer.ip().is_loopback() {
+        return Err(ApiError::Core(conductor_core::error::ConductorError::InvalidInput(
+            "gate rejection is only permitted from localhost".to_string(),
+        )));
+    }
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
 

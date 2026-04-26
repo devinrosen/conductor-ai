@@ -45,6 +45,12 @@ pub use runkon_flow::dsl::{
     WorkflowDef, WorkflowNode, WorkflowTrigger, WorkflowWarning, MAX_WORKFLOW_DEPTH,
 };
 
+/// Conductor-native alias for the parsed workflow DSL type.
+///
+/// Callers should prefer this name over `runkon_flow::dsl::WorkflowDef` or the
+/// re-exported `WorkflowDef`, which both leak the runkon-flow crate dependency.
+pub type WorkflowDefinition = runkon_flow::dsl::WorkflowDef;
+
 // Re-export batch validation from the workflow layer (not DSL).
 pub use batch_validate::{
     validate_workflows_batch, BatchValidationResult, BatchValidationWarning,
@@ -83,7 +89,7 @@ pub use status::{WorkflowRunStatus, WorkflowStepStatus};
 pub use types::SpawnHeartbeatResumeParams;
 pub use types::{
     resolve_conductor_bin_dir, ActiveWorkflowCounts, BlockedOn, ContextEntry, GateAnalyticsRow,
-    MetadataEntry, PendingGateAnalyticsRow, PendingGateRow, RunIdSlot, SpikeBaseline,
+    GateKind, MetadataEntry, PendingGateAnalyticsRow, PendingGateRow, RunIdSlot, SpikeBaseline,
     StepFailureHeatmapRow, StepResult, StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity,
     WorkflowExecConfig, WorkflowExecInput, WorkflowExecStandalone, WorkflowFailureRateTrendRow,
     WorkflowPercentiles, WorkflowRegressionSignal, WorkflowResult, WorkflowResumeInput,

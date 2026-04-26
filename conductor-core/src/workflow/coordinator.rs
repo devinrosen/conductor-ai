@@ -1004,3 +1004,153 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
 
     Ok(super::rk_types::rk_workflow_result_to_core(rk_result))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use runkon_flow::dsl::{InputDecl, InputType, WorkflowDef, WorkflowTrigger};
+    use std::collections::HashMap;
+
+    // -------------------------------------------------------------------------
+    // apply_workflow_input_defaults
+    // -------------------------------------------------------------------------
+
+    fn make_wf(inputs: Vec<InputDecl>) -> WorkflowDef {
+        WorkflowDef {
+            name: "test-wf".to_string(),
+            title: None,
+            description: String::new(),
+            trigger: WorkflowTrigger::Manual,
+            targets: vec![],
+            group: None,
+            inputs,
+            body: vec![],
+            always: vec![],
+            source_path: String::new(),
+        }
+    }
+
+    fn input_decl(
+        name: &str,
+        required: bool,
+        input_type: InputType,
+        default: Option<&str>,
+    ) -> InputDecl {
+        InputDecl {
+            name: name.to_string(),
+            required,
+            input_type,
+            default: default.map(str::to_string),
+            description: None,
+        }
+    }
+
+    #[test]
+    fn apply_defaults_missing_required_returns_error() {
+        let wf = make_wf(vec![input_decl("ticket", true, InputType::String, None)]);
+        let mut inputs = HashMap::new();
+        let err = apply_workflow_input_defaults(&wf, &mut inputs).unwrap_err();
+        assert!(
+            err.to_string().contains("Missing required input: 'ticket'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn apply_defaults_present_required_ok() {
+        let wf = make_wf(vec![input_decl("ticket", true, InputType::String, None)]);
+        let mut inputs = HashMap::from([("ticket".to_string(), "PROJ-1".to_string())]);
+        apply_workflow_input_defaults(&wf, &mut inputs).expect("should succeed");
+    }
+
+    #[test]
+    fn apply_defaults_inserts_default_when_key_absent() {
+        let wf = make_wf(vec![input_decl(
+            "env",
+            false,
+            InputType::String,
+            Some("staging"),
+        )]);
+        let mut inputs = HashMap::new();
+        apply_workflow_input_defaults(&wf, &mut inputs).expect("should succeed");
+        assert_eq!(inputs.get("env").map(String::as_str), Some("staging"));
+    }
+
+    #[test]
+    fn apply_defaults_does_not_override_existing_value() {
+        let wf = make_wf(vec![input_decl(
+            "env",
+            false,
+            InputType::String,
+            Some("staging"),
+        )]);
+        let mut inputs = HashMap::from([("env".to_string(), "production".to_string())]);
+        apply_workflow_input_defaults(&wf, &mut inputs).expect("should succeed");
+        assert_eq!(inputs.get("env").map(String::as_str), Some("production"));
+    }
+
+    #[test]
+    fn apply_defaults_boolean_input_defaults_to_false() {
+        let wf = make_wf(vec![input_decl("dry_run", false, InputType::Boolean, None)]);
+        let mut inputs = HashMap::new();
+        apply_workflow_input_defaults(&wf, &mut inputs).expect("should succeed");
+        assert_eq!(inputs.get("dry_run").map(String::as_str), Some("false"));
+    }
+
+    // -------------------------------------------------------------------------
+    // validate_resume_preconditions
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn validate_resume_completed_without_restart_errors() {
+        let err =
+            validate_resume_preconditions(&WorkflowRunStatus::Completed, false, None).unwrap_err();
+        assert!(
+            err.to_string().contains("Cannot resume a completed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_resume_completed_with_restart_ok() {
+        validate_resume_preconditions(&WorkflowRunStatus::Completed, true, None)
+            .expect("restart on completed should be allowed");
+    }
+
+    #[test]
+    fn validate_resume_running_errors() {
+        let err =
+            validate_resume_preconditions(&WorkflowRunStatus::Running, false, None).unwrap_err();
+        assert!(
+            err.to_string().contains("already running"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_resume_cancelled_errors() {
+        let err =
+            validate_resume_preconditions(&WorkflowRunStatus::Cancelled, false, None).unwrap_err();
+        assert!(
+            err.to_string().contains("Cannot resume a cancelled"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_resume_restart_with_from_step_errors() {
+        let err =
+            validate_resume_preconditions(&WorkflowRunStatus::Failed, true, Some("step-2"))
+                .unwrap_err();
+        assert!(
+            err.to_string().contains("Cannot use --restart and --from-step"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_resume_failed_without_restart_ok() {
+        validate_resume_preconditions(&WorkflowRunStatus::Failed, false, None)
+            .expect("resuming a failed run should be allowed");
+    }
+}

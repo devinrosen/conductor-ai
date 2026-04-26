@@ -105,7 +105,13 @@ impl GitHubTokenCache {
         if bot_name.is_none() && config.github.app.is_none() {
             return None;
         }
-        let mut cache = self.cache.lock().expect("token cache mutex poisoned");
+        let mut cache = match self.cache.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                tracing::warn!("token cache mutex poisoned; skipping token cache");
+                return None;
+            }
+        };
         let needs_refresh = cache
             .as_ref()
             .map(|(cached_token, fetched_at)| {

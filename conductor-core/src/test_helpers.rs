@@ -44,6 +44,24 @@ pub fn make_action_params(schema: Option<crate::schema_config::OutputSchema>) ->
     }
 }
 
+/// Build `ActionParams` with a specific name for dispatch tests.
+///
+/// The `name` field controls which executor the `ActionRegistry` routes to;
+/// tests that verify named-executor dispatch must use the same name here as
+/// the executor's `name()` implementation.
+pub fn make_params(name: &str) -> ActionParams {
+    ActionParams {
+        name: name.to_string(),
+        inputs: std::collections::HashMap::new(),
+        retries_remaining: 0,
+        retry_error: None,
+        snippets: vec![],
+        dry_run: false,
+        gate_feedback: None,
+        schema: None,
+    }
+}
+
 /// Opens an in-memory SQLite database with migrations applied. No seed data is inserted.
 pub fn create_test_conn() -> Connection {
     let conn = Connection::open_in_memory().unwrap();

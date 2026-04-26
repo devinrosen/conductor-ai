@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::error::Result;
 use runkon_flow::dsl::ForeachScope;
 
-use super::{FanOutItem, ItemProvider, ProviderContext};
+use super::{collect_fan_out_items, FanOutItem, ItemProvider, ProviderContext};
 
 pub struct WorkflowRunsProvider;
 
@@ -36,15 +36,16 @@ impl ItemProvider for WorkflowRunsProvider {
         let wf_mgr = crate::workflow::manager::WorkflowManager::new(ctx.conn);
         let rows = wf_mgr.list_runs_by_status(&statuses, workflow_name_filter)?;
 
-        Ok(rows
-            .into_iter()
-            .filter(|(id, _)| !existing_set.contains(id))
-            .map(|(id, wf_name)| FanOutItem {
+        Ok(collect_fan_out_items(
+            rows,
+            existing_set,
+            |(id, _)| id.as_str(),
+            |(id, wf_name)| FanOutItem {
                 item_type: "workflow_run".to_string(),
                 item_id: id,
                 item_ref: wf_name,
-            })
-            .collect())
+            },
+        ))
     }
 }
 

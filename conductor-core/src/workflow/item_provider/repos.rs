@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::error::Result;
 use runkon_flow::dsl::ForeachScope;
 
-use super::{FanOutItem, ItemProvider, ProviderContext};
+use super::{collect_fan_out_items, FanOutItem, ItemProvider, ProviderContext};
 
 pub struct ReposProvider;
 
@@ -23,17 +23,16 @@ impl ItemProvider for ReposProvider {
 
         let mgr = RepoManager::new(ctx.conn, ctx.config);
         let repos = mgr.list()?;
-        let mut items = Vec::new();
-        for r in repos {
-            if !existing_set.contains(&r.id) {
-                items.push(FanOutItem {
-                    item_type: "repo".to_string(),
-                    item_id: r.id.clone(),
-                    item_ref: r.slug.clone(),
-                });
-            }
-        }
-        Ok(items)
+        Ok(collect_fan_out_items(
+            repos,
+            existing_set,
+            |r| r.id.as_str(),
+            |r| FanOutItem {
+                item_type: "repo".to_string(),
+                item_id: r.id,
+                item_ref: r.slug,
+            },
+        ))
     }
 }
 

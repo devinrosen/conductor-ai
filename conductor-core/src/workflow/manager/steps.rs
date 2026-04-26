@@ -4,7 +4,7 @@ use chrono::Utc;
 use rusqlite::named_params;
 
 use crate::error::{ConductorError, Result};
-use runkon_flow::dsl::GateType;
+use crate::workflow::types::GateKind;
 
 use super::WorkflowManager;
 use crate::workflow::status::WorkflowStepStatus;
@@ -200,7 +200,7 @@ impl<'a> WorkflowManager<'a> {
     pub fn set_step_gate_info(
         &self,
         step_id: &str,
-        gate_type: GateType,
+        gate_type: GateKind,
         gate_prompt: Option<&str>,
         gate_timeout: &str,
     ) -> Result<()> {

@@ -45,7 +45,9 @@ fn execute_via_api(
             .into_json()
             .map_err(|e| format!("Failed to parse API response JSON: {e}"))?,
         Err(ureq::Error::Status(status, resp)) => {
-            let body_text = resp.into_string().unwrap_or_default();
+            let body_text = resp
+                .into_string()
+                .unwrap_or_else(|e| format!("<body read failed: {e}>"));
             return Err(format!("API call failed: {status} {body_text}"));
         }
         Err(e) => return Err(format!("API call failed: {e}")),
@@ -159,6 +161,7 @@ mod tests {
 
     #[test]
     fn missing_api_key_returns_error() {
+        // _guard (not _) keeps the mutex alive for the full test body to prevent env-var races.
         let _guard = ENV_MUTEX.lock().unwrap();
         let prev = std::env::var("ANTHROPIC_API_KEY").ok();
         unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };

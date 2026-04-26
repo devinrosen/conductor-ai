@@ -55,6 +55,37 @@ pub trait ItemProvider: Send + Sync {
     }
 }
 
+/// Collect `FanOutItem`s from an iterator, skipping ids already in `existing_set`.
+///
+/// Centralises the deduplication loop that every `ItemProvider::items()` needs:
+/// `for item in list { if !existing_set.contains(&item.id) { items.push(...) } }`.
+pub(super) fn collect_fan_out_items<T>(
+    items: impl IntoIterator<Item = T>,
+    existing_set: &HashSet<String>,
+    get_id: impl Fn(&T) -> &str,
+    to_item: impl Fn(T) -> FanOutItem,
+) -> Vec<FanOutItem> {
+    items
+        .into_iter()
+        .filter(|t| !existing_set.contains(get_id(t)))
+        .map(to_item)
+        .collect()
+}
+
+/// Extract a required `repo_id` from an `Option<String>`, returning a typed
+/// `ConductorError::Workflow` when absent.  Used by providers that scope items
+/// to a single repo (tickets, worktrees).
+pub(super) fn require_repo_id<'a>(
+    repo_id: &'a Option<String>,
+    entity: &str,
+) -> crate::error::Result<&'a str> {
+    repo_id.as_deref().ok_or_else(|| {
+        crate::error::ConductorError::Workflow(format!(
+            "foreach over {entity} requires a repo_id in the execution context"
+        ))
+    })
+}
+
 /// Registry mapping provider names to implementations.
 #[allow(dead_code)]
 pub struct ItemProviderRegistry {

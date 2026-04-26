@@ -7,7 +7,7 @@ use crate::error::{ConductorError, Result};
 use crate::worktree::{Worktree, WorktreeManager};
 use runkon_flow::dsl::ForeachScope;
 
-use super::{FanOutItem, ItemProvider, ProviderContext};
+use super::{require_repo_id, FanOutItem, ItemProvider, ProviderContext};
 
 pub struct WorktreesProvider {
     repo_id: Option<String>,
@@ -35,11 +35,7 @@ impl ItemProvider for WorktreesProvider {
         _filter: &HashMap<String, String>,
         existing_set: &HashSet<String>,
     ) -> Result<Vec<FanOutItem>> {
-        let repo_id = self.repo_id.as_deref().ok_or_else(|| {
-            ConductorError::Workflow(
-                "foreach over worktrees requires a repo_id in the execution context".to_string(),
-            )
-        })?;
+        let repo_id = require_repo_id(&self.repo_id, "worktrees")?;
 
         let wt_scope_opt = match scope {
             Some(ForeachScope::Worktree(s)) => Some(s),

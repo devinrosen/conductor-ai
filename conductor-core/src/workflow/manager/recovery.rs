@@ -78,6 +78,31 @@ pub struct ReapedStaleRun {
 }
 
 impl<'a> WorkflowManager<'a> {
+    /// Run `f` inside a named SQLite savepoint, committing on success and rolling
+    /// back on error.  Replaces the repeated SAVEPOINT / match / RELEASE pattern
+    /// across several reaper functions.
+    fn with_savepoint<T>(
+        &self,
+        name: &str,
+        f: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        self.conn.execute_batch(&format!("SAVEPOINT {name}"))?;
+        let result = f();
+        match result {
+            Ok(v) => {
+                self.conn.execute_batch(&format!("RELEASE {name}"))?;
+                Ok(v)
+            }
+            Err(e) => {
+                let _ = self
+                    .conn
+                    .execute_batch(&format!("ROLLBACK TO SAVEPOINT {name}"));
+                let _ = self.conn.execute_batch(&format!("RELEASE {name}"));
+                Err(e)
+            }
+        }
+    }
+
     /// Reap workflow_run_steps stuck in `running` status whose script subprocess
     /// has died while conductor was not running.
     ///
@@ -237,8 +262,7 @@ impl<'a> WorkflowManager<'a> {
 
         // Wrap all updates in a savepoint so they commit in one round-trip
         // instead of N separate auto-commit transactions.
-        self.conn.execute_batch("SAVEPOINT recover_stuck_steps")?;
-        let result: Result<usize> = (|| {
+        self.with_savepoint("recover_stuck_steps", || {
             let mut recovered = 0usize;
             for (step_id, child_run_id, step_status, result_text) in stuck {
                 self.update_step_status_full(
@@ -255,20 +279,7 @@ impl<'a> WorkflowManager<'a> {
                 recovered += 1;
             }
             Ok(recovered)
-        })();
-        match result {
-            Ok(n) => {
-                self.conn.execute_batch("RELEASE recover_stuck_steps")?;
-                Ok(n)
-            }
-            Err(e) => {
-                let _ = self
-                    .conn
-                    .execute_batch("ROLLBACK TO SAVEPOINT recover_stuck_steps");
-                let _ = self.conn.execute_batch("RELEASE recover_stuck_steps");
-                Err(e)
-            }
-        }
+        })
     }
 
     /// Reap workflow runs that are stuck in `waiting` status because the executor
@@ -485,9 +496,7 @@ impl<'a> WorkflowManager<'a> {
 
         // Wrap all updates in a savepoint so they commit in one round-trip instead
         // of N separate auto-commit transactions (mirrors recover_stuck_steps).
-        self.conn
-            .execute_batch("SAVEPOINT reap_stale_workflow_runs")?;
-        let result: Result<Vec<ReapedStaleRun>> = (|| {
+        self.with_savepoint("reap_stale_workflow_runs", || {
             let mut reaped = Vec::new();
 
             for s in stale {
@@ -544,22 +553,7 @@ impl<'a> WorkflowManager<'a> {
             }
 
             Ok(reaped)
-        })();
-
-        match result {
-            Ok(reaped) => {
-                self.conn
-                    .execute_batch("RELEASE reap_stale_workflow_runs")?;
-                Ok(reaped)
-            }
-            Err(e) => {
-                let _ = self
-                    .conn
-                    .execute_batch("ROLLBACK TO SAVEPOINT reap_stale_workflow_runs");
-                let _ = self.conn.execute_batch("RELEASE reap_stale_workflow_runs");
-                Err(e)
-            }
-        }
+        })
     }
 
     /// Detect and auto-resume workflow runs stuck in `running` status.
@@ -792,9 +786,7 @@ impl<'a> WorkflowManager<'a> {
 
         // Wrap all updates in a savepoint so they commit in one round-trip instead
         // of N separate auto-commit transactions (mirrors recover_stuck_steps).
-        self.conn
-            .execute_batch("SAVEPOINT reap_finalization_stuck_workflow_runs")?;
-        let result: crate::error::Result<usize> = (|| {
+        self.with_savepoint("reap_finalization_stuck_workflow_runs", || {
             let mut finalized = 0usize;
 
             for (run_id, parent_run_id, has_failure) in stuck {
@@ -834,24 +826,7 @@ impl<'a> WorkflowManager<'a> {
             }
 
             Ok(finalized)
-        })();
-
-        match result {
-            Ok(n) => {
-                self.conn
-                    .execute_batch("RELEASE reap_finalization_stuck_workflow_runs")?;
-                Ok(n)
-            }
-            Err(e) => {
-                let _ = self
-                    .conn
-                    .execute_batch("ROLLBACK TO SAVEPOINT reap_finalization_stuck_workflow_runs");
-                let _ = self
-                    .conn
-                    .execute_batch("RELEASE reap_finalization_stuck_workflow_runs");
-                Err(e)
-            }
-        }
+        })
     }
 
     /// Find the most-recently-started child workflow run that can be resumed:

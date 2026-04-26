@@ -3,9 +3,49 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use runkon_flow::dsl::GateType;
-
 use super::status::{WorkflowRunStatus, WorkflowStepStatus};
+
+/// Conductor-native gate kind enum, mirroring `runkon_flow::dsl::GateType`.
+///
+/// `WorkflowRunStep` is publicly exported by conductor-core, so its `gate_type`
+/// field must not leak the runkon-flow dependency type. Converters between this
+/// type and `runkon_flow::dsl::GateType` live in `rk_types`.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GateKind {
+    HumanApproval,
+    HumanReview,
+    PrApproval,
+    PrChecks,
+    QualityGate,
+}
+
+impl std::fmt::Display for GateKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::HumanApproval => write!(f, "human_approval"),
+            Self::HumanReview => write!(f, "human_review"),
+            Self::PrApproval => write!(f, "pr_approval"),
+            Self::PrChecks => write!(f, "pr_checks"),
+            Self::QualityGate => write!(f, "quality_gate"),
+        }
+    }
+}
+
+impl std::str::FromStr for GateKind {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "human_approval" => Ok(Self::HumanApproval),
+            "human_review" => Ok(Self::HumanReview),
+            "pr_approval" => Ok(Self::PrApproval),
+            "pr_checks" => Ok(Self::PrChecks),
+            "quality_gate" => Ok(Self::QualityGate),
+            _ => Err(format!("unknown gate kind: {s}")),
+        }
+    }
+}
 
 /// Time granularity for workflow analytics queries.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -173,8 +213,7 @@ pub struct WorkflowRunStep {
     pub context_out: Option<String>,
     pub markers_out: Option<String>,
     pub retry_count: i64,
-    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
-    pub gate_type: Option<GateType>,
+    pub gate_type: Option<GateKind>,
     pub gate_prompt: Option<String>,
     pub gate_timeout: Option<String>,
     pub gate_approved_by: Option<String>,

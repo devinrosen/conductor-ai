@@ -2,10 +2,9 @@
 
 use super::*;
 use crate::workflow::types::{
-    BlockedOn, ContextEntry, MetadataEntry, WorkflowExecConfig, WorkflowRunStep,
+    BlockedOn, ContextEntry, GateKind, MetadataEntry, WorkflowExecConfig, WorkflowRunStep,
     WorkflowStepSummary,
 };
-use runkon_flow::dsl::GateType;
 
 // ---------------------------------------------------------------------------
 // BlockedOn serde roundtrips
@@ -302,7 +301,7 @@ fn test_metadata_fields_all_optional_fields() {
     );
     step.started_at = Some("2025-01-01T00:00:00Z".into());
     step.ended_at = Some("2025-01-01T00:01:00Z".into());
-    step.gate_type = Some(GateType::HumanApproval);
+    step.gate_type = Some(GateKind::HumanApproval);
     step.gate_prompt = Some("Approve?".into());
     step.gate_feedback = Some("LGTM".into());
 

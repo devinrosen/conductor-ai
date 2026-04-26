@@ -199,7 +199,12 @@ fn main() {
                         }
                     });
 
-                    if let Err(e) = axum::serve(listener, router).await {
+                    if let Err(e) = axum::serve(
+                        listener,
+                        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                    )
+                    .await
+                    {
                         eprintln!(
                             "[conductor-desktop] Embedded API server exited unexpectedly: {e}"
                         );

@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use crate::error::{ConductorError, Result};
 use runkon_flow::dsl::{ForeachScope, TicketScope};
 
-use super::{FanOutItem, ItemProvider, ProviderContext};
+use super::{collect_fan_out_items, require_repo_id, FanOutItem, ItemProvider, ProviderContext};
 
 pub struct TicketsProvider {
     repo_id: Option<String>,
@@ -32,25 +32,19 @@ impl ItemProvider for TicketsProvider {
         use crate::tickets::{TicketFilter, TicketSyncer};
 
         let syncer = TicketSyncer::new(ctx.conn);
-        let repo_id = self.repo_id.as_deref().ok_or_else(|| {
-            ConductorError::Workflow(
-                "foreach over tickets requires a repo_id in the execution context".to_string(),
-            )
-        })?;
+        let repo_id = require_repo_id(&self.repo_id, "tickets")?;
 
-        let mut items = Vec::new();
+        let ticket_item = |t: crate::tickets::Ticket| FanOutItem {
+            item_type: "ticket".to_string(),
+            item_id: t.id,
+            item_ref: t.source_id,
+        };
 
-        match scope {
+        let items = match scope {
             Some(ForeachScope::Ticket(ts)) => match ts {
                 TicketScope::TicketId(ticket_id) => match syncer.get_by_id(ticket_id) {
-                    Ok(t) if !existing_set.contains(&t.id) => {
-                        items.push(FanOutItem {
-                            item_type: "ticket".to_string(),
-                            item_id: t.id.clone(),
-                            item_ref: t.source_id.clone(),
-                        });
-                    }
-                    Ok(_) => {}
+                    Ok(t) if !existing_set.contains(&t.id) => vec![ticket_item(t)],
+                    Ok(_) => vec![],
                     Err(ConductorError::TicketNotFound { .. }) => {
                         return Err(ConductorError::Workflow(format!(
                             "foreach: ticket '{}' not found",
@@ -67,15 +61,7 @@ impl ItemProvider for TicketsProvider {
                         unlabeled_only: false,
                     };
                     let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
-                    for t in tickets {
-                        if !existing_set.contains(&t.id) {
-                            items.push(FanOutItem {
-                                item_type: "ticket".to_string(),
-                                item_id: t.id.clone(),
-                                item_ref: t.source_id.clone(),
-                            });
-                        }
-                    }
+                    collect_fan_out_items(tickets, existing_set, |t| t.id.as_str(), ticket_item)
                 }
                 TicketScope::Unlabeled => {
                     let filter = TicketFilter {
@@ -85,15 +71,7 @@ impl ItemProvider for TicketsProvider {
                         unlabeled_only: true,
                     };
                     let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
-                    for t in tickets {
-                        if !existing_set.contains(&t.id) {
-                            items.push(FanOutItem {
-                                item_type: "ticket".to_string(),
-                                item_id: t.id.clone(),
-                                item_ref: t.source_id.clone(),
-                            });
-                        }
-                    }
+                    collect_fan_out_items(tickets, existing_set, |t| t.id.as_str(), ticket_item)
                 }
             },
             Some(ForeachScope::Worktree(_)) => {
@@ -109,17 +87,9 @@ impl ItemProvider for TicketsProvider {
                     unlabeled_only: false,
                 };
                 let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
-                for t in tickets {
-                    if !existing_set.contains(&t.id) {
-                        items.push(FanOutItem {
-                            item_type: "ticket".to_string(),
-                            item_id: t.id.clone(),
-                            item_ref: t.source_id.clone(),
-                        });
-                    }
-                }
+                collect_fan_out_items(tickets, existing_set, |t| t.id.as_str(), ticket_item)
             }
-        }
+        };
 
         Ok(items)
     }

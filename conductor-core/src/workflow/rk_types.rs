@@ -15,7 +15,7 @@ use crate::workflow::persistence::{
     StepUpdate as CoreStepUpdate,
 };
 use crate::workflow::types::{
-    BlockedOn as CoreBlockedOn, WorkflowRun as CoreRun, WorkflowRunStep as CoreStep,
+    BlockedOn as CoreBlockedOn, GateKind, WorkflowRun as CoreRun, WorkflowRunStep as CoreStep,
 };
 use runkon_flow::traits::persistence::{
     FanOutItemStatus as RkFanOutItemStatus, FanOutItemUpdate as RkFanOutItemUpdate,
@@ -220,8 +220,31 @@ fn blocked_on_to_rk(b: CoreBlockedOn) -> RkBlockedOn {
     }
 }
 
+pub fn gate_kind_to_rk(k: GateKind) -> runkon_flow::dsl::GateType {
+    use runkon_flow::dsl::GateType as Rk;
+    match k {
+        GateKind::HumanApproval => Rk::HumanApproval,
+        GateKind::HumanReview => Rk::HumanReview,
+        GateKind::PrApproval => Rk::PrApproval,
+        GateKind::PrChecks => Rk::PrChecks,
+        GateKind::QualityGate => Rk::QualityGate,
+    }
+}
+
+#[allow(dead_code)]
+pub fn rk_to_gate_kind(g: runkon_flow::dsl::GateType) -> GateKind {
+    use runkon_flow::dsl::GateType as Rk;
+    match g {
+        Rk::HumanApproval => GateKind::HumanApproval,
+        Rk::HumanReview => GateKind::HumanReview,
+        Rk::PrApproval => GateKind::PrApproval,
+        Rk::PrChecks => GateKind::PrChecks,
+        Rk::QualityGate => GateKind::QualityGate,
+    }
+}
+
 pub fn step_to_rk(s: CoreStep) -> RkStep {
-    let gate_type = s.gate_type;
+    let gate_type = s.gate_type.map(gate_kind_to_rk);
     RkStep {
         id: s.id,
         workflow_run_id: s.workflow_run_id,
@@ -335,7 +358,7 @@ mod tests {
     use super::*;
     use crate::workflow::status::WorkflowStepStatus as CoreStepStatus;
 
-    fn make_core_step(gate_type: Option<runkon_flow::dsl::GateType>) -> CoreStep {
+    fn make_core_step(gate_type: Option<GateKind>) -> CoreStep {
         CoreStep {
             id: "step-1".to_string(),
             workflow_run_id: "run-1".to_string(),
@@ -382,7 +405,7 @@ mod tests {
 
     #[test]
     fn step_to_rk_with_recognised_gate_type_preserves_gate() {
-        let step = make_core_step(Some(runkon_flow::dsl::GateType::HumanApproval));
+        let step = make_core_step(Some(GateKind::HumanApproval));
         let rk = step_to_rk(step);
         assert_eq!(
             rk.gate_type,
