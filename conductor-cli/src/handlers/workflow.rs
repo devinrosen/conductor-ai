@@ -227,7 +227,6 @@ pub fn handle_workflow(
                 );
 
                 match conductor_core::workflow_ephemeral::run_workflow_on_pr(
-                    conn,
                     config,
                     &pr_ref,
                     &name,

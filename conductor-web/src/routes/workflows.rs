@@ -1074,10 +1074,15 @@ pub async fn list_all_workflow_runs_handler(
             let current_iteration = current.map(|s| s.iteration);
 
             // Compute total_steps and max_iterations from definition_snapshot
-            let def: Option<WorkflowDef> = run
-                .definition_snapshot
-                .as_deref()
-                .and_then(|snap| serde_json::from_str(snap).ok());
+            let def: Option<WorkflowDef> = run.definition_snapshot.as_deref().and_then(|snap| {
+                serde_json::from_str(snap).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        run_id = %run.id,
+                        "Failed to deserialize definition_snapshot: {e}"
+                    );
+                    None
+                })
+            });
             let total_steps = def.as_ref().map(|d| d.total_nodes());
             let max_iterations = current_step_name
                 .as_deref()

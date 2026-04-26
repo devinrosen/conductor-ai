@@ -261,7 +261,7 @@ impl<'a> WorkflowManager<'a> {
         self.with_savepoint("recover_stuck_steps", || {
             let mut recovered = 0usize;
             for (step_id, child_run_id, step_status, result_text) in stuck {
-                self.update_step_status_full(
+                self.mark_step_terminal(
                     &step_id,
                     step_status,
                     Some(&child_run_id),
@@ -881,22 +881,17 @@ impl<'a> WorkflowManager<'a> {
     ) -> Result<()> {
         #[cfg(unix)]
         {
-            // Script-step PIDs (subprocess_pid on the step row itself).
-            let script_pids: Vec<i64> = query_collect(
+            // Collect all PIDs (script-step direct PIDs + agent-step PIDs via JOIN)
+            // in one round-trip using a UNION query.
+            let all_pids: Vec<i64> = query_collect(
                 self.conn,
-                "SELECT subprocess_pid FROM workflow_run_steps \
+                "SELECT subprocess_pid \
+                 FROM workflow_run_steps \
                  WHERE workflow_run_id = :run_id AND status = 'running' \
                    AND subprocess_pid IS NOT NULL \
-                   AND (:from_pos IS NULL OR position >= :from_pos)",
-                named_params![":run_id": workflow_run_id, ":from_pos": from_position],
-                |row| row.get("subprocess_pid"),
-            )?;
-
-            // Agent-step PIDs: running steps where the PID lives in agent_runs
-            // (wrs.subprocess_pid IS NULL) rather than on the step row itself.
-            let agent_pids: Vec<i64> = query_collect(
-                self.conn,
-                "SELECT ar.subprocess_pid \
+                   AND (:from_pos IS NULL OR position >= :from_pos) \
+                 UNION ALL \
+                 SELECT ar.subprocess_pid \
                  FROM workflow_run_steps wrs \
                  JOIN agent_runs ar ON ar.id = wrs.child_run_id \
                  WHERE wrs.workflow_run_id = :run_id \
@@ -908,9 +903,8 @@ impl<'a> WorkflowManager<'a> {
                 |row| row.get("subprocess_pid"),
             )?;
 
-            let handles: Vec<_> = script_pids
+            let handles: Vec<_> = all_pids
                 .into_iter()
-                .chain(agent_pids)
                 .filter_map(|pid| u32::try_from(pid).ok())
                 .map(|pid| std::thread::spawn(move || crate::process_utils::cancel_subprocess(pid)))
                 .collect();

@@ -943,4 +943,48 @@ mod tests {
             "Invalid granularity: invalid. Must be 'daily' or 'weekly'"
         );
     }
+
+    // -------------------------------------------------------------------------
+    // GateKind::from_str
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn gate_kind_from_str_all_variants_roundtrip() {
+        use std::str::FromStr;
+        let cases = [
+            ("human_approval", GateKind::HumanApproval),
+            ("human_review", GateKind::HumanReview),
+            ("pr_approval", GateKind::PrApproval),
+            ("pr_checks", GateKind::PrChecks),
+            ("quality_gate", GateKind::QualityGate),
+        ];
+        for (s, expected) in cases {
+            let parsed =
+                GateKind::from_str(s).unwrap_or_else(|e| panic!("parse failed for '{s}': {e}"));
+            assert_eq!(parsed, expected, "from_str roundtrip failed for '{s}'");
+            assert_eq!(
+                parsed.to_string(),
+                s,
+                "Display roundtrip failed for {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn gate_kind_from_str_error_on_unknown() {
+        use std::str::FromStr;
+        let result = GateKind::from_str("unknown_gate");
+        assert!(result.is_err(), "expected Err for unknown gate kind");
+        assert_eq!(result.unwrap_err(), "unknown gate kind: unknown_gate");
+    }
+
+    #[test]
+    fn gate_kind_parse_via_option_ok_returns_none_for_unknown() {
+        // Production path: .parse::<GateKind>().ok() coerces unknown to None.
+        let parsed: Option<GateKind> = "bogus".parse().ok();
+        assert!(
+            parsed.is_none(),
+            "unknown gate kind should parse to None via .ok()"
+        );
+    }
 }

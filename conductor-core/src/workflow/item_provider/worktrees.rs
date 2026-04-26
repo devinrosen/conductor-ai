@@ -132,17 +132,15 @@ fn dependencies_impl(
             return Ok(vec![]);
         }
     };
+    // Build both maps in a single pass: wt→ticket and ticket→wt.
     let mut wt_ticket_map: HashMap<String, String> = HashMap::new();
+    let mut ticket_wt_map: HashMap<String, String> = HashMap::new();
     for wt in worktrees {
         if let Some(tid) = wt.ticket_id {
+            ticket_wt_map.insert(tid.clone(), wt.id.clone());
             wt_ticket_map.insert(wt.id, tid);
         }
     }
-
-    let ticket_wt_map: HashMap<String, String> = wt_ticket_map
-        .iter()
-        .map(|(wt_id, tid)| (tid.clone(), wt_id.clone()))
-        .collect();
 
     let ticket_ids: Vec<String> = wt_ticket_map.values().cloned().collect();
     if ticket_ids.is_empty() {

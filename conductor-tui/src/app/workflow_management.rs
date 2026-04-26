@@ -1449,9 +1449,6 @@ impl App {
         inputs: std::collections::HashMap<String, String>,
         model: Option<String>,
     ) {
-        use conductor_core::config::db_path;
-        use conductor_core::db::open_database;
-
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
         let workflow_display_name = def.display_name().to_string();
@@ -1466,26 +1463,12 @@ impl App {
             use conductor_core::workflow::WorkflowExecConfig;
             use conductor_core::workflow_ephemeral::run_workflow_on_pr;
 
-            let db = db_path();
-            let conn = match open_database(&db) {
-                Ok(c) => c,
-                Err(e) => {
-                    if let Some(ref tx) = bg_tx {
-                        let _ = tx.send(Action::BackgroundError {
-                            message: format!("Failed to open database: {e}"),
-                        });
-                    }
-                    return;
-                }
-            };
-
             let exec_config = WorkflowExecConfig {
                 shutdown: Some(shutdown),
                 ..WorkflowExecConfig::default()
             };
 
             let result = run_workflow_on_pr(
-                &conn,
                 &config,
                 &pr_ref,
                 &def.name,

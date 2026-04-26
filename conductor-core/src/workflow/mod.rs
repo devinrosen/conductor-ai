@@ -28,7 +28,6 @@ pub(crate) mod persistence_memory;
 pub(crate) mod persistence_sqlite;
 pub(crate) mod prompt_builder;
 pub(crate) mod rk_types;
-pub(crate) mod run_context;
 pub(crate) mod runkon_bridge;
 pub(crate) mod runkon_gate_bridge;
 pub(crate) mod script_env_provider;
@@ -44,12 +43,6 @@ pub use runkon_flow::dsl::{
     InputType, OnFail, ParallelNode, UnlessNode, ValidationError, ValidationReport, WhileNode,
     WorkflowDef, WorkflowNode, WorkflowTrigger, WorkflowWarning, MAX_WORKFLOW_DEPTH,
 };
-
-/// Conductor-native alias for the parsed workflow DSL type.
-///
-/// Callers should prefer this name over `runkon_flow::dsl::WorkflowDef` or the
-/// re-exported `WorkflowDef`, which both leak the runkon-flow crate dependency.
-pub type WorkflowDefinition = runkon_flow::dsl::WorkflowDef;
 
 // Re-export batch validation from the workflow layer (not DSL).
 pub use batch_validate::{

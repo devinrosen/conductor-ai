@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
-use rusqlite::Connection;
 use tempfile::TempDir;
 
 use crate::config::Config;
@@ -187,7 +186,6 @@ pub fn checkout_pr(pr: &PrRef, dir: &Path) -> Result<String> {
 /// 7. Return the `WorkflowResult`
 #[allow(clippy::too_many_arguments)]
 pub fn run_workflow_on_pr(
-    _conn: &Connection,
     config: &Config,
     pr_ref: &PrRef,
     workflow_name: &str,

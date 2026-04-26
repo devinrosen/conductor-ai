@@ -4,9 +4,9 @@
 //! import converters without depending on the persistence module.
 //!
 //! This module, along with `runkon_bridge` and `runkon_gate_bridge`, is migration
-//! scaffolding for Phase 3.x of the FlowEngine migration. These bridge modules are
-//! temporary glue that will be removed once the legacy conductor-core execution stack
-//! is deleted in Phase 3.3.
+//! scaffolding for the FlowEngine migration. These bridge modules will be removed
+//! once conductor-core and runkon-flow types are fully unified (planned for a future
+//! phase after Phase 3.3).
 
 use crate::workflow::manager::FanOutItemRow as CoreFanOutItemRow;
 use crate::workflow::persistence::{
@@ -228,18 +228,6 @@ pub fn gate_kind_to_rk(k: GateKind) -> runkon_flow::dsl::GateType {
         GateKind::PrApproval => Rk::PrApproval,
         GateKind::PrChecks => Rk::PrChecks,
         GateKind::QualityGate => Rk::QualityGate,
-    }
-}
-
-#[allow(dead_code)]
-pub fn rk_to_gate_kind(g: runkon_flow::dsl::GateType) -> GateKind {
-    use runkon_flow::dsl::GateType as Rk;
-    match g {
-        Rk::HumanApproval => GateKind::HumanApproval,
-        Rk::HumanReview => GateKind::HumanReview,
-        Rk::PrApproval => GateKind::PrApproval,
-        Rk::PrChecks => GateKind::PrChecks,
-        Rk::QualityGate => GateKind::QualityGate,
     }
 }
 

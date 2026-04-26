@@ -165,6 +165,35 @@ fn lock_shared(
         .map_err(|e| ConductorError::Workflow(format!("db mutex poisoned: {e}")))
 }
 
+/// Guard for active runs at depth 0.
+///
+/// Returns `Ok(())` when no active run is found, or when the active run is cancelled
+/// because `force = true`.  Returns `Err(WorkflowRunAlreadyActive)` when an active
+/// run exists and `force = false`.
+///
+/// Extracted to a standalone function so it can be tested in isolation against an
+/// in-memory database without setting up a full engine.
+pub(crate) fn guard_active_run(
+    wf_mgr: &WorkflowManager<'_>,
+    worktree_id: &str,
+    force: bool,
+) -> Result<()> {
+    if let Some(active) = wf_mgr.get_active_run_for_worktree(worktree_id)? {
+        if force {
+            tracing::info!(
+                "Force override: cancelling active run {} to start new run",
+                active.id
+            );
+            wf_mgr.cancel_run(&active.id, "force override: new run requested")?;
+        } else {
+            return Err(ConductorError::WorkflowRunAlreadyActive {
+                name: active.workflow_name,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Execute a workflow in a self-contained manner using `runkon_flow::FlowEngine::run()`.
 ///
 /// Opens its own database connection and builds all bridge adapters so the
@@ -209,19 +238,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         // concurrently with their parent and must not trigger this check.
         if params.depth == 0 {
             if let Some(ref wt_id) = params.worktree_id {
-                if let Some(active) = wf_mgr.get_active_run_for_worktree(wt_id)? {
-                    if params.force {
-                        tracing::info!(
-                            "Force override: cancelling active run {} to start new run",
-                            active.id
-                        );
-                        wf_mgr.cancel_run(&active.id, "force override: new run requested")?;
-                    } else {
-                        return Err(ConductorError::WorkflowRunAlreadyActive {
-                            name: active.workflow_name,
-                        });
-                    }
-                }
+                guard_active_run(&wf_mgr, wt_id, params.force)?;
             }
         }
 
@@ -497,9 +514,10 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         ))
     })?;
 
-    let rk_result = engine
-        .run(&rk_def, &mut rk_state)
-        .map_err(|e| ConductorError::Workflow(e.to_string()))?;
+    let rk_result = engine.run(&rk_def, &mut rk_state).map_err(|e| match e {
+        runkon_flow::engine_error::EngineError::Cancelled(_) => ConductorError::WorkflowCancelled,
+        other => ConductorError::Workflow(other.to_string()),
+    })?;
 
     // Close the parent agent run. It was created without a subprocess_pid (workflow
     // parent runs never spawn a subprocess), so the orphan reaper would sweep it the
@@ -995,11 +1013,12 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         ))
     })?;
 
-    let rk_result = engine.resume(&rk_def, &mut rk_state).map_err(|e| {
-        ConductorError::Workflow(format!(
-            "workflow '{}' resume failed: {e}",
+    let rk_result = engine.resume(&rk_def, &mut rk_state).map_err(|e| match e {
+        runkon_flow::engine_error::EngineError::Cancelled(_) => ConductorError::WorkflowCancelled,
+        other => ConductorError::Workflow(format!(
+            "workflow '{}' resume failed: {other}",
             wf_run.workflow_name
-        ))
+        )),
     })?;
 
     Ok(super::rk_types::rk_workflow_result_to_core(rk_result))
@@ -1008,6 +1027,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workflow::manager::WorkflowManager;
     use runkon_flow::dsl::{InputDecl, InputType, WorkflowDef, WorkflowTrigger};
     use std::collections::HashMap;
 
@@ -1152,5 +1172,96 @@ mod tests {
     fn validate_resume_failed_without_restart_ok() {
         validate_resume_preconditions(&WorkflowRunStatus::Failed, false, None)
             .expect("resuming a failed run should be allowed");
+    }
+
+    // -------------------------------------------------------------------------
+    // guard_active_run
+    // -------------------------------------------------------------------------
+
+    fn setup_guard_db() -> rusqlite::Connection {
+        crate::test_helpers::setup_db()
+    }
+
+    fn make_running_workflow_run(
+        conn: &rusqlite::Connection,
+        wt_id: &str,
+        wf_name: &str,
+    ) -> String {
+        let agent_mgr = crate::agent::AgentManager::new(conn);
+        let parent = agent_mgr.create_run(Some(wt_id), "workflow", None).unwrap();
+        let wf_mgr = WorkflowManager::new(conn);
+        let run = wf_mgr
+            .create_workflow_run(wf_name, Some(wt_id), &parent.id, false, "manual", None)
+            .unwrap();
+        // Transition to Running so it counts as an active run.
+        conn.execute(
+            "UPDATE workflow_runs SET status = 'running' WHERE id = ?1",
+            rusqlite::params![run.id],
+        )
+        .unwrap();
+        run.id
+    }
+
+    #[test]
+    fn guard_active_run_returns_already_active_when_run_exists() {
+        let conn = setup_guard_db();
+        let wf_name = "my-workflow";
+        make_running_workflow_run(&conn, "w1", wf_name);
+
+        let wf_mgr = WorkflowManager::new(&conn);
+        let err = guard_active_run(&wf_mgr, "w1", false).unwrap_err();
+        assert!(
+            matches!(err, crate::error::ConductorError::WorkflowRunAlreadyActive { ref name } if name == wf_name),
+            "expected WorkflowRunAlreadyActive, got: {err}"
+        );
+    }
+
+    #[test]
+    fn guard_active_run_ok_when_no_active_run() {
+        let conn = setup_guard_db();
+        let wf_mgr = WorkflowManager::new(&conn);
+        // No workflow runs exist — guard should pass.
+        guard_active_run(&wf_mgr, "w1", false).expect("no active run should return Ok");
+    }
+
+    #[test]
+    fn guard_active_run_force_cancels_active_run() {
+        let conn = setup_guard_db();
+        let run_id = make_running_workflow_run(&conn, "w1", "my-wf");
+
+        let wf_mgr = WorkflowManager::new(&conn);
+        guard_active_run(&wf_mgr, "w1", true).expect("force should cancel and return Ok");
+
+        // The previously active run must now be cancelled.
+        let row: String = conn
+            .query_row(
+                "SELECT status FROM workflow_runs WHERE id = ?1",
+                rusqlite::params![run_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            row, "cancelled",
+            "active run should be cancelled after force override"
+        );
+    }
+
+    #[test]
+    fn guard_active_run_ok_when_only_completed_runs_exist() {
+        let conn = setup_guard_db();
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("wf", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET status = 'completed' WHERE id = ?1",
+            rusqlite::params![run.id],
+        )
+        .unwrap();
+
+        // Completed run is not "active" — guard should pass.
+        guard_active_run(&wf_mgr, "w1", false).expect("completed run should not block new run");
     }
 }

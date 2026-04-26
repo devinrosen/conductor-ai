@@ -103,7 +103,75 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
+    /// Mark a step as starting (Running or Waiting), recording `started_at` and the child run.
+    pub fn mark_step_running(
+        &self,
+        step_id: &str,
+        status: WorkflowStepStatus,
+        child_run_id: Option<&str>,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE workflow_run_steps SET status = :status, child_run_id = :child_run_id, \
+             started_at = :started_at WHERE id = :id",
+            named_params![":status": status, ":child_run_id": child_run_id, ":started_at": now, ":id": step_id],
+        )?;
+        Ok(())
+    }
+
+    /// Mark a step as terminal (Completed, Failed, Skipped, TimedOut), recording all output fields.
+    #[allow(clippy::too_many_arguments)]
+    pub fn mark_step_terminal(
+        &self,
+        step_id: &str,
+        status: WorkflowStepStatus,
+        child_run_id: Option<&str>,
+        result_text: Option<&str>,
+        context_out: Option<&str>,
+        markers_out: Option<&str>,
+        retry_count: Option<i64>,
+        structured_output: Option<&str>,
+        step_error: Option<&str>,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE workflow_run_steps SET status = :status, \
+             child_run_id = COALESCE(:child_run_id, child_run_id), \
+             ended_at = :ended_at, result_text = :result_text, context_out = :context_out, \
+             markers_out = :markers_out, \
+             retry_count = COALESCE(:retry_count, retry_count), \
+             structured_output = :structured_output, step_error = :step_error \
+             WHERE id = :id",
+            named_params![
+                ":status": status,
+                ":child_run_id": child_run_id,
+                ":ended_at": now,
+                ":result_text": result_text,
+                ":context_out": context_out,
+                ":markers_out": markers_out,
+                ":retry_count": retry_count,
+                ":structured_output": structured_output,
+                ":step_error": step_error,
+                ":id": step_id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Mark a step with a non-starting, non-terminal status (e.g. Pending), updating only `status`.
+    pub fn mark_step_pending(&self, step_id: &str, status: WorkflowStepStatus) -> Result<()> {
+        self.conn.execute(
+            "UPDATE workflow_run_steps SET status = :status WHERE id = :id",
+            named_params![":status": status, ":id": step_id],
+        )?;
+        Ok(())
+    }
+
     /// Update a step's status with all fields including structured_output and step_error.
+    ///
+    /// Dispatches to [`mark_step_running`], [`mark_step_terminal`], or [`mark_step_pending`]
+    /// based on the status. Prefer calling those named methods directly when the caller knows
+    /// which branch applies.
     #[allow(clippy::too_many_arguments)]
     pub fn update_step_status_full(
         &self,
@@ -117,7 +185,6 @@ impl<'a> WorkflowManager<'a> {
         structured_output: Option<&str>,
         step_error: Option<&str>,
     ) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
         let is_starting =
             status == WorkflowStepStatus::Running || status == WorkflowStepStatus::Waiting;
         let is_terminal = matches!(
@@ -129,40 +196,22 @@ impl<'a> WorkflowManager<'a> {
         );
 
         if is_starting {
-            self.conn.execute(
-                "UPDATE workflow_run_steps SET status = :status, child_run_id = :child_run_id, \
-                 started_at = :started_at WHERE id = :id",
-                named_params![":status": status, ":child_run_id": child_run_id, ":started_at": now, ":id": step_id],
-            )?;
+            self.mark_step_running(step_id, status, child_run_id)
         } else if is_terminal {
-            self.conn.execute(
-                "UPDATE workflow_run_steps SET status = :status, \
-                 child_run_id = COALESCE(:child_run_id, child_run_id), \
-                 ended_at = :ended_at, result_text = :result_text, context_out = :context_out, \
-                 markers_out = :markers_out, \
-                 retry_count = COALESCE(:retry_count, retry_count), \
-                 structured_output = :structured_output, step_error = :step_error \
-                 WHERE id = :id",
-                named_params![
-                    ":status": status,
-                    ":child_run_id": child_run_id,
-                    ":ended_at": now,
-                    ":result_text": result_text,
-                    ":context_out": context_out,
-                    ":markers_out": markers_out,
-                    ":retry_count": retry_count,
-                    ":structured_output": structured_output,
-                    ":step_error": step_error,
-                    ":id": step_id,
-                ],
-            )?;
+            self.mark_step_terminal(
+                step_id,
+                status,
+                child_run_id,
+                result_text,
+                context_out,
+                markers_out,
+                retry_count,
+                structured_output,
+                step_error,
+            )
         } else {
-            self.conn.execute(
-                "UPDATE workflow_run_steps SET status = :status WHERE id = :id",
-                named_params![":status": status, ":id": step_id],
-            )?;
+            self.mark_step_pending(step_id, status)
         }
-        Ok(())
     }
 
     /// Write the child run ID back to a parent step immediately after the child run is created.
