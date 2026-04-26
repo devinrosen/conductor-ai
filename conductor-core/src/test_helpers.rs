@@ -9,6 +9,13 @@ use crate::workflow::action_executor::{ActionParams, ExecutionContext};
 /// `cargo test` runs tests across modules in parallel by default; any test
 /// that calls `std::env::set_var`/`remove_var` on a shared env-var must hold
 /// this lock for the duration of the mutation + assertion to prevent races.
+///
+/// # IMPORTANT — usage contract
+///
+/// Store the guard in a named binding (e.g. `let _guard = ENV_MUTEX.lock()…`),
+/// **not** in `_` (which drops the lock immediately). The binding must remain
+/// in scope for the entire test body, including any cleanup `set_var` calls.
+/// Dropping it early re-introduces the race this mutex is meant to prevent.
 pub static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Build a minimal `ExecutionContext` for unit tests.

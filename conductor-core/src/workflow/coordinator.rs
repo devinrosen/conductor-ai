@@ -196,6 +196,12 @@ fn inject_repo_variables(repo: &crate::repo::Repo, merged_inputs: &mut HashMap<S
         .or_insert_with(|| repo.slug.clone());
 }
 
+fn deserialize_workflow_snapshot(snapshot: &str) -> Result<runkon_flow::dsl::WorkflowDef> {
+    serde_json::from_str(snapshot).map_err(|e| {
+        ConductorError::Workflow(format!("Failed to deserialize workflow definition: {e}"))
+    })
+}
+
 /// Acquire the shared SQLite connection mutex, mapping a poison error to a `ConductorError`.
 fn lock_shared(
     conn: &Arc<std::sync::Mutex<Connection>>,
@@ -586,10 +592,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
     // -----------------------------------------------------------------------
 
     // Reuse the snapshot JSON already computed during setup to avoid a second serialization.
-    let rk_def: runkon_flow::dsl::WorkflowDef =
-        serde_json::from_str(&snapshot_json).map_err(|e| {
-            ConductorError::Workflow(format!("Failed to deserialize workflow definition: {e}"))
-        })?;
+    let rk_def = deserialize_workflow_snapshot(&snapshot_json)?;
 
     let RkEngineComponents {
         persistence,
@@ -692,7 +695,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         }
     }
 
-    Ok(super::rk_types::rk_workflow_result_to_core(rk_result))
+    Ok(rk_result.into())
 }
 
 /// Validate resume preconditions that can be checked from status alone.
@@ -1035,10 +1038,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     // Build the FlowEngine and execution state.
     // -----------------------------------------------------------------------
 
-    let rk_def: runkon_flow::dsl::WorkflowDef =
-        serde_json::from_str(&snapshot_string).map_err(|e| {
-            ConductorError::Workflow(format!("Failed to deserialize workflow definition: {e}"))
-        })?;
+    let rk_def = deserialize_workflow_snapshot(&snapshot_string)?;
 
     let RkEngineComponents {
         persistence,
@@ -1104,7 +1104,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         .resume(&rk_def, &mut rk_state)
         .map_err(|e| map_engine_error(e, &wf_run.workflow_name, "resume"))?;
 
-    Ok(super::rk_types::rk_workflow_result_to_core(rk_result))
+    Ok(rk_result.into())
 }
 
 #[cfg(test)]
@@ -1434,5 +1434,168 @@ mod tests {
 
         // Completed run is not "active" — guard should pass.
         guard_active_run(&wf_mgr, "w1", false).expect("completed run should not block new run");
+    }
+
+    // -------------------------------------------------------------------------
+    // inject_ticket_variables / inject_worktree_variables / inject_repo_variables
+    // -------------------------------------------------------------------------
+
+    fn make_ticket() -> crate::tickets::Ticket {
+        crate::tickets::Ticket {
+            id: "t1".into(),
+            source_id: "42".into(),
+            source_type: "github".into(),
+            title: "Fix bug".into(),
+            body: "body text".into(),
+            state: "open".into(),
+            url: "https://github.com/org/repo/issues/42".into(),
+            priority: None,
+            repo_id: "r1".into(),
+            labels: String::new(),
+            raw_json: "{}".into(),
+            synced_at: "2024-01-01T00:00:00Z".into(),
+            assignee: None,
+            workflow: None,
+            agent_map: None,
+        }
+    }
+
+    #[test]
+    fn inject_ticket_variables_populates_all_keys() {
+        let ticket = make_ticket();
+        let mut inputs = HashMap::new();
+        inject_ticket_variables(&ticket, &mut inputs);
+
+        assert_eq!(inputs["ticket_id"], "t1");
+        assert_eq!(inputs["ticket_source_id"], "42");
+        assert_eq!(inputs["ticket_source_type"], "github");
+        assert_eq!(inputs["ticket_title"], "Fix bug");
+        assert_eq!(inputs["ticket_body"], "body text");
+        assert_eq!(
+            inputs["ticket_url"],
+            "https://github.com/org/repo/issues/42"
+        );
+        assert_eq!(inputs["ticket_raw_json"], "{}");
+    }
+
+    #[test]
+    fn inject_ticket_variables_does_not_overwrite_existing_keys() {
+        let ticket = make_ticket();
+        let mut inputs = HashMap::new();
+        inputs.insert("ticket_title".into(), "caller-supplied".into());
+        inject_ticket_variables(&ticket, &mut inputs);
+        assert_eq!(
+            inputs["ticket_title"], "caller-supplied",
+            "pre-existing key must not be overwritten"
+        );
+    }
+
+    #[test]
+    fn inject_worktree_variables_populates_branch_and_base() {
+        let conn = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let wt_mgr = crate::worktree::WorktreeManager::new(&conn, &config);
+        let wt = wt_mgr.get_by_id("w1").unwrap();
+        let mut inputs = HashMap::new();
+        inject_worktree_variables(&wt, "main", &mut inputs);
+        assert!(
+            inputs.contains_key("worktree_branch"),
+            "worktree_branch must be injected"
+        );
+        assert!(
+            inputs.contains_key("feature_base_branch"),
+            "feature_base_branch must be injected"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // execute_workflow_standalone — error paths and run_id_notify
+    // -------------------------------------------------------------------------
+
+    fn make_standalone_params(
+        db_path: std::path::PathBuf,
+        ticket_id: Option<String>,
+        run_id_notify: Option<crate::workflow::types::RunIdSlot>,
+    ) -> WorkflowExecStandalone {
+        WorkflowExecStandalone {
+            config: crate::config::Config::default(),
+            workflow: make_wf(vec![]),
+            worktree_id: if ticket_id.is_some() {
+                Some("w1".into())
+            } else {
+                None
+            },
+            working_dir: "/tmp".into(),
+            repo_path: "/tmp".into(),
+            ticket_id,
+            repo_id: None,
+            model: None,
+            exec_config: crate::workflow::types::WorkflowExecConfig {
+                dry_run: false,
+                ..Default::default()
+            },
+            inputs: HashMap::new(),
+            target_label: None,
+            run_id_notify,
+            triggered_by_hook: false,
+            conductor_bin_dir: None,
+            force: false,
+            extra_plugin_dirs: vec![],
+            db_path: Some(db_path),
+            parent_workflow_run_id: None,
+            depth: 0,
+            parent_step_id: None,
+            default_bot_name: None,
+            iteration: 0,
+        }
+    }
+
+    #[test]
+    fn execute_standalone_unknown_ticket_id_returns_error() {
+        // workflow_runs.ticket_id has a FK constraint — providing a nonexistent ticket
+        // causes the run-creation INSERT to fail, which is surfaced as an error from
+        // execute_workflow_standalone before any agent work begins.
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        {
+            let conn = crate::db::open_database(db_file.path()).unwrap();
+            crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+            crate::test_helpers::insert_test_worktree(&conn, "w1", "r1", "feat-test", "/tmp");
+        }
+
+        let params = make_standalone_params(
+            db_file.path().to_path_buf(),
+            Some("no-such-ticket".into()),
+            None,
+        );
+        let result = execute_workflow_standalone(&params);
+        assert!(
+            result.is_err(),
+            "nonexistent ticket_id must produce an error"
+        );
+    }
+
+    #[test]
+    fn execute_standalone_run_id_notify_populated() {
+        // With no worktree/ticket/repo IDs, the function runs an empty workflow trivially
+        // (no steps → immediate success). This documents that run_id_notify is populated
+        // immediately after the workflow run record is created, before any engine work.
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        crate::db::open_database(db_file.path()).unwrap();
+
+        let notify: crate::workflow::types::RunIdSlot =
+            std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
+        let params = make_standalone_params(
+            db_file.path().to_path_buf(),
+            None,
+            Some(std::sync::Arc::clone(&notify)),
+        );
+        let _ = execute_workflow_standalone(&params);
+
+        let (lock, _) = notify.as_ref();
+        let slot = lock.lock().unwrap();
+        assert!(
+            slot.is_some(),
+            "run_id_notify slot must be populated before any engine work"
+        );
     }
 }

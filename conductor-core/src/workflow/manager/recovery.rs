@@ -90,10 +90,15 @@ impl<'a> WorkflowManager<'a> {
                 Ok(v)
             }
             Err(e) => {
-                let _ = self
+                if let Err(rb_err) = self
                     .conn
-                    .execute_batch(&format!("ROLLBACK TO SAVEPOINT {name}"));
-                let _ = self.conn.execute_batch(&format!("RELEASE {name}"));
+                    .execute_batch(&format!("ROLLBACK TO SAVEPOINT {name}"))
+                {
+                    tracing::warn!("savepoint '{name}' rollback failed: {rb_err}");
+                }
+                if let Err(rel_err) = self.conn.execute_batch(&format!("RELEASE {name}")) {
+                    tracing::warn!("savepoint '{name}' release-after-rollback failed: {rel_err}");
+                }
                 Err(e)
             }
         }

@@ -172,14 +172,23 @@ impl App {
         }
         self.state.data.workflow_runs =
             if let Some(ref wt_id) = self.state.selected_worktree_id.clone() {
-                wf_mgr.list_workflow_runs(wt_id).unwrap_or_default()
+                wf_mgr.list_workflow_runs(wt_id).unwrap_or_else(|e| {
+                    tracing::warn!("Failed to list workflow runs for worktree '{wt_id}': {e}");
+                    Default::default()
+                })
             } else if self.state.view == View::RepoDetail {
                 let repo_id = self.state.selected_repo_id.as_deref().unwrap_or("");
                 wf_mgr
                     .list_workflow_runs_for_repo(repo_id, 50)
-                    .unwrap_or_default()
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("Failed to list workflow runs for repo '{repo_id}': {e}");
+                        Default::default()
+                    })
             } else {
-                wf_mgr.list_all_workflow_runs(50).unwrap_or_default()
+                wf_mgr.list_all_workflow_runs(50).unwrap_or_else(|e| {
+                    tracing::warn!("Failed to list all workflow runs: {e}");
+                    Default::default()
+                })
             };
 
         // Load steps for the currently selected run
@@ -194,7 +203,10 @@ impl App {
         if let Some(ref run_id) = self.state.selected_workflow_run_id {
             let wf_mgr = WorkflowManager::new(&self.conn);
             self.state.data.workflow_steps =
-                collapse_loop_iterations(wf_mgr.get_workflow_steps(run_id).unwrap_or_default());
+                collapse_loop_iterations(wf_mgr.get_workflow_steps(run_id).unwrap_or_else(|e| {
+                    tracing::warn!("Failed to load steps for run '{run_id}': {e}");
+                    Default::default()
+                }));
         } else {
             self.state.data.workflow_steps.clear();
         }

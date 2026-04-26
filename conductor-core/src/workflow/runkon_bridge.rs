@@ -580,7 +580,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
                 )),
             })?;
 
-        Ok(super::rk_types::core_workflow_result_to_rk(core_result))
+        Ok(core_result.into())
     }
 
     fn resume_child(
@@ -607,7 +607,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             )),
         })?;
 
-        Ok(super::rk_types::core_workflow_result_to_rk(core_result))
+        Ok(core_result.into())
     }
 
     fn find_resumable_child(

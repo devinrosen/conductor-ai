@@ -324,18 +324,6 @@ impl From<runkon_flow::types::WorkflowResult> for crate::workflow::types::Workfl
     }
 }
 
-pub fn core_workflow_result_to_rk(
-    core: crate::workflow::types::WorkflowResult,
-) -> runkon_flow::types::WorkflowResult {
-    core.into()
-}
-
-pub fn rk_workflow_result_to_core(
-    r: runkon_flow::types::WorkflowResult,
-) -> crate::workflow::types::WorkflowResult {
-    r.into()
-}
-
 pub fn gate_approval_to_rk(s: CoreGateApprovalState) -> RkGateApprovalState {
     match s {
         CoreGateApprovalState::Pending => RkGateApprovalState::Pending,
@@ -570,7 +558,7 @@ mod tests {
             total_cache_read_input_tokens: 50,
             total_cache_creation_input_tokens: 25,
         };
-        let core = rk_workflow_result_to_core(rk);
+        let core: crate::workflow::types::WorkflowResult = rk.into();
         assert_eq!(core.workflow_run_id, "run-1");
         assert_eq!(core.worktree_id, Some("wt-1".to_string()));
         assert_eq!(core.workflow_name, "my-wf");
@@ -906,7 +894,7 @@ mod tests {
             total_cache_read_input_tokens: 75,
             total_cache_creation_input_tokens: 10,
         };
-        let rk = core_workflow_result_to_rk(core);
+        let rk: runkon_flow::types::WorkflowResult = core.into();
         assert_eq!(rk.workflow_run_id, "run-2");
         assert_eq!(rk.worktree_id, Some("wt-2".to_string()));
         assert_eq!(rk.workflow_name, "wf-name");
