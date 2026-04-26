@@ -225,12 +225,11 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
         ectx: &runkon_flow::traits::action_executor::ExecutionContext,
         params: &runkon_flow::traits::action_executor::ActionParams,
     ) -> Result<runkon_flow::traits::action_executor::ActionOutput, EngineError> {
-        // The runtime (ClaudeAgentExecutor) expects an agent_runs row to exist with
-        // the run_id it receives. In the old conductor-core call executor this row was
-        // created by create_child_run() before dispatch. In the new runkon-flow path
-        // only a workflow_run_steps ID exists, so we create the agent_run here and
-        // use its ID as run_id. We also link it back to the step via child_run_id so
-        // the TUI can drill in while the agent is running.
+        // ClaudeAgentExecutor needs a pre-created agent_runs row ID as `run_id` so
+        // it can track the subprocess. The step↔run link (child_run_id on the step
+        // row) is written here — before execution starts — so the TUI can show live
+        // agent output while the step is in flight. The engine also sets child_run_id
+        // post-execution via ActionOutput, which is a no-op thanks to COALESCE.
         let child_run_id = {
             let conn = self.conn.lock().map_err(bridge_lock_err)?;
             let agent_mgr = crate::agent::AgentManager::new(&conn);
@@ -268,7 +267,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
         // injecting db_path which exists only in the conductor-core variant.
         // run_id is the freshly-created agent_run ID (not the workflow step ID).
         let core_ectx = crate::workflow::action_executor::ExecutionContext {
-            run_id: child_run_id,
+            run_id: child_run_id.clone(),
             working_dir: ectx.working_dir.clone(),
             repo_path: ectx.repo_path.clone(),
             db_path: self.db_path.clone(),
@@ -296,8 +295,10 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             schema: core_schema,
         };
 
-        // Dispatch through the inner executor.
-        self.inner
+        // Dispatch through the inner executor, then surface child_run_id so the
+        // engine writes the step↔run link via update_step() post-execution.
+        let mut output = self
+            .inner
             .execute(&core_ectx, &core_params)
             .map(core_action_output_to_rk)
             .map_err(|e| match e {
@@ -305,7 +306,9 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                     runkon_flow::cancellation_reason::CancellationReason::UserRequested(None),
                 ),
                 other => EngineError::Workflow(other.to_string()),
-            })
+            })?;
+        output.child_run_id = Some(child_run_id);
+        Ok(output)
     }
 }
 
@@ -572,7 +575,9 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         };
 
         let core_result = crate::workflow::engine::execute_workflow_standalone(&standalone_params)
-            .map_err(|e| EngineError::Workflow(e.to_string()))?;
+            .map_err(|e| {
+                EngineError::Workflow(format!("child workflow '{}' failed: {e}", child_def.name))
+            })?;
 
         Ok(super::rk_types::core_workflow_result_to_rk(core_result))
     }
@@ -582,10 +587,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         workflow_run_id: &str,
         model: Option<&str>,
     ) -> runkon_flow::engine_error::Result<runkon_flow::types::WorkflowResult> {
-        let guard = self.conn.lock().map_err(bridge_lock_err)?;
-
         let input = crate::workflow::types::WorkflowResumeInput {
-            conn: &guard,
             config: &self.config,
             workflow_run_id,
             model,
@@ -594,6 +596,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             conductor_bin_dir: None,
             event_sinks: vec![],
             db_path: Some(self.db_path.clone()),
+            shutdown: None,
         };
 
         let core_result = crate::workflow::engine::resume_workflow(&input).map_err(|e| {

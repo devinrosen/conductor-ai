@@ -375,6 +375,9 @@ fn snap_workflow_run_detail_with_steps() {
             fan_out_failed: 0,
             fan_out_skipped: 0,
             step_error: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
         },
         WorkflowRunStep {
             id: "step2".into(),
@@ -414,6 +417,9 @@ fn snap_workflow_run_detail_with_steps() {
             fan_out_failed: 0,
             fan_out_skipped: 0,
             step_error: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
         },
     ];
 

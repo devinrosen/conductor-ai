@@ -348,10 +348,13 @@ mod tests {
     fn test_resume_ephemeral_workflow_run_rejected() {
         use crate::agent::AgentManager;
         use crate::config::Config;
-        use crate::test_helpers::setup_db;
         use crate::workflow::{resume_workflow, WorkflowManager, WorkflowResumeInput};
 
-        let conn = setup_db();
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let db_path = tmp.path().to_path_buf();
+        let conn = crate::db::open_database(&db_path).unwrap();
+        crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+
         let agent_mgr = AgentManager::new(&conn);
         // Create an ephemeral parent agent run (empty worktree_id → stored as NULL)
         let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
@@ -374,7 +377,6 @@ mod tests {
 
         let config = Config::default();
         let input = WorkflowResumeInput {
-            conn: &conn,
             config: &config,
             workflow_run_id: &run.id,
             restart: false,
@@ -382,7 +384,8 @@ mod tests {
             model: None,
             conductor_bin_dir: None,
             event_sinks: vec![],
-            db_path: None,
+            db_path: Some(db_path.clone()),
+            shutdown: None,
         };
 
         let err = resume_workflow(&input).unwrap_err();

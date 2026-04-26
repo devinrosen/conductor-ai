@@ -19,19 +19,6 @@ use crate::types::WorkflowResult;
 use crate::workflow_resolver_directory::DirectoryWorkflowResolver;
 
 // ---------------------------------------------------------------------------
-// EngineBundle (kept for source compatibility)
-// ---------------------------------------------------------------------------
-
-/// Produced by earlier versions of `FlowEngineBuilder::build()`.
-///
-/// Kept so that importers of `runkon_flow::EngineBundle` continue to compile.
-/// New code should use `FlowEngine` instead.
-pub struct EngineBundle {
-    pub action_registry: ActionRegistry,
-    pub script_env_provider: Arc<dyn ScriptEnvProvider>,
-}
-
-// ---------------------------------------------------------------------------
 // FlowEngine
 // ---------------------------------------------------------------------------
 
@@ -157,6 +144,41 @@ impl FlowEngine {
         }
 
         result
+    }
+
+    /// Resume a workflow from the post-reset DB state.
+    ///
+    /// Reads completed steps from persistence, builds the skip set internally, and
+    /// delegates to `run()`. The `state.resume_ctx` must be `None` on entry — this
+    /// method owns skip-set construction so that it reads the *post-reset* DB state.
+    pub fn resume(
+        &self,
+        def: &WorkflowDef,
+        state: &mut ExecutionState,
+    ) -> crate::engine_error::Result<WorkflowResult> {
+        if state.resume_ctx.is_some() {
+            return Err(EngineError::Workflow(
+                "resume() requires resume_ctx to be None on entry".to_string(),
+            ));
+        }
+        let steps = state
+            .persistence
+            .get_steps(&state.workflow_run_id)
+            .map_err(|e| {
+                EngineError::Workflow(format!(
+                    "resume: failed to load steps for run '{}': {e}",
+                    state.workflow_run_id
+                ))
+            })?;
+        let step_map: HashMap<_, _> = steps
+            .into_iter()
+            .filter(|s| s.status == crate::status::WorkflowStepStatus::Completed)
+            .map(|s| ((s.step_name.clone(), s.iteration as u32), s))
+            .collect();
+        if !step_map.is_empty() {
+            state.resume_ctx = Some(crate::engine::ResumeContext { step_map });
+        }
+        self.run(def, state)
     }
 
     /// Cancel a running workflow by run ID.
@@ -555,11 +577,11 @@ impl Drop for FlowEngine {
 mod tests {
     use super::*;
     use crate::dsl::{
-        AgentRef, ApprovalMode, CallNode, CallWorkflowNode, ForEachNode, GateNode, GateType,
-        OnChildFail, OnCycle, OnTimeout, WorkflowTrigger,
+        ApprovalMode, CallWorkflowNode, ForEachNode, GateNode, GateType, OnChildFail, OnCycle,
+        OnTimeout,
     };
     use crate::engine_error::EngineError;
-    use crate::test_helpers::{make_ectx, make_params};
+    use crate::test_helpers::{call_node, make_def, make_ectx, make_params, ForwardSink, VecSink};
     use crate::traits::action_executor::{ActionOutput, ActionParams, ExecutionContext};
     use crate::traits::gate_resolver::{GateContext, GateParams, GatePoll};
     use crate::traits::item_provider::{FanOutItem, ProviderContext};
@@ -603,6 +625,77 @@ mod tests {
         }
     }
 
+    struct CountingExecutor {
+        name: &'static str,
+        count: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl ActionExecutor for CountingExecutor {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn execute(
+            &self,
+            _: &ExecutionContext,
+            _: &ActionParams,
+        ) -> Result<ActionOutput, EngineError> {
+            self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(ActionOutput::default())
+        }
+    }
+
+    fn make_test_run(
+        p: &Arc<crate::persistence_memory::InMemoryWorkflowPersistence>,
+    ) -> crate::types::WorkflowRun {
+        use crate::traits::persistence::{NewRun, WorkflowPersistence};
+        p.create_run(NewRun {
+            workflow_name: "wf".to_string(),
+            worktree_id: None,
+            ticket_id: None,
+            repo_id: None,
+            parent_run_id: String::new(),
+            dry_run: false,
+            trigger: "manual".to_string(),
+            definition_snapshot: None,
+            parent_workflow_run_id: None,
+            target_label: None,
+        })
+        .unwrap()
+    }
+
+    /// Build an `ExecutionState` wired with two `CountingExecutor`s (alpha, beta)
+    /// and return the counters alongside the state.
+    fn make_counting_state(
+        persistence: Arc<crate::persistence_memory::InMemoryWorkflowPersistence>,
+        run_id: String,
+    ) -> (
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+        crate::engine::ExecutionState,
+    ) {
+        let alpha_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let beta_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut m = HashMap::new();
+        m.insert(
+            "alpha".to_string(),
+            Box::new(CountingExecutor {
+                name: "alpha",
+                count: Arc::clone(&alpha_count),
+            }) as Box<dyn crate::traits::action_executor::ActionExecutor>,
+        );
+        m.insert(
+            "beta".to_string(),
+            Box::new(CountingExecutor {
+                name: "beta",
+                count: Arc::clone(&beta_count),
+            }) as Box<dyn crate::traits::action_executor::ActionExecutor>,
+        );
+        let mut state = make_bare_state("wf");
+        state.persistence = persistence;
+        state.action_registry = Arc::new(ActionRegistry::new(m, None));
+        state.workflow_run_id = run_id;
+        (alpha_count, beta_count, state)
+    }
+
     struct TicketsProvider;
     impl crate::traits::item_provider::ItemProvider for TicketsProvider {
         fn name(&self) -> &str {
@@ -635,35 +728,6 @@ mod tests {
     }
 
     // --- helpers ---
-
-    #[allow(dead_code)]
-    fn make_def(name: &str, body: Vec<WorkflowNode>) -> WorkflowDef {
-        WorkflowDef {
-            name: name.to_string(),
-            title: None,
-            description: String::new(),
-            trigger: WorkflowTrigger::Manual,
-            targets: vec![],
-            group: None,
-            inputs: vec![],
-            body,
-            always: vec![],
-            source_path: "test.wf".to_string(),
-        }
-    }
-
-    fn call_node(agent: &str) -> WorkflowNode {
-        WorkflowNode::Call(CallNode {
-            agent: AgentRef::Name(agent.to_string()),
-            retries: 0,
-            on_fail: None,
-            output: None,
-            with: vec![],
-            bot_name: None,
-            plugin_dirs: vec![],
-            timeout: None,
-        })
-    }
 
     fn foreach_node(step: &str, over: &str) -> WorkflowNode {
         WorkflowNode::ForEach(ForEachNode {
@@ -1154,30 +1218,6 @@ mod tests {
 
     use crate::events::{EngineEvent, EngineEventData, EventSink};
     use crate::persistence_memory::InMemoryWorkflowPersistence;
-    use std::sync::Mutex;
-
-    /// A VecSink that collects all received events for inspection.
-    struct VecSink {
-        events: Mutex<Vec<EngineEventData>>,
-    }
-
-    impl VecSink {
-        fn new() -> Arc<Self> {
-            Arc::new(Self {
-                events: Mutex::new(Vec::new()),
-            })
-        }
-
-        fn collected(&self) -> Vec<EngineEventData> {
-            self.events.lock().unwrap().clone()
-        }
-    }
-
-    impl EventSink for VecSink {
-        fn emit(&self, event: &EngineEventData) {
-            self.events.lock().unwrap().push(event.clone());
-        }
-    }
 
     /// A sink that always panics — used to test panic isolation.
     struct PanicSink;
@@ -1436,15 +1476,6 @@ mod tests {
         assert_eq!(*last, "RunCompleted", "last event should be RunCompleted");
     }
 
-    /// A sink that forwards events to a VecSink behind an Arc.
-    struct ForwardSink(Arc<VecSink>);
-
-    impl EventSink for ForwardSink {
-        fn emit(&self, event: &EngineEventData) {
-            self.0.emit(event);
-        }
-    }
-
     // ---------------------------------------------------------------------------
     // Cancellation integration tests (Task 16)
     // ---------------------------------------------------------------------------
@@ -1469,23 +1500,10 @@ mod tests {
     fn cancel_run_marks_cancelling_in_db() {
         use crate::persistence_memory::InMemoryWorkflowPersistence;
         use crate::status::WorkflowRunStatus;
-        use crate::traits::persistence::{NewRun, WorkflowPersistence};
+        use crate::traits::persistence::WorkflowPersistence;
 
         let persistence = Arc::new(InMemoryWorkflowPersistence::new());
-        let run = persistence
-            .create_run(NewRun {
-                workflow_name: "wf".to_string(),
-                worktree_id: None,
-                ticket_id: None,
-                repo_id: None,
-                parent_run_id: String::new(),
-                dry_run: false,
-                trigger: "manual".to_string(),
-                definition_snapshot: None,
-                parent_workflow_run_id: None,
-                target_label: None,
-            })
-            .unwrap();
+        let run = make_test_run(&persistence);
         persistence
             .update_run_status(&run.id, WorkflowRunStatus::Running, None, None)
             .unwrap();
@@ -1559,7 +1577,6 @@ mod tests {
     fn parallel_fail_fast_skips_remaining_branches() {
         use crate::dsl::{ParallelNode, WorkflowNode};
         use crate::persistence_memory::InMemoryWorkflowPersistence;
-        use crate::traits::persistence::NewRun;
 
         // Build engine with both alpha and failing executors.
         let engine = FlowEngineBuilder::new()
@@ -1585,22 +1602,9 @@ mod tests {
 
         let def = make_def("wf", vec![parallel]);
 
-        let persistence: Arc<dyn crate::traits::persistence::WorkflowPersistence> =
-            Arc::new(InMemoryWorkflowPersistence::new());
-        let run = persistence
-            .create_run(NewRun {
-                workflow_name: "wf".to_string(),
-                worktree_id: None,
-                ticket_id: None,
-                repo_id: None,
-                parent_run_id: String::new(),
-                dry_run: false,
-                trigger: "manual".to_string(),
-                definition_snapshot: None,
-                parent_workflow_run_id: None,
-                target_label: None,
-            })
-            .unwrap();
+        let persistence = Arc::new(InMemoryWorkflowPersistence::new());
+        let run = make_test_run(&persistence);
+        let persistence: Arc<dyn crate::traits::persistence::WorkflowPersistence> = persistence;
 
         // Build a state with both executors in the registry.
         let mut m = HashMap::new();
@@ -1640,7 +1644,6 @@ mod tests {
     fn step_timeout_marks_timed_out() {
         use crate::dsl::{CallNode, WorkflowNode};
         use crate::persistence_memory::InMemoryWorkflowPersistence;
-        use crate::traits::persistence::NewRun;
 
         // Executor that sleeps longer than the DSL timeout.
         struct SlowExecutor;
@@ -1676,22 +1679,9 @@ mod tests {
 
         let def = make_def("wf", vec![timed_out_call]);
 
-        let persistence: Arc<dyn crate::traits::persistence::WorkflowPersistence> =
-            Arc::new(InMemoryWorkflowPersistence::new());
-        let run = persistence
-            .create_run(NewRun {
-                workflow_name: "wf".to_string(),
-                worktree_id: None,
-                ticket_id: None,
-                repo_id: None,
-                parent_run_id: String::new(),
-                dry_run: false,
-                trigger: "manual".to_string(),
-                definition_snapshot: None,
-                parent_workflow_run_id: None,
-                target_label: None,
-            })
-            .unwrap();
+        let persistence = Arc::new(InMemoryWorkflowPersistence::new());
+        let run = make_test_run(&persistence);
+        let persistence: Arc<dyn crate::traits::persistence::WorkflowPersistence> = persistence;
 
         let mut m = HashMap::new();
         m.insert(
@@ -1716,28 +1706,350 @@ mod tests {
         );
     }
 
+    // ---------------------------------------------------------------------------
+    // FlowEngine::resume() tests
+    // ---------------------------------------------------------------------------
+
+    // AC: resume() reads completed steps from DB and skips them; pending steps run.
+    #[test]
+    fn resume_skips_completed_steps() {
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::status::WorkflowStepStatus;
+        use crate::traits::persistence::{NewStep, StepUpdate, WorkflowPersistence};
+        use std::sync::atomic::Ordering;
+
+        let persistence = Arc::new(InMemoryWorkflowPersistence::new());
+        let run = make_test_run(&persistence);
+
+        // Pre-seed alpha as a completed step so resume() will skip it.
+        let step_id = persistence
+            .insert_step(NewStep {
+                workflow_run_id: run.id.clone(),
+                step_name: "alpha".to_string(),
+                role: "actor".to_string(),
+                can_commit: false,
+                position: 0,
+                iteration: 0,
+                retry_count: Some(0),
+            })
+            .unwrap();
+        persistence
+            .update_step(
+                &step_id,
+                StepUpdate {
+                    status: WorkflowStepStatus::Completed,
+                    child_run_id: None,
+                    result_text: None,
+                    context_out: None,
+                    markers_out: None,
+                    retry_count: None,
+                    structured_output: None,
+                    step_error: None,
+                },
+            )
+            .unwrap();
+
+        let (alpha_count, beta_count, mut state) =
+            make_counting_state(Arc::clone(&persistence), run.id);
+
+        let engine = FlowEngineBuilder::new().build().unwrap();
+        let def = make_def("wf", vec![call_node("alpha"), call_node("beta")]);
+        engine.resume(&def, &mut state).unwrap();
+
+        assert_eq!(
+            alpha_count.load(Ordering::SeqCst),
+            0,
+            "alpha was pre-completed and should be skipped"
+        );
+        assert_eq!(
+            beta_count.load(Ordering::SeqCst),
+            1,
+            "beta should execute once"
+        );
+    }
+
+    // AC: resume() accumulates metrics from pre-completed steps into WorkflowResult totals.
+    #[test]
+    fn resume_accumulates_metrics_from_completed_steps() {
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::status::WorkflowStepStatus;
+        use crate::traits::persistence::{NewStep, StepUpdate, WorkflowPersistence};
+
+        let persistence = Arc::new(InMemoryWorkflowPersistence::new());
+        let run = make_test_run(&persistence);
+
+        // Pre-seed alpha as a completed step with non-zero metrics.
+        let step_id = persistence
+            .insert_step(NewStep {
+                workflow_run_id: run.id.clone(),
+                step_name: "alpha".to_string(),
+                role: "actor".to_string(),
+                can_commit: false,
+                position: 0,
+                iteration: 0,
+                retry_count: Some(0),
+            })
+            .unwrap();
+        persistence
+            .update_step(
+                &step_id,
+                StepUpdate {
+                    status: WorkflowStepStatus::Completed,
+                    child_run_id: None,
+                    result_text: None,
+                    context_out: None,
+                    markers_out: None,
+                    retry_count: None,
+                    structured_output: None,
+                    step_error: None,
+                },
+            )
+            .unwrap();
+        // Inject non-zero cost and turn metrics directly into the step record.
+        persistence.set_step_metrics_for_test(
+            &step_id,
+            Some(1.23),
+            Some(5),
+            Some(4000),
+            Some(100),
+            Some(200),
+        );
+
+        let (_, _, mut state) = make_counting_state(Arc::clone(&persistence), run.id);
+
+        let engine = FlowEngineBuilder::new().build().unwrap();
+        let def = make_def("wf", vec![call_node("alpha"), call_node("beta")]);
+        let result = engine.resume(&def, &mut state).unwrap();
+
+        assert!(
+            (result.total_cost - 1.23).abs() < 1e-9,
+            "total_cost should include alpha's pre-completed cost; got {}",
+            result.total_cost
+        );
+        assert_eq!(
+            result.total_turns, 5,
+            "total_turns should include alpha's pre-completed turns"
+        );
+        assert_eq!(
+            result.total_input_tokens, 100,
+            "total_input_tokens should include alpha's pre-completed tokens"
+        );
+    }
+
+    // AC: resume() with no completed steps runs all steps (same behaviour as run()).
+    #[test]
+    fn resume_empty_skip_set_runs_all() {
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use std::sync::atomic::Ordering;
+
+        let persistence = Arc::new(InMemoryWorkflowPersistence::new());
+        let run = make_test_run(&persistence);
+
+        let (alpha_count, beta_count, mut state) = make_counting_state(persistence, run.id);
+
+        let engine = FlowEngineBuilder::new().build().unwrap();
+        let def = make_def("wf", vec![call_node("alpha"), call_node("beta")]);
+        engine.resume(&def, &mut state).unwrap();
+
+        assert_eq!(
+            alpha_count.load(Ordering::SeqCst),
+            1,
+            "alpha should execute once when no completed steps exist"
+        );
+        assert_eq!(
+            beta_count.load(Ordering::SeqCst),
+            1,
+            "beta should execute once when no completed steps exist"
+        );
+    }
+
+    // AC: resume() with a while loop fast-forwards past completed iterations and only
+    // executes body steps for the first incomplete iteration.
+    #[test]
+    fn resume_while_loop_starts_at_first_incomplete_iteration() {
+        use crate::dsl::{OnMaxIter, WhileNode, WorkflowNode};
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::status::WorkflowStepStatus;
+        use crate::traits::persistence::{NewStep, StepUpdate, WorkflowPersistence};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let persistence = Arc::new(InMemoryWorkflowPersistence::new());
+        let run = make_test_run(&persistence);
+
+        // Pre-seed the condition step (outside the while loop) as completed with a "continue" marker.
+        let cond_id = persistence
+            .insert_step(NewStep {
+                workflow_run_id: run.id.clone(),
+                step_name: "cond".to_string(),
+                role: "actor".to_string(),
+                can_commit: false,
+                position: 0,
+                iteration: 0,
+                retry_count: Some(0),
+            })
+            .unwrap();
+        persistence
+            .update_step(
+                &cond_id,
+                StepUpdate {
+                    status: WorkflowStepStatus::Completed,
+                    child_run_id: None,
+                    result_text: None,
+                    context_out: None,
+                    markers_out: Some(r#"["continue"]"#.to_string()),
+                    retry_count: None,
+                    structured_output: None,
+                    step_error: None,
+                },
+            )
+            .unwrap();
+
+        // Pre-seed body_a and body_b for iterations 0 and 1.
+        for iter in 0i64..2 {
+            for (pos_offset, name) in [(0i64, "body_a"), (1, "body_b")] {
+                let sid = persistence
+                    .insert_step(NewStep {
+                        workflow_run_id: run.id.clone(),
+                        step_name: name.to_string(),
+                        role: "actor".to_string(),
+                        can_commit: false,
+                        position: iter * 2 + pos_offset + 1,
+                        iteration: iter,
+                        retry_count: Some(0),
+                    })
+                    .unwrap();
+                persistence
+                    .update_step(
+                        &sid,
+                        StepUpdate {
+                            status: WorkflowStepStatus::Completed,
+                            child_run_id: None,
+                            result_text: None,
+                            context_out: None,
+                            markers_out: None,
+                            retry_count: None,
+                            structured_output: None,
+                            step_error: None,
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+
+        // Build state with CountingExecutors for body_a and body_b.
+        let a_count = Arc::new(AtomicUsize::new(0));
+        let b_count = Arc::new(AtomicUsize::new(0));
+        let mut m = HashMap::new();
+        m.insert(
+            "body_a".to_string(),
+            Box::new(CountingExecutor {
+                name: "body_a",
+                count: Arc::clone(&a_count),
+            }) as Box<dyn crate::traits::action_executor::ActionExecutor>,
+        );
+        m.insert(
+            "body_b".to_string(),
+            Box::new(CountingExecutor {
+                name: "body_b",
+                count: Arc::clone(&b_count),
+            }) as Box<dyn crate::traits::action_executor::ActionExecutor>,
+        );
+        // Also register "cond" with a counting executor (it is pre-completed and will
+        // be skipped, but must be present in the registry so validation passes).
+        m.insert(
+            "cond".to_string(),
+            Box::new(CountingExecutor {
+                name: "cond",
+                count: Arc::new(AtomicUsize::new(0)),
+            }) as Box<dyn crate::traits::action_executor::ActionExecutor>,
+        );
+        let mut state = make_bare_state("wf");
+        state.persistence = Arc::clone(&persistence) as Arc<dyn WorkflowPersistence>;
+        state.action_registry = Arc::new(ActionRegistry::new(m, None));
+        state.workflow_run_id = run.id.clone();
+
+        // Workflow: cond (outside) -> while(cond.continue, max=3) { body_a, body_b }
+        let while_node = WorkflowNode::While(WhileNode {
+            step: "cond".to_string(),
+            marker: "continue".to_string(),
+            max_iterations: 3,
+            stuck_after: None,
+            on_max_iter: OnMaxIter::Continue,
+            body: vec![call_node("body_a"), call_node("body_b")],
+        });
+        let def = make_def("wf", vec![call_node("cond"), while_node]);
+
+        let engine = FlowEngineBuilder::new().build().unwrap();
+        engine.resume(&def, &mut state).unwrap();
+
+        assert_eq!(
+            a_count.load(Ordering::SeqCst),
+            1,
+            "body_a should execute only for the third iteration (first incomplete)"
+        );
+        assert_eq!(
+            b_count.load(Ordering::SeqCst),
+            1,
+            "body_b should execute only for the third iteration (first incomplete)"
+        );
+    }
+
+    // AC: resume() propagates persistence errors from get_steps().
+    #[test]
+    fn resume_propagates_get_steps_error() {
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+
+        let persistence = Arc::new(InMemoryWorkflowPersistence::new());
+        persistence.set_fail_get_steps(true);
+
+        let engine = FlowEngineBuilder::new().build().unwrap();
+        let def = make_def("wf", vec![call_node("alpha")]);
+        let mut state = make_bare_state("wf");
+        state.persistence = persistence;
+        state.workflow_run_id = "run-123".to_string();
+
+        let err = engine.resume(&def, &mut state).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("resume: failed to load steps for run"),
+            "error should contain the prefix; got: {msg}"
+        );
+        assert!(
+            msg.contains("run-123"),
+            "error should contain the run ID; got: {msg}"
+        );
+    }
+
+    // AC: resume() returns Err when called with a pre-seeded resume_ctx.
+    #[test]
+    fn resume_rejects_pre_seeded_resume_ctx() {
+        use crate::engine::ResumeContext;
+        use std::collections::HashMap;
+
+        let engine = FlowEngineBuilder::new().build().unwrap();
+        let def = make_def("wf", vec![call_node("alpha")]);
+        let mut state = make_bare_state("wf");
+        state.resume_ctx = Some(ResumeContext {
+            step_map: HashMap::new(),
+        });
+        state.workflow_run_id = "run-precond".to_string();
+
+        let err = engine.resume(&def, &mut state).unwrap_err();
+        assert!(
+            err.to_string().contains("resume_ctx"),
+            "error should mention resume_ctx; got: {err}"
+        );
+    }
+
     // AC: cross-process cancel — is_run_cancelled returns true for Cancelling status.
     #[test]
     fn cross_process_cancel_via_db_poll() {
         use crate::persistence_memory::InMemoryWorkflowPersistence;
         use crate::status::WorkflowRunStatus;
-        use crate::traits::persistence::{NewRun, WorkflowPersistence};
+        use crate::traits::persistence::WorkflowPersistence;
 
         let persistence = Arc::new(InMemoryWorkflowPersistence::new());
-        let run = persistence
-            .create_run(NewRun {
-                workflow_name: "wf".to_string(),
-                worktree_id: None,
-                ticket_id: None,
-                repo_id: None,
-                parent_run_id: String::new(),
-                dry_run: false,
-                trigger: "manual".to_string(),
-                definition_snapshot: None,
-                parent_workflow_run_id: None,
-                target_label: None,
-            })
-            .unwrap();
+        let run = make_test_run(&persistence);
 
         // Simulate cross-process cancel by directly writing Cancelling to DB.
         persistence

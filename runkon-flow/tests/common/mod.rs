@@ -12,7 +12,6 @@ use runkon_flow::engine::{
     ChildWorkflowInput, ChildWorkflowRunner, ExecutionState, ResumeContext, WorktreeContext,
 };
 use runkon_flow::engine_error::EngineError;
-use runkon_flow::events::{EngineEventData, EventSink};
 use runkon_flow::persistence_memory::InMemoryWorkflowPersistence;
 pub use runkon_flow::traits::action_executor::ActionExecutor;
 use runkon_flow::traits::action_executor::{
@@ -91,41 +90,8 @@ impl ActionExecutor for FailingExecutor {
 // Event sink helpers
 // ---------------------------------------------------------------------------
 
-/// Collects all emitted events for post-run inspection.
-pub struct VecSink {
-    events: Mutex<Vec<EngineEventData>>,
-}
-
-impl VecSink {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            events: Mutex::new(Vec::new()),
-        })
-    }
-
-    pub fn collected(&self) -> Vec<EngineEventData> {
-        self.events.lock().unwrap().clone()
-    }
-}
-
-impl EventSink for VecSink {
-    fn emit(&self, event: &EngineEventData) {
-        self.events.lock().unwrap().push(event.clone());
-    }
-}
-
-/// Forwards events to a `VecSink` owned behind an `Arc`.
-///
-/// Used because `FlowEngineBuilder::event_sink` takes `Box<dyn EventSink>`,
-/// while the test needs to keep an `Arc<VecSink>` to read the collected events
-/// after `run()` completes.
-pub struct ForwardSink(pub Arc<VecSink>);
-
-impl EventSink for ForwardSink {
-    fn emit(&self, event: &EngineEventData) {
-        self.0.emit(event);
-    }
-}
+#[allow(unused_imports)]
+pub use runkon_flow::test_helpers::{ForwardSink, VecSink};
 
 // ---------------------------------------------------------------------------
 // State construction helpers
@@ -208,7 +174,7 @@ pub fn make_state(
 
 /// Wrap `make_state` and set `resume_ctx` to signal a workflow resume.
 ///
-/// The `skip_completed` set is empty so all steps execute normally — tests that
+/// The `step_map` is empty so all steps execute normally — tests that
 /// need skipping behaviour should populate it directly after calling this helper.
 pub fn make_state_with_resume_ctx(
     wf_name: &str,
@@ -217,7 +183,6 @@ pub fn make_state_with_resume_ctx(
 ) -> ExecutionState {
     let mut state = make_state(wf_name, persistence, named_executors);
     state.resume_ctx = Some(ResumeContext {
-        skip_completed: HashSet::new(),
         step_map: HashMap::new(),
     });
     state

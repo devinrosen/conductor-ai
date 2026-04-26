@@ -82,7 +82,10 @@ async fn wait_for_run_id(slot: RunIdSlot) -> Option<String> {
         guard.clone()
     })
     .await
-    .unwrap_or(None)
+    .unwrap_or_else(|e| {
+        tracing::warn!("wait_for_run_id: spawn_blocking task failed: {e}");
+        None
+    })
 }
 
 /// Fire a workflow completion notification.
@@ -1715,6 +1718,7 @@ pub async fn resume_workflow_endpoint(
             restart,
             db_path: None,
             conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+            shutdown: None,
         };
 
         let result = conductor_core::workflow::resume_workflow_standalone(&params);

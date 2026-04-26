@@ -18,21 +18,6 @@ use crate::types::{
     ContextEntry, StepKey, StepResult, WorkflowExecConfig, WorkflowResult, WorkflowRunStep,
 };
 
-/// Input keys that the workflow engine injects automatically from the run context.
-pub const ENGINE_INJECTED_KEYS: &[&str] = &[
-    "ticket_id",
-    "ticket_source_id",
-    "ticket_source_type",
-    "ticket_title",
-    "ticket_body",
-    "ticket_url",
-    "ticket_raw_json",
-    "repo_id",
-    "repo_path",
-    "repo_name",
-    "workflow_run_id",
-];
-
 /// Domain-identity context for a single workflow execution.
 #[derive(Clone)]
 pub struct WorktreeContext {
@@ -46,9 +31,7 @@ pub struct WorktreeContext {
 
 /// Pre-loaded context for resuming a workflow run.
 pub struct ResumeContext {
-    /// Step keys to skip (e.g. `("lint", 0)`).
-    pub skip_completed: HashSet<StepKey>,
-    /// Completed step records keyed by step key, for O(1) restore.
+    /// Completed step records keyed by step key, for O(1) skip check and restore.
     pub step_map: HashMap<StepKey, WorkflowRunStep>,
 }
 
@@ -210,6 +193,24 @@ pub fn resolve_schema(state: &ExecutionState, name: &str) -> Result<OutputSchema
 pub fn emit_event(state: &ExecutionState, event: EngineEvent) {
     crate::events::emit_to_sinks(&state.workflow_run_id, event, &state.event_sinks);
 }
+
+/// Input keys that the workflow engine injects automatically from the run context.
+///
+/// These keys are populated from `WorktreeContext` fields at execution time; callers
+/// should treat them as read-only and avoid defining workflow inputs with these names.
+pub const ENGINE_INJECTED_KEYS: &[&str] = &[
+    "ticket_id",
+    "ticket_source_id",
+    "ticket_source_type",
+    "ticket_title",
+    "ticket_body",
+    "ticket_url",
+    "ticket_raw_json",
+    "repo_id",
+    "repo_path",
+    "repo_name",
+    "workflow_run_id",
+];
 
 /// Extract completed step keys from a slice of step records.
 pub fn completed_keys_from_steps(steps: &[WorkflowRunStep]) -> HashSet<StepKey> {
@@ -488,14 +489,7 @@ pub fn record_step_failure(
         step_name: step_label.to_string(),
         status: WorkflowStepStatus::Failed,
         result_text: Some(last_error),
-        cost_usd: None,
-        num_turns: None,
-        duration_ms: None,
-        markers: Vec::new(),
-        context: String::new(),
-        child_run_id: None,
-        structured_output: None,
-        output_file: None,
+        ..StepResult::default()
     };
     state.step_results.insert(step_key, step_result);
 
@@ -520,15 +514,7 @@ pub fn record_step_skipped(state: &mut ExecutionState, step_key: String, step_la
     let step_result = StepResult {
         step_name: step_label.to_string(),
         status: WorkflowStepStatus::Skipped,
-        result_text: None,
-        cost_usd: None,
-        num_turns: None,
-        duration_ms: None,
-        markers: Vec::new(),
-        context: String::new(),
-        child_run_id: None,
-        structured_output: None,
-        output_file: None,
+        ..StepResult::default()
     };
     state.step_results.insert(step_key, step_result);
 }
@@ -587,13 +573,33 @@ pub fn record_step_success(
     };
     state.step_results.insert(step_key, step_result);
 
+    push_context_entry(
+        state,
+        step_name,
+        iteration,
+        context,
+        markers_for_ctx,
+        structured_output_for_ctx,
+        output_file_for_ctx,
+    );
+}
+
+fn push_context_entry(
+    state: &mut ExecutionState,
+    step_name: &str,
+    iteration: u32,
+    context: String,
+    markers: Vec<String>,
+    structured_output: Option<String>,
+    output_file: Option<String>,
+) {
     state.contexts.push(ContextEntry {
         step: step_name.to_string(),
         iteration,
         context,
-        markers: markers_for_ctx,
-        structured_output: structured_output_for_ctx,
-        output_file: output_file_for_ctx,
+        markers,
+        structured_output,
+        output_file,
     });
 }
 
@@ -707,8 +713,8 @@ pub fn handle_on_fail(
 /// Check whether a step should be skipped on resume.
 pub fn should_skip(state: &ExecutionState, step_name: &str, iteration: u32) -> bool {
     state.resume_ctx.as_ref().is_some_and(|ctx| {
-        ctx.skip_completed
-            .contains(&(step_name.to_owned(), iteration))
+        ctx.step_map
+            .contains_key(&(step_name.to_owned(), iteration))
     })
 }
 
@@ -755,6 +761,17 @@ pub fn restore_completed_step(
     let markers = parse_markers_out(step.markers_out.as_deref(), step_key);
     let context = step.context_out.clone().unwrap_or_default();
 
+    // Accumulate costs from the step's joined agent run metrics.
+    state.accumulate_metrics(
+        step.cost_usd,
+        step.num_turns,
+        step.duration_ms,
+        step.input_tokens,
+        step.output_tokens,
+        step.cache_read_input_tokens,
+        step.cache_creation_input_tokens,
+    );
+
     // Restore gate feedback if this was a gate step
     if let Some(ref feedback) = step.gate_feedback {
         state.last_gate_feedback = Some(feedback.clone());
@@ -776,14 +793,15 @@ pub fn restore_completed_step(
     };
     state.step_results.insert(step_key.to_string(), step_result);
 
-    state.contexts.push(ContextEntry {
-        step: step_key.to_string(),
+    push_context_entry(
+        state,
+        step_key,
         iteration,
         context,
-        markers: markers_for_ctx,
-        structured_output: step.structured_output.clone(),
-        output_file: step.output_file.clone(),
-    });
+        markers_for_ctx,
+        step.structured_output.clone(),
+        step.output_file.clone(),
+    );
 }
 
 /// Fetch both the final step output (markers + context) and all completed step
@@ -803,13 +821,13 @@ pub fn fetch_child_completion_data(
         }
     };
 
-    // Derive final output from the last completed step.
-    let last_completed = steps
-        .iter()
+    // Collect completed steps once; derive both final output and bubble-up map from it.
+    let completed: Vec<_> = steps
+        .into_iter()
         .filter(|s| s.status == WorkflowStepStatus::Completed)
-        .max_by_key(|s| s.position);
+        .collect();
 
-    let final_output = match last_completed {
+    let final_output = match completed.iter().max_by_key(|s| s.position) {
         Some(step) => {
             let markers = parse_markers_out(step.markers_out.as_deref(), &step.step_name);
             let context = step.context_out.clone().unwrap_or_default();
@@ -819,9 +837,8 @@ pub fn fetch_child_completion_data(
     };
 
     // Build bubble-up map from all completed steps.
-    let child_steps = steps
+    let child_steps = completed
         .into_iter()
-        .filter(|s| s.status == WorkflowStepStatus::Completed)
         .map(|s| {
             let markers = parse_markers_out(s.markers_out.as_deref(), &s.step_name);
             let context = s.context_out.clone().unwrap_or_default();

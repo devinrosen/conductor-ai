@@ -245,8 +245,8 @@ pub fn collect_leaf_step_keys(node: &WorkflowNode) -> Vec<String> {
 /// while loop. Returns the max iteration that has all body nodes completed,
 /// so the loop resumes from the iteration where it failed.
 pub fn find_max_completed_while_iteration(state: &ExecutionState, node: &WhileNode) -> u32 {
-    let skip_set = match state.resume_ctx {
-        Some(ref ctx) => &ctx.skip_completed,
+    let step_map = match state.resume_ctx {
+        Some(ref ctx) => &ctx.step_map,
         None => return 0,
     };
 
@@ -257,13 +257,28 @@ pub fn find_max_completed_while_iteration(state: &ExecutionState, node: &WhileNo
         return 0;
     }
 
+    let body_key_set: std::collections::HashSet<&str> =
+        body_keys.iter().map(String::as_str).collect();
+
+    // Build a map from iteration -> set of completed step names, restricted to body
+    // keys only — non-body steps from other parts of the workflow are irrelevant here.
+    let mut completed_by_iter: std::collections::HashMap<u32, std::collections::HashSet<&str>> =
+        std::collections::HashMap::new();
+    for (name, iter) in step_map.keys() {
+        if body_key_set.contains(name.as_str()) {
+            completed_by_iter
+                .entry(*iter)
+                .or_default()
+                .insert(name.as_str());
+        }
+    }
+
     // Find the highest iteration where all body nodes are completed
     let mut iter = 0u32;
+    let empty: std::collections::HashSet<&str> = std::collections::HashSet::new();
     loop {
-        let all_done = body_keys
-            .iter()
-            .all(|k| skip_set.contains(&(k.clone(), iter)));
-        if !all_done {
+        let completed = completed_by_iter.get(&iter).unwrap_or(&empty);
+        if !body_keys.iter().all(|k| completed.contains(k.as_str())) {
             break;
         }
         iter += 1;

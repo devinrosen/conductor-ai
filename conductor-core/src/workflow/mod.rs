@@ -67,7 +67,8 @@ pub fn injected_variable_keys() -> &'static [&'static str] {
 
 pub use engine::{
     apply_workflow_input_defaults, execute_workflow, execute_workflow_standalone, resume_workflow,
-    resume_workflow_standalone, validate_resume_preconditions,
+    resume_workflow_standalone, spawn_claimed_runs, spawn_heartbeat_resume, spawn_workflow_resume,
+    validate_resume_preconditions,
 };
 pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
 pub use manager::recovery::{ReapedStaleRun, StaleWorkflowRun};
@@ -79,6 +80,7 @@ pub use persistence::{
 };
 pub use persistence_sqlite::SqliteWorkflowPersistence;
 pub use status::{WorkflowRunStatus, WorkflowStepStatus};
+pub use types::SpawnHeartbeatResumeParams;
 pub use types::{
     resolve_conductor_bin_dir, ActiveWorkflowCounts, BlockedOn, ContextEntry, GateAnalyticsRow,
     MetadataEntry, PendingGateAnalyticsRow, PendingGateRow, RunIdSlot, SpikeBaseline,

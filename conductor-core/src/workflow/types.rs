@@ -191,6 +191,12 @@ pub struct WorkflowRunStep {
     pub output_tokens: Option<i64>,
     pub cache_read_input_tokens: Option<i64>,
     pub cache_creation_input_tokens: Option<i64>,
+    /// Cost of the child agent run for this step, populated via JOIN with agent_runs.
+    pub cost_usd: Option<f64>,
+    /// Turn count from the child agent run for this step, populated via JOIN with agent_runs.
+    pub num_turns: Option<i64>,
+    /// Wall-clock duration of the child agent run in ms, populated via JOIN with agent_runs.
+    pub duration_ms: Option<i64>,
     /// Total number of fan-out items (foreach steps only).
     pub fan_out_total: Option<i64>,
     /// Number of successfully completed fan-out items.
@@ -542,6 +548,23 @@ pub struct WorkflowExecStandalone {
     pub iteration: u32,
 }
 
+/// Parameters for [`spawn_heartbeat_resume`].
+///
+/// Groups execution parameters (`run_id`, `config`, …) together with
+/// notification-only parameters (`workflow_name`, `target_label`) so the
+/// execution API surface does not expose notification concerns as positional
+/// arguments.
+pub struct SpawnHeartbeatResumeParams {
+    pub run_id: String,
+    /// Workflow name — used only in the stuck-run failure notification.
+    pub workflow_name: String,
+    /// Target label — used only in the stuck-run failure notification.
+    pub target_label: Option<String>,
+    pub config: crate::config::Config,
+    pub conductor_bin_dir: Option<std::path::PathBuf>,
+    pub db_path: Option<std::path::PathBuf>,
+}
+
 /// Owned inputs for [`resume_workflow_standalone`], avoiding lifetime issues
 /// when spawning background threads.
 pub struct WorkflowResumeStandalone {
@@ -555,11 +578,18 @@ pub struct WorkflowResumeStandalone {
     pub db_path: Option<std::path::PathBuf>,
     /// Directory containing the conductor binary, injected into script step PATH.
     pub conductor_bin_dir: Option<std::path::PathBuf>,
+    /// Shutdown signal for graceful cancellation. `None` means the run cannot
+    /// be aborted externally (e.g. auto-resume watchdog threads).
+    pub shutdown: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// Input parameters for resuming a workflow run.
+///
+/// `resume_workflow` is fully self-contained: it opens its own database connection
+/// from `db_path` (defaulting to `crate::config::db_path()` when `None`), using
+/// a single connection for both the pre-execution phase and the FlowEngine execution
+/// phase. This matches the `execute_workflow_standalone` pattern.
 pub struct WorkflowResumeInput<'a> {
-    pub conn: &'a rusqlite::Connection,
     pub config: &'a crate::config::Config,
     pub workflow_run_id: &'a str,
     /// Optional model override for agent steps.
@@ -572,9 +602,11 @@ pub struct WorkflowResumeInput<'a> {
     pub conductor_bin_dir: Option<std::path::PathBuf>,
     /// Event sinks for run observability. Defaults to empty (no sinks).
     pub event_sinks: Vec<std::sync::Arc<dyn runkon_flow::events::EventSink>>,
-    /// Database path for the FlowEngine execution phase.
-    /// When `None`, falls back to `crate::config::db_path()`.
+    /// Database path. When `None`, falls back to `crate::config::db_path()`.
     pub db_path: Option<std::path::PathBuf>,
+    /// Shutdown signal for graceful cancellation. `None` means the run cannot
+    /// be aborted externally (e.g. auto-resume watchdog threads).
+    pub shutdown: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// Resolve the directory containing the current executable.

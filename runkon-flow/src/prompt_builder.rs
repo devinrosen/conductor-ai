@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
-use crate::engine::ExecutionState;
-use crate::engine::ENGINE_INJECTED_KEYS;
+use crate::engine::{ExecutionState, ENGINE_INJECTED_KEYS};
 
 fn substitute_variables_impl(
     template: &str,
@@ -93,7 +92,10 @@ pub fn build_variable_map(state: &ExecutionState) -> HashMap<&str, String> {
     let prior_contexts_json = if state.contexts.is_empty() {
         "[]".to_string()
     } else {
-        serde_json::to_string(&state.contexts).unwrap_or_default()
+        crate::helpers::serialize_or_empty_array(
+            &state.contexts,
+            "build_variable_map:prior_contexts",
+        )
     };
     vars.insert("prior_contexts", prior_contexts_json);
     if let Some(ref gf) = state.last_gate_feedback {

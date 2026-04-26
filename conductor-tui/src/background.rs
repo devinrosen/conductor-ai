@@ -55,8 +55,14 @@ pub fn spawn_db_poller(
         let mut turn_state: HashMap<String, (u64, i64)> = HashMap::new();
         loop {
             thread::sleep(interval);
-            let sel_wt = selected_worktree_id.lock().unwrap().clone();
-            let sel_repo = selected_repo_id.lock().unwrap().clone();
+            let sel_wt = selected_worktree_id
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let sel_repo = selected_repo_id
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
             if let Some(PollResult {
                 mut action,
                 config,
@@ -516,12 +522,13 @@ pub fn poll_data(
                 } else {
                     None
                 };
-                if let Err(e) = wf_mgr.auto_resume_stuck_workflows(
-                    &config,
-                    configurable_threshold,
-                    conductor_bin_dir.clone(),
-                ) {
-                    tracing::warn!("auto_resume_stuck_workflows failed: {e}");
+                match wf_mgr.claim_stuck_workflows(&config, configurable_threshold) {
+                    Ok(claimed) => conductor_core::workflow::spawn_claimed_runs(
+                        claimed,
+                        config.clone(),
+                        conductor_bin_dir.clone(),
+                    ),
+                    Err(e) => tracing::warn!("claim_stuck_workflows failed: {e}"),
                 }
                 let auto_resume_limit = config.general.auto_resume_limit;
                 if auto_resume_limit > 0 {
@@ -532,10 +539,13 @@ pub fn poll_data(
                         Ok(_) => {}
                         Err(e) => tracing::warn!("classify_resumable_workflows failed: {e}"),
                     }
-                    if let Err(e) =
-                        wf_mgr.watchdog_needs_resume_workflows(&config, conductor_bin_dir)
-                    {
-                        tracing::warn!("watchdog_needs_resume_workflows failed: {e}");
+                    match wf_mgr.claim_needs_resume_runs(&config) {
+                        Ok(claimed) => conductor_core::workflow::spawn_claimed_runs(
+                            claimed,
+                            config.clone(),
+                            conductor_bin_dir.clone(),
+                        ),
+                        Err(e) => tracing::warn!("claim_needs_resume_runs failed: {e}"),
                     }
                 }
             }
@@ -642,6 +652,14 @@ pub fn poll_data(
             })
             .collect();
 
+        // Batch-fetch steps for all active runs to avoid one query per run.
+        let active_est_run_ids: Vec<String> = active_runs.iter().map(|r| r.id.clone()).collect();
+        let active_est_run_id_refs: Vec<&str> =
+            active_est_run_ids.iter().map(|s| s.as_str()).collect();
+        let all_steps_by_run = wf_mgr
+            .get_steps_for_runs(&active_est_run_id_refs)
+            .unwrap_or_default();
+
         // Cache step histories per workflow name to avoid redundant queries
         let mut step_history_cache: std::collections::HashMap<
             String,
@@ -683,8 +701,9 @@ pub fn poll_data(
             }
 
             let step_ests = estimation::estimate_all_steps(step_histories);
-            let steps = wf_mgr.get_workflow_steps(&run.id).unwrap_or_default();
-            if let Some(live_est) = estimation::live_remaining_estimate(&steps, &step_ests) {
+            let empty = vec![];
+            let steps = all_steps_by_run.get(&run.id).unwrap_or(&empty);
+            if let Some(live_est) = estimation::live_remaining_estimate(steps, &step_ests) {
                 estimates.insert(run.id.clone(), live_est);
             }
         }
@@ -755,7 +774,7 @@ pub fn spawn_ticket_sync_once(tx: BackgroundSender) {
     thread::spawn(move || {
         sync_all_tickets(&tx);
         if !tx.send(Action::TicketSyncDone) {
-            eprintln!("failed to send TicketSyncDone: channel closed");
+            tracing::warn!("failed to send TicketSyncDone: channel closed");
         }
     });
 }
@@ -803,11 +822,11 @@ fn sync_repo(
                 Ok(count) => {
                     if let Err(e) = syncer.close_missing_tickets(repo_id, source_type, &synced_ids)
                     {
-                        eprintln!("warn: close_missing_tickets failed for {repo_slug}: {e}");
+                        tracing::warn!("close_missing_tickets failed for {repo_slug}: {e}");
                     }
                     if let Err(e) = syncer.mark_worktrees_for_closed_tickets(repo_id) {
-                        eprintln!(
-                            "warn: mark_worktrees_for_closed_tickets failed for {repo_slug}: {e}"
+                        tracing::warn!(
+                            "mark_worktrees_for_closed_tickets failed for {repo_slug}: {e}"
                         );
                     }
                     Action::TicketSyncComplete {

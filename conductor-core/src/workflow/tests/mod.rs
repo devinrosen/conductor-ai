@@ -17,10 +17,20 @@ mod types;
 
 pub(super) use self::helpers::make_exec_input;
 pub(super) use super::engine::{
-    bubble_up_child_step_results, completed_keys_from_steps, execute_nodes,
-    fetch_child_final_output, record_step_failure, record_step_skipped, resolve_child_inputs,
-    restore_completed_step, ExecutionState, ResumeContext,
+    bubble_up_child_step_results, execute_nodes, fetch_child_final_output, record_step_failure,
+    record_step_skipped, resolve_child_inputs, restore_completed_step, ExecutionState,
+    ResumeContext,
 };
+
+pub(super) fn completed_keys_from_steps(
+    steps: &[WorkflowRunStep],
+) -> std::collections::HashSet<StepKey> {
+    steps
+        .iter()
+        .filter(|s| s.status == WorkflowStepStatus::Completed)
+        .map(|s| (s.step_name.clone(), s.iteration as u32))
+        .collect()
+}
 pub(super) use super::executors::{
     execute_call, execute_call_workflow, execute_do, execute_do_while, execute_unless,
     execute_while, handle_gate_timeout,
