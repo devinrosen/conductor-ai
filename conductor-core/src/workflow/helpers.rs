@@ -37,6 +37,44 @@ pub fn parse_gate_options(json: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_gate_options_valid_array_returns_values() {
+        let json = r#"[{"value": "opt1"}, {"value": "opt2"}, {"value": "opt3"}]"#;
+        let result = parse_gate_options(json);
+        assert_eq!(result, vec!["opt1", "opt2", "opt3"]);
+    }
+
+    #[test]
+    fn parse_gate_options_invalid_json_returns_empty() {
+        let result = parse_gate_options("not valid json at all");
+        assert!(result.is_empty(), "invalid JSON should yield empty Vec");
+    }
+
+    #[test]
+    fn parse_gate_options_drops_objects_missing_value_key() {
+        let json = r#"[{"value": "keep"}, {"label": "no-value"}, {"value": "also-keep"}]"#;
+        let result = parse_gate_options(json);
+        assert_eq!(result, vec!["keep", "also-keep"]);
+    }
+
+    #[test]
+    fn parse_gate_options_empty_array_returns_empty() {
+        let result = parse_gate_options("[]");
+        assert!(result.is_empty(), "empty array should yield empty Vec");
+    }
+
+    #[test]
+    fn parse_gate_options_extra_fields_ignored() {
+        let json = r#"[{"value": "a", "label": "A label", "extra": 42}]"#;
+        let result = parse_gate_options(json);
+        assert_eq!(result, vec!["a"]);
+    }
+}
+
 pub(super) fn load_agent_and_build_prompt(
     ectx: &ExecutionContext,
     params: &ActionParams,

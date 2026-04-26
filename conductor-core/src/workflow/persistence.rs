@@ -33,6 +33,7 @@ pub struct NewStep {
 }
 
 /// Fields to update on an existing workflow step.
+#[derive(Default)]
 pub struct StepUpdate {
     pub status: WorkflowStepStatus,
     pub child_run_id: Option<String>,
@@ -42,6 +43,44 @@ pub struct StepUpdate {
     pub retry_count: Option<i64>,
     pub structured_output: Option<String>,
     pub step_error: Option<String>,
+}
+
+impl StepUpdate {
+    /// Convenience constructor for a successful step completion.
+    pub fn completed(
+        child_run_id: Option<String>,
+        result_text: Option<String>,
+        context_out: Option<String>,
+        markers_out: Option<String>,
+        attempt: u32,
+        structured_output: Option<String>,
+    ) -> Self {
+        Self {
+            status: WorkflowStepStatus::Completed,
+            child_run_id,
+            result_text,
+            context_out,
+            markers_out,
+            retry_count: Some(attempt as i64),
+            structured_output,
+            step_error: None,
+        }
+    }
+
+    /// Convenience constructor for a failed step.
+    pub fn failed(err_msg: impl Into<String>, attempt: u32) -> Self {
+        let err_msg = err_msg.into();
+        Self {
+            status: WorkflowStepStatus::Failed,
+            child_run_id: None,
+            result_text: Some(err_msg.clone()),
+            context_out: None,
+            markers_out: None,
+            retry_count: Some(attempt as i64),
+            structured_output: None,
+            step_error: Some(err_msg),
+        }
+    }
 }
 
 /// Status values for fan-out items, mirroring the string constants stored in the DB.
@@ -99,6 +138,9 @@ pub enum GateApprovalState {
     },
 }
 
+// NOTE: This function body mirrors `runkon_flow::traits::persistence::gate_approval_state_from_fields`
+// exactly. A true re-export is blocked until conductor-core and runkon-flow share a single
+// `GateApprovalState` + `WorkflowStepStatus` (tracked in issue #2631).
 pub(crate) fn gate_approval_state_from_fields(
     approved_at: Option<&str>,
     status: WorkflowStepStatus,
@@ -117,10 +159,14 @@ pub(crate) fn gate_approval_state_from_fields(
     GateApprovalState::Pending
 }
 
+// Unstable migration scaffolding: this trait is planned for removal/unification
+// with runkon-flow's `WorkflowPersistence` once conductor-core and runkon-flow
+// types are fully unified (tracked in issue #2631). Do not add new callers.
 /// Abstracts all persistence reads and writes needed by the workflow engine.
 ///
 /// `Send + Sync` are required for use behind `Arc<dyn WorkflowPersistence>`.
 /// All methods acquire a lock internally; no external synchronization is needed.
+#[doc(hidden)]
 pub trait WorkflowPersistence: Send + Sync {
     // --- Run lifecycle ---
 

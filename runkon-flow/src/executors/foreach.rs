@@ -704,15 +704,19 @@ pub fn execute_foreach(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet, VecDeque};
+
     use crate::types::FanOutItemRow;
 
-    fn make_row(status: &str) -> FanOutItemRow {
+    use super::{collect_transitive_dependents, is_eligible};
+
+    fn make_row(item_id: &str, status: &str) -> FanOutItemRow {
         FanOutItemRow {
-            id: "id".to_string(),
+            id: format!("db-{item_id}"),
             step_run_id: "step".to_string(),
             item_type: "repo".to_string(),
-            item_id: "item".to_string(),
-            item_ref: "ref".to_string(),
+            item_id: item_id.to_string(),
+            item_ref: format!("ref-{item_id}"),
             child_run_id: None,
             status: status.to_string(),
             dispatched_at: None,
@@ -720,16 +724,35 @@ mod tests {
         }
     }
 
+    /// Simulates the still_waiting promotion loop: drains `waiting` into `ready` for
+    /// items whose dependencies are all in `terminal_ids`.
+    fn promote_waiting(
+        waiting: &mut Vec<FanOutItemRow>,
+        ready: &mut VecDeque<FanOutItemRow>,
+        dep_map: &HashMap<String, HashSet<String>>,
+        terminal_ids: &HashSet<String>,
+    ) {
+        let mut still_waiting = Vec::new();
+        for item in waiting.drain(..) {
+            if is_eligible(&item.item_id, dep_map, terminal_ids) {
+                ready.push_back(item);
+            } else {
+                still_waiting.push(item);
+            }
+        }
+        *waiting = still_waiting;
+    }
+
     /// Verifies that the seeding fold correctly counts pre-existing terminal items
     /// on partial resume without iterating the slice more than once.
     #[test]
     fn seed_counts_from_existing_terminal_items() {
         let existing = [
-            make_row("completed"),
-            make_row("completed"),
-            make_row("failed"),
-            make_row("skipped"),
-            make_row("pending"), // must NOT contribute to any count
+            make_row("a", "completed"),
+            make_row("b", "completed"),
+            make_row("c", "failed"),
+            make_row("d", "skipped"),
+            make_row("e", "pending"), // must NOT contribute to any count
         ];
 
         let (completed, failed, skipped) =
@@ -746,5 +769,150 @@ mod tests {
         assert_eq!(completed, 2, "expected 2 completed");
         assert_eq!(failed, 1, "expected 1 failed");
         assert_eq!(skipped, 1, "expected 1 skipped");
+    }
+
+    /// No dependencies: all items start in ready immediately (terminal_ids empty).
+    #[test]
+    fn no_dependencies_all_items_start_ready() {
+        let dep_map: HashMap<String, HashSet<String>> = HashMap::new();
+        let terminal_ids: HashSet<String> = HashSet::new();
+
+        let items = vec![
+            make_row("a", "pending"),
+            make_row("b", "pending"),
+            make_row("c", "pending"),
+        ];
+
+        let (ready_vec, waiting): (Vec<_>, Vec<_>) = items
+            .into_iter()
+            .partition(|item| is_eligible(&item.item_id, &dep_map, &terminal_ids));
+
+        assert_eq!(ready_vec.len(), 3, "all items should be ready with no deps");
+        assert!(waiting.is_empty(), "nothing should be waiting");
+    }
+
+    /// Linear chain A → B: B stays waiting until A is terminal, then B moves to ready.
+    #[test]
+    fn linear_chain_b_waits_for_a_then_becomes_ready() {
+        let mut dep_map: HashMap<String, HashSet<String>> = HashMap::new();
+        // B depends on A
+        dep_map
+            .entry("b".to_string())
+            .or_default()
+            .insert("a".to_string());
+
+        let mut terminal_ids: HashSet<String> = HashSet::new();
+
+        let items = vec![make_row("a", "pending"), make_row("b", "pending")];
+
+        let (ready_vec, mut waiting): (Vec<_>, Vec<_>) = items
+            .into_iter()
+            .partition(|item| is_eligible(&item.item_id, &dep_map, &terminal_ids));
+        let mut ready: VecDeque<FanOutItemRow> = ready_vec.into_iter().collect();
+
+        assert_eq!(ready.len(), 1, "only A should be ready initially");
+        assert_eq!(ready.front().unwrap().item_id, "a");
+        assert_eq!(waiting.len(), 1, "B should be waiting");
+
+        // Simulate A completing
+        terminal_ids.insert("a".to_string());
+        promote_waiting(&mut waiting, &mut ready, &dep_map, &terminal_ids);
+
+        // After promotion, A is consumed, B should now be in ready
+        // Drain the 'a' item from ready (it was dispatched)
+        let dispatched = ready.pop_front().unwrap();
+        assert_eq!(dispatched.item_id, "a");
+
+        assert_eq!(ready.len(), 1, "B should now be in ready after A completed");
+        assert_eq!(ready.front().unwrap().item_id, "b");
+        assert!(waiting.is_empty(), "nothing should remain waiting");
+    }
+
+    /// Diamond dependency: C and D both depend on A.
+    /// Once A completes both C and D should move to ready simultaneously.
+    #[test]
+    fn diamond_both_dependents_promoted_after_common_dep_completes() {
+        let mut dep_map: HashMap<String, HashSet<String>> = HashMap::new();
+        // C depends on A, D depends on A
+        dep_map
+            .entry("c".to_string())
+            .or_default()
+            .insert("a".to_string());
+        dep_map
+            .entry("d".to_string())
+            .or_default()
+            .insert("a".to_string());
+
+        let mut terminal_ids: HashSet<String> = HashSet::new();
+
+        let items = vec![
+            make_row("a", "pending"),
+            make_row("c", "pending"),
+            make_row("d", "pending"),
+        ];
+
+        let (ready_vec, mut waiting): (Vec<_>, Vec<_>) = items
+            .into_iter()
+            .partition(|item| is_eligible(&item.item_id, &dep_map, &terminal_ids));
+        let mut ready: VecDeque<FanOutItemRow> = ready_vec.into_iter().collect();
+
+        assert_eq!(ready.len(), 1, "only A should start ready");
+        assert_eq!(waiting.len(), 2, "C and D should be waiting");
+
+        // A completes
+        terminal_ids.insert("a".to_string());
+        promote_waiting(&mut waiting, &mut ready, &dep_map, &terminal_ids);
+
+        // Both C and D should now be ready (plus A still in deque before it's dispatched)
+        assert!(
+            waiting.is_empty(),
+            "no items should remain waiting after A completes"
+        );
+        // ready should contain A (already there) + C + D = 3
+        assert_eq!(ready.len(), 3, "A, C, D should all be in ready");
+    }
+
+    /// Items already in existing_set are skipped; their dependents become eligible.
+    #[test]
+    fn already_completed_items_enable_dependents() {
+        let mut dep_map: HashMap<String, HashSet<String>> = HashMap::new();
+        // B depends on A
+        dep_map
+            .entry("b".to_string())
+            .or_default()
+            .insert("a".to_string());
+
+        // A is already in existing_set (completed before this dispatch loop)
+        let existing_set: HashSet<String> = ["a".to_string()].into_iter().collect();
+        // terminal_ids seeds from existing completed items
+        let mut terminal_ids: HashSet<String> = existing_set.clone();
+
+        // Only B is a new pending item (A was completed earlier)
+        let pending_items = vec![make_row("b", "pending")];
+
+        let (ready_vec, waiting): (Vec<_>, Vec<_>) = pending_items
+            .into_iter()
+            .partition(|item| is_eligible(&item.item_id, &dep_map, &terminal_ids));
+        let ready: VecDeque<FanOutItemRow> = ready_vec.into_iter().collect();
+
+        assert_eq!(
+            ready.len(),
+            1,
+            "B should be immediately ready because A is already terminal"
+        );
+        assert!(waiting.is_empty());
+
+        // Also verify collect_transitive_dependents with everything already terminal
+        terminal_ids.insert("b".to_string());
+        let mut dependents_map: HashMap<String, HashSet<String>> = HashMap::new();
+        dependents_map
+            .entry("a".to_string())
+            .or_default()
+            .insert("b".to_string());
+        let transitive = collect_transitive_dependents("a", &dependents_map, &terminal_ids);
+        assert!(
+            transitive.is_empty(),
+            "B is already terminal so transitive set should be empty"
+        );
     }
 }
