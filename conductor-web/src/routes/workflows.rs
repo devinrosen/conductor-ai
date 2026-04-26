@@ -82,7 +82,10 @@ async fn wait_for_run_id(slot: RunIdSlot) -> Option<String> {
         guard.clone()
     })
     .await
-    .unwrap_or(None)
+    .unwrap_or_else(|e| {
+        tracing::warn!("wait_for_run_id: spawn_blocking task failed: {e}");
+        None
+    })
 }
 
 /// Fire a workflow completion notification.

@@ -489,14 +489,7 @@ pub fn record_step_failure(
         step_name: step_label.to_string(),
         status: WorkflowStepStatus::Failed,
         result_text: Some(last_error),
-        cost_usd: None,
-        num_turns: None,
-        duration_ms: None,
-        markers: Vec::new(),
-        context: String::new(),
-        child_run_id: None,
-        structured_output: None,
-        output_file: None,
+        ..StepResult::default()
     };
     state.step_results.insert(step_key, step_result);
 
@@ -521,15 +514,7 @@ pub fn record_step_skipped(state: &mut ExecutionState, step_key: String, step_la
     let step_result = StepResult {
         step_name: step_label.to_string(),
         status: WorkflowStepStatus::Skipped,
-        result_text: None,
-        cost_usd: None,
-        num_turns: None,
-        duration_ms: None,
-        markers: Vec::new(),
-        context: String::new(),
-        child_run_id: None,
-        structured_output: None,
-        output_file: None,
+        ..StepResult::default()
     };
     state.step_results.insert(step_key, step_result);
 }

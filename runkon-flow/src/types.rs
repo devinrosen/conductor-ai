@@ -193,7 +193,7 @@ pub struct WorkflowResult {
 }
 
 /// Result of a single step execution (kept in memory during execution).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct StepResult {
     pub step_name: String,
     pub status: WorkflowStepStatus,

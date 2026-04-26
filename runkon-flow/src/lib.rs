@@ -13,7 +13,7 @@ pub mod output_schema;
 pub mod persistence_memory;
 pub mod prompt_builder;
 pub mod status;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub mod test_helpers;
 pub mod traits;
 pub mod types;

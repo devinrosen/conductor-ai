@@ -768,7 +768,7 @@ pub fn spawn_ticket_sync_once(tx: BackgroundSender) {
     thread::spawn(move || {
         sync_all_tickets(&tx);
         if !tx.send(Action::TicketSyncDone) {
-            eprintln!("failed to send TicketSyncDone: channel closed");
+            tracing::warn!("failed to send TicketSyncDone: channel closed");
         }
     });
 }
