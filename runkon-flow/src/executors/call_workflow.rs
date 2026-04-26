@@ -1,7 +1,7 @@
 use crate::dsl::CallWorkflowNode;
 use crate::engine::{
     fetch_child_completion_data, handle_on_fail, record_step_success, resolve_child_inputs,
-    restore_step, should_skip, ExecutionState,
+    ExecutionState,
 };
 use crate::engine_error::{EngineError, Result};
 use crate::prompt_builder::build_variable_map;
@@ -20,9 +20,7 @@ pub fn execute_call_workflow(
 
     // Skip completed sub-workflow steps on resume
     let wf_step_name = format!("workflow:{}", node.workflow);
-    if should_skip(state, &wf_step_name, iteration) {
-        tracing::info!("Skipping completed sub-workflow '{}'", node.workflow);
-        restore_step(state, &wf_step_name, iteration);
+    if super::skip_if_already_completed(state, &wf_step_name, iteration, &node.workflow) {
         return Ok(());
     }
 
@@ -102,19 +100,14 @@ pub fn execute_call_workflow(
                         .persistence
                         .update_step(
                             &step_id,
-                            StepUpdate {
-                                status: WorkflowStepStatus::Completed,
-                                child_run_id: Some(result.workflow_run_id.clone()),
-                                result_text: Some(format!(
-                                    "Sub-workflow '{}' completed",
-                                    node.workflow
-                                )),
-                                context_out: Some(context.clone()),
-                                markers_out: Some(markers_json),
-                                retry_count: Some(0),
-                                structured_output: None,
-                                step_error: None,
-                            },
+                            StepUpdate::completed(
+                                Some(result.workflow_run_id.clone()),
+                                Some(format!("Sub-workflow '{}' completed", node.workflow)),
+                                Some(context.clone()),
+                                Some(markers_json),
+                                0,
+                                None,
+                            ),
                         )
                         .map_err(p_err)?;
 
@@ -225,18 +218,9 @@ pub fn execute_call_workflow(
     let max_attempts = 1 + node.retries;
 
     for attempt in 0..max_attempts {
-        let step_id = state
-            .persistence
-            .insert_step(NewStep {
-                workflow_run_id: state.workflow_run_id.clone(),
-                step_name: wf_step_name.clone(),
-                role: "workflow".to_string(),
-                can_commit: false,
-                position: pos,
-                iteration: iteration as i64,
-                retry_count: Some(attempt as i64),
-            })
-            .map_err(p_err)?;
+        // Insert step record as running (also emits StepRetrying when attempt > 0)
+        let step_id =
+            super::begin_retry_attempt(state, &wf_step_name, "workflow", pos, iteration, attempt)?;
 
         tracing::info!(
             "Step 'workflow:{}' (attempt {}/{}): executing sub-workflow",
@@ -301,19 +285,7 @@ pub fn execute_call_workflow(
                     tracing::warn!("{msg}");
                     state
                         .persistence
-                        .update_step(
-                            &step_id,
-                            StepUpdate {
-                                status: WorkflowStepStatus::Failed,
-                                child_run_id: None,
-                                result_text: Some(msg.clone()),
-                                context_out: None,
-                                markers_out: None,
-                                retry_count: Some(attempt as i64),
-                                structured_output: None,
-                                step_error: Some(msg.clone()),
-                            },
-                        )
+                        .update_step(&step_id, StepUpdate::failed(msg.clone(), attempt))
                         .map_err(p_err)?;
                     last_error = msg;
                     continue;
@@ -357,19 +329,14 @@ pub fn execute_call_workflow(
                         .persistence
                         .update_step(
                             &step_id,
-                            StepUpdate {
-                                status: WorkflowStepStatus::Completed,
-                                child_run_id: Some(result.workflow_run_id.clone()),
-                                result_text: Some(format!(
-                                    "Sub-workflow '{}' completed",
-                                    node.workflow
-                                )),
-                                context_out: Some(context.clone()),
-                                markers_out: Some(markers_json),
-                                retry_count: Some(attempt as i64),
-                                structured_output: None,
-                                step_error: None,
-                            },
+                            StepUpdate::completed(
+                                Some(result.workflow_run_id.clone()),
+                                Some(format!("Sub-workflow '{}' completed", node.workflow)),
+                                Some(context.clone()),
+                                Some(markers_json),
+                                attempt,
+                                None,
+                            ),
                         )
                         .map_err(p_err)?;
 
@@ -429,19 +396,7 @@ pub fn execute_call_workflow(
                 tracing::warn!("{} (attempt {}/{})", msg, attempt + 1, max_attempts);
                 state
                     .persistence
-                    .update_step(
-                        &step_id,
-                        StepUpdate {
-                            status: WorkflowStepStatus::Failed,
-                            child_run_id: None,
-                            result_text: Some(msg.clone()),
-                            context_out: None,
-                            markers_out: None,
-                            retry_count: Some(attempt as i64),
-                            structured_output: None,
-                            step_error: Some(msg.clone()),
-                        },
-                    )
+                    .update_step(&step_id, StepUpdate::failed(msg.clone(), attempt))
                     .map_err(p_err)?;
                 last_error = msg;
                 continue;

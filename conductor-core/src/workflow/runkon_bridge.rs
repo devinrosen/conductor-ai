@@ -1072,4 +1072,94 @@ mod tests {
             "error message should be preserved: {msg}"
         );
     }
+
+    #[test]
+    fn output_schema_round_trip_all_field_types() {
+        use crate::schema_config::{ArrayItems, FieldDef, FieldType, OutputSchema};
+
+        let core_schema = OutputSchema {
+            name: "test".to_string(),
+            fields: vec![
+                FieldDef {
+                    name: "s".to_string(),
+                    required: true,
+                    field_type: FieldType::String,
+                    desc: None,
+                    examples: None,
+                },
+                FieldDef {
+                    name: "n".to_string(),
+                    required: false,
+                    field_type: FieldType::Number,
+                    desc: None,
+                    examples: None,
+                },
+                FieldDef {
+                    name: "b".to_string(),
+                    required: false,
+                    field_type: FieldType::Boolean,
+                    desc: None,
+                    examples: None,
+                },
+                FieldDef {
+                    name: "e".to_string(),
+                    required: false,
+                    field_type: FieldType::Enum(vec!["a".to_string(), "b".to_string()]),
+                    desc: None,
+                    examples: None,
+                },
+                FieldDef {
+                    name: "arr".to_string(),
+                    required: false,
+                    field_type: FieldType::Array {
+                        items: ArrayItems::Scalar(Box::new(FieldType::String)),
+                    },
+                    desc: None,
+                    examples: None,
+                },
+                FieldDef {
+                    name: "obj".to_string(),
+                    required: false,
+                    field_type: FieldType::Object {
+                        fields: vec![FieldDef {
+                            name: "inner".to_string(),
+                            required: true,
+                            field_type: FieldType::Number,
+                            desc: None,
+                            examples: None,
+                        }],
+                    },
+                    desc: None,
+                    examples: None,
+                },
+            ],
+            markers: None,
+        };
+
+        // core→rk→core round trip
+        let rk: runkon_flow::output_schema::OutputSchema = core_schema
+            .fields
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .fold(
+                runkon_flow::output_schema::OutputSchema {
+                    name: core_schema.name.clone(),
+                    fields: vec![],
+                    markers: None,
+                },
+                |mut acc, f| {
+                    acc.fields.push(f.into());
+                    acc
+                },
+            );
+        let roundtripped: crate::schema_config::OutputSchema = rk.into();
+        assert_eq!(roundtripped.name, core_schema.name);
+        assert_eq!(roundtripped.fields.len(), core_schema.fields.len());
+        for (got, expected) in roundtripped.fields.iter().zip(core_schema.fields.iter()) {
+            assert_eq!(got.name, expected.name);
+            assert_eq!(got.required, expected.required);
+        }
+    }
 }

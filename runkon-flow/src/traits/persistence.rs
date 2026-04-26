@@ -44,6 +44,43 @@ pub struct StepUpdate {
     pub step_error: Option<String>,
 }
 
+impl StepUpdate {
+    /// Convenience constructor for a successful step completion.
+    pub fn completed(
+        child_run_id: Option<String>,
+        result_text: Option<String>,
+        context_out: Option<String>,
+        markers_out: Option<String>,
+        attempt: u32,
+        structured_output: Option<String>,
+    ) -> Self {
+        Self {
+            status: WorkflowStepStatus::Completed,
+            child_run_id,
+            result_text,
+            context_out,
+            markers_out,
+            retry_count: Some(attempt as i64),
+            structured_output,
+            step_error: None,
+        }
+    }
+
+    /// Convenience constructor for a failed step.
+    pub fn failed(err_msg: String, attempt: u32) -> Self {
+        Self {
+            status: WorkflowStepStatus::Failed,
+            child_run_id: None,
+            result_text: Some(err_msg.clone()),
+            context_out: None,
+            markers_out: None,
+            retry_count: Some(attempt as i64),
+            structured_output: None,
+            step_error: Some(err_msg),
+        }
+    }
+}
+
 /// Status values for fan-out items, mirroring the string constants stored in the DB.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FanOutItemStatus {

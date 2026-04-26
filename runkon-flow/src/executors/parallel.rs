@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::cancellation_reason::CancellationReason;
 use crate::dsl::ParallelNode;
-use crate::engine::{resolve_schema, restore_step, should_skip, ExecutionState};
+use crate::engine::{resolve_schema, ExecutionState};
 use crate::engine_error::{EngineError, Result};
 use crate::status::WorkflowStepStatus;
 use crate::traits::action_executor::{ActionOutput, ActionParams, ExecutionContext};
@@ -62,9 +62,7 @@ pub fn execute_parallel(
         let agent_label = agent_ref.label();
         let agent_step_key = agent_ref.step_key();
 
-        if should_skip(state, &agent_step_key, iteration) {
-            tracing::info!("parallel: skipping completed agent '{}'", agent_label);
-            restore_step(state, &agent_step_key, iteration);
+        if super::skip_if_already_completed(state, &agent_step_key, iteration, agent_label) {
             skipped_count += 1;
             continue;
         }
@@ -282,16 +280,14 @@ pub fn execute_parallel(
                     .persistence
                     .update_step(
                         &pr.step_id,
-                        StepUpdate {
-                            status: WorkflowStepStatus::Completed,
-                            child_run_id: output.child_run_id.clone(),
-                            result_text: output.result_text.clone(),
-                            context_out: Some(context.clone()),
-                            markers_out: Some(markers_json),
-                            retry_count: Some(pr.attempt as i64),
-                            structured_output: output.structured_output.clone(),
-                            step_error: None,
-                        },
+                        StepUpdate::completed(
+                            output.child_run_id.clone(),
+                            output.result_text.clone(),
+                            Some(context.clone()),
+                            Some(markers_json),
+                            pr.attempt,
+                            output.structured_output.clone(),
+                        ),
                     )
                     .map_err(p_err)?;
 
@@ -332,19 +328,7 @@ pub fn execute_parallel(
                 tracing::warn!("parallel: '{}' failed: {e}", pr.agent_name);
                 state
                     .persistence
-                    .update_step(
-                        &pr.step_id,
-                        StepUpdate {
-                            status: WorkflowStepStatus::Failed,
-                            child_run_id: None,
-                            result_text: Some(e.to_string()),
-                            context_out: None,
-                            markers_out: None,
-                            retry_count: Some(pr.attempt as i64),
-                            structured_output: None,
-                            step_error: Some(e.to_string()),
-                        },
-                    )
+                    .update_step(&pr.step_id, StepUpdate::failed(e.to_string(), pr.attempt))
                     .map_err(p_err)?;
                 failures += 1;
             }

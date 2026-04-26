@@ -106,6 +106,14 @@ impl InMemoryWorkflowPersistence {
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, InMemoryStore>, EngineError> {
         self.store.lock().map_err(|_| lock_err())
     }
+
+    fn with_store<F, T>(&self, f: F) -> Result<T, EngineError>
+    where
+        F: FnOnce(&mut InMemoryStore) -> Result<T, EngineError>,
+    {
+        let mut store = self.store.lock().map_err(|_| lock_err())?;
+        f(&mut store)
+    }
 }
 
 impl WorkflowPersistence for InMemoryWorkflowPersistence {

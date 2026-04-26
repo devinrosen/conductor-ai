@@ -6,8 +6,8 @@ use crate::error::{ConductorError, Result};
 use runkon_flow::dsl::{ForeachScope, TicketScope};
 
 use super::{
-    collect_fan_out_items, fetch_dep_item_ids, require_repo_id, FanOutItem, ItemProvider,
-    ProviderContext,
+    collect_fan_out_items, dep_query_err, fetch_dep_item_ids, ids_to_set_and_refs, require_repo_id,
+    FanOutItem, ItemProvider, ProviderContext,
 };
 
 pub struct TicketsProvider {
@@ -87,20 +87,15 @@ impl ItemProvider for TicketsProvider {
         _config: &crate::config::Config,
         step_id: &str,
     ) -> Result<Vec<(String, String)>> {
-        use std::collections::HashSet;
-
         let Some(item_ids) = fetch_dep_item_ids(conn, step_id)? else {
             return Ok(vec![]);
         };
 
         let syncer = crate::tickets::TicketSyncer::new(conn);
-        let id_set: HashSet<&String> = item_ids.iter().collect();
-        let ticket_id_refs: Vec<&str> = item_ids.iter().map(String::as_str).collect();
+        let (id_set, ticket_id_refs) = ids_to_set_and_refs(&item_ids);
         let raw_edges = syncer
             .get_blocking_edges_for_tickets(&ticket_id_refs)
-            .map_err(|e| {
-                ConductorError::Workflow(format!("foreach: dependency query failed: {e}"))
-            })?;
+            .map_err(dep_query_err)?;
 
         let edges: Vec<(String, String)> = raw_edges
             .into_iter()

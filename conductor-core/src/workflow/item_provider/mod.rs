@@ -98,3 +98,15 @@ pub(super) fn require_repo_id<'a>(
         ))
     })
 }
+
+/// Build the `HashSet<&String>` and `Vec<&str>` pair used for dependency filtering.
+pub(super) fn ids_to_set_and_refs(item_ids: &[String]) -> (HashSet<&String>, Vec<&str>) {
+    let id_set: HashSet<&String> = item_ids.iter().collect();
+    let id_refs: Vec<&str> = item_ids.iter().map(String::as_str).collect();
+    (id_set, id_refs)
+}
+
+/// Standard error for a failed dependency query in a foreach step.
+pub(super) fn dep_query_err(e: impl std::fmt::Display) -> crate::error::ConductorError {
+    crate::error::ConductorError::Workflow(format!("foreach: dependency query failed: {e}"))
+}

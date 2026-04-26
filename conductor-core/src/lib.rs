@@ -57,7 +57,6 @@ pub mod ticket_source;
 pub mod tickets;
 pub mod vantage;
 pub mod workflow;
-pub use workflow::WorkflowPersistence;
 pub mod workflow_config;
 pub mod workflow_ephemeral;
 pub mod workflow_template;

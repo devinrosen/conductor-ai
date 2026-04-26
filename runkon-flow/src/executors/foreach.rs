@@ -359,6 +359,9 @@ pub fn execute_foreach(
         Arc::clone(&child_runner),
     ));
 
+    // Clone node.inputs once outside the dispatch loop to avoid re-cloning on every iteration.
+    let base_inputs = node.inputs.clone();
+
     // Build the placeholder WorkflowDef once — same for every item.
     let placeholder_def = crate::dsl::WorkflowDef {
         name: node.workflow.clone(),
@@ -388,18 +391,25 @@ pub fn execute_foreach(
                 )
             });
 
-    // Dispatch-loop tracking state
-    let mut pending: Vec<crate::types::FanOutItemRow> = pending_items;
+    // Dispatch-loop tracking state.
+    // Split pending items into ready (all deps met) and waiting (deps outstanding).
+    // At the start terminal_ids is empty, so items with no deps are immediately ready.
     let mut in_flight: usize = 0;
     let mut halt = false;
     // item_ids that have reached a terminal state (completed, failed, or skipped)
     let mut terminal_ids: HashSet<String> = HashSet::new();
 
+    let (ready_vec, mut waiting): (Vec<_>, Vec<_>) = pending_items
+        .into_iter()
+        .partition(|item| is_eligible(&item.item_id, &dep_map, &terminal_ids));
+    let mut ready: std::collections::VecDeque<crate::types::FanOutItemRow> =
+        ready_vec.into_iter().collect();
+
     tracing::info!(
         "foreach '{}': starting parallel dispatch (max_slots={}, items={})",
         node.name,
         max_slots,
-        pending.len(),
+        ready.len() + waiting.len(),
     );
 
     loop {
@@ -494,7 +504,8 @@ pub fn execute_foreach(
                             }
                             terminal_ids.insert(skip_id.clone());
                         }
-                        pending.retain(|i| !to_skip.contains(&i.item_id));
+                        ready.retain(|i| !to_skip.contains(&i.item_id));
+                        waiting.retain(|i| !to_skip.contains(&i.item_id));
                         if !to_skip.is_empty() {
                             tracing::info!(
                                 "foreach '{}': skipped {} dependents of '{}'",
@@ -507,6 +518,17 @@ pub fn execute_foreach(
                     OnChildFail::Continue => {}
                 }
             }
+
+            // After recording a terminal item, promote newly eligible waiting items to ready.
+            let mut still_waiting = Vec::new();
+            for item in waiting.drain(..) {
+                if is_eligible(&item.item_id, &dep_map, &terminal_ids) {
+                    ready.push_back(item);
+                } else {
+                    still_waiting.push(item);
+                }
+            }
+            waiting = still_waiting;
         }
 
         // 2. Check parent cancellation.
@@ -523,12 +545,8 @@ pub fn execute_foreach(
         let mut no_more_eligible = false;
         if !halt {
             while in_flight < max_slots {
-                let eligible_pos = pending
-                    .iter()
-                    .position(|item| is_eligible(&item.item_id, &dep_map, &terminal_ids));
-
-                let item = match eligible_pos {
-                    Some(pos) => pending.swap_remove(pos),
+                let item = match ready.pop_front() {
+                    Some(item) => item,
                     None => {
                         no_more_eligible = true;
                         break;
@@ -552,7 +570,7 @@ pub fn execute_foreach(
                     )
                     .map_err(p_err)?;
 
-                let mut child_inputs = node.inputs.clone();
+                let mut child_inputs = base_inputs.clone();
                 child_inputs.insert("item.id".to_string(), item.item_id.clone());
                 child_inputs.insert("item.ref".to_string(), item.item_ref.clone());
 

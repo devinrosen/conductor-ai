@@ -5,15 +5,14 @@ use std::sync::Arc;
 use crate::cancellation_reason::CancellationReason;
 use crate::dsl::CallNode;
 use crate::engine::{
-    emit_event, handle_on_fail, record_step_success, resolve_schema, restore_step, should_skip,
-    ExecutionState,
+    emit_event, handle_on_fail, record_step_success, resolve_schema, ExecutionState,
 };
 use crate::engine_error::{EngineError, Result};
 use crate::events::EngineEvent;
 use crate::prompt_builder::build_variable_map;
 use crate::status::WorkflowStepStatus;
 use crate::traits::action_executor::{ActionParams, ExecutionContext};
-use crate::traits::persistence::{NewStep, StepUpdate};
+use crate::traits::persistence::StepUpdate;
 
 use super::p_err;
 
@@ -56,13 +55,7 @@ fn execute_call_inner(
     state.position += 1;
 
     let step_key_check = node.agent.step_key();
-    if should_skip(state, &step_key_check, iteration) {
-        tracing::info!(
-            "Skipping completed step '{}' (iteration {})",
-            step_key_check,
-            iteration
-        );
-        restore_step(state, &step_key_check, iteration);
+    if super::skip_if_already_completed(state, &step_key_check, iteration, &step_key_check) {
         return Ok(());
     }
 
@@ -79,29 +72,9 @@ fn execute_call_inner(
     let mut last_error = String::new();
 
     for attempt in 0..max_attempts {
-        if attempt > 0 {
-            emit_event(
-                state,
-                EngineEvent::StepRetrying {
-                    step_name: agent_label.to_string(),
-                    attempt,
-                },
-            );
-        }
-
-        // Insert step record as running
-        let step_id = state
-            .persistence
-            .insert_step(NewStep {
-                workflow_run_id: state.workflow_run_id.clone(),
-                step_name: agent_label.to_string(),
-                role: "actor".to_string(),
-                can_commit: false,
-                position: pos,
-                iteration: iteration as i64,
-                retry_count: Some(attempt as i64),
-            })
-            .map_err(p_err)?;
+        // Insert step record as running (also emits StepRetrying when attempt > 0)
+        let step_id =
+            super::begin_retry_attempt(state, agent_label, "actor", pos, iteration, attempt)?;
 
         emit_event(
             state,
@@ -271,16 +244,14 @@ fn execute_call_inner(
                     .persistence
                     .update_step(
                         &step_id,
-                        StepUpdate {
-                            status: WorkflowStepStatus::Completed,
-                            child_run_id: output.child_run_id.clone(),
-                            result_text: output.result_text.clone(),
-                            context_out: Some(context.clone()),
-                            markers_out: Some(markers_json),
-                            retry_count: Some(attempt as i64),
-                            structured_output: output.structured_output.clone(),
-                            step_error: None,
-                        },
+                        StepUpdate::completed(
+                            output.child_run_id.clone(),
+                            output.result_text.clone(),
+                            Some(context.clone()),
+                            Some(markers_json),
+                            attempt,
+                            output.structured_output.clone(),
+                        ),
                     )
                     .map_err(p_err)?;
 
@@ -344,19 +315,7 @@ fn execute_call_inner(
                 // Mark step failed
                 state
                     .persistence
-                    .update_step(
-                        &step_id,
-                        StepUpdate {
-                            status: WorkflowStepStatus::Failed,
-                            child_run_id: None,
-                            result_text: Some(err_msg.clone()),
-                            context_out: None,
-                            markers_out: None,
-                            retry_count: Some(attempt as i64),
-                            structured_output: None,
-                            step_error: Some(err_msg.clone()),
-                        },
-                    )
+                    .update_step(&step_id, StepUpdate::failed(err_msg.clone(), attempt))
                     .map_err(p_err)?;
                 last_error = err_msg;
                 continue;

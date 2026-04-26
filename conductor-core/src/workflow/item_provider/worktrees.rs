@@ -7,11 +7,15 @@ use crate::error::{ConductorError, Result};
 use crate::worktree::{Worktree, WorktreeManager};
 use runkon_flow::dsl::ForeachScope;
 
-use super::{fetch_dep_item_ids, require_repo_id, FanOutItem, ItemProvider, ProviderContext};
+use super::{
+    dep_query_err, fetch_dep_item_ids, ids_to_set_and_refs, require_repo_id, FanOutItem,
+    ItemProvider, ProviderContext,
+};
 
 pub struct WorktreesProvider {
     repo_id: Option<String>,
     worktree_id: Option<String>,
+    pr_cache: std::sync::Mutex<std::collections::HashMap<String, Vec<crate::github::GithubPr>>>,
 }
 
 impl WorktreesProvider {
@@ -19,6 +23,7 @@ impl WorktreesProvider {
         Self {
             repo_id,
             worktree_id,
+            pr_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 }
@@ -67,7 +72,16 @@ impl ItemProvider for WorktreesProvider {
             if !candidates.is_empty() {
                 let repo =
                     crate::repo::RepoManager::new(ctx.conn, ctx.config).get_by_id(repo_id)?;
-                let open_prs = crate::github::list_open_prs(&repo.remote_url)?;
+                let open_prs = {
+                    let mut cache = self.pr_cache.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(cached) = cache.get(&repo.remote_url) {
+                        cached.clone()
+                    } else {
+                        let prs = crate::github::list_open_prs(&repo.remote_url)?;
+                        cache.insert(repo.remote_url.clone(), prs.clone());
+                        prs
+                    }
+                };
                 candidates = filter_by_open_pr(candidates, want_open_pr, open_prs);
             }
         }
@@ -115,8 +129,7 @@ fn dependencies_impl(
         return Ok(vec![]);
     };
 
-    let id_set: HashSet<&String> = item_ids.iter().collect();
-    let id_refs: Vec<&str> = item_ids.iter().map(String::as_str).collect();
+    let (id_set, id_refs) = ids_to_set_and_refs(&item_ids);
     let wt_mgr = WorktreeManager::new(conn, config);
     let worktrees = match wt_mgr.get_by_ids(&id_refs) {
         Ok(wts) => wts,
@@ -144,7 +157,7 @@ fn dependencies_impl(
     let syncer = crate::tickets::TicketSyncer::new(conn);
     let dep_edges = syncer
         .get_blocking_edges_for_tickets(&ticket_id_refs)
-        .map_err(|e| ConductorError::Workflow(format!("foreach: dependency query failed: {e}")))?;
+        .map_err(dep_query_err)?;
 
     let mut edges: HashSet<(String, String)> = HashSet::new();
     for (blocker_ticket_id, dependent_ticket_id) in dep_edges {
