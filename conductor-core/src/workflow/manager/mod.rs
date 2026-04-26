@@ -9,7 +9,7 @@ mod steps;
 #[cfg(test)]
 mod tests;
 
-pub use definitions::InvalidWorkflowEntry;
+pub use definitions::{list_workflow_defs, InvalidWorkflowEntry};
 pub use fan_out::FanOutItemRow;
 
 #[allow(unused_imports)]

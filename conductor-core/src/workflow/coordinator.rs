@@ -157,6 +157,45 @@ fn inject_worktree_variables(
         .or_insert_with(|| wt.branch.clone());
 }
 
+fn inject_ticket_variables(
+    ticket: &crate::tickets::Ticket,
+    merged_inputs: &mut HashMap<String, String>,
+) {
+    merged_inputs
+        .entry("ticket_id".to_string())
+        .or_insert_with(|| ticket.id.clone());
+    merged_inputs
+        .entry("ticket_source_id".to_string())
+        .or_insert_with(|| ticket.source_id.clone());
+    merged_inputs
+        .entry("ticket_source_type".to_string())
+        .or_insert_with(|| ticket.source_type.clone());
+    merged_inputs
+        .entry("ticket_title".to_string())
+        .or_insert_with(|| ticket.title.clone());
+    merged_inputs
+        .entry("ticket_body".to_string())
+        .or_insert_with(|| ticket.body.clone());
+    merged_inputs
+        .entry("ticket_url".to_string())
+        .or_insert_with(|| ticket.url.clone());
+    merged_inputs
+        .entry("ticket_raw_json".to_string())
+        .or_insert_with(|| ticket.raw_json.clone());
+}
+
+fn inject_repo_variables(repo: &crate::repo::Repo, merged_inputs: &mut HashMap<String, String>) {
+    merged_inputs
+        .entry("repo_id".to_string())
+        .or_insert_with(|| repo.id.clone());
+    merged_inputs
+        .entry("repo_path".to_string())
+        .or_insert_with(|| repo.local_path.clone());
+    merged_inputs
+        .entry("repo_name".to_string())
+        .or_insert_with(|| repo.slug.clone());
+}
+
 /// Acquire the shared SQLite connection mutex, mapping a poison error to a `ConductorError`.
 fn lock_shared(
     conn: &Arc<std::sync::Mutex<Connection>>,
@@ -192,6 +231,68 @@ pub(crate) fn guard_active_run(
         }
     }
     Ok(())
+}
+
+/// Common components shared between `execute_workflow_standalone` and `resume_workflow`.
+///
+/// Built once by [`build_rk_engine_components`] and consumed into `ExecutionState`.
+struct RkEngineComponents {
+    persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence>,
+    action_registry: Arc<runkon_flow::traits::action_executor::ActionRegistry>,
+    child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner>,
+}
+
+/// Build the persistence, action-registry, and child-runner that are identical
+/// between fresh execution and resume.  Call sites then layer in the parts that
+/// differ (item_registry, script_env_provider, ExecutionState fields).
+fn build_rk_engine_components(
+    config: &crate::config::Config,
+    shared_conn: &Arc<std::sync::Mutex<Connection>>,
+    db: &std::path::Path,
+) -> RkEngineComponents {
+    let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> = Arc::new(
+        super::persistence_sqlite::SqliteWorkflowPersistence::from_shared_connection(Arc::clone(
+            shared_conn,
+        )),
+    );
+    let action_registry = Arc::new(super::runkon_bridge::build_rk_action_registry(
+        config,
+        Arc::clone(shared_conn),
+        db,
+    ));
+    let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> =
+        Arc::new(super::runkon_bridge::ConductorChildWorkflowRunner::new(
+            db.to_path_buf(),
+            config.clone(),
+            Arc::clone(shared_conn),
+        ));
+    RkEngineComponents {
+        persistence,
+        action_registry,
+        child_runner,
+    }
+}
+
+/// Build a schema resolver closure for the given workflow name.
+#[allow(clippy::type_complexity)]
+fn make_schema_resolver(
+    workflow_name: String,
+) -> Arc<
+    dyn Fn(
+            &str,
+            &str,
+            &str,
+        )
+            -> runkon_flow::engine_error::Result<runkon_flow::output_schema::OutputSchema>
+        + Send
+        + Sync,
+> {
+    Arc::new(move |working_dir, repo_path, name| {
+        let schema_ref = crate::schema_config::SchemaRef::from_str_value(name);
+        crate::schema_config::load_schema(working_dir, repo_path, &schema_ref, Some(&workflow_name))
+            .map(super::runkon_bridge::core_schema_to_rk)
+            .map_err(|e| runkon_flow::engine_error::EngineError::Workflow(e.to_string()))
+    })
 }
 
 /// Execute a workflow in a self-contained manner using `runkon_flow::FlowEngine::run()`.
@@ -251,10 +352,16 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         )?;
 
         // Derive repo_id from worktree when not explicitly provided.
+        // Cache the fetched Worktree to avoid a second DB lookup during variable injection below.
+        let mut fetched_worktree: Option<crate::worktree::Worktree> = None;
         let derived_repo_id = match (&params.repo_id, &params.worktree_id) {
             (None, Some(wt_id)) => {
                 match crate::worktree::WorktreeManager::new(conn, config).get_by_id(wt_id) {
-                    Ok(wt) => Some(wt.repo_id),
+                    Ok(wt) => {
+                        let repo_id = wt.repo_id.clone();
+                        fetched_worktree = Some(wt);
+                        Some(repo_id)
+                    }
                     Err(e) => {
                         tracing::warn!(
                             "Failed to look up worktree '{wt_id}' for repo_id derivation: {e}"
@@ -312,47 +419,22 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         let mut merged_inputs = params.inputs.clone();
         if let Some(ref tid) = params.ticket_id {
             let ticket = crate::tickets::TicketSyncer::new(conn).get_by_id(tid)?;
-            merged_inputs
-                .entry("ticket_id".to_string())
-                .or_insert_with(|| ticket.id.clone());
-            merged_inputs
-                .entry("ticket_source_id".to_string())
-                .or_insert_with(|| ticket.source_id.clone());
-            merged_inputs
-                .entry("ticket_source_type".to_string())
-                .or_insert_with(|| ticket.source_type.clone());
-            merged_inputs
-                .entry("ticket_title".to_string())
-                .or_insert_with(|| ticket.title.clone());
-            merged_inputs
-                .entry("ticket_body".to_string())
-                .or_insert_with(|| ticket.body.clone());
-            merged_inputs
-                .entry("ticket_url".to_string())
-                .or_insert_with(|| ticket.url.clone());
-            merged_inputs
-                .entry("ticket_raw_json".to_string())
-                .or_insert_with(|| ticket.raw_json.clone());
+            inject_ticket_variables(&ticket, &mut merged_inputs);
         }
         let fetched_repo = if let Some(ref rid) = effective_repo_id {
             let repo = crate::repo::RepoManager::new(conn, config).get_by_id(rid)?;
-            merged_inputs
-                .entry("repo_id".to_string())
-                .or_insert_with(|| repo.id.clone());
-            merged_inputs
-                .entry("repo_path".to_string())
-                .or_insert_with(|| repo.local_path.clone());
-            merged_inputs
-                .entry("repo_name".to_string())
-                .or_insert_with(|| repo.slug.clone());
+            inject_repo_variables(&repo, &mut merged_inputs);
             Some(repo)
         } else {
             None
         };
         if let Some(ref wt_id) = params.worktree_id {
-            let wt = crate::worktree::WorktreeManager::new(conn, config).get_by_id(wt_id)?;
-            // Reuse the already-fetched repo when the IDs match (the common case where
-            // effective_repo_id was derived from this same worktree).
+            // Reuse the Worktree cached during repo_id derivation (the common case where
+            // effective_repo_id came from this same worktree), or fetch it now if needed.
+            let wt = match fetched_worktree {
+                Some(cached) => cached,
+                None => crate::worktree::WorktreeManager::new(conn, config).get_by_id(wt_id)?,
+            };
             let default_branch = if let Some(ref r) = fetched_repo {
                 r.default_branch.clone()
             } else {
@@ -391,17 +473,11 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
             ConductorError::Workflow(format!("Failed to deserialize workflow definition: {e}"))
         })?;
 
-    let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> = Arc::new(
-        super::persistence_sqlite::SqliteWorkflowPersistence::from_shared_connection(Arc::clone(
-            &shared_conn,
-        )),
-    );
-
-    let action_registry = Arc::new(super::runkon_bridge::build_rk_action_registry(
-        config,
-        Arc::clone(&shared_conn),
-        &db,
-    ));
+    let RkEngineComponents {
+        persistence,
+        action_registry,
+        child_runner,
+    } = build_rk_engine_components(config, &shared_conn, &db);
 
     let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(
         Arc::clone(&shared_conn),
@@ -414,35 +490,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         params.extra_plugin_dirs.clone(),
     );
 
-    let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> =
-        Arc::new(super::runkon_bridge::ConductorChildWorkflowRunner::new(
-            db.clone(),
-            config.clone(),
-            Arc::clone(&shared_conn),
-        ));
-
-    let workflow_name_for_resolver = workflow.name.clone();
-    #[allow(clippy::type_complexity)]
-    let schema_resolver: Arc<
-        dyn Fn(
-                &str,
-                &str,
-                &str,
-            )
-                -> runkon_flow::engine_error::Result<runkon_flow::output_schema::OutputSchema>
-            + Send
-            + Sync,
-    > = Arc::new(move |working_dir, repo_path, name| {
-        let schema_ref = crate::schema_config::SchemaRef::from_str_value(name);
-        crate::schema_config::load_schema(
-            working_dir,
-            repo_path,
-            &schema_ref,
-            Some(&workflow_name_for_resolver),
-        )
-        .map(super::runkon_bridge::core_schema_to_rk)
-        .map_err(|e| runkon_flow::engine_error::EngineError::Workflow(e.to_string()))
-    });
+    let schema_resolver = make_schema_resolver(workflow.name.clone());
 
     let rk_exec_config = runkon_flow::types::WorkflowExecConfig {
         poll_interval: params.exec_config.poll_interval,
@@ -889,7 +937,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     };
 
     // -----------------------------------------------------------------------
-    // Build the FlowEngine and execution state — mirrors execute_workflow_standalone.
+    // Build the FlowEngine and execution state.
     // -----------------------------------------------------------------------
 
     let rk_def: runkon_flow::dsl::WorkflowDef =
@@ -897,17 +945,11 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
             ConductorError::Workflow(format!("Failed to deserialize workflow definition: {e}"))
         })?;
 
-    let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> = Arc::new(
-        super::persistence_sqlite::SqliteWorkflowPersistence::from_shared_connection(Arc::clone(
-            &shared_conn,
-        )),
-    );
-
-    let action_registry = Arc::new(super::runkon_bridge::build_rk_action_registry(
-        config,
-        Arc::clone(&shared_conn),
-        &db,
-    ));
+    let RkEngineComponents {
+        persistence,
+        action_registry,
+        child_runner,
+    } = build_rk_engine_components(config, &shared_conn, &db);
 
     let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(
         Arc::clone(&shared_conn),
@@ -918,35 +960,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     let script_env_provider =
         super::runkon_bridge::build_rk_script_env_provider(input.conductor_bin_dir.clone(), vec![]);
 
-    let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> =
-        Arc::new(super::runkon_bridge::ConductorChildWorkflowRunner::new(
-            db.clone(),
-            config.clone(),
-            Arc::clone(&shared_conn),
-        ));
-
-    let workflow_name_for_resolver = wf_run.workflow_name.clone();
-    #[allow(clippy::type_complexity)]
-    let schema_resolver: Arc<
-        dyn Fn(
-                &str,
-                &str,
-                &str,
-            )
-                -> runkon_flow::engine_error::Result<runkon_flow::output_schema::OutputSchema>
-            + Send
-            + Sync,
-    > = Arc::new(move |working_dir, repo_path, name| {
-        let schema_ref = crate::schema_config::SchemaRef::from_str_value(name);
-        crate::schema_config::load_schema(
-            working_dir,
-            repo_path,
-            &schema_ref,
-            Some(&workflow_name_for_resolver),
-        )
-        .map(super::runkon_bridge::core_schema_to_rk)
-        .map_err(|e| runkon_flow::engine_error::EngineError::Workflow(e.to_string()))
-    });
+    let schema_resolver = make_schema_resolver(wf_run.workflow_name.clone());
 
     let mut rk_state = runkon_flow::engine::ExecutionState {
         persistence: Arc::clone(&persistence),
@@ -1117,6 +1131,23 @@ mod tests {
         assert_eq!(inputs.get("dry_run").map(String::as_str), Some("false"));
     }
 
+    #[test]
+    fn apply_defaults_required_with_default_absent_returns_error() {
+        // required=true takes priority over default — absent required inputs are always an error.
+        let wf = make_wf(vec![input_decl(
+            "ticket",
+            true,
+            InputType::String,
+            Some("fallback"),
+        )]);
+        let mut inputs = HashMap::new();
+        let err = apply_workflow_input_defaults(&wf, &mut inputs).unwrap_err();
+        assert!(
+            err.to_string().contains("Missing required input: 'ticket'"),
+            "unexpected error: {err}"
+        );
+    }
+
     // -------------------------------------------------------------------------
     // validate_resume_preconditions
     // -------------------------------------------------------------------------
@@ -1172,6 +1203,12 @@ mod tests {
     fn validate_resume_failed_without_restart_ok() {
         validate_resume_preconditions(&WorkflowRunStatus::Failed, false, None)
             .expect("resuming a failed run should be allowed");
+    }
+
+    #[test]
+    fn validate_resume_failed_with_restart_ok() {
+        validate_resume_preconditions(&WorkflowRunStatus::Failed, true, None)
+            .expect("restarting a failed run should be allowed");
     }
 
     // -------------------------------------------------------------------------

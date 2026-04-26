@@ -70,7 +70,7 @@ pub use coordinator::{
 };
 pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
 pub use manager::recovery::{ReapedStaleRun, StaleWorkflowRun};
-pub use manager::{FanOutItemRow, InvalidWorkflowEntry, WorkflowManager};
+pub use manager::{list_workflow_defs, FanOutItemRow, InvalidWorkflowEntry, WorkflowManager};
 pub use output::{parse_conductor_output, ConductorOutput};
 pub use persistence::{
     FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,

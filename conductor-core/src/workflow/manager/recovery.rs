@@ -587,6 +587,43 @@ impl<'a> WorkflowManager<'a> {
         Ok(changed == 1)
     }
 
+    /// CAS-flip each candidate run from `from_status` → `failed`, fire the
+    /// orphan-resumed notification for all winners, and return their IDs.
+    ///
+    /// Losers (races where another watchdog already claimed the run) are logged at
+    /// debug level and silently dropped.  This consolidates the repeated
+    /// flip-loop + notification pattern shared across the three claim functions.
+    fn cas_claim_ids_and_notify(
+        &self,
+        config: &Config,
+        candidates: &[String],
+        from_status: &str,
+        error_msg: &str,
+        caller_name: &str,
+    ) -> Result<Vec<String>> {
+        let mut claimed: Vec<String> = Vec::new();
+        for run_id in candidates {
+            if !self.cas_flip_run_to_failed_from(run_id, from_status, error_msg)? {
+                tracing::debug!(
+                    run_id = %run_id,
+                    "{caller_name}: CAS lost race (already claimed)"
+                );
+                continue;
+            }
+            tracing::info!(run_id = %run_id, "{caller_name}: claimed orphaned run for resumption");
+            claimed.push(run_id.clone());
+        }
+        if !claimed.is_empty() {
+            crate::notify::fire_orphan_resumed_notification(
+                self.conn,
+                &config.notifications,
+                &config.notify.hooks,
+                &claimed,
+            );
+        }
+        Ok(claimed)
+    }
+
     /// CAS-claim stuck workflow runs and fire the orphan-resumed notification.
     ///
     /// Returns the IDs of runs successfully claimed (flipped from `running` to
@@ -605,36 +642,18 @@ impl<'a> WorkflowManager<'a> {
             return Ok(vec![]);
         }
 
-        // CAS flip each run from running → failed before resuming.
-        // Only runs we successfully flip get resumed — losers of the race are skipped.
-        let mut flipped_ids: Vec<String> = Vec::new();
-        for run_id in &stuck_ids {
-            if self.cas_flip_run_to_failed_from(
-                run_id,
-                "running",
-                "Orphaned: executor died between steps — auto-resumed by watchdog",
-            )? {
-                flipped_ids.push(run_id.clone());
-            } else {
-                tracing::debug!(
-                    run_id = %run_id,
-                    "claim_stuck_workflows: CAS lost race (already claimed)"
-                );
-            }
-        }
+        let flipped_ids = self.cas_claim_ids_and_notify(
+            config,
+            &stuck_ids,
+            "running",
+            "Orphaned: executor died between steps — auto-resumed by watchdog",
+            "claim_stuck_workflows",
+        )?;
 
-        if flipped_ids.is_empty() {
-            return Ok(vec![]);
+        if !flipped_ids.is_empty() {
+            let n = flipped_ids.len();
+            tracing::info!("Auto-resuming {n} stuck workflow run(s) (threshold={threshold}s)");
         }
-
-        let n = flipped_ids.len();
-        tracing::info!("Auto-resuming {n} stuck workflow run(s) (threshold={threshold}s)");
-        crate::notify::fire_orphan_resumed_notification(
-            self.conn,
-            &config.notifications,
-            &config.notify.hooks,
-            &flipped_ids,
-        );
 
         Ok(flipped_ids)
     }
@@ -679,43 +698,23 @@ impl<'a> WorkflowManager<'a> {
             return Ok(vec![]);
         }
 
-        let mut claimed: Vec<(String, String, Option<String>)> = Vec::new();
-
-        for (run_id, workflow_name, target_label) in orphaned {
-            // Step 2: CAS flip running → failed.
-            // If another watchdog already won the race, changes() == 0 and we skip.
-            if !self.cas_flip_run_to_failed_from(
-                &run_id,
+        // CAS-flip each candidate, fire the batch notification, collect winner IDs.
+        let orphaned_ids: Vec<String> = orphaned.iter().map(|(id, _, _)| id.clone()).collect();
+        let claimed_id_set: std::collections::HashSet<String> = self
+            .cas_claim_ids_and_notify(
+                config,
+                &orphaned_ids,
                 "running",
                 "Orphaned: executor died between steps — auto-resumed by watchdog",
-            )? {
-                tracing::debug!(
-                    run_id = %run_id,
-                    "claim_heartbeat_stuck_runs: CAS lost race for run (already reaped)"
-                );
-                continue;
-            }
+                "claim_heartbeat_stuck_runs",
+            )?
+            .into_iter()
+            .collect();
 
-            tracing::info!(
-                run_id = %run_id,
-                "claim_heartbeat_stuck_runs: reaped orphaned run, resuming"
-            );
-
-            claimed.push((run_id, workflow_name, target_label));
-        }
-
-        // Fire a single batch notification for all runs that were claimed for resumption.
-        if !claimed.is_empty() {
-            let claimed_ids: Vec<String> = claimed.iter().map(|(id, _, _)| id.clone()).collect();
-            crate::notify::fire_orphan_resumed_notification(
-                self.conn,
-                &config.notifications,
-                &config.notify.hooks,
-                &claimed_ids,
-            );
-        }
-
-        Ok(claimed)
+        Ok(orphaned
+            .into_iter()
+            .filter(|(id, _, _)| claimed_id_set.contains(id))
+            .collect())
     }
 
     /// Directly finalize workflow runs that are stuck in `running` status because
@@ -1209,42 +1208,13 @@ impl<'a> WorkflowManager<'a> {
             return Ok(vec![]);
         }
 
-        let mut claimed_ids: Vec<String> = Vec::new();
-
-        for run_id in candidates {
-            // Step 2: CAS flip needs_resume → failed.
-            // If another watchdog already won the race, changes() == 0 and we skip.
-            if !self.cas_flip_run_to_failed_from(
-                &run_id,
-                "needs_resume",
-                "Orphaned: parent agent run died — auto-resumed by watchdog",
-            )? {
-                tracing::debug!(
-                    run_id = %run_id,
-                    "claim_needs_resume_runs: CAS lost race (already claimed)"
-                );
-                continue;
-            }
-
-            tracing::info!(
-                run_id = %run_id,
-                "claim_needs_resume_runs: claimed orphaned run for resumption"
-            );
-
-            claimed_ids.push(run_id);
-        }
-
-        // Batch notification for all runs handed off.
-        if !claimed_ids.is_empty() {
-            crate::notify::fire_orphan_resumed_notification(
-                self.conn,
-                &config.notifications,
-                &config.notify.hooks,
-                &claimed_ids,
-            );
-        }
-
-        Ok(claimed_ids)
+        self.cas_claim_ids_and_notify(
+            config,
+            &candidates,
+            "needs_resume",
+            "Orphaned: parent agent run died — auto-resumed by watchdog",
+            "claim_needs_resume_runs",
+        )
     }
 }
 
