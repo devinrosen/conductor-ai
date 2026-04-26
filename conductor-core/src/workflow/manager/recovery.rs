@@ -787,6 +787,9 @@ impl<'a> WorkflowManager<'a> {
             // stateless (wraps &Connection) so rebuilding it per iteration is wasteful.
             let agent_mgr = crate::agent::AgentManager::new(self.conn);
 
+            const SUMMARY: &str =
+                "Auto-finalized by reaper: all steps terminal, status was stuck in 'running'";
+
             for (run_id, parent_run_id, has_failure) in stuck {
                 let final_status = if has_failure {
                     WorkflowRunStatus::Failed
@@ -794,11 +797,7 @@ impl<'a> WorkflowManager<'a> {
                     WorkflowRunStatus::Completed
                 };
 
-                let summary =
-                    "Auto-finalized by reaper: all steps terminal, status was stuck in 'running'"
-                        .to_string();
-
-                self.update_workflow_status(&run_id, final_status.clone(), Some(&summary), None)?;
+                self.update_workflow_status(&run_id, final_status.clone(), Some(SUMMARY), None)?;
                 tracing::info!(
                     run_id = %run_id,
                     status = %final_status,
@@ -807,9 +806,9 @@ impl<'a> WorkflowManager<'a> {
 
                 // Best-effort: update the parent agent_runs row if still running.
                 let update_result = if has_failure {
-                    agent_mgr.update_run_failed_if_running(&parent_run_id, &summary)
+                    agent_mgr.update_run_failed_if_running(&parent_run_id, SUMMARY)
                 } else {
-                    agent_mgr.update_run_completed_if_running(&parent_run_id, &summary)
+                    agent_mgr.update_run_completed_if_running(&parent_run_id, SUMMARY)
                 };
                 if let Err(e) = update_result {
                     tracing::warn!(

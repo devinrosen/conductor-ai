@@ -1294,6 +1294,57 @@ mod tests {
             .expect("Cancelling should be resumable");
     }
 
+    #[test]
+    fn validate_resume_waiting_ok() {
+        // Waiting falls through to Ok(()) — it is an explicitly resumable status.
+        validate_resume_preconditions(&WorkflowRunStatus::Waiting, false, None)
+            .expect("Waiting should be resumable");
+    }
+
+    // -------------------------------------------------------------------------
+    // spawn_heartbeat_resume
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn spawn_heartbeat_resume_failure_with_valid_db_fires_notification_without_panic() {
+        // Branch 1: resume fails (invalid run_id), DB opens successfully → notification fires.
+        use tempfile::NamedTempFile;
+        let db_file = NamedTempFile::new().unwrap();
+        let db_path = db_file.path().to_path_buf();
+        // Initialise the schema so open_database succeeds inside the spawned thread.
+        crate::db::open_database(&db_path).unwrap();
+
+        let handle = spawn_heartbeat_resume(SpawnHeartbeatResumeParams {
+            run_id: "nonexistent-run-id".to_string(),
+            workflow_name: "test-wf".to_string(),
+            target_label: None,
+            config: crate::config::Config::default(),
+            conductor_bin_dir: None,
+            db_path: Some(db_path),
+        });
+        handle
+            .join()
+            .expect("spawn_heartbeat_resume thread panicked");
+    }
+
+    #[test]
+    fn spawn_heartbeat_resume_failure_with_invalid_db_logs_warning_without_panic() {
+        // Branch 2: resume fails, DB open also fails (non-existent dir) → warning logged, no panic.
+        let handle = spawn_heartbeat_resume(SpawnHeartbeatResumeParams {
+            run_id: "nonexistent-run-id".to_string(),
+            workflow_name: "test-wf".to_string(),
+            target_label: None,
+            config: crate::config::Config::default(),
+            conductor_bin_dir: None,
+            db_path: Some(std::path::PathBuf::from(
+                "/nonexistent/path/that/cannot/be/opened/conductor.db",
+            )),
+        });
+        handle
+            .join()
+            .expect("spawn_heartbeat_resume thread panicked");
+    }
+
     // -------------------------------------------------------------------------
     // guard_active_run
     // -------------------------------------------------------------------------

@@ -134,11 +134,10 @@ fn dependencies_impl(
         }
     }
 
-    let ticket_ids: Vec<String> = wt_ticket_map.values().cloned().collect();
-    if ticket_ids.is_empty() {
+    let ticket_id_refs: Vec<&str> = wt_ticket_map.values().map(String::as_str).collect();
+    if ticket_id_refs.is_empty() {
         return Ok(vec![]);
     }
-    let ticket_id_refs: Vec<&str> = ticket_ids.iter().map(String::as_str).collect();
     let syncer = crate::tickets::TicketSyncer::new(conn);
     let dep_edges = syncer
         .get_blocking_edges_for_tickets(&ticket_id_refs)

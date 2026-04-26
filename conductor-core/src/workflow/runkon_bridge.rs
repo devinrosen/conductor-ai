@@ -374,21 +374,12 @@ fn delegate_items<P: ItemProvider>(
 // field, and the inner provider constructed inside delegate_items.
 // ---------------------------------------------------------------------------
 
-macro_rules! impl_rk_item_provider {
-    // Variant: no extra field — inner provider needs no self data.
-    ($name:ident, $provider_name:literal, $inner:expr) => {
-        pub(super) struct $name {
-            conn: Arc<Mutex<rusqlite::Connection>>,
-            config: crate::config::Config,
-        }
-        impl $name {
-            pub(super) fn new(
-                conn: Arc<Mutex<rusqlite::Connection>>,
-                config: crate::config::Config,
-            ) -> Self {
-                Self { conn, config }
-            }
-        }
+// Shared ItemProvider trait impl — called from both branches of impl_rk_item_provider!.
+// Each branch adds a private `fn provider(&self)` method to the struct so the inner
+// provider can be obtained via `self.provider()` inside method bodies without needing
+// `self` to appear in macro argument tokens (which Rust macro hygiene forbids).
+macro_rules! impl_rk_item_provider_trait {
+    ($name:ident, $provider_name:literal) => {
         impl runkon_flow::traits::item_provider::ItemProvider for $name {
             fn name(&self) -> &str {
                 $provider_name
@@ -406,19 +397,41 @@ macro_rules! impl_rk_item_provider {
                     scope,
                     filter,
                     existing_set,
-                    $inner,
+                    self.provider(),
                 )
             }
             fn supports_ordered(&self) -> bool {
-                ($inner).supports_ordered()
+                self.provider().supports_ordered()
             }
             fn dependencies(&self, step_id: &str) -> Result<Vec<(String, String)>, EngineError> {
                 let guard = self.conn.lock().map_err(bridge_lock_err)?;
-                ($inner)
+                self.provider()
                     .dependencies(&guard, &self.config, step_id)
                     .map_err(EngineError::from)
             }
         }
+    };
+}
+
+macro_rules! impl_rk_item_provider {
+    // Variant: no extra field — inner provider needs no self data.
+    ($name:ident, $provider_name:literal, $inner:expr) => {
+        pub(super) struct $name {
+            conn: Arc<Mutex<rusqlite::Connection>>,
+            config: crate::config::Config,
+        }
+        impl $name {
+            pub(super) fn new(
+                conn: Arc<Mutex<rusqlite::Connection>>,
+                config: crate::config::Config,
+            ) -> Self {
+                Self { conn, config }
+            }
+            fn provider(&self) -> impl ItemProvider {
+                $inner
+            }
+        }
+        impl_rk_item_provider_trait!($name, $provider_name);
     };
     // Variant: with repo_id — `$make_provider` is a closure `|repo_id| <expr>` that
     // receives `self.repo_id` and returns a provider.  Using a closure avoids any
@@ -441,37 +454,11 @@ macro_rules! impl_rk_item_provider {
                     repo_id,
                 }
             }
-        }
-        impl runkon_flow::traits::item_provider::ItemProvider for $name {
-            fn name(&self) -> &str {
-                $provider_name
-            }
-            fn items(
-                &self,
-                _ctx: &runkon_flow::traits::item_provider::ProviderContext,
-                scope: Option<&runkon_flow::dsl::ForeachScope>,
-                filter: &HashMap<String, String>,
-                existing_set: &HashSet<String>,
-            ) -> Result<Vec<runkon_flow::traits::item_provider::FanOutItem>, EngineError> {
-                delegate_items(
-                    &self.conn,
-                    &self.config,
-                    scope,
-                    filter,
-                    existing_set,
-                    ($make_provider)(self.repo_id.clone()),
-                )
-            }
-            fn supports_ordered(&self) -> bool {
-                ($make_provider)(self.repo_id.clone()).supports_ordered()
-            }
-            fn dependencies(&self, step_id: &str) -> Result<Vec<(String, String)>, EngineError> {
-                let guard = self.conn.lock().map_err(bridge_lock_err)?;
+            fn provider(&self) -> impl ItemProvider {
                 ($make_provider)(self.repo_id.clone())
-                    .dependencies(&guard, &self.config, step_id)
-                    .map_err(EngineError::from)
             }
         }
+        impl_rk_item_provider_trait!($name, $provider_name);
     };
 }
 

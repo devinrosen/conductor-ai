@@ -622,6 +622,14 @@ pub async fn run_workflow(
                 } else if let Err(e) = &notification_conn {
                     tracing::error!("notify: DB open failed, skipping notification: {e}");
                 }
+
+                state_clone
+                    .events
+                    .emit(ConductorEvent::WorkflowRunStatusChanged {
+                        run_id: error_run_id,
+                        worktree_id: params.worktree_id.clone(),
+                        status: "failed".to_string(),
+                    });
             }
         }
 

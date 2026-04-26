@@ -101,6 +101,7 @@ where
         agents: Vec<AgentRef>,
         snippets: Vec<String>,
         schemas: Vec<String>,
+        bot_names: Vec<String>,
     }
     let per_wf_refs: Vec<WorkflowRefs> = workflows
         .iter()
@@ -108,6 +109,7 @@ where
             agents: wf.collect_all_agent_refs(),
             snippets: wf.collect_all_snippet_refs(),
             schemas: wf.collect_all_schema_refs(),
+            bot_names: wf.collect_all_bot_names(),
         })
         .collect();
 
@@ -215,9 +217,9 @@ where
         }
 
         // --- Bot names (warnings) ---
-        let all_bots = workflow.collect_all_bot_names();
-        let unknown_bots: Vec<String> = all_bots
-            .into_iter()
+        let unknown_bots: Vec<&String> = wf_refs
+            .bot_names
+            .iter()
             .filter(|b| !known_bots.contains(b.as_str()))
             .collect();
 
