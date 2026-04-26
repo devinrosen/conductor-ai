@@ -282,8 +282,7 @@ fn make_schema_resolver(
             &str,
             &str,
             &str,
-        )
-            -> runkon_flow::engine_error::Result<runkon_flow::output_schema::OutputSchema>
+        ) -> runkon_flow::engine_error::Result<runkon_flow::output_schema::OutputSchema>
         + Send
         + Sync,
 > {
