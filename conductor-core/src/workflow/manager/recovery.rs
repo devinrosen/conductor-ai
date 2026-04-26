@@ -1018,28 +1018,28 @@ impl<'a> WorkflowManager<'a> {
         self.delete_run_recursive(run_id)
     }
 
-    /// Recursively delete a workflow run and all of its descendants.
+    /// Delete a workflow run and all of its descendants in a single statement.
     ///
-    /// Children are deleted before the parent to satisfy the FK constraint on
-    /// `parent_workflow_run_id`. No status check is performed on children — they
-    /// are expected to be terminal when the parent is.
+    /// A recursive CTE collects all descendants plus the root, then deletes
+    /// them together.  SQLite checks the self-referential FK
+    /// (`parent_workflow_run_id`) at statement end, not row-by-row, so deleting
+    /// parent and children together never produces an intermediate violation.
     fn delete_run_recursive(&self, run_id: &str) -> Result<()> {
-        let children: Vec<String> = query_collect(
-            self.conn,
-            "SELECT id FROM workflow_runs WHERE parent_workflow_run_id = :run_id",
-            named_params![":run_id": run_id],
-            |row| row.get("id"),
-        )?;
-
-        for child_id in children {
-            self.delete_run_recursive(&child_id)?;
-        }
-
+        // A single recursive CTE collects all descendants plus the root, then
+        // deletes them in one statement.  SQLite checks the self-referential FK
+        // (parent_workflow_run_id) at statement end, not row-by-row, so deleting
+        // parent and children together never produces an intermediate violation.
         self.conn.execute(
-            "DELETE FROM workflow_runs WHERE id = :id",
-            named_params![":id": run_id],
+            "WITH RECURSIVE descendants(id) AS (
+                 SELECT id FROM workflow_runs WHERE parent_workflow_run_id = :root
+                 UNION ALL
+                 SELECT r.id FROM workflow_runs r
+                   JOIN descendants d ON r.parent_workflow_run_id = d.id
+             )
+             DELETE FROM workflow_runs
+              WHERE id IN (SELECT id FROM descendants) OR id = :root",
+            named_params![":root": run_id],
         )?;
-
         Ok(())
     }
 

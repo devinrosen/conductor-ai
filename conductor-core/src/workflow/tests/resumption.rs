@@ -1,5 +1,7 @@
 #![allow(unused_imports)]
 
+use std::sync::Arc;
+
 use super::*;
 use crate::agent::AgentManager;
 
@@ -1129,7 +1131,7 @@ fn test_spawn_workflow_resume_handles_failed_resume_gracefully() {
     // WorkflowResumeStandalone directly — exercise via the standalone path
     // by using a real db_path override through the config approach instead.
     // Since spawn_workflow_resume now returns a JoinHandle, we can join it.
-    let handle = spawn_workflow_resume(run.id.clone(), Config::default(), None);
+    let handle = spawn_workflow_resume(run.id.clone(), Arc::new(Config::default()), None);
     handle
         .join()
         .expect("spawn_workflow_resume thread panicked");

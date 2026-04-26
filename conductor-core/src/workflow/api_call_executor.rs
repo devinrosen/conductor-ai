@@ -49,7 +49,8 @@ fn execute_via_api(
                 .into_string()
                 .unwrap_or_else(|e| format!("<body read failed: {e}>"));
             let truncated = if body_text.len() > 500 {
-                format!("{}…", &body_text[..500])
+                let end = body_text.floor_char_boundary(500);
+                format!("{}…", &body_text[..end])
             } else {
                 body_text
             };

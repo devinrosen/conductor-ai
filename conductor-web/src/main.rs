@@ -286,7 +286,7 @@ async fn main() -> Result<()> {
                                 for run_id in claimed {
                                     conductor_core::workflow::spawn_workflow_resume(
                                         run_id,
-                                        (*cfg).clone(),
+                                        Arc::new((*cfg).clone()),
                                         conductor_bin_dir.clone(),
                                     );
                                 }

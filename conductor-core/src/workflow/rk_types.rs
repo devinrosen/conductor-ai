@@ -27,71 +27,53 @@ use runkon_flow::types::{
     WorkflowRunStep as RkStep,
 };
 
-impl From<runkon_flow::status::WorkflowRunStatus> for crate::workflow::status::WorkflowRunStatus {
-    fn from(s: runkon_flow::status::WorkflowRunStatus) -> Self {
-        use crate::workflow::status::WorkflowRunStatus as Core;
-        use runkon_flow::status::WorkflowRunStatus as Rk;
-        match s {
-            Rk::Pending => Core::Pending,
-            Rk::Running => Core::Running,
-            Rk::Completed => Core::Completed,
-            Rk::Failed => Core::Failed,
-            Rk::Cancelled => Core::Cancelled,
-            Rk::Waiting => Core::Waiting,
-            Rk::NeedsResume => Core::NeedsResume,
-            Rk::Cancelling => Core::Cancelling,
+/// Generate bidirectional `From` impls between two enums whose variants are
+/// identical in name (just in different namespaces).  Both directions are
+/// produced from a single macro invocation so future variant additions require
+/// only one edit.
+macro_rules! impl_bidirectional_status_from {
+    ($core:path, $rk:path, [$($variant:ident),+ $(,)?]) => {
+        impl From<$rk> for $core {
+            fn from(s: $rk) -> Self {
+                use $rk as Rk;
+                use $core as Core;
+                match s {
+                    $(Rk::$variant => Core::$variant),+
+                }
+            }
         }
-    }
+        impl From<$core> for $rk {
+            fn from(s: $core) -> Self {
+                use $core as Core;
+                use $rk as Rk;
+                match s {
+                    $(Core::$variant => Rk::$variant),+
+                }
+            }
+        }
+    };
 }
 
-impl From<crate::workflow::status::WorkflowRunStatus> for runkon_flow::status::WorkflowRunStatus {
-    fn from(s: crate::workflow::status::WorkflowRunStatus) -> Self {
-        use crate::workflow::status::WorkflowRunStatus as Core;
-        use runkon_flow::status::WorkflowRunStatus as Rk;
-        match s {
-            Core::Pending => Rk::Pending,
-            Core::Running => Rk::Running,
-            Core::Completed => Rk::Completed,
-            Core::Failed => Rk::Failed,
-            Core::Cancelled => Rk::Cancelled,
-            Core::Waiting => Rk::Waiting,
-            Core::NeedsResume => Rk::NeedsResume,
-            Core::Cancelling => Rk::Cancelling,
-        }
-    }
-}
+impl_bidirectional_status_from!(
+    crate::workflow::status::WorkflowRunStatus,
+    runkon_flow::status::WorkflowRunStatus,
+    [
+        Pending,
+        Running,
+        Completed,
+        Failed,
+        Cancelled,
+        Waiting,
+        NeedsResume,
+        Cancelling
+    ]
+);
 
-impl From<runkon_flow::status::WorkflowStepStatus> for crate::workflow::status::WorkflowStepStatus {
-    fn from(s: runkon_flow::status::WorkflowStepStatus) -> Self {
-        use crate::workflow::status::WorkflowStepStatus as Core;
-        use runkon_flow::status::WorkflowStepStatus as Rk;
-        match s {
-            Rk::Pending => Core::Pending,
-            Rk::Running => Core::Running,
-            Rk::Completed => Core::Completed,
-            Rk::Failed => Core::Failed,
-            Rk::Skipped => Core::Skipped,
-            Rk::Waiting => Core::Waiting,
-            Rk::TimedOut => Core::TimedOut,
-        }
-    }
-}
-
-impl From<crate::workflow::status::WorkflowStepStatus> for runkon_flow::status::WorkflowStepStatus {
-    fn from(s: crate::workflow::status::WorkflowStepStatus) -> Self {
-        use crate::workflow::status::WorkflowStepStatus as Core;
-        use runkon_flow::status::WorkflowStepStatus as Rk;
-        match s {
-            Core::Pending => Rk::Pending,
-            Core::Running => Rk::Running,
-            Core::Completed => Rk::Completed,
-            Core::Failed => Rk::Failed,
-            Core::Skipped => Rk::Skipped,
-            Core::Waiting => Rk::Waiting,
-            Core::TimedOut => Rk::TimedOut,
-        }
-    }
-}
+impl_bidirectional_status_from!(
+    crate::workflow::status::WorkflowStepStatus,
+    runkon_flow::status::WorkflowStepStatus,
+    [Pending, Running, Completed, Failed, Skipped, Waiting, TimedOut]
+);
 
 /// Generate a `From<$src> for $dst` impl that copies same-named fields.
 macro_rules! field_copy_from {
@@ -186,26 +168,39 @@ pub fn run_to_rk(r: CoreRun) -> RkRun {
     }
 }
 
+fn human_gate_blocked_on_to_rk(
+    gate_name: String,
+    prompt: Option<String>,
+    options: Vec<String>,
+    is_review: bool,
+) -> RkBlockedOn {
+    if is_review {
+        RkBlockedOn::HumanReview {
+            gate_name,
+            prompt,
+            options,
+        }
+    } else {
+        RkBlockedOn::HumanApproval {
+            gate_name,
+            prompt,
+            options,
+        }
+    }
+}
+
 fn blocked_on_to_rk(b: CoreBlockedOn) -> RkBlockedOn {
     match b {
         CoreBlockedOn::HumanApproval {
             gate_name,
             prompt,
             options,
-        } => RkBlockedOn::HumanApproval {
-            gate_name,
-            prompt,
-            options,
-        },
+        } => human_gate_blocked_on_to_rk(gate_name, prompt, options, false),
         CoreBlockedOn::HumanReview {
             gate_name,
             prompt,
             options,
-        } => RkBlockedOn::HumanReview {
-            gate_name,
-            prompt,
-            options,
-        },
+        } => human_gate_blocked_on_to_rk(gate_name, prompt, options, true),
         CoreBlockedOn::PrApproval {
             gate_name,
             approvals_needed,
@@ -290,41 +285,17 @@ pub fn fan_out_item_to_rk(r: CoreFanOutItemRow) -> RkFanOutItemRow {
     }
 }
 
-impl From<crate::workflow::types::WorkflowResult> for runkon_flow::types::WorkflowResult {
-    fn from(core: crate::workflow::types::WorkflowResult) -> Self {
-        Self {
-            workflow_run_id: core.workflow_run_id,
-            worktree_id: core.worktree_id,
-            workflow_name: core.workflow_name,
-            all_succeeded: core.all_succeeded,
-            total_cost: core.total_cost,
-            total_turns: core.total_turns,
-            total_duration_ms: core.total_duration_ms,
-            total_input_tokens: core.total_input_tokens,
-            total_output_tokens: core.total_output_tokens,
-            total_cache_read_input_tokens: core.total_cache_read_input_tokens,
-            total_cache_creation_input_tokens: core.total_cache_creation_input_tokens,
-        }
-    }
-}
+field_copy_from!(crate::workflow::types::WorkflowResult => runkon_flow::types::WorkflowResult {
+    workflow_run_id, worktree_id, workflow_name, all_succeeded, total_cost, total_turns,
+    total_duration_ms, total_input_tokens, total_output_tokens,
+    total_cache_read_input_tokens, total_cache_creation_input_tokens,
+});
 
-impl From<runkon_flow::types::WorkflowResult> for crate::workflow::types::WorkflowResult {
-    fn from(r: runkon_flow::types::WorkflowResult) -> Self {
-        Self {
-            workflow_run_id: r.workflow_run_id,
-            worktree_id: r.worktree_id,
-            workflow_name: r.workflow_name,
-            all_succeeded: r.all_succeeded,
-            total_cost: r.total_cost,
-            total_turns: r.total_turns,
-            total_duration_ms: r.total_duration_ms,
-            total_input_tokens: r.total_input_tokens,
-            total_output_tokens: r.total_output_tokens,
-            total_cache_read_input_tokens: r.total_cache_read_input_tokens,
-            total_cache_creation_input_tokens: r.total_cache_creation_input_tokens,
-        }
-    }
-}
+field_copy_from!(runkon_flow::types::WorkflowResult => crate::workflow::types::WorkflowResult {
+    workflow_run_id, worktree_id, workflow_name, all_succeeded, total_cost, total_turns,
+    total_duration_ms, total_input_tokens, total_output_tokens,
+    total_cache_read_input_tokens, total_cache_creation_input_tokens,
+});
 
 pub fn gate_approval_to_rk(s: CoreGateApprovalState) -> RkGateApprovalState {
     match s {

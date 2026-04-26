@@ -531,7 +531,7 @@ pub fn poll_data(
                 match wf_mgr.claim_stuck_workflows(&config, configurable_threshold) {
                     Ok(claimed) => conductor_core::workflow::spawn_claimed_runs(
                         claimed,
-                        config.clone(),
+                        Arc::new(config.clone()),
                         conductor_bin_dir.clone(),
                     ),
                     Err(e) => tracing::warn!("claim_stuck_workflows failed: {e}"),
@@ -548,7 +548,7 @@ pub fn poll_data(
                     match wf_mgr.claim_needs_resume_runs(&config) {
                         Ok(claimed) => conductor_core::workflow::spawn_claimed_runs(
                             claimed,
-                            config.clone(),
+                            Arc::new(config.clone()),
                             conductor_bin_dir.clone(),
                         ),
                         Err(e) => tracing::warn!("claim_needs_resume_runs failed: {e}"),

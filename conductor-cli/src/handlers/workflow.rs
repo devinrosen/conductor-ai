@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
@@ -60,7 +62,7 @@ pub fn handle_workflow(
                 match wf_mgr.claim_needs_resume_runs(config) {
                     Ok(claimed) => conductor_core::workflow::spawn_claimed_runs(
                         claimed,
-                        config.clone(),
+                        Arc::new(config.clone()),
                         conductor_bin_dir.clone(),
                     ),
                     Err(e) => eprintln!("Warning: claim_needs_resume_runs failed: {e}"),

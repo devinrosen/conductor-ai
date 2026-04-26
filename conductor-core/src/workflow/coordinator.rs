@@ -775,11 +775,11 @@ fn make_resume_params(
 /// production callers may drop it to detach.
 pub fn spawn_workflow_resume(
     run_id: String,
-    config: Config,
+    config: Arc<Config>,
     conductor_bin_dir: Option<std::path::PathBuf>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        let params = make_resume_params(config, run_id.clone(), conductor_bin_dir, None);
+        let params = make_resume_params((*config).clone(), run_id.clone(), conductor_bin_dir, None);
         if let Err(e) = resume_workflow_standalone(&params) {
             tracing::warn!(run_id = %run_id, "spawn_workflow_resume: auto-resume failed: {e}");
         }
@@ -834,11 +834,11 @@ pub fn spawn_heartbeat_resume(p: SpawnHeartbeatResumeParams) -> std::thread::Joi
 /// the pattern lives in one place.
 pub fn spawn_claimed_runs(
     claimed: Vec<String>,
-    config: Config,
+    config: Arc<Config>,
     conductor_bin_dir: Option<std::path::PathBuf>,
 ) {
     for run_id in claimed {
-        spawn_workflow_resume(run_id, config.clone(), conductor_bin_dir.clone());
+        spawn_workflow_resume(run_id, Arc::clone(&config), conductor_bin_dir.clone());
     }
 }
 
@@ -1346,12 +1346,42 @@ mod tests {
         // resume_workflow_standalone fails (run not found) → warning is logged, no panic.
         let handle = spawn_workflow_resume(
             "nonexistent-run-id".to_string(),
-            crate::config::Config::default(),
+            Arc::new(crate::config::Config::default()),
             None,
         );
         handle
             .join()
             .expect("spawn_workflow_resume thread panicked");
+    }
+
+    // -------------------------------------------------------------------------
+    // spawn_claimed_runs
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn spawn_claimed_runs_empty_vec_is_noop() {
+        // Passing an empty claimed list must not panic and must spawn no threads.
+        // There's no observable side-effect to assert on, so this test just
+        // verifies the function returns without panicking.
+        spawn_claimed_runs(vec![], Arc::new(crate::config::Config::default()), None);
+    }
+
+    #[test]
+    fn spawn_claimed_runs_multi_id_does_not_panic() {
+        // Two non-existent run IDs: both resume attempts will fail (run not found),
+        // log a warning, and exit cleanly.  The function must not panic.
+        // We can't join the spawned threads here because spawn_claimed_runs doesn't
+        // return handles; we give the threads a moment to finish.
+        spawn_claimed_runs(
+            vec![
+                "nonexistent-run-a".to_string(),
+                "nonexistent-run-b".to_string(),
+            ],
+            Arc::new(crate::config::Config::default()),
+            None,
+        );
+        // Brief yield so spawned threads can finish before the test process exits.
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
     // -------------------------------------------------------------------------
