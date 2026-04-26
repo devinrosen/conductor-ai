@@ -38,7 +38,8 @@ export interface TicketTree {
  * - When `apiDeps` is provided (preferred), uses DB-backed dependency data for all
  *   source types. Falls back to Vantage `raw_json` parsing when `apiDeps` is absent.
  * - A ticket is "blocked" if any blocker in `blocked_by` is not closed.
- * - A blocked ticket is "unlocked" if every blocker has a PR with review_decision "APPROVED".
+ * - A blocked ticket is "unlocked" if every blocker has a GitHub PR with review_decision "APPROVED"
+ *   or (for Vantage tickets) a conductor.status of pr_approved/merged/released.
  * - Non-vantage tickets without apiDeps are always roots.
  */
 export function buildTicketTree(
@@ -136,36 +137,58 @@ export function buildTicketTree(
   // Roots: tickets that have no parent in the list
   const roots = tickets.filter((t) => !hasParentInList.has(t.source_id));
 
-  // Compute unlocked set: blocked tickets whose blocking parents all have approved PRs
+  // Compute unlocked set: blocked tickets whose blocking parents all have approved PRs.
+  // For Vantage tickets, conductor.status of pr_approved/merged/released also counts.
   const unlocked = new Set<string>();
-  if (worktrees?.length && prs?.length) {
-    // ticket_id → worktree branch
-    const wtBranchByTicketId = new Map<string, string>();
+
+  // Build a set of ticket IDs whose Vantage conductor.status is terminal/approved
+  const vantagePrApproved = new Set<string>();
+  // Keep in sync with TERMINAL_CONDUCTOR_STATUSES in conductor-core/src/vantage.rs
+  const VANTAGE_APPROVED_STATUSES = ["pr_approved", "merged", "released"];
+  for (const t of tickets) {
+    if (t.source_type !== "vantage") continue;
+    try {
+      const raw = JSON.parse(t.raw_json);
+      const conductorStatus = raw?.conductor?.status ?? "";
+      if (VANTAGE_APPROVED_STATUSES.includes(conductorStatus)) {
+        vantagePrApproved.add(t.id);
+      }
+    } catch { /* skip */ }
+  }
+
+  // ticket_id → worktree branch (for GitHub PR lookup)
+  const wtBranchByTicketId = new Map<string, string>();
+  if (worktrees?.length) {
     for (const wt of worktrees) {
       if (wt.ticket_id) {
         wtBranchByTicketId.set(wt.ticket_id, wt.branch);
       }
     }
-    // branch → PR
-    const prByBranch = new Map<string, GithubPr>();
+  }
+  // branch → PR
+  const prByBranch = new Map<string, GithubPr>();
+  if (prs?.length) {
     for (const pr of prs) {
       prByBranch.set(pr.head_ref_name, pr);
     }
+  }
 
-    for (const ticketId of blocked) {
-      const parentIds = blockingParentIds.get(ticketId);
-      if (!parentIds?.length) continue;
+  for (const ticketId of blocked) {
+    const parentIds = blockingParentIds.get(ticketId);
+    if (!parentIds?.length) continue;
 
-      const allApproved = parentIds.every((parentId) => {
-        const branch = wtBranchByTicketId.get(parentId);
-        if (!branch) return false;
-        const pr = prByBranch.get(branch);
-        return pr?.review_decision === "APPROVED";
-      });
+    const allApproved = parentIds.every((parentId) => {
+      // Vantage conductor.status check
+      if (vantagePrApproved.has(parentId)) return true;
+      // GitHub PR review_decision check
+      const branch = wtBranchByTicketId.get(parentId);
+      if (!branch) return false;
+      const pr = prByBranch.get(branch);
+      return pr?.review_decision === "APPROVED";
+    });
 
-      if (allApproved) {
-        unlocked.add(ticketId);
-      }
+    if (allApproved) {
+      unlocked.add(ticketId);
     }
   }
 
