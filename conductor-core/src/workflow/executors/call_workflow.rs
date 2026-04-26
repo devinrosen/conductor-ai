@@ -29,6 +29,18 @@ pub fn execute_call_workflow(
             ctx.repo_id().map(String::from),
         )
     };
+    let working_dir_str = working_dir.to_str().ok_or_else(|| {
+        ConductorError::Workflow(format!(
+            "working directory path is not valid UTF-8: {}",
+            working_dir.display()
+        ))
+    })?;
+    let repo_path_str = repo_path.to_str().ok_or_else(|| {
+        ConductorError::Workflow(format!(
+            "repo path is not valid UTF-8: {}",
+            repo_path.display()
+        ))
+    })?;
 
     // Skip completed sub-workflow steps on resume
     let wf_step_name = format!("workflow:{}", node.workflow);
@@ -91,17 +103,14 @@ pub fn execute_call_workflow(
     let step_key = node.workflow.clone();
 
     // Load the child workflow definition once (it won't change between retries)
-    let child_def = crate::workflow_dsl::load_workflow_by_name(
-        working_dir.to_str().unwrap_or(""),
-        repo_path.to_str().unwrap_or(""),
-        &node.workflow,
-    )
-    .map_err(|e| {
-        ConductorError::Workflow(format!(
-            "Failed to load sub-workflow '{}': {e}",
-            node.workflow
-        ))
-    })?;
+    let child_def =
+        crate::workflow_dsl::load_workflow_by_name(working_dir_str, repo_path_str, &node.workflow)
+            .map_err(|e| {
+                ConductorError::Workflow(format!(
+                    "Failed to load sub-workflow '{}': {e}",
+                    node.workflow
+                ))
+            })?;
 
     // Retry loop
     let max_attempts = 1 + node.retries;
@@ -295,8 +304,8 @@ pub fn execute_call_workflow(
             config: state.config,
             workflow: &child_def,
             worktree_id: worktree_id.as_deref(),
-            working_dir: working_dir.to_str().unwrap_or(""),
-            repo_path: repo_path.to_str().unwrap_or(""),
+            working_dir: working_dir_str,
+            repo_path: repo_path_str,
             ticket_id: ticket_id.as_deref(),
             repo_id: repo_id.as_deref(),
             model: state.model.as_deref(),

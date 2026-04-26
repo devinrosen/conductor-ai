@@ -1768,6 +1768,74 @@ mod tests {
         );
     }
 
+    // AC: resume() accumulates metrics from pre-completed steps into WorkflowResult totals.
+    #[test]
+    fn resume_accumulates_metrics_from_completed_steps() {
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::status::WorkflowStepStatus;
+        use crate::traits::persistence::{NewStep, StepUpdate, WorkflowPersistence};
+
+        let persistence = Arc::new(InMemoryWorkflowPersistence::new());
+        let run = make_test_run(&persistence);
+
+        // Pre-seed alpha as a completed step with non-zero metrics.
+        let step_id = persistence
+            .insert_step(NewStep {
+                workflow_run_id: run.id.clone(),
+                step_name: "alpha".to_string(),
+                role: "actor".to_string(),
+                can_commit: false,
+                position: 0,
+                iteration: 0,
+                retry_count: Some(0),
+            })
+            .unwrap();
+        persistence
+            .update_step(
+                &step_id,
+                StepUpdate {
+                    status: WorkflowStepStatus::Completed,
+                    child_run_id: None,
+                    result_text: None,
+                    context_out: None,
+                    markers_out: None,
+                    retry_count: None,
+                    structured_output: None,
+                    step_error: None,
+                },
+            )
+            .unwrap();
+        // Inject non-zero cost and turn metrics directly into the step record.
+        persistence.set_step_metrics_for_test(
+            &step_id,
+            Some(1.23),
+            Some(5),
+            Some(4000),
+            Some(100),
+            Some(200),
+        );
+
+        let (_, _, mut state) = make_counting_state(Arc::clone(&persistence), run.id);
+
+        let engine = FlowEngineBuilder::new().build().unwrap();
+        let def = make_def("wf", vec![call_node("alpha"), call_node("beta")]);
+        let result = engine.resume(&def, &mut state).unwrap();
+
+        assert!(
+            (result.total_cost - 1.23).abs() < 1e-9,
+            "total_cost should include alpha's pre-completed cost; got {}",
+            result.total_cost
+        );
+        assert_eq!(
+            result.total_turns, 5,
+            "total_turns should include alpha's pre-completed turns"
+        );
+        assert_eq!(
+            result.total_input_tokens, 100,
+            "total_input_tokens should include alpha's pre-completed tokens"
+        );
+    }
+
     // AC: resume() with no completed steps runs all steps (same behaviour as run()).
     #[test]
     fn resume_empty_skip_set_runs_all() {

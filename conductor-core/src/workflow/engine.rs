@@ -886,6 +886,14 @@ fn evaluate_hooks(
     }
 }
 
+/// Acquire the shared SQLite connection mutex, mapping a poison error to a `ConductorError`.
+fn lock_shared(
+    conn: &Arc<std::sync::Mutex<Connection>>,
+) -> Result<std::sync::MutexGuard<'_, Connection>> {
+    conn.lock()
+        .map_err(|e| ConductorError::Workflow(format!("db mutex poisoned: {e}")))
+}
+
 /// Execute a workflow in a self-contained manner using `runkon_flow::FlowEngine::run()`.
 ///
 /// Opens its own database connection and builds all bridge adapters so the
@@ -907,9 +915,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
     // Setup phase — acquire lock once, do all pre-run work, release.
     // -----------------------------------------------------------------------
     let (wf_run_id, parent_run_id, merged_inputs, effective_repo_id_owned, snapshot_json) = {
-        let guard = shared_conn
-            .lock()
-            .map_err(|e| ConductorError::Workflow(format!("db mutex poisoned: {e}")))?;
+        let guard = lock_shared(&shared_conn)?;
         let conn: &Connection = &guard;
 
         let agent_mgr = AgentManager::new(conn);
@@ -1228,9 +1234,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
     // parent runs never spawn a subprocess), so the orphan reaper would sweep it the
     // moment the workflow_run becomes terminal unless we explicitly mark it done here.
     {
-        let guard = shared_conn
-            .lock()
-            .map_err(|e| ConductorError::Workflow(format!("db mutex poisoned: {e}")))?;
+        let guard = lock_shared(&shared_conn)?;
         let agent_mgr = AgentManager::new(&guard);
         let summary = format!("Workflow '{}' completed", workflow.name);
         if rk_result.all_succeeded {
@@ -1429,9 +1433,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     // Pre-execution phase: validate, reset, and prepare. Lock shared_conn for the
     // duration so all mutations complete before the FlowEngine takes over.
     let (wf_run, worktree_path, repo_path, snapshot_string) = {
-        let guard = shared_conn
-            .lock()
-            .map_err(|e| ConductorError::Workflow(format!("db mutex poisoned: {e}")))?;
+        let guard = lock_shared(&shared_conn)?;
         let conn: &Connection = &guard;
         let wf_mgr = WorkflowManager::new(conn);
         let wt_mgr = WorktreeManager::new(conn, config);

@@ -55,8 +55,14 @@ pub fn spawn_db_poller(
         let mut turn_state: HashMap<String, (u64, i64)> = HashMap::new();
         loop {
             thread::sleep(interval);
-            let sel_wt = selected_worktree_id.lock().unwrap().clone();
-            let sel_repo = selected_repo_id.lock().unwrap().clone();
+            let sel_wt = selected_worktree_id
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let sel_repo = selected_repo_id
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
             if let Some(PollResult {
                 mut action,
                 config,

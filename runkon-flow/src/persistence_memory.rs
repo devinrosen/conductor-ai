@@ -73,6 +73,28 @@ impl InMemoryWorkflowPersistence {
         self.fail_get_steps
             .store(fail, std::sync::atomic::Ordering::Relaxed);
     }
+
+    /// Test helper: directly set the metric fields on a step so that
+    /// `restore_completed_step` can be tested with non-None metric values.
+    #[cfg(test)]
+    pub fn set_step_metrics_for_test(
+        &self,
+        step_id: &str,
+        cost_usd: Option<f64>,
+        num_turns: Option<i64>,
+        duration_ms: Option<i64>,
+        input_tokens: Option<i64>,
+        output_tokens: Option<i64>,
+    ) {
+        let mut store = self.store.lock().unwrap();
+        if let Some(step) = store.steps.get_mut(step_id) {
+            step.cost_usd = cost_usd;
+            step.num_turns = num_turns;
+            step.duration_ms = duration_ms;
+            step.input_tokens = input_tokens;
+            step.output_tokens = output_tokens;
+        }
+    }
 }
 
 fn lock_err() -> EngineError {
