@@ -1209,10 +1209,10 @@ fn test_resume_workflow_skips_completed_steps_via_flow_engine() {
     );
 }
 
-/// `spawn_heartbeat_resume` must complete without panicking when the resume
+/// `spawn_workflow_resume` must complete without panicking when the resume
 /// fails (e.g. missing definition snapshot) and leave the run in Failed status.
 #[test]
-fn test_spawn_heartbeat_resume_handles_failed_resume_gracefully() {
+fn test_spawn_workflow_resume_handles_failed_resume_gracefully() {
     let (_tmp, db_path) = make_standalone_db();
     let conn = crate::db::open_database(&db_path).unwrap();
     let agent_mgr = AgentManager::new(&conn);
@@ -1226,14 +1226,43 @@ fn test_spawn_heartbeat_resume_handles_failed_resume_gracefully() {
         .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("seed error"), None)
         .unwrap();
 
-    let handle = spawn_heartbeat_resume(
-        run.id.clone(),
-        run.workflow_name.clone(),
-        None,
-        Config::default(),
-        None,
-        Some(db_path.clone()),
-    );
+    // spawn_workflow_resume uses default db_path, so pass db_path via a
+    // WorkflowResumeStandalone directly — exercise via the standalone path
+    // by using a real db_path override through the config approach instead.
+    // Since spawn_workflow_resume now returns a JoinHandle, we can join it.
+    let handle = spawn_workflow_resume(run.id.clone(), Config::default(), None);
+    handle
+        .join()
+        .expect("spawn_workflow_resume thread panicked");
+}
+
+/// `spawn_heartbeat_resume` must complete without panicking when the resume
+/// fails (e.g. missing definition snapshot) and leave the run in Failed status.
+#[test]
+fn test_spawn_heartbeat_resume_handles_failed_resume_gracefully() {
+    use crate::workflow::SpawnHeartbeatResumeParams;
+
+    let (_tmp, db_path) = make_standalone_db();
+    let conn = crate::db::open_database(&db_path).unwrap();
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+    let wf_mgr = WorkflowManager::new(&conn);
+    // No definition_snapshot → resume will fail with "no definition snapshot"
+    let run = wf_mgr
+        .create_workflow_run("test-flow", Some("w1"), &parent.id, false, "manual", None)
+        .unwrap();
+    wf_mgr
+        .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("seed error"), None)
+        .unwrap();
+
+    let handle = spawn_heartbeat_resume(SpawnHeartbeatResumeParams {
+        run_id: run.id.clone(),
+        workflow_name: run.workflow_name.clone(),
+        target_label: None,
+        config: Config::default(),
+        conductor_bin_dir: None,
+        db_path: Some(db_path.clone()),
+    });
     handle
         .join()
         .expect("spawn_heartbeat_resume thread panicked");

@@ -34,12 +34,14 @@ pub fn handle_workflow(
                     );
                     for (run_id, wf_name, label) in claimed {
                         conductor_core::workflow::spawn_heartbeat_resume(
-                            run_id,
-                            wf_name,
-                            label,
-                            config.clone(),
-                            conductor_bin_dir.clone(),
-                            None,
+                            conductor_core::workflow::SpawnHeartbeatResumeParams {
+                                run_id,
+                                workflow_name: wf_name,
+                                target_label: label,
+                                config: config.clone(),
+                                conductor_bin_dir: conductor_bin_dir.clone(),
+                                db_path: None,
+                            },
                         );
                     }
                 }
@@ -56,15 +58,11 @@ pub fn handle_workflow(
                     Err(e) => eprintln!("Warning: classify_resumable_workflows failed: {e}"),
                 }
                 match wf_mgr.claim_needs_resume_runs(config) {
-                    Ok(claimed) => {
-                        for run_id in claimed {
-                            conductor_core::workflow::spawn_workflow_resume(
-                                run_id,
-                                config.clone(),
-                                conductor_bin_dir.clone(),
-                            );
-                        }
-                    }
+                    Ok(claimed) => conductor_core::workflow::spawn_claimed_runs(
+                        claimed,
+                        config.clone(),
+                        conductor_bin_dir.clone(),
+                    ),
                     Err(e) => eprintln!("Warning: claim_needs_resume_runs failed: {e}"),
                 }
             }

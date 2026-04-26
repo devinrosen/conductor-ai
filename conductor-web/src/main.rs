@@ -156,12 +156,14 @@ async fn main() -> Result<()> {
                     );
                     for (run_id, wf_name, label) in claimed {
                         conductor_core::workflow::spawn_heartbeat_resume(
-                            run_id,
-                            wf_name,
-                            label,
-                            config.clone(),
-                            conductor_bin_dir.clone(),
-                            None,
+                            conductor_core::workflow::SpawnHeartbeatResumeParams {
+                                run_id,
+                                workflow_name: wf_name,
+                                target_label: label,
+                                config: config.clone(),
+                                conductor_bin_dir: conductor_bin_dir.clone(),
+                                db_path: None,
+                            },
                         );
                     }
                 }
@@ -254,12 +256,14 @@ async fn main() -> Result<()> {
                             tracing::info!("Auto-resuming {} stuck workflow run(s)", claimed.len());
                             for (run_id, wf_name, label) in claimed {
                                 conductor_core::workflow::spawn_heartbeat_resume(
-                                    run_id,
-                                    wf_name,
-                                    label,
-                                    (*cfg).clone(),
-                                    conductor_bin_dir.clone(),
-                                    None,
+                                    conductor_core::workflow::SpawnHeartbeatResumeParams {
+                                        run_id,
+                                        workflow_name: wf_name,
+                                        target_label: label,
+                                        config: (*cfg).clone(),
+                                        conductor_bin_dir: conductor_bin_dir.clone(),
+                                        db_path: None,
+                                    },
                                 );
                             }
                         }

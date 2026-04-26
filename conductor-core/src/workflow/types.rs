@@ -548,6 +548,23 @@ pub struct WorkflowExecStandalone {
     pub iteration: u32,
 }
 
+/// Parameters for [`spawn_heartbeat_resume`].
+///
+/// Groups execution parameters (`run_id`, `config`, …) together with
+/// notification-only parameters (`workflow_name`, `target_label`) so the
+/// execution API surface does not expose notification concerns as positional
+/// arguments.
+pub struct SpawnHeartbeatResumeParams {
+    pub run_id: String,
+    /// Workflow name — used only in the stuck-run failure notification.
+    pub workflow_name: String,
+    /// Target label — used only in the stuck-run failure notification.
+    pub target_label: Option<String>,
+    pub config: crate::config::Config,
+    pub conductor_bin_dir: Option<std::path::PathBuf>,
+    pub db_path: Option<std::path::PathBuf>,
+}
+
 /// Owned inputs for [`resume_workflow_standalone`], avoiding lifetime issues
 /// when spawning background threads.
 pub struct WorkflowResumeStandalone {

@@ -16,9 +16,9 @@ use crate::worktree::WorktreeManager;
 use super::manager::WorkflowManager;
 use super::status::{WorkflowRunStatus, WorkflowStepStatus};
 use super::types::{
-    ContextEntry, StepKey, StepResult, WorkflowExecConfig, WorkflowExecInput,
-    WorkflowExecStandalone, WorkflowResult, WorkflowResumeInput, WorkflowResumeStandalone,
-    WorkflowRunStep,
+    ContextEntry, SpawnHeartbeatResumeParams, StepKey, StepResult, WorkflowExecConfig,
+    WorkflowExecInput, WorkflowExecStandalone, WorkflowResult, WorkflowResumeInput,
+    WorkflowResumeStandalone, WorkflowRunStep,
 };
 
 /// Input keys that the workflow engine injects automatically from the run context
@@ -1317,30 +1317,46 @@ pub fn resume_workflow_standalone(params: &WorkflowResumeStandalone) -> Result<W
     resume_workflow(&input)
 }
 
+/// Build the standard [`WorkflowResumeStandalone`] for a watchdog-spawned resume.
+///
+/// Centralises the five constant fields so `spawn_workflow_resume` and
+/// `spawn_heartbeat_resume` share one construction path.
+fn make_resume_params(
+    config: Config,
+    run_id: String,
+    conductor_bin_dir: Option<std::path::PathBuf>,
+    db_path: Option<std::path::PathBuf>,
+) -> WorkflowResumeStandalone {
+    WorkflowResumeStandalone {
+        config,
+        workflow_run_id: run_id,
+        model: None,
+        from_step: None,
+        restart: false,
+        db_path,
+        conductor_bin_dir,
+        shutdown: None,
+    }
+}
+
 /// Spawn a background thread to resume a workflow run.
 ///
 /// Designed for the TUI/CLI watchdog callers so they are not blocked and the
 /// WorkflowManager (data-access layer) does not need to call engine-layer code.
+///
+/// Returns the thread `JoinHandle` so callers can optionally join for testing;
+/// production callers may drop it to detach.
 pub fn spawn_workflow_resume(
     run_id: String,
     config: Config,
     conductor_bin_dir: Option<std::path::PathBuf>,
-) {
+) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        let params = WorkflowResumeStandalone {
-            config,
-            workflow_run_id: run_id.clone(),
-            model: None,
-            from_step: None,
-            restart: false,
-            db_path: None,
-            conductor_bin_dir,
-            shutdown: None,
-        };
+        let params = make_resume_params(config, run_id.clone(), conductor_bin_dir, None);
         if let Err(e) = resume_workflow_standalone(&params) {
             tracing::warn!(run_id = %run_id, "spawn_workflow_resume: auto-resume failed: {e}");
         }
-    });
+    })
 }
 
 /// Spawn a background thread to resume a heartbeat-stuck workflow run.
@@ -1350,46 +1366,32 @@ pub fn spawn_workflow_resume(
 ///
 /// Returns the thread `JoinHandle` so callers can optionally wait for
 /// completion (production callers may drop it to detach).
-pub fn spawn_heartbeat_resume(
-    run_id: String,
-    workflow_name: String,
-    target_label: Option<String>,
-    config: Config,
-    conductor_bin_dir: Option<std::path::PathBuf>,
-    db_path: Option<std::path::PathBuf>,
-) -> std::thread::JoinHandle<()> {
+pub fn spawn_heartbeat_resume(p: SpawnHeartbeatResumeParams) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        let effective_db = db_path.clone().unwrap_or_else(crate::config::db_path);
-        let params = WorkflowResumeStandalone {
-            config: config.clone(),
-            workflow_run_id: run_id.clone(),
-            model: None,
-            from_step: None,
-            restart: false,
-            db_path: Some(effective_db.clone()),
-            conductor_bin_dir,
-            shutdown: None,
-        };
+        let effective_db = p.db_path.clone().unwrap_or_else(crate::config::db_path);
+        let params = make_resume_params(
+            p.config.clone(),
+            p.run_id.clone(),
+            p.conductor_bin_dir,
+            Some(effective_db.clone()),
+        );
         if let Err(e) = resume_workflow_standalone(&params) {
-            tracing::warn!(
-                run_id = %run_id,
-                "spawn_heartbeat_resume: auto-resume failed: {e}"
-            );
+            tracing::warn!(run_id = %p.run_id, "spawn_heartbeat_resume: auto-resume failed: {e}");
             match crate::db::open_database(&effective_db) {
                 Ok(db) => {
                     crate::notify::fire_heartbeat_stuck_failed_notification(
                         &db,
-                        &config.notifications,
-                        &config.notify.hooks,
-                        &run_id,
-                        &workflow_name,
-                        target_label.as_deref(),
+                        &p.config.notifications,
+                        &p.config.notify.hooks,
+                        &p.run_id,
+                        &p.workflow_name,
+                        p.target_label.as_deref(),
                         &e.to_string(),
                     );
                 }
                 Err(db_err) => {
                     tracing::warn!(
-                        run_id = %run_id,
+                        run_id = %p.run_id,
                         error = %db_err,
                         "spawn_heartbeat_resume: could not open DB to fire stuck-run notification"
                     );
@@ -1397,6 +1399,20 @@ pub fn spawn_heartbeat_resume(
             }
         }
     })
+}
+
+/// Spawn a resume thread for each claimed run ID.
+///
+/// Consolidates the claim-then-spawn loop used by TUI and CLI watchdogs so
+/// the pattern lives in one place.
+pub fn spawn_claimed_runs(
+    claimed: Vec<String>,
+    config: Config,
+    conductor_bin_dir: Option<std::path::PathBuf>,
+) {
+    for run_id in claimed {
+        spawn_workflow_resume(run_id, config.clone(), conductor_bin_dir.clone());
+    }
 }
 
 /// Resume a failed or stalled workflow run from the point of failure.
