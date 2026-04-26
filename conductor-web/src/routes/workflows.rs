@@ -1715,6 +1715,7 @@ pub async fn resume_workflow_endpoint(
             restart,
             db_path: None,
             conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+            shutdown: None,
         };
 
         let result = conductor_core::workflow::resume_workflow_standalone(&params);

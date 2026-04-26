@@ -385,6 +385,7 @@ mod tests {
             conductor_bin_dir: None,
             event_sinks: vec![],
             db_path: Some(db_path.clone()),
+            shutdown: None,
         };
 
         let err = resume_workflow(&input).unwrap_err();

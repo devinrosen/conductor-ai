@@ -561,6 +561,9 @@ pub struct WorkflowResumeStandalone {
     pub db_path: Option<std::path::PathBuf>,
     /// Directory containing the conductor binary, injected into script step PATH.
     pub conductor_bin_dir: Option<std::path::PathBuf>,
+    /// Shutdown signal for graceful cancellation. `None` means the run cannot
+    /// be aborted externally (e.g. auto-resume watchdog threads).
+    pub shutdown: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// Input parameters for resuming a workflow run.
@@ -584,6 +587,9 @@ pub struct WorkflowResumeInput<'a> {
     pub event_sinks: Vec<std::sync::Arc<dyn runkon_flow::events::EventSink>>,
     /// Database path. When `None`, falls back to `crate::config::db_path()`.
     pub db_path: Option<std::path::PathBuf>,
+    /// Shutdown signal for graceful cancellation. `None` means the run cannot
+    /// be aborted externally (e.g. auto-resume watchdog threads).
+    pub shutdown: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// Resolve the directory containing the current executable.

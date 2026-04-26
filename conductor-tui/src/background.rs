@@ -824,11 +824,11 @@ fn sync_repo(
                 Ok(count) => {
                     if let Err(e) = syncer.close_missing_tickets(repo_id, source_type, &synced_ids)
                     {
-                        eprintln!("warn: close_missing_tickets failed for {repo_slug}: {e}");
+                        tracing::warn!("close_missing_tickets failed for {repo_slug}: {e}");
                     }
                     if let Err(e) = syncer.mark_worktrees_for_closed_tickets(repo_id) {
-                        eprintln!(
-                            "warn: mark_worktrees_for_closed_tickets failed for {repo_slug}: {e}"
+                        tracing::warn!(
+                            "mark_worktrees_for_closed_tickets failed for {repo_slug}: {e}"
                         );
                     }
                     Action::TicketSyncComplete {

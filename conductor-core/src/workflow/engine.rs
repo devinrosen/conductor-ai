@@ -1311,6 +1311,7 @@ pub fn resume_workflow_standalone(params: &WorkflowResumeStandalone) -> Result<W
         conductor_bin_dir: params.conductor_bin_dir.clone(),
         event_sinks: vec![],
         db_path: Some(db),
+        shutdown: params.shutdown.clone(),
     };
 
     resume_workflow(&input)
@@ -1334,6 +1335,7 @@ pub fn spawn_workflow_resume(
             restart: false,
             db_path: None,
             conductor_bin_dir,
+            shutdown: None,
         };
         if let Err(e) = resume_workflow_standalone(&params) {
             tracing::warn!(run_id = %run_id, "spawn_workflow_resume: auto-resume failed: {e}");
@@ -1366,6 +1368,7 @@ pub fn spawn_heartbeat_resume(
             restart: false,
             db_path: Some(effective_db.clone()),
             conductor_bin_dir,
+            shutdown: None,
         };
         if let Err(e) = resume_workflow_standalone(&params) {
             tracing::warn!(
@@ -1384,9 +1387,10 @@ pub fn spawn_heartbeat_resume(
                         &e.to_string(),
                     );
                 }
-                Err(_) => {
+                Err(db_err) => {
                     tracing::warn!(
                         run_id = %run_id,
+                        error = %db_err,
                         "spawn_heartbeat_resume: could not open DB to fire stuck-run notification"
                     );
                 }
@@ -1652,7 +1656,10 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
             extra_plugin_dirs: vec![],
         },
         model: input.model.map(String::from),
-        exec_config: runkon_flow::types::WorkflowExecConfig::default(),
+        exec_config: runkon_flow::types::WorkflowExecConfig {
+            shutdown: input.shutdown.clone(),
+            ..runkon_flow::types::WorkflowExecConfig::default()
+        },
         inputs: wf_run.inputs.clone(),
         parent_run_id: wf_run.parent_run_id.clone(),
         depth: 0,

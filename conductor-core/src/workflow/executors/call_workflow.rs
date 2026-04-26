@@ -142,6 +142,7 @@ pub fn execute_call_workflow(
             conductor_bin_dir: conductor_bin_dir.clone(),
             event_sinks: state.exec_config.event_sinks.clone(),
             db_path: None,
+            shutdown: state.exec_config.shutdown.clone(),
         };
 
         let msg = match crate::workflow::engine::resume_workflow(&resume_input) {

@@ -148,6 +148,7 @@ fn test_resume_rejects_completed_run() {
         conductor_bin_dir: None,
         event_sinks: vec![],
         db_path: Some(db_path.clone()),
+        shutdown: None,
     };
     let err = resume_workflow(&input).unwrap_err();
     assert!(
@@ -187,6 +188,7 @@ fn test_resume_rejects_cancelled_run() {
         conductor_bin_dir: None,
         event_sinks: vec![],
         db_path: Some(db_path.clone()),
+        shutdown: None,
     };
     let err = resume_workflow(&input).unwrap_err();
     assert!(
@@ -235,6 +237,7 @@ fn test_resume_rejects_restart_and_from_step_together() {
         conductor_bin_dir: None,
         event_sinks: vec![],
         db_path: Some(db_path.clone()),
+        shutdown: None,
     };
     let err = resume_workflow(&input).unwrap_err();
     assert!(
@@ -269,6 +272,7 @@ fn test_resume_rejects_missing_snapshot() {
         conductor_bin_dir: None,
         event_sinks: vec![],
         db_path: Some(db_path.clone()),
+        shutdown: None,
     };
     let err = resume_workflow(&input).unwrap_err();
     assert!(
@@ -290,6 +294,7 @@ fn test_resume_rejects_nonexistent_run() {
         conductor_bin_dir: None,
         event_sinks: vec![],
         db_path: Some(db_path.clone()),
+        shutdown: None,
     };
     let err = resume_workflow(&input).unwrap_err();
     assert!(
@@ -345,6 +350,7 @@ fn test_resume_rejects_nonexistent_from_step() {
         conductor_bin_dir: None,
         event_sinks: vec![],
         db_path: Some(db_path.clone()),
+        shutdown: None,
     };
     let err = resume_workflow(&input).unwrap_err();
     assert!(
@@ -395,6 +401,7 @@ fn test_resume_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
         conductor_bin_dir: None,
         event_sinks: vec![],
         db_path: Some(db_path.clone()),
+        shutdown: None,
     };
 
     let result = resume_workflow(&input).expect(
@@ -787,6 +794,7 @@ fn test_resume_allows_restart_on_completed_run() {
         conductor_bin_dir: None,
         event_sinks: vec![],
         db_path: Some(db_path.clone()),
+        shutdown: None,
     };
     assert!(resume_workflow(&input).is_err());
 
@@ -801,6 +809,7 @@ fn test_resume_allows_restart_on_completed_run() {
         conductor_bin_dir: None,
         event_sinks: vec![],
         db_path: Some(db_path.clone()),
+        shutdown: None,
     };
     let err = resume_workflow(&input).unwrap_err();
     // Should fail on worktree resolution, NOT on "Cannot resume a completed"
@@ -908,6 +917,7 @@ fn test_resume_workflow_ephemeral_run_rejected() {
         conductor_bin_dir: None,
         event_sinks: vec![],
         db_path: Some(db_path.clone()),
+        shutdown: None,
     });
     assert!(result.is_err(), "ephemeral run resume should be rejected");
     let err = result.unwrap_err().to_string();
@@ -957,6 +967,7 @@ fn test_resume_workflow_repo_target() {
         conductor_bin_dir: None,
         event_sinks: vec![],
         db_path: Some(db_path.clone()),
+        shutdown: None,
     });
     assert!(
         resume_result.is_ok(),
@@ -1007,6 +1018,7 @@ fn test_resume_workflow_ticket_target() {
         conductor_bin_dir: None,
         event_sinks: vec![],
         db_path: Some(db_path.clone()),
+        shutdown: None,
     });
     assert!(
         resume_result.is_ok(),
@@ -1089,6 +1101,7 @@ fn test_resume_deletes_orphaned_pending_steps() {
         conductor_bin_dir: None,
         event_sinks: vec![],
         db_path: Some(db_path.clone()),
+        shutdown: None,
     });
     assert!(
         result.is_ok(),
@@ -1177,6 +1190,7 @@ fn test_resume_workflow_skips_completed_steps_via_flow_engine() {
         conductor_bin_dir: None,
         event_sinks: vec![],
         db_path: Some(db_path),
+        shutdown: None,
     })
     .expect("resume_workflow must succeed for a failed run with a pre-completed step");
 

@@ -594,6 +594,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             conductor_bin_dir: None,
             event_sinks: vec![],
             db_path: Some(self.db_path.clone()),
+            shutdown: None,
         };
 
         let core_result = crate::workflow::engine::resume_workflow(&input).map_err(|e| {

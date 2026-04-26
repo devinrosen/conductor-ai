@@ -712,6 +712,7 @@ pub fn handle_workflow(
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                 event_sinks: vec![],
                 db_path: None,
+                shutdown: None,
             };
 
             if restart {
