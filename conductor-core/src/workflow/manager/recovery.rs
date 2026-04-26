@@ -768,45 +768,68 @@ impl<'a> WorkflowManager<'a> {
             },
         )?;
 
-        let mut finalized = 0usize;
+        // Wrap all updates in a savepoint so they commit in one round-trip instead
+        // of N separate auto-commit transactions (mirrors recover_stuck_steps).
+        self.conn
+            .execute_batch("SAVEPOINT reap_finalization_stuck_workflow_runs")?;
+        let result: crate::error::Result<usize> = (|| {
+            let mut finalized = 0usize;
 
-        for (run_id, parent_run_id, has_failure) in stuck {
-            let final_status = if has_failure {
-                WorkflowRunStatus::Failed
-            } else {
-                WorkflowRunStatus::Completed
-            };
+            for (run_id, parent_run_id, has_failure) in stuck {
+                let final_status = if has_failure {
+                    WorkflowRunStatus::Failed
+                } else {
+                    WorkflowRunStatus::Completed
+                };
 
-            let summary =
-                "Auto-finalized by reaper: all steps terminal, status was stuck in 'running'"
-                    .to_string();
+                let summary =
+                    "Auto-finalized by reaper: all steps terminal, status was stuck in 'running'"
+                        .to_string();
 
-            self.update_workflow_status(&run_id, final_status.clone(), Some(&summary), None)?;
-            tracing::info!(
-                run_id = %run_id,
-                status = %final_status,
-                "Reaper finalized stuck workflow run"
-            );
-
-            // Best-effort: update the parent agent_runs row if still running.
-            let agent_mgr = crate::agent::AgentManager::new(self.conn);
-            let update_result = if has_failure {
-                agent_mgr.update_run_failed_if_running(&parent_run_id, &summary)
-            } else {
-                agent_mgr.update_run_completed_if_running(&parent_run_id, &summary)
-            };
-            if let Err(e) = update_result {
-                tracing::warn!(
+                self.update_workflow_status(&run_id, final_status.clone(), Some(&summary), None)?;
+                tracing::info!(
                     run_id = %run_id,
-                    parent_run_id = %parent_run_id,
-                    "Failed to update parent agent_runs row (best-effort, non-fatal): {e}"
+                    status = %final_status,
+                    "Reaper finalized stuck workflow run"
                 );
+
+                // Best-effort: update the parent agent_runs row if still running.
+                let agent_mgr = crate::agent::AgentManager::new(self.conn);
+                let update_result = if has_failure {
+                    agent_mgr.update_run_failed_if_running(&parent_run_id, &summary)
+                } else {
+                    agent_mgr.update_run_completed_if_running(&parent_run_id, &summary)
+                };
+                if let Err(e) = update_result {
+                    tracing::warn!(
+                        run_id = %run_id,
+                        parent_run_id = %parent_run_id,
+                        "Failed to update parent agent_runs row (best-effort, non-fatal): {e}"
+                    );
+                }
+
+                finalized += 1;
             }
 
-            finalized += 1;
-        }
+            Ok(finalized)
+        })();
 
-        Ok(finalized)
+        match result {
+            Ok(n) => {
+                self.conn
+                    .execute_batch("RELEASE reap_finalization_stuck_workflow_runs")?;
+                Ok(n)
+            }
+            Err(e) => {
+                let _ = self
+                    .conn
+                    .execute_batch("ROLLBACK TO SAVEPOINT reap_finalization_stuck_workflow_runs");
+                let _ = self
+                    .conn
+                    .execute_batch("RELEASE reap_finalization_stuck_workflow_runs");
+                Err(e)
+            }
+        }
     }
 
     /// Find the most-recently-started child workflow run that can be resumed:
