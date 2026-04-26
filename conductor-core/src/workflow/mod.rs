@@ -68,6 +68,7 @@ pub use coordinator::{
     resume_workflow_standalone, spawn_claimed_runs, spawn_heartbeat_resume, spawn_workflow_resume,
     validate_resume_preconditions,
 };
+pub use engine_error::EngineError;
 pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
 pub use manager::recovery::{ReapedStaleRun, StaleWorkflowRun};
 pub use manager::{list_workflow_defs, FanOutItemRow, InvalidWorkflowEntry, WorkflowManager};

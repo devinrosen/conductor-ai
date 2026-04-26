@@ -242,6 +242,125 @@ struct RkEngineComponents {
     child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner>,
 }
 
+/// Variable-field arguments for constructing a fresh [`runkon_flow::engine::ExecutionState`].
+///
+/// Passed to [`build_rk_execution_state`] which centralises the zero-valued fields so
+/// they cannot diverge between the execute and resume paths.
+struct RkStateArgs {
+    persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence>,
+    action_registry: Arc<runkon_flow::traits::action_executor::ActionRegistry>,
+    script_env_provider: Arc<dyn runkon_flow::ScriptEnvProvider>,
+    workflow_run_id: String,
+    workflow_name: String,
+    worktree_ctx: runkon_flow::engine::WorktreeContext,
+    model: Option<String>,
+    exec_config: runkon_flow::types::WorkflowExecConfig,
+    inputs: HashMap<String, String>,
+    parent_run_id: String,
+    depth: u32,
+    target_label: Option<String>,
+    default_bot_name: Option<String>,
+    triggered_by_hook: bool,
+    #[allow(clippy::type_complexity)]
+    schema_resolver: Arc<
+        dyn Fn(
+                &str,
+                &str,
+                &str,
+            )
+                -> runkon_flow::engine_error::Result<runkon_flow::output_schema::OutputSchema>
+            + Send
+            + Sync,
+    >,
+    child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner>,
+    registry: Arc<runkon_flow::ItemProviderRegistry>,
+    event_sinks: Arc<[Arc<dyn runkon_flow::EventSink>]>,
+}
+
+/// Build a fresh [`runkon_flow::engine::ExecutionState`] from the variable arguments,
+/// filling in all zero-initialised metric and runtime fields in one place so the
+/// execute and resume paths cannot diverge silently.
+fn build_rk_execution_state(args: RkStateArgs) -> runkon_flow::engine::ExecutionState {
+    runkon_flow::engine::ExecutionState {
+        persistence: args.persistence,
+        action_registry: args.action_registry,
+        script_env_provider: args.script_env_provider,
+        workflow_run_id: args.workflow_run_id,
+        workflow_name: args.workflow_name,
+        worktree_ctx: args.worktree_ctx,
+        model: args.model,
+        exec_config: args.exec_config,
+        inputs: args.inputs,
+        parent_run_id: args.parent_run_id,
+        depth: args.depth,
+        target_label: args.target_label,
+        step_results: HashMap::new(),
+        contexts: Vec::new(),
+        position: 0,
+        all_succeeded: true,
+        total_cost: 0.0,
+        total_turns: 0,
+        total_duration_ms: 0,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        total_cache_read_input_tokens: 0,
+        total_cache_creation_input_tokens: 0,
+        last_gate_feedback: None,
+        block_output: None,
+        block_with: Vec::new(),
+        resume_ctx: None,
+        default_bot_name: args.default_bot_name,
+        triggered_by_hook: args.triggered_by_hook,
+        schema_resolver: Some(args.schema_resolver),
+        child_runner: Some(args.child_runner),
+        last_heartbeat_at: runkon_flow::engine::ExecutionState::new_heartbeat(),
+        registry: args.registry,
+        event_sinks: args.event_sinks,
+        cancellation: runkon_flow::CancellationToken::new(),
+        current_execution_id: Arc::new(std::sync::Mutex::new(None)),
+    }
+}
+
+/// Build a [`runkon_flow::FlowEngine`] with all gate resolvers registered.
+fn build_flow_engine(
+    persistence: &Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence>,
+    event_sinks: &Arc<[Arc<dyn runkon_flow::EventSink>]>,
+    working_dir: String,
+    default_bot_name: Option<String>,
+    config: Config,
+    db: &std::path::Path,
+    workflow_name: &str,
+) -> Result<runkon_flow::FlowEngine> {
+    super::runkon_gate_bridge::register_rk_gate_resolvers(
+        runkon_flow::FlowEngineBuilder::new().with_event_sinks(event_sinks),
+        Arc::clone(persistence),
+        working_dir,
+        default_bot_name,
+        config,
+        db.to_path_buf(),
+    )
+    .build()
+    .map_err(|e| {
+        ConductorError::Workflow(format!("failed to build engine for '{workflow_name}': {e}"))
+    })
+}
+
+/// Map a [`runkon_flow::engine_error::EngineError`] to [`ConductorError`].
+///
+/// `phase` is a short label inserted into the error message (e.g. `"run"` or `"resume"`).
+fn map_engine_error(
+    e: runkon_flow::engine_error::EngineError,
+    workflow_name: &str,
+    phase: &str,
+) -> ConductorError {
+    match e {
+        runkon_flow::engine_error::EngineError::Cancelled(_) => ConductorError::WorkflowCancelled,
+        other => ConductorError::Workflow(format!(
+            "workflow '{workflow_name}' {phase} failed: {other}"
+        )),
+    }
+}
+
 /// Build the persistence, action-registry, and child-runner that are identical
 /// between fresh execution and resume.  Call sites then layer in the parts that
 /// differ (item_registry, script_env_provider, ExecutionState fields).
@@ -498,8 +617,10 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         dry_run: params.exec_config.dry_run,
         shutdown: params.exec_config.shutdown.clone(),
     };
+    let event_sinks: Arc<[Arc<dyn runkon_flow::EventSink>]> =
+        Arc::from(params.exec_config.event_sinks.clone());
 
-    let mut rk_state = runkon_flow::engine::ExecutionState {
+    let mut rk_state = build_rk_execution_state(RkStateArgs {
         persistence: Arc::clone(&persistence),
         action_registry,
         script_env_provider,
@@ -519,52 +640,27 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         parent_run_id: parent_run_id.clone(),
         depth: params.depth,
         target_label: params.target_label.clone(),
-        step_results: HashMap::new(),
-        contexts: Vec::new(),
-        position: 0,
-        all_succeeded: true,
-        total_cost: 0.0,
-        total_turns: 0,
-        total_duration_ms: 0,
-        total_input_tokens: 0,
-        total_output_tokens: 0,
-        total_cache_read_input_tokens: 0,
-        total_cache_creation_input_tokens: 0,
-        last_gate_feedback: None,
-        block_output: None,
-        block_with: Vec::new(),
-        resume_ctx: None,
         default_bot_name: params.default_bot_name.clone(),
         triggered_by_hook: params.triggered_by_hook,
-        schema_resolver: Some(schema_resolver),
-        child_runner: Some(child_runner),
-        last_heartbeat_at: runkon_flow::engine::ExecutionState::new_heartbeat(),
+        schema_resolver,
+        child_runner,
         registry: item_registry,
-        event_sinks: Arc::from(params.exec_config.event_sinks.clone()),
-        cancellation: runkon_flow::CancellationToken::new(),
-        current_execution_id: Arc::new(std::sync::Mutex::new(None)),
-    };
+        event_sinks: Arc::clone(&event_sinks),
+    });
 
-    let engine = super::runkon_gate_bridge::register_rk_gate_resolvers(
-        runkon_flow::FlowEngineBuilder::new().with_event_sinks(&rk_state.event_sinks),
-        Arc::clone(&persistence),
+    let engine = build_flow_engine(
+        &persistence,
+        &event_sinks,
         params.working_dir.clone(),
         params.default_bot_name.clone(),
         config.clone(),
-        db,
-    )
-    .build()
-    .map_err(|e| {
-        ConductorError::Workflow(format!(
-            "failed to build engine for '{}': {e}",
-            workflow.name
-        ))
-    })?;
+        &db,
+        &workflow.name,
+    )?;
 
-    let rk_result = engine.run(&rk_def, &mut rk_state).map_err(|e| match e {
-        runkon_flow::engine_error::EngineError::Cancelled(_) => ConductorError::WorkflowCancelled,
-        other => ConductorError::Workflow(other.to_string()),
-    })?;
+    let rk_result = engine
+        .run(&rk_def, &mut rk_state)
+        .map_err(|e| map_engine_error(e, &workflow.name, "run"))?;
 
     // Close the parent agent run. It was created without a subprocess_pid (workflow
     // parent runs never spawn a subprocess), so the orphan reaper would sweep it the
@@ -961,7 +1057,9 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
 
     let schema_resolver = make_schema_resolver(wf_run.workflow_name.clone());
 
-    let mut rk_state = runkon_flow::engine::ExecutionState {
+    let event_sinks: Arc<[Arc<dyn runkon_flow::EventSink>]> = Arc::from(input.event_sinks.clone());
+
+    let mut rk_state = build_rk_execution_state(RkStateArgs {
         persistence: Arc::clone(&persistence),
         action_registry,
         script_env_provider,
@@ -984,55 +1082,27 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         parent_run_id: wf_run.parent_run_id.clone(),
         depth: 0,
         target_label: wf_run.target_label.clone(),
-        step_results: HashMap::new(),
-        contexts: Vec::new(),
-        position: 0,
-        all_succeeded: true,
-        total_cost: 0.0,
-        total_turns: 0,
-        total_duration_ms: 0,
-        total_input_tokens: 0,
-        total_output_tokens: 0,
-        total_cache_read_input_tokens: 0,
-        total_cache_creation_input_tokens: 0,
-        last_gate_feedback: None,
-        block_output: None,
-        block_with: Vec::new(),
-        resume_ctx: None,
         default_bot_name: wf_run.default_bot_name.clone(),
         triggered_by_hook: wf_run.is_triggered_by_hook(),
-        schema_resolver: Some(schema_resolver),
-        child_runner: Some(child_runner),
-        last_heartbeat_at: runkon_flow::engine::ExecutionState::new_heartbeat(),
+        schema_resolver,
+        child_runner,
         registry: item_registry,
-        event_sinks: Arc::from(input.event_sinks.clone()),
-        cancellation: runkon_flow::CancellationToken::new(),
-        current_execution_id: Arc::new(std::sync::Mutex::new(None)),
-    };
+        event_sinks: Arc::clone(&event_sinks),
+    });
 
-    let engine = super::runkon_gate_bridge::register_rk_gate_resolvers(
-        runkon_flow::FlowEngineBuilder::new().with_event_sinks(&rk_state.event_sinks),
-        Arc::clone(&persistence),
+    let engine = build_flow_engine(
+        &persistence,
+        &event_sinks,
         worktree_path,
         wf_run.default_bot_name.clone(),
         config.clone(),
-        db,
-    )
-    .build()
-    .map_err(|e| {
-        ConductorError::Workflow(format!(
-            "failed to build engine for '{}': {e}",
-            wf_run.workflow_name
-        ))
-    })?;
+        &db,
+        &wf_run.workflow_name,
+    )?;
 
-    let rk_result = engine.resume(&rk_def, &mut rk_state).map_err(|e| match e {
-        runkon_flow::engine_error::EngineError::Cancelled(_) => ConductorError::WorkflowCancelled,
-        other => ConductorError::Workflow(format!(
-            "workflow '{}' resume failed: {other}",
-            wf_run.workflow_name
-        )),
-    })?;
+    let rk_result = engine
+        .resume(&rk_def, &mut rk_state)
+        .map_err(|e| map_engine_error(e, &wf_run.workflow_name, "resume"))?;
 
     Ok(super::rk_types::rk_workflow_result_to_core(rk_result))
 }
@@ -1208,6 +1278,20 @@ mod tests {
     fn validate_resume_failed_with_restart_ok() {
         validate_resume_preconditions(&WorkflowRunStatus::Failed, true, None)
             .expect("restarting a failed run should be allowed");
+    }
+
+    #[test]
+    fn validate_resume_needs_resume_ok() {
+        // NeedsResume falls through to Ok(()) — it is an explicitly resumable status.
+        validate_resume_preconditions(&WorkflowRunStatus::NeedsResume, false, None)
+            .expect("NeedsResume should be resumable");
+    }
+
+    #[test]
+    fn validate_resume_cancelling_ok() {
+        // Cancelling falls through to Ok(()) — partial cancellation can be resumed.
+        validate_resume_preconditions(&WorkflowRunStatus::Cancelling, false, None)
+            .expect("Cancelling should be resumable");
     }
 
     // -------------------------------------------------------------------------

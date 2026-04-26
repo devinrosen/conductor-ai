@@ -761,8 +761,12 @@ async fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("invalid CONDUCTOR_PORT: {e}"))?;
 
     let mut origins: Vec<HeaderValue> = vec![
-        format!("http://localhost:{port}").parse().unwrap(),
-        format!("http://127.0.0.1:{port}").parse().unwrap(),
+        format!("http://localhost:{port}")
+            .parse()
+            .expect("localhost CORS origin is always valid for a u16 port"),
+        format!("http://127.0.0.1:{port}")
+            .parse()
+            .expect("localhost CORS origin is always valid for a u16 port"),
     ];
     if let Ok(v) = "http://localhost:5173".parse() {
         origins.push(v);

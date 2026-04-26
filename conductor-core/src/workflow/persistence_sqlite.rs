@@ -226,8 +226,7 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for SqliteWorkflowPer
         &self,
         new_run: runkon_flow::traits::persistence::NewRun,
     ) -> Result<runkon_flow::types::WorkflowRun, EngineError> {
-        let core_run =
-            <Self as WorkflowPersistence>::create_run(self, rk_conv::new_run_to_core(new_run))?;
+        let core_run = <Self as WorkflowPersistence>::create_run(self, new_run.into())?;
         Ok(rk_conv::run_to_rk(core_run))
     }
 
@@ -271,7 +270,7 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for SqliteWorkflowPer
         &self,
         new_step: runkon_flow::traits::persistence::NewStep,
     ) -> Result<String, EngineError> {
-        <Self as WorkflowPersistence>::insert_step(self, rk_conv::new_step_to_core(new_step))
+        <Self as WorkflowPersistence>::insert_step(self, new_step.into())
     }
 
     fn update_step(
@@ -279,11 +278,7 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for SqliteWorkflowPer
         step_id: &str,
         update: runkon_flow::traits::persistence::StepUpdate,
     ) -> Result<(), EngineError> {
-        <Self as WorkflowPersistence>::update_step(
-            self,
-            step_id,
-            rk_conv::step_update_to_core(update),
-        )
+        <Self as WorkflowPersistence>::update_step(self, step_id, update.into())
     }
 
     fn get_steps(
@@ -315,11 +310,7 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for SqliteWorkflowPer
         item_id: &str,
         update: runkon_flow::traits::persistence::FanOutItemUpdate,
     ) -> Result<(), EngineError> {
-        <Self as WorkflowPersistence>::update_fan_out_item(
-            self,
-            item_id,
-            rk_conv::fan_out_update_to_core(update),
-        )
+        <Self as WorkflowPersistence>::update_fan_out_item(self, item_id, update.into())
     }
 
     fn get_fan_out_items(
@@ -327,7 +318,7 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for SqliteWorkflowPer
         step_run_id: &str,
         status_filter: Option<runkon_flow::traits::persistence::FanOutItemStatus>,
     ) -> Result<Vec<runkon_flow::types::FanOutItemRow>, EngineError> {
-        let core_filter = status_filter.map(rk_conv::fan_out_status_to_core);
+        let core_filter = status_filter.map(Into::into);
         let result =
             <Self as WorkflowPersistence>::get_fan_out_items(self, step_run_id, core_filter)?;
         Ok(result

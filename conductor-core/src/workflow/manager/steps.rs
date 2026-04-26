@@ -10,6 +10,15 @@ use super::WorkflowManager;
 use crate::workflow::status::WorkflowStepStatus;
 
 impl<'a> WorkflowManager<'a> {
+    /// Execute a single SQL UPDATE and map the rusqlite error to [`ConductorError`].
+    ///
+    /// All `mark_step_*` methods share this one-liner to avoid repeating the
+    /// `execute(...)?; Ok(())` pattern.
+    fn execute_step_sql(&self, sql: &str, params: impl rusqlite::Params) -> Result<()> {
+        self.conn.execute(sql, params)?;
+        Ok(())
+    }
+
     /// Insert a workflow step record.
     pub fn insert_step(
         &self,
@@ -111,12 +120,11 @@ impl<'a> WorkflowManager<'a> {
         child_run_id: Option<&str>,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        self.conn.execute(
+        self.execute_step_sql(
             "UPDATE workflow_run_steps SET status = :status, child_run_id = :child_run_id, \
              started_at = :started_at WHERE id = :id",
             named_params![":status": status, ":child_run_id": child_run_id, ":started_at": now, ":id": step_id],
-        )?;
-        Ok(())
+        )
     }
 
     /// Mark a step as terminal (Completed, Failed, Skipped, TimedOut), recording all output fields.
@@ -134,7 +142,7 @@ impl<'a> WorkflowManager<'a> {
         step_error: Option<&str>,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        self.conn.execute(
+        self.execute_step_sql(
             "UPDATE workflow_run_steps SET status = :status, \
              child_run_id = COALESCE(:child_run_id, child_run_id), \
              ended_at = :ended_at, result_text = :result_text, context_out = :context_out, \
@@ -154,17 +162,15 @@ impl<'a> WorkflowManager<'a> {
                 ":step_error": step_error,
                 ":id": step_id,
             ],
-        )?;
-        Ok(())
+        )
     }
 
     /// Mark a step with a non-starting, non-terminal status (e.g. Pending), updating only `status`.
     pub fn mark_step_pending(&self, step_id: &str, status: WorkflowStepStatus) -> Result<()> {
-        self.conn.execute(
+        self.execute_step_sql(
             "UPDATE workflow_run_steps SET status = :status WHERE id = :id",
             named_params![":status": status, ":id": step_id],
-        )?;
-        Ok(())
+        )
     }
 
     /// Update a step's status with all fields including structured_output and step_error.
@@ -596,6 +602,30 @@ mod tests {
         assert_eq!(step.retry_count, 1);
         assert_eq!(step.structured_output.as_deref(), Some(r#"{"ok":true}"#));
         assert!(step.ended_at.is_some(), "ended_at should be set");
+    }
+
+    #[test]
+    fn mark_step_pending_updates_status_only() {
+        let conn = test_helpers::setup_db();
+        let (_run_id, step_id) = setup(&conn);
+        let mgr = WorkflowManager::new(&conn);
+
+        // Advance to Running first so we can observe the rollback to Pending.
+        mgr.mark_step_running(&step_id, WorkflowStepStatus::Running, Some("child-x"))
+            .unwrap();
+        // Now reset to Pending — only status should change.
+        mgr.mark_step_pending(&step_id, WorkflowStepStatus::Pending)
+            .unwrap();
+
+        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        assert_eq!(step.status, WorkflowStepStatus::Pending);
+        // started_at and child_run_id must be left as-is (mark_step_pending touches status only).
+        assert!(step.started_at.is_some(), "started_at should be preserved");
+        assert_eq!(
+            step.child_run_id.as_deref(),
+            Some("child-x"),
+            "child_run_id should be preserved"
+        );
     }
 
     #[test]

@@ -376,18 +376,17 @@ pub fn execute_foreach(
     // Seed terminal counts from items that were already terminal before this dispatch
     // (e.g. partially-resumed runs).  New completions/failures/skips are tracked
     // incrementally below so the final phase can skip a DB re-query.
-    let mut completed_count: usize = existing_items
-        .iter()
-        .filter(|i| i.status == "completed")
-        .count();
-    let mut failed_count: usize = existing_items
-        .iter()
-        .filter(|i| i.status == "failed")
-        .count();
-    let mut skipped_count: usize = existing_items
-        .iter()
-        .filter(|i| i.status == "skipped")
-        .count();
+    // Single pass over existing_items to avoid iterating the slice three times.
+    let (mut completed_count, mut failed_count, mut skipped_count) =
+        existing_items
+            .iter()
+            .fold((0usize, 0usize, 0usize), |(comp, fail, skip), i| {
+                (
+                    comp + usize::from(i.status == "completed"),
+                    fail + usize::from(i.status == "failed"),
+                    skip + usize::from(i.status == "skipped"),
+                )
+            });
 
     // Dispatch-loop tracking state
     let mut pending: Vec<crate::types::FanOutItemRow> = pending_items;
@@ -683,4 +682,51 @@ pub fn execute_foreach(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::types::FanOutItemRow;
+
+    fn make_row(status: &str) -> FanOutItemRow {
+        FanOutItemRow {
+            id: "id".to_string(),
+            step_run_id: "step".to_string(),
+            item_type: "repo".to_string(),
+            item_id: "item".to_string(),
+            item_ref: "ref".to_string(),
+            child_run_id: None,
+            status: status.to_string(),
+            dispatched_at: None,
+            completed_at: None,
+        }
+    }
+
+    /// Verifies that the seeding fold correctly counts pre-existing terminal items
+    /// on partial resume without iterating the slice more than once.
+    #[test]
+    fn seed_counts_from_existing_terminal_items() {
+        let existing = [
+            make_row("completed"),
+            make_row("completed"),
+            make_row("failed"),
+            make_row("skipped"),
+            make_row("pending"), // must NOT contribute to any count
+        ];
+
+        let (completed, failed, skipped) =
+            existing
+                .iter()
+                .fold((0usize, 0usize, 0usize), |(comp, fail, skip), i| {
+                    (
+                        comp + usize::from(i.status == "completed"),
+                        fail + usize::from(i.status == "failed"),
+                        skip + usize::from(i.status == "skipped"),
+                    )
+                });
+
+        assert_eq!(completed, 2, "expected 2 completed");
+        assert_eq!(failed, 1, "expected 1 failed");
+        assert_eq!(skipped, 1, "expected 1 skipped");
+    }
 }

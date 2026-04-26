@@ -1284,6 +1284,51 @@ mod tests {
         .unwrap()
     }
 
+    // ── parse_duration_secs ───────────────────────────────────────────────────
+
+    #[test]
+    fn parse_duration_secs_hours() {
+        assert_eq!(super::parse_duration_secs("2h"), Ok(7200));
+    }
+
+    #[test]
+    fn parse_duration_secs_large_hours() {
+        assert_eq!(super::parse_duration_secs("48h"), Ok(172800));
+    }
+
+    #[test]
+    fn parse_duration_secs_minutes() {
+        assert_eq!(super::parse_duration_secs("30m"), Ok(1800));
+    }
+
+    #[test]
+    fn parse_duration_secs_seconds_suffix() {
+        assert_eq!(super::parse_duration_secs("60s"), Ok(60));
+    }
+
+    #[test]
+    fn parse_duration_secs_plain_integer() {
+        assert_eq!(super::parse_duration_secs("120"), Ok(120));
+    }
+
+    #[test]
+    fn parse_duration_secs_quoted_value() {
+        // TOML duration values may arrive with surrounding quotes.
+        assert_eq!(super::parse_duration_secs("\"30m\""), Ok(1800));
+    }
+
+    #[test]
+    fn parse_duration_secs_invalid_input() {
+        assert!(super::parse_duration_secs("not-a-number").is_err());
+    }
+
+    #[test]
+    fn parse_duration_secs_overflow_hours() {
+        // A value so large that multiplying by 3600 overflows u64.
+        let huge = format!("{}h", u64::MAX);
+        assert!(super::parse_duration_secs(&huge).is_err());
+    }
+
     // ── classify_resumable_workflows ──────────────────────────────────────────
 
     #[test]

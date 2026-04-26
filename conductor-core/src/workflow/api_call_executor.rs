@@ -53,6 +53,9 @@ fn execute_via_api(
             } else {
                 body_text
             };
+            // The API may echo user-supplied prompt content in error bodies.
+            // The 500-char cap above limits exposure; callers should treat this
+            // error string as potentially containing user data.
             return Err(format!("API call failed: {status} {truncated}"));
         }
         Err(e) => return Err(format!("API call failed: {e}")),

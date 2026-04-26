@@ -103,7 +103,6 @@ fn filter_by_open_pr(
     candidates
 }
 
-#[allow(dead_code)]
 fn dependencies_impl(
     conn: &Connection,
     config: &Config,
