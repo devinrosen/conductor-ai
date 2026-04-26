@@ -165,4 +165,22 @@ mod tests {
         let result = substitute_variables_keep_literal("hello {{name}} and {{unknown}}", &vars);
         assert_eq!(result, "hello world and {{unknown}}");
     }
+
+    #[test]
+    fn test_substitute_variables_multiple_unresolved() {
+        let mut vars = HashMap::new();
+        vars.insert("known", "X".to_string());
+        let result = substitute_variables("{{known}} {{unk1}} {{unk2}}", &vars);
+        assert_eq!(result, "X  ");
+    }
+
+    #[test]
+    fn test_substitute_variables_embedded_json_in_value_not_reprocessed() {
+        // Single-pass: {{...}} tokens inside a substituted value are NOT re-scanned.
+        // This matters when agent prior_output itself contains template-like text.
+        let mut vars = HashMap::new();
+        vars.insert("prior_output", "result: {{some_json_key}}".to_string());
+        let result = substitute_variables("Output: {{prior_output}}", &vars);
+        assert_eq!(result, "Output: result: {{some_json_key}}");
+    }
 }

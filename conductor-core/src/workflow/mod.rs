@@ -33,7 +33,9 @@ pub(crate) mod script_env_provider;
 pub(crate) mod status;
 pub(crate) mod types;
 
-// Re-export DSL types so consumers go through `workflow::` instead of `workflow_dsl::` directly.
+// Unstable migration scaffolding: these re-exports will be removed once conductor-core
+// and runkon-flow types are fully unified (planned post-Phase 3.3).
+#[doc(hidden)]
 pub use runkon_flow::dsl::{
     collect_agent_names, collect_workflow_refs, default_skills_dir, detect_workflow_cycles,
     load_workflow_by_name, make_script_resolver, parse_workflow_str, resolve_script_path,
@@ -76,7 +78,6 @@ pub use persistence::{
     FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,
     WorkflowPersistence,
 };
-pub use persistence_sqlite::SqliteWorkflowPersistence;
 pub use status::{WorkflowRunStatus, WorkflowStepStatus};
 pub use types::SpawnHeartbeatResumeParams;
 pub use types::{

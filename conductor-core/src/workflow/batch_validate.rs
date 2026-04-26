@@ -164,16 +164,17 @@ where
     // Cache sub-workflow loads so each workflow is parsed from disk at most once
     // across the entire batch (cycle detection + semantic validation both call
     // the loader for the same sub-workflow names).
-    let loader_cache: RefCell<HashMap<String, std::result::Result<WorkflowDef, String>>> =
-        RefCell::new(HashMap::new());
+    let loader_cache: RefCell<
+        HashMap<String, std::sync::Arc<std::result::Result<WorkflowDef, String>>>,
+    > = RefCell::new(HashMap::new());
     let cached_loader = |name: &str| -> std::result::Result<WorkflowDef, String> {
         if let Some(cached) = loader_cache.borrow().get(name) {
-            return cached.clone();
+            return (**cached).clone();
         }
         let result = loader(name);
         loader_cache
             .borrow_mut()
-            .insert(name.to_string(), result.clone());
+            .insert(name.to_string(), std::sync::Arc::new(result.clone()));
         result
     };
 

@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -28,6 +29,7 @@ pub struct SqliteWorkflowPersistence {
 impl SqliteWorkflowPersistence {
     /// Open a new SQLite connection at `path`, configured for WAL mode and
     /// foreign key enforcement. Creates the file if it does not already exist.
+    #[cfg(test)]
     pub fn open(path: &Path) -> crate::error::Result<Self> {
         let conn = Connection::open(path).map_err(ConductorError::Database)?;
         conn.pragma_update(None, "journal_mode", "WAL")

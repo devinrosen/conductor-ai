@@ -30,71 +30,123 @@ impl From<ConductorError> for EngineError {
 }
 
 // ---------------------------------------------------------------------------
-// 1. OutputSchema conversion helpers (runkon-flow → conductor-core)
+// 1. Schema conversion helpers (output_schema ↔ schema_config)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Bidirectional schema type conversions (output_schema ↔ schema_config)
+//
+// Implemented as From traits so callers can use `.into()` and the compiler
+// enforces match exhaustiveness in both directions from a single impl each.
+// ---------------------------------------------------------------------------
+
+impl From<runkon_flow::output_schema::FieldType> for crate::schema_config::FieldType {
+    fn from(rk: runkon_flow::output_schema::FieldType) -> Self {
+        use runkon_flow::output_schema::FieldType as Rk;
+        match rk {
+            Rk::String => Self::String,
+            Rk::Number => Self::Number,
+            Rk::Boolean => Self::Boolean,
+            Rk::Enum(v) => Self::Enum(v),
+            Rk::Array { items } => Self::Array {
+                items: items.into(),
+            },
+            Rk::Object { fields } => Self::Object {
+                fields: fields.into_iter().map(Into::into).collect(),
+            },
+        }
+    }
+}
+
+impl From<crate::schema_config::FieldType> for runkon_flow::output_schema::FieldType {
+    fn from(core: crate::schema_config::FieldType) -> Self {
+        use crate::schema_config::FieldType as Core;
+        match core {
+            Core::String => Self::String,
+            Core::Number => Self::Number,
+            Core::Boolean => Self::Boolean,
+            Core::Enum(v) => Self::Enum(v),
+            Core::Array { items } => Self::Array {
+                items: items.into(),
+            },
+            Core::Object { fields } => Self::Object {
+                fields: fields.into_iter().map(Into::into).collect(),
+            },
+        }
+    }
+}
+
+impl From<runkon_flow::output_schema::ArrayItems> for crate::schema_config::ArrayItems {
+    fn from(rk: runkon_flow::output_schema::ArrayItems) -> Self {
+        use runkon_flow::output_schema::ArrayItems as Rk;
+        match rk {
+            Rk::Scalar(ft) => Self::Scalar(Box::new((*ft).into())),
+            Rk::Object(fields) => Self::Object(fields.into_iter().map(Into::into).collect()),
+            Rk::Untyped => Self::Untyped,
+        }
+    }
+}
+
+impl From<crate::schema_config::ArrayItems> for runkon_flow::output_schema::ArrayItems {
+    fn from(core: crate::schema_config::ArrayItems) -> Self {
+        use crate::schema_config::ArrayItems as Core;
+        match core {
+            Core::Scalar(ft) => Self::Scalar(Box::new((*ft).into())),
+            Core::Object(fields) => Self::Object(fields.into_iter().map(Into::into).collect()),
+            Core::Untyped => Self::Untyped,
+        }
+    }
+}
+
+impl From<runkon_flow::output_schema::FieldDef> for crate::schema_config::FieldDef {
+    fn from(rk: runkon_flow::output_schema::FieldDef) -> Self {
+        Self {
+            name: rk.name,
+            required: rk.required,
+            field_type: rk.field_type.into(),
+            desc: rk.desc,
+            examples: rk.examples,
+        }
+    }
+}
+
+impl From<crate::schema_config::FieldDef> for runkon_flow::output_schema::FieldDef {
+    fn from(core: crate::schema_config::FieldDef) -> Self {
+        Self {
+            name: core.name,
+            required: core.required,
+            field_type: core.field_type.into(),
+            desc: core.desc,
+            examples: core.examples,
+        }
+    }
+}
+
+impl From<runkon_flow::output_schema::OutputSchema> for crate::schema_config::OutputSchema {
+    fn from(rk: runkon_flow::output_schema::OutputSchema) -> Self {
+        Self {
+            name: rk.name,
+            fields: rk.fields.into_iter().map(Into::into).collect(),
+            markers: rk.markers,
+        }
+    }
+}
+
+impl From<crate::schema_config::OutputSchema> for runkon_flow::output_schema::OutputSchema {
+    fn from(core: crate::schema_config::OutputSchema) -> Self {
+        Self {
+            name: core.name,
+            fields: core.fields.into_iter().map(Into::into).collect(),
+            markers: core.markers,
+        }
+    }
+}
 
 /// Convert a `runkon_flow` `OutputSchema` into a `conductor-core` `OutputSchema`.
 pub(super) fn rk_schema_to_core(
     rk: runkon_flow::output_schema::OutputSchema,
 ) -> crate::schema_config::OutputSchema {
-    crate::schema_config::OutputSchema {
-        name: rk.name,
-        fields: rk.fields.into_iter().map(rk_field_def_to_core).collect(),
-        markers: rk.markers,
-    }
-}
-
-fn rk_field_def_to_core(
-    rk: runkon_flow::output_schema::FieldDef,
-) -> crate::schema_config::FieldDef {
-    crate::schema_config::FieldDef {
-        name: rk.name,
-        required: rk.required,
-        field_type: rk_field_type_to_core(rk.field_type),
-        desc: rk.desc,
-        examples: rk.examples,
-    }
-}
-
-fn rk_field_type_to_core(
-    rk: runkon_flow::output_schema::FieldType,
-) -> crate::schema_config::FieldType {
-    match rk {
-        runkon_flow::output_schema::FieldType::String => crate::schema_config::FieldType::String,
-        runkon_flow::output_schema::FieldType::Number => crate::schema_config::FieldType::Number,
-        runkon_flow::output_schema::FieldType::Boolean => crate::schema_config::FieldType::Boolean,
-        runkon_flow::output_schema::FieldType::Enum(variants) => {
-            crate::schema_config::FieldType::Enum(variants)
-        }
-        runkon_flow::output_schema::FieldType::Array { items } => {
-            crate::schema_config::FieldType::Array {
-                items: rk_array_items_to_core(items),
-            }
-        }
-        runkon_flow::output_schema::FieldType::Object { fields } => {
-            crate::schema_config::FieldType::Object {
-                fields: fields.into_iter().map(rk_field_def_to_core).collect(),
-            }
-        }
-    }
-}
-
-fn rk_array_items_to_core(
-    rk: runkon_flow::output_schema::ArrayItems,
-) -> crate::schema_config::ArrayItems {
-    match rk {
-        runkon_flow::output_schema::ArrayItems::Scalar(ft) => {
-            crate::schema_config::ArrayItems::Scalar(Box::new(rk_field_type_to_core(*ft)))
-        }
-        runkon_flow::output_schema::ArrayItems::Object(fields) => {
-            crate::schema_config::ArrayItems::Object(
-                fields.into_iter().map(rk_field_def_to_core).collect(),
-            )
-        }
-        runkon_flow::output_schema::ArrayItems::Untyped => {
-            crate::schema_config::ArrayItems::Untyped
-        }
-    }
+    rk.into()
 }
 
 /// Convert a `conductor-core` `OutputSchema` into a `runkon_flow` `OutputSchema`.
@@ -104,64 +156,7 @@ fn rk_array_items_to_core(
 pub(super) fn core_schema_to_rk(
     core: crate::schema_config::OutputSchema,
 ) -> runkon_flow::output_schema::OutputSchema {
-    runkon_flow::output_schema::OutputSchema {
-        name: core.name,
-        fields: core.fields.into_iter().map(core_field_def_to_rk).collect(),
-        markers: core.markers,
-    }
-}
-
-fn core_field_def_to_rk(
-    core: crate::schema_config::FieldDef,
-) -> runkon_flow::output_schema::FieldDef {
-    runkon_flow::output_schema::FieldDef {
-        name: core.name,
-        required: core.required,
-        field_type: core_field_type_to_rk(core.field_type),
-        desc: core.desc,
-        examples: core.examples,
-    }
-}
-
-fn core_field_type_to_rk(
-    core: crate::schema_config::FieldType,
-) -> runkon_flow::output_schema::FieldType {
-    match core {
-        crate::schema_config::FieldType::String => runkon_flow::output_schema::FieldType::String,
-        crate::schema_config::FieldType::Number => runkon_flow::output_schema::FieldType::Number,
-        crate::schema_config::FieldType::Boolean => runkon_flow::output_schema::FieldType::Boolean,
-        crate::schema_config::FieldType::Enum(variants) => {
-            runkon_flow::output_schema::FieldType::Enum(variants)
-        }
-        crate::schema_config::FieldType::Array { items } => {
-            runkon_flow::output_schema::FieldType::Array {
-                items: core_array_items_to_rk(items),
-            }
-        }
-        crate::schema_config::FieldType::Object { fields } => {
-            runkon_flow::output_schema::FieldType::Object {
-                fields: fields.into_iter().map(core_field_def_to_rk).collect(),
-            }
-        }
-    }
-}
-
-fn core_array_items_to_rk(
-    core: crate::schema_config::ArrayItems,
-) -> runkon_flow::output_schema::ArrayItems {
-    match core {
-        crate::schema_config::ArrayItems::Scalar(ft) => {
-            runkon_flow::output_schema::ArrayItems::Scalar(Box::new(core_field_type_to_rk(*ft)))
-        }
-        crate::schema_config::ArrayItems::Object(fields) => {
-            runkon_flow::output_schema::ArrayItems::Object(
-                fields.into_iter().map(core_field_def_to_rk).collect(),
-            )
-        }
-        crate::schema_config::ArrayItems::Untyped => {
-            runkon_flow::output_schema::ArrayItems::Untyped
-        }
-    }
+    core.into()
 }
 
 // ---------------------------------------------------------------------------

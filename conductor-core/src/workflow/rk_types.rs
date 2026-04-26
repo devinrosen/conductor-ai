@@ -110,17 +110,11 @@ impl From<RkStepUpdate> for CoreStepUpdate {
     }
 }
 
-impl From<RkFanOutItemStatus> for CoreFanOutItemStatus {
-    fn from(s: RkFanOutItemStatus) -> Self {
-        match s {
-            RkFanOutItemStatus::Pending => Self::Pending,
-            RkFanOutItemStatus::Running => Self::Running,
-            RkFanOutItemStatus::Completed => Self::Completed,
-            RkFanOutItemStatus::Failed => Self::Failed,
-            RkFanOutItemStatus::Skipped => Self::Skipped,
-        }
-    }
-}
+impl_bidirectional_status_from!(
+    CoreFanOutItemStatus,
+    RkFanOutItemStatus,
+    [Pending, Running, Completed, Failed, Skipped]
+);
 
 impl From<RkFanOutItemUpdate> for CoreFanOutItemUpdate {
     fn from(u: RkFanOutItemUpdate) -> Self {

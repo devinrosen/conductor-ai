@@ -446,7 +446,7 @@ pub async fn run_workflow(
     Json(req): Json<RunWorkflowRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     // Validate inputs while holding the lock
-    let (wt_path, wt_slug, wt_ticket_id, repo_path, repo_slug, repo_id, model) = {
+    let (wt_path, wt_slug, wt_ticket_id, repo_path, repo_slug, repo_id, model, def) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
         let wt_mgr = WorktreeManager::new(&db, &config);
@@ -455,8 +455,8 @@ pub async fn run_workflow(
         let wt = wt_mgr.get_by_id(&worktree_id)?;
         let repo = repo_mgr.get_by_id(&wt.repo_id)?;
 
-        // Validate workflow exists
-        let _def = WorkflowManager::load_def_by_name(&wt.path, &repo.local_path, &req.name)?;
+        // Validate workflow exists and load definition
+        let def = WorkflowManager::load_def_by_name(&wt.path, &repo.local_path, &req.name)?;
 
         // Reject if a top-level workflow run is already active on this worktree
         let wf_mgr = WorkflowManager::new(&db);
@@ -482,6 +482,7 @@ pub async fn run_workflow(
             repo.slug.clone(),
             repo.id.clone(),
             model,
+            def,
         )
     };
 
@@ -489,6 +490,10 @@ pub async fn run_workflow(
     let dry_run = req.dry_run.unwrap_or(false);
     let mut inputs = req.inputs.unwrap_or_default();
     let wt_id = worktree_id.clone();
+
+    // Validate required inputs and apply defaults before spawning so validation
+    // errors are returned immediately to the client (not after a background wait).
+    apply_workflow_input_defaults(&def, &mut inputs).map_err(ApiError::Core)?;
 
     // Spawn blocking task with its own DB connection so the shared AppState
     // mutex is not held for the entire workflow execution (which would starve
@@ -507,20 +512,6 @@ pub async fn run_workflow(
     let state_clone = state.clone();
     let db_path = state.db_path.clone();
     tokio::task::spawn_blocking(move || {
-        let def = match WorkflowManager::load_def_by_name(&wt_path, &repo_path, &workflow_name) {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::error!("Failed to load workflow def: {e}");
-                return;
-            }
-        };
-
-        // Validate required inputs and apply defaults (matches CLI and ephemeral paths)
-        if let Err(e) = apply_workflow_input_defaults(&def, &mut inputs) {
-            tracing::error!("Workflow input validation failed: {e}");
-            return;
-        }
-
         let params = conductor_core::workflow::WorkflowExecStandalone {
             config,
             workflow: def,
