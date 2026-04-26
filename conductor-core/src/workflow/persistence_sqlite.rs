@@ -245,7 +245,7 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for SqliteWorkflowPer
     ) -> Result<Vec<runkon_flow::types::WorkflowRun>, EngineError> {
         let core_statuses: Vec<crate::workflow::status::WorkflowRunStatus> = statuses
             .iter()
-            .map(|s| rk_conv::run_status_to_core(s.clone()))
+            .map(|s| crate::workflow::status::WorkflowRunStatus::from(s.clone()))
             .collect();
         let result = <Self as WorkflowPersistence>::list_active_runs(self, &core_statuses)?;
         Ok(result.into_iter().map(rk_conv::run_to_rk).collect())
@@ -261,7 +261,7 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for SqliteWorkflowPer
         <Self as WorkflowPersistence>::update_run_status(
             self,
             run_id,
-            rk_conv::run_status_to_core(status),
+            status.into(),
             result_summary,
             error,
         )

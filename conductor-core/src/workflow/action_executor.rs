@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 
-use crate::error::{ConductorError, Result};
+use crate::error::Result;
 use crate::schema_config::OutputSchema;
 
 /// Trait for pluggable action execution.
@@ -98,53 +98,9 @@ pub struct ExecutionContext {
     pub step_id: String,
 }
 
-/// Holds named and fallback `ActionExecutor` implementations.
-///
-/// Use `ActionRegistryBuilder` to construct; call `dispatch` at step execution time.
-#[allow(dead_code)]
-pub struct ActionRegistry {
-    named: HashMap<String, Box<dyn ActionExecutor>>,
-    fallback: Option<Box<dyn ActionExecutor>>,
-}
-
-#[allow(dead_code)]
-impl ActionRegistry {
-    /// Construct a registry from pre-built maps (called only by `ActionRegistryBuilder`).
-    pub(super) fn new(
-        named: HashMap<String, Box<dyn ActionExecutor>>,
-        fallback: Option<Box<dyn ActionExecutor>>,
-    ) -> Self {
-        Self { named, fallback }
-    }
-
-    /// Find the executor for `name` and run it.
-    ///
-    /// Resolution order: exact-name match → fallback → error.
-    pub fn dispatch(
-        &self,
-        name: &str,
-        ectx: &ExecutionContext,
-        params: &ActionParams,
-    ) -> Result<ActionOutput> {
-        let executor = self
-            .named
-            .get(name)
-            .map(|e| e.as_ref())
-            .or(self.fallback.as_deref());
-        match executor {
-            Some(e) => e.execute(ectx, params),
-            None => Err(ConductorError::Workflow(format!(
-                "no registered ActionExecutor for '{}' and no fallback configured",
-                name
-            ))),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::{make_ectx, make_params};
 
     struct NoopExecutor;
 
@@ -157,54 +113,8 @@ mod tests {
             _ectx: &ExecutionContext,
             _params: &ActionParams,
         ) -> Result<ActionOutput> {
-            Ok(ActionOutput {
-                markers: vec!["done".to_string()],
-                context: Some("noop ran".to_string()),
-                ..Default::default()
-            })
+            Ok(ActionOutput::default())
         }
-    }
-
-    #[test]
-    fn dispatch_named_executor() {
-        let registry = ActionRegistry::new(
-            [(
-                "noop".to_string(),
-                Box::new(NoopExecutor) as Box<dyn ActionExecutor>,
-            )]
-            .into_iter()
-            .collect(),
-            None,
-        );
-        let ectx = make_ectx();
-        let params = make_params("noop");
-        let output = registry.dispatch("noop", &ectx, &params).unwrap();
-        assert_eq!(output.markers, vec!["done"]);
-    }
-
-    #[test]
-    fn dispatch_fallback_when_no_named_match() {
-        let registry = ActionRegistry::new(
-            std::collections::HashMap::new(),
-            Some(Box::new(NoopExecutor)),
-        );
-        let ectx = make_ectx();
-        let params = make_params("anything");
-        let output = registry.dispatch("anything", &ectx, &params).unwrap();
-        assert_eq!(output.markers, vec!["done"]);
-    }
-
-    #[test]
-    fn dispatch_error_when_no_executor_or_fallback() {
-        let registry = ActionRegistry::new(std::collections::HashMap::new(), None);
-        let ectx = make_ectx();
-        let params = make_params("missing");
-        let err = registry.dispatch("missing", &ectx, &params).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("no registered ActionExecutor for 'missing'"),
-            "got: {err}"
-        );
     }
 
     #[test]

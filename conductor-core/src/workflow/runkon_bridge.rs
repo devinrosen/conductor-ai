@@ -409,6 +409,15 @@ macro_rules! impl_rk_item_provider {
                     $inner,
                 )
             }
+            fn supports_ordered(&self) -> bool {
+                ($inner).supports_ordered()
+            }
+            fn dependencies(&self, step_id: &str) -> Result<Vec<(String, String)>, EngineError> {
+                let guard = self.conn.lock().map_err(bridge_lock_err)?;
+                ($inner)
+                    .dependencies(&guard, &self.config, step_id)
+                    .map_err(EngineError::from)
+            }
         }
     };
     // Variant: with repo_id — `$make_provider` is a closure `|repo_id| <expr>` that
@@ -452,6 +461,15 @@ macro_rules! impl_rk_item_provider {
                     existing_set,
                     ($make_provider)(self.repo_id.clone()),
                 )
+            }
+            fn supports_ordered(&self) -> bool {
+                ($make_provider)(self.repo_id.clone()).supports_ordered()
+            }
+            fn dependencies(&self, step_id: &str) -> Result<Vec<(String, String)>, EngineError> {
+                let guard = self.conn.lock().map_err(bridge_lock_err)?;
+                ($make_provider)(self.repo_id.clone())
+                    .dependencies(&guard, &self.config, step_id)
+                    .map_err(EngineError::from)
             }
         }
     };

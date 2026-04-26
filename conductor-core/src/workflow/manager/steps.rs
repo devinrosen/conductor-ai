@@ -306,7 +306,9 @@ impl<'a> WorkflowManager<'a> {
         let context_out = selections.filter(|s| !s.is_empty()).map(|items| {
             let mut out = String::from("User selected the following items:\n");
             for item in items {
-                out.push_str(&format!("- {item}\n"));
+                out.push_str("- ");
+                out.push_str(item);
+                out.push('\n');
             }
             out
         });

@@ -48,7 +48,12 @@ fn execute_via_api(
             let body_text = resp
                 .into_string()
                 .unwrap_or_else(|e| format!("<body read failed: {e}>"));
-            return Err(format!("API call failed: {status} {body_text}"));
+            let truncated = if body_text.len() > 500 {
+                format!("{}…", &body_text[..500])
+            } else {
+                body_text
+            };
+            return Err(format!("API call failed: {status} {truncated}"));
         }
         Err(e) => return Err(format!("API call failed: {e}")),
     };
@@ -150,6 +155,42 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::test_helpers::{make_action_params, make_ectx, ENV_MUTEX};
+
+    #[test]
+    fn test_extract_tool_use_input_success() {
+        let response = serde_json::json!({
+            "content": [
+                {"type": "tool_use", "input": {"field": "value"}}
+            ]
+        });
+        let result = extract_tool_use_input(&response).unwrap();
+        assert_eq!(result["field"], "value");
+    }
+
+    #[test]
+    fn test_missing_content_array() {
+        let response = serde_json::json!({"model": "claude"});
+        let err = extract_tool_use_input(&response).unwrap_err();
+        assert!(err.contains("'content' array"), "got: {err}");
+    }
+
+    #[test]
+    fn test_missing_tool_use_block() {
+        let response = serde_json::json!({
+            "content": [{"type": "text", "text": "hello"}]
+        });
+        let err = extract_tool_use_input(&response).unwrap_err();
+        assert!(err.contains("no tool_use block"), "got: {err}");
+    }
+
+    #[test]
+    fn test_tool_use_block_missing_input() {
+        let response = serde_json::json!({
+            "content": [{"type": "tool_use", "name": "my_tool"}]
+        });
+        let err = extract_tool_use_input(&response).unwrap_err();
+        assert!(err.contains("missing 'input' field"), "got: {err}");
+    }
 
     #[test]
     fn missing_schema_returns_error() {

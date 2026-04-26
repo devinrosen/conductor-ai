@@ -9,20 +9,30 @@ fn substitute_variables_impl(
     vars: &HashMap<&str, String>,
     strip_unresolved: bool,
 ) -> String {
-    let mut result = template.to_string();
-    for (key, value) in vars {
-        let pattern = format!("{{{{{key}}}}}");
-        result = result.replace(&pattern, value);
-    }
-    if strip_unresolved {
-        while let Some(start) = result.find("{{") {
-            if let Some(end) = result[start..].find("}}") {
-                result.replace_range(start..start + end + 2, "");
-            } else {
-                break;
+    // Single-pass scan: one output allocation regardless of variable count.
+    let mut result = String::with_capacity(template.len());
+    let mut remaining = template;
+    while let Some(open) = remaining.find("{{") {
+        result.push_str(&remaining[..open]);
+        remaining = &remaining[open + 2..];
+        if let Some(close) = remaining.find("}}") {
+            let key = &remaining[..close];
+            remaining = &remaining[close + 2..];
+            if let Some(val) = vars.get(key) {
+                result.push_str(val);
+            } else if !strip_unresolved {
+                result.push_str("{{");
+                result.push_str(key);
+                result.push_str("}}");
             }
+            // strip_unresolved: just drop the placeholder — push nothing
+        } else {
+            // Unclosed `{{` — emit it literally and stop scanning.
+            result.push_str("{{");
+            break;
         }
     }
+    result.push_str(remaining);
     result
 }
 

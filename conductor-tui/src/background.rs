@@ -481,9 +481,15 @@ pub fn poll_data(
             .as_secs() as i64;
         if now - LAST_REAP.load(Ordering::Relaxed) >= 30 {
             LAST_REAP.store(now, Ordering::Relaxed);
-            let _ = agent_mgr.reap_orphaned_runs();
-            let _ = agent_mgr.dismiss_expired_feedback_requests();
-            let _ = wt_mgr.reap_stale_worktrees();
+            if let Err(e) = agent_mgr.reap_orphaned_runs() {
+                tracing::warn!("reap_orphaned_runs failed: {e}");
+            }
+            if let Err(e) = agent_mgr.dismiss_expired_feedback_requests() {
+                tracing::warn!("dismiss_expired_feedback_requests failed: {e}");
+            }
+            if let Err(e) = wt_mgr.reap_stale_worktrees() {
+                tracing::warn!("reap_stale_worktrees failed: {e}");
+            }
             if config.general.auto_cleanup_merged_branches {
                 match wt_mgr.cleanup_merged_worktrees(None) {
                     Ok(n) if n > 0 => tracing::info!("Auto-cleaned {n} merged worktree(s)"),

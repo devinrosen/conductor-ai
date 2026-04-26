@@ -373,6 +373,22 @@ pub fn execute_foreach(
         source_path: String::new(),
     };
 
+    // Seed terminal counts from items that were already terminal before this dispatch
+    // (e.g. partially-resumed runs).  New completions/failures/skips are tracked
+    // incrementally below so the final phase can skip a DB re-query.
+    let mut completed_count: usize = existing_items
+        .iter()
+        .filter(|i| i.status == "completed")
+        .count();
+    let mut failed_count: usize = existing_items
+        .iter()
+        .filter(|i| i.status == "failed")
+        .count();
+    let mut skipped_count: usize = existing_items
+        .iter()
+        .filter(|i| i.status == "skipped")
+        .count();
+
     // Dispatch-loop tracking state
     let mut pending: Vec<crate::types::FanOutItemRow> = pending_items;
     let mut in_flight: usize = 0;
@@ -443,8 +459,10 @@ pub fn execute_foreach(
             );
 
             if succeeded {
+                completed_count += 1;
                 tracing::info!("foreach '{}': item '{}' → completed", node.name, item_ref);
             } else {
+                failed_count += 1;
                 tracing::warn!("foreach '{}': item '{}' → failed", node.name, item_ref);
             }
 
@@ -462,6 +480,7 @@ pub fn execute_foreach(
                     OnChildFail::SkipDependents => {
                         let to_skip =
                             collect_transitive_dependents(&item_id, &dependents_map, &terminal_ids);
+                        skipped_count += to_skip.len();
                         for skip_id in &to_skip {
                             if let Some(skip_db_id) = item_id_to_db_id.get(skip_id) {
                                 state
@@ -590,26 +609,11 @@ pub fn execute_foreach(
         }
     }
 
-    // Phase 3: Step completion
-    let fan_out_items = state
-        .persistence
-        .get_fan_out_items(&step_id, None)
-        .map_err(p_err)?;
-    let total = fan_out_items.len();
-    let (completed_count, failed_count, skipped_count) =
-        fan_out_items
-            .iter()
-            .fold((0usize, 0usize, 0usize), |(c, f, s), i| {
-                match i.status.as_str() {
-                    "completed" => (c + 1, f, s),
-                    "failed" => (c, f + 1, s),
-                    "skipped" => (c, f, s + 1),
-                    _ => (c, f, s),
-                }
-            });
+    // Phase 3: Step completion — use in-memory counters accumulated during dispatch
+    // to avoid an extra DB round-trip for counting terminal items.
 
     let context = format!(
-        "foreach {}: {completed_count} completed, {failed_count} failed, {skipped_count} skipped of {total} {}",
+        "foreach {}: {completed_count} completed, {failed_count} failed, {skipped_count} skipped of {total_items} {}",
         node.name, node.over,
     );
 
@@ -654,7 +658,7 @@ pub fn execute_foreach(
         );
     } else {
         let error_msg = format!(
-            "foreach '{}': {failed_count} of {total} items failed",
+            "foreach '{}': {failed_count} of {total_items} items failed",
             node.name
         );
 

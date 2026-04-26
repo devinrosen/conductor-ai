@@ -27,69 +27,69 @@ use runkon_flow::types::{
     WorkflowRunStep as RkStep,
 };
 
-pub fn run_status_to_core(
-    s: runkon_flow::status::WorkflowRunStatus,
-) -> crate::workflow::status::WorkflowRunStatus {
-    use crate::workflow::status::WorkflowRunStatus as Core;
-    use runkon_flow::status::WorkflowRunStatus as Rk;
-    match s {
-        Rk::Pending => Core::Pending,
-        Rk::Running => Core::Running,
-        Rk::Completed => Core::Completed,
-        Rk::Failed => Core::Failed,
-        Rk::Cancelled => Core::Cancelled,
-        Rk::Waiting => Core::Waiting,
-        Rk::NeedsResume => Core::NeedsResume,
-        Rk::Cancelling => Core::Cancelling,
+impl From<runkon_flow::status::WorkflowRunStatus> for crate::workflow::status::WorkflowRunStatus {
+    fn from(s: runkon_flow::status::WorkflowRunStatus) -> Self {
+        use crate::workflow::status::WorkflowRunStatus as Core;
+        use runkon_flow::status::WorkflowRunStatus as Rk;
+        match s {
+            Rk::Pending => Core::Pending,
+            Rk::Running => Core::Running,
+            Rk::Completed => Core::Completed,
+            Rk::Failed => Core::Failed,
+            Rk::Cancelled => Core::Cancelled,
+            Rk::Waiting => Core::Waiting,
+            Rk::NeedsResume => Core::NeedsResume,
+            Rk::Cancelling => Core::Cancelling,
+        }
     }
 }
 
-pub fn run_status_to_rk(
-    s: crate::workflow::status::WorkflowRunStatus,
-) -> runkon_flow::status::WorkflowRunStatus {
-    use crate::workflow::status::WorkflowRunStatus as Core;
-    use runkon_flow::status::WorkflowRunStatus as Rk;
-    match s {
-        Core::Pending => Rk::Pending,
-        Core::Running => Rk::Running,
-        Core::Completed => Rk::Completed,
-        Core::Failed => Rk::Failed,
-        Core::Cancelled => Rk::Cancelled,
-        Core::Waiting => Rk::Waiting,
-        Core::NeedsResume => Rk::NeedsResume,
-        Core::Cancelling => Rk::Cancelling,
+impl From<crate::workflow::status::WorkflowRunStatus> for runkon_flow::status::WorkflowRunStatus {
+    fn from(s: crate::workflow::status::WorkflowRunStatus) -> Self {
+        use crate::workflow::status::WorkflowRunStatus as Core;
+        use runkon_flow::status::WorkflowRunStatus as Rk;
+        match s {
+            Core::Pending => Rk::Pending,
+            Core::Running => Rk::Running,
+            Core::Completed => Rk::Completed,
+            Core::Failed => Rk::Failed,
+            Core::Cancelled => Rk::Cancelled,
+            Core::Waiting => Rk::Waiting,
+            Core::NeedsResume => Rk::NeedsResume,
+            Core::Cancelling => Rk::Cancelling,
+        }
     }
 }
 
-pub fn step_status_to_core(
-    s: runkon_flow::status::WorkflowStepStatus,
-) -> crate::workflow::status::WorkflowStepStatus {
-    use crate::workflow::status::WorkflowStepStatus as Core;
-    use runkon_flow::status::WorkflowStepStatus as Rk;
-    match s {
-        Rk::Pending => Core::Pending,
-        Rk::Running => Core::Running,
-        Rk::Completed => Core::Completed,
-        Rk::Failed => Core::Failed,
-        Rk::Skipped => Core::Skipped,
-        Rk::Waiting => Core::Waiting,
-        Rk::TimedOut => Core::TimedOut,
+impl From<runkon_flow::status::WorkflowStepStatus> for crate::workflow::status::WorkflowStepStatus {
+    fn from(s: runkon_flow::status::WorkflowStepStatus) -> Self {
+        use crate::workflow::status::WorkflowStepStatus as Core;
+        use runkon_flow::status::WorkflowStepStatus as Rk;
+        match s {
+            Rk::Pending => Core::Pending,
+            Rk::Running => Core::Running,
+            Rk::Completed => Core::Completed,
+            Rk::Failed => Core::Failed,
+            Rk::Skipped => Core::Skipped,
+            Rk::Waiting => Core::Waiting,
+            Rk::TimedOut => Core::TimedOut,
+        }
     }
 }
 
-pub fn step_status_to_rk(
-    s: crate::workflow::status::WorkflowStepStatus,
-) -> runkon_flow::status::WorkflowStepStatus {
-    use crate::workflow::status::WorkflowStepStatus as Core;
-    use runkon_flow::status::WorkflowStepStatus as Rk;
-    match s {
-        Core::Pending => Rk::Pending,
-        Core::Running => Rk::Running,
-        Core::Completed => Rk::Completed,
-        Core::Failed => Rk::Failed,
-        Core::Skipped => Rk::Skipped,
-        Core::Waiting => Rk::Waiting,
-        Core::TimedOut => Rk::TimedOut,
+impl From<crate::workflow::status::WorkflowStepStatus> for runkon_flow::status::WorkflowStepStatus {
+    fn from(s: crate::workflow::status::WorkflowStepStatus) -> Self {
+        use crate::workflow::status::WorkflowStepStatus as Core;
+        use runkon_flow::status::WorkflowStepStatus as Rk;
+        match s {
+            Core::Pending => Rk::Pending,
+            Core::Running => Rk::Running,
+            Core::Completed => Rk::Completed,
+            Core::Failed => Rk::Failed,
+            Core::Skipped => Rk::Skipped,
+            Core::Waiting => Rk::Waiting,
+            Core::TimedOut => Rk::TimedOut,
+        }
     }
 }
 
@@ -122,7 +122,7 @@ pub fn new_step_to_core(s: RkNewStep) -> CoreNewStep {
 
 pub fn step_update_to_core(u: RkStepUpdate) -> CoreStepUpdate {
     CoreStepUpdate {
-        status: step_status_to_core(u.status),
+        status: u.status.into(),
         child_run_id: u.child_run_id,
         result_text: u.result_text,
         context_out: u.context_out,
@@ -160,7 +160,7 @@ pub fn run_to_rk(r: CoreRun) -> RkRun {
         workflow_name: r.workflow_name,
         worktree_id: r.worktree_id,
         parent_run_id: r.parent_run_id,
-        status: run_status_to_rk(r.status),
+        status: r.status.into(),
         dry_run: r.dry_run,
         trigger: r.trigger,
         started_at: r.started_at,
@@ -240,7 +240,7 @@ pub fn step_to_rk(s: CoreStep) -> RkStep {
         role: s.role,
         can_commit: s.can_commit,
         condition_expr: s.condition_expr,
-        status: step_status_to_rk(s.status),
+        status: s.status.into(),
         child_run_id: s.child_run_id,
         position: s.position,
         started_at: s.started_at,
@@ -432,7 +432,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
-    // run_status_to_rk / run_status_to_core — all 8 variants in both directions
+    // WorkflowRunStatus From impls — all 8 variants in both directions
     // ---------------------------------------------------------------------------
 
     macro_rules! run_status_roundtrip {
@@ -441,8 +441,8 @@ mod tests {
             fn $name() {
                 use crate::workflow::status::WorkflowRunStatus as Core;
                 use runkon_flow::status::WorkflowRunStatus as Rk;
-                assert_eq!(run_status_to_rk($core), $rk, "core→rk");
-                assert_eq!(run_status_to_core($rk), $core, "rk→core");
+                assert_eq!(Rk::from($core), $rk, "core→rk");
+                assert_eq!(Core::from($rk), $core, "rk→core");
             }
         };
     }
@@ -457,7 +457,7 @@ mod tests {
     run_status_roundtrip!(run_status_cancelling, Core::Cancelling, Rk::Cancelling);
 
     // ---------------------------------------------------------------------------
-    // step_status_to_rk / step_status_to_core — all 7 variants in both directions
+    // WorkflowStepStatus From impls — all 7 variants in both directions
     // ---------------------------------------------------------------------------
 
     macro_rules! step_status_roundtrip {
@@ -466,8 +466,8 @@ mod tests {
             fn $name() {
                 use crate::workflow::status::WorkflowStepStatus as Core;
                 use runkon_flow::status::WorkflowStepStatus as Rk;
-                assert_eq!(step_status_to_rk($core), $rk, "core→rk");
-                assert_eq!(step_status_to_core($rk), $core, "rk→core");
+                assert_eq!(Rk::from($core), $rk, "core→rk");
+                assert_eq!(Core::from($rk), $core, "rk→core");
             }
         };
     }
