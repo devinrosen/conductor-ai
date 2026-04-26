@@ -17,7 +17,7 @@ pub(crate) mod coordinator;
 pub(crate) mod engine_error;
 pub mod estimation;
 pub(crate) mod executors;
-pub(crate) mod helpers;
+pub mod helpers;
 pub(crate) mod item_provider;
 pub(crate) mod manager;
 pub(crate) mod output;
@@ -35,6 +35,7 @@ pub(crate) mod types;
 
 // Unstable migration scaffolding: these re-exports will be removed once conductor-core
 // and runkon-flow types are fully unified (planned post-Phase 3.3).
+// Removal is tracked in issue #2631 — do not add new re-exports to this block.
 #[doc(hidden)]
 pub use runkon_flow::dsl::{
     collect_agent_names, collect_workflow_refs, default_skills_dir, detect_workflow_cycles,

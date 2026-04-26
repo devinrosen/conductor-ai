@@ -3396,7 +3396,8 @@ fn test_get_all_pending_gates_excludes_completed() {
         .unwrap();
     mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
         .unwrap();
-    mgr.approve_gate(&step_id, "alice", None, None).unwrap();
+    mgr.approve_gate(&step_id, "alice", None, None, None)
+        .unwrap();
 
     let rows = mgr.get_all_pending_gates().unwrap();
     assert!(rows.is_empty(), "completed gate must not appear");
@@ -4386,7 +4387,7 @@ fn get_gate_approval_state_returns_approved_after_approval() {
     let step_id = mgr
         .insert_step(&run.id, "approval-gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.approve_gate(&step_id, "alice", Some("looks good"), None)
+    mgr.approve_gate(&step_id, "alice", Some("looks good"), None, None)
         .unwrap();
     let state = mgr.get_gate_approval_state(&step_id).unwrap();
     assert!(

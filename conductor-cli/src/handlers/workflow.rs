@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
@@ -21,54 +19,8 @@ pub fn handle_workflow(
     // Finalize and resume stuck workflow runs before handling any workflow command.
     {
         let wf_mgr = WorkflowManager::new(conn);
-        match wf_mgr.reap_finalization_stuck_workflow_runs(60) {
-            Ok(n) if n > 0 => eprintln!("Info: reaper finalized {n} stuck workflow run(s)"),
-            Ok(_) => {}
-            Err(e) => eprintln!("Warning: reap_finalization_stuck_workflow_runs failed: {e}"),
-        }
-        {
-            let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-            match wf_mgr.claim_heartbeat_stuck_runs(config, 60) {
-                Ok(claimed) if !claimed.is_empty() => {
-                    eprintln!(
-                        "Info: auto-resuming {} stuck workflow run(s)",
-                        claimed.len()
-                    );
-                    for (run_id, wf_name, label) in claimed {
-                        conductor_core::workflow::spawn_heartbeat_resume(
-                            conductor_core::workflow::SpawnHeartbeatResumeParams {
-                                run_id,
-                                workflow_name: wf_name,
-                                target_label: label,
-                                config: config.clone(),
-                                conductor_bin_dir: conductor_bin_dir.clone(),
-                                db_path: None,
-                            },
-                        );
-                    }
-                }
-                Ok(_) => {}
-                Err(e) => eprintln!("Warning: claim_heartbeat_stuck_runs failed: {e}"),
-            }
-            let auto_resume_limit = config.general.auto_resume_limit;
-            if auto_resume_limit > 0 {
-                match wf_mgr.classify_resumable_workflows(auto_resume_limit) {
-                    Ok(n) if n > 0 => {
-                        eprintln!("Info: classifier flagged {n} workflow run(s) for auto-resume")
-                    }
-                    Ok(_) => {}
-                    Err(e) => eprintln!("Warning: classify_resumable_workflows failed: {e}"),
-                }
-                match wf_mgr.claim_needs_resume_runs(config) {
-                    Ok(claimed) => conductor_core::workflow::spawn_claimed_runs(
-                        claimed,
-                        Arc::new(config.clone()),
-                        conductor_bin_dir.clone(),
-                    ),
-                    Err(e) => eprintln!("Warning: claim_needs_resume_runs failed: {e}"),
-                }
-            }
-        }
+        let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
+        wf_mgr.run_workflow_maintenance(config, conductor_bin_dir);
     }
 
     match command {
@@ -758,7 +710,7 @@ pub fn handle_workflow(
         }
         WorkflowCommands::GateApprove { run_id } => {
             with_waiting_gate(conn, &run_id, |wf_mgr, step, user| {
-                wf_mgr.approve_gate(&step.id, user, None, None)?;
+                wf_mgr.approve_gate(&step.id, user, None, None, None)?;
                 println!("Gate '{}' approved by {user}.", step.step_name);
                 Ok(())
             })?;
@@ -779,7 +731,7 @@ pub fn handle_workflow(
         }
         WorkflowCommands::GateFeedback { run_id, feedback } => {
             with_waiting_gate(conn, &run_id, |wf_mgr, step, user| {
-                wf_mgr.approve_gate(&step.id, user, Some(&feedback), None)?;
+                wf_mgr.approve_gate(&step.id, user, Some(&feedback), None, None)?;
                 println!(
                     "Gate '{}' approved with feedback by {user}.",
                     step.step_name

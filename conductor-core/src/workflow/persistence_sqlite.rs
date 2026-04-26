@@ -199,7 +199,12 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
         feedback: Option<&str>,
         selections: Option<&[String]>,
     ) -> Result<(), EngineError> {
-        self.with_manager(|mgr| mgr.approve_gate(step_id, approved_by, feedback, selections))
+        let context_out = selections
+            .filter(|s| !s.is_empty())
+            .map(crate::workflow::helpers::format_gate_selection_context);
+        self.with_manager(|mgr| {
+            mgr.approve_gate(step_id, approved_by, feedback, selections, context_out)
+        })
     }
 
     fn reject_gate(

@@ -1197,6 +1197,62 @@ impl<'a> WorkflowManager<'a> {
             "claim_needs_resume_runs",
         )
     }
+
+    /// Run all workflow lifecycle maintenance tasks: reap stuck runs, resume
+    /// heartbeat-stuck runs, classify and claim needs-resume runs.
+    ///
+    /// This consolidates the recovery block that was previously duplicated in
+    /// every binary entry point (CLI `handle_workflow`, TUI startup, web startup).
+    /// Callers pass `conductor_bin_dir` so that resume subprocesses can locate
+    /// the conductor binary; pass `None` to let the library resolve it.
+    pub fn run_workflow_maintenance(
+        &self,
+        config: &Config,
+        conductor_bin_dir: Option<std::path::PathBuf>,
+    ) {
+        match self.reap_finalization_stuck_workflow_runs(60) {
+            Ok(n) if n > 0 => tracing::info!("reaper finalized {n} stuck workflow run(s)"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("reap_finalization_stuck_workflow_runs failed: {e}"),
+        }
+        match self.claim_heartbeat_stuck_runs(config, 60) {
+            Ok(claimed) if !claimed.is_empty() => {
+                tracing::info!("auto-resuming {} stuck workflow run(s)", claimed.len());
+                for (run_id, wf_name, label) in claimed {
+                    crate::workflow::spawn_heartbeat_resume(
+                        crate::workflow::SpawnHeartbeatResumeParams {
+                            run_id,
+                            workflow_name: wf_name,
+                            target_label: label,
+                            config: config.clone(),
+                            conductor_bin_dir: conductor_bin_dir.clone(),
+                            db_path: None,
+                        },
+                    );
+                }
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("claim_heartbeat_stuck_runs failed: {e}"),
+        }
+        let auto_resume_limit = config.general.auto_resume_limit;
+        if auto_resume_limit > 0 {
+            match self.classify_resumable_workflows(auto_resume_limit) {
+                Ok(n) if n > 0 => {
+                    tracing::info!("classifier flagged {n} workflow run(s) for auto-resume")
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("classify_resumable_workflows failed: {e}"),
+            }
+            match self.claim_needs_resume_runs(config) {
+                Ok(claimed) => crate::workflow::spawn_claimed_runs(
+                    claimed,
+                    std::sync::Arc::new(config.clone()),
+                    conductor_bin_dir.clone(),
+                ),
+                Err(e) => tracing::warn!("claim_needs_resume_runs failed: {e}"),
+            }
+        }
+    }
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
@@ -1508,6 +1564,64 @@ mod tests {
     fn test_auto_resume_limit_default_is_three() {
         let config = Config::default();
         assert_eq!(config.general.auto_resume_limit, 3);
+    }
+
+    // ── delete_run_recursive: multi-level CTE deletion ────────────────────────
+
+    #[test]
+    fn test_delete_run_recursive_removes_root_child_and_grandchild() {
+        let (conn, parent_id) = setup();
+
+        // Insert root run (terminal so delete_run validates OK).
+        insert_run(&conn, "root", &parent_id, "completed", None, 0);
+
+        // Insert child run parented to root.
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+              started_at, iteration, parent_workflow_run_id) \
+             VALUES ('child', 'test-wf', 'w1', :parent_id, 'completed', 0, 'manual', \
+                     '2024-01-01T00:00:00Z', 0, 'root')",
+            named_params![":parent_id": parent_id],
+        )
+        .unwrap();
+
+        // Insert grandchild run parented to child.
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+              started_at, iteration, parent_workflow_run_id) \
+             VALUES ('grandchild', 'test-wf', 'w1', :parent_id, 'completed', 0, 'manual', \
+                     '2024-01-01T00:00:00Z', 0, 'child')",
+            named_params![":parent_id": parent_id],
+        )
+        .unwrap();
+
+        // Verify all three rows exist before deletion.
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM workflow_runs WHERE id IN ('root', 'child', 'grandchild')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 3, "all three runs should exist before delete");
+
+        let mgr = WorkflowManager::new(&conn);
+        mgr.delete_run("root").unwrap();
+
+        // All three rows must be gone after delete_run_recursive.
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM workflow_runs WHERE id IN ('root', 'child', 'grandchild')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            remaining, 0,
+            "root, child, and grandchild must all be deleted"
+        );
     }
 
     // ── terminate_subprocesses: agent PID collection ──────────────────────────

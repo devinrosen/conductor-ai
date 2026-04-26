@@ -1618,7 +1618,11 @@ impl App {
                         .collect(),
                 )
             };
-            match wf_mgr.approve_gate(step_id, "tui-user", fb, selections.as_deref()) {
+            let context_out = selections
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(conductor_core::workflow::helpers::format_gate_selection_context);
+            match wf_mgr.approve_gate(step_id, "tui-user", fb, selections.as_deref(), context_out) {
                 Ok(()) => {
                     self.state.status_message = Some("Gate approved".to_string());
                 }
@@ -1639,17 +1643,7 @@ impl App {
                 let options: Vec<String> = step
                     .gate_options
                     .as_deref()
-                    .and_then(|json| {
-                        serde_json::from_str::<Vec<serde_json::Value>>(json)
-                            .ok()
-                            .map(|arr| {
-                                arr.into_iter()
-                                    .filter_map(|v| {
-                                        v.get("value").and_then(|s| s.as_str()).map(String::from)
-                                    })
-                                    .collect()
-                            })
-                    })
+                    .map(conductor_core::workflow::helpers::parse_gate_options)
                     .unwrap_or_default();
                 let n = options.len();
                 self.state.modal = Modal::GateAction {

@@ -364,11 +364,9 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
             })
         });
         if let Some(items) = selections.filter(|s| !s.is_empty()) {
-            let mut out = String::from("User selected the following items:\n");
-            for item in items {
-                out.push_str(&format!("- {item}\n"));
-            }
-            step.context_out = Some(out);
+            step.context_out = Some(crate::workflow::helpers::format_gate_selection_context(
+                items,
+            ));
         }
         step.status = WorkflowStepStatus::Completed;
         step.ended_at = Some(now);

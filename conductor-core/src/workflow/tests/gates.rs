@@ -26,7 +26,7 @@ fn test_gate_approve() {
     assert_eq!(waiting.unwrap().id, step_id);
 
     // Approve
-    mgr.approve_gate(&step_id, "user", Some("Looks good!"), None)
+    mgr.approve_gate(&step_id, "user", Some("Looks good!"), None, None)
         .unwrap();
 
     // Verify
@@ -81,7 +81,7 @@ fn test_gate_pr_approval_approve() {
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
-    mgr.approve_gate(&step_id, "reviewer-bot", Some("PR approved"), None)
+    mgr.approve_gate(&step_id, "reviewer-bot", Some("PR approved"), None, None)
         .unwrap();
 
     let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
@@ -136,7 +136,7 @@ fn test_gate_pr_checks_approve() {
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
-    mgr.approve_gate(&step_id, "ci-bot", Some("All checks passed"), None)
+    mgr.approve_gate(&step_id, "ci-bot", Some("All checks passed"), None, None)
         .unwrap();
 
     let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
@@ -176,7 +176,8 @@ fn test_gate_multiselect_options_and_approval() {
 
     // Approve with a subset of selections
     let selections = vec!["finding-a".to_string(), "finding-c".to_string()];
-    mgr.approve_gate(&step_id, "user", None, Some(&selections))
+    let context_out = crate::workflow::helpers::format_gate_selection_context(&selections);
+    mgr.approve_gate(&step_id, "user", None, Some(&selections), Some(context_out))
         .unwrap();
 
     // Verify post-approval state
@@ -227,7 +228,8 @@ fn test_gate_approve_empty_selections() {
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
     // Approve with empty selections (skip all)
-    mgr.approve_gate(&step_id, "user", None, Some(&[])).unwrap();
+    mgr.approve_gate(&step_id, "user", None, Some(&[]), None)
+        .unwrap();
 
     let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
     assert_eq!(step.status, WorkflowStepStatus::Completed);

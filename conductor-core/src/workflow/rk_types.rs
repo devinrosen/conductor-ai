@@ -162,39 +162,26 @@ pub fn run_to_rk(r: CoreRun) -> RkRun {
     }
 }
 
-fn human_gate_blocked_on_to_rk(
-    gate_name: String,
-    prompt: Option<String>,
-    options: Vec<String>,
-    is_review: bool,
-) -> RkBlockedOn {
-    if is_review {
-        RkBlockedOn::HumanReview {
-            gate_name,
-            prompt,
-            options,
-        }
-    } else {
-        RkBlockedOn::HumanApproval {
-            gate_name,
-            prompt,
-            options,
-        }
-    }
-}
-
 fn blocked_on_to_rk(b: CoreBlockedOn) -> RkBlockedOn {
     match b {
         CoreBlockedOn::HumanApproval {
             gate_name,
             prompt,
             options,
-        } => human_gate_blocked_on_to_rk(gate_name, prompt, options, false),
+        } => RkBlockedOn::HumanApproval {
+            gate_name,
+            prompt,
+            options,
+        },
         CoreBlockedOn::HumanReview {
             gate_name,
             prompt,
             options,
-        } => human_gate_blocked_on_to_rk(gate_name, prompt, options, true),
+        } => RkBlockedOn::HumanReview {
+            gate_name,
+            prompt,
+            options,
+        },
         CoreBlockedOn::PrApproval {
             gate_name,
             approvals_needed,

@@ -142,23 +142,6 @@ impl From<crate::schema_config::OutputSchema> for runkon_flow::output_schema::Ou
     }
 }
 
-/// Convert a `runkon_flow` `OutputSchema` into a `conductor-core` `OutputSchema`.
-pub(super) fn rk_schema_to_core(
-    rk: runkon_flow::output_schema::OutputSchema,
-) -> crate::schema_config::OutputSchema {
-    rk.into()
-}
-
-/// Convert a `conductor-core` `OutputSchema` into a `runkon_flow` `OutputSchema`.
-///
-/// Inverse of `rk_schema_to_core`. Used by the `schema_resolver` closure passed
-/// to `ExecutionState` so that `load_schema()` results are usable by the engine.
-pub(super) fn core_schema_to_rk(
-    core: crate::schema_config::OutputSchema,
-) -> runkon_flow::output_schema::OutputSchema {
-    core.into()
-}
-
 // ---------------------------------------------------------------------------
 // 2. ActionOutput conversion helper (conductor-core → runkon-flow)
 // ---------------------------------------------------------------------------
@@ -296,7 +279,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
         };
 
         // Convert runkon-flow ActionParams → conductor-core ActionParams.
-        let core_schema = params.schema.clone().map(rk_schema_to_core);
+        let core_schema = params.schema.clone().map(Into::into);
         let core_params = crate::workflow::action_executor::ActionParams {
             name: params.name.clone(),
             inputs: (*params.inputs).clone(),
@@ -948,7 +931,7 @@ mod tests {
             }],
             markers: None,
         };
-        let rk = core_schema_to_rk(core.clone());
+        let rk: runkon_flow::output_schema::OutputSchema = core.clone().into();
         assert_eq!(rk.name, core.name);
         assert_eq!(rk.fields.len(), 1);
         assert_eq!(rk.fields[0].name, "title");
@@ -974,8 +957,8 @@ mod tests {
             }],
             markers: None,
         };
-        let rk = core_schema_to_rk(core);
-        let back = rk_schema_to_core(rk);
+        let rk: runkon_flow::output_schema::OutputSchema = core.into();
+        let back: crate::schema_config::OutputSchema = rk.into();
         assert_eq!(back.fields[0].name, "color");
         assert!(matches!(
             back.fields[0].field_type,
@@ -1002,8 +985,8 @@ mod tests {
             }],
             markers: None,
         };
-        let rk = core_schema_to_rk(core);
-        let back = rk_schema_to_core(rk);
+        let rk: runkon_flow::output_schema::OutputSchema = core.into();
+        let back: crate::schema_config::OutputSchema = rk.into();
         assert!(matches!(back.fields[0].field_type, FieldType::Array { .. }));
     }
 
@@ -1161,5 +1144,88 @@ mod tests {
             assert_eq!(got.name, expected.name);
             assert_eq!(got.required, expected.required);
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Fix 9: PersistenceAdapter::get_gate_approval via the adapter
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn persistence_adapter_get_gate_approval_returns_approved_state() {
+        use crate::workflow::persistence::{NewRun, NewStep, WorkflowPersistence};
+        use crate::workflow::persistence_memory::InMemoryWorkflowPersistence;
+        use runkon_flow::traits::persistence::GateApprovalState as RkGateApprovalState;
+        use runkon_flow::traits::persistence::WorkflowPersistence as RkPersistence;
+
+        // 1. Create the in-memory persistence.
+        let persistence = InMemoryWorkflowPersistence::new();
+
+        // 2. Create a run and insert a step.
+        let run = persistence
+            .create_run(NewRun {
+                workflow_name: "test-wf".to_string(),
+                worktree_id: None,
+                ticket_id: None,
+                repo_id: None,
+                parent_run_id: "parent".to_string(),
+                dry_run: false,
+                trigger: "test".to_string(),
+                definition_snapshot: None,
+                parent_workflow_run_id: None,
+                target_label: None,
+            })
+            .unwrap();
+        let step_id = persistence
+            .insert_step(NewStep {
+                workflow_run_id: run.id.clone(),
+                step_name: "approval-gate".to_string(),
+                role: "gate".to_string(),
+                can_commit: false,
+                position: 0,
+                iteration: 0,
+                retry_count: None,
+            })
+            .unwrap();
+
+        // 3. Approve the gate via the core persistence.
+        persistence
+            .approve_gate(&step_id, "tester", Some("lgtm"), None)
+            .unwrap();
+
+        // 4. Wrap in PersistenceAdapter.
+        let adapter = PersistenceAdapter(Arc::new(persistence));
+
+        // 5. Call get_gate_approval via the runkon-flow trait and verify the result.
+        let state = RkPersistence::get_gate_approval(&adapter, &step_id).unwrap();
+        match state {
+            RkGateApprovalState::Approved { feedback, .. } => {
+                assert_eq!(
+                    feedback.as_deref(),
+                    Some("lgtm"),
+                    "feedback must survive the approve_gate/get_gate_approval roundtrip via PersistenceAdapter"
+                );
+            }
+            other => panic!("expected Approved, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Fix 10: dependencies method via a concrete Rk item-provider adapter
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn rk_repos_item_provider_dependencies_returns_empty_for_nonexistent_step() {
+        use runkon_flow::traits::item_provider::ItemProvider as RkItemProvider;
+
+        let conn = Arc::new(Mutex::new(crate::test_helpers::setup_db()));
+        let config = crate::config::Config::default();
+        let provider = RkReposItemProvider::new(Arc::clone(&conn), config);
+
+        let result = RkItemProvider::dependencies(&provider, "nonexistent-step");
+        assert!(result.is_ok(), "dependencies should not error: {result:?}");
+        assert!(
+            result.unwrap().is_empty(),
+            "dependencies for nonexistent step should be empty"
+        );
     }
 }

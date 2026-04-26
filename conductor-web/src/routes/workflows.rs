@@ -1851,11 +1851,17 @@ pub async fn approve_gate(
     let step = find_waiting_gate_or_err(&mgr, &id)?;
 
     let approved_by = std::env::var("USER").unwrap_or_else(|_| "user".to_string());
+    let context_out = req
+        .selections
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(conductor_core::workflow::helpers::format_gate_selection_context);
     mgr.approve_gate(
         &step.id,
         &approved_by,
         req.feedback.as_deref(),
         req.selections.as_deref(),
+        context_out,
     )?;
 
     state

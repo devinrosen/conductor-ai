@@ -286,6 +286,7 @@ impl<'a> WorkflowManager<'a> {
         approved_by: &str,
         feedback: Option<&str>,
         selections: Option<&[String]>,
+        context_out: Option<String>,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
 
@@ -301,17 +302,6 @@ impl<'a> WorkflowManager<'a> {
         } else {
             None
         };
-
-        // Build a context_out snippet when selections are present.
-        let context_out = selections.filter(|s| !s.is_empty()).map(|items| {
-            let mut out = String::from("User selected the following items:\n");
-            for item in items {
-                out.push_str("- ");
-                out.push_str(item);
-                out.push('\n');
-            }
-            out
-        });
 
         self.execute_step_sql(
             "UPDATE workflow_run_steps SET gate_approved_at = :now, gate_approved_by = :approved_by, \
