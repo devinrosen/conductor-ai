@@ -102,7 +102,7 @@ fn lock_err() -> EngineError {
 }
 
 impl InMemoryWorkflowPersistence {
-    fn lock(&self) -> Result<std::sync::MutexGuard<InMemoryStore>, EngineError> {
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, InMemoryStore>, EngineError> {
         self.store.lock().map_err(|_| lock_err())
     }
 }

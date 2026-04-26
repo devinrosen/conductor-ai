@@ -27,6 +27,7 @@ pub struct ProviderContext<'a> {
 
 /// Trait for a foreach item source registered with the engine.
 pub trait ItemProvider: Send + Sync {
+    #[allow(dead_code)]
     fn name(&self) -> &str;
 
     fn items(
@@ -37,6 +38,7 @@ pub trait ItemProvider: Send + Sync {
         existing_set: &HashSet<String>,
     ) -> Result<Vec<FanOutItem>>;
 
+    #[allow(dead_code)]
     fn dependencies(
         &self,
         conn: &Connection,
@@ -47,16 +49,19 @@ pub trait ItemProvider: Send + Sync {
         Ok(vec![])
     }
 
+    #[allow(dead_code)]
     fn supports_ordered(&self) -> bool {
         false
     }
 }
 
 /// Registry mapping provider names to implementations.
+#[allow(dead_code)]
 pub struct ItemProviderRegistry {
     providers: HashMap<String, Arc<dyn ItemProvider>>,
 }
 
+#[allow(dead_code)]
 impl ItemProviderRegistry {
     pub fn new() -> Self {
         Self {
@@ -81,6 +86,7 @@ impl Default for ItemProviderRegistry {
 }
 
 /// Build the default registry with the four built-in providers.
+#[allow(dead_code)]
 pub fn build_default_registry(
     repo_id: Option<&str>,
     worktree_id: Option<&str>,

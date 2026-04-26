@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::*;
 use crate::agent::AgentManager;
 use crate::config::Config;
@@ -34,7 +36,6 @@ pub(super) fn set_step_status(mgr: &WorkflowManager, step_id: &str, status: Work
     mgr.update_step_status(step_id, status, None, None, None, None, None)
         .unwrap();
 }
-
 
 pub(super) fn make_test_schema() -> OutputSchema {
     schema_config::parse_schema_content("fields:\n  approved: boolean\n  summary: string\n", "test")

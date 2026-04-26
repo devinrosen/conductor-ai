@@ -147,7 +147,7 @@ fn setup_standalone_run(
 fn make_resume_input<'a>(
     config: &'a crate::config::Config,
     run_id: &'a str,
-    db_path: &std::path::PathBuf,
+    db_path: &std::path::Path,
     from_step: Option<&'a str>,
     restart: bool,
 ) -> WorkflowResumeInput<'a> {
@@ -159,7 +159,7 @@ fn make_resume_input<'a>(
         restart,
         conductor_bin_dir: None,
         event_sinks: vec![],
-        db_path: Some(db_path.clone()),
+        db_path: Some(db_path.to_path_buf()),
         shutdown: None,
     }
 }

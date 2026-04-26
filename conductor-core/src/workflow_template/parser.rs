@@ -54,7 +54,7 @@ pub fn parse_wft(input: &str, source: &str) -> Result<WorkflowTemplate> {
     })?;
 
     // Validate the .wf body
-    parse_workflow_str(&body, source).map_err(|e| ConductorError::Workflow(e))?;
+    parse_workflow_str(&body, source).map_err(ConductorError::Workflow)?;
 
     Ok(WorkflowTemplate { metadata, body })
 }

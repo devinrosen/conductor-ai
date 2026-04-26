@@ -53,10 +53,23 @@ fn execute_via_api(
     let input = extract_tool_use_input(&response_value)?;
     let json_string = serde_json::to_string(&input)
         .map_err(|e| format!("Failed to serialize tool_use input: {e}"))?;
-    let usage = response_value.get("usage").unwrap_or(&serde_json::Value::Null);
-    let input_tokens = usage.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
-    let output_tokens = usage.get("output_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
-    Ok(ApiCallResult { json: input, json_string, input_tokens, output_tokens })
+    let usage = response_value
+        .get("usage")
+        .unwrap_or(&serde_json::Value::Null);
+    let input_tokens = usage
+        .get("input_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let output_tokens = usage
+        .get("output_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    Ok(ApiCallResult {
+        json: input,
+        json_string,
+        input_tokens,
+        output_tokens,
+    })
 }
 
 fn extract_tool_use_input(
@@ -110,16 +123,10 @@ impl ActionExecutor for ApiCallExecutor {
 
         let model = ectx.model.as_deref().unwrap_or(DEFAULT_API_MODEL);
 
-        let result = execute_via_api(
-            &prompt,
-            schema,
-            model,
-            ectx.step_timeout,
-            &api_key,
-        )
-        .map_err(|e| {
-            ConductorError::Workflow(format!("API call for '{}' failed: {e}", params.name))
-        })?;
+        let result =
+            execute_via_api(&prompt, schema, model, ectx.step_timeout, &api_key).map_err(|e| {
+                ConductorError::Workflow(format!("API call for '{}' failed: {e}", params.name))
+            })?;
 
         let structured = crate::schema_config::derive_output_from_value(result.json, schema);
 

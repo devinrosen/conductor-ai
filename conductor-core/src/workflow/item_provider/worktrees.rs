@@ -4,8 +4,8 @@ use rusqlite::Connection;
 
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
-use runkon_flow::dsl::ForeachScope;
 use crate::worktree::{Worktree, WorktreeManager};
+use runkon_flow::dsl::ForeachScope;
 
 use super::{FanOutItem, ItemProvider, ProviderContext};
 
@@ -111,6 +111,7 @@ fn filter_by_open_pr(
     candidates
 }
 
+#[allow(dead_code)]
 fn dependencies_impl(
     conn: &Connection,
     config: &Config,

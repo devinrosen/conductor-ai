@@ -32,6 +32,7 @@ pub(super) fn substitute_variables(prompt: &str, vars: &HashMap<&str, String>) -
 }
 
 /// For data contexts: substitutes variables but preserves any `{{…}}` text that was not a variable.
+#[allow(dead_code)]
 pub(super) fn substitute_variables_keep_literal(
     template: &str,
     vars: &HashMap<&str, String>,

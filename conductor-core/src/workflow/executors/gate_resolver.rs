@@ -21,6 +21,7 @@ use super::resolvers::{
 #[derive(Debug)]
 pub(in crate::workflow) enum GatePoll {
     Approved(Option<String>),
+    #[allow(dead_code)]
     Rejected(String),
     Pending,
 }
@@ -54,6 +55,7 @@ pub(in crate::workflow) struct GateContext<'a> {
 // ---------------------------------------------------------------------------
 
 pub(in crate::workflow) trait GateResolver: Send + Sync {
+    #[allow(dead_code)]
     fn gate_type(&self) -> &str;
     fn poll(&self, run_id: &str, params: &GateParams, ctx: &GateContext<'_>) -> Result<GatePoll>;
 }
@@ -131,11 +133,13 @@ impl GitHubTokenCache {
 // Registry builder
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn register(map: &mut HashMap<String, Box<dyn GateResolver>>, resolver: Box<dyn GateResolver>) {
     let key = resolver.gate_type().to_string();
     map.insert(key, resolver);
 }
 
+#[allow(dead_code)]
 pub(in crate::workflow) fn build_default_gate_resolvers(
     persistence: Arc<dyn WorkflowPersistence>,
     working_dir: String,

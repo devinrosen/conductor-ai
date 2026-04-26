@@ -15,15 +15,20 @@ fn parse_duration_secs(s: &str) -> std::result::Result<u64, String> {
     if let Some(h) = s.strip_suffix('h') {
         h.parse::<u64>()
             .map_err(|e| format!("Invalid duration '{s}': {e}"))
-            .and_then(|n| n.checked_mul(3600).ok_or_else(|| format!("overflow: '{s}'")))
+            .and_then(|n| {
+                n.checked_mul(3600)
+                    .ok_or_else(|| format!("overflow: '{s}'"))
+            })
     } else if let Some(m) = s.strip_suffix('m') {
         m.parse::<u64>()
             .map_err(|e| format!("Invalid duration '{s}': {e}"))
             .and_then(|n| n.checked_mul(60).ok_or_else(|| format!("overflow: '{s}'")))
     } else if let Some(sec) = s.strip_suffix('s') {
-        sec.parse().map_err(|e| format!("Invalid duration '{s}': {e}"))
+        sec.parse()
+            .map_err(|e| format!("Invalid duration '{s}': {e}"))
     } else {
-        s.parse().map_err(|e| format!("Invalid duration '{s}': {e}"))
+        s.parse()
+            .map_err(|e| format!("Invalid duration '{s}': {e}"))
     }
 }
 use super::WorkflowManager;

@@ -12,6 +12,7 @@ pub(super) fn load_agent_and_build_prompt(
         Some(&ectx.workflow_name),
         &ectx.plugin_dirs,
     )?;
-    let prompt = crate::workflow::prompt_builder::build_agent_prompt_from_params(&agent_def, params);
+    let prompt =
+        crate::workflow::prompt_builder::build_agent_prompt_from_params(&agent_def, params);
     Ok((agent_def, prompt))
 }

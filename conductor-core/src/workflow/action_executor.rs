@@ -101,11 +101,13 @@ pub struct ExecutionContext {
 /// Holds named and fallback `ActionExecutor` implementations.
 ///
 /// Use `ActionRegistryBuilder` to construct; call `dispatch` at step execution time.
+#[allow(dead_code)]
 pub struct ActionRegistry {
     named: HashMap<String, Box<dyn ActionExecutor>>,
     fallback: Option<Box<dyn ActionExecutor>>,
 }
 
+#[allow(dead_code)]
 impl ActionRegistry {
     /// Construct a registry from pre-built maps (called only by `ActionRegistryBuilder`).
     pub(super) fn new(

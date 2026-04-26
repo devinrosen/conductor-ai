@@ -269,8 +269,7 @@ pub fn load_workflow_by_name(
     repo_path: &str,
     name: &str,
 ) -> Result<WorkflowDef> {
-    runkon_flow::dsl::validate_workflow_name(name)
-        .map_err(ConductorError::Workflow)?;
+    runkon_flow::dsl::validate_workflow_name(name).map_err(ConductorError::Workflow)?;
 
     let filename = format!("{name}.md");
     let workflows_dir =

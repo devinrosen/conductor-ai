@@ -11,6 +11,7 @@ use super::action_executor::{ActionExecutor, ActionRegistry};
 /// confusion with the runkon-flow builder that exists in the same dependency tree.
 pub struct ActionRegistryBuilder {
     named: HashMap<String, Box<dyn ActionExecutor>>,
+    #[allow(dead_code)]
     fallback: Option<Box<dyn ActionExecutor>>,
 }
 
@@ -32,6 +33,7 @@ impl ActionRegistryBuilder {
     /// Register the fallback (catch-all) executor.
     ///
     /// Returns `Err` if called more than once — only one fallback is allowed.
+    #[allow(dead_code)]
     pub fn action_fallback(mut self, executor: Box<dyn ActionExecutor>) -> Result<Self> {
         if self.fallback.is_some() {
             return Err(ConductorError::Workflow(
@@ -43,6 +45,7 @@ impl ActionRegistryBuilder {
     }
 
     /// Consume the builder and produce an `ActionRegistry`.
+    #[allow(dead_code)]
     pub fn build(self) -> Result<ActionRegistry> {
         Ok(ActionRegistry::new(self.named, self.fallback))
     }

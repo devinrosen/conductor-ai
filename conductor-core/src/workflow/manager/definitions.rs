@@ -34,7 +34,7 @@ impl WorkflowManager<'_> {
         Vec<runkon_flow::dsl::WorkflowWarning>,
     )> {
         workflow_dsl::load_workflow_defs(worktree_path, repo_path)
-            .map_err(|e| crate::error::ConductorError::Workflow(e))
+            .map_err(crate::error::ConductorError::Workflow)
     }
 
     /// Load a single workflow definition by name.
@@ -44,7 +44,7 @@ impl WorkflowManager<'_> {
         name: &str,
     ) -> Result<runkon_flow::dsl::WorkflowDef> {
         workflow_dsl::load_workflow_by_name(worktree_path, repo_path, name)
-            .map_err(|e| crate::error::ConductorError::Workflow(e))
+            .map_err(crate::error::ConductorError::Workflow)
     }
 
     /// Validate a single workflow definition using the full batch validation
