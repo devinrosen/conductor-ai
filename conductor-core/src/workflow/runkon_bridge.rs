@@ -227,13 +227,13 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
     ) -> Result<runkon_flow::traits::action_executor::ActionOutput, EngineError> {
         // ClaudeAgentExecutor needs a pre-created agent_runs row ID as `run_id` so
         // it can track the subprocess. The step↔run link (child_run_id on the step
-        // row) is written post-execution via ActionOutput.child_run_id — the engine
-        // calls update_step() with COALESCE semantics, so no direct DB write is needed
-        // here.
+        // row) is written here — before execution starts — so the TUI can show live
+        // agent output while the step is in flight. The engine also sets child_run_id
+        // post-execution via ActionOutput, which is a no-op thanks to COALESCE.
         let child_run_id = {
             let conn = self.conn.lock().map_err(bridge_lock_err)?;
             let agent_mgr = crate::agent::AgentManager::new(&conn);
-            agent_mgr
+            let child_run = agent_mgr
                 .create_child_run(
                     ectx.worktree_id.as_deref(),
                     &format!("Workflow step: {}", params.name),
@@ -246,8 +246,21 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                         "step '{}': failed to create child agent run: {e}",
                         params.name
                     ))
-                })?
-                .id
+                })?;
+
+            if !ectx.step_id.is_empty() {
+                let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+                if let Err(e) = wf_mgr.update_step_child_run_id(&ectx.step_id, &child_run.id) {
+                    tracing::warn!(
+                        "step '{}' (step_id={}): failed to link child_run_id {}: {e}",
+                        params.name,
+                        ectx.step_id,
+                        child_run.id,
+                    );
+                }
+            }
+
+            child_run.id
         };
 
         // Convert runkon-flow ExecutionContext → conductor-core ExecutionContext,
