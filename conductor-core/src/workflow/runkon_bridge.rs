@@ -225,16 +225,15 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
         ectx: &runkon_flow::traits::action_executor::ExecutionContext,
         params: &runkon_flow::traits::action_executor::ActionParams,
     ) -> Result<runkon_flow::traits::action_executor::ActionOutput, EngineError> {
-        // The runtime (ClaudeAgentExecutor) expects an agent_runs row to exist with
-        // the run_id it receives. In the old conductor-core call executor this row was
-        // created by create_child_run() before dispatch. In the new runkon-flow path
-        // only a workflow_run_steps ID exists, so we create the agent_run here and
-        // use its ID as run_id. We also link it back to the step via child_run_id so
-        // the TUI can drill in while the agent is running.
+        // ClaudeAgentExecutor needs a pre-created agent_runs row ID as `run_id` so
+        // it can track the subprocess. The step↔run link (child_run_id on the step
+        // row) is written post-execution via ActionOutput.child_run_id — the engine
+        // calls update_step() with COALESCE semantics, so no direct DB write is needed
+        // here.
         let child_run_id = {
             let conn = self.conn.lock().map_err(bridge_lock_err)?;
             let agent_mgr = crate::agent::AgentManager::new(&conn);
-            let child_run = agent_mgr
+            agent_mgr
                 .create_child_run(
                     ectx.worktree_id.as_deref(),
                     &format!("Workflow step: {}", params.name),
@@ -247,28 +246,15 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                         "step '{}': failed to create child agent run: {e}",
                         params.name
                     ))
-                })?;
-
-            if !ectx.step_id.is_empty() {
-                let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
-                if let Err(e) = wf_mgr.update_step_child_run_id(&ectx.step_id, &child_run.id) {
-                    tracing::warn!(
-                        "step '{}' (step_id={}): failed to link child_run_id {}: {e}",
-                        params.name,
-                        ectx.step_id,
-                        child_run.id,
-                    );
-                }
-            }
-
-            child_run.id
+                })?
+                .id
         };
 
         // Convert runkon-flow ExecutionContext → conductor-core ExecutionContext,
         // injecting db_path which exists only in the conductor-core variant.
         // run_id is the freshly-created agent_run ID (not the workflow step ID).
         let core_ectx = crate::workflow::action_executor::ExecutionContext {
-            run_id: child_run_id,
+            run_id: child_run_id.clone(),
             working_dir: ectx.working_dir.clone(),
             repo_path: ectx.repo_path.clone(),
             db_path: self.db_path.clone(),
@@ -296,8 +282,10 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             schema: core_schema,
         };
 
-        // Dispatch through the inner executor.
-        self.inner
+        // Dispatch through the inner executor, then surface child_run_id so the
+        // engine writes the step↔run link via update_step() post-execution.
+        let mut output = self
+            .inner
             .execute(&core_ectx, &core_params)
             .map(core_action_output_to_rk)
             .map_err(|e| match e {
@@ -305,7 +293,9 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                     runkon_flow::cancellation_reason::CancellationReason::UserRequested(None),
                 ),
                 other => EngineError::Workflow(other.to_string()),
-            })
+            })?;
+        output.child_run_id = Some(child_run_id);
+        Ok(output)
     }
 }
 
