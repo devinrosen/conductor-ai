@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use axum::http::HeaderValue;
+use axum::http::{header, HeaderValue, Method};
 use conductor_core::agent::AgentManager;
 use conductor_core::config::{conductor_dir, db_path, ensure_dirs, load_config, save_config};
 use conductor_core::db::open_database;
 use tokio::sync::{Mutex, RwLock};
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use conductor_web::assets::static_handler;
@@ -773,8 +773,14 @@ async fn main() -> Result<()> {
 
     let cors = CorsLayer::new()
         .allow_origin(origins)
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::PATCH,
+        ])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
 
     let app = api_router()
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", ApiDoc::openapi()))

@@ -8,10 +8,6 @@ use super::{collect_fan_out_items, FanOutItem, ItemProvider, ProviderContext};
 pub struct ReposProvider;
 
 impl ItemProvider for ReposProvider {
-    fn name(&self) -> &str {
-        "repos"
-    }
-
     fn items(
         &self,
         ctx: &ProviderContext<'_>,

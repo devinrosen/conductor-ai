@@ -291,40 +291,52 @@ pub fn fan_out_item_to_rk(r: CoreFanOutItemRow) -> RkFanOutItemRow {
     }
 }
 
+impl From<crate::workflow::types::WorkflowResult> for runkon_flow::types::WorkflowResult {
+    fn from(core: crate::workflow::types::WorkflowResult) -> Self {
+        Self {
+            workflow_run_id: core.workflow_run_id,
+            worktree_id: core.worktree_id,
+            workflow_name: core.workflow_name,
+            all_succeeded: core.all_succeeded,
+            total_cost: core.total_cost,
+            total_turns: core.total_turns,
+            total_duration_ms: core.total_duration_ms,
+            total_input_tokens: core.total_input_tokens,
+            total_output_tokens: core.total_output_tokens,
+            total_cache_read_input_tokens: core.total_cache_read_input_tokens,
+            total_cache_creation_input_tokens: core.total_cache_creation_input_tokens,
+        }
+    }
+}
+
+impl From<runkon_flow::types::WorkflowResult> for crate::workflow::types::WorkflowResult {
+    fn from(r: runkon_flow::types::WorkflowResult) -> Self {
+        Self {
+            workflow_run_id: r.workflow_run_id,
+            worktree_id: r.worktree_id,
+            workflow_name: r.workflow_name,
+            all_succeeded: r.all_succeeded,
+            total_cost: r.total_cost,
+            total_turns: r.total_turns,
+            total_duration_ms: r.total_duration_ms,
+            total_input_tokens: r.total_input_tokens,
+            total_output_tokens: r.total_output_tokens,
+            total_cache_read_input_tokens: r.total_cache_read_input_tokens,
+            total_cache_creation_input_tokens: r.total_cache_creation_input_tokens,
+        }
+    }
+}
+
 pub fn core_workflow_result_to_rk(
     core: crate::workflow::types::WorkflowResult,
 ) -> runkon_flow::types::WorkflowResult {
-    runkon_flow::types::WorkflowResult {
-        workflow_run_id: core.workflow_run_id,
-        worktree_id: core.worktree_id,
-        workflow_name: core.workflow_name,
-        all_succeeded: core.all_succeeded,
-        total_cost: core.total_cost,
-        total_turns: core.total_turns,
-        total_duration_ms: core.total_duration_ms,
-        total_input_tokens: core.total_input_tokens,
-        total_output_tokens: core.total_output_tokens,
-        total_cache_read_input_tokens: core.total_cache_read_input_tokens,
-        total_cache_creation_input_tokens: core.total_cache_creation_input_tokens,
-    }
+    core.into()
 }
 
 pub fn rk_workflow_result_to_core(
     r: runkon_flow::types::WorkflowResult,
 ) -> crate::workflow::types::WorkflowResult {
-    crate::workflow::types::WorkflowResult {
-        workflow_run_id: r.workflow_run_id,
-        worktree_id: r.worktree_id,
-        workflow_name: r.workflow_name,
-        all_succeeded: r.all_succeeded,
-        total_cost: r.total_cost,
-        total_turns: r.total_turns,
-        total_duration_ms: r.total_duration_ms,
-        total_input_tokens: r.total_input_tokens,
-        total_output_tokens: r.total_output_tokens,
-        total_cache_read_input_tokens: r.total_cache_read_input_tokens,
-        total_cache_creation_input_tokens: r.total_cache_creation_input_tokens,
-    }
+    r.into()
 }
 
 pub fn gate_approval_to_rk(s: CoreGateApprovalState) -> RkGateApprovalState {
@@ -906,4 +918,36 @@ mod tests {
         assert_eq!(rk.total_cache_read_input_tokens, 75);
         assert_eq!(rk.total_cache_creation_input_tokens, 10);
     }
+
+    // ---------------------------------------------------------------------------
+    // gate_kind_to_rk — all 5 GateKind variants
+    // ---------------------------------------------------------------------------
+
+    macro_rules! gate_kind_roundtrip {
+        ($name:ident, $core:expr, $rk:expr) => {
+            #[test]
+            fn $name() {
+                use runkon_flow::dsl::GateType as Rk;
+                assert_eq!(gate_kind_to_rk($core), $rk);
+            }
+        };
+    }
+
+    gate_kind_roundtrip!(
+        gate_kind_human_approval,
+        GateKind::HumanApproval,
+        Rk::HumanApproval
+    );
+    gate_kind_roundtrip!(
+        gate_kind_human_review,
+        GateKind::HumanReview,
+        Rk::HumanReview
+    );
+    gate_kind_roundtrip!(gate_kind_pr_approval, GateKind::PrApproval, Rk::PrApproval);
+    gate_kind_roundtrip!(gate_kind_pr_checks, GateKind::PrChecks, Rk::PrChecks);
+    gate_kind_roundtrip!(
+        gate_kind_quality_gate,
+        GateKind::QualityGate,
+        Rk::QualityGate
+    );
 }

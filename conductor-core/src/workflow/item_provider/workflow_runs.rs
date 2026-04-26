@@ -8,10 +8,6 @@ use super::{collect_fan_out_items, FanOutItem, ItemProvider, ProviderContext};
 pub struct WorkflowRunsProvider;
 
 impl ItemProvider for WorkflowRunsProvider {
-    fn name(&self) -> &str {
-        "workflow_runs"
-    }
-
     fn items(
         &self,
         ctx: &ProviderContext<'_>,

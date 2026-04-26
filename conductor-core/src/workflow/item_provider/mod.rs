@@ -26,9 +26,6 @@ pub struct ProviderContext<'a> {
 
 /// Trait for a foreach item source registered with the engine.
 pub trait ItemProvider: Send + Sync {
-    #[allow(dead_code)]
-    fn name(&self) -> &str;
-
     fn items(
         &self,
         ctx: &ProviderContext<'_>,
@@ -69,6 +66,25 @@ pub(super) fn collect_fan_out_items<T>(
         .filter(|t| !existing_set.contains(get_id(t)))
         .map(to_item)
         .collect()
+}
+
+/// Fetch item IDs for a foreach step from the DB and return them, or `None` if the
+/// step has no items yet (caller should return `Ok(vec![])`).
+///
+/// Eliminates the repeated open-connection+query+early-exit boilerplate that appeared
+/// at the top of every `ItemProvider::dependencies()` impl.
+pub(super) fn fetch_dep_item_ids(
+    conn: &rusqlite::Connection,
+    step_id: &str,
+) -> crate::error::Result<Option<Vec<String>>> {
+    let mgr = crate::workflow::manager::WorkflowManager::new(conn);
+    let items = mgr.get_fan_out_items(step_id, None)?;
+    let ids: Vec<String> = items.into_iter().map(|i| i.item_id).collect();
+    if ids.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(ids))
+    }
 }
 
 /// Extract a required `repo_id` from an `Option<String>`, returning a typed

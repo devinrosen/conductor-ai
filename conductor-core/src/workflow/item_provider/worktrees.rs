@@ -7,7 +7,7 @@ use crate::error::{ConductorError, Result};
 use crate::worktree::{Worktree, WorktreeManager};
 use runkon_flow::dsl::ForeachScope;
 
-use super::{require_repo_id, FanOutItem, ItemProvider, ProviderContext};
+use super::{fetch_dep_item_ids, require_repo_id, FanOutItem, ItemProvider, ProviderContext};
 
 pub struct WorktreesProvider {
     repo_id: Option<String>,
@@ -24,10 +24,6 @@ impl WorktreesProvider {
 }
 
 impl ItemProvider for WorktreesProvider {
-    fn name(&self) -> &str {
-        "worktrees"
-    }
-
     fn items(
         &self,
         ctx: &ProviderContext<'_>,
@@ -113,12 +109,9 @@ fn dependencies_impl(
     config: &Config,
     step_id: &str,
 ) -> Result<Vec<(String, String)>> {
-    let mgr = crate::workflow::manager::WorkflowManager::new(conn);
-    let items = mgr.get_fan_out_items(step_id, None)?;
-    let item_ids: Vec<String> = items.iter().map(|i| i.item_id.clone()).collect();
-    if item_ids.is_empty() {
+    let Some(item_ids) = fetch_dep_item_ids(conn, step_id)? else {
         return Ok(vec![]);
-    }
+    };
 
     let id_set: HashSet<&String> = item_ids.iter().collect();
     let id_refs: Vec<&str> = item_ids.iter().map(String::as_str).collect();

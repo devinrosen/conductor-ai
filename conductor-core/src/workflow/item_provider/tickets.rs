@@ -5,7 +5,10 @@ use rusqlite::Connection;
 use crate::error::{ConductorError, Result};
 use runkon_flow::dsl::{ForeachScope, TicketScope};
 
-use super::{collect_fan_out_items, require_repo_id, FanOutItem, ItemProvider, ProviderContext};
+use super::{
+    collect_fan_out_items, fetch_dep_item_ids, require_repo_id, FanOutItem, ItemProvider,
+    ProviderContext,
+};
 
 pub struct TicketsProvider {
     repo_id: Option<String>,
@@ -18,10 +21,6 @@ impl TicketsProvider {
 }
 
 impl ItemProvider for TicketsProvider {
-    fn name(&self) -> &str {
-        "tickets"
-    }
-
     fn items(
         &self,
         ctx: &ProviderContext<'_>,
@@ -29,7 +28,7 @@ impl ItemProvider for TicketsProvider {
         _filter: &HashMap<String, String>,
         existing_set: &HashSet<String>,
     ) -> Result<Vec<FanOutItem>> {
-        use crate::tickets::{TicketFilter, TicketSyncer};
+        use crate::tickets::TicketSyncer;
 
         let syncer = TicketSyncer::new(ctx.conn);
         let repo_id = require_repo_id(&self.repo_id, "tickets")?;
@@ -54,23 +53,13 @@ impl ItemProvider for TicketsProvider {
                     Err(e) => return Err(e),
                 },
                 TicketScope::Label(label) => {
-                    let filter = TicketFilter {
-                        labels: vec![label.clone()],
-                        search: None,
-                        include_closed: false,
-                        unlabeled_only: false,
-                    };
-                    let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
+                    let tickets = syncer
+                        .list_filtered(Some(repo_id), &ticket_filter(vec![label.clone()], false))?;
                     collect_fan_out_items(tickets, existing_set, |t| t.id.as_str(), ticket_item)
                 }
                 TicketScope::Unlabeled => {
-                    let filter = TicketFilter {
-                        labels: vec![],
-                        search: None,
-                        include_closed: false,
-                        unlabeled_only: true,
-                    };
-                    let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
+                    let tickets =
+                        syncer.list_filtered(Some(repo_id), &ticket_filter(vec![], true))?;
                     collect_fan_out_items(tickets, existing_set, |t| t.id.as_str(), ticket_item)
                 }
             },
@@ -80,13 +69,7 @@ impl ItemProvider for TicketsProvider {
                 ));
             }
             None => {
-                let filter = TicketFilter {
-                    labels: vec![],
-                    search: None,
-                    include_closed: false,
-                    unlabeled_only: false,
-                };
-                let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
+                let tickets = syncer.list_filtered(Some(repo_id), &ticket_filter(vec![], false))?;
                 collect_fan_out_items(tickets, existing_set, |t| t.id.as_str(), ticket_item)
             }
         };
@@ -106,12 +89,9 @@ impl ItemProvider for TicketsProvider {
     ) -> Result<Vec<(String, String)>> {
         use std::collections::HashSet;
 
-        let mgr = crate::workflow::manager::WorkflowManager::new(conn);
-        let items = mgr.get_fan_out_items(step_id, None)?;
-        let item_ids: Vec<String> = items.iter().map(|i| i.item_id.clone()).collect();
-        if item_ids.is_empty() {
+        let Some(item_ids) = fetch_dep_item_ids(conn, step_id)? else {
             return Ok(vec![]);
-        }
+        };
 
         let syncer = crate::tickets::TicketSyncer::new(conn);
         let id_set: HashSet<&String> = item_ids.iter().collect();
@@ -129,6 +109,15 @@ impl ItemProvider for TicketsProvider {
             })
             .collect();
         Ok(edges)
+    }
+}
+
+fn ticket_filter(labels: Vec<String>, unlabeled_only: bool) -> crate::tickets::TicketFilter {
+    crate::tickets::TicketFilter {
+        labels,
+        search: None,
+        include_closed: false,
+        unlabeled_only,
     }
 }
 

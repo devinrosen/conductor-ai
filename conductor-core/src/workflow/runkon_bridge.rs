@@ -265,6 +265,9 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
 
             if !ectx.step_id.is_empty() {
                 let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+                // Best-effort pre-execution link so the TUI can show live agent output
+                // while the step is running. The ActionOutput written by the executor
+                // after execution completes is the authoritative source of child_run_id.
                 if let Err(e) = wf_mgr.update_step_child_run_id(&ectx.step_id, &child_run.id) {
                     tracing::warn!(
                         "step '{}' (step_id={}): failed to link child_run_id {}: {e}",
@@ -867,5 +870,32 @@ mod tests {
             }
             Ok(_) => panic!("expected mutex-poison error, got Ok"),
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // From<ConductorError> for EngineError — both branches
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn conductor_error_workflow_cancelled_becomes_engine_cancelled() {
+        let err: EngineError = ConductorError::WorkflowCancelled.into();
+        assert!(
+            matches!(err, EngineError::Cancelled(_)),
+            "WorkflowCancelled should map to EngineError::Cancelled, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn conductor_error_other_becomes_engine_workflow() {
+        let err: EngineError = ConductorError::Workflow("some error".to_string()).into();
+        assert!(
+            matches!(err, EngineError::Workflow(_)),
+            "non-cancellation error should map to EngineError::Workflow, got: {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("some error"),
+            "error message should be preserved: {msg}"
+        );
     }
 }

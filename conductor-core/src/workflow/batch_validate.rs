@@ -111,28 +111,25 @@ where
         })
         .collect();
 
-    let mut all_agent_refs = Vec::new();
-    let mut all_snippet_names = Vec::new();
-    let mut all_schema_names = Vec::new();
+    let mut all_agent_refs_set: HashSet<AgentRef> = HashSet::new();
+    let mut all_snippet_names_set: HashSet<String> = HashSet::new();
+    let mut all_schema_names_set: HashSet<String> = HashSet::new();
     for refs in &per_wf_refs {
-        all_agent_refs.extend(refs.agents.iter().cloned());
-        all_snippet_names.extend(refs.snippets.iter().cloned());
-        all_schema_names.extend(refs.schemas.iter().cloned());
+        all_agent_refs_set.extend(refs.agents.iter().cloned());
+        all_snippet_names_set.extend(refs.snippets.iter().cloned());
+        all_schema_names_set.extend(refs.schemas.iter().cloned());
     }
-    all_agent_refs.sort();
-    all_agent_refs.dedup();
-    all_snippet_names.sort();
-    all_snippet_names.dedup();
-    all_schema_names.sort();
-    all_schema_names.dedup();
+    let all_agent_refs: Vec<AgentRef> = all_agent_refs_set.into_iter().collect();
+    let all_snippet_names: Vec<String> = all_snippet_names_set.into_iter().collect();
+    let all_schema_names: Vec<String> = all_schema_names_set.into_iter().collect();
 
     // Collect all plugin_dirs from call nodes for agent resolution.
-    let mut all_plugin_dirs: Vec<String> = workflows
+    let all_plugin_dirs: Vec<String> = workflows
         .iter()
         .flat_map(|wf| wf.collect_all_plugin_dirs())
+        .collect::<HashSet<_>>()
+        .into_iter()
         .collect();
-    all_plugin_dirs.sort();
-    all_plugin_dirs.dedup();
 
     let global_agent_specs: Vec<AgentSpec> = all_agent_refs.iter().map(AgentSpec::from).collect();
     let globally_missing_agents: HashSet<String> = agent_config::find_missing_agents(

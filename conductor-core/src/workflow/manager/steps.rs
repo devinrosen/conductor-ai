@@ -518,3 +518,109 @@ impl<'a> WorkflowManager<'a> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers;
+    use crate::workflow::status::WorkflowStepStatus;
+
+    fn setup(conn: &rusqlite::Connection) -> (String, String) {
+        let parent_id = test_helpers::make_agent_parent_id(conn);
+        let mgr = WorkflowManager::new(conn);
+        let run = mgr
+            .create_workflow_run("wf-test", Some("w1"), &parent_id, false, "manual", None)
+            .unwrap();
+        let step_id = mgr
+            .insert_step(&run.id, "step-a", "actor", false, 0, 0)
+            .unwrap();
+        (run.id, step_id)
+    }
+
+    #[test]
+    fn mark_step_running_sets_status_and_child_run_id() {
+        let conn = test_helpers::setup_db();
+        let (_run_id, step_id) = setup(&conn);
+        let mgr = WorkflowManager::new(&conn);
+
+        mgr.mark_step_running(&step_id, WorkflowStepStatus::Running, Some("child-run-1"))
+            .unwrap();
+
+        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        assert_eq!(step.status, WorkflowStepStatus::Running);
+        assert_eq!(step.child_run_id.as_deref(), Some("child-run-1"));
+        assert!(step.started_at.is_some(), "started_at should be set");
+    }
+
+    #[test]
+    fn mark_step_running_without_child_run_id() {
+        let conn = test_helpers::setup_db();
+        let (_run_id, step_id) = setup(&conn);
+        let mgr = WorkflowManager::new(&conn);
+
+        mgr.mark_step_running(&step_id, WorkflowStepStatus::Waiting, None)
+            .unwrap();
+
+        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        assert_eq!(step.status, WorkflowStepStatus::Waiting);
+        assert!(step.child_run_id.is_none());
+    }
+
+    #[test]
+    fn mark_step_terminal_sets_all_output_fields() {
+        let conn = test_helpers::setup_db();
+        let (_run_id, step_id) = setup(&conn);
+        let mgr = WorkflowManager::new(&conn);
+
+        mgr.mark_step_terminal(
+            &step_id,
+            WorkflowStepStatus::Completed,
+            Some("child-run-2"),
+            Some("result text"),
+            Some("ctx out"),
+            Some("marker-a"),
+            Some(1),
+            Some(r#"{"ok":true}"#),
+            None,
+        )
+        .unwrap();
+
+        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        assert_eq!(step.status, WorkflowStepStatus::Completed);
+        assert_eq!(step.child_run_id.as_deref(), Some("child-run-2"));
+        assert_eq!(step.result_text.as_deref(), Some("result text"));
+        assert_eq!(step.context_out.as_deref(), Some("ctx out"));
+        assert_eq!(step.markers_out.as_deref(), Some("marker-a"));
+        assert_eq!(step.retry_count, 1);
+        assert_eq!(step.structured_output.as_deref(), Some(r#"{"ok":true}"#));
+        assert!(step.ended_at.is_some(), "ended_at should be set");
+    }
+
+    #[test]
+    fn mark_step_terminal_preserves_existing_child_run_id_when_none_passed() {
+        let conn = test_helpers::setup_db();
+        let (_run_id, step_id) = setup(&conn);
+        let mgr = WorkflowManager::new(&conn);
+
+        mgr.mark_step_running(&step_id, WorkflowStepStatus::Running, Some("child-run-3"))
+            .unwrap();
+        mgr.mark_step_terminal(
+            &step_id,
+            WorkflowStepStatus::Failed,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("something went wrong"),
+        )
+        .unwrap();
+
+        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        assert_eq!(step.status, WorkflowStepStatus::Failed);
+        // COALESCE in SQL keeps the existing child_run_id when None is passed.
+        assert_eq!(step.child_run_id.as_deref(), Some("child-run-3"));
+        assert_eq!(step.step_error.as_deref(), Some("something went wrong"));
+    }
+}

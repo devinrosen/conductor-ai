@@ -81,7 +81,7 @@ impl<'a> WorkflowManager<'a> {
     /// Run `f` inside a named SQLite savepoint, committing on success and rolling
     /// back on error.  Replaces the repeated SAVEPOINT / match / RELEASE pattern
     /// across several reaper functions.
-    fn with_savepoint<T>(&self, name: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    fn with_savepoint<T>(&self, name: &'static str, f: impl FnOnce() -> Result<T>) -> Result<T> {
         self.conn.execute_batch(&format!("SAVEPOINT {name}"))?;
         let result = f();
         match result {
@@ -784,6 +784,9 @@ impl<'a> WorkflowManager<'a> {
         // of N separate auto-commit transactions (mirrors recover_stuck_steps).
         self.with_savepoint("reap_finalization_stuck_workflow_runs", || {
             let mut finalized = 0usize;
+            // Constructed once here rather than inside the loop — AgentManager is
+            // stateless (wraps &Connection) so rebuilding it per iteration is wasteful.
+            let agent_mgr = crate::agent::AgentManager::new(self.conn);
 
             for (run_id, parent_run_id, has_failure) in stuck {
                 let final_status = if has_failure {
@@ -804,7 +807,6 @@ impl<'a> WorkflowManager<'a> {
                 );
 
                 // Best-effort: update the parent agent_runs row if still running.
-                let agent_mgr = crate::agent::AgentManager::new(self.conn);
                 let update_result = if has_failure {
                     agent_mgr.update_run_failed_if_running(&parent_run_id, &summary)
                 } else {
