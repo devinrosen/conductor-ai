@@ -17,33 +17,12 @@ pub struct InvalidWorkflowEntry {
     pub error: String,
 }
 
-/// Load workflow definitions from the filesystem for a worktree.
-///
-/// Wraps `workflow_dsl::load_workflow_defs` so consumers don't need to
-/// reach into the low-level DSL module directly.
-///
-/// Returns `(defs, warnings)` — warnings contain one [`WorkflowWarning`]
-/// per `.wf` file that failed to parse. Successfully-parsed definitions are
-/// always returned even when some files are broken.
-///
-/// Prefer this free function over `WorkflowManager::list_defs` — it performs
-/// only filesystem I/O and requires no database connection.
-pub fn list_workflow_defs(
-    worktree_path: &str,
-    repo_path: &str,
-) -> Result<(
-    Vec<runkon_flow::dsl::WorkflowDef>,
-    Vec<runkon_flow::dsl::WorkflowWarning>,
-)> {
-    workflow_dsl::load_workflow_defs(worktree_path, repo_path)
-        .map_err(crate::error::ConductorError::Workflow)
-}
-
 impl WorkflowManager<'_> {
     /// Load workflow definitions from the filesystem for a worktree.
     ///
-    /// Prefer the free function [`list_workflow_defs`] — this static method exists
-    /// only for backwards compatibility. It requires no database connection.
+    /// Returns `(defs, warnings)` — warnings contain one entry per `.wf` file
+    /// that failed to parse. Successfully-parsed definitions are always returned
+    /// even when some files are broken.
     pub fn list_defs(
         worktree_path: &str,
         repo_path: &str,
@@ -51,7 +30,8 @@ impl WorkflowManager<'_> {
         Vec<runkon_flow::dsl::WorkflowDef>,
         Vec<runkon_flow::dsl::WorkflowWarning>,
     )> {
-        list_workflow_defs(worktree_path, repo_path)
+        workflow_dsl::load_workflow_defs(worktree_path, repo_path)
+            .map_err(crate::error::ConductorError::Workflow)
     }
 
     /// Load a single workflow definition by name.

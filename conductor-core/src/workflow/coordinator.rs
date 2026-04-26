@@ -143,57 +143,43 @@ fn validate_workflow_resources(
     Ok(())
 }
 
+/// Insert `value` under `key` only when the key is absent — existing caller-supplied
+/// values are never overwritten. All inject_*_variables functions use this helper.
+fn set_input(inputs: &mut HashMap<String, String>, key: &str, value: String) {
+    inputs.entry(key.to_string()).or_insert(value);
+}
+
 fn inject_worktree_variables(
     wt: &crate::worktree::Worktree,
     repo_default_branch: &str,
     merged_inputs: &mut HashMap<String, String>,
 ) {
     let base = wt.effective_base(repo_default_branch);
-    merged_inputs
-        .entry("feature_base_branch".to_string())
-        .or_insert_with(|| base.to_string());
-    merged_inputs
-        .entry("worktree_branch".to_string())
-        .or_insert_with(|| wt.branch.clone());
+    set_input(merged_inputs, "feature_base_branch", base.to_string());
+    set_input(merged_inputs, "worktree_branch", wt.branch.clone());
 }
 
 fn inject_ticket_variables(
     ticket: &crate::tickets::Ticket,
     merged_inputs: &mut HashMap<String, String>,
 ) {
-    merged_inputs
-        .entry("ticket_id".to_string())
-        .or_insert_with(|| ticket.id.clone());
-    merged_inputs
-        .entry("ticket_source_id".to_string())
-        .or_insert_with(|| ticket.source_id.clone());
-    merged_inputs
-        .entry("ticket_source_type".to_string())
-        .or_insert_with(|| ticket.source_type.clone());
-    merged_inputs
-        .entry("ticket_title".to_string())
-        .or_insert_with(|| ticket.title.clone());
-    merged_inputs
-        .entry("ticket_body".to_string())
-        .or_insert_with(|| ticket.body.clone());
-    merged_inputs
-        .entry("ticket_url".to_string())
-        .or_insert_with(|| ticket.url.clone());
-    merged_inputs
-        .entry("ticket_raw_json".to_string())
-        .or_insert_with(|| ticket.raw_json.clone());
+    set_input(merged_inputs, "ticket_id", ticket.id.clone());
+    set_input(merged_inputs, "ticket_source_id", ticket.source_id.clone());
+    set_input(
+        merged_inputs,
+        "ticket_source_type",
+        ticket.source_type.clone(),
+    );
+    set_input(merged_inputs, "ticket_title", ticket.title.clone());
+    set_input(merged_inputs, "ticket_body", ticket.body.clone());
+    set_input(merged_inputs, "ticket_url", ticket.url.clone());
+    set_input(merged_inputs, "ticket_raw_json", ticket.raw_json.clone());
 }
 
 fn inject_repo_variables(repo: &crate::repo::Repo, merged_inputs: &mut HashMap<String, String>) {
-    merged_inputs
-        .entry("repo_id".to_string())
-        .or_insert_with(|| repo.id.clone());
-    merged_inputs
-        .entry("repo_path".to_string())
-        .or_insert_with(|| repo.local_path.clone());
-    merged_inputs
-        .entry("repo_name".to_string())
-        .or_insert_with(|| repo.slug.clone());
+    set_input(merged_inputs, "repo_id", repo.id.clone());
+    set_input(merged_inputs, "repo_path", repo.local_path.clone());
+    set_input(merged_inputs, "repo_name", repo.slug.clone());
 }
 
 fn deserialize_workflow_snapshot(snapshot: &str) -> Result<runkon_flow::dsl::WorkflowDef> {
@@ -1347,6 +1333,23 @@ mod tests {
         handle
             .join()
             .expect("spawn_heartbeat_resume thread panicked");
+    }
+
+    // -------------------------------------------------------------------------
+    // spawn_workflow_resume
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn spawn_workflow_resume_does_not_panic_on_invalid_run_id() {
+        // resume_workflow_standalone fails (run not found) → warning is logged, no panic.
+        let handle = spawn_workflow_resume(
+            "nonexistent-run-id".to_string(),
+            crate::config::Config::default(),
+            None,
+        );
+        handle
+            .join()
+            .expect("spawn_workflow_resume thread panicked");
     }
 
     // -------------------------------------------------------------------------

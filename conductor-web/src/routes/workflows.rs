@@ -3409,4 +3409,54 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
+
+    // --- gate loopback guard tests ---
+
+    #[tokio::test]
+    async fn approve_gate_rejects_non_loopback_request() {
+        use axum::extract::ConnectInfo;
+        use std::net::SocketAddr;
+
+        let state = empty_state();
+        let app = api_router().with_state(state);
+        let non_loopback: SocketAddr = "192.168.1.100:0".parse().unwrap();
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/api/workflows/runs/any-run-id/gate/approve")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({}).to_string()))
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(non_loopback));
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "non-loopback approve_gate must be rejected with 400"
+        );
+    }
+
+    #[tokio::test]
+    async fn reject_gate_rejects_non_loopback_request() {
+        use axum::extract::ConnectInfo;
+        use std::net::SocketAddr;
+
+        let state = empty_state();
+        let app = api_router().with_state(state);
+        let non_loopback: SocketAddr = "192.168.1.100:0".parse().unwrap();
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/api/workflows/runs/any-run-id/gate/reject")
+            .header("content-type", "application/json")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(non_loopback));
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "non-loopback reject_gate must be rejected with 400"
+        );
+    }
 }
