@@ -81,11 +81,7 @@ impl<'a> WorkflowManager<'a> {
     /// Run `f` inside a named SQLite savepoint, committing on success and rolling
     /// back on error.  Replaces the repeated SAVEPOINT / match / RELEASE pattern
     /// across several reaper functions.
-    fn with_savepoint<T>(
-        &self,
-        name: &str,
-        f: impl FnOnce() -> Result<T>,
-    ) -> Result<T> {
+    fn with_savepoint<T>(&self, name: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
         self.conn.execute_batch(&format!("SAVEPOINT {name}"))?;
         let result = f();
         match result {

@@ -1,8 +1,8 @@
 use super::*;
 use crate::agent::{AgentRun, AgentRunStatus};
 use crate::config::{HookConfig, NotificationConfig, SlackConfig, WorkflowNotificationConfig};
-use crate::workflow::{WorkflowRun, WorkflowRunStatus};
 use crate::workflow::types::GateKind;
+use crate::workflow::{WorkflowRun, WorkflowRunStatus};
 #[allow(unused_imports)]
 use rusqlite::Connection;
 

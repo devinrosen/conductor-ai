@@ -1139,11 +1139,11 @@ mod tests {
 
     #[test]
     fn validate_resume_restart_with_from_step_errors() {
-        let err =
-            validate_resume_preconditions(&WorkflowRunStatus::Failed, true, Some("step-2"))
-                .unwrap_err();
+        let err = validate_resume_preconditions(&WorkflowRunStatus::Failed, true, Some("step-2"))
+            .unwrap_err();
         assert!(
-            err.to_string().contains("Cannot use --restart and --from-step"),
+            err.to_string()
+                .contains("Cannot use --restart and --from-step"),
             "unexpected error: {err}"
         );
     }

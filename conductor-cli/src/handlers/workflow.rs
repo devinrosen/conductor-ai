@@ -379,9 +379,8 @@ pub fn handle_workflow(
                 })?;
             } else {
                 // Normal registered repo/worktree run
-                let repo_slug = repo.ok_or_else(|| {
-                    anyhow::anyhow!("--repo is required when --pr is not used")
-                })?;
+                let repo_slug = repo
+                    .ok_or_else(|| anyhow::anyhow!("--repo is required when --pr is not used"))?;
                 let worktree_slug = worktree.ok_or_else(|| {
                     anyhow::anyhow!("--worktree is required when --pr is not used")
                 })?;

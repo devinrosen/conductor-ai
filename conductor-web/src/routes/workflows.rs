@@ -1835,9 +1835,11 @@ pub async fn approve_gate(
     Json(req): Json<GateActionRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if !peer.ip().is_loopback() {
-        return Err(ApiError::Core(conductor_core::error::ConductorError::InvalidInput(
-            "gate approval is only permitted from localhost".to_string(),
-        )));
+        return Err(ApiError::Core(
+            conductor_core::error::ConductorError::InvalidInput(
+                "gate approval is only permitted from localhost".to_string(),
+            ),
+        ));
     }
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
@@ -1885,9 +1887,11 @@ pub async fn reject_gate(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     if !peer.ip().is_loopback() {
-        return Err(ApiError::Core(conductor_core::error::ConductorError::InvalidInput(
-            "gate rejection is only permitted from localhost".to_string(),
-        )));
+        return Err(ApiError::Core(
+            conductor_core::error::ConductorError::InvalidInput(
+                "gate rejection is only permitted from localhost".to_string(),
+            ),
+        ));
     }
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
