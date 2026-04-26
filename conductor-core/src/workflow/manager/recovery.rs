@@ -10,27 +10,6 @@ use crate::error::Result;
 
 use super::helpers::{purge_where_clause, row_to_workflow_run};
 
-fn parse_duration_secs(s: &str) -> std::result::Result<u64, String> {
-    let s = s.trim().trim_matches('"');
-    if let Some(h) = s.strip_suffix('h') {
-        h.parse::<u64>()
-            .map_err(|e| format!("Invalid duration '{s}': {e}"))
-            .and_then(|n| {
-                n.checked_mul(3600)
-                    .ok_or_else(|| format!("overflow: '{s}'"))
-            })
-    } else if let Some(m) = s.strip_suffix('m') {
-        m.parse::<u64>()
-            .map_err(|e| format!("Invalid duration '{s}': {e}"))
-            .and_then(|n| n.checked_mul(60).ok_or_else(|| format!("overflow: '{s}'")))
-    } else if let Some(sec) = s.strip_suffix('s') {
-        sec.parse()
-            .map_err(|e| format!("Invalid duration '{s}': {e}"))
-    } else {
-        s.parse()
-            .map_err(|e| format!("Invalid duration '{s}': {e}"))
-    }
-}
 use super::WorkflowManager;
 use crate::workflow::constants::RUN_COLUMNS;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
@@ -332,7 +311,7 @@ impl<'a> WorkflowManager<'a> {
             let gate_step = gate_steps.get(&run_id);
             let gate_timed_out = gate_step.is_some_and(|step| {
                 let timeout_secs = step.gate_timeout.as_deref().and_then(|s| {
-                    match parse_duration_secs(s) {
+                    match runkon_flow::dsl::parse_duration_str(s) {
                         Ok(n) => i64::try_from(n).ok(),
                         Err(_) => {
                             tracing::warn!(
@@ -1288,49 +1267,49 @@ mod tests {
         .unwrap()
     }
 
-    // ── parse_duration_secs ───────────────────────────────────────────────────
+    // ── parse_duration_str (runkon_flow::dsl) ────────────────────────────────
 
     #[test]
     fn parse_duration_secs_hours() {
-        assert_eq!(super::parse_duration_secs("2h"), Ok(7200));
+        assert_eq!(runkon_flow::dsl::parse_duration_str("2h"), Ok(7200));
     }
 
     #[test]
     fn parse_duration_secs_large_hours() {
-        assert_eq!(super::parse_duration_secs("48h"), Ok(172800));
+        assert_eq!(runkon_flow::dsl::parse_duration_str("48h"), Ok(172800));
     }
 
     #[test]
     fn parse_duration_secs_minutes() {
-        assert_eq!(super::parse_duration_secs("30m"), Ok(1800));
+        assert_eq!(runkon_flow::dsl::parse_duration_str("30m"), Ok(1800));
     }
 
     #[test]
     fn parse_duration_secs_seconds_suffix() {
-        assert_eq!(super::parse_duration_secs("60s"), Ok(60));
+        assert_eq!(runkon_flow::dsl::parse_duration_str("60s"), Ok(60));
     }
 
     #[test]
     fn parse_duration_secs_plain_integer() {
-        assert_eq!(super::parse_duration_secs("120"), Ok(120));
+        assert_eq!(runkon_flow::dsl::parse_duration_str("120"), Ok(120));
     }
 
     #[test]
     fn parse_duration_secs_quoted_value() {
         // TOML duration values may arrive with surrounding quotes.
-        assert_eq!(super::parse_duration_secs("\"30m\""), Ok(1800));
+        assert_eq!(runkon_flow::dsl::parse_duration_str("\"30m\""), Ok(1800));
     }
 
     #[test]
     fn parse_duration_secs_invalid_input() {
-        assert!(super::parse_duration_secs("not-a-number").is_err());
+        assert!(runkon_flow::dsl::parse_duration_str("not-a-number").is_err());
     }
 
     #[test]
     fn parse_duration_secs_overflow_hours() {
         // A value so large that multiplying by 3600 overflows u64.
         let huge = format!("{}h", u64::MAX);
-        assert!(super::parse_duration_secs(&huge).is_err());
+        assert!(runkon_flow::dsl::parse_duration_str(&huge).is_err());
     }
 
     // ── classify_resumable_workflows ──────────────────────────────────────────

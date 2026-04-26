@@ -48,7 +48,12 @@ fn main() {
             // Always use the global database — the desktop app manages all
             // repos, so worktree-local DB detection must be bypassed.
             let db_path_val = conductor_dir().join("conductor.db");
-            let conn = open_database(&db_path_val).expect("Failed to open conductor database");
+            let conn = open_database(&db_path_val).unwrap_or_else(|e| {
+                panic!(
+                    "Failed to open conductor database at {}: {e}",
+                    db_path_val.display()
+                )
+            });
             let config = load_config().expect("Failed to load conductor config");
 
             // Reap stale resources on startup.

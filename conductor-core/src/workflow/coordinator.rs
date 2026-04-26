@@ -998,11 +998,15 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
                 .count();
 
             let skip_count = if let Some(from_step) = input.from_step {
-                // Safety: from_step existence was validated above
                 let pos = all_steps
                     .iter()
                     .find(|s| s.step_name == from_step)
-                    .expect("from_step validated above")
+                    .ok_or_else(|| {
+                        ConductorError::Workflow(format!(
+                            "resume step '{}' not found in run '{}'",
+                            from_step, wf_run.id
+                        ))
+                    })?
                     .position;
 
                 let reset_count = all_steps
@@ -1571,6 +1575,102 @@ mod tests {
         assert!(
             result.is_err(),
             "nonexistent ticket_id must produce an error"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // resume_workflow — from_step not-found and ephemeral PR run
+    // -------------------------------------------------------------------------
+
+    fn make_resume_input<'a>(
+        config: &'a crate::config::Config,
+        run_id: &'a str,
+        from_step: Option<&'a str>,
+        db_path: std::path::PathBuf,
+    ) -> WorkflowResumeInput<'a> {
+        WorkflowResumeInput {
+            config,
+            workflow_run_id: run_id,
+            model: None,
+            from_step,
+            restart: false,
+            conductor_bin_dir: None,
+            event_sinks: vec![],
+            db_path: Some(db_path),
+            shutdown: None,
+        }
+    }
+
+    #[test]
+    fn resume_workflow_from_step_not_found_returns_err() {
+        use tempfile::NamedTempFile;
+        let db_file = NamedTempFile::new().unwrap();
+        let run_id = {
+            let conn = crate::db::open_database(db_file.path()).unwrap();
+            crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+            crate::test_helpers::insert_test_worktree(&conn, "w1", "r1", "feat-test", "/tmp");
+            let parent = crate::agent::AgentManager::new(&conn)
+                .create_run(Some("w1"), "workflow", None)
+                .unwrap();
+            let wf_mgr = WorkflowManager::new(&conn);
+            let run = wf_mgr
+                .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
+                .unwrap();
+            conn.execute(
+                "UPDATE workflow_runs SET status = 'failed' WHERE id = ?1",
+                rusqlite::params![run.id],
+            )
+            .unwrap();
+            run.id
+        };
+
+        let config = crate::config::Config::default();
+        let input = make_resume_input(
+            &config,
+            &run_id,
+            Some("no-such-step"),
+            db_file.path().to_path_buf(),
+        );
+        let err = resume_workflow(&input).unwrap_err();
+        assert!(
+            err.to_string().contains("not found"),
+            "expected 'not found' error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn resume_workflow_ephemeral_pr_run_returns_err() {
+        use tempfile::NamedTempFile;
+        let db_file = NamedTempFile::new().unwrap();
+        let run_id = {
+            let conn = crate::db::open_database(db_file.path()).unwrap();
+            // Ephemeral runs have no worktree/repo/ticket — only an agent parent.
+            let parent = crate::agent::AgentManager::new(&conn)
+                .create_run(None, "workflow", None)
+                .unwrap();
+            let wf_mgr = WorkflowManager::new(&conn);
+            let run = wf_mgr
+                .create_workflow_run_with_targets(
+                    "test-wf", None, // worktree_id
+                    None, // ticket_id
+                    None, // repo_id
+                    &parent.id, false, "manual", None, None, None,
+                )
+                .unwrap();
+            conn.execute(
+                "UPDATE workflow_runs SET status = 'failed' WHERE id = ?1",
+                rusqlite::params![run.id],
+            )
+            .unwrap();
+            run.id
+        };
+
+        let config = crate::config::Config::default();
+        let input = make_resume_input(&config, &run_id, None, db_file.path().to_path_buf());
+        let err = resume_workflow(&input).unwrap_err();
+        assert!(
+            err.to_string().contains("ephemeral"),
+            "expected 'ephemeral' error, got: {err}"
         );
     }
 

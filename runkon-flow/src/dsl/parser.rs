@@ -1021,7 +1021,7 @@ impl Parser {
 // Duration parser
 // ---------------------------------------------------------------------------
 
-pub(crate) fn parse_duration_str(s: &str) -> std::result::Result<u64, String> {
+pub fn parse_duration_str(s: &str) -> std::result::Result<u64, String> {
     let s = s.trim().trim_matches('"');
     if let Some(hours) = s.strip_suffix('h') {
         let n: u64 = hours

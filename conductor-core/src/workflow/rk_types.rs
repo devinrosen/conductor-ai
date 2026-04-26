@@ -217,19 +217,21 @@ fn blocked_on_to_rk(b: CoreBlockedOn) -> RkBlockedOn {
     }
 }
 
-pub fn gate_kind_to_rk(k: GateKind) -> runkon_flow::dsl::GateType {
-    use runkon_flow::dsl::GateType as Rk;
-    match k {
-        GateKind::HumanApproval => Rk::HumanApproval,
-        GateKind::HumanReview => Rk::HumanReview,
-        GateKind::PrApproval => Rk::PrApproval,
-        GateKind::PrChecks => Rk::PrChecks,
-        GateKind::QualityGate => Rk::QualityGate,
+impl From<GateKind> for runkon_flow::dsl::GateType {
+    fn from(k: GateKind) -> Self {
+        use runkon_flow::dsl::GateType as Rk;
+        match k {
+            GateKind::HumanApproval => Rk::HumanApproval,
+            GateKind::HumanReview => Rk::HumanReview,
+            GateKind::PrApproval => Rk::PrApproval,
+            GateKind::PrChecks => Rk::PrChecks,
+            GateKind::QualityGate => Rk::QualityGate,
+        }
     }
 }
 
 pub fn step_to_rk(s: CoreStep) -> RkStep {
-    let gate_type = s.gate_type.map(gate_kind_to_rk);
+    let gate_type = s.gate_type.map(Into::into);
     RkStep {
         id: s.id,
         workflow_run_id: s.workflow_run_id,
@@ -909,7 +911,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
-    // gate_kind_to_rk — all 5 GateKind variants
+    // GateKind → GateType From impl — all 5 variants
     // ---------------------------------------------------------------------------
 
     macro_rules! gate_kind_roundtrip {
@@ -917,7 +919,7 @@ mod tests {
             #[test]
             fn $name() {
                 use runkon_flow::dsl::GateType as Rk;
-                assert_eq!(gate_kind_to_rk($core), $rk);
+                assert_eq!(runkon_flow::dsl::GateType::from($core), $rk);
             }
         };
     }

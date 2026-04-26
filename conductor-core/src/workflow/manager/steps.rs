@@ -313,7 +313,7 @@ impl<'a> WorkflowManager<'a> {
             out
         });
 
-        self.conn.execute(
+        self.execute_step_sql(
             "UPDATE workflow_run_steps SET gate_approved_at = :now, gate_approved_by = :approved_by, \
              gate_feedback = :feedback, gate_selections = :selections_json, \
              context_out = COALESCE(:context_out, context_out), \
@@ -326,8 +326,7 @@ impl<'a> WorkflowManager<'a> {
                 ":context_out": context_out,
                 ":id": step_id,
             ],
-        )?;
-        Ok(())
+        )
     }
 
     /// Reject a gate: set step to failed.
@@ -338,12 +337,11 @@ impl<'a> WorkflowManager<'a> {
         feedback: Option<&str>,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        self.conn.execute(
+        self.execute_step_sql(
             "UPDATE workflow_run_steps SET gate_approved_by = :rejected_by, gate_feedback = :feedback, \
              status = 'failed', ended_at = :ended_at WHERE id = :id",
             named_params![":rejected_by": rejected_by, ":feedback": feedback, ":ended_at": now, ":id": step_id],
-        )?;
-        Ok(())
+        )
     }
 
     /// Returns true if the predecessor step (position - 1) has status 'completed'.
