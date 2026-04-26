@@ -180,7 +180,7 @@ REVIEW_BODY="${HEADING}
 # Append blocking findings section if any
 if [ "${HAS_BLOCKING_CHECK}" = "true" ]; then
   BLOCKING_SECTION=$(echo "${PRIOR_OUTPUT}" | jq -r '
-    "\n### Blocking findings\n",
+    "\n### Blocking findings (\(.blocking_findings // [] | length))\n",
     (
       [(.blocking_findings // []) | group_by(.reviewer)[] |
         . as $group |
