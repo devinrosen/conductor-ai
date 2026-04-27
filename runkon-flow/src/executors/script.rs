@@ -655,4 +655,43 @@ mod tests {
             "template in env value should be substituted; context: {ctx:?}"
         );
     }
+
+    /// Security-sensitive env vars in node.env are skipped, not injected.
+    #[test]
+    fn sensitive_env_vars_are_blocked() {
+        let (persistence, run_id) = make_persistence();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone());
+
+        let mut env = HashMap::new();
+        env.insert("LD_PRELOAD".to_string(), "/malicious/lib.so".to_string());
+        env.insert("DYLD_LIBRARY_PATH".to_string(), "/malicious/lib".to_string());
+        env.insert("SAFE_VAR".to_string(), "allowed_value".to_string());
+        let node = ScriptNode {
+            name: "sensitive-test".to_string(),
+            run: "echo SAFE_VAR=[$SAFE_VAR] LD_PRELOAD=[$LD_PRELOAD] DYLD_LIBRARY_PATH=[$DYLD_LIBRARY_PATH]".to_string(),
+            env,
+            timeout: None,
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        };
+        execute_script(&mut state, &node, 0).unwrap();
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        let step = &steps[0];
+        assert_eq!(step.status, WorkflowStepStatus::Completed);
+        let ctx = step.context_out.as_deref().unwrap_or("");
+        assert!(
+            ctx.contains("SAFE_VAR=[allowed_value]"),
+            "SAFE_VAR should be injected; context: {ctx:?}"
+        );
+        assert!(
+            !ctx.contains("/malicious/lib.so"),
+            "LD_PRELOAD should be blocked; context: {ctx:?}"
+        );
+        assert!(
+            !ctx.contains("/malicious/lib"),
+            "DYLD_LIBRARY_PATH should be blocked; context: {ctx:?}"
+        );
+    }
 }

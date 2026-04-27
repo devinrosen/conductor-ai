@@ -256,26 +256,18 @@ impl StepResult {
     /// Convenience wrapper for the common case where cost/turns/duration are
     /// not available (e.g. restored from a prior run or bubble-up from a child
     /// workflow). Metric fields on `success` are ignored.
-    pub fn completed_without_metrics(step_name: &str, success: &StepSuccess) -> Self {
-        Self {
-            step_name: step_name.to_string(),
-            status: WorkflowStepStatus::Completed,
-            result_text: success.result_text.clone(),
-            cost_usd: None,
-            num_turns: None,
-            duration_ms: None,
-            markers: success.markers.clone(),
-            context: success.context.clone(),
-            child_run_id: success.child_run_id.clone(),
-            structured_output: success.structured_output.clone(),
-            output_file: success.output_file.clone(),
-        }
+    pub fn completed_without_metrics(success: &StepSuccess) -> Self {
+        let mut s = Self::completed(success);
+        s.cost_usd = None;
+        s.num_turns = None;
+        s.duration_ms = None;
+        s
     }
 
     /// Create a completed StepResult from a [`StepSuccess`] description.
-    pub fn completed(step_name: &str, success: &StepSuccess) -> Self {
+    pub fn completed(success: &StepSuccess) -> Self {
         Self {
-            step_name: step_name.to_string(),
+            step_name: success.step_name.clone(),
             status: WorkflowStepStatus::Completed,
             result_text: success.result_text.clone(),
             cost_usd: success.cost_usd,
@@ -346,6 +338,7 @@ mod tests {
     #[test]
     fn step_result_completed_sets_all_fields() {
         let success = StepSuccess {
+            step_name: "review".to_string(),
             result_text: Some("looks good".to_string()),
             cost_usd: Some(0.05),
             num_turns: Some(3),
@@ -357,7 +350,7 @@ mod tests {
             output_file: Some("/tmp/out".to_string()),
             ..StepSuccess::default()
         };
-        let r = StepResult::completed("review", &success);
+        let r = StepResult::completed(&success);
         assert_eq!(r.step_name, "review");
         assert_eq!(r.status, WorkflowStepStatus::Completed);
         assert_eq!(r.result_text, Some("looks good".to_string()));

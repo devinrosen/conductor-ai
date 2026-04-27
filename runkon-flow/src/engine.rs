@@ -527,7 +527,7 @@ pub fn record_step_success(state: &mut ExecutionState, success: &crate::types::S
         tracing::warn!("Failed to flush mid-run metrics: {e}");
     }
 
-    let step_result = StepResult::completed(&success.step_name, success);
+    let step_result = StepResult::completed(success);
     state.step_results.insert(success.step_key.clone(), step_result);
 
     push_context_entry(state, success);
@@ -730,7 +730,7 @@ pub fn restore_completed_step(
         iteration,
         ..crate::types::StepSuccess::default()
     };
-    let step_result = StepResult::completed_without_metrics(step_key, &success);
+    let step_result = StepResult::completed_without_metrics(&success);
     state.step_results.insert(step_key.to_string(), step_result);
 
     push_context_entry(state, &success);
@@ -784,7 +784,7 @@ pub fn fetch_child_completion_data(
                 output_file: s.output_file.clone(),
                 ..crate::types::StepSuccess::default()
             };
-            let result = StepResult::completed_without_metrics(&s.step_name, &success);
+            let result = StepResult::completed_without_metrics(&success);
             (s.step_name, result)
         })
         .collect();
