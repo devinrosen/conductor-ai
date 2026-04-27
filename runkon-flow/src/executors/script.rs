@@ -219,8 +219,21 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
     // Spawn reader threads BEFORE waiting for the child to avoid pipe deadlock.
     // If the child writes more than the OS pipe buffer size to either stream
     // while the parent is blocked in wait(), the child would hang forever.
+    fn spawn_reader_thread<R: Read + Send + 'static>(
+        mut pipe: R,
+        stream_name: &'static str,
+    ) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Err(e) = pipe.read_to_end(&mut buf) {
+                tracing::warn!("script: failed to read {stream_name} pipe: {e}");
+            }
+            buf
+        })
+    }
+
     let stdout_handle = {
-        let mut pipe = match child.stdout.take() {
+        let pipe = match child.stdout.take() {
             Some(p) => p,
             None => {
                 return fail_script_step(
@@ -234,16 +247,10 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                 );
             }
         };
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Err(e) = pipe.read_to_end(&mut buf) {
-                tracing::warn!("script: failed to read stdout pipe: {e}");
-            }
-            buf
-        })
+        spawn_reader_thread(pipe, "stdout")
     };
     let stderr_handle = {
-        let mut pipe = match child.stderr.take() {
+        let pipe = match child.stderr.take() {
             Some(p) => p,
             None => {
                 return fail_script_step(
@@ -257,13 +264,7 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                 );
             }
         };
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Err(e) = pipe.read_to_end(&mut buf) {
-                tracing::warn!("script: failed to read stderr pipe: {e}");
-            }
-            buf
-        })
+        spawn_reader_thread(pipe, "stderr")
     };
 
     let start = std::time::Instant::now();
@@ -769,5 +770,56 @@ mod tests {
         assert_eq!(steps.len(), 1);
         let step = &steps[0];
         assert_eq!(step.status, WorkflowStepStatus::Completed);
+    }
+
+    /// A non-success exit code with stderr output must capture stderr in the step error.
+    #[test]
+    fn non_success_exit_with_stderr_capture() {
+        let (persistence, run_id) = make_persistence();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone());
+        let node = ScriptNode {
+            name: "fails-with-stderr".to_string(),
+            run: "echo 'error details' >&2 && exit 1".to_string(),
+            env: Default::default(),
+            timeout: None,
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        };
+        let result = execute_script(&mut state, &node, 0);
+        assert!(result.is_err(), "expected failure for non-zero exit");
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        assert_eq!(steps.len(), 1);
+        let step = &steps[0];
+        assert_eq!(step.status, WorkflowStepStatus::Failed);
+        let err_text = step.result_text.as_deref().unwrap_or("");
+        assert!(
+            err_text.contains("error details"),
+            "stderr should be captured in error message: {err_text}"
+        );
+    }
+
+    /// Non-UTF-8 stderr on a failed script must not panic; the step is marked Failed.
+    #[test]
+    fn non_utf8_stderr_is_handled_gracefully() {
+        let (persistence, run_id) = make_persistence();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone());
+        let node = ScriptNode {
+            name: "bad-stderr".to_string(),
+            run: "python3 -c \"import sys; sys.stderr.buffer.write(bytes([0x80,0x81,0x82])); sys.exit(1)\"".to_string(),
+            env: Default::default(),
+            timeout: None,
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        };
+        let result = execute_script(&mut state, &node, 0);
+        assert!(result.is_err(), "expected failure for non-zero exit");
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        assert_eq!(steps.len(), 1);
+        let step = &steps[0];
+        assert_eq!(step.status, WorkflowStepStatus::Failed);
     }
 }

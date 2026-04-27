@@ -233,22 +233,16 @@ pub fn execute_foreach(
 
     if total_items == 0 {
         let context = format!("foreach {}: no items to process", node.name);
-        state
-            .persistence
-            .update_step(
-                &step_id,
-                StepUpdate {
-                    status: WorkflowStepStatus::Completed,
-                    child_run_id: None,
-                    result_text: Some(context.clone()),
-                    context_out: Some(context.clone()),
-                    markers_out: None,
-                    retry_count: Some(0),
-                    structured_output: None,
-                    step_error: None,
-                },
-            )
-            .map_err(p_err)?;
+        super::persist_completed_step(
+            state,
+            &step_id,
+            None,
+            Some(context.clone()),
+            Some(context.clone()),
+            None,
+            0,
+            None,
+        )?;
 
         record_foreach_step_success(state, step_key, &node.name, context, iteration);
         return Ok(());

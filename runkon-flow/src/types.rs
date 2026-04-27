@@ -377,7 +377,7 @@ pub struct FanOutItemRow {
 
 #[cfg(test)]
 mod tests {
-    use super::{StepResult, StepSuccess};
+    use super::{StepResult, StepSuccess, WorkflowRunStep};
     use crate::status::WorkflowStepStatus;
 
     #[test]
@@ -480,6 +480,40 @@ mod tests {
         assert_eq!(entry.markers, vec!["m1", "m2"]);
         assert_eq!(entry.structured_output, Some(r#"{"k":"v"}"#.to_string()));
         assert_eq!(entry.output_file, Some("/tmp/out".to_string()));
+    }
+
+    #[test]
+    fn from_workflow_run_step_maps_fields() {
+        let step = WorkflowRunStep {
+            result_text: Some("all good".to_string()),
+            child_run_id: Some("child-1".to_string()),
+            structured_output: Some(r#"{"ok":true}"#.to_string()),
+            output_file: Some("/tmp/out".to_string()),
+            ..WorkflowRunStep::default()
+        };
+        let success = StepSuccess::from_workflow_run_step(
+            "child-step".to_string(),
+            &step,
+            vec!["m1".to_string(), "m2".to_string()],
+            "ctx-body".to_string(),
+            7,
+        );
+        assert_eq!(success.step_name, "child-step");
+        assert_eq!(success.result_text, Some("all good".to_string()));
+        assert_eq!(success.markers, vec!["m1", "m2"]);
+        assert_eq!(success.context, "ctx-body");
+        assert_eq!(success.child_run_id, Some("child-1".to_string()));
+        assert_eq!(success.structured_output, Some(r#"{"ok":true}"#.to_string()));
+        assert_eq!(success.output_file, Some("/tmp/out".to_string()));
+        assert_eq!(success.iteration, 7);
+        // Metric fields should default to None
+        assert!(success.cost_usd.is_none());
+        assert!(success.num_turns.is_none());
+        assert!(success.duration_ms.is_none());
+        assert!(success.input_tokens.is_none());
+        assert!(success.output_tokens.is_none());
+        assert!(success.cache_read_input_tokens.is_none());
+        assert!(success.cache_creation_input_tokens.is_none());
     }
 
     #[test]
