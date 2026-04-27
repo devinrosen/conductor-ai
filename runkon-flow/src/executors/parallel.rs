@@ -599,6 +599,119 @@ mod tests {
             error_msg.contains("panic_exec"),
             "step_error should name the executor; got: {error_msg:?}"
         );
+        assert!(
+            error_msg.contains("deliberate panic in test executor"),
+            "step_error should include the panic payload; got: {error_msg:?}"
+        );
+    }
+
+    /// Verifies that a panicking executor with a `String` payload is caught and the
+    /// message is surfaced in the step error.
+    #[test]
+    fn parallel_panicking_executor_string_payload_is_surfaced() {
+        struct PanicStringExec;
+        impl ActionExecutor for PanicStringExec {
+            fn name(&self) -> &str {
+                "panic_string_exec"
+            }
+            fn execute(
+                &self,
+                _ectx: &crate::traits::action_executor::ExecutionContext,
+                _params: &ActionParams,
+            ) -> Result<ActionOutput, EngineError> {
+                panic!("{}", "string payload panic".to_string())
+            }
+        }
+
+        let mut named = HashMap::new();
+        named.insert(
+            "panic_string_exec".to_string(),
+            Box::new(PanicStringExec) as Box<dyn ActionExecutor>,
+        );
+        let registry = crate::traits::action_executor::ActionRegistry::new(named, None);
+
+        let (persistence, run_id) = make_persistence_with_run();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone(), registry);
+
+        let node = ParallelNode {
+            fail_fast: false,
+            min_success: None,
+            calls: vec![AgentRef::Name("panic_string_exec".to_string())],
+            output: None,
+            call_outputs: HashMap::new(),
+            with: vec![],
+            call_with: HashMap::new(),
+            call_if: HashMap::new(),
+        };
+
+        execute_parallel(&mut state, &node, 0).unwrap();
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        assert_eq!(steps.len(), 1);
+        let error_msg = steps[0].step_error.as_deref().unwrap_or("");
+        assert!(
+            error_msg.contains("panic_string_exec"),
+            "step_error should name the executor; got: {error_msg:?}"
+        );
+        assert!(
+            error_msg.contains("string payload panic"),
+            "step_error should include the String panic payload; got: {error_msg:?}"
+        );
+    }
+
+    /// Verifies that a panicking executor with an unknown payload type (neither `&str`
+    /// nor `String`) falls back to a generic panic message.
+    #[test]
+    fn parallel_panicking_executor_unknown_payload_fallback() {
+        struct PanicUnknownExec;
+        impl ActionExecutor for PanicUnknownExec {
+            fn name(&self) -> &str {
+                "panic_unknown_exec"
+            }
+            fn execute(
+                &self,
+                _ectx: &crate::traits::action_executor::ExecutionContext,
+                _params: &ActionParams,
+            ) -> Result<ActionOutput, EngineError> {
+                std::panic::panic_any(42i32)
+            }
+        }
+
+        let mut named = HashMap::new();
+        named.insert(
+            "panic_unknown_exec".to_string(),
+            Box::new(PanicUnknownExec) as Box<dyn ActionExecutor>,
+        );
+        let registry = crate::traits::action_executor::ActionRegistry::new(named, None);
+
+        let (persistence, run_id) = make_persistence_with_run();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone(), registry);
+
+        let node = ParallelNode {
+            fail_fast: false,
+            min_success: None,
+            calls: vec![AgentRef::Name("panic_unknown_exec".to_string())],
+            output: None,
+            call_outputs: HashMap::new(),
+            with: vec![],
+            call_with: HashMap::new(),
+            call_if: HashMap::new(),
+        };
+
+        execute_parallel(&mut state, &node, 0).unwrap();
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        assert_eq!(steps.len(), 1);
+        let error_msg = steps[0].step_error.as_deref().unwrap_or("");
+        assert!(
+            error_msg.contains("panic_unknown_exec"),
+            "step_error should name the executor; got: {error_msg:?}"
+        );
+        // Unknown payload should produce the fallback message without a payload description.
+        assert!(
+            !error_msg.contains("42"),
+            "step_error should NOT contain the unknown payload value; got: {error_msg:?}"
+        );
     }
 
     /// Verifies that fail_fast marks the workflow as not-all-succeeded after the first failure.

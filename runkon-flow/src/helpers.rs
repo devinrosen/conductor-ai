@@ -71,9 +71,12 @@ pub fn parse_conductor_output(text: &str) -> Option<ConductorOutput> {
 pub fn strip_trailing_commas(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
+    // Reuse a single buffer across all commas to avoid repeated small heap
+    // allocations (each comma would otherwise allocate a fresh String).
+    let mut ws_buf = String::with_capacity(16);
     while let Some(c) = chars.next() {
         if c == ',' {
-            let mut ws_buf = String::new();
+            ws_buf.clear();
             while chars.peek().is_some_and(|p| p.is_whitespace()) {
                 ws_buf.push(chars.next().unwrap());
             }
@@ -474,6 +477,37 @@ Real output:
             "<<<END_CONDUCTOR_OUTPUT>>>\n"
         );
         assert!(parse_conductor_output(text).is_none());
+    }
+
+    #[test]
+    fn markers_field_with_wrong_type_returns_none() {
+        // Direct deserialization is stricter than the old manual extraction:
+        // a "markers" field that is a string instead of an array must fail.
+        let text = concat!(
+            "<<<CONDUCTOR_OUTPUT>>>\n",
+            r#"{"markers":"not-an-array","context":"ok"}"#,
+            "\n",
+            "<<<END_CONDUCTOR_OUTPUT>>>\n"
+        );
+        assert!(
+            parse_conductor_output(text).is_none(),
+            "markers field with non-array type should cause parse failure"
+        );
+    }
+
+    #[test]
+    fn context_field_with_wrong_type_returns_none() {
+        // A "context" field that is a number instead of a string must fail.
+        let text = concat!(
+            "<<<CONDUCTOR_OUTPUT>>>\n",
+            r#"{"markers":["m1"],"context":42}"#,
+            "\n",
+            "<<<END_CONDUCTOR_OUTPUT>>>\n"
+        );
+        assert!(
+            parse_conductor_output(text).is_none(),
+            "context field with non-string type should cause parse failure"
+        );
     }
 }
 
