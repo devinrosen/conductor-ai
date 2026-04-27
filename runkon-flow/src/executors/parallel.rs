@@ -7,7 +7,7 @@ use crate::engine_error::{EngineError, Result};
 use crate::status::WorkflowStepStatus;
 use crate::traits::action_executor::{ActionOutput, ActionParams, ExecutionContext};
 use crate::traits::persistence::{NewStep, StepUpdate};
-use crate::types::{ContextEntry, StepResult};
+use crate::types::{StepResult, StepSuccess};
 
 use super::p_err;
 
@@ -287,14 +287,23 @@ pub fn execute_parallel(
                 merged_markers.extend(output.markers.iter().cloned());
 
                 // Push parallel agent context
-                state.contexts.push(ContextEntry {
-                    step: pr.agent_name.clone(),
-                    iteration,
-                    context: context.clone(),
+                state.contexts.push(StepSuccess {
+                    step_name: pr.agent_name.clone(),
+                    result_text: output.result_text.clone(),
+                    cost_usd: output.cost_usd,
+                    num_turns: output.num_turns,
+                    duration_ms: output.duration_ms,
+                    input_tokens: output.input_tokens,
+                    output_tokens: output.output_tokens,
+                    cache_read_input_tokens: output.cache_read_input_tokens,
+                    cache_creation_input_tokens: output.cache_creation_input_tokens,
                     markers: output.markers.clone(),
+                    context: context.clone(),
+                    child_run_id: output.child_run_id.clone(),
                     structured_output: output.structured_output.clone(),
                     output_file: None,
-                });
+                    iteration,
+                }.into());
 
                 state.accumulate_metrics(
                     output.cost_usd,

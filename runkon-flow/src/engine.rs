@@ -531,24 +531,8 @@ pub fn record_step_success(
         tracing::warn!("Failed to flush mid-run metrics: {e}");
     }
 
-    // Build StepResult and ContextEntry directly to avoid double-cloning
-    // the potentially-large context/structured_output/output_file fields.
-    state.step_results.insert(
-        step_key,
-        StepResult {
-            step_name: success.step_name.clone(),
-            status: WorkflowStepStatus::Completed,
-            result_text: success.result_text.clone(),
-            cost_usd: success.cost_usd,
-            num_turns: success.num_turns,
-            duration_ms: success.duration_ms,
-            markers: success.markers.clone(),
-            context: success.context.clone(),
-            child_run_id: success.child_run_id.clone(),
-            structured_output: success.structured_output.clone(),
-            output_file: success.output_file.clone(),
-        },
-    );
+    let step_result = StepResult::completed(&success);
+    state.step_results.insert(step_key, step_result);
 
     state.contexts.push(success.into());
 }
