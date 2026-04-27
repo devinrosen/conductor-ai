@@ -68,9 +68,14 @@ impl StepUpdate {
 
     /// Convenience constructor for a failed step.
     pub fn failed(err_msg: String, attempt: u32) -> Self {
+        Self::failed_with_child(err_msg, attempt, None)
+    }
+
+    /// Convenience constructor for a failed step with an optional child run ID.
+    pub fn failed_with_child(err_msg: String, attempt: u32, child_run_id: Option<String>) -> Self {
         Self {
             status: WorkflowStepStatus::Failed,
-            child_run_id: None,
+            child_run_id,
             result_text: Some(err_msg.clone()),
             context_out: None,
             markers_out: None,

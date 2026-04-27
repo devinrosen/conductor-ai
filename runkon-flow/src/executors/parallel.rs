@@ -220,11 +220,15 @@ pub fn execute_parallel(
                         &dispatch_input.params,
                     )
                 }))
-                .unwrap_or_else(|_| {
-                    Err(EngineError::Workflow(format!(
-                        "executor '{}' panicked",
-                        dispatch_input.params.name
-                    )))
+                .unwrap_or_else(|payload| {
+                    let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                        format!("executor '{}' panicked: {s}", dispatch_input.params.name)
+                    } else if let Some(s) = payload.downcast_ref::<String>() {
+                        format!("executor '{}' panicked: {s}", dispatch_input.params.name)
+                    } else {
+                        format!("executor '{}' panicked", dispatch_input.params.name)
+                    };
+                    Err(EngineError::Workflow(msg))
                 })
             };
             let _ = tx.send((dispatch_input.step_id, dispatch_input.agent_name, result));

@@ -19,13 +19,31 @@ impl<'a> WorkflowManager<'a> {
         Ok(())
     }
 
+    /// Columns that may be updated via [`set_step_column`].
+    const SETTABLE_COLUMNS: &'static [&'static str] = &[
+        "child_run_id",
+        "subprocess_pid",
+        "output_file",
+        "parallel_group_id",
+        "gate_options",
+        "status",
+    ];
+
     /// Update a single column on a workflow step.
+    ///
+    /// The `column` parameter is validated against [`SETTABLE_COLUMNS`] before
+    /// interpolation to prevent accidental SQL injection.
     fn set_step_column(
         &self,
         step_id: &str,
         column: &str,
         value: impl rusqlite::ToSql,
     ) -> Result<()> {
+        if !Self::SETTABLE_COLUMNS.contains(&column) {
+            return Err(ConductorError::Config(format!(
+                "invalid step column '{column}'"
+            )));
+        }
         let sql = format!("UPDATE workflow_run_steps SET {column} = :value WHERE id = :id");
         self.execute_step_sql(&sql, named_params![":value": value, ":id": step_id])
     }

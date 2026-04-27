@@ -981,8 +981,14 @@ impl<'a> WorkflowManager<'a> {
             let run_id: String = row.get("workflow_run_id")?;
             // Take only the first (lowest-position) row per run_id.
             map.entry(run_id).or_insert_with(|| {
-                let step_name: String = row.get("step_name").unwrap_or_default();
-                let iteration: i64 = row.get("iteration").unwrap_or(0);
+                let step_name: String = row.get("step_name").unwrap_or_else(|e| {
+                    tracing::warn!("row.get('step_name') failed: {e}");
+                    String::new()
+                });
+                let iteration: i64 = row.get("iteration").unwrap_or_else(|e| {
+                    tracing::warn!("row.get('iteration') failed: {e}");
+                    0
+                });
                 (step_name, iteration)
             });
         }

@@ -152,8 +152,8 @@ pub(super) fn build_action_params(
 }
 
 /// Persist a completed step and record its success result in one call.
-/// Centralises the `persist_completed_step` + `record_step_success` pair that is
-/// duplicated in `call.rs`, `parallel.rs`, and `call_workflow.rs`.
+/// Centralises the `persist_completed_step` + `record_step_success` pair used
+/// by `call.rs` after a successful agent dispatch.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_dispatch_success(
     state: &mut crate::engine::ExecutionState,

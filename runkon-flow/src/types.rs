@@ -285,3 +285,56 @@ pub struct FanOutItemRow {
     pub dispatched_at: Option<String>,
     pub completed_at: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::StepResult;
+    use crate::status::WorkflowStepStatus;
+
+    #[test]
+    fn step_result_failed_sets_status_and_text() {
+        let r = StepResult::failed("plan", "out of tokens".to_string());
+        assert_eq!(r.step_name, "plan");
+        assert_eq!(r.status, WorkflowStepStatus::Failed);
+        assert_eq!(r.result_text, Some("out of tokens".to_string()));
+        assert!(r.markers.is_empty());
+        assert_eq!(r.context, "");
+    }
+
+    #[test]
+    fn step_result_skipped_sets_status_and_defaults() {
+        let r = StepResult::skipped("lint");
+        assert_eq!(r.step_name, "lint");
+        assert_eq!(r.status, WorkflowStepStatus::Skipped);
+        assert!(r.result_text.is_none());
+        assert!(r.markers.is_empty());
+        assert_eq!(r.context, "");
+    }
+
+    #[test]
+    fn step_result_completed_sets_all_fields() {
+        let r = StepResult::completed(
+            "review",
+            Some("looks good".to_string()),
+            Some(0.05),
+            Some(3),
+            Some(1200),
+            vec!["approved".to_string()],
+            "ctx".to_string(),
+            Some("child-1".to_string()),
+            Some(r#"{"ok":true}"#.to_string()),
+            Some("/tmp/out".to_string()),
+        );
+        assert_eq!(r.step_name, "review");
+        assert_eq!(r.status, WorkflowStepStatus::Completed);
+        assert_eq!(r.result_text, Some("looks good".to_string()));
+        assert_eq!(r.cost_usd, Some(0.05));
+        assert_eq!(r.num_turns, Some(3));
+        assert_eq!(r.duration_ms, Some(1200));
+        assert_eq!(r.markers, vec!["approved"]);
+        assert_eq!(r.context, "ctx");
+        assert_eq!(r.child_run_id, Some("child-1".to_string()));
+        assert_eq!(r.structured_output, Some(r#"{"ok":true}"#.to_string()));
+        assert_eq!(r.output_file, Some("/tmp/out".to_string()));
+    }
+}

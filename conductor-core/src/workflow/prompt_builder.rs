@@ -90,9 +90,9 @@ fn build_prompt_core(
             "The following template placeholders are available and have been substituted in this prompt:\n\n",
         );
         for (key, value) in vars {
-            prompt.push_str("- `");
+            prompt.push_str("- `{{");
             prompt.push_str(key);
-            prompt.push_str("` = `");
+            prompt.push_str("}}` = `");
             prompt.push_str(value);
             prompt.push_str("`\n");
         }
