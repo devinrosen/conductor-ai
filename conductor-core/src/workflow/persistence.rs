@@ -341,4 +341,37 @@ mod tests {
             other => panic!("expected Rejected, got {other:?}"),
         }
     }
+
+    #[test]
+    fn step_update_completed_sets_correct_fields() {
+        let update = StepUpdate::completed(
+            Some("child-123".into()),
+            Some("result".into()),
+            Some("ctx".into()),
+            Some("markers".into()),
+            3,
+            Some("{\"key\": \"val\"}".into()),
+        );
+        assert_eq!(update.status, WorkflowStepStatus::Completed);
+        assert_eq!(update.child_run_id, Some("child-123".into()));
+        assert_eq!(update.result_text, Some("result".into()));
+        assert_eq!(update.context_out, Some("ctx".into()));
+        assert_eq!(update.markers_out, Some("markers".into()));
+        assert_eq!(update.retry_count, Some(3));
+        assert_eq!(update.structured_output, Some("{\"key\": \"val\"}".into()));
+        assert!(update.step_error.is_none());
+    }
+
+    #[test]
+    fn step_update_failed_sets_correct_fields() {
+        let update = StepUpdate::failed("oops", 2);
+        assert_eq!(update.status, WorkflowStepStatus::Failed);
+        assert_eq!(update.result_text, Some("oops".into()));
+        assert_eq!(update.step_error, Some("oops".into()));
+        assert!(update.child_run_id.is_none());
+        assert!(update.context_out.is_none());
+        assert!(update.markers_out.is_none());
+        assert!(update.structured_output.is_none());
+        assert_eq!(update.retry_count, Some(2));
+    }
 }

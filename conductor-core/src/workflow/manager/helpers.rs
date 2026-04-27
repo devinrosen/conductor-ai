@@ -9,12 +9,12 @@ use crate::workflow::types::{
 /// rather than silently coerced to the default value.
 pub(super) fn json_or_warn<T: serde::de::DeserializeOwned + Default>(
     json: Option<&str>,
-    context: &str,
+    context: impl FnOnce() -> String,
 ) -> T {
     match json {
         None => T::default(),
         Some(s) => serde_json::from_str(s).unwrap_or_else(|e| {
-            tracing::warn!("{context}: {e}");
+            tracing::warn!("{}: {e}", context());
             T::default()
         }),
     }
@@ -50,10 +50,10 @@ pub(in crate::workflow) fn row_to_workflow_run(
     let id: String = row.get("id")?;
     let dry_run_int: i64 = row.get("dry_run")?;
     let inputs_json: Option<String> = row.get("inputs")?;
-    let inputs: std::collections::HashMap<String, String> = json_or_warn(
-        inputs_json.as_deref(),
-        &format!("Malformed inputs JSON in workflow run {id}"),
-    );
+    let inputs: std::collections::HashMap<String, String> =
+        json_or_warn(inputs_json.as_deref(), || {
+            format!("Malformed inputs JSON in workflow run {id}")
+        });
     let ticket_id: Option<String> = row.get("ticket_id")?;
     let repo_id: Option<String> = row.get("repo_id")?;
     let parent_workflow_run_id: Option<String> = row.get("parent_workflow_run_id")?;
@@ -61,10 +61,9 @@ pub(in crate::workflow) fn row_to_workflow_run(
     let default_bot_name: Option<String> = row.get("default_bot_name")?;
     let iteration: i64 = row.get("iteration")?;
     let blocked_on_json: Option<String> = row.get("blocked_on")?;
-    let blocked_on: Option<BlockedOn> = json_or_warn(
-        blocked_on_json.as_deref(),
-        &format!("Malformed blocked_on JSON in workflow run {id}"),
-    );
+    let blocked_on: Option<BlockedOn> = json_or_warn(blocked_on_json.as_deref(), || {
+        format!("Malformed blocked_on JSON in workflow run {id}")
+    });
     let total_input_tokens: Option<i64> = row.get("total_input_tokens")?;
     let total_output_tokens: Option<i64> = row.get("total_output_tokens")?;
     let total_cache_read_input_tokens: Option<i64> = row.get("total_cache_read_input_tokens")?;

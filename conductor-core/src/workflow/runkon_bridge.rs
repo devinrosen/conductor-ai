@@ -1120,23 +1120,7 @@ mod tests {
         };
 
         // core→rk→core round trip
-        let rk: runkon_flow::output_schema::OutputSchema = core_schema
-            .fields
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>()
-            .into_iter()
-            .fold(
-                runkon_flow::output_schema::OutputSchema {
-                    name: core_schema.name.clone(),
-                    fields: vec![],
-                    markers: None,
-                },
-                |mut acc, f| {
-                    acc.fields.push(f.into());
-                    acc
-                },
-            );
+        let rk: runkon_flow::output_schema::OutputSchema = core_schema.clone().into();
         let roundtripped: crate::schema_config::OutputSchema = rk.into();
         assert_eq!(roundtripped.name, core_schema.name);
         assert_eq!(roundtripped.fields.len(), core_schema.fields.len());
