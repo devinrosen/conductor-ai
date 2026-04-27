@@ -177,16 +177,16 @@ pub fn execute_parallel(
             state.worktree_ctx.extra_plugin_dirs.clone(),
         );
 
-        let params = ActionParams {
-            name: agent_label.to_string(),
+        let params = super::build_action_params(
+            agent_label,
             inputs,
-            retries_remaining: 0,
-            retry_error: None,
-            snippets: effective_with,
-            dry_run: state.exec_config.dry_run,
-            gate_feedback: state.last_gate_feedback.clone(),
-            schema: call_schema,
-        };
+            effective_with,
+            state.exec_config.dry_run,
+            state.last_gate_feedback.clone(),
+            call_schema,
+            0,
+            None,
+        );
 
         dispatch_queue.push(DispatchInput {
             step_id,

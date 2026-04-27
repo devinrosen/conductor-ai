@@ -4,15 +4,14 @@ use std::sync::Arc;
 use crate::cancellation_reason::CancellationReason;
 use crate::dsl::CallNode;
 use crate::engine::{
-    emit_event, handle_on_fail, record_step_success, resolve_schema, ExecutionState,
+    emit_event, handle_on_fail, resolve_schema, ExecutionState,
 };
 use crate::engine_error::{EngineError, Result};
 use crate::events::EngineEvent;
 use crate::status::WorkflowStepStatus;
-use crate::traits::action_executor::ActionParams;
 use crate::traits::persistence::StepUpdate;
 
-use super::p_err;
+use super::{p_err, build_action_params, record_dispatch_success};
 
 pub fn execute_call(state: &mut ExecutionState, node: &CallNode, iteration: u32) -> Result<()> {
     // Call-level output overrides block-level; if neither is set, use None.
@@ -100,20 +99,20 @@ fn execute_call_inner(
         let ectx =
             super::build_execution_context(state, &step_id, effective_bot_name, merged_plugin_dirs);
 
-        let params = ActionParams {
-            name: agent_label.to_string(),
+        let params = build_action_params(
+            agent_label,
             inputs,
-            retries_remaining: max_attempts - attempt - 1,
-            retry_error: if attempt == 0 {
+            with_refs.to_vec(),
+            state.exec_config.dry_run,
+            state.last_gate_feedback.clone(),
+            schema.clone(),
+            max_attempts - attempt - 1,
+            if attempt == 0 {
                 None
             } else {
                 Some(last_error.clone())
             },
-            snippets: with_refs.to_vec(),
-            dry_run: state.exec_config.dry_run,
-            gate_feedback: state.last_gate_feedback.clone(),
-            schema: schema.clone(),
-        };
+        );
 
         // Per-step timeout: spawn a timer thread that cancels a child token after
         // the configured duration. Checked after dispatch to override the result.
@@ -205,12 +204,6 @@ fn execute_call_inner(
 
         match dispatch_result {
             Ok(output) => {
-                let markers_json = crate::helpers::serialize_or_empty_array(
-                    &output.markers,
-                    &format!("call '{agent_label}'"),
-                );
-                let context = output.context.clone().unwrap_or_default();
-
                 tracing::info!(
                     "Step '{}' completed: cost=${:.4}, {} turns, markers={:?}",
                     agent_label,
@@ -218,19 +211,16 @@ fn execute_call_inner(
                     output.num_turns.unwrap_or(0),
                     output.markers,
                 );
-
-                // Update step to completed
-                super::persist_completed_step(
+                record_dispatch_success(
                     state,
                     &step_id,
-                    output.child_run_id.clone(),
-                    output.result_text.clone(),
-                    Some(context.clone()),
-                    Some(markers_json),
+                    &step_key,
+                    agent_label,
+                    &output,
+                    iteration,
                     attempt,
-                    output.structured_output.clone(),
+                    None,
                 )?;
-
                 emit_event(
                     state,
                     EngineEvent::StepCompleted {
@@ -238,27 +228,6 @@ fn execute_call_inner(
                         succeeded: true,
                     },
                 );
-
-                record_step_success(
-                    state,
-                    step_key.clone(),
-                    agent_label,
-                    output.result_text,
-                    output.cost_usd,
-                    output.num_turns,
-                    output.duration_ms,
-                    output.input_tokens,
-                    output.output_tokens,
-                    output.cache_read_input_tokens,
-                    output.cache_creation_input_tokens,
-                    output.markers,
-                    context,
-                    output.child_run_id,
-                    iteration,
-                    output.structured_output,
-                    None,
-                );
-
                 return Ok(());
             }
             Err(EngineError::Cancelled(reason)) => {
@@ -288,7 +257,6 @@ fn execute_call_inner(
                     attempt + 1,
                     max_attempts,
                 );
-                // Mark step failed
                 state
                     .persistence
                     .update_step(&step_id, StepUpdate::failed(err_msg.clone(), attempt))

@@ -19,6 +19,17 @@ impl<'a> WorkflowManager<'a> {
         Ok(())
     }
 
+    /// Update a single column on a workflow step.
+    fn set_step_column(
+        &self,
+        step_id: &str,
+        column: &str,
+        value: impl rusqlite::ToSql,
+    ) -> Result<()> {
+        let sql = format!("UPDATE workflow_run_steps SET {column} = :value WHERE id = :id");
+        self.execute_step_sql(&sql, named_params![":value": value, ":id": step_id])
+    }
+
     /// Insert a workflow step record.
     pub fn insert_step(
         &self,
@@ -215,10 +226,7 @@ impl<'a> WorkflowManager<'a> {
 
     /// Write the child run ID back to a parent step immediately after the child run is created.
     pub fn update_step_child_run_id(&self, step_id: &str, child_run_id: &str) -> Result<()> {
-        self.execute_step_sql(
-            "UPDATE workflow_run_steps SET child_run_id = :child_run_id WHERE id = :id",
-            named_params![":child_run_id": child_run_id, ":id": step_id],
-        )
+        self.set_step_column(step_id, "child_run_id", child_run_id)
     }
 
     /// Persist or clear the subprocess PID for a script step.
@@ -227,18 +235,12 @@ impl<'a> WorkflowManager<'a> {
     /// Pass `None` after the step reaches any terminal state to clear the PID
     /// and prevent OS PID reuse from tripping the orphan reaper.
     pub fn set_step_subprocess_pid(&self, step_id: &str, pid: Option<u32>) -> Result<()> {
-        self.execute_step_sql(
-            "UPDATE workflow_run_steps SET subprocess_pid = :pid WHERE id = :id",
-            named_params![":pid": pid.map(|p| p as i64), ":id": step_id],
-        )
+        self.set_step_column(step_id, "subprocess_pid", pid.map(|p| p as i64))
     }
 
     /// Persist the stdout capture file path for a script step.
     pub fn set_step_output_file(&self, step_id: &str, output_file: &str) -> Result<()> {
-        self.execute_step_sql(
-            "UPDATE workflow_run_steps SET output_file = :output_file WHERE id = :id",
-            named_params![":output_file": output_file, ":id": step_id],
-        )
+        self.set_step_column(step_id, "output_file", output_file)
     }
 
     /// Update gate-specific columns on a step.
@@ -258,18 +260,12 @@ impl<'a> WorkflowManager<'a> {
 
     /// Set parallel_group_id on a step.
     pub fn set_step_parallel_group(&self, step_id: &str, group_id: &str) -> Result<()> {
-        self.execute_step_sql(
-            "UPDATE workflow_run_steps SET parallel_group_id = :group_id WHERE id = :id",
-            named_params![":group_id": group_id, ":id": step_id],
-        )
+        self.set_step_column(step_id, "parallel_group_id", group_id)
     }
 
     /// Store the resolved gate options JSON on a step (called at gate start).
     pub fn set_step_gate_options(&self, step_id: &str, options_json: &str) -> Result<()> {
-        self.execute_step_sql(
-            "UPDATE workflow_run_steps SET gate_options = :options_json WHERE id = :id",
-            named_params![":options_json": options_json, ":id": step_id],
-        )
+        self.set_step_column(step_id, "gate_options", options_json)
     }
 
     /// Approve a gate: set gate_approved_at, gate_approved_by, optional feedback, and optional selections.

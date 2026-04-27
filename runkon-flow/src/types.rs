@@ -208,6 +208,56 @@ pub struct StepResult {
     pub output_file: Option<String>,
 }
 
+impl StepResult {
+    /// Create a failed StepResult with the given error text.
+    pub fn failed(step_name: &str, result_text: String) -> Self {
+        Self {
+            step_name: step_name.to_string(),
+            status: WorkflowStepStatus::Failed,
+            result_text: Some(result_text),
+            ..Self::default()
+        }
+    }
+
+    /// Create a skipped StepResult.
+    pub fn skipped(step_name: &str) -> Self {
+        Self {
+            step_name: step_name.to_string(),
+            status: WorkflowStepStatus::Skipped,
+            ..Self::default()
+        }
+    }
+
+    /// Create a completed StepResult with all output fields.
+    #[allow(clippy::too_many_arguments)]
+    pub fn completed(
+        step_name: &str,
+        result_text: Option<String>,
+        cost_usd: Option<f64>,
+        num_turns: Option<i64>,
+        duration_ms: Option<i64>,
+        markers: Vec<String>,
+        context: String,
+        child_run_id: Option<String>,
+        structured_output: Option<String>,
+        output_file: Option<String>,
+    ) -> Self {
+        Self {
+            step_name: step_name.to_string(),
+            status: WorkflowStepStatus::Completed,
+            result_text,
+            cost_usd,
+            num_turns,
+            duration_ms,
+            markers,
+            context,
+            child_run_id,
+            structured_output,
+            output_file,
+        }
+    }
+}
+
 /// An entry in the accumulated context history.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextEntry {

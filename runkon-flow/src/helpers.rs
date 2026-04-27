@@ -56,7 +56,10 @@ pub fn parse_conductor_output(text: &str) -> Option<ConductorOutput> {
 
     serde_json::from_str::<ConductorOutput>(&cleaned)
         .map_err(|e| {
-            tracing::warn!("parse_conductor_output: invalid JSON: {e}");
+            let snippet: String = cleaned.chars().take(200).collect();
+            tracing::warn!(
+                "parse_conductor_output: invalid JSON in CONDUCTOR_OUTPUT block: {e}\n  snippet: {snippet}"
+            );
         })
         .ok()
 }
@@ -261,17 +264,14 @@ pub fn find_max_completed_while_iteration(state: &ExecutionState, node: &WhileNo
         }
     }
 
-    // Find the highest iteration where all body nodes are completed
+    // Find the highest iteration where all body nodes are completed.
+    // Since completed_by_iter only contains body keys, a simple count check
+    // avoids the O(body_keys) all() scan on every iteration.
+    let body_len = body_keys.len();
     let mut iter = 0u32;
-    let empty: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    loop {
-        let completed = completed_by_iter.get(&iter).unwrap_or(&empty);
-        if !body_keys.iter().all(|k| completed.contains(k.as_str())) {
-            break;
-        }
+    while completed_by_iter.get(&iter).map(|s| s.len()).unwrap_or(0) == body_len {
         iter += 1;
     }
-    // iter is now the first incomplete iteration — start there
     iter
 }
 

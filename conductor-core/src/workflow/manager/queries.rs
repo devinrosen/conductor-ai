@@ -22,6 +22,9 @@ static STEP_SELECT_EXPANDED: std::sync::LazyLock<String> = std::sync::LazyLock::
     WorkflowManager::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
 });
 use crate::workflow::status::WorkflowRunStatus;
+
+/// SQL fragment that filters to runs whose worktree is active or which have no worktree.
+const ACTIVE_WORKTREE_GUARD: &str = "workflow_runs.worktree_id IS NULL OR worktrees.status = 'active'";
 use crate::workflow::types::{
     extract_workflow_title, ActiveWorkflowCounts, GateAnalyticsRow, PendingGateAnalyticsRow,
     PendingGateRow, StepFailureHeatmapRow, StepRetryAnalyticsRow, StepTokenHeatmapRow,
@@ -412,7 +415,7 @@ impl<'a> WorkflowManager<'a> {
                      FROM workflow_runs \
                      LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
                      WHERE workflow_runs.repo_id = :repo_id \
-                       AND (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
+                       AND ({ACTIVE_WORKTREE_GUARD}) \
                        AND workflow_runs.status = :status \
                      ORDER BY workflow_runs.started_at DESC LIMIT {limit} OFFSET {offset}"
                 ),
@@ -455,11 +458,13 @@ impl<'a> WorkflowManager<'a> {
     pub fn list_all_workflow_runs(&self, limit: usize) -> Result<Vec<WorkflowRun>> {
         query_collect(
             self.conn,
-            "SELECT workflow_runs.* \
-             FROM workflow_runs \
-             LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-             WHERE workflow_runs.worktree_id IS NULL OR worktrees.status = 'active' \
-             ORDER BY workflow_runs.started_at DESC LIMIT :limit",
+            &format!(
+                "SELECT workflow_runs.* \
+                 FROM workflow_runs \
+                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                 WHERE {ACTIVE_WORKTREE_GUARD} \
+                 ORDER BY workflow_runs.started_at DESC LIMIT :limit"
+            ),
             named_params! { ":limit": limit as i64 },
             row_to_workflow_run,
         )
@@ -490,7 +495,7 @@ impl<'a> WorkflowManager<'a> {
             "SELECT workflow_runs.* \
              FROM workflow_runs \
              LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-             WHERE (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
+             WHERE ({ACTIVE_WORKTREE_GUARD}) \
                AND workflow_runs.status IN ({placeholders}) \
              ORDER BY workflow_runs.started_at DESC \
              LIMIT 500"
@@ -517,23 +522,27 @@ impl<'a> WorkflowManager<'a> {
             let status_str = s.to_string();
             query_collect(
                 self.conn,
-                "SELECT workflow_runs.* \
-                 FROM workflow_runs \
-                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                 WHERE (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
-                   AND workflow_runs.status = :status \
-                 ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset",
+                &format!(
+                    "SELECT workflow_runs.* \
+                     FROM workflow_runs \
+                     LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                     WHERE ({ACTIVE_WORKTREE_GUARD}) \
+                       AND workflow_runs.status = :status \
+                     ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
+                ),
                 named_params! { ":status": status_str, ":limit": limit as i64, ":offset": offset as i64 },
                 row_to_workflow_run,
             )
         } else {
             query_collect(
                 self.conn,
-                "SELECT workflow_runs.* \
-                 FROM workflow_runs \
-                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                 WHERE workflow_runs.worktree_id IS NULL OR worktrees.status = 'active' \
-                 ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset",
+                &format!(
+                    "SELECT workflow_runs.* \
+                     FROM workflow_runs \
+                     LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                     WHERE {ACTIVE_WORKTREE_GUARD} \
+                     ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
+                ),
                 named_params! { ":limit": limit as i64, ":offset": offset as i64 },
                 row_to_workflow_run,
             )
@@ -552,12 +561,14 @@ impl<'a> WorkflowManager<'a> {
     ) -> Result<Vec<WorkflowRun>> {
         query_collect(
             self.conn,
-            "SELECT workflow_runs.* \
-             FROM workflow_runs \
-             LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-             WHERE workflow_runs.repo_id = :repo_id \
-               AND (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
-             ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset",
+            &format!(
+                "SELECT workflow_runs.* \
+                 FROM workflow_runs \
+                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                 WHERE workflow_runs.repo_id = :repo_id \
+                   AND ({ACTIVE_WORKTREE_GUARD}) \
+                 ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
+            ),
             named_params! { ":repo_id": repo_id, ":limit": limit as i64, ":offset": offset as i64 },
             row_to_workflow_run,
         )
@@ -718,7 +729,7 @@ impl<'a> WorkflowManager<'a> {
              FROM workflow_runs \
              LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
              WHERE (workflow_runs.repo_id = ? OR worktrees.repo_id = ?) \
-               AND (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
+               AND ({ACTIVE_WORKTREE_GUARD}) \
                AND workflow_runs.status IN ({placeholders}) \
              ORDER BY workflow_runs.started_at DESC \
              LIMIT 500"

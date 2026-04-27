@@ -485,12 +485,7 @@ pub fn record_step_failure(
     started: bool,
 ) -> Result<()> {
     state.all_succeeded = false;
-    let step_result = StepResult {
-        step_name: step_label.to_string(),
-        status: WorkflowStepStatus::Failed,
-        result_text: Some(last_error),
-        ..StepResult::default()
-    };
+    let step_result = StepResult::failed(step_label, last_error);
     state.step_results.insert(step_key, step_result);
 
     if state.exec_config.fail_fast {
@@ -511,11 +506,7 @@ pub fn record_step_failure(
 /// Record a skipped step (on_fail = continue): insert StepResult with Skipped status.
 pub fn record_step_skipped(state: &mut ExecutionState, step_key: String, step_label: &str) {
     tracing::info!("Step '{}' skipped via on_fail = continue", step_label);
-    let step_result = StepResult {
-        step_name: step_label.to_string(),
-        status: WorkflowStepStatus::Skipped,
-        ..StepResult::default()
-    };
+    let step_result = StepResult::skipped(step_label);
     state.step_results.insert(step_key, step_result);
 }
 
@@ -558,19 +549,18 @@ pub fn record_step_success(
     let markers_for_ctx = markers.clone();
     let structured_output_for_ctx = structured_output.clone();
     let output_file_for_ctx = output_file.clone();
-    let step_result = StepResult {
-        step_name: step_name.to_string(),
-        status: WorkflowStepStatus::Completed,
+    let step_result = StepResult::completed(
+        step_name,
         result_text,
         cost_usd,
         num_turns,
         duration_ms,
         markers,
-        context: context.clone(),
+        context.clone(),
         child_run_id,
         structured_output,
         output_file,
-    };
+    );
     state.step_results.insert(step_key, step_result);
 
     push_context_entry(
@@ -778,19 +768,18 @@ pub fn restore_completed_step(
     }
 
     let markers_for_ctx = markers.clone();
-    let step_result = StepResult {
-        step_name: step_key.to_string(),
-        status: WorkflowStepStatus::Completed,
-        result_text: step.result_text.clone(),
-        cost_usd: None,
-        num_turns: None,
-        duration_ms: None,
+    let step_result = StepResult::completed(
+        step_key,
+        step.result_text.clone(),
+        None,
+        None,
+        None,
         markers,
-        context: context.clone(),
-        child_run_id: step.child_run_id.clone(),
-        structured_output: step.structured_output.clone(),
-        output_file: step.output_file.clone(),
-    };
+        context.clone(),
+        step.child_run_id.clone(),
+        step.structured_output.clone(),
+        step.output_file.clone(),
+    );
     state.step_results.insert(step_key.to_string(), step_result);
 
     push_context_entry(
@@ -842,19 +831,18 @@ pub fn fetch_child_completion_data(
         .map(|s| {
             let markers = parse_markers_out(s.markers_out.as_deref(), &s.step_name);
             let context = s.context_out.clone().unwrap_or_default();
-            let result = StepResult {
-                step_name: s.step_name.clone(),
-                status: WorkflowStepStatus::Completed,
-                result_text: s.result_text.clone(),
-                cost_usd: None,
-                num_turns: None,
-                duration_ms: None,
+            let result = StepResult::completed(
+                &s.step_name,
+                s.result_text.clone(),
+                None,
+                None,
+                None,
                 markers,
                 context,
-                child_run_id: s.child_run_id.clone(),
-                structured_output: s.structured_output.clone(),
-                output_file: s.output_file.clone(),
-            };
+                s.child_run_id.clone(),
+                s.structured_output.clone(),
+                s.output_file.clone(),
+            );
             (s.step_name, result)
         })
         .collect();
