@@ -3,15 +3,13 @@ use std::sync::Arc;
 
 use crate::cancellation_reason::CancellationReason;
 use crate::dsl::CallNode;
-use crate::engine::{
-    emit_event, handle_on_fail, resolve_schema, ExecutionState,
-};
+use crate::engine::{emit_event, handle_on_fail, resolve_schema, ExecutionState};
 use crate::engine_error::{EngineError, Result};
 use crate::events::EngineEvent;
 use crate::status::WorkflowStepStatus;
 use crate::traits::persistence::StepUpdate;
 
-use super::{p_err, build_action_params, record_dispatch_success};
+use super::{build_action_params, p_err, record_dispatch_success};
 
 pub fn execute_call(state: &mut ExecutionState, node: &CallNode, iteration: u32) -> Result<()> {
     // Call-level output overrides block-level; if neither is set, use None.

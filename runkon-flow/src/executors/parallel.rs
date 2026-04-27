@@ -241,10 +241,7 @@ pub fn execute_parallel(
                 dispatch_input.agent_step_key,
                 result,
             )) {
-                tracing::warn!(
-                    "parallel: result channel broken (receiver dropped): {}",
-                    e
-                );
+                tracing::warn!("parallel: result channel broken (receiver dropped): {}", e);
             }
         });
     }

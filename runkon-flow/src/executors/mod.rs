@@ -131,6 +131,7 @@ pub(super) fn persist_completed_step(
 }
 
 /// Build [`ActionParams`] from the fields that are identical in `call.rs` and `parallel.rs`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_action_params(
     name: &str,
     inputs: Arc<HashMap<String, String>>,
@@ -156,6 +157,7 @@ pub(super) fn build_action_params(
 /// Persist a completed step and record its success result in one call.
 /// Centralises the `persist_completed_step` + `record_step_success` pair used
 /// by `call.rs` after a successful agent dispatch.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn record_dispatch_success(
     state: &mut crate::engine::ExecutionState,
     step_id: &str,

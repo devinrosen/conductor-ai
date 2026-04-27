@@ -12,9 +12,7 @@ use crate::engine_error::{EngineError, Result};
 use crate::events::EngineEvent;
 use crate::status::WorkflowStepStatus;
 use crate::traits::item_provider::ProviderContext;
-use crate::traits::persistence::{
-    FanOutItemStatus, FanOutItemUpdate, NewStep, StepUpdate,
-};
+use crate::traits::persistence::{FanOutItemStatus, FanOutItemUpdate, NewStep, StepUpdate};
 
 use super::p_err;
 

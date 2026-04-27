@@ -24,7 +24,8 @@ static STEP_SELECT_EXPANDED: std::sync::LazyLock<String> = std::sync::LazyLock::
 use crate::workflow::status::WorkflowRunStatus;
 
 /// SQL fragment that filters to runs whose worktree is active or which have no worktree.
-const ACTIVE_WORKTREE_GUARD: &str = "workflow_runs.worktree_id IS NULL OR worktrees.status = 'active'";
+const ACTIVE_WORKTREE_GUARD: &str =
+    "workflow_runs.worktree_id IS NULL OR worktrees.status = 'active'";
 use crate::workflow::types::{
     extract_workflow_title, ActiveWorkflowCounts, GateAnalyticsRow, PendingGateAnalyticsRow,
     PendingGateRow, StepFailureHeatmapRow, StepRetryAnalyticsRow, StepTokenHeatmapRow,

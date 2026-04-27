@@ -9,8 +9,6 @@ pub(crate) mod api_call_executor;
 mod batch_validate;
 pub mod channel_event_sink;
 pub use channel_event_sink::ChannelEventSink;
-pub(crate) mod cancellation;
-pub(crate) mod cancellation_reason;
 pub(crate) mod claude_agent_executor;
 pub(crate) mod constants;
 pub(crate) mod coordinator;

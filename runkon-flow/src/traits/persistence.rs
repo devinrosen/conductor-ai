@@ -360,7 +360,8 @@ mod tests {
 
     #[test]
     fn step_update_failed_with_child_sets_child_run_id() {
-        let update = StepUpdate::failed_with_child("child err".into(), 1, Some("child-run-42".into()));
+        let update =
+            StepUpdate::failed_with_child("child err".into(), 1, Some("child-run-42".into()));
         assert_eq!(update.status, WorkflowStepStatus::Failed);
         assert_eq!(update.result_text, Some("child err".into()));
         assert_eq!(update.step_error, Some("child err".into()));

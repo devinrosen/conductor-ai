@@ -44,12 +44,11 @@ pub fn execute_call_workflow(
 
     // Helper: persist success and bubble up child step results.
     // Used by both the resume-success path and the fresh-success path.
-    let record_child_success = |
-        state: &mut ExecutionState,
-        step_id: &str,
-        result: &crate::types::WorkflowResult,
-        attempt: u32,
-    | -> Result<()> {
+    let record_child_success = |state: &mut ExecutionState,
+                                step_id: &str,
+                                result: &crate::types::WorkflowResult,
+                                attempt: u32|
+     -> Result<()> {
         let ((markers, context), child_steps) =
             fetch_child_completion_data(state.persistence.as_ref(), &result.workflow_run_id);
 
@@ -157,7 +156,11 @@ pub fn execute_call_workflow(
                         .persistence
                         .update_step(
                             &step_id,
-                            StepUpdate::failed_with_child(msg.clone(), 0, Some(result.workflow_run_id)),
+                            StepUpdate::failed_with_child(
+                                msg.clone(),
+                                0,
+                                Some(result.workflow_run_id),
+                            ),
                         )
                         .map_err(p_err)?;
                     msg
@@ -239,23 +242,22 @@ pub fn execute_call_workflow(
         // and loads it itself. We'll pass inputs as-is.
 
         // Resolve child inputs against an empty inputs map (no decls → just pass through substituted vars)
-        let resolved_inputs =
-            match resolve_child_inputs(&raw_child_inputs, &vars, &[]) {
-                Ok(inputs) => inputs,
-                Err(missing) => {
-                    let msg = format!(
-                        "Sub-workflow '{}' requires input '{}' but it was not provided",
-                        node.workflow, missing,
-                    );
-                    tracing::warn!("{msg}");
-                    state
-                        .persistence
-                        .update_step(&step_id, StepUpdate::failed(msg.clone(), attempt))
-                        .map_err(p_err)?;
-                    last_error = msg;
-                    continue;
-                }
-            };
+        let resolved_inputs = match resolve_child_inputs(&raw_child_inputs, &vars, &[]) {
+            Ok(inputs) => inputs,
+            Err(missing) => {
+                let msg = format!(
+                    "Sub-workflow '{}' requires input '{}' but it was not provided",
+                    node.workflow, missing,
+                );
+                tracing::warn!("{msg}");
+                state
+                    .persistence
+                    .update_step(&step_id, StepUpdate::failed(msg.clone(), attempt))
+                    .map_err(p_err)?;
+                last_error = msg;
+                continue;
+            }
+        };
 
         // Use the child_runner to execute — it resolves the real def by name
         match child_runner.execute_child(
@@ -293,7 +295,11 @@ pub fn execute_call_workflow(
                         .persistence
                         .update_step(
                             &step_id,
-                            StepUpdate::failed_with_child(msg.clone(), attempt, Some(result.workflow_run_id)),
+                            StepUpdate::failed_with_child(
+                                msg.clone(),
+                                attempt,
+                                Some(result.workflow_run_id),
+                            ),
                         )
                         .map_err(p_err)?;
                     last_error = msg;

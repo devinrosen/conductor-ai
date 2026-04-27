@@ -727,7 +727,11 @@ mod tests {
             .unwrap();
 
         let items = p.get_fan_out_items(&step_id, None).unwrap();
-        assert_eq!(items.len(), 2, "different item_type should create distinct items");
+        assert_eq!(
+            items.len(),
+            2,
+            "different item_type should create distinct items"
+        );
 
         // idempotency: re-inserting both should not change count
         p.insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
