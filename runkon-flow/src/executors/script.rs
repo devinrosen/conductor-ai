@@ -182,6 +182,7 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
     const SENSITIVE_ENV_VARS: &[&str] = &[
         "LD_PRELOAD",
         "LD_LIBRARY_PATH",
+        "DYLD_LIBRARY_PATH",
         "PATH",
         "DYLD_INSERT_LIBRARIES",
         "PYTHONPATH",
@@ -199,10 +200,11 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
         }
         if SENSITIVE_ENV_VARS.contains(&k.as_str()) {
             tracing::warn!(
-                "script '{}': env block overrides security-sensitive variable {:?}",
+                "script '{}': env block overrides security-sensitive variable {:?} — skipping",
                 node.name,
                 k
             );
+            continue;
         }
         let resolved = crate::prompt_builder::substitute_variables(v, &vars);
         env_vars.insert(k.clone(), resolved);

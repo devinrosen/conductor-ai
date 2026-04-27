@@ -255,28 +255,21 @@ impl StepResult {
     ///
     /// Convenience wrapper for the common case where cost/turns/duration are
     /// not available (e.g. restored from a prior run or bubble-up from a child
-    /// workflow).
-    pub fn completed_without_metrics(
-        step_name: &str,
-        result_text: Option<String>,
-        markers: Vec<String>,
-        context: String,
-        child_run_id: Option<String>,
-        structured_output: Option<String>,
-        output_file: Option<String>,
-    ) -> Self {
-        Self::completed(
-            step_name,
-            &StepSuccess {
-                result_text,
-                markers,
-                context,
-                child_run_id,
-                structured_output,
-                output_file,
-                ..StepSuccess::default()
-            },
-        )
+    /// workflow). Metric fields on `success` are ignored.
+    pub fn completed_without_metrics(step_name: &str, success: &StepSuccess) -> Self {
+        Self {
+            step_name: step_name.to_string(),
+            status: WorkflowStepStatus::Completed,
+            result_text: success.result_text.clone(),
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            markers: success.markers.clone(),
+            context: success.context.clone(),
+            child_run_id: success.child_run_id.clone(),
+            structured_output: success.structured_output.clone(),
+            output_file: success.output_file.clone(),
+        }
     }
 
     /// Create a completed StepResult from a [`StepSuccess`] description.

@@ -296,7 +296,13 @@ pub fn execute_call_workflow(
                     return Ok(());
                 } else {
                     let msg = format!("Sub-workflow '{}' failed", node.workflow);
-                    tracing::warn!("{} (attempt {}/{})", msg, attempt + 1, max_attempts);
+                    tracing::warn!(
+                        "{} (attempt {}/{}) [child_run_id={}]",
+                        msg,
+                        attempt + 1,
+                        max_attempts,
+                        result.workflow_run_id,
+                    );
                     state
                         .persistence
                         .update_step(

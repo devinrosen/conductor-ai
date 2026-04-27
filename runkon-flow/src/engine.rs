@@ -527,39 +527,20 @@ pub fn record_step_success(state: &mut ExecutionState, success: &crate::types::S
         tracing::warn!("Failed to flush mid-run metrics: {e}");
     }
 
-    let markers_for_ctx = success.markers.clone();
-    let structured_output_for_ctx = success.structured_output.clone();
-    let output_file_for_ctx = success.output_file.clone();
     let step_result = StepResult::completed(&success.step_name, success);
     state.step_results.insert(success.step_key.clone(), step_result);
 
-    push_context_entry(
-        state,
-        &success.step_name,
-        success.iteration,
-        success.context.clone(),
-        markers_for_ctx,
-        structured_output_for_ctx,
-        output_file_for_ctx,
-    );
+    push_context_entry(state, success);
 }
 
-fn push_context_entry(
-    state: &mut ExecutionState,
-    step_name: &str,
-    iteration: u32,
-    context: String,
-    markers: Vec<String>,
-    structured_output: Option<String>,
-    output_file: Option<String>,
-) {
+fn push_context_entry(state: &mut ExecutionState, success: &crate::types::StepSuccess) {
     state.contexts.push(ContextEntry {
-        step: step_name.to_string(),
-        iteration,
-        context,
-        markers,
-        structured_output,
-        output_file,
+        step: success.step_name.clone(),
+        iteration: success.iteration,
+        context: success.context.clone(),
+        markers: success.markers.clone(),
+        structured_output: success.structured_output.clone(),
+        output_file: success.output_file.clone(),
     });
 }
 
@@ -737,27 +718,22 @@ pub fn restore_completed_step(
         state.last_gate_feedback = Some(feedback.clone());
     }
 
-    let markers_for_ctx = markers.clone();
-    let step_result = StepResult::completed_without_metrics(
-        step_key,
-        step.result_text.clone(),
+    let success = crate::types::StepSuccess {
+        step_key: step_key.to_string(),
+        step_name: step_key.to_string(),
+        result_text: step.result_text.clone(),
         markers,
-        context.clone(),
-        step.child_run_id.clone(),
-        step.structured_output.clone(),
-        step.output_file.clone(),
-    );
+        context: context.clone(),
+        child_run_id: step.child_run_id.clone(),
+        structured_output: step.structured_output.clone(),
+        output_file: step.output_file.clone(),
+        iteration,
+        ..crate::types::StepSuccess::default()
+    };
+    let step_result = StepResult::completed_without_metrics(step_key, &success);
     state.step_results.insert(step_key.to_string(), step_result);
 
-    push_context_entry(
-        state,
-        step_key,
-        iteration,
-        context,
-        markers_for_ctx,
-        step.structured_output.clone(),
-        step.output_file.clone(),
-    );
+    push_context_entry(state, &success);
 }
 
 /// Fetch both the final step output (markers + context) and all completed step
@@ -798,15 +774,17 @@ pub fn fetch_child_completion_data(
         .map(|s| {
             let markers = parse_markers_out(s.markers_out.as_deref(), &s.step_name);
             let context = s.context_out.clone().unwrap_or_default();
-            let result = StepResult::completed_without_metrics(
-                &s.step_name,
-                s.result_text.clone(),
+            let success = crate::types::StepSuccess {
+                step_name: s.step_name.clone(),
+                result_text: s.result_text.clone(),
                 markers,
                 context,
-                s.child_run_id.clone(),
-                s.structured_output.clone(),
-                s.output_file.clone(),
-            );
+                child_run_id: s.child_run_id.clone(),
+                structured_output: s.structured_output.clone(),
+                output_file: s.output_file.clone(),
+                ..crate::types::StepSuccess::default()
+            };
+            let result = StepResult::completed_without_metrics(&s.step_name, &success);
             (s.step_name, result)
         })
         .collect();
