@@ -235,12 +235,17 @@ pub fn execute_parallel(
                     Err(EngineError::Workflow(msg))
                 })
             };
-            let _ = tx.send((
+            if let Err(e) = tx.send((
                 dispatch_input.step_id,
                 dispatch_input.agent_name,
                 dispatch_input.agent_step_key,
                 result,
-            ));
+            )) {
+                tracing::warn!(
+                    "parallel: result channel broken (receiver dropped): {}",
+                    e
+                );
+            }
         });
     }
     // Drop the sender so the receiver knows when all threads have completed.

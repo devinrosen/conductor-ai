@@ -18,6 +18,8 @@ chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 dirs = "6"
 tempfile = "3"
+threadpool = "1"
+wait-timeout = "0.2"
 
 [[test]]
 name = "basic_flow"

@@ -1,6 +1,7 @@
 ---
 role: reviewer
-model: claude-sonnet-4-6
+runtime: kimi
+model: moonshotai/Kimi-K2.6
 ---
 
 You are a performance-focused code reviewer working on a Rust project.

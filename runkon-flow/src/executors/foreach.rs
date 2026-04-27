@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc};
-use std::thread;
 use std::time::Duration;
 
 use crate::cancellation::CancellationToken;
@@ -340,6 +339,8 @@ pub fn execute_foreach(
         ready.len() + waiting.len(),
     );
 
+    let pool = threadpool::ThreadPool::new(max_slots);
+
     loop {
         // 1. When threads are in-flight, block briefly on the first result to yield
         //    the CPU instead of spinning. Then drain any additional ready results.
@@ -404,6 +405,7 @@ pub fn execute_foreach(
             }
 
             terminal_ids.insert(item_id.clone());
+            let mut newly_terminal = vec![item_id.clone()];
 
             if !succeeded {
                 match node.on_child_fail {
@@ -431,6 +433,7 @@ pub fn execute_foreach(
                                     .map_err(p_err)?;
                             }
                             terminal_ids.insert(skip_id.clone());
+                            newly_terminal.push(skip_id.clone());
                         }
                         ready.retain(|i| !to_skip.contains(&i.item_id));
                         waiting.retain(|i| !to_skip.contains(&i.item_id));
@@ -447,16 +450,30 @@ pub fn execute_foreach(
                 }
             }
 
-            // After recording a terminal item, promote newly eligible waiting items to ready.
-            let mut still_waiting = Vec::new();
-            for item in waiting.drain(..) {
-                if is_eligible(&item.item_id, &dep_map, &terminal_ids) {
-                    ready.push_back(item);
-                } else {
-                    still_waiting.push(item);
+            // After recording terminal items, promote newly eligible waiting items to ready.
+            // Only check items that are dependents of the newly terminal items — an item
+            // can only become eligible when one of its dependencies becomes terminal.
+            if !waiting.is_empty() {
+                let mut candidates = HashSet::new();
+                for tid in &newly_terminal {
+                    if let Some(deps) = dependents_map.get(tid) {
+                        candidates.extend(deps.iter().cloned());
+                    }
+                }
+                if !candidates.is_empty() {
+                    let mut still_waiting = Vec::new();
+                    for item in waiting.drain(..) {
+                        if candidates.contains(&item.item_id)
+                            && is_eligible(&item.item_id, &dep_map, &terminal_ids)
+                        {
+                            ready.push_back(item);
+                        } else {
+                            still_waiting.push(item);
+                        }
+                    }
+                    waiting = still_waiting;
                 }
             }
-            waiting = still_waiting;
         }
 
         // 2. Check parent cancellation.
@@ -510,7 +527,7 @@ pub fn execute_foreach(
                 let tx_clone = tx.clone();
                 let depth = state.depth;
 
-                thread::spawn(move || {
+                pool.execute(move || {
                     let child_state = ctx.make_child_state(child_cancellation.clone());
                     let succeeded = ctx
                         .child_runner

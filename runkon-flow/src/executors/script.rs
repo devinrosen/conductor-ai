@@ -1,4 +1,5 @@
-use std::path::{Path, PathBuf};
+use std::io::Read;
+use std::path::Path;
 
 use crate::dsl::ScriptNode;
 use crate::engine::{
@@ -13,33 +14,7 @@ use crate::traits::run_context::RunContext;
 
 use super::p_err;
 
-/// Create a named temp file that persists after the handle is dropped.
-///
-/// Logs a warning on any failure mode so the caller can see why capture is missing.
-fn make_temp_file(step_name: &str, purpose: &str) -> Option<PathBuf> {
-    match tempfile::NamedTempFile::new() {
-        Ok(f) => {
-            let path = f.path().to_path_buf();
-            match f.keep() {
-                Ok(_) => Some(path),
-                Err(e) => {
-                    tracing::warn!(
-                        "script '{}': failed to persist temp {purpose} file: {e}",
-                        step_name
-                    );
-                    None
-                }
-            }
-        }
-        Err(e) => {
-            tracing::warn!(
-                "script '{}': failed to create temp {purpose} file: {e}",
-                step_name
-            );
-            None
-        }
-    }
-}
+use wait_timeout::ChildExt;
 
 fn apply_script_on_fail(
     state: &mut ExecutionState,
@@ -212,9 +187,6 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
 
     // Execute the script
     let working_dir = &state.worktree_ctx.working_dir;
-    let output_file = make_temp_file(&node.name, "stdout");
-    // Redirect stderr to a temp file so it never leaks to the TUI terminal.
-    let stderr_file = make_temp_file(&node.name, "stderr");
 
     let mut cmd = std::process::Command::new("sh");
     cmd.arg("-c").arg(&script_cmd);
@@ -222,171 +194,14 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
     for (k, v) in &env_vars {
         cmd.env(k, v);
     }
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
 
-    // Optionally capture stdout to output file
-    if let Some(ref out_path) = output_file {
-        match std::fs::File::create(out_path) {
-            Ok(file) => {
-                cmd.stdout(file);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "script '{}': failed to open stdout file for writing: {e}",
-                    node.name
-                );
-            }
-        }
-    }
-
-    // Redirect stderr to a temp file so it never leaks to the TUI terminal.
-    if let Some(ref err_path) = stderr_file {
-        match std::fs::File::create(err_path) {
-            Ok(file) => {
-                cmd.stderr(file);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "script '{}': failed to open stderr capture file: {e}",
-                    node.name
-                );
-            }
-        }
-    }
-
-    let start = std::time::Instant::now();
-    let result = cmd.status();
-    let duration_ms = start.elapsed().as_millis() as i64;
-
-    match result {
-        Ok(status) if status.success() => {
-            tracing::info!(
-                "script '{}': completed successfully in {}ms",
-                node.name,
-                duration_ms
-            );
-
-            // Clean up stderr capture file on success.
-            if let Some(ref p) = stderr_file {
-                let _ = std::fs::remove_file(p);
-            }
-
-            // Read stdout and parse the CONDUCTOR_OUTPUT block so markers like
-            // `has_code_changes` are available to downstream `if` conditions.
-            let stdout = output_file.as_ref().and_then(|p| {
-                std::fs::read_to_string(p)
-                    .map_err(|e| {
-                        tracing::warn!("script '{}': failed to read stdout: {e}", node.name)
-                    })
-                    .ok()
-            });
-            let (markers, context) = stdout
-                .as_deref()
-                .and_then(crate::helpers::parse_conductor_output)
-                .map(|out| (out.markers, out.context))
-                .unwrap_or_else(|| {
-                    let ctx = stdout.as_deref().unwrap_or("").chars().take(2000).collect();
-                    (vec![], ctx)
-                });
-
-            let markers_json = crate::helpers::serialize_or_empty_array(
-                &markers,
-                &format!("script '{}'", node.name),
-            );
-            let output_file_path = output_file
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string());
-
-            state
-                .persistence
-                .update_step(
-                    &step_id,
-                    StepUpdate {
-                        status: WorkflowStepStatus::Completed,
-                        child_run_id: None,
-                        result_text: Some(format!("Script '{}' completed", node.name)),
-                        context_out: Some(context.clone()),
-                        markers_out: Some(markers_json),
-                        retry_count: Some(0),
-                        structured_output: None,
-                        step_error: None,
-                    },
-                )
-                .map_err(p_err)?;
-
-            record_step_success(
-                state,
-                node.name.clone(),
-                crate::types::StepSuccess {
-                    step_name: node.name.clone(),
-                    result_text: Some(format!("Script '{}' completed", node.name)),
-                    duration_ms: Some(duration_ms),
-                    markers,
-                    context,
-                    iteration,
-                    output_file: output_file_path,
-                    ..crate::types::StepSuccess::default()
-                },
-            );
-
-            Ok(())
-        }
-        Ok(status) => {
-            let exit_code = status.code().unwrap_or(-1);
-
-            // Read captured stderr (up to 2 000 chars) to include in the error.
-            let captured_stderr = stderr_file.as_ref().and_then(|p| {
-                std::fs::read_to_string(p)
-                    .map_err(|e| {
-                        tracing::warn!(
-                            "script '{}': failed to read captured stderr: {e}",
-                            node.name
-                        )
-                    })
-                    .ok()
-                    .map(|s| s.trim().chars().take(2000).collect::<String>())
-                    .filter(|s| !s.is_empty())
-            });
-
-            let err_msg = match &captured_stderr {
-                Some(stderr) => format!(
-                    "Script '{}' exited with code {}\n{}",
-                    node.name, exit_code, stderr
-                ),
-                None => format!("Script '{}' exited with code {}", node.name, exit_code),
-            };
-            tracing::warn!("{}", err_msg);
-
-            state
-                .persistence
-                .update_step(
-                    &step_id,
-                    StepUpdate {
-                        status: WorkflowStepStatus::Failed,
-                        child_run_id: None,
-                        result_text: Some(err_msg.clone()),
-                        context_out: None,
-                        markers_out: None,
-                        retry_count: Some(0),
-                        structured_output: None,
-                        step_error: Some(err_msg.clone()),
-                    },
-                )
-                .map_err(p_err)?;
-
-            // Clean up output file and stderr file on failure
-            if let Some(ref p) = output_file {
-                let _ = std::fs::remove_file(p);
-            }
-            if let Some(ref p) = stderr_file {
-                let _ = std::fs::remove_file(p);
-            }
-
-            apply_script_on_fail(state, &node.name, &node.on_fail, err_msg)
-        }
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
         Err(e) => {
             let err_msg = format!("Script '{}' failed to execute: {e}", node.name);
             tracing::warn!("{}", err_msg);
-
             state
                 .persistence
                 .update_step(
@@ -403,13 +218,201 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                     },
                 )
                 .map_err(p_err)?;
-
-            if let Some(ref p) = stderr_file {
-                let _ = std::fs::remove_file(p);
-            }
-
-            apply_script_on_fail(state, &node.name, &node.on_fail, err_msg)
+            return apply_script_on_fail(state, &node.name, &node.on_fail, err_msg);
         }
+    };
+
+    let start = std::time::Instant::now();
+
+    let status = if let Some(timeout_secs) = node.timeout {
+        let timeout = std::time::Duration::from_secs(timeout_secs);
+        match child.wait_timeout(timeout) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _duration_ms = start.elapsed().as_millis() as i64;
+                let err_msg = format!(
+                    "Script '{}' timed out after {}s",
+                    node.name, timeout_secs
+                );
+                tracing::warn!("{}", err_msg);
+                state
+                    .persistence
+                    .update_step(
+                        &step_id,
+                        StepUpdate {
+                            status: WorkflowStepStatus::Failed,
+                            child_run_id: None,
+                            result_text: Some(err_msg.clone()),
+                            context_out: None,
+                            markers_out: None,
+                            retry_count: Some(0),
+                            structured_output: None,
+                            step_error: Some(err_msg.clone()),
+                        },
+                    )
+                    .map_err(p_err)?;
+                return apply_script_on_fail(state, &node.name, &node.on_fail, err_msg);
+            }
+            Err(e) => {
+                let err_msg = format!("Script '{}' wait failed: {e}", node.name);
+                tracing::warn!("{}", err_msg);
+                state
+                    .persistence
+                    .update_step(
+                        &step_id,
+                        StepUpdate {
+                            status: WorkflowStepStatus::Failed,
+                            child_run_id: None,
+                            result_text: Some(err_msg.clone()),
+                            context_out: None,
+                            markers_out: None,
+                            retry_count: Some(0),
+                            structured_output: None,
+                            step_error: Some(err_msg.clone()),
+                        },
+                    )
+                    .map_err(p_err)?;
+                return apply_script_on_fail(state, &node.name, &node.on_fail, err_msg);
+            }
+        }
+    } else {
+        match child.wait() {
+            Ok(s) => s,
+            Err(e) => {
+                let err_msg = format!("Script '{}' wait failed: {e}", node.name);
+                tracing::warn!("{}", err_msg);
+                state
+                    .persistence
+                    .update_step(
+                        &step_id,
+                        StepUpdate {
+                            status: WorkflowStepStatus::Failed,
+                            child_run_id: None,
+                            result_text: Some(err_msg.clone()),
+                            context_out: None,
+                            markers_out: None,
+                            retry_count: Some(0),
+                            structured_output: None,
+                            step_error: Some(err_msg.clone()),
+                        },
+                    )
+                    .map_err(p_err)?;
+                return apply_script_on_fail(state, &node.name, &node.on_fail, err_msg);
+            }
+        }
+    };
+    let duration_ms = start.elapsed().as_millis() as i64;
+
+    // Read stdout/stderr from pipes after the child has exited.
+    let stdout = child
+        .stdout
+        .take()
+        .and_then(|mut pipe| {
+            let mut buf = Vec::new();
+            pipe.read_to_end(&mut buf).ok()?;
+            String::from_utf8(buf).ok()
+        })
+        .unwrap_or_default();
+    let stderr = child
+        .stderr
+        .take()
+        .and_then(|mut pipe| {
+            let mut buf = Vec::new();
+            pipe.read_to_end(&mut buf).ok()?;
+            String::from_utf8(buf).ok()
+        })
+        .unwrap_or_default();
+
+    if status.success() {
+        tracing::info!(
+            "script '{}': completed successfully in {}ms",
+            node.name,
+            duration_ms
+        );
+
+        let (markers, context) = crate::helpers::parse_conductor_output(&stdout)
+            .map(|out| (out.markers, out.context))
+            .unwrap_or_else(|| {
+                let ctx = stdout.chars().take(2000).collect();
+                (vec![], ctx)
+            });
+
+        let markers_json = crate::helpers::serialize_or_empty_array(
+            &markers,
+            &format!("script '{}'", node.name),
+        );
+
+        state
+            .persistence
+            .update_step(
+                &step_id,
+                StepUpdate {
+                    status: WorkflowStepStatus::Completed,
+                    child_run_id: None,
+                    result_text: Some(format!("Script '{}' completed", node.name)),
+                    context_out: Some(context.clone()),
+                    markers_out: Some(markers_json),
+                    retry_count: Some(0),
+                    structured_output: None,
+                    step_error: None,
+                },
+            )
+            .map_err(p_err)?;
+
+        record_step_success(
+            state,
+            node.name.clone(),
+            crate::types::StepSuccess {
+                step_name: node.name.clone(),
+                result_text: Some(format!("Script '{}' completed", node.name)),
+                duration_ms: Some(duration_ms),
+                markers,
+                context,
+                iteration,
+                ..crate::types::StepSuccess::default()
+            },
+        );
+
+        Ok(())
+    } else {
+        let exit_code = status.code().unwrap_or(-1);
+
+        let captured_stderr = stderr
+            .trim()
+            .chars()
+            .take(2000)
+            .collect::<String>();
+
+        let err_msg = if captured_stderr.is_empty() {
+            format!("Script '{}' exited with code {}", node.name, exit_code)
+        } else {
+            format!(
+                "Script '{}' exited with code {}\n{}",
+                node.name, exit_code, captured_stderr
+            )
+        };
+        tracing::warn!("{}", err_msg);
+
+        state
+            .persistence
+            .update_step(
+                &step_id,
+                StepUpdate {
+                    status: WorkflowStepStatus::Failed,
+                    child_run_id: None,
+                    result_text: Some(err_msg.clone()),
+                    context_out: None,
+                    markers_out: None,
+                    retry_count: Some(0),
+                    structured_output: None,
+                    step_error: Some(err_msg.clone()),
+                },
+            )
+            .map_err(p_err)?;
+
+        apply_script_on_fail(state, &node.name, &node.on_fail, err_msg)
     }
 }
 

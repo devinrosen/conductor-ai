@@ -170,6 +170,8 @@ impl ExecutionState {
     }
 
     /// Accumulate individual metrics into this execution state.
+    ///
+    /// Returns `true` if at least one metric was present and added.
     #[allow(clippy::too_many_arguments)]
     pub fn accumulate_metrics(
         &mut self,
@@ -180,28 +182,37 @@ impl ExecutionState {
         output_tokens: Option<i64>,
         cache_read: Option<i64>,
         cache_create: Option<i64>,
-    ) {
+    ) -> bool {
+        let mut changed = false;
         if let Some(c) = cost {
             self.total_cost += c;
+            changed = true;
         }
         if let Some(t) = turns {
             self.total_turns += t;
+            changed = true;
         }
         if let Some(d) = duration {
             self.total_duration_ms += d;
+            changed = true;
         }
         if let Some(t) = input_tokens {
             self.total_input_tokens += t;
+            changed = true;
         }
         if let Some(t) = output_tokens {
             self.total_output_tokens += t;
+            changed = true;
         }
         if let Some(t) = cache_read {
             self.total_cache_read_input_tokens += t;
+            changed = true;
         }
         if let Some(t) = cache_create {
             self.total_cache_creation_input_tokens += t;
+            changed = true;
         }
+        changed
     }
 
     /// Persist the current accumulated metrics to the workflow run row.
@@ -563,7 +574,7 @@ pub fn record_step_success(
     step_key: String,
     success: crate::types::StepSuccess,
 ) {
-    state.accumulate_metrics(
+    let metrics_changed = state.accumulate_metrics(
         success.cost_usd,
         success.num_turns,
         success.duration_ms,
@@ -573,9 +584,11 @@ pub fn record_step_success(
         success.cache_creation_input_tokens,
     );
 
-    // Best-effort mid-run metrics flush — non-fatal
-    if let Err(e) = state.flush_metrics() {
-        tracing::warn!("Failed to flush mid-run metrics: {e}");
+    // Best-effort mid-run metrics flush — non-fatal, only if something changed
+    if metrics_changed {
+        if let Err(e) = state.flush_metrics() {
+            tracing::warn!("Failed to flush mid-run metrics: {e}");
+        }
     }
 
     let step_result = StepResult::completed(&success);
@@ -962,5 +975,118 @@ mod tests {
         let mut inputs = HashMap::new();
         let result = apply_workflow_input_defaults(&workflow, &mut inputs);
         assert!(result.is_err(), "expected error for missing required input");
+    }
+
+    #[test]
+    fn fork_child_resets_runtime_state_and_preserves_shared_config() {
+        use crate::cancellation::CancellationToken;
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::traits::script_env_provider::NoOpScriptEnvProvider;
+        use crate::types::WorkflowExecConfig;
+
+        let parent = ExecutionState {
+            persistence: Arc::new(InMemoryWorkflowPersistence::new()),
+            action_registry: Arc::new(crate::traits::action_executor::ActionRegistry::new(
+                HashMap::new(),
+                None,
+            )),
+            script_env_provider: Arc::new(NoOpScriptEnvProvider),
+            workflow_run_id: "run-1".to_string(),
+            workflow_name: "wf".to_string(),
+            worktree_ctx: WorktreeContext {
+                worktree_id: Some("wt".to_string()),
+                working_dir: "/tmp".to_string(),
+                repo_path: "/repo".to_string(),
+                ticket_id: Some("TICK-1".to_string()),
+                repo_id: Some("repo-1".to_string()),
+                extra_plugin_dirs: vec!["plugins".to_string()],
+            },
+            model: Some("gpt-4".to_string()),
+            exec_config: WorkflowExecConfig::default(),
+            inputs: {
+                let mut m = HashMap::new();
+                m.insert("key".to_string(), "val".to_string());
+                m
+            },
+            parent_run_id: "parent-1".to_string(),
+            depth: 3,
+            target_label: Some("label".to_string()),
+            step_results: {
+                let mut m = HashMap::new();
+                m.insert("step".to_string(), StepResult::default());
+                m
+            },
+            contexts: vec![ContextEntry {
+                step: "step".to_string(),
+                iteration: 1,
+                context: "ctx".to_string(),
+                markers: vec![],
+                structured_output: None,
+                output_file: None,
+            }],
+            position: 42,
+            all_succeeded: false,
+            total_cost: 1.23,
+            total_turns: 5,
+            total_duration_ms: 1000,
+            total_input_tokens: 100,
+            total_output_tokens: 200,
+            total_cache_read_input_tokens: 50,
+            total_cache_creation_input_tokens: 25,
+            last_gate_feedback: Some("feedback".to_string()),
+            block_output: Some("output".to_string()),
+            block_with: vec!["with".to_string()],
+            resume_ctx: None,
+            default_bot_name: Some("bot".to_string()),
+            triggered_by_hook: true,
+            schema_resolver: None,
+            child_runner: None,
+            last_heartbeat_at: ExecutionState::new_heartbeat(),
+            registry: Arc::new(crate::traits::item_provider::ItemProviderRegistry::new()),
+            event_sinks: Arc::from(vec![]),
+            cancellation: CancellationToken::new(),
+            current_execution_id: Arc::new(std::sync::Mutex::new(None)),
+        };
+
+        let child_cancellation = CancellationToken::new();
+        let child = parent.fork_child(child_cancellation.clone());
+
+        // Shared config cloned
+        assert_eq!(child.workflow_run_id, "run-1");
+        assert_eq!(child.workflow_name, "wf");
+        assert_eq!(child.worktree_ctx.working_dir, "/tmp");
+        assert_eq!(child.model, Some("gpt-4".to_string()));
+        assert_eq!(child.depth, 3);
+        assert_eq!(child.target_label, Some("label".to_string()));
+        assert_eq!(child.default_bot_name, Some("bot".to_string()));
+        assert_eq!(child.parent_run_id, "parent-1");
+
+        // Runtime state reset
+        assert!(child.inputs.is_empty(), "inputs should be cleared");
+        assert!(child.step_results.is_empty(), "step_results should be cleared");
+        assert!(child.contexts.is_empty(), "contexts should be cleared");
+        assert_eq!(child.position, 0);
+        assert!(child.all_succeeded);
+        assert_eq!(child.total_cost, 0.0);
+        assert_eq!(child.total_turns, 0);
+        assert_eq!(child.total_duration_ms, 0);
+        assert_eq!(child.total_input_tokens, 0);
+        assert_eq!(child.total_output_tokens, 0);
+        assert_eq!(child.total_cache_read_input_tokens, 0);
+        assert_eq!(child.total_cache_creation_input_tokens, 0);
+        assert!(child.last_gate_feedback.is_none());
+        assert!(child.block_output.is_none());
+        assert!(child.block_with.is_empty());
+        assert!(child.resume_ctx.is_none());
+        assert!(!child.triggered_by_hook);
+        assert!(child.schema_resolver.is_none());
+        assert!(child.child_runner.is_none());
+
+        // Cancellation replaced
+        assert!(!child.cancellation.is_cancelled());
+        assert!(std::sync::Arc::ptr_eq(
+            &child.current_execution_id,
+            &child.current_execution_id
+        ));
     }
 }
