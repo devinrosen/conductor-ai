@@ -18,9 +18,9 @@ struct InMemoryStore {
     runs: HashMap<String, WorkflowRun>,
     steps: HashMap<String, WorkflowRunStep>,
     fan_out_items: HashMap<String, FanOutItemRow>,
-    /// Secondary index: step_run_id → item_id → fan_out_item id for O(1) idempotency check
-    /// without allocating a tuple key on the cache-hit path.
-    fan_out_index: HashMap<String, HashMap<String, String>>,
+    /// Secondary index: step_run_id → (item_type, item_id) → fan_out_item id for O(1)
+    /// idempotency check.
+    fan_out_index: HashMap<String, HashMap<(String, String), String>>,
     /// Insertion-order list of fan_out_item ids; used to return items in stable order
     /// (mirrors real SQLite behaviour where rows sort by rowid = insertion order).
     fan_out_order: Vec<String>,
@@ -328,11 +328,12 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         item_ref: &str,
     ) -> Result<String, EngineError> {
         let mut store = self.lock()?;
-        // Idempotent: O(1) lookup via nested index — no tuple allocation on hit path.
+        let dedup_key = (item_type.to_string(), item_id.to_string());
+        // Idempotent: O(1) lookup via nested index.
         if let Some(existing_id) = store
             .fan_out_index
             .get(step_run_id)
-            .and_then(|m| m.get(item_id))
+            .and_then(|m| m.get(&dedup_key))
         {
             return Ok(existing_id.clone());
         }
@@ -341,7 +342,7 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
             .fan_out_index
             .entry(step_run_id.to_string())
             .or_default()
-            .insert(item_id.to_string(), id.clone());
+            .insert(dedup_key, id.clone());
         store.fan_out_order.push(id.clone());
         store.fan_out_items.insert(
             id.clone(),
@@ -711,6 +712,31 @@ mod tests {
 
         let items = p.get_fan_out_items(&step_id, None).unwrap();
         assert_eq!(items.len(), 1, "duplicate insert should be ignored");
+    }
+
+    #[test]
+    fn test_fan_out_item_idempotent_respects_item_type() {
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        let step_id = p.insert_step(make_new_step(&run.id, "s")).unwrap();
+
+        // same step_run_id + item_id, different item_type → two distinct items
+        p.insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
+            .unwrap();
+        p.insert_fan_out_item(&step_id, "worktree", "t-1", "ref-2")
+            .unwrap();
+
+        let items = p.get_fan_out_items(&step_id, None).unwrap();
+        assert_eq!(items.len(), 2, "different item_type should create distinct items");
+
+        // idempotency: re-inserting both should not change count
+        p.insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
+            .unwrap();
+        p.insert_fan_out_item(&step_id, "worktree", "t-1", "ref-2")
+            .unwrap();
+
+        let items = p.get_fan_out_items(&step_id, None).unwrap();
+        assert_eq!(items.len(), 2, "re-inserts should be idempotent");
     }
 
     #[test]
