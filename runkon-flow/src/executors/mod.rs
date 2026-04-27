@@ -12,8 +12,10 @@ use std::sync::Arc;
 use crate::engine_error::EngineError;
 
 #[inline]
+#[track_caller]
 pub(super) fn p_err(e: impl std::fmt::Display) -> EngineError {
-    EngineError::Persistence(e.to_string())
+    let loc = std::panic::Location::caller();
+    EngineError::Persistence(format!("{}:{} — {e}", loc.file(), loc.line()))
 }
 
 /// Insert a step record and emit a StepRetrying event when `attempt > 0`.

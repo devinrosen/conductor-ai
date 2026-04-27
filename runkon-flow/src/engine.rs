@@ -771,17 +771,13 @@ pub fn restore_completed_step(
         state.last_gate_feedback = Some(feedback.clone());
     }
 
-    let success = crate::types::StepSuccess {
-        step_name: step_key.to_string(),
-        result_text: step.result_text.clone(),
+    let success = crate::types::StepSuccess::from_workflow_run_step(
+        step_key.to_string(),
+        step,
         markers,
         context,
-        child_run_id: step.child_run_id.clone(),
-        structured_output: step.structured_output.clone(),
-        output_file: step.output_file.clone(),
         iteration,
-        ..crate::types::StepSuccess::default()
-    };
+    );
     let step_result = StepResult::completed_without_metrics(&success);
     state.step_results.insert(step_key.to_string(), step_result);
 
@@ -826,16 +822,13 @@ pub fn fetch_child_completion_data(
         .map(|s| {
             let markers = parse_markers_out(s.markers_out.as_deref(), &s.step_name);
             let context = s.context_out.clone().unwrap_or_default();
-            let success = crate::types::StepSuccess {
-                step_name: s.step_name.clone(),
-                result_text: s.result_text.clone(),
+            let success = crate::types::StepSuccess::from_workflow_run_step(
+                s.step_name.clone(),
+                &s,
                 markers,
                 context,
-                child_run_id: s.child_run_id.clone(),
-                structured_output: s.structured_output.clone(),
-                output_file: s.output_file.clone(),
-                ..crate::types::StepSuccess::default()
-            };
+                0,
+            );
             let result = StepResult::completed_without_metrics(&success);
             (s.step_name, result)
         })

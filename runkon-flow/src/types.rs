@@ -244,6 +244,27 @@ impl StepSuccess {
             output_file,
         }
     }
+
+    /// Build a [`StepSuccess`] from a database [`WorkflowRunStep`] record.
+    pub fn from_workflow_run_step(
+        step_name: String,
+        step: &WorkflowRunStep,
+        markers: Vec<String>,
+        context: String,
+        iteration: u32,
+    ) -> Self {
+        Self {
+            step_name,
+            result_text: step.result_text.clone(),
+            markers,
+            context,
+            child_run_id: step.child_run_id.clone(),
+            structured_output: step.structured_output.clone(),
+            output_file: step.output_file.clone(),
+            iteration,
+            ..Self::default()
+        }
+    }
 }
 
 /// Result of a single step execution (kept in memory during execution).
@@ -459,5 +480,45 @@ mod tests {
         assert_eq!(entry.markers, vec!["m1", "m2"]);
         assert_eq!(entry.structured_output, Some(r#"{"k":"v"}"#.to_string()));
         assert_eq!(entry.output_file, Some("/tmp/out".to_string()));
+    }
+
+    #[test]
+    fn from_action_output_maps_all_fields() {
+        let output = crate::traits::action_executor::ActionOutput {
+            markers: vec!["m1".to_string()],
+            context: Some("ctx".to_string()),
+            result_text: Some("rt".to_string()),
+            cost_usd: Some(0.05),
+            num_turns: Some(3),
+            duration_ms: Some(1200),
+            input_tokens: Some(100),
+            output_tokens: Some(200),
+            cache_read_input_tokens: Some(50),
+            cache_creation_input_tokens: Some(25),
+            child_run_id: Some("child-1".to_string()),
+            structured_output: Some(r#"{"ok":true}"#.to_string()),
+        };
+        let success = StepSuccess::from_action_output(
+            &output,
+            "review".to_string(),
+            "ctx".to_string(),
+            5,
+            Some("/tmp/out".to_string()),
+        );
+        assert_eq!(success.step_name, "review");
+        assert_eq!(success.result_text, Some("rt".to_string()));
+        assert_eq!(success.cost_usd, Some(0.05));
+        assert_eq!(success.num_turns, Some(3));
+        assert_eq!(success.duration_ms, Some(1200));
+        assert_eq!(success.input_tokens, Some(100));
+        assert_eq!(success.output_tokens, Some(200));
+        assert_eq!(success.cache_read_input_tokens, Some(50));
+        assert_eq!(success.cache_creation_input_tokens, Some(25));
+        assert_eq!(success.markers, vec!["m1"]);
+        assert_eq!(success.context, "ctx");
+        assert_eq!(success.child_run_id, Some("child-1".to_string()));
+        assert_eq!(success.iteration, 5);
+        assert_eq!(success.structured_output, Some(r#"{"ok":true}"#.to_string()));
+        assert_eq!(success.output_file, Some("/tmp/out".to_string()));
     }
 }

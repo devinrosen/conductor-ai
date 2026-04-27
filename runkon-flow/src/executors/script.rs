@@ -8,7 +8,6 @@ use crate::engine::{
 };
 use crate::engine_error::Result;
 use crate::prompt_builder::build_variable_map;
-use crate::status::WorkflowStepStatus;
 use crate::traits::persistence::{NewStep, StepUpdate};
 use crate::traits::run_context::RunContext;
 
@@ -72,23 +71,16 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
 
     if state.exec_config.dry_run {
         tracing::info!("script '{}': dry-run, skipping execution", node.name);
-        state
-            .persistence
-            .update_step(
-                &step_id,
-                StepUpdate {
-                    status: WorkflowStepStatus::Completed,
-                    child_run_id: None,
-                    result_text: Some("dry-run: script not executed".to_string()),
-                    context_out: None,
-                    markers_out: None,
-                    retry_count: Some(0),
-                    structured_output: None,
-                    step_error: None,
-                },
-            )
-            .map_err(p_err)?;
-
+        super::persist_completed_step(
+            state,
+            &step_id,
+            None,
+            Some("dry-run: script not executed".to_string()),
+            None,
+            None,
+            0,
+            None,
+        )?;
         record_step_success(
             state,
             node.name.clone(),
@@ -228,7 +220,20 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
     // If the child writes more than the OS pipe buffer size to either stream
     // while the parent is blocked in wait(), the child would hang forever.
     let stdout_handle = {
-        let mut pipe = child.stdout.take().expect("stdout was piped");
+        let mut pipe = match child.stdout.take() {
+            Some(p) => p,
+            None => {
+                return fail_script_step(
+                    state,
+                    &step_id,
+                    node,
+                    format!(
+                        "script '{}': stdout pipe unavailable after spawn",
+                        node.name
+                    ),
+                );
+            }
+        };
         std::thread::spawn(move || {
             let mut buf = Vec::new();
             if let Err(e) = pipe.read_to_end(&mut buf) {
@@ -238,7 +243,20 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
         })
     };
     let stderr_handle = {
-        let mut pipe = child.stderr.take().expect("stderr was piped");
+        let mut pipe = match child.stderr.take() {
+            Some(p) => p,
+            None => {
+                return fail_script_step(
+                    state,
+                    &step_id,
+                    node,
+                    format!(
+                        "script '{}': stderr pipe unavailable after spawn",
+                        node.name
+                    ),
+                );
+            }
+        };
         std::thread::spawn(move || {
             let mut buf = Vec::new();
             if let Err(e) = pipe.read_to_end(&mut buf) {
@@ -331,22 +349,16 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
             &format!("script '{}'", node.name),
         );
 
-        state
-            .persistence
-            .update_step(
-                &step_id,
-                StepUpdate {
-                    status: WorkflowStepStatus::Completed,
-                    child_run_id: None,
-                    result_text: Some(format!("Script '{}' completed", node.name)),
-                    context_out: Some(context.clone()),
-                    markers_out: Some(markers_json),
-                    retry_count: Some(0),
-                    structured_output: None,
-                    step_error: None,
-                },
-            )
-            .map_err(p_err)?;
+        super::persist_completed_step(
+            state,
+            &step_id,
+            None,
+            Some(format!("Script '{}' completed", node.name)),
+            Some(context.clone()),
+            Some(markers_json),
+            0,
+            None,
+        )?;
 
         record_step_success(
             state,
@@ -404,6 +416,7 @@ mod tests {
     use super::*;
     use crate::dsl::ScriptNode;
     use crate::engine::{ExecutionState, WorktreeContext};
+    use crate::status::WorkflowStepStatus;
     use crate::persistence_memory::InMemoryWorkflowPersistence;
     use crate::traits::action_executor::ActionRegistry;
     use crate::traits::item_provider::ItemProviderRegistry;
@@ -708,5 +721,53 @@ mod tests {
             err_text.contains("timed out"),
             "error should mention timeout: {err_text}"
         );
+    }
+
+    /// A script that writes more than the OS pipe buffer to stdout must not deadlock.
+    /// This is a regression test for the pipe-deadlock fix (reader threads spawned
+    /// before wait()).
+    #[test]
+    fn pipe_deadlock_regression_large_stdout() {
+        let (persistence, run_id) = make_persistence();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone());
+        // Output 128KB of 'x' to stdout — well above the typical 64KB pipe buffer.
+        let node = ScriptNode {
+            name: "bigout".to_string(),
+            run: "python3 -c \"import sys; sys.stdout.write('x' * 131072)\"".to_string(),
+            env: Default::default(),
+            timeout: None,
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        };
+        execute_script(&mut state, &node, 0).unwrap();
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        assert_eq!(steps.len(), 1);
+        let step = &steps[0];
+        assert_eq!(step.status, WorkflowStepStatus::Completed);
+    }
+
+    /// Non-UTF-8 stdout is handled gracefully: the step still completes and the
+    /// invalid bytes are dropped with a logged warning.
+    #[test]
+    fn non_utf8_stdout_is_handled_gracefully() {
+        let (persistence, run_id) = make_persistence();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone());
+        let node = ScriptNode {
+            name: "binary".to_string(),
+            run: "python3 -c \"import sys; sys.stdout.buffer.write(bytes([0x80,0x81,0x82]))\"".to_string(),
+            env: Default::default(),
+            timeout: None,
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        };
+        execute_script(&mut state, &node, 0).unwrap();
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        assert_eq!(steps.len(), 1);
+        let step = &steps[0];
+        assert_eq!(step.status, WorkflowStepStatus::Completed);
     }
 }
