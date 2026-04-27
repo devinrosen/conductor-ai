@@ -12,8 +12,10 @@ use std::sync::Arc;
 use crate::engine_error::EngineError;
 
 #[inline]
+#[track_caller]
 pub(super) fn p_err(e: impl std::fmt::Display) -> EngineError {
-    EngineError::Persistence(e.to_string())
+    let loc = std::panic::Location::caller();
+    EngineError::Persistence(format!("{}:{} — {e}", loc.file(), loc.line()))
 }
 
 /// Insert a step record and emit a StepRetrying event when `attempt > 0`.
@@ -154,7 +156,6 @@ pub(super) fn build_action_params(
 /// Persist a completed step and record its success result in one call.
 /// Centralises the `persist_completed_step` + `record_step_success` pair used
 /// by `call.rs` after a successful agent dispatch.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn record_dispatch_success(
     state: &mut crate::engine::ExecutionState,
     step_id: &str,
@@ -183,21 +184,13 @@ pub(super) fn record_dispatch_success(
     crate::engine::record_step_success(
         state,
         step_key.to_string(),
-        agent_label,
-        output.result_text.clone(),
-        output.cost_usd,
-        output.num_turns,
-        output.duration_ms,
-        output.input_tokens,
-        output.output_tokens,
-        output.cache_read_input_tokens,
-        output.cache_creation_input_tokens,
-        output.markers.clone(),
-        context,
-        output.child_run_id.clone(),
-        iteration,
-        output.structured_output.clone(),
-        output_file,
+        crate::types::StepSuccess::from_action_output(
+            output,
+            agent_label.to_string(),
+            context,
+            iteration,
+            output_file,
+        ),
     );
     Ok(())
 }

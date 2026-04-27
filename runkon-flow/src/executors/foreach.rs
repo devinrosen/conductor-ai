@@ -1,23 +1,20 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{mpsc, Arc, Mutex};
-use std::thread;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use crate::cancellation::CancellationToken;
 use crate::dsl::{ForEachNode, OnChildFail};
 use crate::engine::{
     emit_event, record_step_failure, record_step_success, restore_step, should_skip,
-    ChildWorkflowInput, ExecutionState, WorktreeContext,
+    ChildWorkflowInput, ExecutionState,
 };
 use crate::engine_error::{EngineError, Result};
 use crate::events::EngineEvent;
 use crate::status::WorkflowStepStatus;
-use crate::traits::action_executor::ActionRegistry;
-use crate::traits::item_provider::{ItemProviderRegistry, ProviderContext};
+use crate::traits::item_provider::ProviderContext;
 use crate::traits::persistence::{
-    FanOutItemStatus, FanOutItemUpdate, NewStep, StepUpdate, WorkflowPersistence,
+    FanOutItemStatus, FanOutItemUpdate, NewStep, StepUpdate,
 };
-use crate::traits::script_env_provider::ScriptEnvProvider;
 
 use super::p_err;
 
@@ -27,21 +24,9 @@ use super::p_err;
 /// the parent `ExecutionState` are kept, so the main thread retains full `&mut`
 /// access throughout the dispatch loop.
 struct ForeachParentCtx {
-    persistence: Arc<dyn WorkflowPersistence>,
-    action_registry: Arc<ActionRegistry>,
-    script_env_provider: Arc<dyn ScriptEnvProvider>,
-    registry: Arc<ItemProviderRegistry>,
-    event_sinks: Arc<[Arc<dyn crate::events::EventSink>]>,
+    /// Pre-forked template with empty runtime collections — cheap to clone.
+    template: ExecutionState,
     child_runner: Arc<dyn crate::engine::ChildWorkflowRunner>,
-    workflow_run_id: String,
-    workflow_name: String,
-    model: Option<String>,
-    exec_config: crate::types::WorkflowExecConfig,
-    parent_run_id: String,
-    depth: u32,
-    target_label: Option<String>,
-    default_bot_name: Option<String>,
-    worktree_ctx: WorktreeContext,
 }
 
 impl ForeachParentCtx {
@@ -49,64 +34,20 @@ impl ForeachParentCtx {
         state: &ExecutionState,
         child_runner: Arc<dyn crate::engine::ChildWorkflowRunner>,
     ) -> Self {
+        // fork_child creates a state with all runtime collections already empty,
+        // so cloning the template later is cheap.
+        let mut template = state.fork_child(crate::cancellation::CancellationToken::new());
+        template.child_runner = Some(Arc::clone(&child_runner));
         Self {
-            persistence: Arc::clone(&state.persistence),
-            action_registry: Arc::clone(&state.action_registry),
-            script_env_provider: Arc::clone(&state.script_env_provider),
-            registry: Arc::clone(&state.registry),
-            event_sinks: Arc::clone(&state.event_sinks),
+            template,
             child_runner,
-            workflow_run_id: state.workflow_run_id.clone(),
-            workflow_name: state.workflow_name.clone(),
-            model: state.model.clone(),
-            exec_config: state.exec_config.clone(),
-            parent_run_id: state.parent_run_id.clone(),
-            depth: state.depth,
-            target_label: state.target_label.clone(),
-            default_bot_name: state.default_bot_name.clone(),
-            worktree_ctx: state.worktree_ctx.clone(),
         }
     }
 
     fn make_child_state(&self, cancellation: CancellationToken) -> ExecutionState {
-        ExecutionState {
-            persistence: Arc::clone(&self.persistence),
-            action_registry: Arc::clone(&self.action_registry),
-            script_env_provider: Arc::clone(&self.script_env_provider),
-            workflow_run_id: self.workflow_run_id.clone(),
-            workflow_name: self.workflow_name.clone(),
-            worktree_ctx: self.worktree_ctx.clone(),
-            model: self.model.clone(),
-            exec_config: self.exec_config.clone(),
-            inputs: HashMap::new(),
-            parent_run_id: self.parent_run_id.clone(),
-            depth: self.depth,
-            target_label: self.target_label.clone(),
-            step_results: HashMap::new(),
-            contexts: vec![],
-            position: 0,
-            all_succeeded: true,
-            total_cost: 0.0,
-            total_turns: 0,
-            total_duration_ms: 0,
-            total_input_tokens: 0,
-            total_output_tokens: 0,
-            total_cache_read_input_tokens: 0,
-            total_cache_creation_input_tokens: 0,
-            last_gate_feedback: None,
-            block_output: None,
-            block_with: vec![],
-            resume_ctx: None,
-            default_bot_name: self.default_bot_name.clone(),
-            triggered_by_hook: false,
-            schema_resolver: None,
-            child_runner: Some(Arc::clone(&self.child_runner)),
-            last_heartbeat_at: ExecutionState::new_heartbeat(),
-            registry: Arc::clone(&self.registry),
-            event_sinks: Arc::clone(&self.event_sinks),
-            cancellation,
-            current_execution_id: Arc::new(Mutex::new(None)),
-        }
+        let mut child = self.template.clone();
+        child.cancellation = cancellation;
+        child
     }
 }
 
@@ -145,9 +86,9 @@ fn is_eligible(
 
 /// Record a successful foreach step with the standard set of defaulted arguments.
 ///
-/// `record_step_success` takes 17 arguments; all of the foreach-specific ones
-/// default to `None` / `vec![]`.  This wrapper narrows the call site to the
-/// three values that actually vary: `step_key`, `step_name`, and `context`.
+/// All of the foreach-specific fields default to `None` / `vec![]`.
+/// This wrapper narrows the call site to the three values that actually vary:
+/// `step_key`, `step_name`, and `context`.
 fn record_foreach_step_success(
     state: &mut ExecutionState,
     step_key: String,
@@ -158,21 +99,13 @@ fn record_foreach_step_success(
     record_step_success(
         state,
         step_key,
-        step_name,
-        Some(context.clone()),
-        None,   // cost_usd
-        None,   // num_turns
-        None,   // duration_ms
-        None,   // input_tokens
-        None,   // output_tokens
-        None,   // cache_read_input_tokens
-        None,   // cache_creation_input_tokens
-        vec![], // markers
-        context,
-        None, // child_run_id
-        iteration,
-        None, // structured_output
-        None, // output_file
+        crate::types::StepSuccess {
+            step_name: step_name.to_string(),
+            result_text: Some(context.clone()),
+            context,
+            iteration,
+            ..crate::types::StepSuccess::default()
+        },
     );
 }
 
@@ -300,22 +233,16 @@ pub fn execute_foreach(
 
     if total_items == 0 {
         let context = format!("foreach {}: no items to process", node.name);
-        state
-            .persistence
-            .update_step(
-                &step_id,
-                StepUpdate {
-                    status: WorkflowStepStatus::Completed,
-                    child_run_id: None,
-                    result_text: Some(context.clone()),
-                    context_out: Some(context.clone()),
-                    markers_out: None,
-                    retry_count: Some(0),
-                    structured_output: None,
-                    step_error: None,
-                },
-            )
-            .map_err(p_err)?;
+        super::persist_completed_step(
+            state,
+            &step_id,
+            None,
+            Some(context.clone()),
+            Some(context.clone()),
+            None,
+            0,
+            None,
+        )?;
 
         record_foreach_step_success(state, step_key, &node.name, context, iteration);
         return Ok(());
@@ -377,20 +304,6 @@ pub fn execute_foreach(
     // Clone node.inputs once outside the dispatch loop to avoid re-cloning on every iteration.
     let base_inputs = node.inputs.clone();
 
-    // Build the placeholder WorkflowDef once — same for every item.
-    let placeholder_def = crate::dsl::WorkflowDef {
-        name: node.workflow.clone(),
-        title: None,
-        description: String::new(),
-        trigger: crate::dsl::WorkflowTrigger::Manual,
-        targets: vec![],
-        group: None,
-        inputs: vec![],
-        body: vec![],
-        always: vec![],
-        source_path: String::new(),
-    };
-
     // Seed terminal counts from items that were already terminal before this dispatch
     // (e.g. partially-resumed runs).  New completions/failures/skips are tracked
     // incrementally below so the final phase can skip a DB re-query.
@@ -426,6 +339,8 @@ pub fn execute_foreach(
         max_slots,
         ready.len() + waiting.len(),
     );
+
+    let pool = threadpool::ThreadPool::new(max_slots);
 
     loop {
         // 1. When threads are in-flight, block briefly on the first result to yield
@@ -491,6 +406,7 @@ pub fn execute_foreach(
             }
 
             terminal_ids.insert(item_id.clone());
+            let mut newly_terminal = vec![item_id.clone()];
 
             if !succeeded {
                 match node.on_child_fail {
@@ -518,6 +434,7 @@ pub fn execute_foreach(
                                     .map_err(p_err)?;
                             }
                             terminal_ids.insert(skip_id.clone());
+                            newly_terminal.push(skip_id.clone());
                         }
                         ready.retain(|i| !to_skip.contains(&i.item_id));
                         waiting.retain(|i| !to_skip.contains(&i.item_id));
@@ -534,16 +451,30 @@ pub fn execute_foreach(
                 }
             }
 
-            // After recording a terminal item, promote newly eligible waiting items to ready.
-            let mut still_waiting = Vec::new();
-            for item in waiting.drain(..) {
-                if is_eligible(&item.item_id, &dep_map, &terminal_ids) {
-                    ready.push_back(item);
-                } else {
-                    still_waiting.push(item);
+            // After recording terminal items, promote newly eligible waiting items to ready.
+            // Only check items that are dependents of the newly terminal items — an item
+            // can only become eligible when one of its dependencies becomes terminal.
+            if !waiting.is_empty() {
+                let mut candidates = HashSet::new();
+                for tid in &newly_terminal {
+                    if let Some(deps) = dependents_map.get(tid) {
+                        candidates.extend(deps.iter().cloned());
+                    }
+                }
+                if !candidates.is_empty() {
+                    let mut still_waiting = Vec::new();
+                    for item in waiting.drain(..) {
+                        if candidates.contains(&item.item_id)
+                            && is_eligible(&item.item_id, &dep_map, &terminal_ids)
+                        {
+                            ready.push_back(item);
+                        } else {
+                            still_waiting.push(item);
+                        }
+                    }
+                    waiting = still_waiting;
                 }
             }
-            waiting = still_waiting;
         }
 
         // 2. Check parent cancellation.
@@ -590,19 +521,19 @@ pub fn execute_foreach(
                 child_inputs.insert("item.ref".to_string(), item.item_ref.clone());
 
                 let ctx = Arc::clone(&parent_ctx);
-                let def = placeholder_def.clone();
+                let workflow_name = node.workflow.clone();
                 let inputs = child_inputs;
                 let item_db_id = item.id.clone();
                 let child_cancellation = state.cancellation.child();
                 let tx_clone = tx.clone();
                 let depth = state.depth;
 
-                thread::spawn(move || {
+                pool.execute(move || {
                     let child_state = ctx.make_child_state(child_cancellation.clone());
                     let succeeded = ctx
                         .child_runner
                         .execute_child(
-                            &def,
+                            &workflow_name,
                             &child_state,
                             ChildWorkflowInput {
                                 inputs,

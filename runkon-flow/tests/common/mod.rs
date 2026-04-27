@@ -329,14 +329,14 @@ impl MockChildRunner {
 impl ChildWorkflowRunner for MockChildRunner {
     fn execute_child(
         &self,
-        child_def: &WorkflowDef,
+        workflow_name: &str,
         _parent_state: &ExecutionState,
         params: ChildWorkflowInput,
     ) -> runkon_flow::engine_error::Result<WorkflowResult> {
         let item_id = params.inputs.get("item.id").cloned().unwrap_or_default();
         self.call_log.lock().unwrap().push(item_id.clone());
         let succeeded = self.outcomes.get(&item_id).copied().unwrap_or(true);
-        Ok(mock_workflow_result(&item_id, &child_def.name, succeeded))
+        Ok(mock_workflow_result(&item_id, workflow_name, succeeded))
     }
 
     fn resume_child(
@@ -609,7 +609,7 @@ impl CancellingMockRunner {
 impl ChildWorkflowRunner for CancellingMockRunner {
     fn execute_child(
         &self,
-        child_def: &WorkflowDef,
+        workflow_name: &str,
         _parent_state: &ExecutionState,
         params: ChildWorkflowInput,
     ) -> runkon_flow::engine_error::Result<WorkflowResult> {
@@ -620,7 +620,7 @@ impl ChildWorkflowRunner for CancellingMockRunner {
             self.token.cancel(CancellationReason::UserRequested(None));
         }
         let succeeded = self.outcomes.get(&item_id).copied().unwrap_or(true);
-        Ok(mock_workflow_result(&item_id, &child_def.name, succeeded))
+        Ok(mock_workflow_result(&item_id, workflow_name, succeeded))
     }
 
     fn resume_child(

@@ -30,12 +30,14 @@ pub struct WorktreeContext {
 }
 
 /// Pre-loaded context for resuming a workflow run.
+#[derive(Clone)]
 pub struct ResumeContext {
     /// Completed step records keyed by step key, for O(1) skip check and restore.
     pub step_map: HashMap<StepKey, WorkflowRunStep>,
 }
 
 /// Mutable runtime state for a workflow execution — no conductor-core deps.
+#[derive(Clone)]
 pub struct ExecutionState {
     pub persistence: Arc<dyn WorkflowPersistence>,
     pub action_registry: Arc<ActionRegistry>,
@@ -102,7 +104,7 @@ pub struct ChildWorkflowInput {
 pub trait ChildWorkflowRunner: Send + Sync {
     fn execute_child(
         &self,
-        child_def: &WorkflowDef,
+        workflow_name: &str,
         parent_state: &ExecutionState,
         params: ChildWorkflowInput,
     ) -> Result<WorkflowResult>;
@@ -122,7 +124,38 @@ impl ExecutionState {
         Arc::new(AtomicI64::new(0))
     }
 
+    /// Fork a child execution state from this parent.
+    ///
+    /// Copies shared configuration (persistence, registries, workflow identity) and resets all
+    /// runtime accumulators so the child starts with a clean slate.
+    pub fn fork_child(&self, cancellation: CancellationToken) -> ExecutionState {
+        let mut child = self.clone();
+        child.inputs.clear();
+        child.step_results.clear();
+        child.contexts.clear();
+        child.position = 0;
+        child.all_succeeded = true;
+        child.total_cost = 0.0;
+        child.total_turns = 0;
+        child.total_duration_ms = 0;
+        child.total_input_tokens = 0;
+        child.total_output_tokens = 0;
+        child.total_cache_read_input_tokens = 0;
+        child.total_cache_creation_input_tokens = 0;
+        child.last_gate_feedback = None;
+        child.block_output = None;
+        child.block_with.clear();
+        child.resume_ctx = None;
+        child.triggered_by_hook = false;
+        child.last_heartbeat_at = Self::new_heartbeat();
+        child.cancellation = cancellation;
+        child.current_execution_id = Arc::new(std::sync::Mutex::new(None));
+        child
+    }
+
     /// Accumulate individual metrics into this execution state.
+    ///
+    /// Returns `true` if at least one metric was present and added.
     #[allow(clippy::too_many_arguments)]
     pub fn accumulate_metrics(
         &mut self,
@@ -133,28 +166,37 @@ impl ExecutionState {
         output_tokens: Option<i64>,
         cache_read: Option<i64>,
         cache_create: Option<i64>,
-    ) {
+    ) -> bool {
+        let mut changed = false;
         if let Some(c) = cost {
             self.total_cost += c;
+            changed = true;
         }
         if let Some(t) = turns {
             self.total_turns += t;
+            changed = true;
         }
         if let Some(d) = duration {
             self.total_duration_ms += d;
+            changed = true;
         }
         if let Some(t) = input_tokens {
             self.total_input_tokens += t;
+            changed = true;
         }
         if let Some(t) = output_tokens {
             self.total_output_tokens += t;
+            changed = true;
         }
         if let Some(t) = cache_read {
             self.total_cache_read_input_tokens += t;
+            changed = true;
         }
         if let Some(t) = cache_create {
             self.total_cache_creation_input_tokens += t;
+            changed = true;
         }
+        changed
     }
 
     /// Persist the current accumulated metrics to the workflow run row.
@@ -511,86 +553,32 @@ pub fn record_step_skipped(state: &mut ExecutionState, step_key: String, step_la
 }
 
 /// Record a successful step: accumulate stats, insert StepResult, push context.
-#[allow(clippy::too_many_arguments)]
 pub fn record_step_success(
     state: &mut ExecutionState,
     step_key: String,
-    step_name: &str,
-    result_text: Option<String>,
-    cost_usd: Option<f64>,
-    num_turns: Option<i64>,
-    duration_ms: Option<i64>,
-    input_tokens: Option<i64>,
-    output_tokens: Option<i64>,
-    cache_read_input_tokens: Option<i64>,
-    cache_creation_input_tokens: Option<i64>,
-    markers: Vec<String>,
-    context: String,
-    child_run_id: Option<String>,
-    iteration: u32,
-    structured_output: Option<String>,
-    output_file: Option<String>,
+    success: crate::types::StepSuccess,
 ) {
-    state.accumulate_metrics(
-        cost_usd,
-        num_turns,
-        duration_ms,
-        input_tokens,
-        output_tokens,
-        cache_read_input_tokens,
-        cache_creation_input_tokens,
+    let metrics_changed = state.accumulate_metrics(
+        success.cost_usd,
+        success.num_turns,
+        success.duration_ms,
+        success.input_tokens,
+        success.output_tokens,
+        success.cache_read_input_tokens,
+        success.cache_creation_input_tokens,
     );
 
-    // Best-effort mid-run metrics flush — non-fatal
-    if let Err(e) = state.flush_metrics() {
-        tracing::warn!("Failed to flush mid-run metrics: {e}");
+    // Best-effort mid-run metrics flush — non-fatal, only if something changed
+    if metrics_changed {
+        if let Err(e) = state.flush_metrics() {
+            tracing::warn!("Failed to flush mid-run metrics: {e}");
+        }
     }
 
-    let markers_for_ctx = markers.clone();
-    let structured_output_for_ctx = structured_output.clone();
-    let output_file_for_ctx = output_file.clone();
-    let step_result = StepResult::completed(
-        step_name,
-        result_text,
-        cost_usd,
-        num_turns,
-        duration_ms,
-        markers,
-        context.clone(),
-        child_run_id,
-        structured_output,
-        output_file,
-    );
+    let step_result = StepResult::completed(&success);
     state.step_results.insert(step_key, step_result);
 
-    push_context_entry(
-        state,
-        step_name,
-        iteration,
-        context,
-        markers_for_ctx,
-        structured_output_for_ctx,
-        output_file_for_ctx,
-    );
-}
-
-fn push_context_entry(
-    state: &mut ExecutionState,
-    step_name: &str,
-    iteration: u32,
-    context: String,
-    markers: Vec<String>,
-    structured_output: Option<String>,
-    output_file: Option<String>,
-) {
-    state.contexts.push(ContextEntry {
-        step: step_name.to_string(),
-        iteration,
-        context,
-        markers,
-        structured_output,
-        output_file,
-    });
+    state.contexts.push(success.into());
 }
 
 /// Resolve child workflow inputs: substitute variables, apply defaults, and
@@ -767,27 +755,17 @@ pub fn restore_completed_step(
         state.last_gate_feedback = Some(feedback.clone());
     }
 
-    let markers_for_ctx = markers.clone();
-    let step_result = StepResult::completed_without_metrics(
-        step_key,
-        step.result_text.clone(),
+    let success = crate::types::StepSuccess::from_workflow_run_step(
+        step_key.to_string(),
+        step,
         markers,
-        context.clone(),
-        step.child_run_id.clone(),
-        step.structured_output.clone(),
-        step.output_file.clone(),
+        context,
+        iteration,
     );
+    let step_result = StepResult::completed_without_metrics(&success);
     state.step_results.insert(step_key.to_string(), step_result);
 
-    push_context_entry(
-        state,
-        step_key,
-        iteration,
-        context,
-        markers_for_ctx,
-        step.structured_output.clone(),
-        step.output_file.clone(),
-    );
+    state.contexts.push(success.into());
 }
 
 /// Fetch both the final step output (markers + context) and all completed step
@@ -828,15 +806,14 @@ pub fn fetch_child_completion_data(
         .map(|s| {
             let markers = parse_markers_out(s.markers_out.as_deref(), &s.step_name);
             let context = s.context_out.clone().unwrap_or_default();
-            let result = StepResult::completed_without_metrics(
-                &s.step_name,
-                s.result_text.clone(),
+            let success = crate::types::StepSuccess::from_workflow_run_step(
+                s.step_name.clone(),
+                &s,
                 markers,
                 context,
-                s.child_run_id.clone(),
-                s.structured_output.clone(),
-                s.output_file.clone(),
+                0,
             );
+            let result = StepResult::completed_without_metrics(&success);
             (s.step_name, result)
         })
         .collect();
@@ -975,5 +952,140 @@ mod tests {
         let mut inputs = HashMap::new();
         let result = apply_workflow_input_defaults(&workflow, &mut inputs);
         assert!(result.is_err(), "expected error for missing required input");
+    }
+
+    #[test]
+    fn fork_child_resets_runtime_state_and_preserves_shared_config() {
+        use crate::cancellation::CancellationToken;
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::traits::script_env_provider::NoOpScriptEnvProvider;
+        use crate::types::WorkflowExecConfig;
+
+        struct DummyChildRunner;
+        impl ChildWorkflowRunner for DummyChildRunner {
+            fn execute_child(
+                &self,
+                _workflow_name: &str,
+                _parent_state: &ExecutionState,
+                _params: ChildWorkflowInput,
+            ) -> Result<crate::types::WorkflowResult> {
+                unimplemented!()
+            }
+            fn resume_child(&self, _workflow_run_id: &str, _model: Option<&str>) -> Result<crate::types::WorkflowResult> {
+                unimplemented!()
+            }
+            fn find_resumable_child(
+                &self,
+                _parent_run_id: &str,
+                _workflow_name: &str,
+            ) -> Result<Option<crate::types::WorkflowRun>> {
+                unimplemented!()
+            }
+        }
+
+        let parent = ExecutionState {
+            persistence: Arc::new(InMemoryWorkflowPersistence::new()),
+            action_registry: Arc::new(crate::traits::action_executor::ActionRegistry::new(
+                HashMap::new(),
+                None,
+            )),
+            script_env_provider: Arc::new(NoOpScriptEnvProvider),
+            workflow_run_id: "run-1".to_string(),
+            workflow_name: "wf".to_string(),
+            worktree_ctx: WorktreeContext {
+                worktree_id: Some("wt".to_string()),
+                working_dir: "/tmp".to_string(),
+                repo_path: "/repo".to_string(),
+                ticket_id: Some("TICK-1".to_string()),
+                repo_id: Some("repo-1".to_string()),
+                extra_plugin_dirs: vec!["plugins".to_string()],
+            },
+            model: Some("gpt-4".to_string()),
+            exec_config: WorkflowExecConfig::default(),
+            inputs: {
+                let mut m = HashMap::new();
+                m.insert("key".to_string(), "val".to_string());
+                m
+            },
+            parent_run_id: "parent-1".to_string(),
+            depth: 3,
+            target_label: Some("label".to_string()),
+            step_results: {
+                let mut m = HashMap::new();
+                m.insert("step".to_string(), StepResult::default());
+                m
+            },
+            contexts: vec![ContextEntry {
+                step: "step".to_string(),
+                iteration: 1,
+                context: "ctx".to_string(),
+                markers: vec![],
+                structured_output: None,
+                output_file: None,
+            }],
+            position: 42,
+            all_succeeded: false,
+            total_cost: 1.23,
+            total_turns: 5,
+            total_duration_ms: 1000,
+            total_input_tokens: 100,
+            total_output_tokens: 200,
+            total_cache_read_input_tokens: 50,
+            total_cache_creation_input_tokens: 25,
+            last_gate_feedback: Some("feedback".to_string()),
+            block_output: Some("output".to_string()),
+            block_with: vec!["with".to_string()],
+            resume_ctx: None,
+            default_bot_name: Some("bot".to_string()),
+            triggered_by_hook: true,
+            schema_resolver: None,
+            child_runner: Some(Arc::new(DummyChildRunner)),
+            last_heartbeat_at: ExecutionState::new_heartbeat(),
+            registry: Arc::new(crate::traits::item_provider::ItemProviderRegistry::new()),
+            event_sinks: Arc::from(vec![]),
+            cancellation: CancellationToken::new(),
+            current_execution_id: Arc::new(std::sync::Mutex::new(None)),
+        };
+
+        let child_cancellation = CancellationToken::new();
+        let child = parent.fork_child(child_cancellation.clone());
+
+        // Shared config cloned
+        assert_eq!(child.workflow_run_id, "run-1");
+        assert_eq!(child.workflow_name, "wf");
+        assert_eq!(child.worktree_ctx.working_dir, "/tmp");
+        assert_eq!(child.model, Some("gpt-4".to_string()));
+        assert_eq!(child.depth, 3);
+        assert_eq!(child.target_label, Some("label".to_string()));
+        assert_eq!(child.default_bot_name, Some("bot".to_string()));
+        assert_eq!(child.parent_run_id, "parent-1");
+
+        // Runtime state reset
+        assert!(child.inputs.is_empty(), "inputs should be cleared");
+        assert!(child.step_results.is_empty(), "step_results should be cleared");
+        assert!(child.contexts.is_empty(), "contexts should be cleared");
+        assert_eq!(child.position, 0);
+        assert!(child.all_succeeded);
+        assert_eq!(child.total_cost, 0.0);
+        assert_eq!(child.total_turns, 0);
+        assert_eq!(child.total_duration_ms, 0);
+        assert_eq!(child.total_input_tokens, 0);
+        assert_eq!(child.total_output_tokens, 0);
+        assert_eq!(child.total_cache_read_input_tokens, 0);
+        assert_eq!(child.total_cache_creation_input_tokens, 0);
+        assert!(child.last_gate_feedback.is_none());
+        assert!(child.block_output.is_none());
+        assert!(child.block_with.is_empty());
+        assert!(child.resume_ctx.is_none());
+        assert!(!child.triggered_by_hook);
+        assert!(child.schema_resolver.is_none());
+        assert!(child.child_runner.is_some(), "child_runner should be cloned from parent");
+
+        // Cancellation replaced
+        assert!(!child.cancellation.is_cancelled());
+        assert!(std::sync::Arc::ptr_eq(
+            &child.current_execution_id,
+            &child.current_execution_id
+        ));
     }
 }

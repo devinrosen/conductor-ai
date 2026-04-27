@@ -72,24 +72,26 @@ pub fn execute_call_workflow(
         record_step_success(
             state,
             step_key.clone(),
-            &node.workflow,
-            Some(format!(
-                "Sub-workflow '{}' completed successfully",
-                node.workflow
-            )),
-            Some(result.total_cost),
-            Some(result.total_turns),
-            Some(result.total_duration_ms),
-            Some(result.total_input_tokens),
-            Some(result.total_output_tokens),
-            Some(result.total_cache_read_input_tokens),
-            Some(result.total_cache_creation_input_tokens),
-            markers,
-            context,
-            Some(result.workflow_run_id.clone()),
-            iteration,
-            None,
-            None,
+            crate::types::StepSuccess {
+                step_name: node.workflow.clone(),
+                result_text: Some(format!(
+                    "Sub-workflow '{}' completed successfully",
+                    node.workflow
+                )),
+                cost_usd: Some(result.total_cost),
+                num_turns: Some(result.total_turns),
+                duration_ms: Some(result.total_duration_ms),
+                input_tokens: Some(result.total_input_tokens),
+                output_tokens: Some(result.total_output_tokens),
+                cache_read_input_tokens: Some(result.total_cache_read_input_tokens),
+                cache_creation_input_tokens: Some(result.total_cache_creation_input_tokens),
+                markers,
+                context,
+                child_run_id: Some(result.workflow_run_id.clone()),
+                iteration,
+                structured_output: None,
+                output_file: None,
+            },
         );
 
         for (key, value) in child_steps {
@@ -236,23 +238,9 @@ pub fn execute_call_workflow(
         // Actually, the better approach is: child_runner gets the workflow name via the step
         // and loads it itself. We'll pass inputs as-is.
 
-        // Build a minimal dummy WorkflowDef with the name only — the runner must load the real one.
-        let placeholder_def = crate::dsl::WorkflowDef {
-            name: node.workflow.clone(),
-            title: None,
-            description: String::new(),
-            trigger: crate::dsl::WorkflowTrigger::Manual,
-            targets: vec![],
-            group: None,
-            inputs: vec![],
-            body: vec![],
-            always: vec![],
-            source_path: String::new(),
-        };
-
-        // Resolve child inputs against the placeholder (no decls → just pass through substituted vars)
+        // Resolve child inputs against an empty inputs map (no decls → just pass through substituted vars)
         let resolved_inputs =
-            match resolve_child_inputs(&raw_child_inputs, &vars, &placeholder_def.inputs) {
+            match resolve_child_inputs(&raw_child_inputs, &vars, &[]) {
                 Ok(inputs) => inputs,
                 Err(missing) => {
                     let msg = format!(
@@ -269,9 +257,9 @@ pub fn execute_call_workflow(
                 }
             };
 
-        // Use the child_runner to execute — it knows about conductor-core types
+        // Use the child_runner to execute — it resolves the real def by name
         match child_runner.execute_child(
-            &placeholder_def,
+            &node.workflow,
             state,
             crate::engine::ChildWorkflowInput {
                 inputs: resolved_inputs,
@@ -294,7 +282,13 @@ pub fn execute_call_workflow(
                     return Ok(());
                 } else {
                     let msg = format!("Sub-workflow '{}' failed", node.workflow);
-                    tracing::warn!("{} (attempt {}/{})", msg, attempt + 1, max_attempts);
+                    tracing::warn!(
+                        "{} (attempt {}/{}) [child_run_id={}]",
+                        msg,
+                        attempt + 1,
+                        max_attempts,
+                        result.workflow_run_id,
+                    );
                     state
                         .persistence
                         .update_step(

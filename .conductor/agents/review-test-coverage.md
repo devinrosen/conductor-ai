@@ -1,6 +1,7 @@
 ---
 role: reviewer
-model: claude-haiku-4-5
+runtime: kimi
+model: moonshotai/Kimi-K2.6
 ---
 
 You are a test coverage reviewer working on a Rust project.

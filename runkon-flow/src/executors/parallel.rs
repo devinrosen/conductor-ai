@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use crate::cancellation_reason::CancellationReason;
 use crate::dsl::ParallelNode;
-use crate::engine::{resolve_schema, ExecutionState};
+use crate::engine::{record_step_success, resolve_schema, ExecutionState};
 use crate::engine_error::{EngineError, Result};
 use crate::status::WorkflowStepStatus;
 use crate::traits::action_executor::{ActionOutput, ActionParams, ExecutionContext};
 use crate::traits::persistence::{NewStep, StepUpdate};
-use crate::types::{ContextEntry, StepResult};
+use crate::types::{StepResult, StepSuccess};
 
 use super::p_err;
 
@@ -36,6 +36,7 @@ pub fn execute_parallel(
     struct ParallelCallResult {
         agent_name: String,
         step_id: String,
+        agent_step_key: String,
         result: std::result::Result<ActionOutput, EngineError>,
         attempt: u32,
     }
@@ -43,6 +44,7 @@ pub fn execute_parallel(
     struct DispatchInput {
         step_id: String,
         agent_name: String,
+        agent_step_key: String,
         ectx: ExecutionContext,
         params: ActionParams,
     }
@@ -101,7 +103,7 @@ pub fn execute_parallel(
     // to exit early when fail_fast fires.
     let scope_token = state.cancellation.child();
 
-    for (i, _agent_step_key, call_schema, effective_with) in call_inputs {
+    for (i, agent_step_key, call_schema, effective_with) in call_inputs {
         let pos = pos_base + i as i64;
         let agent_ref = &node.calls[i];
         let agent_label = agent_ref.label();
@@ -191,6 +193,7 @@ pub fn execute_parallel(
         dispatch_queue.push(DispatchInput {
             step_id,
             agent_name: agent_label.to_string(),
+            agent_step_key,
             ectx,
             params,
         });
@@ -200,6 +203,7 @@ pub fn execute_parallel(
     // so that a fail_fast cancellation from a result that arrives while threads are still
     // starting will prevent those threads from doing any work.
     let (completion_tx, completion_rx) = std::sync::mpsc::channel::<(
+        String,
         String,
         String,
         std::result::Result<ActionOutput, EngineError>,
@@ -231,7 +235,17 @@ pub fn execute_parallel(
                     Err(EngineError::Workflow(msg))
                 })
             };
-            let _ = tx.send((dispatch_input.step_id, dispatch_input.agent_name, result));
+            if let Err(e) = tx.send((
+                dispatch_input.step_id,
+                dispatch_input.agent_name,
+                dispatch_input.agent_step_key,
+                result,
+            )) {
+                tracing::warn!(
+                    "parallel: result channel broken (receiver dropped): {}",
+                    e
+                );
+            }
         });
     }
     // Drop the sender so the receiver knows when all threads have completed.
@@ -239,11 +253,12 @@ pub fn execute_parallel(
 
     // Collect results as threads complete, triggering fail_fast cancellation as needed.
     let mut results: Vec<ParallelCallResult> = Vec::new();
-    for (step_id, agent_name, result) in completion_rx {
+    for (step_id, agent_name, agent_step_key, result) in completion_rx {
         let failed = result.is_err();
         results.push(ParallelCallResult {
             agent_name,
             step_id,
+            agent_step_key,
             result,
             attempt: 0,
         });
@@ -257,8 +272,9 @@ pub fn execute_parallel(
     let mut successes = 0u32;
     let mut failures = 0u32;
 
-    for pr in &results {
-        match &pr.result {
+    let results_count = results.len();
+    for pr in results {
+        match pr.result {
             Ok(output) => {
                 let markers_json = crate::helpers::serialize_or_empty_array(
                     &output.markers,
@@ -286,29 +302,17 @@ pub fn execute_parallel(
                 successes += 1;
                 merged_markers.extend(output.markers.iter().cloned());
 
-                // Push parallel agent context
-                state.contexts.push(ContextEntry {
-                    step: pr.agent_name.clone(),
-                    iteration,
-                    context: context.clone(),
-                    markers: output.markers.clone(),
-                    structured_output: output.structured_output.clone(),
-                    output_file: None,
-                });
-
-                state.accumulate_metrics(
-                    output.cost_usd,
-                    output.num_turns,
-                    output.duration_ms,
-                    output.input_tokens,
-                    output.output_tokens,
-                    output.cache_read_input_tokens,
-                    output.cache_creation_input_tokens,
+                record_step_success(
+                    state,
+                    pr.agent_step_key.clone(),
+                    StepSuccess::from_action_output(
+                        &output,
+                        pr.agent_name.clone(),
+                        context,
+                        iteration,
+                        None,
+                    ),
                 );
-
-                if let Err(e) = state.flush_metrics() {
-                    tracing::warn!("Failed to flush mid-run metrics after parallel agent: {e}");
-                }
             }
             Err(e) => {
                 tracing::warn!("parallel: '{}' failed: {e}", pr.agent_name);
@@ -323,7 +327,7 @@ pub fn execute_parallel(
 
     // Apply min_success policy (skipped-on-resume agents count as successes)
     let effective_successes = successes + skipped_count;
-    let total_agents = results.len() as u32 + skipped_count;
+    let total_agents = results_count as u32 + skipped_count;
     let min_required = node.min_success.unwrap_or(total_agents);
     tracing::info!(
         "parallel: {successes} succeeded, {failures} failed, {skipped_count} skipped out of {total_agents} agents",

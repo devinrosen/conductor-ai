@@ -1,4 +1,5 @@
-use std::path::{Path, PathBuf};
+use std::io::Read;
+use std::path::Path;
 
 use crate::dsl::ScriptNode;
 use crate::engine::{
@@ -7,39 +8,12 @@ use crate::engine::{
 };
 use crate::engine_error::Result;
 use crate::prompt_builder::build_variable_map;
-use crate::status::WorkflowStepStatus;
 use crate::traits::persistence::{NewStep, StepUpdate};
 use crate::traits::run_context::RunContext;
 
 use super::p_err;
 
-/// Create a named temp file that persists after the handle is dropped.
-///
-/// Logs a warning on any failure mode so the caller can see why capture is missing.
-fn make_temp_file(step_name: &str, purpose: &str) -> Option<PathBuf> {
-    match tempfile::NamedTempFile::new() {
-        Ok(f) => {
-            let path = f.path().to_path_buf();
-            match f.keep() {
-                Ok(_) => Some(path),
-                Err(e) => {
-                    tracing::warn!(
-                        "script '{}': failed to persist temp {purpose} file: {e}",
-                        step_name
-                    );
-                    None
-                }
-            }
-        }
-        Err(e) => {
-            tracing::warn!(
-                "script '{}': failed to create temp {purpose} file: {e}",
-                step_name
-            );
-            None
-        }
-    }
-}
+use wait_timeout::ChildExt;
 
 fn apply_script_on_fail(
     state: &mut ExecutionState,
@@ -54,6 +28,21 @@ fn apply_script_on_fail(
         }
         _ => record_step_failure(state, step_name.to_string(), step_name, err_msg, 1, true),
     }
+}
+
+/// Persist a script step failure and apply on_fail logic in one call.
+fn fail_script_step(
+    state: &mut ExecutionState,
+    step_id: &str,
+    node: &ScriptNode,
+    err_msg: String,
+) -> Result<()> {
+    tracing::warn!("{}", err_msg);
+    state
+        .persistence
+        .update_step(step_id, StepUpdate::failed(err_msg.clone(), 0))
+        .map_err(p_err)?;
+    apply_script_on_fail(state, &node.name, &node.on_fail, err_msg)
 }
 
 pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: u32) -> Result<()> {
@@ -82,41 +71,25 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
 
     if state.exec_config.dry_run {
         tracing::info!("script '{}': dry-run, skipping execution", node.name);
-        state
-            .persistence
-            .update_step(
-                &step_id,
-                StepUpdate {
-                    status: WorkflowStepStatus::Completed,
-                    child_run_id: None,
-                    result_text: Some("dry-run: script not executed".to_string()),
-                    context_out: None,
-                    markers_out: None,
-                    retry_count: Some(0),
-                    structured_output: None,
-                    step_error: None,
-                },
-            )
-            .map_err(p_err)?;
-
-        record_step_success(
+        super::persist_completed_step(
             state,
-            node.name.clone(),
-            &node.name,
+            &step_id,
+            None,
             Some("dry-run: script not executed".to_string()),
             None,
             None,
+            0,
             None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            String::new(),
-            None,
-            iteration,
-            None,
-            None,
+        )?;
+        record_step_success(
+            state,
+            node.name.clone(),
+            crate::types::StepSuccess {
+                step_name: node.name.clone(),
+                result_text: Some("dry-run: script not executed".to_string()),
+                iteration,
+                ..crate::types::StepSuccess::default()
+            },
         );
         return Ok(());
     }
@@ -191,6 +164,7 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
     const SENSITIVE_ENV_VARS: &[&str] = &[
         "LD_PRELOAD",
         "LD_LIBRARY_PATH",
+        "DYLD_LIBRARY_PATH",
         "PATH",
         "DYLD_INSERT_LIBRARIES",
         "PYTHONPATH",
@@ -208,10 +182,11 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
         }
         if SENSITIVE_ENV_VARS.contains(&k.as_str()) {
             tracing::warn!(
-                "script '{}': env block overrides security-sensitive variable {:?}",
+                "script '{}': env block overrides security-sensitive variable {:?} — skipping",
                 node.name,
                 k
             );
+            continue;
         }
         let resolved = crate::prompt_builder::substitute_variables(v, &vars);
         env_vars.insert(k.clone(), resolved);
@@ -219,9 +194,6 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
 
     // Execute the script
     let working_dir = &state.worktree_ctx.working_dir;
-    let output_file = make_temp_file(&node.name, "stdout");
-    // Redirect stderr to a temp file so it never leaks to the TUI terminal.
-    let stderr_file = make_temp_file(&node.name, "stderr");
 
     let mut cmd = std::process::Command::new("sh");
     cmd.arg("-c").arg(&script_cmd);
@@ -229,199 +201,214 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
     for (k, v) in &env_vars {
         cmd.env(k, v);
     }
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
 
-    // Optionally capture stdout to output file
-    if let Some(ref out_path) = output_file {
-        match std::fs::File::create(out_path) {
-            Ok(file) => {
-                cmd.stdout(file);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "script '{}': failed to open stdout file for writing: {e}",
-                    node.name
-                );
-            }
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            return fail_script_step(
+                state,
+                &step_id,
+                node,
+                format!("Script '{}' failed to execute: {e}", node.name),
+            );
         }
+    };
+
+    // Spawn reader threads BEFORE waiting for the child to avoid pipe deadlock.
+    // If the child writes more than the OS pipe buffer size to either stream
+    // while the parent is blocked in wait(), the child would hang forever.
+    fn spawn_reader_thread<R: Read + Send + 'static>(
+        mut pipe: R,
+        stream_name: &'static str,
+    ) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Err(e) = pipe.read_to_end(&mut buf) {
+                tracing::warn!("script: failed to read {stream_name} pipe: {e}");
+            }
+            buf
+        })
     }
 
-    // Redirect stderr to a temp file so it never leaks to the TUI terminal.
-    if let Some(ref err_path) = stderr_file {
-        match std::fs::File::create(err_path) {
-            Ok(file) => {
-                cmd.stderr(file);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "script '{}': failed to open stderr capture file: {e}",
-                    node.name
+    let stdout_handle = {
+        let pipe = match child.stdout.take() {
+            Some(p) => p,
+            None => {
+                return fail_script_step(
+                    state,
+                    &step_id,
+                    node,
+                    format!(
+                        "script '{}': stdout pipe unavailable after spawn",
+                        node.name
+                    ),
                 );
             }
-        }
-    }
+        };
+        spawn_reader_thread(pipe, "stdout")
+    };
+    let stderr_handle = {
+        let pipe = match child.stderr.take() {
+            Some(p) => p,
+            None => {
+                return fail_script_step(
+                    state,
+                    &step_id,
+                    node,
+                    format!(
+                        "script '{}': stderr pipe unavailable after spawn",
+                        node.name
+                    ),
+                );
+            }
+        };
+        spawn_reader_thread(pipe, "stderr")
+    };
 
     let start = std::time::Instant::now();
-    let result = cmd.status();
+
+    let status = if let Some(timeout_secs) = node.timeout {
+        let timeout = std::time::Duration::from_secs(timeout_secs);
+        match child.wait_timeout(timeout) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_handle.join();
+                let _ = stderr_handle.join();
+                return fail_script_step(
+                    state,
+                    &step_id,
+                    node,
+                    format!("Script '{}' timed out after {}s", node.name, timeout_secs),
+                );
+            }
+            Err(e) => {
+                let _ = stdout_handle.join();
+                let _ = stderr_handle.join();
+                return fail_script_step(
+                    state,
+                    &step_id,
+                    node,
+                    format!("Script '{}' wait failed: {e}", node.name),
+                );
+            }
+        }
+    } else {
+        match child.wait() {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = stdout_handle.join();
+                let _ = stderr_handle.join();
+                return fail_script_step(
+                    state,
+                    &step_id,
+                    node,
+                    format!("Script '{}' wait failed: {e}", node.name),
+                );
+            }
+        }
+    };
     let duration_ms = start.elapsed().as_millis() as i64;
 
-    match result {
-        Ok(status) if status.success() => {
-            tracing::info!(
-                "script '{}': completed successfully in {}ms",
-                node.name,
-                duration_ms
-            );
-
-            // Clean up stderr capture file on success.
-            if let Some(ref p) = stderr_file {
-                let _ = std::fs::remove_file(p);
+    let stdout = match stdout_handle.join() {
+        Ok(buf) => match String::from_utf8(buf) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("script: stdout is not valid UTF-8: {e}");
+                String::new()
             }
+        },
+        Err(_) => {
+            tracing::warn!("script: stdout reader thread panicked");
+            String::new()
+        }
+    };
 
-            // Read stdout and parse the CONDUCTOR_OUTPUT block so markers like
-            // `has_code_changes` are available to downstream `if` conditions.
-            let stdout = output_file.as_ref().and_then(|p| {
-                std::fs::read_to_string(p)
-                    .map_err(|e| {
-                        tracing::warn!("script '{}': failed to read stdout: {e}", node.name)
-                    })
-                    .ok()
+    if status.success() {
+        // Discard stderr on success — join the thread so it doesn't leak,
+        // but don't convert to String to avoid unnecessary allocation.
+        let _ = stderr_handle.join();
+
+        tracing::info!(
+            "script '{}': completed successfully in {}ms",
+            node.name,
+            duration_ms
+        );
+
+        let (markers, context) = crate::helpers::parse_conductor_output(&stdout)
+            .map(|out| (out.markers, out.context))
+            .unwrap_or_else(|| {
+                let ctx = stdout.chars().take(2000).collect();
+                (vec![], ctx)
             });
-            let (markers, context) = stdout
-                .as_deref()
-                .and_then(crate::helpers::parse_conductor_output)
-                .map(|out| (out.markers, out.context))
-                .unwrap_or_else(|| {
-                    let ctx = stdout.as_deref().unwrap_or("").chars().take(2000).collect();
-                    (vec![], ctx)
-                });
 
-            let markers_json = crate::helpers::serialize_or_empty_array(
-                &markers,
-                &format!("script '{}'", node.name),
-            );
-            let output_file_path = output_file
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string());
+        let markers_json = crate::helpers::serialize_or_empty_array(
+            &markers,
+            &format!("script '{}'", node.name),
+        );
 
-            state
-                .persistence
-                .update_step(
-                    &step_id,
-                    StepUpdate {
-                        status: WorkflowStepStatus::Completed,
-                        child_run_id: None,
-                        result_text: Some(format!("Script '{}' completed", node.name)),
-                        context_out: Some(context.clone()),
-                        markers_out: Some(markers_json),
-                        retry_count: Some(0),
-                        structured_output: None,
-                        step_error: None,
-                    },
-                )
-                .map_err(p_err)?;
+        super::persist_completed_step(
+            state,
+            &step_id,
+            None,
+            Some(format!("Script '{}' completed", node.name)),
+            Some(context.clone()),
+            Some(markers_json),
+            0,
+            None,
+        )?;
 
-            record_step_success(
-                state,
-                node.name.clone(),
-                &node.name,
-                Some(format!("Script '{}' completed", node.name)),
-                None,
-                None,
-                Some(duration_ms),
-                None,
-                None,
-                None,
-                None,
+        record_step_success(
+            state,
+            node.name.clone(),
+            crate::types::StepSuccess {
+                step_name: node.name.clone(),
+                result_text: Some(format!("Script '{}' completed", node.name)),
+                duration_ms: Some(duration_ms),
                 markers,
                 context,
-                None,
                 iteration,
-                None,
-                output_file_path,
-            );
+                ..crate::types::StepSuccess::default()
+            },
+        );
 
-            Ok(())
-        }
-        Ok(status) => {
-            let exit_code = status.code().unwrap_or(-1);
+        Ok(())
+    } else {
+        let exit_code = status.code().unwrap_or(-1);
 
-            // Read captured stderr (up to 2 000 chars) to include in the error.
-            let captured_stderr = stderr_file.as_ref().and_then(|p| {
-                std::fs::read_to_string(p)
-                    .map_err(|e| {
-                        tracing::warn!(
-                            "script '{}': failed to read captured stderr: {e}",
-                            node.name
-                        )
-                    })
-                    .ok()
-                    .map(|s| s.trim().chars().take(2000).collect::<String>())
-                    .filter(|s| !s.is_empty())
-            });
-
-            let err_msg = match &captured_stderr {
-                Some(stderr) => format!(
-                    "Script '{}' exited with code {}\n{}",
-                    node.name, exit_code, stderr
-                ),
-                None => format!("Script '{}' exited with code {}", node.name, exit_code),
-            };
-            tracing::warn!("{}", err_msg);
-
-            state
-                .persistence
-                .update_step(
-                    &step_id,
-                    StepUpdate {
-                        status: WorkflowStepStatus::Failed,
-                        child_run_id: None,
-                        result_text: Some(err_msg.clone()),
-                        context_out: None,
-                        markers_out: None,
-                        retry_count: Some(0),
-                        structured_output: None,
-                        step_error: Some(err_msg.clone()),
-                    },
-                )
-                .map_err(p_err)?;
-
-            // Clean up output file and stderr file on failure
-            if let Some(ref p) = output_file {
-                let _ = std::fs::remove_file(p);
+        let stderr = match stderr_handle.join() {
+            Ok(buf) => match String::from_utf8(buf) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("script: stderr is not valid UTF-8: {e}");
+                    String::new()
+                }
+            },
+            Err(_) => {
+                tracing::warn!("script: stderr reader thread panicked");
+                String::new()
             }
-            if let Some(ref p) = stderr_file {
-                let _ = std::fs::remove_file(p);
-            }
+        };
 
-            apply_script_on_fail(state, &node.name, &node.on_fail, err_msg)
-        }
-        Err(e) => {
-            let err_msg = format!("Script '{}' failed to execute: {e}", node.name);
-            tracing::warn!("{}", err_msg);
+        let captured_stderr = stderr
+            .trim()
+            .chars()
+            .take(2000)
+            .collect::<String>();
 
-            state
-                .persistence
-                .update_step(
-                    &step_id,
-                    StepUpdate {
-                        status: WorkflowStepStatus::Failed,
-                        child_run_id: None,
-                        result_text: Some(err_msg.clone()),
-                        context_out: None,
-                        markers_out: None,
-                        retry_count: Some(0),
-                        structured_output: None,
-                        step_error: Some(err_msg.clone()),
-                    },
-                )
-                .map_err(p_err)?;
+        let err_msg = if captured_stderr.is_empty() {
+            format!("Script '{}' exited with code {}", node.name, exit_code)
+        } else {
+            format!(
+                "Script '{}' exited with code {}\n{}",
+                node.name, exit_code, captured_stderr
+            )
+        };
 
-            if let Some(ref p) = stderr_file {
-                let _ = std::fs::remove_file(p);
-            }
-
-            apply_script_on_fail(state, &node.name, &node.on_fail, err_msg)
-        }
+        fail_script_step(state, &step_id, node, err_msg)
     }
 }
 
@@ -430,6 +417,7 @@ mod tests {
     use super::*;
     use crate::dsl::ScriptNode;
     use crate::engine::{ExecutionState, WorktreeContext};
+    use crate::status::WorkflowStepStatus;
     use crate::persistence_memory::InMemoryWorkflowPersistence;
     use crate::traits::action_executor::ActionRegistry;
     use crate::traits::item_provider::ItemProviderRegistry;
@@ -666,5 +654,172 @@ mod tests {
             ctx.contains("substituted"),
             "template in env value should be substituted; context: {ctx:?}"
         );
+    }
+
+    /// Security-sensitive env vars in node.env are skipped, not injected.
+    #[test]
+    fn sensitive_env_vars_are_blocked() {
+        let (persistence, run_id) = make_persistence();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone());
+
+        let mut env = HashMap::new();
+        env.insert("LD_PRELOAD".to_string(), "/malicious/lib.so".to_string());
+        env.insert("DYLD_LIBRARY_PATH".to_string(), "/malicious/lib".to_string());
+        env.insert("SAFE_VAR".to_string(), "allowed_value".to_string());
+        let node = ScriptNode {
+            name: "sensitive-test".to_string(),
+            run: "echo SAFE_VAR=[$SAFE_VAR] LD_PRELOAD=[$LD_PRELOAD] DYLD_LIBRARY_PATH=[$DYLD_LIBRARY_PATH]".to_string(),
+            env,
+            timeout: None,
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        };
+        execute_script(&mut state, &node, 0).unwrap();
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        let step = &steps[0];
+        assert_eq!(step.status, WorkflowStepStatus::Completed);
+        let ctx = step.context_out.as_deref().unwrap_or("");
+        assert!(
+            ctx.contains("SAFE_VAR=[allowed_value]"),
+            "SAFE_VAR should be injected; context: {ctx:?}"
+        );
+        assert!(
+            !ctx.contains("/malicious/lib.so"),
+            "LD_PRELOAD should be blocked; context: {ctx:?}"
+        );
+        assert!(
+            !ctx.contains("/malicious/lib"),
+            "DYLD_LIBRARY_PATH should be blocked; context: {ctx:?}"
+        );
+    }
+
+    /// A script that exceeds its timeout is killed and the step is marked Failed.
+    #[test]
+    fn script_timeout_kills_long_running_process() {
+        let (persistence, run_id) = make_persistence();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone());
+        let node = ScriptNode {
+            name: "sleepy".to_string(),
+            run: "sleep 5".to_string(),
+            env: Default::default(),
+            timeout: Some(1), // 1 second timeout
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        };
+        let result = execute_script(&mut state, &node, 0);
+        // on_fail is None, so failure should return Err.
+        assert!(result.is_err(), "expected timeout error");
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        assert_eq!(steps.len(), 1);
+        let step = &steps[0];
+        assert_eq!(step.status, WorkflowStepStatus::Failed);
+        let err_text = step.result_text.as_deref().unwrap_or("");
+        assert!(
+            err_text.contains("timed out"),
+            "error should mention timeout: {err_text}"
+        );
+    }
+
+    /// A script that writes more than the OS pipe buffer to stdout must not deadlock.
+    /// This is a regression test for the pipe-deadlock fix (reader threads spawned
+    /// before wait()).
+    #[test]
+    fn pipe_deadlock_regression_large_stdout() {
+        let (persistence, run_id) = make_persistence();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone());
+        // Output 128KB of 'x' to stdout — well above the typical 64KB pipe buffer.
+        let node = ScriptNode {
+            name: "bigout".to_string(),
+            run: "python3 -c \"import sys; sys.stdout.write('x' * 131072)\"".to_string(),
+            env: Default::default(),
+            timeout: None,
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        };
+        execute_script(&mut state, &node, 0).unwrap();
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        assert_eq!(steps.len(), 1);
+        let step = &steps[0];
+        assert_eq!(step.status, WorkflowStepStatus::Completed);
+    }
+
+    /// Non-UTF-8 stdout is handled gracefully: the step still completes and the
+    /// invalid bytes are dropped with a logged warning.
+    #[test]
+    fn non_utf8_stdout_is_handled_gracefully() {
+        let (persistence, run_id) = make_persistence();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone());
+        let node = ScriptNode {
+            name: "binary".to_string(),
+            run: "python3 -c \"import sys; sys.stdout.buffer.write(bytes([0x80,0x81,0x82]))\"".to_string(),
+            env: Default::default(),
+            timeout: None,
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        };
+        execute_script(&mut state, &node, 0).unwrap();
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        assert_eq!(steps.len(), 1);
+        let step = &steps[0];
+        assert_eq!(step.status, WorkflowStepStatus::Completed);
+    }
+
+    /// A non-success exit code with stderr output must capture stderr in the step error.
+    #[test]
+    fn non_success_exit_with_stderr_capture() {
+        let (persistence, run_id) = make_persistence();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone());
+        let node = ScriptNode {
+            name: "fails-with-stderr".to_string(),
+            run: "echo 'error details' >&2 && exit 1".to_string(),
+            env: Default::default(),
+            timeout: None,
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        };
+        let result = execute_script(&mut state, &node, 0);
+        assert!(result.is_err(), "expected failure for non-zero exit");
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        assert_eq!(steps.len(), 1);
+        let step = &steps[0];
+        assert_eq!(step.status, WorkflowStepStatus::Failed);
+        let err_text = step.result_text.as_deref().unwrap_or("");
+        assert!(
+            err_text.contains("error details"),
+            "stderr should be captured in error message: {err_text}"
+        );
+    }
+
+    /// Non-UTF-8 stderr on a failed script must not panic; the step is marked Failed.
+    #[test]
+    fn non_utf8_stderr_is_handled_gracefully() {
+        let (persistence, run_id) = make_persistence();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone());
+        let node = ScriptNode {
+            name: "bad-stderr".to_string(),
+            run: "python3 -c \"import sys; sys.stderr.buffer.write(bytes([0x80,0x81,0x82])); sys.exit(1)\"".to_string(),
+            env: Default::default(),
+            timeout: None,
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        };
+        let result = execute_script(&mut state, &node, 0);
+        assert!(result.is_err(), "expected failure for non-zero exit");
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        assert_eq!(steps.len(), 1);
+        let step = &steps[0];
+        assert_eq!(step.status, WorkflowStepStatus::Failed);
     }
 }

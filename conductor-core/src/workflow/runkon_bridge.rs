@@ -493,22 +493,21 @@ impl ConductorChildWorkflowRunner {
 impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
     fn execute_child(
         &self,
-        child_def: &runkon_flow::dsl::WorkflowDef,
+        workflow_name: &str,
         parent_state: &runkon_flow::engine::ExecutionState,
         params: runkon_flow::engine::ChildWorkflowInput,
     ) -> runkon_flow::engine_error::Result<runkon_flow::types::WorkflowResult> {
-        // Load the real workflow definition from disk. The caller passes a placeholder
-        // WorkflowDef with body=[] — the child runner is responsible for resolving the
+        // Load the real workflow definition from disk. The runner resolves the
         // actual definition by name from the worktree/repo .conductor/workflows/ directory.
         let core_def = runkon_flow::dsl::load_workflow_by_name(
             &parent_state.worktree_ctx.working_dir,
             &parent_state.worktree_ctx.repo_path,
-            &child_def.name,
+            workflow_name,
         )
         .map_err(|e| {
             EngineError::Workflow(format!(
                 "failed to load sub-workflow '{}': {e}",
-                child_def.name
+                workflow_name
             ))
         })?;
 
@@ -554,7 +553,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
                 ConductorError::WorkflowCancelled => EngineError::from(e),
                 other => EngineError::Workflow(format!(
                     "child workflow '{}' failed: {other}",
-                    child_def.name
+                    workflow_name
                 )),
             })?;
 
