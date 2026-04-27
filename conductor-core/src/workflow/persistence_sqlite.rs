@@ -6,14 +6,13 @@ use rusqlite::Connection;
 
 use crate::error::ConductorError;
 use crate::workflow::engine_error::EngineError;
-use crate::workflow::manager::FanOutItemRow;
 use crate::workflow::manager::WorkflowManager;
 use crate::workflow::status::WorkflowRunStatus;
 use crate::workflow::types::{WorkflowRun, WorkflowRunStep};
 
 use super::persistence::{
-    FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,
-    WorkflowPersistence,
+    FanOutItemRow, FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep,
+    StepUpdate, WorkflowPersistence,
 };
 
 /// SQLite-backed implementation of `WorkflowPersistence`.
@@ -464,6 +463,97 @@ mod tests {
             fetched.total_turns,
             Some(num_turns),
             "total_turns should match the num_turns argument"
+        );
+    }
+
+    /// `approve_gate` with non-empty `selections` must write `context_out` to the step row.
+    ///
+    /// The `SqliteWorkflowPersistence` implementation calls
+    /// `format_gate_selection_context` when `selections` is non-empty, so the
+    /// resulting `context_out` should contain each selection item.
+    #[test]
+    fn test_approve_gate_with_selections_sets_context_out() {
+        let conn = crate::test_helpers::setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(conn));
+        let p = SqliteWorkflowPersistence::from_shared_connection(std::sync::Arc::clone(&shared));
+
+        let run = p.create_run(make_new_run(parent.id)).unwrap();
+        let step_id = p
+            .insert_step(NewStep {
+                workflow_run_id: run.id.clone(),
+                step_name: "review-gate".to_string(),
+                role: "gate".to_string(),
+                can_commit: false,
+                position: 0,
+                iteration: 0,
+                retry_count: None,
+            })
+            .unwrap();
+
+        // Configure gate_options so validation passes for the selections.
+        // The validation expects an array of objects with a "value" key.
+        {
+            let conn = shared.lock().unwrap();
+            let mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+            mgr.set_step_gate_options(
+                &step_id,
+                r#"[{"value":"item-a"},{"value":"item-b"},{"value":"item-c"}]"#,
+            )
+            .unwrap();
+        }
+
+        let selections = vec!["item-a".to_string(), "item-b".to_string()];
+        p.approve_gate(&step_id, "human", None, Some(&selections))
+            .unwrap();
+
+        // Read back the step to verify context_out was written.
+        let steps = p.get_steps(&run.id).unwrap();
+        let step = steps.iter().find(|s| s.id == step_id).unwrap();
+        let context_out = step
+            .context_out
+            .as_deref()
+            .expect("context_out should be set when selections are provided");
+        assert!(
+            context_out.contains("item-a"),
+            "context_out should contain the first selection; got: {context_out:?}"
+        );
+        assert!(
+            context_out.contains("item-b"),
+            "context_out should contain the second selection; got: {context_out:?}"
+        );
+    }
+
+    /// `approve_gate` with `selections = Some(&[])` (empty slice) must NOT set
+    /// `context_out` — the persistence layer filters empty selections out.
+    #[test]
+    fn test_approve_gate_with_empty_selections_sets_no_context_out() {
+        let (p, parent_id) = make_persistence();
+        let run = p.create_run(make_new_run(parent_id)).unwrap();
+        let step_id = p
+            .insert_step(NewStep {
+                workflow_run_id: run.id.clone(),
+                step_name: "review-gate".to_string(),
+                role: "gate".to_string(),
+                can_commit: false,
+                position: 0,
+                iteration: 0,
+                retry_count: None,
+            })
+            .unwrap();
+
+        // Pass an empty selections slice — validation is skipped for empty slices,
+        // and `format_gate_selection_context` is not called, so context_out stays None.
+        p.approve_gate(&step_id, "human", None, Some(&[])).unwrap();
+
+        let steps = p.get_steps(&run.id).unwrap();
+        let step = steps.iter().find(|s| s.id == step_id).unwrap();
+        assert!(
+            step.context_out.is_none(),
+            "context_out should be None for empty selections; got: {:?}",
+            step.context_out
         );
     }
 

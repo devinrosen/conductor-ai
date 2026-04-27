@@ -6,6 +6,9 @@ pub mod gate;
 pub mod parallel;
 pub mod script;
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use crate::engine_error::EngineError;
 
 #[inline]
@@ -48,6 +51,81 @@ pub(super) fn begin_retry_attempt(
         })
         .map_err(p_err)?;
     Ok(step_id)
+}
+
+/// Build the inputs map (`Arc<HashMap<String, String>>`) from the current execution state.
+///
+/// Serializes `state.contexts` into a flat variable map once so callers do not
+/// duplicate the `build_variable_map` → collect pattern.
+pub(super) fn build_inputs_map(
+    state: &crate::engine::ExecutionState,
+) -> Arc<HashMap<String, String>> {
+    let var_map = crate::prompt_builder::build_variable_map(state);
+    Arc::new(
+        var_map
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+    )
+}
+
+/// Construct an `ExecutionContext` from shared state fields.
+///
+/// Centralises the repeated struct-literal initialisation in `call.rs` and
+/// `parallel.rs`.  Both sites differ only in `bot_name` and `plugin_dirs`;
+/// all other fields come directly from `state`.
+pub(super) fn build_execution_context(
+    state: &crate::engine::ExecutionState,
+    step_id: &str,
+    bot_name: Option<String>,
+    plugin_dirs: Vec<String>,
+) -> crate::traits::action_executor::ExecutionContext {
+    crate::traits::action_executor::ExecutionContext {
+        run_id: step_id.to_string(),
+        working_dir: std::path::PathBuf::from(&state.worktree_ctx.working_dir),
+        repo_path: state.worktree_ctx.repo_path.clone(),
+        step_timeout: state.exec_config.step_timeout,
+        shutdown: state.exec_config.shutdown.clone(),
+        model: state.model.clone(),
+        bot_name,
+        plugin_dirs,
+        workflow_name: state.workflow_name.clone(),
+        worktree_id: state.worktree_ctx.worktree_id.clone(),
+        parent_run_id: state.parent_run_id.clone(),
+        step_id: step_id.to_string(),
+    }
+}
+
+/// Persist a successfully completed step via `state.persistence.update_step`.
+///
+/// Wraps the `StepUpdate::completed(...)` + `.map_err(p_err)` pattern that is
+/// duplicated in `call.rs`, `parallel.rs`, and `call_workflow.rs`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn persist_completed_step(
+    state: &crate::engine::ExecutionState,
+    step_id: &str,
+    child_run_id: Option<String>,
+    result_text: Option<String>,
+    context_out: Option<String>,
+    markers_out: Option<String>,
+    attempt: u32,
+    structured_output: Option<String>,
+) -> crate::engine_error::Result<()> {
+    use crate::traits::persistence::StepUpdate;
+    state
+        .persistence
+        .update_step(
+            step_id,
+            StepUpdate::completed(
+                child_run_id,
+                result_text,
+                context_out,
+                markers_out,
+                attempt,
+                structured_output,
+            ),
+        )
+        .map_err(p_err)
 }
 
 /// Returns `true` and performs skip cleanup if the step has already completed.

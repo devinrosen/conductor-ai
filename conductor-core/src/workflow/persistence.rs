@@ -1,7 +1,25 @@
 use crate::workflow::engine_error::EngineError;
-use crate::workflow::manager::FanOutItemRow;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::workflow::types::{WorkflowRun, WorkflowRunStep};
+
+/// A single row in the `workflow_run_step_fan_out_items` table.
+///
+/// Defined here (in the persistence trait module) rather than in the manager layer
+/// so that implementations of `WorkflowPersistence` can reference it without a
+/// dependency on `manager`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct FanOutItemRow {
+    pub id: String,
+    pub step_run_id: String,
+    pub item_type: String,
+    pub item_id: String,
+    pub item_ref: String,
+    pub child_run_id: Option<String>,
+    pub status: String,
+    pub dispatched_at: Option<String>,
+    pub completed_at: Option<String>,
+}
 
 /// Parameters for creating a new workflow run.
 pub struct NewRun {

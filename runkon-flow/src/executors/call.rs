@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -9,9 +8,8 @@ use crate::engine::{
 };
 use crate::engine_error::{EngineError, Result};
 use crate::events::EngineEvent;
-use crate::prompt_builder::build_variable_map;
 use crate::status::WorkflowStepStatus;
-use crate::traits::action_executor::{ActionParams, ExecutionContext};
+use crate::traits::action_executor::ActionParams;
 use crate::traits::persistence::StepUpdate;
 
 use super::p_err;
@@ -84,13 +82,7 @@ fn execute_call_inner(
         );
 
         // Build variable map and inputs for this attempt
-        let inputs: Arc<HashMap<String, String>> = Arc::new({
-            let var_map = build_variable_map(state);
-            var_map
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v))
-                .collect()
-        });
+        let inputs = super::build_inputs_map(state);
 
         let effective_bot_name = node
             .bot_name
@@ -105,20 +97,8 @@ fn execute_call_inner(
             }
         }
 
-        let ectx = ExecutionContext {
-            run_id: step_id.clone(),
-            working_dir: std::path::PathBuf::from(&state.worktree_ctx.working_dir),
-            repo_path: state.worktree_ctx.repo_path.clone(),
-            step_timeout: state.exec_config.step_timeout,
-            shutdown: state.exec_config.shutdown.clone(),
-            model: state.model.clone(),
-            bot_name: effective_bot_name,
-            plugin_dirs: merged_plugin_dirs,
-            workflow_name: state.workflow_name.clone(),
-            worktree_id: state.worktree_ctx.worktree_id.clone(),
-            parent_run_id: state.parent_run_id.clone(),
-            step_id: step_id.clone(),
-        };
+        let ectx =
+            super::build_execution_context(state, &step_id, effective_bot_name, merged_plugin_dirs);
 
         let params = ActionParams {
             name: agent_label.to_string(),
@@ -240,20 +220,16 @@ fn execute_call_inner(
                 );
 
                 // Update step to completed
-                state
-                    .persistence
-                    .update_step(
-                        &step_id,
-                        StepUpdate::completed(
-                            output.child_run_id.clone(),
-                            output.result_text.clone(),
-                            Some(context.clone()),
-                            Some(markers_json),
-                            attempt,
-                            output.structured_output.clone(),
-                        ),
-                    )
-                    .map_err(p_err)?;
+                super::persist_completed_step(
+                    state,
+                    &step_id,
+                    output.child_run_id.clone(),
+                    output.result_text.clone(),
+                    Some(context.clone()),
+                    Some(markers_json),
+                    attempt,
+                    output.structured_output.clone(),
+                )?;
 
                 emit_event(
                     state,

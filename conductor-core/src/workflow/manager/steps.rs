@@ -429,7 +429,7 @@ impl<'a> WorkflowManager<'a> {
         // Get the stored gate options for this step
         let mut stmt = self
             .conn
-            .prepare("SELECT gate_options FROM workflow_run_steps WHERE id = :id")?;
+            .prepare_cached("SELECT gate_options FROM workflow_run_steps WHERE id = :id")?;
         let gate_options: Option<String> = stmt
             .query_row(named_params![":id": step_id], |row| {
                 row.get::<_, Option<String>>("gate_options")

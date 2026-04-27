@@ -96,20 +96,16 @@ pub fn execute_call_workflow(
                         &format!("call_workflow '{}'", node.workflow),
                     );
 
-                    state
-                        .persistence
-                        .update_step(
-                            &step_id,
-                            StepUpdate::completed(
-                                Some(result.workflow_run_id.clone()),
-                                Some(format!("Sub-workflow '{}' completed", node.workflow)),
-                                Some(context.clone()),
-                                Some(markers_json),
-                                0,
-                                None,
-                            ),
-                        )
-                        .map_err(p_err)?;
+                    super::persist_completed_step(
+                        state,
+                        &step_id,
+                        Some(result.workflow_run_id.clone()),
+                        Some(format!("Sub-workflow '{}' completed", node.workflow)),
+                        Some(context.clone()),
+                        Some(markers_json),
+                        0,
+                        None,
+                    )?;
 
                     record_step_success(
                         state,
@@ -325,20 +321,16 @@ pub fn execute_call_workflow(
                         &format!("call_workflow '{}'", node.workflow),
                     );
 
-                    state
-                        .persistence
-                        .update_step(
-                            &step_id,
-                            StepUpdate::completed(
-                                Some(result.workflow_run_id.clone()),
-                                Some(format!("Sub-workflow '{}' completed", node.workflow)),
-                                Some(context.clone()),
-                                Some(markers_json),
-                                attempt,
-                                None,
-                            ),
-                        )
-                        .map_err(p_err)?;
+                    super::persist_completed_step(
+                        state,
+                        &step_id,
+                        Some(result.workflow_run_id.clone()),
+                        Some(format!("Sub-workflow '{}' completed", node.workflow)),
+                        Some(context.clone()),
+                        Some(markers_json),
+                        attempt,
+                        None,
+                    )?;
 
                     record_step_success(
                         state,

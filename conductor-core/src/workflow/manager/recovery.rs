@@ -1569,6 +1569,45 @@ mod tests {
         assert_eq!(config.general.auto_resume_limit, 3);
     }
 
+    // ── run_workflow_maintenance ───────────────────────────────────────────────
+
+    /// When `auto_resume_limit = 0` the maintenance path must not attempt any
+    /// auto-resume: `classify_resumable_workflows` is never called because
+    /// `run_workflow_maintenance` gates it behind `auto_resume_limit > 0`.
+    #[test]
+    fn test_run_workflow_maintenance_skips_resume_when_limit_zero() {
+        let (conn, parent_id) = setup();
+        // Seed a run that *would* qualify for auto-resume if the limit were > 0.
+        insert_run(&conn, "run1", &parent_id, "failed", Some(ORPHAN_ERROR), 0);
+
+        let mgr = WorkflowManager::new(&conn);
+        let mut config = Config::default();
+        config.general.auto_resume_limit = 0;
+
+        // Must not panic or error.
+        mgr.run_workflow_maintenance(&config, None);
+
+        // The run must remain `failed` — no classification occurred.
+        assert_eq!(
+            run_status(&conn, "run1"),
+            "failed",
+            "status must stay 'failed' when auto_resume_limit = 0"
+        );
+    }
+
+    /// Smoke test: `run_workflow_maintenance` with a positive limit and an empty
+    /// database completes without panicking or returning an error.
+    #[test]
+    fn test_run_workflow_maintenance_completes_without_error_no_stuck_runs() {
+        // Use a fresh database with no workflow runs at all.
+        let conn = crate::test_helpers::setup_db_with_agent_run();
+        let mgr = WorkflowManager::new(&conn);
+        let config = Config::default(); // auto_resume_limit = 3
+
+        // Must not panic — there are no stuck/stale/needs_resume runs to process.
+        mgr.run_workflow_maintenance(&config, None);
+    }
+
     // ── delete_run_recursive: multi-level CTE deletion ────────────────────────
 
     #[test]

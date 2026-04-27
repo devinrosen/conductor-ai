@@ -143,6 +143,39 @@ fn is_eligible(
         .unwrap_or(true)
 }
 
+/// Record a successful foreach step with the standard set of defaulted arguments.
+///
+/// `record_step_success` takes 17 arguments; all of the foreach-specific ones
+/// default to `None` / `vec![]`.  This wrapper narrows the call site to the
+/// three values that actually vary: `step_key`, `step_name`, and `context`.
+fn record_foreach_step_success(
+    state: &mut ExecutionState,
+    step_key: String,
+    step_name: &str,
+    context: String,
+    iteration: u32,
+) {
+    record_step_success(
+        state,
+        step_key,
+        step_name,
+        Some(context.clone()),
+        None,   // cost_usd
+        None,   // num_turns
+        None,   // duration_ms
+        None,   // input_tokens
+        None,   // output_tokens
+        None,   // cache_read_input_tokens
+        None,   // cache_creation_input_tokens
+        vec![], // markers
+        context,
+        None, // child_run_id
+        iteration,
+        None, // structured_output
+        None, // output_file
+    );
+}
+
 /// Execute a `foreach` step: fan out a child workflow over a collection of items.
 pub fn execute_foreach(
     state: &mut ExecutionState,
@@ -284,25 +317,7 @@ pub fn execute_foreach(
             )
             .map_err(p_err)?;
 
-        record_step_success(
-            state,
-            step_key,
-            &node.name,
-            Some(context.clone()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            context,
-            None,
-            iteration,
-            None,
-            None,
-        );
+        record_foreach_step_success(state, step_key, &node.name, context, iteration);
         return Ok(());
     }
 
@@ -654,25 +669,7 @@ pub fn execute_foreach(
             )
             .map_err(p_err)?;
 
-        record_step_success(
-            state,
-            step_key,
-            &node.name,
-            Some(context.clone()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            context,
-            None,
-            iteration,
-            None,
-            None,
-        );
+        record_foreach_step_success(state, step_key, &node.name, context, iteration);
     } else {
         let error_msg = format!(
             "foreach '{}': {failed_count} of {total_items} items failed",

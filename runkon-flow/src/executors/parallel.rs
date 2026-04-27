@@ -95,13 +95,7 @@ pub fn execute_parallel(
 
     // Build the variable map once — state doesn't change between branches so there is
     // no need to re-serialize state.contexts for every parallel branch.
-    let shared_inputs: Arc<std::collections::HashMap<String, String>> = Arc::new({
-        let var_map = crate::prompt_builder::build_variable_map(state);
-        var_map
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect()
-    });
+    let shared_inputs = super::build_inputs_map(state);
 
     // Parallel-scope token: child of the run root. Cancelling it signals running branches
     // to exit early when fail_fast fires.
@@ -176,20 +170,12 @@ pub fn execute_parallel(
 
         let inputs = Arc::clone(&shared_inputs);
 
-        let ectx = ExecutionContext {
-            run_id: step_id.clone(),
-            working_dir: std::path::PathBuf::from(&state.worktree_ctx.working_dir),
-            repo_path: state.worktree_ctx.repo_path.clone(),
-            step_timeout: state.exec_config.step_timeout,
-            shutdown: state.exec_config.shutdown.clone(),
-            model: state.model.clone(),
-            bot_name: state.default_bot_name.clone(),
-            plugin_dirs: state.worktree_ctx.extra_plugin_dirs.clone(),
-            workflow_name: state.workflow_name.clone(),
-            worktree_id: state.worktree_ctx.worktree_id.clone(),
-            parent_run_id: state.parent_run_id.clone(),
-            step_id: step_id.clone(),
-        };
+        let ectx = super::build_execution_context(
+            state,
+            &step_id,
+            state.default_bot_name.clone(),
+            state.worktree_ctx.extra_plugin_dirs.clone(),
+        );
 
         let params = ActionParams {
             name: agent_label.to_string(),
@@ -276,20 +262,16 @@ pub fn execute_parallel(
                 );
                 let context = output.context.clone().unwrap_or_default();
 
-                state
-                    .persistence
-                    .update_step(
-                        &pr.step_id,
-                        StepUpdate::completed(
-                            output.child_run_id.clone(),
-                            output.result_text.clone(),
-                            Some(context.clone()),
-                            Some(markers_json),
-                            pr.attempt,
-                            output.structured_output.clone(),
-                        ),
-                    )
-                    .map_err(p_err)?;
+                super::persist_completed_step(
+                    state,
+                    &pr.step_id,
+                    output.child_run_id.clone(),
+                    output.result_text.clone(),
+                    Some(context.clone()),
+                    Some(markers_json),
+                    pr.attempt,
+                    output.structured_output.clone(),
+                )?;
 
                 tracing::info!(
                     "parallel: '{}' completed (cost=${:.4})",

@@ -8,11 +8,10 @@
 //! once conductor-core and runkon-flow types are fully unified (planned for a future
 //! phase after Phase 3.3).
 
-use crate::workflow::manager::FanOutItemRow as CoreFanOutItemRow;
 use crate::workflow::persistence::{
-    FanOutItemStatus as CoreFanOutItemStatus, FanOutItemUpdate as CoreFanOutItemUpdate,
-    GateApprovalState as CoreGateApprovalState, NewRun as CoreNewRun, NewStep as CoreNewStep,
-    StepUpdate as CoreStepUpdate,
+    FanOutItemRow as CoreFanOutItemRow, FanOutItemStatus as CoreFanOutItemStatus,
+    FanOutItemUpdate as CoreFanOutItemUpdate, GateApprovalState as CoreGateApprovalState,
+    NewRun as CoreNewRun, NewStep as CoreNewStep, StepUpdate as CoreStepUpdate,
 };
 use crate::workflow::types::{
     BlockedOn as CoreBlockedOn, GateKind, WorkflowRun as CoreRun, WorkflowRunStep as CoreStep,
@@ -27,53 +26,87 @@ use runkon_flow::types::{
     WorkflowRunStep as RkStep,
 };
 
-/// Generate bidirectional `From` impls between two enums whose variants are
-/// identical in name (just in different namespaces).  Both directions are
-/// produced from a single macro invocation so future variant additions require
-/// only one edit.
-macro_rules! impl_bidirectional_status_from {
-    ($core:path, $rk:path, [$($variant:ident),+ $(,)?]) => {
-        impl From<$rk> for $core {
-            fn from(s: $rk) -> Self {
-                use $rk as Rk;
-                use $core as Core;
-                match s {
-                    $(Rk::$variant => Core::$variant),+
-                }
-            }
+// ---------------------------------------------------------------------------
+// WorkflowRunStatus conversions
+//
+// The rk→core direction uses a catch-all (`_`) so that new variants added to
+// `runkon_flow::status::WorkflowRunStatus` do NOT force a compile error here.
+// Unknown variants map to `Failed` (the safest observable default).
+// The core→rk direction remains exhaustive: conductor-core controls that enum
+// and we want a compile error if a new core variant is unhandled.
+// ---------------------------------------------------------------------------
+
+impl From<runkon_flow::status::WorkflowRunStatus> for crate::workflow::status::WorkflowRunStatus {
+    fn from(s: runkon_flow::status::WorkflowRunStatus) -> Self {
+        use runkon_flow::status::WorkflowRunStatus as Rk;
+        match s {
+            Rk::Pending => Self::Pending,
+            Rk::Running => Self::Running,
+            Rk::Completed => Self::Completed,
+            Rk::Failed => Self::Failed,
+            Rk::Cancelled => Self::Cancelled,
+            Rk::Waiting => Self::Waiting,
+            Rk::NeedsResume => Self::NeedsResume,
+            Rk::Cancelling => Self::Cancelling,
+            // Catch-all: new runkon-flow variants map to Failed rather than
+            // breaking conductor-core at compile time.
+            #[allow(unreachable_patterns)]
+            _ => Self::Failed,
         }
-        impl From<$core> for $rk {
-            fn from(s: $core) -> Self {
-                use $core as Core;
-                use $rk as Rk;
-                match s {
-                    $(Core::$variant => Rk::$variant),+
-                }
-            }
-        }
-    };
+    }
 }
 
-impl_bidirectional_status_from!(
-    crate::workflow::status::WorkflowRunStatus,
-    runkon_flow::status::WorkflowRunStatus,
-    [
-        Pending,
-        Running,
-        Completed,
-        Failed,
-        Cancelled,
-        Waiting,
-        NeedsResume,
-        Cancelling
-    ]
-);
+impl From<crate::workflow::status::WorkflowRunStatus> for runkon_flow::status::WorkflowRunStatus {
+    fn from(s: crate::workflow::status::WorkflowRunStatus) -> Self {
+        use crate::workflow::status::WorkflowRunStatus as Core;
+        match s {
+            Core::Pending => Self::Pending,
+            Core::Running => Self::Running,
+            Core::Completed => Self::Completed,
+            Core::Failed => Self::Failed,
+            Core::Cancelled => Self::Cancelled,
+            Core::Waiting => Self::Waiting,
+            Core::NeedsResume => Self::NeedsResume,
+            Core::Cancelling => Self::Cancelling,
+        }
+    }
+}
 
-impl_bidirectional_status_from!(
-    crate::workflow::status::WorkflowStepStatus,
-    runkon_flow::status::WorkflowStepStatus,
-    [Pending, Running, Completed, Failed, Skipped, Waiting, TimedOut]
-);
+// ---------------------------------------------------------------------------
+// WorkflowStepStatus conversions — same pattern as WorkflowRunStatus.
+// ---------------------------------------------------------------------------
+
+impl From<runkon_flow::status::WorkflowStepStatus> for crate::workflow::status::WorkflowStepStatus {
+    fn from(s: runkon_flow::status::WorkflowStepStatus) -> Self {
+        use runkon_flow::status::WorkflowStepStatus as Rk;
+        match s {
+            Rk::Pending => Self::Pending,
+            Rk::Running => Self::Running,
+            Rk::Completed => Self::Completed,
+            Rk::Failed => Self::Failed,
+            Rk::Skipped => Self::Skipped,
+            Rk::Waiting => Self::Waiting,
+            Rk::TimedOut => Self::TimedOut,
+            #[allow(unreachable_patterns)]
+            _ => Self::Failed,
+        }
+    }
+}
+
+impl From<crate::workflow::status::WorkflowStepStatus> for runkon_flow::status::WorkflowStepStatus {
+    fn from(s: crate::workflow::status::WorkflowStepStatus) -> Self {
+        use crate::workflow::status::WorkflowStepStatus as Core;
+        match s {
+            Core::Pending => Self::Pending,
+            Core::Running => Self::Running,
+            Core::Completed => Self::Completed,
+            Core::Failed => Self::Failed,
+            Core::Skipped => Self::Skipped,
+            Core::Waiting => Self::Waiting,
+            Core::TimedOut => Self::TimedOut,
+        }
+    }
+}
 
 /// Generate a `From<$src> for $dst` impl that copies same-named fields.
 macro_rules! field_copy_from {
@@ -110,11 +143,31 @@ impl From<RkStepUpdate> for CoreStepUpdate {
     }
 }
 
-impl_bidirectional_status_from!(
-    CoreFanOutItemStatus,
-    RkFanOutItemStatus,
-    [Pending, Running, Completed, Failed, Skipped]
-);
+impl From<RkFanOutItemStatus> for CoreFanOutItemStatus {
+    fn from(s: RkFanOutItemStatus) -> Self {
+        match s {
+            RkFanOutItemStatus::Pending => Self::Pending,
+            RkFanOutItemStatus::Running => Self::Running,
+            RkFanOutItemStatus::Completed => Self::Completed,
+            RkFanOutItemStatus::Failed => Self::Failed,
+            RkFanOutItemStatus::Skipped => Self::Skipped,
+            #[allow(unreachable_patterns)]
+            _ => Self::Failed,
+        }
+    }
+}
+
+impl From<CoreFanOutItemStatus> for RkFanOutItemStatus {
+    fn from(s: CoreFanOutItemStatus) -> Self {
+        match s {
+            CoreFanOutItemStatus::Pending => Self::Pending,
+            CoreFanOutItemStatus::Running => Self::Running,
+            CoreFanOutItemStatus::Completed => Self::Completed,
+            CoreFanOutItemStatus::Failed => Self::Failed,
+            CoreFanOutItemStatus::Skipped => Self::Skipped,
+        }
+    }
+}
 
 impl From<RkFanOutItemUpdate> for CoreFanOutItemUpdate {
     fn from(u: RkFanOutItemUpdate) -> Self {
