@@ -766,19 +766,17 @@ pub fn fetch_child_completion_data(
         .map(|s| {
             let markers = parse_markers_out(s.markers_out.as_deref(), &s.step_name);
             let context = s.context_out.clone().unwrap_or_default();
-            let result = StepResult {
+            let success = crate::types::StepSuccess {
                 step_name: s.step_name.clone(),
-                status: WorkflowStepStatus::Completed,
-                result_text: s.result_text,
-                cost_usd: None,
-                num_turns: None,
-                duration_ms: None,
+                result_text: s.result_text.clone(),
                 markers,
                 context,
-                child_run_id: s.child_run_id,
-                structured_output: s.structured_output,
-                output_file: s.output_file,
+                child_run_id: s.child_run_id.clone(),
+                structured_output: s.structured_output.clone(),
+                output_file: s.output_file.clone(),
+                ..crate::types::StepSuccess::default()
             };
+            let result = StepResult::completed_without_metrics(&success);
             (s.step_name, result)
         })
         .collect();

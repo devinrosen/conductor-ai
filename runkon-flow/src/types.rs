@@ -401,4 +401,34 @@ mod tests {
         assert_eq!(r.markers, vec!["done"]);
         assert_eq!(r.context, "restored");
     }
+
+    #[test]
+    fn step_success_into_context_entry_maps_all_fields() {
+        let success = StepSuccess {
+            step_name: "my-step".to_string(),
+            iteration: 7,
+            context: "ctx-body".to_string(),
+            markers: vec!["m1".to_string(), "m2".to_string()],
+            structured_output: Some(r#"{"k":"v"}"#.to_string()),
+            output_file: Some("/tmp/out".to_string()),
+            // Fields not mapped into ContextEntry should be distinct so we
+            // would catch an accidental mapping.
+            result_text: Some("rt".to_string()),
+            cost_usd: Some(1.23),
+            num_turns: Some(42),
+            duration_ms: Some(999),
+            input_tokens: Some(100),
+            output_tokens: Some(200),
+            cache_read_input_tokens: Some(50),
+            cache_creation_input_tokens: Some(25),
+            child_run_id: Some("child-1".to_string()),
+        };
+        let entry: super::ContextEntry = success.into();
+        assert_eq!(entry.step, "my-step", "step should come from step_name");
+        assert_eq!(entry.iteration, 7);
+        assert_eq!(entry.context, "ctx-body");
+        assert_eq!(entry.markers, vec!["m1", "m2"]);
+        assert_eq!(entry.structured_output, Some(r#"{"k":"v"}"#.to_string()));
+        assert_eq!(entry.output_file, Some("/tmp/out".to_string()));
+    }
 }

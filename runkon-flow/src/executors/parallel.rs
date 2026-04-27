@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::cancellation_reason::CancellationReason;
 use crate::dsl::ParallelNode;
-use crate::engine::{resolve_schema, ExecutionState};
+use crate::engine::{record_step_success, resolve_schema, ExecutionState};
 use crate::engine_error::{EngineError, Result};
 use crate::status::WorkflowStepStatus;
 use crate::traits::action_executor::{ActionOutput, ActionParams, ExecutionContext};
@@ -36,6 +36,7 @@ pub fn execute_parallel(
     struct ParallelCallResult {
         agent_name: String,
         step_id: String,
+        agent_step_key: String,
         result: std::result::Result<ActionOutput, EngineError>,
         attempt: u32,
     }
@@ -43,6 +44,7 @@ pub fn execute_parallel(
     struct DispatchInput {
         step_id: String,
         agent_name: String,
+        agent_step_key: String,
         ectx: ExecutionContext,
         params: ActionParams,
     }
@@ -101,7 +103,7 @@ pub fn execute_parallel(
     // to exit early when fail_fast fires.
     let scope_token = state.cancellation.child();
 
-    for (i, _agent_step_key, call_schema, effective_with) in call_inputs {
+    for (i, agent_step_key, call_schema, effective_with) in call_inputs {
         let pos = pos_base + i as i64;
         let agent_ref = &node.calls[i];
         let agent_label = agent_ref.label();
@@ -191,6 +193,7 @@ pub fn execute_parallel(
         dispatch_queue.push(DispatchInput {
             step_id,
             agent_name: agent_label.to_string(),
+            agent_step_key,
             ectx,
             params,
         });
@@ -200,6 +203,7 @@ pub fn execute_parallel(
     // so that a fail_fast cancellation from a result that arrives while threads are still
     // starting will prevent those threads from doing any work.
     let (completion_tx, completion_rx) = std::sync::mpsc::channel::<(
+        String,
         String,
         String,
         std::result::Result<ActionOutput, EngineError>,
@@ -231,7 +235,12 @@ pub fn execute_parallel(
                     Err(EngineError::Workflow(msg))
                 })
             };
-            let _ = tx.send((dispatch_input.step_id, dispatch_input.agent_name, result));
+            let _ = tx.send((
+                dispatch_input.step_id,
+                dispatch_input.agent_name,
+                dispatch_input.agent_step_key,
+                result,
+            ));
         });
     }
     // Drop the sender so the receiver knows when all threads have completed.
@@ -239,11 +248,12 @@ pub fn execute_parallel(
 
     // Collect results as threads complete, triggering fail_fast cancellation as needed.
     let mut results: Vec<ParallelCallResult> = Vec::new();
-    for (step_id, agent_name, result) in completion_rx {
+    for (step_id, agent_name, agent_step_key, result) in completion_rx {
         let failed = result.is_err();
         results.push(ParallelCallResult {
             agent_name,
             step_id,
+            agent_step_key,
             result,
             attempt: 0,
         });
@@ -286,38 +296,27 @@ pub fn execute_parallel(
                 successes += 1;
                 merged_markers.extend(output.markers.iter().cloned());
 
-                // Push parallel agent context
-                state.contexts.push(StepSuccess {
-                    step_name: pr.agent_name.clone(),
-                    result_text: output.result_text.clone(),
-                    cost_usd: output.cost_usd,
-                    num_turns: output.num_turns,
-                    duration_ms: output.duration_ms,
-                    input_tokens: output.input_tokens,
-                    output_tokens: output.output_tokens,
-                    cache_read_input_tokens: output.cache_read_input_tokens,
-                    cache_creation_input_tokens: output.cache_creation_input_tokens,
-                    markers: output.markers.clone(),
-                    context: context.clone(),
-                    child_run_id: output.child_run_id.clone(),
-                    structured_output: output.structured_output.clone(),
-                    output_file: None,
-                    iteration,
-                }.into());
-
-                state.accumulate_metrics(
-                    output.cost_usd,
-                    output.num_turns,
-                    output.duration_ms,
-                    output.input_tokens,
-                    output.output_tokens,
-                    output.cache_read_input_tokens,
-                    output.cache_creation_input_tokens,
+                record_step_success(
+                    state,
+                    pr.agent_step_key.clone(),
+                    StepSuccess {
+                        step_name: pr.agent_name.clone(),
+                        result_text: output.result_text.clone(),
+                        cost_usd: output.cost_usd,
+                        num_turns: output.num_turns,
+                        duration_ms: output.duration_ms,
+                        input_tokens: output.input_tokens,
+                        output_tokens: output.output_tokens,
+                        cache_read_input_tokens: output.cache_read_input_tokens,
+                        cache_creation_input_tokens: output.cache_creation_input_tokens,
+                        markers: output.markers.clone(),
+                        context,
+                        child_run_id: output.child_run_id.clone(),
+                        structured_output: output.structured_output.clone(),
+                        output_file: None,
+                        iteration,
+                    },
                 );
-
-                if let Err(e) = state.flush_metrics() {
-                    tracing::warn!("Failed to flush mid-run metrics after parallel agent: {e}");
-                }
             }
             Err(e) => {
                 tracing::warn!("parallel: '{}' failed: {e}", pr.agent_name);
