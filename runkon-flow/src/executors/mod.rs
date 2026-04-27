@@ -181,8 +181,8 @@ pub(super) fn record_dispatch_success(
     )?;
     crate::engine::record_step_success(
         state,
-        &crate::types::StepSuccess {
-            step_key: step_key.to_string(),
+        step_key.to_string(),
+        crate::types::StepSuccess {
             step_name: agent_label.to_string(),
             result_text: output.result_text.clone(),
             cost_usd: output.cost_usd,

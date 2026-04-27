@@ -102,7 +102,7 @@ pub struct ChildWorkflowInput {
 pub trait ChildWorkflowRunner: Send + Sync {
     fn execute_child(
         &self,
-        child_def: &WorkflowDef,
+        workflow_name: &str,
         parent_state: &ExecutionState,
         params: ChildWorkflowInput,
     ) -> Result<WorkflowResult>;
@@ -511,7 +511,11 @@ pub fn record_step_skipped(state: &mut ExecutionState, step_key: String, step_la
 }
 
 /// Record a successful step: accumulate stats, insert StepResult, push context.
-pub fn record_step_success(state: &mut ExecutionState, success: &crate::types::StepSuccess) {
+pub fn record_step_success(
+    state: &mut ExecutionState,
+    step_key: String,
+    success: crate::types::StepSuccess,
+) {
     state.accumulate_metrics(
         success.cost_usd,
         success.num_turns,
@@ -527,20 +531,32 @@ pub fn record_step_success(state: &mut ExecutionState, success: &crate::types::S
         tracing::warn!("Failed to flush mid-run metrics: {e}");
     }
 
-    let step_result = StepResult::completed(success);
-    state.step_results.insert(success.step_key.clone(), step_result);
+    // Build StepResult and ContextEntry directly to avoid double-cloning
+    // the potentially-large context/structured_output/output_file fields.
+    state.step_results.insert(
+        step_key,
+        StepResult {
+            step_name: success.step_name.clone(),
+            status: WorkflowStepStatus::Completed,
+            result_text: success.result_text,
+            cost_usd: success.cost_usd,
+            num_turns: success.num_turns,
+            duration_ms: success.duration_ms,
+            markers: success.markers.clone(),
+            context: success.context.clone(),
+            child_run_id: success.child_run_id,
+            structured_output: success.structured_output.clone(),
+            output_file: success.output_file.clone(),
+        },
+    );
 
-    push_context_entry(state, success);
-}
-
-fn push_context_entry(state: &mut ExecutionState, success: &crate::types::StepSuccess) {
     state.contexts.push(ContextEntry {
-        step: success.step_name.clone(),
+        step: success.step_name,
         iteration: success.iteration,
-        context: success.context.clone(),
-        markers: success.markers.clone(),
-        structured_output: success.structured_output.clone(),
-        output_file: success.output_file.clone(),
+        context: success.context,
+        markers: success.markers,
+        structured_output: success.structured_output,
+        output_file: success.output_file,
     });
 }
 
@@ -719,7 +735,6 @@ pub fn restore_completed_step(
     }
 
     let success = crate::types::StepSuccess {
-        step_key: step_key.to_string(),
         step_name: step_key.to_string(),
         result_text: step.result_text.clone(),
         markers,
@@ -733,7 +748,14 @@ pub fn restore_completed_step(
     let step_result = StepResult::completed_without_metrics(&success);
     state.step_results.insert(step_key.to_string(), step_result);
 
-    push_context_entry(state, &success);
+    state.contexts.push(ContextEntry {
+        step: success.step_name,
+        iteration: success.iteration,
+        context: success.context,
+        markers: success.markers,
+        structured_output: success.structured_output,
+        output_file: success.output_file,
+    });
 }
 
 /// Fetch both the final step output (markers + context) and all completed step

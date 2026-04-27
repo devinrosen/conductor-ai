@@ -101,8 +101,8 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
 
         record_step_success(
             state,
-            &crate::types::StepSuccess {
-                step_key: node.name.clone(),
+            node.name.clone(),
+            crate::types::StepSuccess {
                 step_name: node.name.clone(),
                 result_text: Some("dry-run: script not executed".to_string()),
                 iteration,
@@ -315,8 +315,8 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
 
             record_step_success(
                 state,
-                &crate::types::StepSuccess {
-                    step_key: node.name.clone(),
+                node.name.clone(),
+                crate::types::StepSuccess {
                     step_name: node.name.clone(),
                     result_text: Some(format!("Script '{}' completed", node.name)),
                     duration_ms: Some(duration_ms),

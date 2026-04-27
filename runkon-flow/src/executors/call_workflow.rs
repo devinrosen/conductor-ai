@@ -71,8 +71,8 @@ pub fn execute_call_workflow(
 
         record_step_success(
             state,
-            &crate::types::StepSuccess {
-                step_key: step_key.clone(),
+            step_key.clone(),
+            crate::types::StepSuccess {
                 step_name: node.workflow.clone(),
                 result_text: Some(format!(
                     "Sub-workflow '{}' completed successfully",
@@ -238,23 +238,9 @@ pub fn execute_call_workflow(
         // Actually, the better approach is: child_runner gets the workflow name via the step
         // and loads it itself. We'll pass inputs as-is.
 
-        // Build a minimal dummy WorkflowDef with the name only — the runner must load the real one.
-        let placeholder_def = crate::dsl::WorkflowDef {
-            name: node.workflow.clone(),
-            title: None,
-            description: String::new(),
-            trigger: crate::dsl::WorkflowTrigger::Manual,
-            targets: vec![],
-            group: None,
-            inputs: vec![],
-            body: vec![],
-            always: vec![],
-            source_path: String::new(),
-        };
-
-        // Resolve child inputs against the placeholder (no decls → just pass through substituted vars)
+        // Resolve child inputs against an empty inputs map (no decls → just pass through substituted vars)
         let resolved_inputs =
-            match resolve_child_inputs(&raw_child_inputs, &vars, &placeholder_def.inputs) {
+            match resolve_child_inputs(&raw_child_inputs, &vars, &[]) {
                 Ok(inputs) => inputs,
                 Err(missing) => {
                     let msg = format!(
@@ -271,9 +257,9 @@ pub fn execute_call_workflow(
                 }
             };
 
-        // Use the child_runner to execute — it knows about conductor-core types
+        // Use the child_runner to execute — it resolves the real def by name
         match child_runner.execute_child(
-            &placeholder_def,
+            &node.workflow,
             state,
             crate::engine::ChildWorkflowInput {
                 inputs: resolved_inputs,

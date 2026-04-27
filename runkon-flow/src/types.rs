@@ -194,10 +194,11 @@ pub struct WorkflowResult {
 
 /// Input describing a successfully completed step, passed to `record_step_success`.
 ///
-/// Groups the ~16 positional arguments that previously made call sites unwieldy.
+/// Groups the step output data that previously made call sites unwieldy.
+/// Does not include `step_key` or `iteration` — those are execution bookkeeping
+/// concerns kept separate from the step output payload.
 #[derive(Debug, Clone, Default)]
 pub struct StepSuccess {
-    pub step_key: String,
     pub step_name: String,
     pub result_text: Option<String>,
     pub cost_usd: Option<f64>,
@@ -362,5 +363,28 @@ mod tests {
         assert_eq!(r.child_run_id, Some("child-1".to_string()));
         assert_eq!(r.structured_output, Some(r#"{"ok":true}"#.to_string()));
         assert_eq!(r.output_file, Some("/tmp/out".to_string()));
+    }
+
+    #[test]
+    fn completed_without_metrics_ignores_metric_fields() {
+        let success = StepSuccess {
+            step_name: "restore".to_string(),
+            result_text: Some("ok".to_string()),
+            cost_usd: Some(0.10),
+            num_turns: Some(5),
+            duration_ms: Some(3000),
+            markers: vec!["done".to_string()],
+            context: "restored".to_string(),
+            ..StepSuccess::default()
+        };
+        let r = StepResult::completed_without_metrics(&success);
+        assert_eq!(r.step_name, "restore");
+        assert_eq!(r.status, WorkflowStepStatus::Completed);
+        assert_eq!(r.result_text, Some("ok".to_string()));
+        assert!(r.cost_usd.is_none(), "cost_usd should be None");
+        assert!(r.num_turns.is_none(), "num_turns should be None");
+        assert!(r.duration_ms.is_none(), "duration_ms should be None");
+        assert_eq!(r.markers, vec!["done"]);
+        assert_eq!(r.context, "restored");
     }
 }

@@ -157,8 +157,8 @@ fn record_foreach_step_success(
 ) {
     record_step_success(
         state,
-        &crate::types::StepSuccess {
-            step_key,
+        step_key,
+        crate::types::StepSuccess {
             step_name: step_name.to_string(),
             result_text: Some(context.clone()),
             context,
@@ -369,20 +369,6 @@ pub fn execute_foreach(
     // Clone node.inputs once outside the dispatch loop to avoid re-cloning on every iteration.
     let base_inputs = node.inputs.clone();
 
-    // Build the placeholder WorkflowDef once — same for every item.
-    let placeholder_def = crate::dsl::WorkflowDef {
-        name: node.workflow.clone(),
-        title: None,
-        description: String::new(),
-        trigger: crate::dsl::WorkflowTrigger::Manual,
-        targets: vec![],
-        group: None,
-        inputs: vec![],
-        body: vec![],
-        always: vec![],
-        source_path: String::new(),
-    };
-
     // Seed terminal counts from items that were already terminal before this dispatch
     // (e.g. partially-resumed runs).  New completions/failures/skips are tracked
     // incrementally below so the final phase can skip a DB re-query.
@@ -582,7 +568,7 @@ pub fn execute_foreach(
                 child_inputs.insert("item.ref".to_string(), item.item_ref.clone());
 
                 let ctx = Arc::clone(&parent_ctx);
-                let def = placeholder_def.clone();
+                let workflow_name = node.workflow.clone();
                 let inputs = child_inputs;
                 let item_db_id = item.id.clone();
                 let child_cancellation = state.cancellation.child();
@@ -594,7 +580,7 @@ pub fn execute_foreach(
                     let succeeded = ctx
                         .child_runner
                         .execute_child(
-                            &def,
+                            &workflow_name,
                             &child_state,
                             ChildWorkflowInput {
                                 inputs,
