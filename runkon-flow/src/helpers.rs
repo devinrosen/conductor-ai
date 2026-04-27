@@ -54,29 +54,11 @@ pub fn parse_conductor_output(text: &str) -> Option<ConductorOutput> {
     let cleaned = strip_trailing_commas(raw);
     let cleaned = fix_backslash_escapes(&cleaned);
 
-    let value: serde_json::Value = serde_json::from_str(&cleaned)
+    serde_json::from_str::<ConductorOutput>(&cleaned)
         .map_err(|e| {
             tracing::warn!("parse_conductor_output: invalid JSON: {e}");
         })
-        .ok()?;
-
-    let markers = value
-        .get("markers")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|m| m.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let context = value
-        .get("context")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    Some(ConductorOutput { markers, context })
+        .ok()
 }
 
 /// Strip trailing commas before `}` or `]` (common LLM JSON artifact).
