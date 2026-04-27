@@ -228,6 +228,34 @@ impl StepResult {
         }
     }
 
+    /// Create a completed StepResult without per-step metrics.
+    ///
+    /// Convenience wrapper for the common case where cost/turns/duration are
+    /// not available (e.g. restored from a prior run or bubble-up from a child
+    /// workflow).
+    pub fn completed_without_metrics(
+        step_name: &str,
+        result_text: Option<String>,
+        markers: Vec<String>,
+        context: String,
+        child_run_id: Option<String>,
+        structured_output: Option<String>,
+        output_file: Option<String>,
+    ) -> Self {
+        Self::completed(
+            step_name,
+            result_text,
+            None,
+            None,
+            None,
+            markers,
+            context,
+            child_run_id,
+            structured_output,
+            output_file,
+        )
+    }
+
     /// Create a completed StepResult with all output fields.
     #[allow(clippy::too_many_arguments)]
     pub fn completed(

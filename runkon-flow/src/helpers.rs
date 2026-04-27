@@ -64,45 +64,72 @@ pub fn parse_conductor_output(text: &str) -> Option<ConductorOutput> {
         .ok()
 }
 
-/// Strip trailing commas before `}` or `]` (common LLM JSON artifact).
-fn strip_trailing_commas(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+/// Remove trailing commas before `}` or `]` (common LLM JSON artifact).
+///
+/// Preserves whitespace between the comma and the closing bracket so that
+/// re-parsing produces the same layout.
+pub fn strip_trailing_commas(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         if c == ',' {
-            let rest = chars.clone().find(|ch| !ch.is_whitespace());
-            if matches!(rest, Some('}') | Some(']')) {
+            let mut ws_buf = String::new();
+            while chars.peek().is_some_and(|p| p.is_whitespace()) {
+                ws_buf.push(chars.next().unwrap());
+            }
+            if chars.peek().is_some_and(|p| *p == '}' || *p == ']') {
+                result.push_str(&ws_buf);
                 continue;
             }
+            result.push(c);
+            result.push_str(&ws_buf);
+        } else {
+            result.push(c);
         }
-        out.push(c);
     }
-    out
+    result
 }
 
-/// Replace `\` followed by non-JSON-escape characters with `\\`.
-fn fix_backslash_escapes(s: &str) -> String {
-    const VALID: &[char] = &['"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'];
-    let mut out = String::with_capacity(s.len());
+/// Fix invalid backslash escapes inside JSON string literals.
+///
+/// Walks the input character-by-character, tracking JSON string boundaries.
+/// When inside a string, a `\` followed by an invalid JSON escape character
+/// is doubled to `\\`, making it a valid JSON escaped backslash. Valid escape
+/// sequences (including `\\`, `\"`, `\uXXXX`) are emitted verbatim.
+/// Backslashes outside string literals are passed through unchanged.
+pub fn fix_backslash_escapes(s: &str) -> String {
+    const VALID_ESCAPE: &[char] = &['"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'];
+
     let mut chars = s.chars().peekable();
+    let mut result = String::with_capacity(s.len() + 16);
+    let mut in_string = false;
+
     while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.peek() {
-                Some(next) if VALID.contains(next) => {
-                    out.push('\\');
-                    out.push(*next);
-                    chars.next();
-                }
-                _ => {
-                    out.push('\\');
-                    out.push('\\');
-                }
+        if !in_string {
+            result.push(c);
+            if c == '"' {
+                in_string = true;
             }
         } else {
-            out.push(c);
+            match c {
+                '"' => {
+                    result.push(c);
+                    in_string = false;
+                }
+                '\\' => {
+                    if chars.peek().is_some_and(|nc| VALID_ESCAPE.contains(nc)) {
+                        result.push('\\');
+                        result.push(chars.next().unwrap());
+                    } else {
+                        result.push('\\');
+                        result.push('\\');
+                    }
+                }
+                _ => result.push(c),
+            }
         }
     }
-    out
+    result
 }
 
 /// Parse a human-readable duration string into a `std::time::Duration`.

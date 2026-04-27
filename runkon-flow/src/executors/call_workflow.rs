@@ -5,7 +5,6 @@ use crate::engine::{
 };
 use crate::engine_error::{EngineError, Result};
 use crate::prompt_builder::build_variable_map;
-use crate::status::WorkflowStepStatus;
 use crate::traits::persistence::{NewStep, StepUpdate};
 
 use super::p_err;
@@ -218,16 +217,7 @@ pub fn execute_call_workflow(
 
         // Build inputs for the child workflow via variable substitution
         let vars = build_variable_map(state);
-        // We'll pass the raw inputs along with vars to the child runner
-        // which will resolve them with the actual input decls
         let raw_child_inputs = node.inputs.clone();
-        let mut child_inputs = std::collections::HashMap::new();
-        for (k, v) in &raw_child_inputs {
-            child_inputs.insert(
-                k.clone(),
-                crate::prompt_builder::substitute_variables_keep_literal(v, &vars),
-            );
-        }
 
         let effective_bot_name = node
             .bot_name
@@ -280,7 +270,6 @@ pub fn execute_call_workflow(
             };
 
         // Use the child_runner to execute — it knows about conductor-core types
-        let _ = child_inputs; // raw inputs already resolved above
         match child_runner.execute_child(
             &placeholder_def,
             state,

@@ -768,12 +768,9 @@ pub fn restore_completed_step(
     }
 
     let markers_for_ctx = markers.clone();
-    let step_result = StepResult::completed(
+    let step_result = StepResult::completed_without_metrics(
         step_key,
         step.result_text.clone(),
-        None,
-        None,
-        None,
         markers,
         context.clone(),
         step.child_run_id.clone(),
@@ -831,12 +828,9 @@ pub fn fetch_child_completion_data(
         .map(|s| {
             let markers = parse_markers_out(s.markers_out.as_deref(), &s.step_name);
             let context = s.context_out.clone().unwrap_or_default();
-            let result = StepResult::completed(
+            let result = StepResult::completed_without_metrics(
                 &s.step_name,
                 s.result_text.clone(),
-                None,
-                None,
-                None,
                 markers,
                 context,
                 s.child_run_id.clone(),

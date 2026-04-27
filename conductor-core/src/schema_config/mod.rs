@@ -37,6 +37,7 @@ pub(crate) use loader::load_schema_by_path;
 pub(crate) use prompt::generate_field_hints;
 #[cfg(test)]
 pub(crate) use validation::{
-    derive_default_markers, evaluate_marker_expr, fix_invalid_backslash_escapes, strip_code_fences,
-    strip_trailing_commas,
+    derive_default_markers, evaluate_marker_expr, strip_code_fences,
 };
+#[cfg(test)]
+pub(crate) use runkon_flow::helpers::{fix_backslash_escapes, strip_trailing_commas};

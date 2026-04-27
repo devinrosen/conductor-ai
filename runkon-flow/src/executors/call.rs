@@ -129,12 +129,15 @@ fn execute_call_inner(
                 let done = Arc::clone(&timer_done);
                 std::thread::spawn(move || {
                     let start = std::time::Instant::now();
-                    let poll_ms = std::time::Duration::from_millis(10);
+                    // 100 ms poll interval gives ~10× fewer wake-ups than the
+                    // previous 10 ms while still keeping timeout precision well
+                    // below typical step durations (seconds–minutes).
+                    let poll = std::time::Duration::from_millis(100);
                     while start.elapsed() < duration {
                         if done.load(Ordering::Relaxed) {
                             return;
                         }
-                        std::thread::sleep(poll_ms.min(duration - start.elapsed()));
+                        std::thread::sleep(poll.min(duration - start.elapsed()));
                     }
                     if !done.load(Ordering::Relaxed) {
                         tok2.cancel(CancellationReason::Timeout);

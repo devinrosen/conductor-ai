@@ -1162,14 +1162,14 @@ fn test_example_scalar_array_enum() {
 }
 
 // ---------------------------------------------------------------------------
-// fix_invalid_backslash_escapes unit tests
+// fix_backslash_escapes unit tests
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_fix_escapes_bare_backslash_in_string() {
     // `\.` is not a valid JSON escape; should become `\\.`
     let input = r#"{"key": "foo\.bar"}"#;
-    let output = fix_invalid_backslash_escapes(input);
+    let output = fix_backslash_escapes(input);
     assert_eq!(output, r#"{"key": "foo\\.bar"}"#);
     // The result must parse as valid JSON
     let v: serde_json::Value = serde_json::from_str(&output).unwrap();
@@ -1180,7 +1180,7 @@ fn test_fix_escapes_bare_backslash_in_string() {
 fn test_fix_escapes_valid_sequences_not_doubled() {
     // All valid two-character JSON escape sequences must pass through unchanged.
     let input = r#"{"a": "\"\\\/\b\f\n\r\t\u1234"}"#;
-    let output = fix_invalid_backslash_escapes(input);
+    let output = fix_backslash_escapes(input);
     assert_eq!(output, input, "valid escape sequences must not be modified");
 }
 
@@ -1188,7 +1188,7 @@ fn test_fix_escapes_valid_sequences_not_doubled() {
 fn test_fix_escapes_backslash_outside_string_unchanged() {
     // Outside a JSON string literal the sanitizer must not modify anything.
     let input = r#"\{"key": "value"}"#;
-    let output = fix_invalid_backslash_escapes(input);
+    let output = fix_backslash_escapes(input);
     assert_eq!(output, input);
 }
 
@@ -1196,7 +1196,7 @@ fn test_fix_escapes_backslash_outside_string_unchanged() {
 fn test_fix_escapes_swift_keypath_reproduction() {
     // Exact Swift key-path case from the ticket: `@Environment(\.openURL)`
     let input = r#"{"summary": "Add @Environment(\.openURL) button"}"#;
-    let output = fix_invalid_backslash_escapes(input);
+    let output = fix_backslash_escapes(input);
     let v: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(v["summary"], r"Add @Environment(\.openURL) button");
 }
@@ -1205,7 +1205,7 @@ fn test_fix_escapes_swift_keypath_reproduction() {
 fn test_fix_escapes_mixed_valid_and_invalid() {
     // A string with both a valid `\n` and an invalid `\.` — only `\.` must be fixed.
     let input = "{\"msg\": \"line1\\nfoo\\.bar\"}";
-    let output = fix_invalid_backslash_escapes(input);
+    let output = fix_backslash_escapes(input);
     let v: serde_json::Value = serde_json::from_str(&output).unwrap();
     let msg = v["msg"].as_str().unwrap();
     assert!(msg.contains('\n'), "\\n must remain a newline");
@@ -1220,7 +1220,7 @@ fn test_fix_escapes_double_backslash_at_string_end() {
     // `"\\"` is valid JSON (a string containing a single backslash).
     // The sanitizer must not alter it.
     let input = r#"{"k": "\\"}"#;
-    let output = fix_invalid_backslash_escapes(input);
+    let output = fix_backslash_escapes(input);
     assert_eq!(
         output, input,
         "already-valid double backslash must not be modified"
@@ -1233,7 +1233,7 @@ fn test_fix_escapes_double_backslash_at_string_end() {
 fn test_fix_escapes_escaped_quote_not_treated_as_string_boundary() {
     // `\"` inside a string must not close the string.
     let input = r#"{"k": "say \"hi\" now"}"#;
-    let output = fix_invalid_backslash_escapes(input);
+    let output = fix_backslash_escapes(input);
     assert_eq!(output, input);
     let v: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(v["k"], r#"say "hi" now"#);
