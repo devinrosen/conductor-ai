@@ -71,25 +71,27 @@ pub fn execute_call_workflow(
 
         record_step_success(
             state,
-            step_key.clone(),
-            &node.workflow,
-            Some(format!(
-                "Sub-workflow '{}' completed successfully",
-                node.workflow
-            )),
-            Some(result.total_cost),
-            Some(result.total_turns),
-            Some(result.total_duration_ms),
-            Some(result.total_input_tokens),
-            Some(result.total_output_tokens),
-            Some(result.total_cache_read_input_tokens),
-            Some(result.total_cache_creation_input_tokens),
-            markers,
-            context,
-            Some(result.workflow_run_id.clone()),
-            iteration,
-            None,
-            None,
+            &crate::types::StepSuccess {
+                step_key: step_key.clone(),
+                step_name: node.workflow.clone(),
+                result_text: Some(format!(
+                    "Sub-workflow '{}' completed successfully",
+                    node.workflow
+                )),
+                cost_usd: Some(result.total_cost),
+                num_turns: Some(result.total_turns),
+                duration_ms: Some(result.total_duration_ms),
+                input_tokens: Some(result.total_input_tokens),
+                output_tokens: Some(result.total_output_tokens),
+                cache_read_input_tokens: Some(result.total_cache_read_input_tokens),
+                cache_creation_input_tokens: Some(result.total_cache_creation_input_tokens),
+                markers,
+                context,
+                child_run_id: Some(result.workflow_run_id.clone()),
+                iteration,
+                structured_output: None,
+                output_file: None,
+            },
         );
 
         for (key, value) in child_steps {

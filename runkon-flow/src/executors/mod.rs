@@ -154,7 +154,6 @@ pub(super) fn build_action_params(
 /// Persist a completed step and record its success result in one call.
 /// Centralises the `persist_completed_step` + `record_step_success` pair used
 /// by `call.rs` after a successful agent dispatch.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn record_dispatch_success(
     state: &mut crate::engine::ExecutionState,
     step_id: &str,
@@ -182,22 +181,24 @@ pub(super) fn record_dispatch_success(
     )?;
     crate::engine::record_step_success(
         state,
-        step_key.to_string(),
-        agent_label,
-        output.result_text.clone(),
-        output.cost_usd,
-        output.num_turns,
-        output.duration_ms,
-        output.input_tokens,
-        output.output_tokens,
-        output.cache_read_input_tokens,
-        output.cache_creation_input_tokens,
-        output.markers.clone(),
-        context,
-        output.child_run_id.clone(),
-        iteration,
-        output.structured_output.clone(),
-        output_file,
+        &crate::types::StepSuccess {
+            step_key: step_key.to_string(),
+            step_name: agent_label.to_string(),
+            result_text: output.result_text.clone(),
+            cost_usd: output.cost_usd,
+            num_turns: output.num_turns,
+            duration_ms: output.duration_ms,
+            input_tokens: output.input_tokens,
+            output_tokens: output.output_tokens,
+            cache_read_input_tokens: output.cache_read_input_tokens,
+            cache_creation_input_tokens: output.cache_creation_input_tokens,
+            markers: output.markers.clone(),
+            context,
+            child_run_id: output.child_run_id.clone(),
+            iteration,
+            structured_output: output.structured_output.clone(),
+            output_file,
+        },
     );
     Ok(())
 }

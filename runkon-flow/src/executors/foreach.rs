@@ -145,9 +145,9 @@ fn is_eligible(
 
 /// Record a successful foreach step with the standard set of defaulted arguments.
 ///
-/// `record_step_success` takes 17 arguments; all of the foreach-specific ones
-/// default to `None` / `vec![]`.  This wrapper narrows the call site to the
-/// three values that actually vary: `step_key`, `step_name`, and `context`.
+/// All of the foreach-specific fields default to `None` / `vec![]`.
+/// This wrapper narrows the call site to the three values that actually vary:
+/// `step_key`, `step_name`, and `context`.
 fn record_foreach_step_success(
     state: &mut ExecutionState,
     step_key: String,
@@ -157,22 +157,14 @@ fn record_foreach_step_success(
 ) {
     record_step_success(
         state,
-        step_key,
-        step_name,
-        Some(context.clone()),
-        None,   // cost_usd
-        None,   // num_turns
-        None,   // duration_ms
-        None,   // input_tokens
-        None,   // output_tokens
-        None,   // cache_read_input_tokens
-        None,   // cache_creation_input_tokens
-        vec![], // markers
-        context,
-        None, // child_run_id
-        iteration,
-        None, // structured_output
-        None, // output_file
+        &crate::types::StepSuccess {
+            step_key,
+            step_name: step_name.to_string(),
+            result_text: Some(context.clone()),
+            context,
+            iteration,
+            ..crate::types::StepSuccess::default()
+        },
     );
 }
 

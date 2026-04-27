@@ -192,6 +192,29 @@ pub struct WorkflowResult {
     pub total_cache_creation_input_tokens: i64,
 }
 
+/// Input describing a successfully completed step, passed to `record_step_success`.
+///
+/// Groups the ~16 positional arguments that previously made call sites unwieldy.
+#[derive(Debug, Clone, Default)]
+pub struct StepSuccess {
+    pub step_key: String,
+    pub step_name: String,
+    pub result_text: Option<String>,
+    pub cost_usd: Option<f64>,
+    pub num_turns: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cache_read_input_tokens: Option<i64>,
+    pub cache_creation_input_tokens: Option<i64>,
+    pub markers: Vec<String>,
+    pub context: String,
+    pub child_run_id: Option<String>,
+    pub iteration: u32,
+    pub structured_output: Option<String>,
+    pub output_file: Option<String>,
+}
+
 /// Result of a single step execution (kept in memory during execution).
 #[derive(Debug, Clone, Default)]
 pub struct StepResult {
@@ -244,44 +267,32 @@ impl StepResult {
     ) -> Self {
         Self::completed(
             step_name,
-            result_text,
-            None,
-            None,
-            None,
-            markers,
-            context,
-            child_run_id,
-            structured_output,
-            output_file,
+            &StepSuccess {
+                result_text,
+                markers,
+                context,
+                child_run_id,
+                structured_output,
+                output_file,
+                ..StepSuccess::default()
+            },
         )
     }
 
-    /// Create a completed StepResult with all output fields.
-    #[allow(clippy::too_many_arguments)]
-    pub fn completed(
-        step_name: &str,
-        result_text: Option<String>,
-        cost_usd: Option<f64>,
-        num_turns: Option<i64>,
-        duration_ms: Option<i64>,
-        markers: Vec<String>,
-        context: String,
-        child_run_id: Option<String>,
-        structured_output: Option<String>,
-        output_file: Option<String>,
-    ) -> Self {
+    /// Create a completed StepResult from a [`StepSuccess`] description.
+    pub fn completed(step_name: &str, success: &StepSuccess) -> Self {
         Self {
             step_name: step_name.to_string(),
             status: WorkflowStepStatus::Completed,
-            result_text,
-            cost_usd,
-            num_turns,
-            duration_ms,
-            markers,
-            context,
-            child_run_id,
-            structured_output,
-            output_file,
+            result_text: success.result_text.clone(),
+            cost_usd: success.cost_usd,
+            num_turns: success.num_turns,
+            duration_ms: success.duration_ms,
+            markers: success.markers.clone(),
+            context: success.context.clone(),
+            child_run_id: success.child_run_id.clone(),
+            structured_output: success.structured_output.clone(),
+            output_file: success.output_file.clone(),
         }
     }
 }
@@ -316,7 +327,7 @@ pub struct FanOutItemRow {
 
 #[cfg(test)]
 mod tests {
-    use super::StepResult;
+    use super::{StepResult, StepSuccess};
     use crate::status::WorkflowStepStatus;
 
     #[test]
@@ -341,18 +352,19 @@ mod tests {
 
     #[test]
     fn step_result_completed_sets_all_fields() {
-        let r = StepResult::completed(
-            "review",
-            Some("looks good".to_string()),
-            Some(0.05),
-            Some(3),
-            Some(1200),
-            vec!["approved".to_string()],
-            "ctx".to_string(),
-            Some("child-1".to_string()),
-            Some(r#"{"ok":true}"#.to_string()),
-            Some("/tmp/out".to_string()),
-        );
+        let success = StepSuccess {
+            result_text: Some("looks good".to_string()),
+            cost_usd: Some(0.05),
+            num_turns: Some(3),
+            duration_ms: Some(1200),
+            markers: vec!["approved".to_string()],
+            context: "ctx".to_string(),
+            child_run_id: Some("child-1".to_string()),
+            structured_output: Some(r#"{"ok":true}"#.to_string()),
+            output_file: Some("/tmp/out".to_string()),
+            ..StepSuccess::default()
+        };
+        let r = StepResult::completed("review", &success);
         assert_eq!(r.step_name, "review");
         assert_eq!(r.status, WorkflowStepStatus::Completed);
         assert_eq!(r.result_text, Some("looks good".to_string()));

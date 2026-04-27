@@ -511,34 +511,15 @@ pub fn record_step_skipped(state: &mut ExecutionState, step_key: String, step_la
 }
 
 /// Record a successful step: accumulate stats, insert StepResult, push context.
-#[allow(clippy::too_many_arguments)]
-pub fn record_step_success(
-    state: &mut ExecutionState,
-    step_key: String,
-    step_name: &str,
-    result_text: Option<String>,
-    cost_usd: Option<f64>,
-    num_turns: Option<i64>,
-    duration_ms: Option<i64>,
-    input_tokens: Option<i64>,
-    output_tokens: Option<i64>,
-    cache_read_input_tokens: Option<i64>,
-    cache_creation_input_tokens: Option<i64>,
-    markers: Vec<String>,
-    context: String,
-    child_run_id: Option<String>,
-    iteration: u32,
-    structured_output: Option<String>,
-    output_file: Option<String>,
-) {
+pub fn record_step_success(state: &mut ExecutionState, success: &crate::types::StepSuccess) {
     state.accumulate_metrics(
-        cost_usd,
-        num_turns,
-        duration_ms,
-        input_tokens,
-        output_tokens,
-        cache_read_input_tokens,
-        cache_creation_input_tokens,
+        success.cost_usd,
+        success.num_turns,
+        success.duration_ms,
+        success.input_tokens,
+        success.output_tokens,
+        success.cache_read_input_tokens,
+        success.cache_creation_input_tokens,
     );
 
     // Best-effort mid-run metrics flush — non-fatal
@@ -546,28 +527,17 @@ pub fn record_step_success(
         tracing::warn!("Failed to flush mid-run metrics: {e}");
     }
 
-    let markers_for_ctx = markers.clone();
-    let structured_output_for_ctx = structured_output.clone();
-    let output_file_for_ctx = output_file.clone();
-    let step_result = StepResult::completed(
-        step_name,
-        result_text,
-        cost_usd,
-        num_turns,
-        duration_ms,
-        markers,
-        context.clone(),
-        child_run_id,
-        structured_output,
-        output_file,
-    );
-    state.step_results.insert(step_key, step_result);
+    let markers_for_ctx = success.markers.clone();
+    let structured_output_for_ctx = success.structured_output.clone();
+    let output_file_for_ctx = success.output_file.clone();
+    let step_result = StepResult::completed(&success.step_name, success);
+    state.step_results.insert(success.step_key.clone(), step_result);
 
     push_context_entry(
         state,
-        step_name,
-        iteration,
-        context,
+        &success.step_name,
+        success.iteration,
+        success.context.clone(),
         markers_for_ctx,
         structured_output_for_ctx,
         output_file_for_ctx,

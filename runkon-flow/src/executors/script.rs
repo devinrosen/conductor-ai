@@ -101,22 +101,13 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
 
         record_step_success(
             state,
-            node.name.clone(),
-            &node.name,
-            Some("dry-run: script not executed".to_string()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            String::new(),
-            None,
-            iteration,
-            None,
-            None,
+            &crate::types::StepSuccess {
+                step_key: node.name.clone(),
+                step_name: node.name.clone(),
+                result_text: Some("dry-run: script not executed".to_string()),
+                iteration,
+                ..crate::types::StepSuccess::default()
+            },
         );
         return Ok(());
     }
@@ -322,22 +313,17 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
 
             record_step_success(
                 state,
-                node.name.clone(),
-                &node.name,
-                Some(format!("Script '{}' completed", node.name)),
-                None,
-                None,
-                Some(duration_ms),
-                None,
-                None,
-                None,
-                None,
-                markers,
-                context,
-                None,
-                iteration,
-                None,
-                output_file_path,
+                &crate::types::StepSuccess {
+                    step_key: node.name.clone(),
+                    step_name: node.name.clone(),
+                    result_text: Some(format!("Script '{}' completed", node.name)),
+                    duration_ms: Some(duration_ms),
+                    markers,
+                    context,
+                    iteration,
+                    output_file: output_file_path,
+                    ..crate::types::StepSuccess::default()
+                },
             );
 
             Ok(())
