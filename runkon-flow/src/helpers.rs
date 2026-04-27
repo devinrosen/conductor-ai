@@ -105,6 +105,8 @@ fn fix_backslash_escapes(s: &str) -> String {
             match chars.peek() {
                 Some(next) if VALID.contains(next) => {
                     out.push('\\');
+                    out.push(*next);
+                    chars.next();
                 }
                 _ => {
                     out.push('\\');
@@ -336,6 +338,20 @@ mod parse_tests {
         let out = parse_conductor_output(text).unwrap();
         // Successfully parsed despite the invalid backslash sequences.
         assert!(out.context.contains("path"));
+    }
+
+    #[test]
+    fn preserves_valid_backslash_escapes() {
+        // \\ is a valid JSON escape for a literal backslash; fix_backslash_escapes
+        // must not corrupt it into an unparseable sequence.
+        let text = concat!(
+            "<<<CONDUCTOR_OUTPUT>>>\n",
+            r#"{"markers":[],"context":"C:\\Users\\dev"}"#,
+            "\n",
+            "<<<END_CONDUCTOR_OUTPUT>>>"
+        );
+        let out = parse_conductor_output(text).unwrap();
+        assert_eq!(out.context, r"C:\Users\dev");
     }
 
     #[test]
