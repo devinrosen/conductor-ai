@@ -195,8 +195,9 @@ pub struct WorkflowResult {
 /// Input describing a successfully completed step, passed to `record_step_success`.
 ///
 /// Groups the step output data that previously made call sites unwieldy.
-/// Does not include `step_key` or `iteration` — those are execution bookkeeping
-/// concerns kept separate from the step output payload.
+/// Does not include `step_key` — that is an execution bookkeeping concern kept
+/// as a separate parameter. `iteration` is included because it is needed to
+/// populate `ContextEntry`.
 #[derive(Debug, Clone, Default)]
 pub struct StepSuccess {
     pub step_name: String,
@@ -295,6 +296,19 @@ pub struct ContextEntry {
     pub structured_output: Option<String>,
     #[serde(default)]
     pub output_file: Option<String>,
+}
+
+impl From<StepSuccess> for ContextEntry {
+    fn from(success: StepSuccess) -> Self {
+        Self {
+            step: success.step_name,
+            iteration: success.iteration,
+            context: success.context,
+            markers: success.markers,
+            structured_output: success.structured_output,
+            output_file: success.output_file,
+        }
+    }
 }
 
 /// A single row in the `workflow_run_step_fan_out_items` table.

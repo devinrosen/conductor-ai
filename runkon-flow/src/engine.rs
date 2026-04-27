@@ -538,26 +538,19 @@ pub fn record_step_success(
         StepResult {
             step_name: success.step_name.clone(),
             status: WorkflowStepStatus::Completed,
-            result_text: success.result_text,
+            result_text: success.result_text.clone(),
             cost_usd: success.cost_usd,
             num_turns: success.num_turns,
             duration_ms: success.duration_ms,
             markers: success.markers.clone(),
             context: success.context.clone(),
-            child_run_id: success.child_run_id,
+            child_run_id: success.child_run_id.clone(),
             structured_output: success.structured_output.clone(),
             output_file: success.output_file.clone(),
         },
     );
 
-    state.contexts.push(ContextEntry {
-        step: success.step_name,
-        iteration: success.iteration,
-        context: success.context,
-        markers: success.markers,
-        structured_output: success.structured_output,
-        output_file: success.output_file,
-    });
+    state.contexts.push(success.into());
 }
 
 /// Resolve child workflow inputs: substitute variables, apply defaults, and
@@ -738,7 +731,7 @@ pub fn restore_completed_step(
         step_name: step_key.to_string(),
         result_text: step.result_text.clone(),
         markers,
-        context: context.clone(),
+        context,
         child_run_id: step.child_run_id.clone(),
         structured_output: step.structured_output.clone(),
         output_file: step.output_file.clone(),
@@ -748,14 +741,7 @@ pub fn restore_completed_step(
     let step_result = StepResult::completed_without_metrics(&success);
     state.step_results.insert(step_key.to_string(), step_result);
 
-    state.contexts.push(ContextEntry {
-        step: success.step_name,
-        iteration: success.iteration,
-        context: success.context,
-        markers: success.markers,
-        structured_output: success.structured_output,
-        output_file: success.output_file,
-    });
+    state.contexts.push(success.into());
 }
 
 /// Fetch both the final step output (markers + context) and all completed step
@@ -796,17 +782,19 @@ pub fn fetch_child_completion_data(
         .map(|s| {
             let markers = parse_markers_out(s.markers_out.as_deref(), &s.step_name);
             let context = s.context_out.clone().unwrap_or_default();
-            let success = crate::types::StepSuccess {
+            let result = StepResult {
                 step_name: s.step_name.clone(),
-                result_text: s.result_text.clone(),
+                status: WorkflowStepStatus::Completed,
+                result_text: s.result_text,
+                cost_usd: None,
+                num_turns: None,
+                duration_ms: None,
                 markers,
                 context,
-                child_run_id: s.child_run_id.clone(),
-                structured_output: s.structured_output.clone(),
-                output_file: s.output_file.clone(),
-                ..crate::types::StepSuccess::default()
+                child_run_id: s.child_run_id,
+                structured_output: s.structured_output,
+                output_file: s.output_file,
             };
-            let result = StepResult::completed_without_metrics(&success);
             (s.step_name, result)
         })
         .collect();
