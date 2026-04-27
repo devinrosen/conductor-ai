@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
@@ -7,17 +7,15 @@ use crate::cancellation::CancellationToken;
 use crate::dsl::{ForEachNode, OnChildFail};
 use crate::engine::{
     emit_event, record_step_failure, record_step_success, restore_step, should_skip,
-    ChildWorkflowInput, ExecutionState, WorktreeContext,
+    ChildWorkflowInput, ExecutionState,
 };
 use crate::engine_error::{EngineError, Result};
 use crate::events::EngineEvent;
 use crate::status::WorkflowStepStatus;
-use crate::traits::action_executor::ActionRegistry;
-use crate::traits::item_provider::{ItemProviderRegistry, ProviderContext};
+use crate::traits::item_provider::ProviderContext;
 use crate::traits::persistence::{
-    FanOutItemStatus, FanOutItemUpdate, NewStep, StepUpdate, WorkflowPersistence,
+    FanOutItemStatus, FanOutItemUpdate, NewStep, StepUpdate,
 };
-use crate::traits::script_env_provider::ScriptEnvProvider;
 
 use super::p_err;
 
@@ -27,21 +25,8 @@ use super::p_err;
 /// the parent `ExecutionState` are kept, so the main thread retains full `&mut`
 /// access throughout the dispatch loop.
 struct ForeachParentCtx {
-    persistence: Arc<dyn WorkflowPersistence>,
-    action_registry: Arc<ActionRegistry>,
-    script_env_provider: Arc<dyn ScriptEnvProvider>,
-    registry: Arc<ItemProviderRegistry>,
-    event_sinks: Arc<[Arc<dyn crate::events::EventSink>]>,
+    parent_state: ExecutionState,
     child_runner: Arc<dyn crate::engine::ChildWorkflowRunner>,
-    workflow_run_id: String,
-    workflow_name: String,
-    model: Option<String>,
-    exec_config: crate::types::WorkflowExecConfig,
-    parent_run_id: String,
-    depth: u32,
-    target_label: Option<String>,
-    default_bot_name: Option<String>,
-    worktree_ctx: WorktreeContext,
 }
 
 impl ForeachParentCtx {
@@ -50,63 +35,13 @@ impl ForeachParentCtx {
         child_runner: Arc<dyn crate::engine::ChildWorkflowRunner>,
     ) -> Self {
         Self {
-            persistence: Arc::clone(&state.persistence),
-            action_registry: Arc::clone(&state.action_registry),
-            script_env_provider: Arc::clone(&state.script_env_provider),
-            registry: Arc::clone(&state.registry),
-            event_sinks: Arc::clone(&state.event_sinks),
+            parent_state: state.clone(),
             child_runner,
-            workflow_run_id: state.workflow_run_id.clone(),
-            workflow_name: state.workflow_name.clone(),
-            model: state.model.clone(),
-            exec_config: state.exec_config.clone(),
-            parent_run_id: state.parent_run_id.clone(),
-            depth: state.depth,
-            target_label: state.target_label.clone(),
-            default_bot_name: state.default_bot_name.clone(),
-            worktree_ctx: state.worktree_ctx.clone(),
         }
     }
 
     fn make_child_state(&self, cancellation: CancellationToken) -> ExecutionState {
-        ExecutionState {
-            persistence: Arc::clone(&self.persistence),
-            action_registry: Arc::clone(&self.action_registry),
-            script_env_provider: Arc::clone(&self.script_env_provider),
-            workflow_run_id: self.workflow_run_id.clone(),
-            workflow_name: self.workflow_name.clone(),
-            worktree_ctx: self.worktree_ctx.clone(),
-            model: self.model.clone(),
-            exec_config: self.exec_config.clone(),
-            inputs: HashMap::new(),
-            parent_run_id: self.parent_run_id.clone(),
-            depth: self.depth,
-            target_label: self.target_label.clone(),
-            step_results: HashMap::new(),
-            contexts: vec![],
-            position: 0,
-            all_succeeded: true,
-            total_cost: 0.0,
-            total_turns: 0,
-            total_duration_ms: 0,
-            total_input_tokens: 0,
-            total_output_tokens: 0,
-            total_cache_read_input_tokens: 0,
-            total_cache_creation_input_tokens: 0,
-            last_gate_feedback: None,
-            block_output: None,
-            block_with: vec![],
-            resume_ctx: None,
-            default_bot_name: self.default_bot_name.clone(),
-            triggered_by_hook: false,
-            schema_resolver: None,
-            child_runner: Some(Arc::clone(&self.child_runner)),
-            last_heartbeat_at: ExecutionState::new_heartbeat(),
-            registry: Arc::clone(&self.registry),
-            event_sinks: Arc::clone(&self.event_sinks),
-            cancellation,
-            current_execution_id: Arc::new(Mutex::new(None)),
-        }
+        self.parent_state.fork_child(cancellation)
     }
 }
 

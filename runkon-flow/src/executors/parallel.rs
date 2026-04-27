@@ -267,8 +267,9 @@ pub fn execute_parallel(
     let mut successes = 0u32;
     let mut failures = 0u32;
 
-    for pr in &results {
-        match &pr.result {
+    let results_count = results.len();
+    for pr in results {
+        match pr.result {
             Ok(output) => {
                 let markers_json = crate::helpers::serialize_or_empty_array(
                     &output.markers,
@@ -299,23 +300,13 @@ pub fn execute_parallel(
                 record_step_success(
                     state,
                     pr.agent_step_key.clone(),
-                    StepSuccess {
-                        step_name: pr.agent_name.clone(),
-                        result_text: output.result_text.clone(),
-                        cost_usd: output.cost_usd,
-                        num_turns: output.num_turns,
-                        duration_ms: output.duration_ms,
-                        input_tokens: output.input_tokens,
-                        output_tokens: output.output_tokens,
-                        cache_read_input_tokens: output.cache_read_input_tokens,
-                        cache_creation_input_tokens: output.cache_creation_input_tokens,
-                        markers: output.markers.clone(),
+                    StepSuccess::from_action_output(
+                        &output,
+                        pr.agent_name.clone(),
                         context,
-                        child_run_id: output.child_run_id.clone(),
-                        structured_output: output.structured_output.clone(),
-                        output_file: None,
                         iteration,
-                    },
+                        None,
+                    ),
                 );
             }
             Err(e) => {
@@ -331,7 +322,7 @@ pub fn execute_parallel(
 
     // Apply min_success policy (skipped-on-resume agents count as successes)
     let effective_successes = successes + skipped_count;
-    let total_agents = results.len() as u32 + skipped_count;
+    let total_agents = results_count as u32 + skipped_count;
     let min_required = node.min_success.unwrap_or(total_agents);
     tracing::info!(
         "parallel: {successes} succeeded, {failures} failed, {skipped_count} skipped out of {total_agents} agents",

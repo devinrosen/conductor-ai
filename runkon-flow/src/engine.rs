@@ -30,12 +30,14 @@ pub struct WorktreeContext {
 }
 
 /// Pre-loaded context for resuming a workflow run.
+#[derive(Clone)]
 pub struct ResumeContext {
     /// Completed step records keyed by step key, for O(1) skip check and restore.
     pub step_map: HashMap<StepKey, WorkflowRunStep>,
 }
 
 /// Mutable runtime state for a workflow execution — no conductor-core deps.
+#[derive(Clone)]
 pub struct ExecutionState {
     pub persistence: Arc<dyn WorkflowPersistence>,
     pub action_registry: Arc<ActionRegistry>,
@@ -120,6 +122,51 @@ impl ExecutionState {
     /// Create a fresh heartbeat counter, initialized to 0 so the first tick fires immediately.
     pub fn new_heartbeat() -> Arc<AtomicI64> {
         Arc::new(AtomicI64::new(0))
+    }
+
+    /// Fork a child execution state from this parent.
+    ///
+    /// Copies shared configuration (persistence, registries, workflow identity) and resets all
+    /// runtime accumulators so the child starts with a clean slate.
+    pub fn fork_child(&self, cancellation: CancellationToken) -> ExecutionState {
+        Self {
+            persistence: Arc::clone(&self.persistence),
+            action_registry: Arc::clone(&self.action_registry),
+            script_env_provider: Arc::clone(&self.script_env_provider),
+            workflow_run_id: self.workflow_run_id.clone(),
+            workflow_name: self.workflow_name.clone(),
+            worktree_ctx: self.worktree_ctx.clone(),
+            model: self.model.clone(),
+            exec_config: self.exec_config.clone(),
+            inputs: HashMap::new(),
+            parent_run_id: self.parent_run_id.clone(),
+            depth: self.depth,
+            target_label: self.target_label.clone(),
+            step_results: HashMap::new(),
+            contexts: vec![],
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cache_read_input_tokens: 0,
+            total_cache_creation_input_tokens: 0,
+            last_gate_feedback: None,
+            block_output: None,
+            block_with: vec![],
+            resume_ctx: None,
+            default_bot_name: self.default_bot_name.clone(),
+            triggered_by_hook: false,
+            schema_resolver: self.schema_resolver.clone(),
+            child_runner: self.child_runner.as_ref().map(Arc::clone),
+            last_heartbeat_at: Self::new_heartbeat(),
+            registry: Arc::clone(&self.registry),
+            event_sinks: Arc::clone(&self.event_sinks),
+            cancellation,
+            current_execution_id: Arc::new(std::sync::Mutex::new(None)),
+        }
     }
 
     /// Accumulate individual metrics into this execution state.

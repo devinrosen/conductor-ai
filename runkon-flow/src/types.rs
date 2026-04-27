@@ -217,6 +217,35 @@ pub struct StepSuccess {
     pub output_file: Option<String>,
 }
 
+impl StepSuccess {
+    /// Build a [`StepSuccess`] from an [`ActionOutput`] plus execution bookkeeping.
+    pub fn from_action_output(
+        output: &crate::traits::action_executor::ActionOutput,
+        step_name: String,
+        context: String,
+        iteration: u32,
+        output_file: Option<String>,
+    ) -> Self {
+        Self {
+            step_name,
+            result_text: output.result_text.clone(),
+            cost_usd: output.cost_usd,
+            num_turns: output.num_turns,
+            duration_ms: output.duration_ms,
+            input_tokens: output.input_tokens,
+            output_tokens: output.output_tokens,
+            cache_read_input_tokens: output.cache_read_input_tokens,
+            cache_creation_input_tokens: output.cache_creation_input_tokens,
+            markers: output.markers.clone(),
+            context,
+            child_run_id: output.child_run_id.clone(),
+            iteration,
+            structured_output: output.structured_output.clone(),
+            output_file,
+        }
+    }
+}
+
 /// Result of a single step execution (kept in memory during execution).
 #[derive(Debug, Clone, Default)]
 pub struct StepResult {
