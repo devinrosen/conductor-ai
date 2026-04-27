@@ -44,7 +44,7 @@ pub fn execute_call_workflow(
 
     // Helper: persist success and bubble up child step results.
     // Used by both the resume-success path and the fresh-success path.
-    let mut record_child_success = |
+    let record_child_success = |
         state: &mut ExecutionState,
         step_id: &str,
         result: &crate::types::WorkflowResult,
