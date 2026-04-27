@@ -1,5 +1,6 @@
 use crate::dsl::{WhileNode, WorkflowNode};
 use crate::status::WorkflowStepStatus;
+use serde::{Deserialize, Serialize};
 
 // Forward declaration for ExecutionState — defined in engine.rs
 use crate::engine::ExecutionState;
@@ -9,8 +10,11 @@ use crate::engine::ExecutionState;
 // ---------------------------------------------------------------------------
 
 /// Parsed `<<<CONDUCTOR_OUTPUT>>>` block.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConductorOutput {
+    #[serde(default)]
     pub markers: Vec<String>,
+    #[serde(default)]
     pub context: String,
 }
 
@@ -50,68 +54,85 @@ pub fn parse_conductor_output(text: &str) -> Option<ConductorOutput> {
     let cleaned = strip_trailing_commas(raw);
     let cleaned = fix_backslash_escapes(&cleaned);
 
-    let value: serde_json::Value = serde_json::from_str(&cleaned)
+    serde_json::from_str::<ConductorOutput>(&cleaned)
         .map_err(|e| {
-            tracing::warn!("parse_conductor_output: invalid JSON: {e}");
+            let snippet: String = cleaned.chars().take(200).collect();
+            tracing::warn!(
+                "parse_conductor_output: invalid JSON in CONDUCTOR_OUTPUT block: {e}\n  snippet: {snippet}"
+            );
         })
-        .ok()?;
-
-    let markers = value
-        .get("markers")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|m| m.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let context = value
-        .get("context")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    Some(ConductorOutput { markers, context })
+        .ok()
 }
 
-/// Strip trailing commas before `}` or `]` (common LLM JSON artifact).
-fn strip_trailing_commas(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+/// Remove trailing commas before `}` or `]` (common LLM JSON artifact).
+///
+/// Preserves whitespace between the comma and the closing bracket so that
+/// re-parsing produces the same layout.
+pub fn strip_trailing_commas(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
+    // Reuse a single buffer across all commas to avoid repeated small heap
+    // allocations (each comma would otherwise allocate a fresh String).
+    let mut ws_buf = String::with_capacity(16);
     while let Some(c) = chars.next() {
         if c == ',' {
-            let rest = chars.clone().find(|ch| !ch.is_whitespace());
-            if matches!(rest, Some('}') | Some(']')) {
+            ws_buf.clear();
+            while chars.peek().is_some_and(|p| p.is_whitespace()) {
+                ws_buf.push(chars.next().unwrap());
+            }
+            if chars.peek().is_some_and(|p| *p == '}' || *p == ']') {
+                result.push_str(&ws_buf);
                 continue;
             }
+            result.push(c);
+            result.push_str(&ws_buf);
+        } else {
+            result.push(c);
         }
-        out.push(c);
     }
-    out
+    result
 }
 
-/// Replace `\` followed by non-JSON-escape characters with `\\`.
-fn fix_backslash_escapes(s: &str) -> String {
-    const VALID: &[char] = &['"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'];
-    let mut out = String::with_capacity(s.len());
+/// Fix invalid backslash escapes inside JSON string literals.
+///
+/// Walks the input character-by-character, tracking JSON string boundaries.
+/// When inside a string, a `\` followed by an invalid JSON escape character
+/// is doubled to `\\`, making it a valid JSON escaped backslash. Valid escape
+/// sequences (including `\\`, `\"`, `\uXXXX`) are emitted verbatim.
+/// Backslashes outside string literals are passed through unchanged.
+pub fn fix_backslash_escapes(s: &str) -> String {
+    const VALID_ESCAPE: &[char] = &['"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'];
+
     let mut chars = s.chars().peekable();
+    let mut result = String::with_capacity(s.len() + 16);
+    let mut in_string = false;
+
     while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.peek() {
-                Some(next) if VALID.contains(next) => {
-                    out.push('\\');
-                }
-                _ => {
-                    out.push('\\');
-                    out.push('\\');
-                }
+        if !in_string {
+            result.push(c);
+            if c == '"' {
+                in_string = true;
             }
         } else {
-            out.push(c);
+            match c {
+                '"' => {
+                    result.push(c);
+                    in_string = false;
+                }
+                '\\' => {
+                    if chars.peek().is_some_and(|nc| VALID_ESCAPE.contains(nc)) {
+                        result.push('\\');
+                        result.push(chars.next().unwrap());
+                    } else {
+                        result.push('\\');
+                        result.push('\\');
+                    }
+                }
+                _ => result.push(c),
+            }
         }
     }
-    out
+    result
 }
 
 /// Parse a human-readable duration string into a `std::time::Duration`.
@@ -273,17 +294,14 @@ pub fn find_max_completed_while_iteration(state: &ExecutionState, node: &WhileNo
         }
     }
 
-    // Find the highest iteration where all body nodes are completed
+    // Find the highest iteration where all body nodes are completed.
+    // Since completed_by_iter only contains body keys, a simple count check
+    // avoids the O(body_keys) all() scan on every iteration.
+    let body_len = body_keys.len();
     let mut iter = 0u32;
-    let empty: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    loop {
-        let completed = completed_by_iter.get(&iter).unwrap_or(&empty);
-        if !body_keys.iter().all(|k| completed.contains(k.as_str())) {
-            break;
-        }
+    while completed_by_iter.get(&iter).map(|s| s.len()).unwrap_or(0) == body_len {
         iter += 1;
     }
-    // iter is now the first incomplete iteration — start there
     iter
 }
 
@@ -335,6 +353,20 @@ mod parse_tests {
     }
 
     #[test]
+    fn preserves_valid_backslash_escapes() {
+        // \\ is a valid JSON escape for a literal backslash; fix_backslash_escapes
+        // must not corrupt it into an unparseable sequence.
+        let text = concat!(
+            "<<<CONDUCTOR_OUTPUT>>>\n",
+            r#"{"markers":[],"context":"C:\\Users\\dev"}"#,
+            "\n",
+            "<<<END_CONDUCTOR_OUTPUT>>>"
+        );
+        let out = parse_conductor_output(text).unwrap();
+        assert_eq!(out.context, r"C:\Users\dev");
+    }
+
+    #[test]
     fn strips_markdown_code_fence() {
         let text = concat!(
             "<<<CONDUCTOR_OUTPUT>>>\n",
@@ -379,6 +411,103 @@ mod parse_tests {
         let out = parse_conductor_output(text).unwrap();
         assert_eq!(out.markers, vec!["m1"]);
         assert_eq!(out.context, "");
+    }
+
+    #[test]
+    fn marker_in_field_value_finds_real_block() {
+        let text = r#"Some agent output.
+<<<CONDUCTOR_OUTPUT>>>
+{
+  "markers": ["done"],
+  "context": "saw <<<CONDUCTOR_OUTPUT>>> in the log and handled it"
+}
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let out = parse_conductor_output(text).unwrap();
+        assert_eq!(out.markers, vec!["done"]);
+        assert!(out.context.contains("<<<CONDUCTOR_OUTPUT>>>"));
+    }
+
+    #[test]
+    fn skips_code_examples_finds_real_block() {
+        let text = r#"Here is how to emit output:
+```bash
+echo '<<<CONDUCTOR_OUTPUT>>>'
+echo '{"markers": ["fake"], "context": "example"}'
+echo '<<<END_CONDUCTOR_OUTPUT>>>'
+```
+
+Actual output:
+<<<CONDUCTOR_OUTPUT>>>
+{"markers": ["real"], "context": "this is the real result"}
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let out = parse_conductor_output(text).unwrap();
+        assert_eq!(out.markers, vec!["real"]);
+        assert_eq!(out.context, "this is the real result");
+    }
+
+    #[test]
+    fn multiple_complete_blocks_returns_last() {
+        let text = r#"Example 1:
+<<<CONDUCTOR_OUTPUT>>>
+{"markers": ["example1"], "context": "first example"}
+<<<END_CONDUCTOR_OUTPUT>>>
+
+Example 2:
+<<<CONDUCTOR_OUTPUT>>>
+{"markers": ["example2"], "context": "second example"}
+<<<END_CONDUCTOR_OUTPUT>>>
+
+Real output:
+<<<CONDUCTOR_OUTPUT>>>
+{"markers": ["real"], "context": "the actual result"}
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let out = parse_conductor_output(text).unwrap();
+        assert_eq!(out.markers, vec!["real"]);
+        assert_eq!(out.context, "the actual result");
+    }
+
+    #[test]
+    fn malformed_json_returns_none() {
+        let text = concat!(
+            "<<<CONDUCTOR_OUTPUT>>>\n",
+            "{markers: [\"done\"]}\n",
+            "<<<END_CONDUCTOR_OUTPUT>>>\n"
+        );
+        assert!(parse_conductor_output(text).is_none());
+    }
+
+    #[test]
+    fn markers_field_with_wrong_type_returns_none() {
+        // Direct deserialization is stricter than the old manual extraction:
+        // a "markers" field that is a string instead of an array must fail.
+        let text = concat!(
+            "<<<CONDUCTOR_OUTPUT>>>\n",
+            r#"{"markers":"not-an-array","context":"ok"}"#,
+            "\n",
+            "<<<END_CONDUCTOR_OUTPUT>>>\n"
+        );
+        assert!(
+            parse_conductor_output(text).is_none(),
+            "markers field with non-array type should cause parse failure"
+        );
+    }
+
+    #[test]
+    fn context_field_with_wrong_type_returns_none() {
+        // A "context" field that is a number instead of a string must fail.
+        let text = concat!(
+            "<<<CONDUCTOR_OUTPUT>>>\n",
+            r#"{"markers":["m1"],"context":42}"#,
+            "\n",
+            "<<<END_CONDUCTOR_OUTPUT>>>\n"
+        );
+        assert!(
+            parse_conductor_output(text).is_none(),
+            "context field with non-string type should cause parse failure"
+        );
     }
 }
 

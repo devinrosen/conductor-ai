@@ -208,6 +208,84 @@ pub struct StepResult {
     pub output_file: Option<String>,
 }
 
+impl StepResult {
+    /// Create a failed StepResult with the given error text.
+    pub fn failed(step_name: &str, result_text: String) -> Self {
+        Self {
+            step_name: step_name.to_string(),
+            status: WorkflowStepStatus::Failed,
+            result_text: Some(result_text),
+            ..Self::default()
+        }
+    }
+
+    /// Create a skipped StepResult.
+    pub fn skipped(step_name: &str) -> Self {
+        Self {
+            step_name: step_name.to_string(),
+            status: WorkflowStepStatus::Skipped,
+            ..Self::default()
+        }
+    }
+
+    /// Create a completed StepResult without per-step metrics.
+    ///
+    /// Convenience wrapper for the common case where cost/turns/duration are
+    /// not available (e.g. restored from a prior run or bubble-up from a child
+    /// workflow).
+    pub fn completed_without_metrics(
+        step_name: &str,
+        result_text: Option<String>,
+        markers: Vec<String>,
+        context: String,
+        child_run_id: Option<String>,
+        structured_output: Option<String>,
+        output_file: Option<String>,
+    ) -> Self {
+        Self::completed(
+            step_name,
+            result_text,
+            None,
+            None,
+            None,
+            markers,
+            context,
+            child_run_id,
+            structured_output,
+            output_file,
+        )
+    }
+
+    /// Create a completed StepResult with all output fields.
+    #[allow(clippy::too_many_arguments)]
+    pub fn completed(
+        step_name: &str,
+        result_text: Option<String>,
+        cost_usd: Option<f64>,
+        num_turns: Option<i64>,
+        duration_ms: Option<i64>,
+        markers: Vec<String>,
+        context: String,
+        child_run_id: Option<String>,
+        structured_output: Option<String>,
+        output_file: Option<String>,
+    ) -> Self {
+        Self {
+            step_name: step_name.to_string(),
+            status: WorkflowStepStatus::Completed,
+            result_text,
+            cost_usd,
+            num_turns,
+            duration_ms,
+            markers,
+            context,
+            child_run_id,
+            structured_output,
+            output_file,
+        }
+    }
+}
+
 /// An entry in the accumulated context history.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextEntry {
@@ -234,4 +312,57 @@ pub struct FanOutItemRow {
     pub status: String,
     pub dispatched_at: Option<String>,
     pub completed_at: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StepResult;
+    use crate::status::WorkflowStepStatus;
+
+    #[test]
+    fn step_result_failed_sets_status_and_text() {
+        let r = StepResult::failed("plan", "out of tokens".to_string());
+        assert_eq!(r.step_name, "plan");
+        assert_eq!(r.status, WorkflowStepStatus::Failed);
+        assert_eq!(r.result_text, Some("out of tokens".to_string()));
+        assert!(r.markers.is_empty());
+        assert_eq!(r.context, "");
+    }
+
+    #[test]
+    fn step_result_skipped_sets_status_and_defaults() {
+        let r = StepResult::skipped("lint");
+        assert_eq!(r.step_name, "lint");
+        assert_eq!(r.status, WorkflowStepStatus::Skipped);
+        assert!(r.result_text.is_none());
+        assert!(r.markers.is_empty());
+        assert_eq!(r.context, "");
+    }
+
+    #[test]
+    fn step_result_completed_sets_all_fields() {
+        let r = StepResult::completed(
+            "review",
+            Some("looks good".to_string()),
+            Some(0.05),
+            Some(3),
+            Some(1200),
+            vec!["approved".to_string()],
+            "ctx".to_string(),
+            Some("child-1".to_string()),
+            Some(r#"{"ok":true}"#.to_string()),
+            Some("/tmp/out".to_string()),
+        );
+        assert_eq!(r.step_name, "review");
+        assert_eq!(r.status, WorkflowStepStatus::Completed);
+        assert_eq!(r.result_text, Some("looks good".to_string()));
+        assert_eq!(r.cost_usd, Some(0.05));
+        assert_eq!(r.num_turns, Some(3));
+        assert_eq!(r.duration_ms, Some(1200));
+        assert_eq!(r.markers, vec!["approved"]);
+        assert_eq!(r.context, "ctx");
+        assert_eq!(r.child_run_id, Some("child-1".to_string()));
+        assert_eq!(r.structured_output, Some(r#"{"ok":true}"#.to_string()));
+        assert_eq!(r.output_file, Some("/tmp/out".to_string()));
+    }
 }

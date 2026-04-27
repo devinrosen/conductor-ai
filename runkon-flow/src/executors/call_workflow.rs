@@ -5,7 +5,6 @@ use crate::engine::{
 };
 use crate::engine_error::{EngineError, Result};
 use crate::prompt_builder::build_variable_map;
-use crate::status::WorkflowStepStatus;
 use crate::traits::persistence::{NewStep, StepUpdate};
 
 use super::p_err;
@@ -42,6 +41,63 @@ pub fn execute_call_workflow(
 
     let step_key = node.workflow.clone();
     let mut last_error = String::new();
+
+    // Helper: persist success and bubble up child step results.
+    // Used by both the resume-success path and the fresh-success path.
+    let record_child_success = |
+        state: &mut ExecutionState,
+        step_id: &str,
+        result: &crate::types::WorkflowResult,
+        attempt: u32,
+    | -> Result<()> {
+        let ((markers, context), child_steps) =
+            fetch_child_completion_data(state.persistence.as_ref(), &result.workflow_run_id);
+
+        let markers_json = crate::helpers::serialize_or_empty_array(
+            &markers,
+            &format!("call_workflow '{}'", node.workflow),
+        );
+
+        super::persist_completed_step(
+            state,
+            step_id,
+            Some(result.workflow_run_id.clone()),
+            Some(format!("Sub-workflow '{}' completed", node.workflow)),
+            Some(context.clone()),
+            Some(markers_json),
+            attempt,
+            None,
+        )?;
+
+        record_step_success(
+            state,
+            step_key.clone(),
+            &node.workflow,
+            Some(format!(
+                "Sub-workflow '{}' completed successfully",
+                node.workflow
+            )),
+            Some(result.total_cost),
+            Some(result.total_turns),
+            Some(result.total_duration_ms),
+            Some(result.total_input_tokens),
+            Some(result.total_output_tokens),
+            Some(result.total_cache_read_input_tokens),
+            Some(result.total_cache_creation_input_tokens),
+            markers,
+            context,
+            Some(result.workflow_run_id.clone()),
+            iteration,
+            None,
+            None,
+        );
+
+        for (key, value) in child_steps {
+            state.step_results.insert(key, value);
+        }
+
+        Ok(())
+    };
 
     // Require a child runner to be configured
     let child_runner = match &state.child_runner {
@@ -85,55 +141,7 @@ pub fn execute_call_workflow(
                         result.total_cost,
                         result.total_turns,
                     );
-
-                    let ((markers, context), child_steps) = fetch_child_completion_data(
-                        state.persistence.as_ref(),
-                        &result.workflow_run_id,
-                    );
-
-                    let markers_json = crate::helpers::serialize_or_empty_array(
-                        &markers,
-                        &format!("call_workflow '{}'", node.workflow),
-                    );
-
-                    super::persist_completed_step(
-                        state,
-                        &step_id,
-                        Some(result.workflow_run_id.clone()),
-                        Some(format!("Sub-workflow '{}' completed", node.workflow)),
-                        Some(context.clone()),
-                        Some(markers_json),
-                        0,
-                        None,
-                    )?;
-
-                    record_step_success(
-                        state,
-                        step_key.clone(),
-                        &node.workflow,
-                        Some(format!(
-                            "Sub-workflow '{}' completed successfully",
-                            node.workflow
-                        )),
-                        Some(result.total_cost),
-                        Some(result.total_turns),
-                        Some(result.total_duration_ms),
-                        Some(result.total_input_tokens),
-                        Some(result.total_output_tokens),
-                        Some(result.total_cache_read_input_tokens),
-                        Some(result.total_cache_creation_input_tokens),
-                        markers,
-                        context,
-                        Some(result.workflow_run_id.clone()),
-                        iteration,
-                        None,
-                        None,
-                    );
-
-                    for (key, value) in child_steps {
-                        state.step_results.insert(key, value);
-                    }
-
+                    record_child_success(state, &step_id, &result, 0)?;
                     return Ok(());
                 }
                 Ok(result) => {
@@ -147,16 +155,7 @@ pub fn execute_call_workflow(
                         .persistence
                         .update_step(
                             &step_id,
-                            StepUpdate {
-                                status: WorkflowStepStatus::Failed,
-                                child_run_id: Some(result.workflow_run_id),
-                                result_text: Some(msg.clone()),
-                                context_out: None,
-                                markers_out: None,
-                                retry_count: Some(0),
-                                structured_output: None,
-                                step_error: Some(msg.clone()),
-                            },
+                            StepUpdate::failed_with_child(msg.clone(), 0, Some(result.workflow_run_id)),
                         )
                         .map_err(p_err)?;
                     msg
@@ -172,16 +171,7 @@ pub fn execute_call_workflow(
                         .persistence
                         .update_step(
                             &step_id,
-                            StepUpdate {
-                                status: WorkflowStepStatus::Failed,
-                                child_run_id: Some(prior_child.id),
-                                result_text: Some(msg.clone()),
-                                context_out: None,
-                                markers_out: None,
-                                retry_count: Some(0),
-                                structured_output: None,
-                                step_error: Some(msg.clone()),
-                            },
+                            StepUpdate::failed_with_child(msg.clone(), 0, Some(prior_child.id)),
                         )
                         .map_err(p_err)?;
                     msg
@@ -227,16 +217,7 @@ pub fn execute_call_workflow(
 
         // Build inputs for the child workflow via variable substitution
         let vars = build_variable_map(state);
-        // We'll pass the raw inputs along with vars to the child runner
-        // which will resolve them with the actual input decls
         let raw_child_inputs = node.inputs.clone();
-        let mut child_inputs = std::collections::HashMap::new();
-        for (k, v) in &raw_child_inputs {
-            child_inputs.insert(
-                k.clone(),
-                crate::prompt_builder::substitute_variables_keep_literal(v, &vars),
-            );
-        }
 
         let effective_bot_name = node
             .bot_name
@@ -289,7 +270,6 @@ pub fn execute_call_workflow(
             };
 
         // Use the child_runner to execute — it knows about conductor-core types
-        let _ = child_inputs; // raw inputs already resolved above
         match child_runner.execute_child(
             &placeholder_def,
             state,
@@ -310,55 +290,7 @@ pub fn execute_call_workflow(
                         result.total_cost,
                         result.total_turns,
                     );
-
-                    let ((markers, context), child_steps) = fetch_child_completion_data(
-                        state.persistence.as_ref(),
-                        &result.workflow_run_id,
-                    );
-
-                    let markers_json = crate::helpers::serialize_or_empty_array(
-                        &markers,
-                        &format!("call_workflow '{}'", node.workflow),
-                    );
-
-                    super::persist_completed_step(
-                        state,
-                        &step_id,
-                        Some(result.workflow_run_id.clone()),
-                        Some(format!("Sub-workflow '{}' completed", node.workflow)),
-                        Some(context.clone()),
-                        Some(markers_json),
-                        attempt,
-                        None,
-                    )?;
-
-                    record_step_success(
-                        state,
-                        step_key.clone(),
-                        &node.workflow,
-                        Some(format!(
-                            "Sub-workflow '{}' completed successfully",
-                            node.workflow
-                        )),
-                        Some(result.total_cost),
-                        Some(result.total_turns),
-                        Some(result.total_duration_ms),
-                        Some(result.total_input_tokens),
-                        Some(result.total_output_tokens),
-                        Some(result.total_cache_read_input_tokens),
-                        Some(result.total_cache_creation_input_tokens),
-                        markers,
-                        context,
-                        Some(result.workflow_run_id.clone()),
-                        iteration,
-                        None,
-                        None,
-                    );
-
-                    for (key, value) in child_steps {
-                        state.step_results.insert(key, value);
-                    }
-
+                    record_child_success(state, &step_id, &result, attempt)?;
                     return Ok(());
                 } else {
                     let msg = format!("Sub-workflow '{}' failed", node.workflow);
@@ -367,16 +299,7 @@ pub fn execute_call_workflow(
                         .persistence
                         .update_step(
                             &step_id,
-                            StepUpdate {
-                                status: WorkflowStepStatus::Failed,
-                                child_run_id: Some(result.workflow_run_id),
-                                result_text: Some(msg.clone()),
-                                context_out: None,
-                                markers_out: None,
-                                retry_count: Some(attempt as i64),
-                                structured_output: None,
-                                step_error: Some(msg.clone()),
-                            },
+                            StepUpdate::failed_with_child(msg.clone(), attempt, Some(result.workflow_run_id)),
                         )
                         .map_err(p_err)?;
                     last_error = msg;

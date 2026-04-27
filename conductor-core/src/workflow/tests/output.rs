@@ -51,8 +51,8 @@ fn test_parse_conductor_output_marker_in_field_value() {
 fn test_substitute_variables() {
     use std::collections::HashMap;
     let mut vars = HashMap::new();
-    vars.insert("ticket_id", "FEAT-123".to_string());
-    vars.insert("prior_context", "Created PLAN.md".to_string());
+    vars.insert("ticket_id", "FEAT-123");
+    vars.insert("prior_context", "Created PLAN.md");
 
     let prompt = "Fix ticket {{ticket_id}}. Context: {{prior_context}}. Unknown: {{unknown}}.";
     let result = substitute_variables(prompt, &vars);

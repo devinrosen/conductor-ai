@@ -128,6 +128,80 @@ pub(super) fn persist_completed_step(
         .map_err(p_err)
 }
 
+/// Build [`ActionParams`] from the fields that are identical in `call.rs` and `parallel.rs`.
+pub(super) fn build_action_params(
+    name: &str,
+    inputs: Arc<HashMap<String, String>>,
+    snippets: Vec<String>,
+    dry_run: bool,
+    gate_feedback: Option<String>,
+    schema: Option<crate::output_schema::OutputSchema>,
+    retries_remaining: u32,
+    retry_error: Option<String>,
+) -> crate::traits::action_executor::ActionParams {
+    crate::traits::action_executor::ActionParams {
+        name: name.to_string(),
+        inputs,
+        retries_remaining,
+        retry_error,
+        snippets,
+        dry_run,
+        gate_feedback,
+        schema,
+    }
+}
+
+/// Persist a completed step and record its success result in one call.
+/// Centralises the `persist_completed_step` + `record_step_success` pair used
+/// by `call.rs` after a successful agent dispatch.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn record_dispatch_success(
+    state: &mut crate::engine::ExecutionState,
+    step_id: &str,
+    step_key: &str,
+    agent_label: &str,
+    output: &crate::traits::action_executor::ActionOutput,
+    iteration: u32,
+    attempt: u32,
+    output_file: Option<String>,
+) -> crate::engine_error::Result<()> {
+    let markers_json = crate::helpers::serialize_or_empty_array(
+        &output.markers,
+        &format!("agent '{agent_label}'"),
+    );
+    let context = output.context.clone().unwrap_or_default();
+    persist_completed_step(
+        state,
+        step_id,
+        output.child_run_id.clone(),
+        output.result_text.clone(),
+        Some(context.clone()),
+        Some(markers_json),
+        attempt,
+        output.structured_output.clone(),
+    )?;
+    crate::engine::record_step_success(
+        state,
+        step_key.to_string(),
+        agent_label,
+        output.result_text.clone(),
+        output.cost_usd,
+        output.num_turns,
+        output.duration_ms,
+        output.input_tokens,
+        output.output_tokens,
+        output.cache_read_input_tokens,
+        output.cache_creation_input_tokens,
+        output.markers.clone(),
+        context,
+        output.child_run_id.clone(),
+        iteration,
+        output.structured_output.clone(),
+        output_file,
+    );
+    Ok(())
+}
+
 /// Returns `true` and performs skip cleanup if the step has already completed.
 /// Callers should `return Ok(())` (or `continue`) immediately when this returns `true`.
 pub(super) fn skip_if_already_completed(
