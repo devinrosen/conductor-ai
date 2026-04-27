@@ -22,6 +22,24 @@ pub fn format_gate_selection_context(items: &[String]) -> String {
     out
 }
 
+/// Serialize an optional slice of gate selection strings to a JSON string.
+///
+/// Returns `Ok(None)` when `selections` is `None`, `Ok(Some(json))` on success,
+/// or `Err(ConductorError::Workflow(...))` if serialization fails (should never
+/// happen for `Vec<String>` but we propagate rather than panic).
+pub(crate) fn serialize_gate_selections(
+    selections: Option<&[String]>,
+) -> crate::error::Result<Option<String>> {
+    match selections {
+        None => Ok(None),
+        Some(s) => serde_json::to_string(s).map(Some).map_err(|e| {
+            crate::error::ConductorError::Workflow(format!(
+                "gate selections serialization failed: {e}"
+            ))
+        }),
+    }
+}
+
 /// Parse a gate's stored `gate_options` JSON blob into a list of option strings.
 ///
 /// The stored format is a JSON array of objects with a `"value"` key:
@@ -72,6 +90,39 @@ mod tests {
         let json = r#"[{"value": "a", "label": "A label", "extra": 42}]"#;
         let result = parse_gate_options(json);
         assert_eq!(result, vec!["a"]);
+    }
+
+    // ── format_gate_selection_context ────────────────────────────────────────
+
+    #[test]
+    fn format_gate_selection_context_empty_input() {
+        let result = format_gate_selection_context(&[]);
+        assert_eq!(result, "User selected the following items:\n");
+    }
+
+    #[test]
+    fn format_gate_selection_context_single_item() {
+        let result = format_gate_selection_context(&["alpha".to_string()]);
+        assert_eq!(result, "User selected the following items:\n- alpha\n");
+    }
+
+    #[test]
+    fn format_gate_selection_context_item_with_special_characters() {
+        let result = format_gate_selection_context(&["say \"hello\"\nworld".to_string()]);
+        assert_eq!(
+            result,
+            "User selected the following items:\n- say \"hello\"\nworld\n"
+        );
+    }
+
+    #[test]
+    fn format_gate_selection_context_multi_item_golden() {
+        let items = vec!["foo".to_string(), "bar".to_string(), "baz qux".to_string()];
+        let result = format_gate_selection_context(&items);
+        assert_eq!(
+            result,
+            "User selected the following items:\n- foo\n- bar\n- baz qux\n"
+        );
     }
 }
 

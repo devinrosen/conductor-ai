@@ -15,6 +15,9 @@ use crate::workflow::constants::RUN_COLUMNS;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::workflow::types::{StepKey, WorkflowRun};
 
+const ORPHAN_BETWEEN_STEPS_MSG: &str =
+    "Orphaned: executor died between steps \u{2014} auto-resumed by watchdog";
+
 macro_rules! reset_sql {
     ($where:literal) => {
         concat!(
@@ -628,7 +631,7 @@ impl<'a> WorkflowManager<'a> {
             config,
             &stuck_ids,
             "running",
-            "Orphaned: executor died between steps — auto-resumed by watchdog",
+            ORPHAN_BETWEEN_STEPS_MSG,
             "claim_stuck_workflows",
         )?;
 
@@ -687,7 +690,7 @@ impl<'a> WorkflowManager<'a> {
                 config,
                 &orphaned_ids,
                 "running",
-                "Orphaned: executor died between steps — auto-resumed by watchdog",
+                ORPHAN_BETWEEN_STEPS_MSG,
                 "claim_heartbeat_stuck_runs",
             )?
             .into_iter()

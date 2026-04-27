@@ -72,7 +72,7 @@ impl ItemProvider for WorktreesProvider {
             if !candidates.is_empty() {
                 let repo =
                     crate::repo::RepoManager::new(ctx.conn, ctx.config).get_by_id(repo_id)?;
-                let open_prs = {
+                let open_prs: Vec<crate::github::GithubPr> = {
                     let mut cache = self.pr_cache.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(cached) = cache.get(&repo.remote_url) {
                         cached.clone()
@@ -82,7 +82,7 @@ impl ItemProvider for WorktreesProvider {
                         prs
                     }
                 };
-                candidates = filter_by_open_pr(candidates, want_open_pr, open_prs);
+                candidates = filter_by_open_pr(candidates, want_open_pr, &open_prs);
             }
         }
 
@@ -113,9 +113,10 @@ impl ItemProvider for WorktreesProvider {
 fn filter_by_open_pr(
     mut candidates: Vec<Worktree>,
     want_open_pr: bool,
-    open_prs: Vec<crate::github::GithubPr>,
+    open_prs: &[crate::github::GithubPr],
 ) -> Vec<Worktree> {
-    let open_branches: HashSet<String> = open_prs.into_iter().map(|pr| pr.head_ref_name).collect();
+    let open_branches: HashSet<String> =
+        open_prs.iter().map(|pr| pr.head_ref_name.clone()).collect();
     candidates.retain(|wt| open_branches.contains(&wt.branch) == want_open_pr);
     candidates
 }
@@ -333,11 +334,11 @@ mod tests {
             ci_status: String::new(),
         }];
 
-        let with_pr = filter_by_open_pr(wts.clone(), true, prs.clone());
+        let with_pr = filter_by_open_pr(wts.clone(), true, &prs);
         assert_eq!(with_pr.len(), 1);
         assert_eq!(with_pr[0].id, "w1");
 
-        let without_pr = filter_by_open_pr(wts, false, prs);
+        let without_pr = filter_by_open_pr(wts, false, &prs);
         assert_eq!(without_pr.len(), 1);
         assert_eq!(without_pr[0].id, "w2");
     }

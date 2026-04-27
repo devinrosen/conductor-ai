@@ -191,15 +191,8 @@ impl<'a> WorkflowManager<'a> {
         structured_output: Option<&str>,
         step_error: Option<&str>,
     ) -> Result<()> {
-        let is_starting =
-            status == WorkflowStepStatus::Running || status == WorkflowStepStatus::Waiting;
-        let is_terminal = matches!(
-            status,
-            WorkflowStepStatus::Completed
-                | WorkflowStepStatus::Failed
-                | WorkflowStepStatus::Skipped
-                | WorkflowStepStatus::TimedOut
-        );
+        let is_starting = status.is_starting();
+        let is_terminal = status.is_terminal();
 
         if is_starting {
             self.mark_step_running(step_id, status, child_run_id)
@@ -295,13 +288,7 @@ impl<'a> WorkflowManager<'a> {
             self.validate_gate_selections(step_id, selections)?;
         }
 
-        let selections_json = if let Some(s) = selections {
-            Some(serde_json::to_string(s).map_err(|e| {
-                ConductorError::Workflow(format!("Failed to serialize gate selections: {}", e))
-            })?)
-        } else {
-            None
-        };
+        let selections_json = crate::workflow::helpers::serialize_gate_selections(selections)?;
 
         self.execute_step_sql(
             "UPDATE workflow_run_steps SET gate_approved_at = :now, gate_approved_by = :approved_by, \

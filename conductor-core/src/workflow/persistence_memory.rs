@@ -205,15 +205,8 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
             .get_mut(step_id)
             .ok_or_else(|| EngineError::Persistence(format!("step {step_id} not found")))?;
         let now = Utc::now().to_rfc3339();
-        let is_starting = update.status == WorkflowStepStatus::Running
-            || update.status == WorkflowStepStatus::Waiting;
-        let is_terminal = matches!(
-            update.status,
-            WorkflowStepStatus::Completed
-                | WorkflowStepStatus::Failed
-                | WorkflowStepStatus::Skipped
-                | WorkflowStepStatus::TimedOut
-        );
+        let is_starting = update.status.is_starting();
+        let is_terminal = update.status.is_terminal();
         step.status = update.status;
         step.child_run_id = update.child_run_id;
         if is_starting {
@@ -357,8 +350,8 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         step.gate_approved_at = Some(now.clone());
         step.gate_approved_by = Some(approved_by.to_string());
         step.gate_feedback = feedback.map(String::from);
-        step.gate_selections = selections
-            .map(|s| serde_json::to_string(s).expect("Vec<String> serialization is infallible"));
+        step.gate_selections = crate::workflow::helpers::serialize_gate_selections(selections)
+            .map_err(|e| EngineError::Persistence(e.to_string()))?;
         if let Some(items) = selections.filter(|s| !s.is_empty()) {
             step.context_out = Some(crate::workflow::helpers::format_gate_selection_context(
                 items,
