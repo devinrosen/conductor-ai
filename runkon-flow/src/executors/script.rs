@@ -31,6 +31,21 @@ fn apply_script_on_fail(
     }
 }
 
+/// Persist a script step failure and apply on_fail logic in one call.
+fn fail_script_step(
+    state: &mut ExecutionState,
+    step_id: &str,
+    node: &ScriptNode,
+    err_msg: String,
+) -> Result<()> {
+    tracing::warn!("{}", err_msg);
+    state
+        .persistence
+        .update_step(step_id, StepUpdate::failed(err_msg.clone(), 0))
+        .map_err(p_err)?;
+    apply_script_on_fail(state, &node.name, &node.on_fail, err_msg)
+}
+
 pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: u32) -> Result<()> {
     let pos = state.position;
     state.position += 1;
@@ -200,26 +215,37 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            let err_msg = format!("Script '{}' failed to execute: {e}", node.name);
-            tracing::warn!("{}", err_msg);
-            state
-                .persistence
-                .update_step(
-                    &step_id,
-                    StepUpdate {
-                        status: WorkflowStepStatus::Failed,
-                        child_run_id: None,
-                        result_text: Some(err_msg.clone()),
-                        context_out: None,
-                        markers_out: None,
-                        retry_count: Some(0),
-                        structured_output: None,
-                        step_error: Some(err_msg.clone()),
-                    },
-                )
-                .map_err(p_err)?;
-            return apply_script_on_fail(state, &node.name, &node.on_fail, err_msg);
+            return fail_script_step(
+                state,
+                &step_id,
+                node,
+                format!("Script '{}' failed to execute: {e}", node.name),
+            );
         }
+    };
+
+    // Spawn reader threads BEFORE waiting for the child to avoid pipe deadlock.
+    // If the child writes more than the OS pipe buffer size to either stream
+    // while the parent is blocked in wait(), the child would hang forever.
+    let stdout_handle = {
+        let mut pipe = child.stdout.take().expect("stdout was piped");
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Err(e) = pipe.read_to_end(&mut buf) {
+                tracing::warn!("script: failed to read stdout pipe: {e}");
+            }
+            buf
+        })
+    };
+    let stderr_handle = {
+        let mut pipe = child.stderr.take().expect("stderr was piped");
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Err(e) = pipe.read_to_end(&mut buf) {
+                tracing::warn!("script: failed to read stderr pipe: {e}");
+            }
+            buf
+        })
     };
 
     let start = std::time::Instant::now();
@@ -231,101 +257,62 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                let _duration_ms = start.elapsed().as_millis() as i64;
-                let err_msg = format!(
-                    "Script '{}' timed out after {}s",
-                    node.name, timeout_secs
+                let _ = stdout_handle.join();
+                let _ = stderr_handle.join();
+                return fail_script_step(
+                    state,
+                    &step_id,
+                    node,
+                    format!("Script '{}' timed out after {}s", node.name, timeout_secs),
                 );
-                tracing::warn!("{}", err_msg);
-                state
-                    .persistence
-                    .update_step(
-                        &step_id,
-                        StepUpdate {
-                            status: WorkflowStepStatus::Failed,
-                            child_run_id: None,
-                            result_text: Some(err_msg.clone()),
-                            context_out: None,
-                            markers_out: None,
-                            retry_count: Some(0),
-                            structured_output: None,
-                            step_error: Some(err_msg.clone()),
-                        },
-                    )
-                    .map_err(p_err)?;
-                return apply_script_on_fail(state, &node.name, &node.on_fail, err_msg);
             }
             Err(e) => {
-                let err_msg = format!("Script '{}' wait failed: {e}", node.name);
-                tracing::warn!("{}", err_msg);
-                state
-                    .persistence
-                    .update_step(
-                        &step_id,
-                        StepUpdate {
-                            status: WorkflowStepStatus::Failed,
-                            child_run_id: None,
-                            result_text: Some(err_msg.clone()),
-                            context_out: None,
-                            markers_out: None,
-                            retry_count: Some(0),
-                            structured_output: None,
-                            step_error: Some(err_msg.clone()),
-                        },
-                    )
-                    .map_err(p_err)?;
-                return apply_script_on_fail(state, &node.name, &node.on_fail, err_msg);
+                let _ = stdout_handle.join();
+                let _ = stderr_handle.join();
+                return fail_script_step(
+                    state,
+                    &step_id,
+                    node,
+                    format!("Script '{}' wait failed: {e}", node.name),
+                );
             }
         }
     } else {
         match child.wait() {
             Ok(s) => s,
             Err(e) => {
-                let err_msg = format!("Script '{}' wait failed: {e}", node.name);
-                tracing::warn!("{}", err_msg);
-                state
-                    .persistence
-                    .update_step(
-                        &step_id,
-                        StepUpdate {
-                            status: WorkflowStepStatus::Failed,
-                            child_run_id: None,
-                            result_text: Some(err_msg.clone()),
-                            context_out: None,
-                            markers_out: None,
-                            retry_count: Some(0),
-                            structured_output: None,
-                            step_error: Some(err_msg.clone()),
-                        },
-                    )
-                    .map_err(p_err)?;
-                return apply_script_on_fail(state, &node.name, &node.on_fail, err_msg);
+                let _ = stdout_handle.join();
+                let _ = stderr_handle.join();
+                return fail_script_step(
+                    state,
+                    &step_id,
+                    node,
+                    format!("Script '{}' wait failed: {e}", node.name),
+                );
             }
         }
     };
     let duration_ms = start.elapsed().as_millis() as i64;
 
-    // Read stdout/stderr from pipes after the child has exited.
-    let stdout = child
-        .stdout
-        .take()
-        .and_then(|mut pipe| {
-            let mut buf = Vec::new();
-            pipe.read_to_end(&mut buf).ok()?;
-            String::from_utf8(buf).ok()
-        })
-        .unwrap_or_default();
-    let stderr = child
-        .stderr
-        .take()
-        .and_then(|mut pipe| {
-            let mut buf = Vec::new();
-            pipe.read_to_end(&mut buf).ok()?;
-            String::from_utf8(buf).ok()
-        })
-        .unwrap_or_default();
+    let stdout = match stdout_handle.join() {
+        Ok(buf) => match String::from_utf8(buf) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("script: stdout is not valid UTF-8: {e}");
+                String::new()
+            }
+        },
+        Err(_) => {
+            tracing::warn!("script: stdout reader thread panicked");
+            String::new()
+        }
+    };
 
     if status.success() {
+        // Discard stderr on success — join the thread so it doesn't leak,
+        // but don't convert to String to avoid unnecessary allocation.
+        let _ = stderr_handle.join();
+
         tracing::info!(
             "script '{}': completed successfully in {}ms",
             node.name,
@@ -379,6 +366,20 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
     } else {
         let exit_code = status.code().unwrap_or(-1);
 
+        let stderr = match stderr_handle.join() {
+            Ok(buf) => match String::from_utf8(buf) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("script: stderr is not valid UTF-8: {e}");
+                    String::new()
+                }
+            },
+            Err(_) => {
+                tracing::warn!("script: stderr reader thread panicked");
+                String::new()
+            }
+        };
+
         let captured_stderr = stderr
             .trim()
             .chars()
@@ -393,26 +394,8 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                 node.name, exit_code, captured_stderr
             )
         };
-        tracing::warn!("{}", err_msg);
 
-        state
-            .persistence
-            .update_step(
-                &step_id,
-                StepUpdate {
-                    status: WorkflowStepStatus::Failed,
-                    child_run_id: None,
-                    result_text: Some(err_msg.clone()),
-                    context_out: None,
-                    markers_out: None,
-                    retry_count: Some(0),
-                    structured_output: None,
-                    step_error: Some(err_msg.clone()),
-                },
-            )
-            .map_err(p_err)?;
-
-        apply_script_on_fail(state, &node.name, &node.on_fail, err_msg)
+        fail_script_step(state, &step_id, node, err_msg)
     }
 }
 
@@ -695,6 +678,35 @@ mod tests {
         assert!(
             !ctx.contains("/malicious/lib"),
             "DYLD_LIBRARY_PATH should be blocked; context: {ctx:?}"
+        );
+    }
+
+    /// A script that exceeds its timeout is killed and the step is marked Failed.
+    #[test]
+    fn script_timeout_kills_long_running_process() {
+        let (persistence, run_id) = make_persistence();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone());
+        let node = ScriptNode {
+            name: "sleepy".to_string(),
+            run: "sleep 5".to_string(),
+            env: Default::default(),
+            timeout: Some(1), // 1 second timeout
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        };
+        let result = execute_script(&mut state, &node, 0);
+        // on_fail is None, so failure should return Err.
+        assert!(result.is_err(), "expected timeout error");
+
+        let steps = persistence.get_steps(&run_id).unwrap();
+        assert_eq!(steps.len(), 1);
+        let step = &steps[0];
+        assert_eq!(step.status, WorkflowStepStatus::Failed);
+        let err_text = step.result_text.as_deref().unwrap_or("");
+        assert!(
+            err_text.contains("timed out"),
+            "error should mention timeout: {err_text}"
         );
     }
 }

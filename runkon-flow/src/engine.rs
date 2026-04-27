@@ -984,6 +984,28 @@ mod tests {
         use crate::traits::script_env_provider::NoOpScriptEnvProvider;
         use crate::types::WorkflowExecConfig;
 
+        struct DummyChildRunner;
+        impl ChildWorkflowRunner for DummyChildRunner {
+            fn execute_child(
+                &self,
+                _workflow_name: &str,
+                _parent_state: &ExecutionState,
+                _params: ChildWorkflowInput,
+            ) -> Result<crate::types::WorkflowResult> {
+                unimplemented!()
+            }
+            fn resume_child(&self, _workflow_run_id: &str, _model: Option<&str>) -> Result<crate::types::WorkflowResult> {
+                unimplemented!()
+            }
+            fn find_resumable_child(
+                &self,
+                _parent_run_id: &str,
+                _workflow_name: &str,
+            ) -> Result<Option<crate::types::WorkflowRun>> {
+                unimplemented!()
+            }
+        }
+
         let parent = ExecutionState {
             persistence: Arc::new(InMemoryWorkflowPersistence::new()),
             action_registry: Arc::new(crate::traits::action_executor::ActionRegistry::new(
@@ -1040,7 +1062,7 @@ mod tests {
             default_bot_name: Some("bot".to_string()),
             triggered_by_hook: true,
             schema_resolver: None,
-            child_runner: None,
+            child_runner: Some(Arc::new(DummyChildRunner)),
             last_heartbeat_at: ExecutionState::new_heartbeat(),
             registry: Arc::new(crate::traits::item_provider::ItemProviderRegistry::new()),
             event_sinks: Arc::from(vec![]),
@@ -1080,7 +1102,7 @@ mod tests {
         assert!(child.resume_ctx.is_none());
         assert!(!child.triggered_by_hook);
         assert!(child.schema_resolver.is_none());
-        assert!(child.child_runner.is_none());
+        assert!(child.child_runner.is_some(), "child_runner should be cloned from parent");
 
         // Cancellation replaced
         assert!(!child.cancellation.is_cancelled());

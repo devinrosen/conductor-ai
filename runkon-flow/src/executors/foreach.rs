@@ -24,7 +24,8 @@ use super::p_err;
 /// the parent `ExecutionState` are kept, so the main thread retains full `&mut`
 /// access throughout the dispatch loop.
 struct ForeachParentCtx {
-    parent_state: ExecutionState,
+    /// Pre-forked template with empty runtime collections — cheap to clone.
+    template: ExecutionState,
     child_runner: Arc<dyn crate::engine::ChildWorkflowRunner>,
 }
 
@@ -33,14 +34,20 @@ impl ForeachParentCtx {
         state: &ExecutionState,
         child_runner: Arc<dyn crate::engine::ChildWorkflowRunner>,
     ) -> Self {
+        // fork_child creates a state with all runtime collections already empty,
+        // so cloning the template later is cheap.
+        let mut template = state.fork_child(crate::cancellation::CancellationToken::new());
+        template.child_runner = Some(Arc::clone(&child_runner));
         Self {
-            parent_state: state.clone(),
+            template,
             child_runner,
         }
     }
 
     fn make_child_state(&self, cancellation: CancellationToken) -> ExecutionState {
-        self.parent_state.fork_child(cancellation)
+        let mut child = self.template.clone();
+        child.cancellation = cancellation;
+        child
     }
 }
 
