@@ -345,10 +345,8 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                 (vec![], ctx)
             });
 
-        let markers_json = crate::helpers::serialize_or_empty_array(
-            &markers,
-            &format!("script '{}'", node.name),
-        );
+        let markers_json =
+            crate::helpers::serialize_or_empty_array(&markers, &format!("script '{}'", node.name));
 
         super::persist_completed_step(
             state,
@@ -393,11 +391,7 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
             }
         };
 
-        let captured_stderr = stderr
-            .trim()
-            .chars()
-            .take(2000)
-            .collect::<String>();
+        let captured_stderr = stderr.trim().chars().take(2000).collect::<String>();
 
         let err_msg = if captured_stderr.is_empty() {
             format!("Script '{}' exited with code {}", node.name, exit_code)
@@ -417,8 +411,8 @@ mod tests {
     use super::*;
     use crate::dsl::ScriptNode;
     use crate::engine::{ExecutionState, WorktreeContext};
-    use crate::status::WorkflowStepStatus;
     use crate::persistence_memory::InMemoryWorkflowPersistence;
+    use crate::status::WorkflowStepStatus;
     use crate::traits::action_executor::ActionRegistry;
     use crate::traits::item_provider::ItemProviderRegistry;
     use crate::traits::persistence::{NewRun, WorkflowPersistence};
@@ -664,7 +658,10 @@ mod tests {
 
         let mut env = HashMap::new();
         env.insert("LD_PRELOAD".to_string(), "/malicious/lib.so".to_string());
-        env.insert("DYLD_LIBRARY_PATH".to_string(), "/malicious/lib".to_string());
+        env.insert(
+            "DYLD_LIBRARY_PATH".to_string(),
+            "/malicious/lib".to_string(),
+        );
         env.insert("SAFE_VAR".to_string(), "allowed_value".to_string());
         let node = ScriptNode {
             name: "sensitive-test".to_string(),
@@ -757,7 +754,8 @@ mod tests {
         let mut state = make_state(Arc::clone(&persistence), run_id.clone());
         let node = ScriptNode {
             name: "binary".to_string(),
-            run: "python3 -c \"import sys; sys.stdout.buffer.write(bytes([0x80,0x81,0x82]))\"".to_string(),
+            run: "python3 -c \"import sys; sys.stdout.buffer.write(bytes([0x80,0x81,0x82]))\""
+                .to_string(),
             env: Default::default(),
             timeout: None,
             retries: 0,

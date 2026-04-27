@@ -76,11 +76,14 @@ fn build_prompt_core(
         if !fsm_path.is_empty() {
             prompt.push_str("\n\n## Mandatory First Action\n\n");
             prompt.push_str("Before doing ANYTHING else, read the FSM definition file at:\n");
-            prompt.push_str("`");
+            prompt.push('`');
             prompt.push_str(fsm_path);
             prompt.push_str("`\n\n");
-            prompt.push_str("This file defines the state machine that governs your behavior in this workflow. ");
-            prompt.push_str("You MUST read and understand it before proceeding with any other work.");
+            prompt.push_str(
+                "This file defines the state machine that governs your behavior in this workflow. ",
+            );
+            prompt
+                .push_str("You MUST read and understand it before proceeding with any other work.");
         }
     }
 

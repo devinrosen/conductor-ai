@@ -971,7 +971,11 @@ mod tests {
             ) -> Result<crate::types::WorkflowResult> {
                 unimplemented!()
             }
-            fn resume_child(&self, _workflow_run_id: &str, _model: Option<&str>) -> Result<crate::types::WorkflowResult> {
+            fn resume_child(
+                &self,
+                _workflow_run_id: &str,
+                _model: Option<&str>,
+            ) -> Result<crate::types::WorkflowResult> {
                 unimplemented!()
             }
             fn find_resumable_child(
@@ -1062,7 +1066,10 @@ mod tests {
 
         // Runtime state reset
         assert!(child.inputs.is_empty(), "inputs should be cleared");
-        assert!(child.step_results.is_empty(), "step_results should be cleared");
+        assert!(
+            child.step_results.is_empty(),
+            "step_results should be cleared"
+        );
         assert!(child.contexts.is_empty(), "contexts should be cleared");
         assert_eq!(child.position, 0);
         assert!(child.all_succeeded);
@@ -1079,7 +1086,10 @@ mod tests {
         assert!(child.resume_ctx.is_none());
         assert!(!child.triggered_by_hook);
         assert!(child.schema_resolver.is_none());
-        assert!(child.child_runner.is_some(), "child_runner should be cloned from parent");
+        assert!(
+            child.child_runner.is_some(),
+            "child_runner should be cloned from parent"
+        );
 
         // Cancellation replaced
         assert!(!child.cancellation.is_cancelled());

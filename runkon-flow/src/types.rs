@@ -503,7 +503,10 @@ mod tests {
         assert_eq!(success.markers, vec!["m1", "m2"]);
         assert_eq!(success.context, "ctx-body");
         assert_eq!(success.child_run_id, Some("child-1".to_string()));
-        assert_eq!(success.structured_output, Some(r#"{"ok":true}"#.to_string()));
+        assert_eq!(
+            success.structured_output,
+            Some(r#"{"ok":true}"#.to_string())
+        );
         assert_eq!(success.output_file, Some("/tmp/out".to_string()));
         assert_eq!(success.iteration, 7);
         // Metric fields should default to None
@@ -552,7 +555,10 @@ mod tests {
         assert_eq!(success.context, "ctx");
         assert_eq!(success.child_run_id, Some("child-1".to_string()));
         assert_eq!(success.iteration, 5);
-        assert_eq!(success.structured_output, Some(r#"{"ok":true}"#.to_string()));
+        assert_eq!(
+            success.structured_output,
+            Some(r#"{"ok":true}"#.to_string())
+        );
         assert_eq!(success.output_file, Some("/tmp/out".to_string()));
     }
 }

@@ -402,7 +402,6 @@ fn make_schema_resolver(
     Arc::new(move |working_dir, repo_path, name| {
         let schema_ref = crate::schema_config::SchemaRef::from_str_value(name);
         crate::schema_config::load_schema(working_dir, repo_path, &schema_ref, Some(&workflow_name))
-            .map(|s: crate::schema_config::OutputSchema| s.into())
             .map_err(|e| runkon_flow::engine_error::EngineError::Workflow(e.to_string()))
     })
 }
