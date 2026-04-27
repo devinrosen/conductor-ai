@@ -87,12 +87,6 @@ impl CancellationToken {
     }
 }
 
-#[allow(dead_code)]
-pub(crate) struct ExecutionContext<'a> {
-    pub run: &'a dyn crate::workflow::run_context::RunContext,
-    pub cancellation: &'a CancellationToken,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

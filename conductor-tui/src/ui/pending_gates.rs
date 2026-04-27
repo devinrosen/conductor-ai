@@ -1,4 +1,4 @@
-use conductor_core::workflow::GateType;
+use conductor_core::workflow::GateKind;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -101,11 +101,11 @@ pub fn render_pending_gates(frame: &mut Frame, area: Rect, state: &AppState, foc
             .detail_gates
             .get(selected_idx)
             .map(|gate| match gate.step.gate_type {
-                Some(GateType::HumanApproval) => "Enter:approve/reject",
-                Some(GateType::HumanReview) => "Enter:approve/reject",
-                Some(GateType::PrChecks) => "CI running",
-                Some(GateType::PrApproval) => "Waiting for PR reviews",
-                Some(GateType::QualityGate) => "Auto-evaluated",
+                Some(GateKind::HumanApproval) => "Enter:approve/reject",
+                Some(GateKind::HumanReview) => "Enter:approve/reject",
+                Some(GateKind::PrChecks) => "CI running",
+                Some(GateKind::PrApproval) => "Waiting for PR reviews",
+                Some(GateKind::QualityGate) => "Auto-evaluated",
                 None => "Enter:view",
             })
             .unwrap_or("Enter:view");

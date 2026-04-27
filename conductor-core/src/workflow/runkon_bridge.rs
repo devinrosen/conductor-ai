@@ -14,137 +14,130 @@ use crate::error::ConductorError;
 use crate::workflow::action_executor::ActionExecutor;
 use crate::workflow::item_provider::ItemProvider;
 
+/// Convert `ConductorError` to `EngineError`, preserving the cancellation
+/// signal: `WorkflowCancelled` maps to `Cancelled`, all other errors to
+/// `Workflow`.  Centralising this avoids the special-case match being
+/// copy-pasted at every `map_err` site.
+impl From<ConductorError> for EngineError {
+    fn from(e: ConductorError) -> Self {
+        match e {
+            ConductorError::WorkflowCancelled => EngineError::Cancelled(
+                runkon_flow::cancellation_reason::CancellationReason::UserRequested(None),
+            ),
+            other => EngineError::Workflow(other.to_string()),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
-// 1. OutputSchema conversion helpers (runkon-flow → conductor-core)
+// 1. Schema conversion helpers (output_schema ↔ schema_config)
 // ---------------------------------------------------------------------------
 
-/// Convert a `runkon_flow` `OutputSchema` into a `conductor-core` `OutputSchema`.
-pub(super) fn rk_schema_to_core(
-    rk: runkon_flow::output_schema::OutputSchema,
-) -> crate::schema_config::OutputSchema {
-    crate::schema_config::OutputSchema {
-        name: rk.name,
-        fields: rk.fields.into_iter().map(rk_field_def_to_core).collect(),
-        markers: rk.markers,
-    }
-}
+// ---------------------------------------------------------------------------
+// Bidirectional schema type conversions (output_schema ↔ schema_config)
+//
+// Implemented as From traits so callers can use `.into()` and the compiler
+// enforces match exhaustiveness in both directions from a single impl each.
+// ---------------------------------------------------------------------------
 
-fn rk_field_def_to_core(
-    rk: runkon_flow::output_schema::FieldDef,
-) -> crate::schema_config::FieldDef {
-    crate::schema_config::FieldDef {
-        name: rk.name,
-        required: rk.required,
-        field_type: rk_field_type_to_core(rk.field_type),
-        desc: rk.desc,
-        examples: rk.examples,
-    }
-}
-
-fn rk_field_type_to_core(
-    rk: runkon_flow::output_schema::FieldType,
-) -> crate::schema_config::FieldType {
-    match rk {
-        runkon_flow::output_schema::FieldType::String => crate::schema_config::FieldType::String,
-        runkon_flow::output_schema::FieldType::Number => crate::schema_config::FieldType::Number,
-        runkon_flow::output_schema::FieldType::Boolean => crate::schema_config::FieldType::Boolean,
-        runkon_flow::output_schema::FieldType::Enum(variants) => {
-            crate::schema_config::FieldType::Enum(variants)
-        }
-        runkon_flow::output_schema::FieldType::Array { items } => {
-            crate::schema_config::FieldType::Array {
-                items: rk_array_items_to_core(items),
-            }
-        }
-        runkon_flow::output_schema::FieldType::Object { fields } => {
-            crate::schema_config::FieldType::Object {
-                fields: fields.into_iter().map(rk_field_def_to_core).collect(),
-            }
+impl From<runkon_flow::output_schema::FieldType> for crate::schema_config::FieldType {
+    fn from(rk: runkon_flow::output_schema::FieldType) -> Self {
+        use runkon_flow::output_schema::FieldType as Rk;
+        match rk {
+            Rk::String => Self::String,
+            Rk::Number => Self::Number,
+            Rk::Boolean => Self::Boolean,
+            Rk::Enum(v) => Self::Enum(v),
+            Rk::Array { items } => Self::Array {
+                items: items.into(),
+            },
+            Rk::Object { fields } => Self::Object {
+                fields: fields.into_iter().map(Into::into).collect(),
+            },
         }
     }
 }
 
-fn rk_array_items_to_core(
-    rk: runkon_flow::output_schema::ArrayItems,
-) -> crate::schema_config::ArrayItems {
-    match rk {
-        runkon_flow::output_schema::ArrayItems::Scalar(ft) => {
-            crate::schema_config::ArrayItems::Scalar(Box::new(rk_field_type_to_core(*ft)))
-        }
-        runkon_flow::output_schema::ArrayItems::Object(fields) => {
-            crate::schema_config::ArrayItems::Object(
-                fields.into_iter().map(rk_field_def_to_core).collect(),
-            )
-        }
-        runkon_flow::output_schema::ArrayItems::Untyped => {
-            crate::schema_config::ArrayItems::Untyped
-        }
-    }
-}
-
-/// Convert a `conductor-core` `OutputSchema` into a `runkon_flow` `OutputSchema`.
-///
-/// Inverse of `rk_schema_to_core`. Used by the `schema_resolver` closure passed
-/// to `ExecutionState` so that `load_schema()` results are usable by the engine.
-pub(super) fn core_schema_to_rk(
-    core: crate::schema_config::OutputSchema,
-) -> runkon_flow::output_schema::OutputSchema {
-    runkon_flow::output_schema::OutputSchema {
-        name: core.name,
-        fields: core.fields.into_iter().map(core_field_def_to_rk).collect(),
-        markers: core.markers,
-    }
-}
-
-fn core_field_def_to_rk(
-    core: crate::schema_config::FieldDef,
-) -> runkon_flow::output_schema::FieldDef {
-    runkon_flow::output_schema::FieldDef {
-        name: core.name,
-        required: core.required,
-        field_type: core_field_type_to_rk(core.field_type),
-        desc: core.desc,
-        examples: core.examples,
-    }
-}
-
-fn core_field_type_to_rk(
-    core: crate::schema_config::FieldType,
-) -> runkon_flow::output_schema::FieldType {
-    match core {
-        crate::schema_config::FieldType::String => runkon_flow::output_schema::FieldType::String,
-        crate::schema_config::FieldType::Number => runkon_flow::output_schema::FieldType::Number,
-        crate::schema_config::FieldType::Boolean => runkon_flow::output_schema::FieldType::Boolean,
-        crate::schema_config::FieldType::Enum(variants) => {
-            runkon_flow::output_schema::FieldType::Enum(variants)
-        }
-        crate::schema_config::FieldType::Array { items } => {
-            runkon_flow::output_schema::FieldType::Array {
-                items: core_array_items_to_rk(items),
-            }
-        }
-        crate::schema_config::FieldType::Object { fields } => {
-            runkon_flow::output_schema::FieldType::Object {
-                fields: fields.into_iter().map(core_field_def_to_rk).collect(),
-            }
+impl From<crate::schema_config::FieldType> for runkon_flow::output_schema::FieldType {
+    fn from(core: crate::schema_config::FieldType) -> Self {
+        use crate::schema_config::FieldType as Core;
+        match core {
+            Core::String => Self::String,
+            Core::Number => Self::Number,
+            Core::Boolean => Self::Boolean,
+            Core::Enum(v) => Self::Enum(v),
+            Core::Array { items } => Self::Array {
+                items: items.into(),
+            },
+            Core::Object { fields } => Self::Object {
+                fields: fields.into_iter().map(Into::into).collect(),
+            },
         }
     }
 }
 
-fn core_array_items_to_rk(
-    core: crate::schema_config::ArrayItems,
-) -> runkon_flow::output_schema::ArrayItems {
-    match core {
-        crate::schema_config::ArrayItems::Scalar(ft) => {
-            runkon_flow::output_schema::ArrayItems::Scalar(Box::new(core_field_type_to_rk(*ft)))
+impl From<runkon_flow::output_schema::ArrayItems> for crate::schema_config::ArrayItems {
+    fn from(rk: runkon_flow::output_schema::ArrayItems) -> Self {
+        use runkon_flow::output_schema::ArrayItems as Rk;
+        match rk {
+            Rk::Scalar(ft) => Self::Scalar(Box::new((*ft).into())),
+            Rk::Object(fields) => Self::Object(fields.into_iter().map(Into::into).collect()),
+            Rk::Untyped => Self::Untyped,
         }
-        crate::schema_config::ArrayItems::Object(fields) => {
-            runkon_flow::output_schema::ArrayItems::Object(
-                fields.into_iter().map(core_field_def_to_rk).collect(),
-            )
+    }
+}
+
+impl From<crate::schema_config::ArrayItems> for runkon_flow::output_schema::ArrayItems {
+    fn from(core: crate::schema_config::ArrayItems) -> Self {
+        use crate::schema_config::ArrayItems as Core;
+        match core {
+            Core::Scalar(ft) => Self::Scalar(Box::new((*ft).into())),
+            Core::Object(fields) => Self::Object(fields.into_iter().map(Into::into).collect()),
+            Core::Untyped => Self::Untyped,
         }
-        crate::schema_config::ArrayItems::Untyped => {
-            runkon_flow::output_schema::ArrayItems::Untyped
+    }
+}
+
+impl From<runkon_flow::output_schema::FieldDef> for crate::schema_config::FieldDef {
+    fn from(rk: runkon_flow::output_schema::FieldDef) -> Self {
+        Self {
+            name: rk.name,
+            required: rk.required,
+            field_type: rk.field_type.into(),
+            desc: rk.desc,
+            examples: rk.examples,
+        }
+    }
+}
+
+impl From<crate::schema_config::FieldDef> for runkon_flow::output_schema::FieldDef {
+    fn from(core: crate::schema_config::FieldDef) -> Self {
+        Self {
+            name: core.name,
+            required: core.required,
+            field_type: core.field_type.into(),
+            desc: core.desc,
+            examples: core.examples,
+        }
+    }
+}
+
+impl From<runkon_flow::output_schema::OutputSchema> for crate::schema_config::OutputSchema {
+    fn from(rk: runkon_flow::output_schema::OutputSchema) -> Self {
+        Self {
+            name: rk.name,
+            fields: rk.fields.into_iter().map(Into::into).collect(),
+            markers: rk.markers,
+        }
+    }
+}
+
+impl From<crate::schema_config::OutputSchema> for runkon_flow::output_schema::OutputSchema {
+    fn from(core: crate::schema_config::OutputSchema) -> Self {
+        Self {
+            name: core.name,
+            fields: core.fields.into_iter().map(Into::into).collect(),
+            markers: core.markers,
         }
     }
 }
@@ -250,6 +243,9 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
 
             if !ectx.step_id.is_empty() {
                 let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+                // Best-effort pre-execution link so the TUI can show live agent output
+                // while the step is running. The ActionOutput written by the executor
+                // after execution completes is the authoritative source of child_run_id.
                 if let Err(e) = wf_mgr.update_step_child_run_id(&ectx.step_id, &child_run.id) {
                     tracing::warn!(
                         "step '{}' (step_id={}): failed to link child_run_id {}: {e}",
@@ -283,7 +279,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
         };
 
         // Convert runkon-flow ActionParams → conductor-core ActionParams.
-        let core_schema = params.schema.clone().map(rk_schema_to_core);
+        let core_schema = params.schema.clone().map(Into::into);
         let core_params = crate::workflow::action_executor::ActionParams {
             name: params.name.clone(),
             inputs: (*params.inputs).clone(),
@@ -301,12 +297,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             .inner
             .execute(&core_ectx, &core_params)
             .map(core_action_output_to_rk)
-            .map_err(|e| match e {
-                ConductorError::WorkflowCancelled => EngineError::Cancelled(
-                    runkon_flow::cancellation_reason::CancellationReason::UserRequested(None),
-                ),
-                other => EngineError::Workflow(other.to_string()),
-            })?;
+            .map_err(EngineError::from)?;
         output.child_run_id = Some(child_run_id);
         Ok(output)
     }
@@ -315,26 +306,6 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
 // ---------------------------------------------------------------------------
 // 4. RkItemProvider adapters
 // ---------------------------------------------------------------------------
-
-/// Convert a runkon-flow `ForeachScope` to a conductor-core `ForeachScope` via
-/// direct match (both types share identical variants).
-fn rk_scope_to_core(scope: &runkon_flow::dsl::ForeachScope) -> crate::workflow_dsl::ForeachScope {
-    use crate::workflow_dsl::{
-        ForeachScope as Core, TicketScope as CoreTicket, WorktreeScope as CoreWorktree,
-    };
-    use runkon_flow::dsl::{ForeachScope as Rk, TicketScope as RkTicket};
-    match scope {
-        Rk::Ticket(ts) => Core::Ticket(match ts {
-            RkTicket::TicketId(id) => CoreTicket::TicketId(id.clone()),
-            RkTicket::Label(l) => CoreTicket::Label(l.clone()),
-            RkTicket::Unlabeled => CoreTicket::Unlabeled,
-        }),
-        Rk::Worktree(ws) => Core::Worktree(CoreWorktree {
-            base_branch: ws.base_branch.clone(),
-            has_open_pr: ws.has_open_pr,
-        }),
-    }
-}
 
 /// Convert a conductor-core `FanOutItem` to a runkon-flow `FanOutItem`.
 fn core_fan_out_item_to_rk(
@@ -365,13 +336,12 @@ fn delegate_items<P: ItemProvider>(
         conn: &guard,
         config,
     };
-    let core_scope = scope.map(rk_scope_to_core);
     provider
-        .items(&core_ctx, core_scope.as_ref(), filter, existing_set)
+        .items(&core_ctx, scope, filter, existing_set)
         .map(|items: Vec<crate::workflow::item_provider::FanOutItem>| {
             items.into_iter().map(core_fan_out_item_to_rk).collect()
         })
-        .map_err(|e: crate::error::ConductorError| EngineError::Workflow(e.to_string()))
+        .map_err(EngineError::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -382,21 +352,12 @@ fn delegate_items<P: ItemProvider>(
 // field, and the inner provider constructed inside delegate_items.
 // ---------------------------------------------------------------------------
 
-macro_rules! impl_rk_item_provider {
-    // Variant: no extra field — inner provider needs no self data.
-    ($name:ident, $provider_name:literal, $inner:expr) => {
-        pub(super) struct $name {
-            conn: Arc<Mutex<rusqlite::Connection>>,
-            config: crate::config::Config,
-        }
-        impl $name {
-            pub(super) fn new(
-                conn: Arc<Mutex<rusqlite::Connection>>,
-                config: crate::config::Config,
-            ) -> Self {
-                Self { conn, config }
-            }
-        }
+// Shared ItemProvider trait impl — called from both branches of impl_rk_item_provider!.
+// Each branch adds a private `fn provider(&self)` method to the struct so the inner
+// provider can be obtained via `self.provider()` inside method bodies without needing
+// `self` to appear in macro argument tokens (which Rust macro hygiene forbids).
+macro_rules! impl_rk_item_provider_trait {
+    ($name:ident, $provider_name:literal) => {
         impl runkon_flow::traits::item_provider::ItemProvider for $name {
             fn name(&self) -> &str {
                 $provider_name
@@ -414,10 +375,41 @@ macro_rules! impl_rk_item_provider {
                     scope,
                     filter,
                     existing_set,
-                    $inner,
+                    self.provider(),
                 )
             }
+            fn supports_ordered(&self) -> bool {
+                self.provider().supports_ordered()
+            }
+            fn dependencies(&self, step_id: &str) -> Result<Vec<(String, String)>, EngineError> {
+                let guard = self.conn.lock().map_err(bridge_lock_err)?;
+                self.provider()
+                    .dependencies(&guard, &self.config, step_id)
+                    .map_err(EngineError::from)
+            }
         }
+    };
+}
+
+macro_rules! impl_rk_item_provider {
+    // Variant: no extra field — inner provider needs no self data.
+    ($name:ident, $provider_name:literal, $inner:expr) => {
+        pub(super) struct $name {
+            conn: Arc<Mutex<rusqlite::Connection>>,
+            config: crate::config::Config,
+        }
+        impl $name {
+            pub(super) fn new(
+                conn: Arc<Mutex<rusqlite::Connection>>,
+                config: crate::config::Config,
+            ) -> Self {
+                Self { conn, config }
+            }
+            fn provider(&self) -> impl ItemProvider {
+                $inner
+            }
+        }
+        impl_rk_item_provider_trait!($name, $provider_name);
     };
     // Variant: with repo_id — `$make_provider` is a closure `|repo_id| <expr>` that
     // receives `self.repo_id` and returns a provider.  Using a closure avoids any
@@ -440,28 +432,11 @@ macro_rules! impl_rk_item_provider {
                     repo_id,
                 }
             }
-        }
-        impl runkon_flow::traits::item_provider::ItemProvider for $name {
-            fn name(&self) -> &str {
-                $provider_name
-            }
-            fn items(
-                &self,
-                _ctx: &runkon_flow::traits::item_provider::ProviderContext,
-                scope: Option<&runkon_flow::dsl::ForeachScope>,
-                filter: &HashMap<String, String>,
-                existing_set: &HashSet<String>,
-            ) -> Result<Vec<runkon_flow::traits::item_provider::FanOutItem>, EngineError> {
-                delegate_items(
-                    &self.conn,
-                    &self.config,
-                    scope,
-                    filter,
-                    existing_set,
-                    ($make_provider)(self.repo_id.clone()),
-                )
+            fn provider(&self) -> impl ItemProvider {
+                ($make_provider)(self.repo_id.clone())
             }
         }
+        impl_rk_item_provider_trait!($name, $provider_name);
     };
 }
 
@@ -525,7 +500,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         // Load the real workflow definition from disk. The caller passes a placeholder
         // WorkflowDef with body=[] — the child runner is responsible for resolving the
         // actual definition by name from the worktree/repo .conductor/workflows/ directory.
-        let core_def = crate::workflow_dsl::load_workflow_by_name(
+        let core_def = runkon_flow::dsl::load_workflow_by_name(
             &parent_state.worktree_ctx.working_dir,
             &parent_state.worktree_ctx.repo_path,
             &child_def.name,
@@ -574,12 +549,16 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             iteration: params.iteration,
         };
 
-        let core_result = crate::workflow::engine::execute_workflow_standalone(&standalone_params)
-            .map_err(|e| {
-                EngineError::Workflow(format!("child workflow '{}' failed: {e}", child_def.name))
+        let core_result = super::coordinator::execute_workflow_standalone(&standalone_params)
+            .map_err(|e| match e {
+                ConductorError::WorkflowCancelled => EngineError::from(e),
+                other => EngineError::Workflow(format!(
+                    "child workflow '{}' failed: {other}",
+                    child_def.name
+                )),
             })?;
 
-        Ok(super::rk_types::core_workflow_result_to_rk(core_result))
+        Ok(core_result.into())
     }
 
     fn resume_child(
@@ -599,13 +578,14 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             shutdown: None,
         };
 
-        let core_result = crate::workflow::engine::resume_workflow(&input).map_err(|e| {
-            EngineError::Workflow(format!(
-                "failed to resume child workflow run '{workflow_run_id}': {e}"
-            ))
+        let core_result = super::coordinator::resume_workflow(&input).map_err(|e| match e {
+            ConductorError::WorkflowCancelled => EngineError::from(e),
+            other => EngineError::Workflow(format!(
+                "failed to resume child workflow run '{workflow_run_id}': {other}"
+            )),
         })?;
 
-        Ok(super::rk_types::core_workflow_result_to_rk(core_result))
+        Ok(core_result.into())
     }
 
     fn find_resumable_child(
@@ -618,14 +598,190 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         let mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let core_run = mgr
             .find_resumable_child_run(parent_run_id, workflow_name)
-            .map_err(|e| EngineError::Workflow(format!("failed to find resumable child run for parent='{parent_run_id}' workflow='{workflow_name}': {e}")))?;
+            .map_err(|e| EngineError::Workflow(format!(
+                "failed to find resumable child run for parent='{parent_run_id}' workflow='{workflow_name}': {e}"
+            )))?;
 
         Ok(core_run.map(crate::workflow::rk_types::run_to_rk))
     }
 }
 
 // ---------------------------------------------------------------------------
-// 6. Helper builder functions
+// 6. PersistenceAdapter
+// ---------------------------------------------------------------------------
+
+/// Bridges the conductor-core `WorkflowPersistence` trait to the runkon-flow
+/// `WorkflowPersistence` trait, performing type conversion at the boundary.
+///
+/// This is the single place in conductor-core that implements
+/// `runkon_flow::traits::persistence::WorkflowPersistence`; all other modules
+/// interact with the core trait only.
+pub(super) struct PersistenceAdapter(
+    pub(super) Arc<dyn crate::workflow::persistence::WorkflowPersistence>,
+);
+
+impl runkon_flow::traits::persistence::WorkflowPersistence for PersistenceAdapter {
+    fn create_run(
+        &self,
+        new_run: runkon_flow::traits::persistence::NewRun,
+    ) -> Result<runkon_flow::types::WorkflowRun, EngineError> {
+        let core_run = self.0.create_run(new_run.into())?;
+        Ok(crate::workflow::rk_types::run_to_rk(core_run))
+    }
+
+    fn get_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<runkon_flow::types::WorkflowRun>, EngineError> {
+        let result = self.0.get_run(run_id)?;
+        Ok(result.map(crate::workflow::rk_types::run_to_rk))
+    }
+
+    fn list_active_runs(
+        &self,
+        statuses: &[runkon_flow::status::WorkflowRunStatus],
+    ) -> Result<Vec<runkon_flow::types::WorkflowRun>, EngineError> {
+        let core_statuses: Vec<crate::workflow::status::WorkflowRunStatus> =
+            statuses.iter().map(|s| s.clone().into()).collect();
+        let result = self.0.list_active_runs(&core_statuses)?;
+        Ok(result
+            .into_iter()
+            .map(crate::workflow::rk_types::run_to_rk)
+            .collect())
+    }
+
+    fn update_run_status(
+        &self,
+        run_id: &str,
+        status: runkon_flow::status::WorkflowRunStatus,
+        result_summary: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<(), EngineError> {
+        self.0
+            .update_run_status(run_id, status.into(), result_summary, error)
+    }
+
+    fn insert_step(
+        &self,
+        new_step: runkon_flow::traits::persistence::NewStep,
+    ) -> Result<String, EngineError> {
+        self.0.insert_step(new_step.into())
+    }
+
+    fn update_step(
+        &self,
+        step_id: &str,
+        update: runkon_flow::traits::persistence::StepUpdate,
+    ) -> Result<(), EngineError> {
+        self.0.update_step(step_id, update.into())
+    }
+
+    fn get_steps(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<runkon_flow::types::WorkflowRunStep>, EngineError> {
+        let result = self.0.get_steps(run_id)?;
+        Ok(result
+            .into_iter()
+            .map(crate::workflow::rk_types::step_to_rk)
+            .collect())
+    }
+
+    fn insert_fan_out_item(
+        &self,
+        step_run_id: &str,
+        item_type: &str,
+        item_id: &str,
+        item_ref: &str,
+    ) -> Result<String, EngineError> {
+        self.0
+            .insert_fan_out_item(step_run_id, item_type, item_id, item_ref)
+    }
+
+    fn update_fan_out_item(
+        &self,
+        item_id: &str,
+        update: runkon_flow::traits::persistence::FanOutItemUpdate,
+    ) -> Result<(), EngineError> {
+        self.0.update_fan_out_item(item_id, update.into())
+    }
+
+    fn get_fan_out_items(
+        &self,
+        step_run_id: &str,
+        status_filter: Option<runkon_flow::traits::persistence::FanOutItemStatus>,
+    ) -> Result<Vec<runkon_flow::types::FanOutItemRow>, EngineError> {
+        let core_filter = status_filter.map(Into::into);
+        let result = self.0.get_fan_out_items(step_run_id, core_filter)?;
+        Ok(result
+            .into_iter()
+            .map(crate::workflow::rk_types::fan_out_item_to_rk)
+            .collect())
+    }
+
+    fn get_gate_approval(
+        &self,
+        step_id: &str,
+    ) -> Result<runkon_flow::traits::persistence::GateApprovalState, EngineError> {
+        let result = self.0.get_gate_approval(step_id)?;
+        Ok(crate::workflow::rk_types::gate_approval_to_rk(result))
+    }
+
+    fn approve_gate(
+        &self,
+        step_id: &str,
+        approved_by: &str,
+        feedback: Option<&str>,
+        selections: Option<&[String]>,
+    ) -> Result<(), EngineError> {
+        self.0
+            .approve_gate(step_id, approved_by, feedback, selections)
+    }
+
+    fn reject_gate(
+        &self,
+        step_id: &str,
+        rejected_by: &str,
+        feedback: Option<&str>,
+    ) -> Result<(), EngineError> {
+        self.0.reject_gate(step_id, rejected_by, feedback)
+    }
+
+    fn is_run_cancelled(&self, run_id: &str) -> Result<bool, EngineError> {
+        self.0.is_run_cancelled(run_id)
+    }
+
+    fn tick_heartbeat(&self, run_id: &str) -> Result<(), EngineError> {
+        self.0.tick_heartbeat(run_id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn persist_metrics(
+        &self,
+        run_id: &str,
+        input_tokens: i64,
+        output_tokens: i64,
+        cache_read_input_tokens: i64,
+        cache_creation_input_tokens: i64,
+        cost_usd: f64,
+        num_turns: i64,
+        duration_ms: i64,
+    ) -> Result<(), EngineError> {
+        self.0.persist_metrics(
+            run_id,
+            input_tokens,
+            output_tokens,
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
+            cost_usd,
+            num_turns,
+            duration_ms,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 7. Helper builder functions
 // ---------------------------------------------------------------------------
 
 /// Build a runkon-flow `ActionRegistry` backed by a `RkActionExecutorAdapter`
@@ -775,7 +931,7 @@ mod tests {
             }],
             markers: None,
         };
-        let rk = core_schema_to_rk(core.clone());
+        let rk: runkon_flow::output_schema::OutputSchema = core.clone().into();
         assert_eq!(rk.name, core.name);
         assert_eq!(rk.fields.len(), 1);
         assert_eq!(rk.fields[0].name, "title");
@@ -801,8 +957,8 @@ mod tests {
             }],
             markers: None,
         };
-        let rk = core_schema_to_rk(core);
-        let back = rk_schema_to_core(rk);
+        let rk: runkon_flow::output_schema::OutputSchema = core.into();
+        let back: crate::schema_config::OutputSchema = rk.into();
         assert_eq!(back.fields[0].name, "color");
         assert!(matches!(
             back.fields[0].field_type,
@@ -829,8 +985,8 @@ mod tests {
             }],
             markers: None,
         };
-        let rk = core_schema_to_rk(core);
-        let back = rk_schema_to_core(rk);
+        let rk: runkon_flow::output_schema::OutputSchema = core.into();
+        let back: crate::schema_config::OutputSchema = rk.into();
         assert!(matches!(back.fields[0].field_type, FieldType::Array { .. }));
     }
 
@@ -871,5 +1027,189 @@ mod tests {
             }
             Ok(_) => panic!("expected mutex-poison error, got Ok"),
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // From<ConductorError> for EngineError — both branches
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn conductor_error_workflow_cancelled_becomes_engine_cancelled() {
+        let err: EngineError = ConductorError::WorkflowCancelled.into();
+        assert!(
+            matches!(err, EngineError::Cancelled(_)),
+            "WorkflowCancelled should map to EngineError::Cancelled, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn conductor_error_other_becomes_engine_workflow() {
+        let err: EngineError = ConductorError::Workflow("some error".to_string()).into();
+        assert!(
+            matches!(err, EngineError::Workflow(_)),
+            "non-cancellation error should map to EngineError::Workflow, got: {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("some error"),
+            "error message should be preserved: {msg}"
+        );
+    }
+
+    #[test]
+    fn output_schema_round_trip_all_field_types() {
+        use crate::schema_config::{ArrayItems, FieldDef, FieldType, OutputSchema};
+
+        let core_schema = OutputSchema {
+            name: "test".to_string(),
+            fields: vec![
+                FieldDef {
+                    name: "s".to_string(),
+                    required: true,
+                    field_type: FieldType::String,
+                    desc: None,
+                    examples: None,
+                },
+                FieldDef {
+                    name: "n".to_string(),
+                    required: false,
+                    field_type: FieldType::Number,
+                    desc: None,
+                    examples: None,
+                },
+                FieldDef {
+                    name: "b".to_string(),
+                    required: false,
+                    field_type: FieldType::Boolean,
+                    desc: None,
+                    examples: None,
+                },
+                FieldDef {
+                    name: "e".to_string(),
+                    required: false,
+                    field_type: FieldType::Enum(vec!["a".to_string(), "b".to_string()]),
+                    desc: None,
+                    examples: None,
+                },
+                FieldDef {
+                    name: "arr".to_string(),
+                    required: false,
+                    field_type: FieldType::Array {
+                        items: ArrayItems::Scalar(Box::new(FieldType::String)),
+                    },
+                    desc: None,
+                    examples: None,
+                },
+                FieldDef {
+                    name: "obj".to_string(),
+                    required: false,
+                    field_type: FieldType::Object {
+                        fields: vec![FieldDef {
+                            name: "inner".to_string(),
+                            required: true,
+                            field_type: FieldType::Number,
+                            desc: None,
+                            examples: None,
+                        }],
+                    },
+                    desc: None,
+                    examples: None,
+                },
+            ],
+            markers: None,
+        };
+
+        // core→rk→core round trip
+        let rk: runkon_flow::output_schema::OutputSchema = core_schema.clone().into();
+        let roundtripped: crate::schema_config::OutputSchema = rk.into();
+        assert_eq!(roundtripped.name, core_schema.name);
+        assert_eq!(roundtripped.fields.len(), core_schema.fields.len());
+        for (got, expected) in roundtripped.fields.iter().zip(core_schema.fields.iter()) {
+            assert_eq!(got.name, expected.name);
+            assert_eq!(got.required, expected.required);
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Fix 9: PersistenceAdapter::get_gate_approval via the adapter
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn persistence_adapter_get_gate_approval_returns_approved_state() {
+        use crate::workflow::persistence::{NewRun, NewStep, WorkflowPersistence};
+        use crate::workflow::persistence_memory::InMemoryWorkflowPersistence;
+        use runkon_flow::traits::persistence::GateApprovalState as RkGateApprovalState;
+        use runkon_flow::traits::persistence::WorkflowPersistence as RkPersistence;
+
+        // 1. Create the in-memory persistence.
+        let persistence = InMemoryWorkflowPersistence::new();
+
+        // 2. Create a run and insert a step.
+        let run = persistence
+            .create_run(NewRun {
+                workflow_name: "test-wf".to_string(),
+                worktree_id: None,
+                ticket_id: None,
+                repo_id: None,
+                parent_run_id: "parent".to_string(),
+                dry_run: false,
+                trigger: "test".to_string(),
+                definition_snapshot: None,
+                parent_workflow_run_id: None,
+                target_label: None,
+            })
+            .unwrap();
+        let step_id = persistence
+            .insert_step(NewStep {
+                workflow_run_id: run.id.clone(),
+                step_name: "approval-gate".to_string(),
+                role: "gate".to_string(),
+                can_commit: false,
+                position: 0,
+                iteration: 0,
+                retry_count: None,
+            })
+            .unwrap();
+
+        // 3. Approve the gate via the core persistence.
+        persistence
+            .approve_gate(&step_id, "tester", Some("lgtm"), None)
+            .unwrap();
+
+        // 4. Wrap in PersistenceAdapter.
+        let adapter = PersistenceAdapter(Arc::new(persistence));
+
+        // 5. Call get_gate_approval via the runkon-flow trait and verify the result.
+        let state = RkPersistence::get_gate_approval(&adapter, &step_id).unwrap();
+        match state {
+            RkGateApprovalState::Approved { feedback, .. } => {
+                assert_eq!(
+                    feedback.as_deref(),
+                    Some("lgtm"),
+                    "feedback must survive the approve_gate/get_gate_approval roundtrip via PersistenceAdapter"
+                );
+            }
+            other => panic!("expected Approved, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Fix 10: dependencies method via a concrete Rk item-provider adapter
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn rk_repos_item_provider_dependencies_returns_empty_for_nonexistent_step() {
+        use runkon_flow::traits::item_provider::ItemProvider as RkItemProvider;
+
+        let conn = Arc::new(Mutex::new(crate::test_helpers::setup_db()));
+        let config = crate::config::Config::default();
+        let provider = RkReposItemProvider::new(Arc::clone(&conn), config);
+
+        let result = RkItemProvider::dependencies(&provider, "nonexistent-step");
+        assert!(result.is_ok(), "dependencies should not error: {result:?}");
+        assert!(
+            result.unwrap().is_empty(),
+            "dependencies for nonexistent step should be empty"
+        );
     }
 }

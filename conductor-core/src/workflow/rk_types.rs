@@ -4,18 +4,17 @@
 //! import converters without depending on the persistence module.
 //!
 //! This module, along with `runkon_bridge` and `runkon_gate_bridge`, is migration
-//! scaffolding for Phase 3.x of the FlowEngine migration. These bridge modules are
-//! temporary glue that will be removed once the legacy conductor-core execution stack
-//! is deleted in Phase 3.3.
+//! scaffolding for the FlowEngine migration. These bridge modules will be removed
+//! once conductor-core and runkon-flow types are fully unified (planned for a future
+//! phase after Phase 3.3).
 
-use crate::workflow::manager::FanOutItemRow as CoreFanOutItemRow;
 use crate::workflow::persistence::{
-    FanOutItemStatus as CoreFanOutItemStatus, FanOutItemUpdate as CoreFanOutItemUpdate,
-    GateApprovalState as CoreGateApprovalState, NewRun as CoreNewRun, NewStep as CoreNewStep,
-    StepUpdate as CoreStepUpdate,
+    FanOutItemRow as CoreFanOutItemRow, FanOutItemStatus as CoreFanOutItemStatus,
+    FanOutItemUpdate as CoreFanOutItemUpdate, GateApprovalState as CoreGateApprovalState,
+    NewRun as CoreNewRun, NewStep as CoreNewStep, StepUpdate as CoreStepUpdate,
 };
 use crate::workflow::types::{
-    BlockedOn as CoreBlockedOn, WorkflowRun as CoreRun, WorkflowRunStep as CoreStep,
+    BlockedOn as CoreBlockedOn, GateKind, WorkflowRun as CoreRun, WorkflowRunStep as CoreStep,
 };
 use runkon_flow::traits::persistence::{
     FanOutItemStatus as RkFanOutItemStatus, FanOutItemUpdate as RkFanOutItemUpdate,
@@ -27,130 +26,157 @@ use runkon_flow::types::{
     WorkflowRunStep as RkStep,
 };
 
-pub fn run_status_to_core(
-    s: runkon_flow::status::WorkflowRunStatus,
-) -> crate::workflow::status::WorkflowRunStatus {
-    use crate::workflow::status::WorkflowRunStatus as Core;
-    use runkon_flow::status::WorkflowRunStatus as Rk;
-    match s {
-        Rk::Pending => Core::Pending,
-        Rk::Running => Core::Running,
-        Rk::Completed => Core::Completed,
-        Rk::Failed => Core::Failed,
-        Rk::Cancelled => Core::Cancelled,
-        Rk::Waiting => Core::Waiting,
-        Rk::NeedsResume => Core::NeedsResume,
-        Rk::Cancelling => Core::Cancelling,
-    }
-}
+// ---------------------------------------------------------------------------
+// WorkflowRunStatus conversions
+//
+// The rk→core direction uses a catch-all (`_`) so that new variants added to
+// `runkon_flow::status::WorkflowRunStatus` do NOT force a compile error here.
+// Unknown variants map to `Failed` (the safest observable default).
+// The core→rk direction remains exhaustive: conductor-core controls that enum
+// and we want a compile error if a new core variant is unhandled.
+// ---------------------------------------------------------------------------
 
-pub fn run_status_to_rk(
-    s: crate::workflow::status::WorkflowRunStatus,
-) -> runkon_flow::status::WorkflowRunStatus {
-    use crate::workflow::status::WorkflowRunStatus as Core;
-    use runkon_flow::status::WorkflowRunStatus as Rk;
-    match s {
-        Core::Pending => Rk::Pending,
-        Core::Running => Rk::Running,
-        Core::Completed => Rk::Completed,
-        Core::Failed => Rk::Failed,
-        Core::Cancelled => Rk::Cancelled,
-        Core::Waiting => Rk::Waiting,
-        Core::NeedsResume => Rk::NeedsResume,
-        Core::Cancelling => Rk::Cancelling,
-    }
-}
-
-pub fn step_status_to_core(
-    s: runkon_flow::status::WorkflowStepStatus,
-) -> crate::workflow::status::WorkflowStepStatus {
-    use crate::workflow::status::WorkflowStepStatus as Core;
-    use runkon_flow::status::WorkflowStepStatus as Rk;
-    match s {
-        Rk::Pending => Core::Pending,
-        Rk::Running => Core::Running,
-        Rk::Completed => Core::Completed,
-        Rk::Failed => Core::Failed,
-        Rk::Skipped => Core::Skipped,
-        Rk::Waiting => Core::Waiting,
-        Rk::TimedOut => Core::TimedOut,
-    }
-}
-
-pub fn step_status_to_rk(
-    s: crate::workflow::status::WorkflowStepStatus,
-) -> runkon_flow::status::WorkflowStepStatus {
-    use crate::workflow::status::WorkflowStepStatus as Core;
-    use runkon_flow::status::WorkflowStepStatus as Rk;
-    match s {
-        Core::Pending => Rk::Pending,
-        Core::Running => Rk::Running,
-        Core::Completed => Rk::Completed,
-        Core::Failed => Rk::Failed,
-        Core::Skipped => Rk::Skipped,
-        Core::Waiting => Rk::Waiting,
-        Core::TimedOut => Rk::TimedOut,
-    }
-}
-
-pub fn new_run_to_core(r: RkNewRun) -> CoreNewRun {
-    CoreNewRun {
-        workflow_name: r.workflow_name,
-        worktree_id: r.worktree_id,
-        ticket_id: r.ticket_id,
-        repo_id: r.repo_id,
-        parent_run_id: r.parent_run_id,
-        dry_run: r.dry_run,
-        trigger: r.trigger,
-        definition_snapshot: r.definition_snapshot,
-        parent_workflow_run_id: r.parent_workflow_run_id,
-        target_label: r.target_label,
-    }
-}
-
-pub fn new_step_to_core(s: RkNewStep) -> CoreNewStep {
-    CoreNewStep {
-        workflow_run_id: s.workflow_run_id,
-        step_name: s.step_name,
-        role: s.role,
-        can_commit: s.can_commit,
-        position: s.position,
-        iteration: s.iteration,
-        retry_count: s.retry_count,
-    }
-}
-
-pub fn step_update_to_core(u: RkStepUpdate) -> CoreStepUpdate {
-    CoreStepUpdate {
-        status: step_status_to_core(u.status),
-        child_run_id: u.child_run_id,
-        result_text: u.result_text,
-        context_out: u.context_out,
-        markers_out: u.markers_out,
-        retry_count: u.retry_count,
-        structured_output: u.structured_output,
-        step_error: u.step_error,
-    }
-}
-
-pub fn fan_out_update_to_core(u: RkFanOutItemUpdate) -> CoreFanOutItemUpdate {
-    match u {
-        RkFanOutItemUpdate::Running { child_run_id } => {
-            CoreFanOutItemUpdate::Running { child_run_id }
+impl From<runkon_flow::status::WorkflowRunStatus> for crate::workflow::status::WorkflowRunStatus {
+    fn from(s: runkon_flow::status::WorkflowRunStatus) -> Self {
+        use runkon_flow::status::WorkflowRunStatus as Rk;
+        match s {
+            Rk::Pending => Self::Pending,
+            Rk::Running => Self::Running,
+            Rk::Completed => Self::Completed,
+            Rk::Failed => Self::Failed,
+            Rk::Cancelled => Self::Cancelled,
+            Rk::Waiting => Self::Waiting,
+            Rk::NeedsResume => Self::NeedsResume,
+            Rk::Cancelling => Self::Cancelling,
+            // Catch-all: new runkon-flow variants map to Failed rather than
+            // breaking conductor-core at compile time.
+            #[allow(unreachable_patterns)]
+            _ => Self::Failed,
         }
-        RkFanOutItemUpdate::Terminal { status } => CoreFanOutItemUpdate::Terminal {
-            status: fan_out_status_to_core(status),
-        },
     }
 }
 
-pub fn fan_out_status_to_core(s: RkFanOutItemStatus) -> CoreFanOutItemStatus {
-    match s {
-        RkFanOutItemStatus::Pending => CoreFanOutItemStatus::Pending,
-        RkFanOutItemStatus::Running => CoreFanOutItemStatus::Running,
-        RkFanOutItemStatus::Completed => CoreFanOutItemStatus::Completed,
-        RkFanOutItemStatus::Failed => CoreFanOutItemStatus::Failed,
-        RkFanOutItemStatus::Skipped => CoreFanOutItemStatus::Skipped,
+impl From<crate::workflow::status::WorkflowRunStatus> for runkon_flow::status::WorkflowRunStatus {
+    fn from(s: crate::workflow::status::WorkflowRunStatus) -> Self {
+        use crate::workflow::status::WorkflowRunStatus as Core;
+        match s {
+            Core::Pending => Self::Pending,
+            Core::Running => Self::Running,
+            Core::Completed => Self::Completed,
+            Core::Failed => Self::Failed,
+            Core::Cancelled => Self::Cancelled,
+            Core::Waiting => Self::Waiting,
+            Core::NeedsResume => Self::NeedsResume,
+            Core::Cancelling => Self::Cancelling,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WorkflowStepStatus conversions — same pattern as WorkflowRunStatus.
+// ---------------------------------------------------------------------------
+
+impl From<runkon_flow::status::WorkflowStepStatus> for crate::workflow::status::WorkflowStepStatus {
+    fn from(s: runkon_flow::status::WorkflowStepStatus) -> Self {
+        use runkon_flow::status::WorkflowStepStatus as Rk;
+        match s {
+            Rk::Pending => Self::Pending,
+            Rk::Running => Self::Running,
+            Rk::Completed => Self::Completed,
+            Rk::Failed => Self::Failed,
+            Rk::Skipped => Self::Skipped,
+            Rk::Waiting => Self::Waiting,
+            Rk::TimedOut => Self::TimedOut,
+            #[allow(unreachable_patterns)]
+            _ => Self::Failed,
+        }
+    }
+}
+
+impl From<crate::workflow::status::WorkflowStepStatus> for runkon_flow::status::WorkflowStepStatus {
+    fn from(s: crate::workflow::status::WorkflowStepStatus) -> Self {
+        use crate::workflow::status::WorkflowStepStatus as Core;
+        match s {
+            Core::Pending => Self::Pending,
+            Core::Running => Self::Running,
+            Core::Completed => Self::Completed,
+            Core::Failed => Self::Failed,
+            Core::Skipped => Self::Skipped,
+            Core::Waiting => Self::Waiting,
+            Core::TimedOut => Self::TimedOut,
+        }
+    }
+}
+
+/// Generate a `From<$src> for $dst` impl that copies same-named fields.
+macro_rules! field_copy_from {
+    ($src:ty => $dst:ty { $($field:ident),+ $(,)? }) => {
+        impl From<$src> for $dst {
+            fn from(src: $src) -> Self {
+                Self { $($field: src.$field),+ }
+            }
+        }
+    };
+}
+
+field_copy_from!(RkNewRun => CoreNewRun {
+    workflow_name, worktree_id, ticket_id, repo_id, parent_run_id,
+    dry_run, trigger, definition_snapshot, parent_workflow_run_id, target_label,
+});
+
+field_copy_from!(RkNewStep => CoreNewStep {
+    workflow_run_id, step_name, role, can_commit, position, iteration, retry_count,
+});
+
+impl From<RkStepUpdate> for CoreStepUpdate {
+    fn from(u: RkStepUpdate) -> Self {
+        Self {
+            status: u.status.into(),
+            child_run_id: u.child_run_id,
+            result_text: u.result_text,
+            context_out: u.context_out,
+            markers_out: u.markers_out,
+            retry_count: u.retry_count,
+            structured_output: u.structured_output,
+            step_error: u.step_error,
+        }
+    }
+}
+
+impl From<RkFanOutItemStatus> for CoreFanOutItemStatus {
+    fn from(s: RkFanOutItemStatus) -> Self {
+        match s {
+            RkFanOutItemStatus::Pending => Self::Pending,
+            RkFanOutItemStatus::Running => Self::Running,
+            RkFanOutItemStatus::Completed => Self::Completed,
+            RkFanOutItemStatus::Failed => Self::Failed,
+            RkFanOutItemStatus::Skipped => Self::Skipped,
+            #[allow(unreachable_patterns)]
+            _ => Self::Failed,
+        }
+    }
+}
+
+impl From<CoreFanOutItemStatus> for RkFanOutItemStatus {
+    fn from(s: CoreFanOutItemStatus) -> Self {
+        match s {
+            CoreFanOutItemStatus::Pending => Self::Pending,
+            CoreFanOutItemStatus::Running => Self::Running,
+            CoreFanOutItemStatus::Completed => Self::Completed,
+            CoreFanOutItemStatus::Failed => Self::Failed,
+            CoreFanOutItemStatus::Skipped => Self::Skipped,
+        }
+    }
+}
+
+impl From<RkFanOutItemUpdate> for CoreFanOutItemUpdate {
+    fn from(u: RkFanOutItemUpdate) -> Self {
+        match u {
+            RkFanOutItemUpdate::Running { child_run_id } => Self::Running { child_run_id },
+            RkFanOutItemUpdate::Terminal { status } => Self::Terminal {
+                status: status.into(),
+            },
+        }
     }
 }
 
@@ -160,7 +186,7 @@ pub fn run_to_rk(r: CoreRun) -> RkRun {
         workflow_name: r.workflow_name,
         worktree_id: r.worktree_id,
         parent_run_id: r.parent_run_id,
-        status: run_status_to_rk(r.status),
+        status: r.status.into(),
         dry_run: r.dry_run,
         trigger: r.trigger,
         started_at: r.started_at,
@@ -220,14 +246,21 @@ fn blocked_on_to_rk(b: CoreBlockedOn) -> RkBlockedOn {
     }
 }
 
+impl From<GateKind> for runkon_flow::dsl::GateType {
+    fn from(k: GateKind) -> Self {
+        use runkon_flow::dsl::GateType as Rk;
+        match k {
+            GateKind::HumanApproval => Rk::HumanApproval,
+            GateKind::HumanReview => Rk::HumanReview,
+            GateKind::PrApproval => Rk::PrApproval,
+            GateKind::PrChecks => Rk::PrChecks,
+            GateKind::QualityGate => Rk::QualityGate,
+        }
+    }
+}
+
 pub fn step_to_rk(s: CoreStep) -> RkStep {
-    let gate_type = s.gate_type.as_ref().map(|gt| match gt {
-        crate::workflow_dsl::GateType::HumanApproval => runkon_flow::dsl::GateType::HumanApproval,
-        crate::workflow_dsl::GateType::HumanReview => runkon_flow::dsl::GateType::HumanReview,
-        crate::workflow_dsl::GateType::PrApproval => runkon_flow::dsl::GateType::PrApproval,
-        crate::workflow_dsl::GateType::PrChecks => runkon_flow::dsl::GateType::PrChecks,
-        crate::workflow_dsl::GateType::QualityGate => runkon_flow::dsl::GateType::QualityGate,
-    });
+    let gate_type = s.gate_type.map(Into::into);
     RkStep {
         id: s.id,
         workflow_run_id: s.workflow_run_id,
@@ -235,7 +268,7 @@ pub fn step_to_rk(s: CoreStep) -> RkStep {
         role: s.role,
         can_commit: s.can_commit,
         condition_expr: s.condition_expr,
-        status: step_status_to_rk(s.status),
+        status: s.status.into(),
         child_run_id: s.child_run_id,
         position: s.position,
         started_at: s.started_at,
@@ -286,41 +319,17 @@ pub fn fan_out_item_to_rk(r: CoreFanOutItemRow) -> RkFanOutItemRow {
     }
 }
 
-pub fn core_workflow_result_to_rk(
-    core: crate::workflow::types::WorkflowResult,
-) -> runkon_flow::types::WorkflowResult {
-    runkon_flow::types::WorkflowResult {
-        workflow_run_id: core.workflow_run_id,
-        worktree_id: core.worktree_id,
-        workflow_name: core.workflow_name,
-        all_succeeded: core.all_succeeded,
-        total_cost: core.total_cost,
-        total_turns: core.total_turns,
-        total_duration_ms: core.total_duration_ms,
-        total_input_tokens: core.total_input_tokens,
-        total_output_tokens: core.total_output_tokens,
-        total_cache_read_input_tokens: core.total_cache_read_input_tokens,
-        total_cache_creation_input_tokens: core.total_cache_creation_input_tokens,
-    }
-}
+field_copy_from!(crate::workflow::types::WorkflowResult => runkon_flow::types::WorkflowResult {
+    workflow_run_id, worktree_id, workflow_name, all_succeeded, total_cost, total_turns,
+    total_duration_ms, total_input_tokens, total_output_tokens,
+    total_cache_read_input_tokens, total_cache_creation_input_tokens,
+});
 
-pub fn rk_workflow_result_to_core(
-    r: runkon_flow::types::WorkflowResult,
-) -> crate::workflow::types::WorkflowResult {
-    crate::workflow::types::WorkflowResult {
-        workflow_run_id: r.workflow_run_id,
-        worktree_id: r.worktree_id,
-        workflow_name: r.workflow_name,
-        all_succeeded: r.all_succeeded,
-        total_cost: r.total_cost,
-        total_turns: r.total_turns,
-        total_duration_ms: r.total_duration_ms,
-        total_input_tokens: r.total_input_tokens,
-        total_output_tokens: r.total_output_tokens,
-        total_cache_read_input_tokens: r.total_cache_read_input_tokens,
-        total_cache_creation_input_tokens: r.total_cache_creation_input_tokens,
-    }
-}
+field_copy_from!(runkon_flow::types::WorkflowResult => crate::workflow::types::WorkflowResult {
+    workflow_run_id, worktree_id, workflow_name, all_succeeded, total_cost, total_turns,
+    total_duration_ms, total_input_tokens, total_output_tokens,
+    total_cache_read_input_tokens, total_cache_creation_input_tokens,
+});
 
 pub fn gate_approval_to_rk(s: CoreGateApprovalState) -> RkGateApprovalState {
     match s {
@@ -339,9 +348,13 @@ pub fn gate_approval_to_rk(s: CoreGateApprovalState) -> RkGateApprovalState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workflow::persistence::{
+        FanOutItemStatus as CoreFanOutItemStatus, FanOutItemUpdate as CoreFanOutItemUpdate,
+        NewRun as CoreNewRun, NewStep as CoreNewStep, StepUpdate as CoreStepUpdate,
+    };
     use crate::workflow::status::WorkflowStepStatus as CoreStepStatus;
 
-    fn make_core_step(gate_type: Option<crate::workflow_dsl::GateType>) -> CoreStep {
+    fn make_core_step(gate_type: Option<GateKind>) -> CoreStep {
         CoreStep {
             id: "step-1".to_string(),
             workflow_run_id: "run-1".to_string(),
@@ -388,7 +401,7 @@ mod tests {
 
     #[test]
     fn step_to_rk_with_recognised_gate_type_preserves_gate() {
-        let step = make_core_step(Some(crate::workflow_dsl::GateType::HumanApproval));
+        let step = make_core_step(Some(GateKind::HumanApproval));
         let rk = step_to_rk(step);
         assert_eq!(
             rk.gate_type,
@@ -415,7 +428,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
-    // run_status_to_rk / run_status_to_core — all 8 variants in both directions
+    // WorkflowRunStatus From impls — all 8 variants in both directions
     // ---------------------------------------------------------------------------
 
     macro_rules! run_status_roundtrip {
@@ -424,8 +437,8 @@ mod tests {
             fn $name() {
                 use crate::workflow::status::WorkflowRunStatus as Core;
                 use runkon_flow::status::WorkflowRunStatus as Rk;
-                assert_eq!(run_status_to_rk($core), $rk, "core→rk");
-                assert_eq!(run_status_to_core($rk), $core, "rk→core");
+                assert_eq!(Rk::from($core), $rk, "core→rk");
+                assert_eq!(Core::from($rk), $core, "rk→core");
             }
         };
     }
@@ -440,7 +453,7 @@ mod tests {
     run_status_roundtrip!(run_status_cancelling, Core::Cancelling, Rk::Cancelling);
 
     // ---------------------------------------------------------------------------
-    // step_status_to_rk / step_status_to_core — all 7 variants in both directions
+    // WorkflowStepStatus From impls — all 7 variants in both directions
     // ---------------------------------------------------------------------------
 
     macro_rules! step_status_roundtrip {
@@ -449,8 +462,8 @@ mod tests {
             fn $name() {
                 use crate::workflow::status::WorkflowStepStatus as Core;
                 use runkon_flow::status::WorkflowStepStatus as Rk;
-                assert_eq!(step_status_to_rk($core), $rk, "core→rk");
-                assert_eq!(step_status_to_core($rk), $core, "rk→core");
+                assert_eq!(Rk::from($core), $rk, "core→rk");
+                assert_eq!(Core::from($rk), $core, "rk→core");
             }
         };
     }
@@ -472,7 +485,7 @@ mod tests {
         let update = RkFanOutItemUpdate::Running {
             child_run_id: "child-123".to_string(),
         };
-        match fan_out_update_to_core(update) {
+        match CoreFanOutItemUpdate::from(update) {
             CoreFanOutItemUpdate::Running { child_run_id } => {
                 assert_eq!(child_run_id, "child-123");
             }
@@ -485,7 +498,7 @@ mod tests {
         let update = RkFanOutItemUpdate::Terminal {
             status: RkFanOutItemStatus::Completed,
         };
-        match fan_out_update_to_core(update) {
+        match CoreFanOutItemUpdate::from(update) {
             CoreFanOutItemUpdate::Terminal { status } => {
                 assert_eq!(status, CoreFanOutItemStatus::Completed);
             }
@@ -501,7 +514,7 @@ mod tests {
         ($name:ident, $rk:expr, $core:expr) => {
             #[test]
             fn $name() {
-                assert_eq!(fan_out_status_to_core($rk), $core);
+                assert_eq!(CoreFanOutItemStatus::from($rk), $core);
             }
         };
     }
@@ -552,7 +565,7 @@ mod tests {
             total_cache_read_input_tokens: 50,
             total_cache_creation_input_tokens: 25,
         };
-        let core = rk_workflow_result_to_core(rk);
+        let core: crate::workflow::types::WorkflowResult = rk.into();
         assert_eq!(core.workflow_run_id, "run-1");
         assert_eq!(core.worktree_id, Some("wt-1".to_string()));
         assert_eq!(core.workflow_name, "my-wf");
@@ -783,7 +796,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
-    // new_run_to_core / new_step_to_core — field-mapping correctness
+    // From<RkNewRun> / From<RkNewStep> — field-mapping correctness
     // ---------------------------------------------------------------------------
 
     #[test]
@@ -800,7 +813,7 @@ mod tests {
             parent_workflow_run_id: Some("parent-wf-run".to_string()),
             target_label: Some("label".to_string()),
         };
-        let core = new_run_to_core(rk);
+        let core = CoreNewRun::from(rk);
         assert_eq!(core.workflow_name, "my-wf");
         assert_eq!(core.worktree_id, Some("wt-1".to_string()));
         assert_eq!(core.ticket_id, Some("ticket-1".to_string()));
@@ -827,7 +840,7 @@ mod tests {
             iteration: 2,
             retry_count: Some(1),
         };
-        let core = new_step_to_core(rk);
+        let core = CoreNewStep::from(rk);
         assert_eq!(core.workflow_run_id, "run-1");
         assert_eq!(core.step_name, "my-step");
         assert_eq!(core.role, "actor");
@@ -838,7 +851,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
-    // step_update_to_core — all 7 fields (guards transposition)
+    // From<RkStepUpdate> — all 7 fields (guards transposition)
     // ---------------------------------------------------------------------------
 
     #[test]
@@ -854,7 +867,7 @@ mod tests {
             structured_output: Some(r#"{"key":"val"}"#.to_string()),
             step_error: Some("boom".to_string()),
         };
-        let core = step_update_to_core(rk);
+        let core = CoreStepUpdate::from(rk);
         assert_eq!(
             core.status,
             crate::workflow::status::WorkflowStepStatus::Failed
@@ -888,7 +901,7 @@ mod tests {
             total_cache_read_input_tokens: 75,
             total_cache_creation_input_tokens: 10,
         };
-        let rk = core_workflow_result_to_rk(core);
+        let rk: runkon_flow::types::WorkflowResult = core.into();
         assert_eq!(rk.workflow_run_id, "run-2");
         assert_eq!(rk.worktree_id, Some("wt-2".to_string()));
         assert_eq!(rk.workflow_name, "wf-name");
@@ -901,4 +914,36 @@ mod tests {
         assert_eq!(rk.total_cache_read_input_tokens, 75);
         assert_eq!(rk.total_cache_creation_input_tokens, 10);
     }
+
+    // ---------------------------------------------------------------------------
+    // GateKind → GateType From impl — all 5 variants
+    // ---------------------------------------------------------------------------
+
+    macro_rules! gate_kind_roundtrip {
+        ($name:ident, $core:expr, $rk:expr) => {
+            #[test]
+            fn $name() {
+                use runkon_flow::dsl::GateType as Rk;
+                assert_eq!(runkon_flow::dsl::GateType::from($core), $rk);
+            }
+        };
+    }
+
+    gate_kind_roundtrip!(
+        gate_kind_human_approval,
+        GateKind::HumanApproval,
+        Rk::HumanApproval
+    );
+    gate_kind_roundtrip!(
+        gate_kind_human_review,
+        GateKind::HumanReview,
+        Rk::HumanReview
+    );
+    gate_kind_roundtrip!(gate_kind_pr_approval, GateKind::PrApproval, Rk::PrApproval);
+    gate_kind_roundtrip!(gate_kind_pr_checks, GateKind::PrChecks, Rk::PrChecks);
+    gate_kind_roundtrip!(
+        gate_kind_quality_gate,
+        GateKind::QualityGate,
+        Rk::QualityGate
+    );
 }

@@ -2,8 +2,7 @@ use super::*;
 use crate::agent::AgentManager;
 use crate::db::sql_placeholders;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
-use crate::workflow::types::{TimeGranularity, WorkflowRun};
-use crate::workflow_dsl::GateType;
+use crate::workflow::types::{GateKind, TimeGranularity, WorkflowRun};
 
 fn setup_db() -> rusqlite::Connection {
     let conn = crate::test_helpers::setup_db();
@@ -299,7 +298,7 @@ fn test_list_all_waiting_gate_steps_returns_waiting_gate_steps() {
         .unwrap();
     mgr.set_step_gate_info(
         &step_id,
-        GateType::HumanApproval,
+        GateKind::HumanApproval,
         Some("Please approve"),
         "1h",
     )
@@ -805,7 +804,7 @@ fn test_list_all_waiting_gate_steps_excludes_approved_gate_steps() {
     let step_id = mgr
         .insert_step(&run.id, "gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
         .unwrap();
     // Mark as completed (approved) — must not appear in waiting list.
     conn.execute(
@@ -843,7 +842,7 @@ fn test_list_all_waiting_gate_steps_includes_target_label() {
     let step_id = mgr
         .insert_step(&run.id, "approve-deploy", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -883,7 +882,7 @@ fn test_list_waiting_gate_steps_for_repo_via_worktree() {
         .unwrap();
     mgr.set_step_gate_info(
         &step_id,
-        GateType::HumanApproval,
+        GateKind::HumanApproval,
         Some("Please approve"),
         "1h",
     )
@@ -922,7 +921,7 @@ fn test_list_waiting_gate_steps_for_repo_via_direct_repo_id() {
     let step_id = mgr
         .insert_step(&run.id, "direct-gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -966,7 +965,7 @@ fn test_list_waiting_gate_steps_for_repo_ticket_ref_populated() {
     let step_id = mgr
         .insert_step(&run.id, "approval-gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -990,7 +989,7 @@ fn test_list_waiting_gate_steps_for_repo_excludes_other_repo() {
     let step_id = mgr
         .insert_step(&run.id, "gate-other", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -1027,7 +1026,7 @@ fn test_list_waiting_gate_steps_for_repo_excludes_completed_gate_steps() {
     let step_id = mgr
         .insert_step(&run.id, "gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
         .unwrap();
     conn.execute(
         "UPDATE workflow_run_steps SET status = 'completed', gate_approved_at = '2024-01-01T00:00:00Z' WHERE id = :id",
@@ -1050,7 +1049,7 @@ fn test_list_waiting_gate_steps_for_repo_excludes_cancelled_run() {
     let step_id = mgr
         .insert_step(&run.id, "gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
         .unwrap();
     conn.execute(
         "UPDATE workflow_runs SET status = 'cancelled' WHERE id = ?1",
@@ -1074,7 +1073,7 @@ fn test_list_waiting_gate_steps_for_repo_excludes_failed_run() {
     let step_id = mgr
         .insert_step(&run.id, "gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
         .unwrap();
     conn.execute(
         "UPDATE workflow_runs SET status = 'failed' WHERE id = ?1",
@@ -1115,12 +1114,12 @@ fn test_set_workflow_run_iteration() {
 // -----------------------------------------------------------------------
 
 /// Helper to build a minimal WorkflowDef for validation tests.
-fn minimal_workflow(name: &str) -> crate::workflow_dsl::WorkflowDef {
-    crate::workflow_dsl::WorkflowDef {
+fn minimal_workflow(name: &str) -> runkon_flow::dsl::WorkflowDef {
+    runkon_flow::dsl::WorkflowDef {
         name: name.to_string(),
         title: None,
         description: "test workflow".to_string(),
-        trigger: crate::workflow_dsl::WorkflowTrigger::Manual,
+        trigger: runkon_flow::dsl::WorkflowTrigger::Manual,
         targets: vec![],
         group: None,
         inputs: vec![],
@@ -1160,7 +1159,7 @@ fn test_validate_single_returns_entry_for_valid_workflow() {
 
 #[test]
 fn test_validate_single_surfaces_warnings_for_unknown_bot() {
-    use crate::workflow_dsl::{AgentRef, CallNode, WorkflowNode};
+    use runkon_flow::dsl::{AgentRef, CallNode, WorkflowNode};
 
     let tmp = tempfile::tempdir().unwrap();
     let wf_src = "workflow bot-wf {\n  meta {\n    description = \"test\"\n    trigger = \"manual\"\n    targets = [\"worktree\"]\n  }\n  call some-step { as = \"unknown-bot\" }\n}\n";
@@ -1197,7 +1196,7 @@ fn test_validate_single_surfaces_warnings_for_unknown_bot() {
 
 #[test]
 fn test_validate_single_reports_errors_for_missing_agent() {
-    use crate::workflow_dsl::{AgentRef, CallNode, WorkflowNode};
+    use runkon_flow::dsl::{AgentRef, CallNode, WorkflowNode};
 
     let tmp = tempfile::tempdir().unwrap();
     let wf_src = "workflow bad-wf {\n  meta {\n    description = \"test\"\n    trigger = \"manual\"\n    targets = [\"worktree\"]\n  }\n  call nonexistent-agent\n}\n";
@@ -3331,7 +3330,7 @@ fn test_get_gate_analytics_excludes_waiting_steps() {
     let step_id = mgr
         .insert_step(&run.id, "approval", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -3362,7 +3361,7 @@ fn test_get_all_pending_gates_returns_waiting_gate() {
         .unwrap();
     mgr.set_step_gate_info(
         &step_id,
-        GateType::HumanApproval,
+        GateKind::HumanApproval,
         Some("Please review"),
         "1h",
     )
@@ -3395,9 +3394,10 @@ fn test_get_all_pending_gates_excludes_completed() {
     let step_id = mgr
         .insert_step(&run.id, "gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
         .unwrap();
-    mgr.approve_gate(&step_id, "alice", None, None).unwrap();
+    mgr.approve_gate(&step_id, "alice", None, None, None)
+        .unwrap();
 
     let rows = mgr.get_all_pending_gates().unwrap();
     assert!(rows.is_empty(), "completed gate must not appear");
@@ -3429,7 +3429,7 @@ fn test_get_all_pending_gates_cross_workflow() {
     let step_a = mgr
         .insert_step(&run_a.id, "gate-a", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_a, GateType::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_a, GateKind::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&mgr, &step_a, WorkflowStepStatus::Waiting);
 
@@ -3437,7 +3437,7 @@ fn test_get_all_pending_gates_cross_workflow() {
     let step_b = mgr
         .insert_step(&run_b.id, "gate-b", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_b, GateType::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_b, GateKind::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&mgr, &step_b, WorkflowStepStatus::Waiting);
 
@@ -3459,7 +3459,7 @@ fn test_get_all_pending_gates_null_started_at() {
     let step_id = mgr
         .insert_step(&run.id, "legacy-gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
         .unwrap();
     // Force status to 'waiting' without going through update_step_status_full
     // so that started_at stays NULL (simulating pre-fix rows).
@@ -4387,7 +4387,7 @@ fn get_gate_approval_state_returns_approved_after_approval() {
     let step_id = mgr
         .insert_step(&run.id, "approval-gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.approve_gate(&step_id, "alice", Some("looks good"), None)
+    mgr.approve_gate(&step_id, "alice", Some("looks good"), None, None)
         .unwrap();
     let state = mgr.get_gate_approval_state(&step_id).unwrap();
     assert!(
@@ -4416,6 +4416,26 @@ fn get_gate_approval_state_returns_rejected_after_rejection() {
             crate::workflow::persistence::GateApprovalState::Rejected { .. }
         ),
         "should be Rejected after reject_gate, got {state:?}"
+    );
+}
+
+#[test]
+fn gate_kind_human_approval_roundtrips_through_db() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let run = create_worktree_run(&conn, "w1");
+
+    let step_id = mgr
+        .insert_step(&run.id, "gate-step", "gate", false, 0, 0)
+        .unwrap();
+    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
+        .unwrap();
+
+    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    assert_eq!(
+        step.gate_type,
+        Some(GateKind::HumanApproval),
+        "GateKind::HumanApproval must survive a write/read DB roundtrip"
     );
 }
 

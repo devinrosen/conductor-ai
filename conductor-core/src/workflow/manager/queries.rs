@@ -15,6 +15,12 @@ use crate::workflow::constants::{
     REGRESSION_COST_THRESHOLD_PCT, REGRESSION_DURATION_THRESHOLD_PCT,
     REGRESSION_FAILURE_RATE_THRESHOLD_PP, RUN_COLUMNS, STEP_COLUMNS_WITH_PREFIX,
 };
+
+/// Pre-expanded SELECT clause for step queries with agent-run token/cost columns.
+/// Computed once to avoid re-allocating the same `String` on every query.
+static STEP_SELECT_EXPANDED: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    WorkflowManager::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
+});
 use crate::workflow::status::WorkflowRunStatus;
 use crate::workflow::types::{
     extract_workflow_title, ActiveWorkflowCounts, GateAnalyticsRow, PendingGateAnalyticsRow,
@@ -209,7 +215,7 @@ impl<'a> WorkflowManager<'a> {
                 "{} \
                  WHERE s.workflow_run_id = :workflow_run_id \
                  ORDER BY s.position",
-                Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
+                &*STEP_SELECT_EXPANDED
             ),
             named_params! { ":workflow_run_id": workflow_run_id },
             row_to_workflow_step,
@@ -268,7 +274,7 @@ impl<'a> WorkflowManager<'a> {
             "{} \
              WHERE s.workflow_run_id IN ({placeholders}){status_clause} \
              ORDER BY s.workflow_run_id, s.position",
-            Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
+            &*STEP_SELECT_EXPANDED
         );
         let combined = run_ids
             .iter()
@@ -291,7 +297,7 @@ impl<'a> WorkflowManager<'a> {
         let mut stmt = self.conn.prepare_cached(&format!(
             "{} \
              WHERE s.id = :id",
-            Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
+            &*STEP_SELECT_EXPANDED
         ))?;
         let mut rows = stmt.query_map(named_params! { ":id": step_id }, row_to_workflow_step)?;
         match rows.next() {
@@ -320,7 +326,7 @@ impl<'a> WorkflowManager<'a> {
                AND s.status != 'completed' \
              ORDER BY s.id DESC \
              LIMIT 1",
-            Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
+            &*STEP_SELECT_EXPANDED
         ))?;
         let mut rows = stmt.query_map(
             named_params! {
@@ -787,7 +793,7 @@ impl<'a> WorkflowManager<'a> {
                AND s.gate_approved_at IS NULL \
                AND s.status IN ('running', 'waiting') \
              ORDER BY s.workflow_run_id, s.position DESC",
-            Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
+            &*STEP_SELECT_EXPANDED
         );
         let steps: Vec<WorkflowRunStep> = {
             let mut stmt = self.conn.prepare(&sql)?;
@@ -816,7 +822,7 @@ impl<'a> WorkflowManager<'a> {
                      WHERE s.workflow_run_id = :workflow_run_id AND s.gate_type IS NOT NULL AND s.gate_approved_at IS NULL \
                        AND s.status IN ('running', 'waiting') \
                      ORDER BY s.position DESC LIMIT 1",
-                    Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
+                    &*STEP_SELECT_EXPANDED
                 ),
                 named_params! { ":workflow_run_id": workflow_run_id },
                 row_to_workflow_step,

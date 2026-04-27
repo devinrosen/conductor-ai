@@ -34,7 +34,17 @@ pub(super) fn tool_approve_gate(
         Ok(None) => return tool_err(format!("No waiting gate found for run {run_id}")),
         Err(e) => return tool_err(e),
     };
-    match wf_mgr.approve_gate(&step.id, "mcp", feedback, selections.as_deref()) {
+    let context_out = selections
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(conductor_core::workflow::helpers::format_gate_selection_context);
+    match wf_mgr.approve_gate(
+        &step.id,
+        "mcp",
+        feedback,
+        selections.as_deref(),
+        context_out,
+    ) {
         Ok(()) => tool_ok(format!("Gate approved for run {run_id}.")),
         Err(e) => tool_err(e),
     }
@@ -95,7 +105,7 @@ mod tests {
     fn make_waiting_gate(db_path: &std::path::Path) -> (String, String) {
         use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;
-        use conductor_core::workflow::{GateType, WorkflowManager, WorkflowStepStatus};
+        use conductor_core::workflow::{GateKind, WorkflowManager, WorkflowStepStatus};
 
         let conn = open_database(db_path).expect("open db");
 
@@ -115,7 +125,7 @@ mod tests {
             .insert_step(&run.id, "human_review", "reviewer", false, 0, 0)
             .expect("insert step");
 
-        mgr.set_step_gate_info(&step_id, GateType::HumanApproval, Some("Approve?"), "24h")
+        mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, Some("Approve?"), "24h")
             .expect("set gate info");
 
         mgr.update_step_status(

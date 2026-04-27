@@ -6,13 +6,12 @@ use std::sync::Mutex;
 use chrono::Utc;
 
 use crate::workflow::engine_error::EngineError;
-use crate::workflow::manager::FanOutItemRow;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::workflow::types::{WorkflowRun, WorkflowRunStep};
 
 use super::persistence::{
-    gate_approval_state_from_fields, FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun,
-    NewStep, StepUpdate, WorkflowPersistence,
+    gate_approval_state_from_fields, FanOutItemRow, FanOutItemStatus, FanOutItemUpdate,
+    GateApprovalState, NewRun, NewStep, StepUpdate, WorkflowPersistence,
 };
 
 struct InMemoryStore {
@@ -205,15 +204,8 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
             .get_mut(step_id)
             .ok_or_else(|| EngineError::Persistence(format!("step {step_id} not found")))?;
         let now = Utc::now().to_rfc3339();
-        let is_starting = update.status == WorkflowStepStatus::Running
-            || update.status == WorkflowStepStatus::Waiting;
-        let is_terminal = matches!(
-            update.status,
-            WorkflowStepStatus::Completed
-                | WorkflowStepStatus::Failed
-                | WorkflowStepStatus::Skipped
-                | WorkflowStepStatus::TimedOut
-        );
+        let is_starting = update.status.is_starting();
+        let is_terminal = update.status.is_terminal();
         step.status = update.status;
         step.child_run_id = update.child_run_id;
         if is_starting {
@@ -357,18 +349,12 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         step.gate_approved_at = Some(now.clone());
         step.gate_approved_by = Some(approved_by.to_string());
         step.gate_feedback = feedback.map(String::from);
-        step.gate_selections = selections.map(|s| {
-            serde_json::to_string(s).unwrap_or_else(|e| {
-                tracing::warn!("approve_gate: failed to serialize selections: {e}");
-                String::new()
-            })
-        });
+        step.gate_selections = crate::workflow::helpers::serialize_gate_selections(selections)
+            .map_err(|e| EngineError::Persistence(e.to_string()))?;
         if let Some(items) = selections.filter(|s| !s.is_empty()) {
-            let mut out = String::from("User selected the following items:\n");
-            for item in items {
-                out.push_str(&format!("- {item}\n"));
-            }
-            step.context_out = Some(out);
+            step.context_out = Some(crate::workflow::helpers::format_gate_selection_context(
+                items,
+            ));
         }
         step.status = WorkflowStepStatus::Completed;
         step.ended_at = Some(now);
@@ -391,6 +377,29 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         step.gate_feedback = feedback.map(String::from);
         step.status = WorkflowStepStatus::Failed;
         step.ended_at = Some(now);
+        Ok(())
+    }
+
+    fn is_run_cancelled(&self, _run_id: &str) -> Result<bool, EngineError> {
+        Ok(false)
+    }
+
+    fn tick_heartbeat(&self, _run_id: &str) -> Result<(), EngineError> {
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn persist_metrics(
+        &self,
+        _run_id: &str,
+        _input_tokens: i64,
+        _output_tokens: i64,
+        _cache_read_input_tokens: i64,
+        _cache_creation_input_tokens: i64,
+        _cost_usd: f64,
+        _num_turns: i64,
+        _duration_ms: i64,
+    ) -> Result<(), EngineError> {
         Ok(())
     }
 }

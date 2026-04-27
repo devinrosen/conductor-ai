@@ -3,9 +3,49 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::workflow_dsl::GateType;
-
 use super::status::{WorkflowRunStatus, WorkflowStepStatus};
+
+/// Conductor-native gate kind enum, mirroring `runkon_flow::dsl::GateType`.
+///
+/// `WorkflowRunStep` is publicly exported by conductor-core, so its `gate_type`
+/// field must not leak the runkon-flow dependency type. Converters between this
+/// type and `runkon_flow::dsl::GateType` live in `rk_types`.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GateKind {
+    HumanApproval,
+    HumanReview,
+    PrApproval,
+    PrChecks,
+    QualityGate,
+}
+
+impl std::fmt::Display for GateKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::HumanApproval => write!(f, "human_approval"),
+            Self::HumanReview => write!(f, "human_review"),
+            Self::PrApproval => write!(f, "pr_approval"),
+            Self::PrChecks => write!(f, "pr_checks"),
+            Self::QualityGate => write!(f, "quality_gate"),
+        }
+    }
+}
+
+impl std::str::FromStr for GateKind {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "human_approval" => Ok(Self::HumanApproval),
+            "human_review" => Ok(Self::HumanReview),
+            "pr_approval" => Ok(Self::PrApproval),
+            "pr_checks" => Ok(Self::PrChecks),
+            "quality_gate" => Ok(Self::QualityGate),
+            _ => Err(format!("unknown gate kind: {s}")),
+        }
+    }
+}
 
 /// Time granularity for workflow analytics queries.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -173,7 +213,7 @@ pub struct WorkflowRunStep {
     pub context_out: Option<String>,
     pub markers_out: Option<String>,
     pub retry_count: i64,
-    pub gate_type: Option<GateType>,
+    pub gate_type: Option<GateKind>,
     pub gate_prompt: Option<String>,
     pub gate_timeout: Option<String>,
     pub gate_approved_by: Option<String>,
@@ -452,7 +492,7 @@ pub struct ActiveWorkflowCounts {
 pub struct WorkflowExecInput<'a> {
     pub conn: &'a rusqlite::Connection,
     pub config: &'a crate::config::Config,
-    pub workflow: &'a crate::workflow_dsl::WorkflowDef,
+    pub workflow: &'a runkon_flow::dsl::WorkflowDef,
     /// `None` for ephemeral PR runs with no registered worktree.
     pub worktree_id: Option<&'a str>,
     pub working_dir: &'a str,
@@ -507,7 +547,7 @@ pub struct WorkflowExecInput<'a> {
 /// when spawning background threads.
 pub struct WorkflowExecStandalone {
     pub config: crate::config::Config,
-    pub workflow: crate::workflow_dsl::WorkflowDef,
+    pub workflow: runkon_flow::dsl::WorkflowDef,
     /// `None` for ephemeral PR runs with no registered worktree.
     pub worktree_id: Option<String>,
     pub working_dir: String,
@@ -901,6 +941,50 @@ mod tests {
         assert_eq!(
             result.unwrap_err(),
             "Invalid granularity: invalid. Must be 'daily' or 'weekly'"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // GateKind::from_str
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn gate_kind_from_str_all_variants_roundtrip() {
+        use std::str::FromStr;
+        let cases = [
+            ("human_approval", GateKind::HumanApproval),
+            ("human_review", GateKind::HumanReview),
+            ("pr_approval", GateKind::PrApproval),
+            ("pr_checks", GateKind::PrChecks),
+            ("quality_gate", GateKind::QualityGate),
+        ];
+        for (s, expected) in cases {
+            let parsed =
+                GateKind::from_str(s).unwrap_or_else(|e| panic!("parse failed for '{s}': {e}"));
+            assert_eq!(parsed, expected, "from_str roundtrip failed for '{s}'");
+            assert_eq!(
+                parsed.to_string(),
+                s,
+                "Display roundtrip failed for {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn gate_kind_from_str_error_on_unknown() {
+        use std::str::FromStr;
+        let result = GateKind::from_str("unknown_gate");
+        assert!(result.is_err(), "expected Err for unknown gate kind");
+        assert_eq!(result.unwrap_err(), "unknown gate kind: unknown_gate");
+    }
+
+    #[test]
+    fn gate_kind_parse_via_option_ok_returns_none_for_unknown() {
+        // Production path: .parse::<GateKind>().ok() coerces unknown to None.
+        let parsed: Option<GateKind> = "bogus".parse().ok();
+        assert!(
+            parsed.is_none(),
+            "unknown gate kind should parse to None via .ok()"
         );
     }
 }

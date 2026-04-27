@@ -19,54 +19,8 @@ pub fn handle_workflow(
     // Finalize and resume stuck workflow runs before handling any workflow command.
     {
         let wf_mgr = WorkflowManager::new(conn);
-        match wf_mgr.reap_finalization_stuck_workflow_runs(60) {
-            Ok(n) if n > 0 => eprintln!("Info: reaper finalized {n} stuck workflow run(s)"),
-            Ok(_) => {}
-            Err(e) => eprintln!("Warning: reap_finalization_stuck_workflow_runs failed: {e}"),
-        }
-        {
-            let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-            match wf_mgr.claim_heartbeat_stuck_runs(config, 60) {
-                Ok(claimed) if !claimed.is_empty() => {
-                    eprintln!(
-                        "Info: auto-resuming {} stuck workflow run(s)",
-                        claimed.len()
-                    );
-                    for (run_id, wf_name, label) in claimed {
-                        conductor_core::workflow::spawn_heartbeat_resume(
-                            conductor_core::workflow::SpawnHeartbeatResumeParams {
-                                run_id,
-                                workflow_name: wf_name,
-                                target_label: label,
-                                config: config.clone(),
-                                conductor_bin_dir: conductor_bin_dir.clone(),
-                                db_path: None,
-                            },
-                        );
-                    }
-                }
-                Ok(_) => {}
-                Err(e) => eprintln!("Warning: claim_heartbeat_stuck_runs failed: {e}"),
-            }
-            let auto_resume_limit = config.general.auto_resume_limit;
-            if auto_resume_limit > 0 {
-                match wf_mgr.classify_resumable_workflows(auto_resume_limit) {
-                    Ok(n) if n > 0 => {
-                        eprintln!("Info: classifier flagged {n} workflow run(s) for auto-resume")
-                    }
-                    Ok(_) => {}
-                    Err(e) => eprintln!("Warning: classify_resumable_workflows failed: {e}"),
-                }
-                match wf_mgr.claim_needs_resume_runs(config) {
-                    Ok(claimed) => conductor_core::workflow::spawn_claimed_runs(
-                        claimed,
-                        config.clone(),
-                        conductor_bin_dir.clone(),
-                    ),
-                    Err(e) => eprintln!("Warning: claim_needs_resume_runs failed: {e}"),
-                }
-            }
-        }
+        let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
+        wf_mgr.run_workflow_maintenance(config, conductor_bin_dir);
     }
 
     match command {
@@ -227,7 +181,6 @@ pub fn handle_workflow(
                 );
 
                 match conductor_core::workflow_ephemeral::run_workflow_on_pr(
-                    conn,
                     config,
                     &pr_ref,
                     &name,
@@ -266,21 +219,20 @@ pub fn handle_workflow(
                     workflow.name, node_count, repo_slug
                 );
 
-                run_and_report(&conductor_core::workflow::WorkflowExecInput {
-                    conn,
-                    config,
-                    workflow: &workflow,
+                run_and_report(conductor_core::workflow::WorkflowExecStandalone {
+                    config: config.clone(),
+                    workflow,
                     worktree_id: None,
-                    working_dir: &r.local_path,
-                    repo_path: &r.local_path,
+                    working_dir: r.local_path.clone(),
+                    repo_path: r.local_path.clone(),
                     ticket_id: None,
-                    repo_id: Some(&r.id),
-                    model: model.as_deref(),
-                    exec_config: &exec_config,
+                    repo_id: Some(r.id.clone()),
+                    model: model.clone(),
+                    exec_config: exec_config.clone(),
                     inputs: input_map,
                     depth: 0,
                     parent_workflow_run_id: None,
-                    target_label: Some(r.slug.as_str()),
+                    target_label: Some(r.slug.clone()),
                     default_bot_name: None,
                     iteration: 0,
                     run_id_notify: None,
@@ -289,6 +241,7 @@ pub fn handle_workflow(
                     force: false,
                     extra_plugin_dirs: plugin_dirs.clone(),
                     parent_step_id: None,
+                    db_path: None,
                 })?;
             } else if let Some(run_id) = workflow_run {
                 // Workflow-run targeted run (e.g. postmortem workflows)
@@ -311,21 +264,20 @@ pub fn handle_workflow(
                     workflow.name, node_count, run_id
                 );
 
-                run_and_report(&conductor_core::workflow::WorkflowExecInput {
-                    conn,
-                    config,
-                    workflow: &workflow,
-                    worktree_id: ctx.worktree_id.as_deref(),
-                    working_dir: &ctx.working_dir,
-                    repo_path: &ctx.repo_path,
+                run_and_report(conductor_core::workflow::WorkflowExecStandalone {
+                    config: config.clone(),
+                    workflow,
+                    worktree_id: ctx.worktree_id.clone(),
+                    working_dir: ctx.working_dir.clone(),
+                    repo_path: ctx.repo_path.clone(),
                     ticket_id: None,
-                    repo_id: ctx.repo_id.as_deref(),
-                    model: model.as_deref(),
-                    exec_config: &exec_config,
+                    repo_id: ctx.repo_id.clone(),
+                    model: model.clone(),
+                    exec_config: exec_config.clone(),
                     inputs: input_map,
                     depth: 0,
                     parent_workflow_run_id: None,
-                    target_label: Some(run_id.as_str()),
+                    target_label: Some(run_id.clone()),
                     default_bot_name: None,
                     iteration: 0,
                     run_id_notify: None,
@@ -334,6 +286,7 @@ pub fn handle_workflow(
                     force: false,
                     extra_plugin_dirs: plugin_dirs.clone(),
                     parent_step_id: None,
+                    db_path: None,
                 })?;
             } else if let Some(ticket_id) = ticket {
                 let syncer = TicketSyncer::new(conn);
@@ -353,21 +306,20 @@ pub fn handle_workflow(
                     ticket_id
                 );
 
-                run_and_report(&conductor_core::workflow::WorkflowExecInput {
-                    conn,
-                    config,
-                    workflow: &workflow,
+                run_and_report(conductor_core::workflow::WorkflowExecStandalone {
+                    config: config.clone(),
+                    workflow,
                     worktree_id: None,
-                    working_dir: &repo.local_path,
-                    repo_path: &repo.local_path,
-                    ticket_id: Some(&ticket_id),
-                    repo_id: Some(&ticket.repo_id),
-                    model: model.as_deref(),
-                    exec_config: &exec_config,
+                    working_dir: repo.local_path.clone(),
+                    repo_path: repo.local_path.clone(),
+                    ticket_id: Some(ticket_id.clone()),
+                    repo_id: Some(ticket.repo_id.clone()),
+                    model: model.clone(),
+                    exec_config: exec_config.clone(),
                     inputs: input_map,
                     depth: 0,
                     parent_workflow_run_id: None,
-                    target_label: Some(repo.slug.as_str()),
+                    target_label: Some(repo.slug.clone()),
                     default_bot_name: None,
                     iteration: 0,
                     run_id_notify: None,
@@ -376,11 +328,15 @@ pub fn handle_workflow(
                     force: false,
                     extra_plugin_dirs: plugin_dirs.clone(),
                     parent_step_id: None,
+                    db_path: None,
                 })?;
             } else {
                 // Normal registered repo/worktree run
-                let repo_slug = repo.expect("repo is required when --pr is not used");
-                let worktree_slug = worktree.expect("worktree is required when --pr is not used");
+                let repo_slug = repo
+                    .ok_or_else(|| anyhow::anyhow!("--repo is required when --pr is not used"))?;
+                let worktree_slug = worktree.ok_or_else(|| {
+                    anyhow::anyhow!("--worktree is required when --pr is not used")
+                })?;
 
                 let repo_mgr = RepoManager::new(conn, config);
                 let r = repo_mgr.get_by_slug(&repo_slug)?;
@@ -435,21 +391,20 @@ pub fn handle_workflow(
                     workflow.name, node_count, repo_slug, worktree_slug
                 );
 
-                run_and_report(&conductor_core::workflow::WorkflowExecInput {
-                    conn,
-                    config,
-                    workflow: &workflow,
-                    worktree_id: Some(&wt.id),
-                    working_dir: &wt.path,
-                    repo_path: &r.local_path,
-                    ticket_id: wt.ticket_id.as_deref(),
-                    repo_id: Some(&r.id),
-                    model: model.as_deref(),
-                    exec_config: &exec_config,
+                run_and_report(conductor_core::workflow::WorkflowExecStandalone {
+                    config: config.clone(),
+                    workflow,
+                    worktree_id: Some(wt.id.clone()),
+                    working_dir: wt.path.clone(),
+                    repo_path: r.local_path.clone(),
+                    ticket_id: wt.ticket_id.clone(),
+                    repo_id: Some(r.id.clone()),
+                    model: model.clone(),
+                    exec_config: exec_config.clone(),
                     inputs: input_map,
                     depth: 0,
                     parent_workflow_run_id: None,
-                    target_label: Some(&wt_label),
+                    target_label: Some(wt_label.clone()),
                     default_bot_name: None,
                     iteration: 0,
                     run_id_notify: None,
@@ -458,6 +413,7 @@ pub fn handle_workflow(
                     force: false,
                     extra_plugin_dirs: plugin_dirs,
                     parent_step_id: None,
+                    db_path: None,
                 })?;
             }
         }
@@ -754,7 +710,7 @@ pub fn handle_workflow(
         }
         WorkflowCommands::GateApprove { run_id } => {
             with_waiting_gate(conn, &run_id, |wf_mgr, step, user| {
-                wf_mgr.approve_gate(&step.id, user, None, None)?;
+                wf_mgr.approve_gate(&step.id, user, None, None, None)?;
                 println!("Gate '{}' approved by {user}.", step.step_name);
                 Ok(())
             })?;
@@ -775,7 +731,7 @@ pub fn handle_workflow(
         }
         WorkflowCommands::GateFeedback { run_id, feedback } => {
             with_waiting_gate(conn, &run_id, |wf_mgr, step, user| {
-                wf_mgr.approve_gate(&step.id, user, Some(&feedback), None)?;
+                wf_mgr.approve_gate(&step.id, user, Some(&feedback), None, None)?;
                 println!(
                     "Gate '{}' approved with feedback by {user}.",
                     step.step_name
@@ -995,8 +951,8 @@ pub fn handle_workflow(
 }
 
 /// Execute a workflow and report the result.
-fn run_and_report(input: &conductor_core::workflow::WorkflowExecInput) -> Result<()> {
-    let result = conductor_core::workflow::execute_workflow(input)
+fn run_and_report(input: conductor_core::workflow::WorkflowExecStandalone) -> Result<()> {
+    let result = conductor_core::workflow::execute_workflow_standalone(&input)
         .map_err(|e| anyhow::anyhow!("Workflow execution failed: {e}"))?;
     report_workflow_result(result);
     Ok(())

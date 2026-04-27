@@ -16,7 +16,7 @@ fn test_gate_approve() {
     let step_id = mgr
         .insert_step(&run.id, "human_review", "reviewer", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateType::HumanReview, Some("Review?"), "48h")
+    mgr.set_step_gate_info(&step_id, GateKind::HumanReview, Some("Review?"), "48h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -26,7 +26,7 @@ fn test_gate_approve() {
     assert_eq!(waiting.unwrap().id, step_id);
 
     // Approve
-    mgr.approve_gate(&step_id, "user", Some("Looks good!"), None)
+    mgr.approve_gate(&step_id, "user", Some("Looks good!"), None, None)
         .unwrap();
 
     // Verify
@@ -50,7 +50,7 @@ fn test_gate_reject() {
     let step_id = mgr
         .insert_step(&run.id, "human_approval", "reviewer", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, Some("Approve?"), "24h")
+    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, Some("Approve?"), "24h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -58,51 +58,6 @@ fn test_gate_reject() {
 
     let steps = mgr.get_workflow_steps(&run.id).unwrap();
     assert_eq!(steps[0].status, WorkflowStepStatus::Failed);
-}
-
-#[test]
-fn test_gate_timeout_fail() {
-    let conn = setup_db();
-    let config = make_resume_config();
-    let (mut state, run_id) = make_state_with_run(&conn, config);
-
-    let wf_mgr = WorkflowManager::new(&conn);
-    let step_id = wf_mgr
-        .insert_step(&run_id, "test_gate", "gate", false, 0, 0)
-        .unwrap();
-    set_step_status(&wf_mgr, &step_id, WorkflowStepStatus::Waiting);
-
-    let node = make_gate_node(GateType::HumanApproval, OnTimeout::Fail);
-    let result = handle_gate_timeout(&mut state, &step_id, &node);
-
-    assert!(result.is_err());
-    let steps = wf_mgr.get_workflow_steps(&run_id).unwrap();
-    assert_eq!(steps[0].status, WorkflowStepStatus::Failed);
-    assert!(!state.all_succeeded);
-}
-
-#[test]
-fn test_gate_timeout_continue() {
-    let conn = setup_db();
-    let config = make_resume_config();
-    let (mut state, run_id) = make_state_with_run(&conn, config);
-
-    let wf_mgr = WorkflowManager::new(&conn);
-    let step_id = wf_mgr
-        .insert_step(&run_id, "test_gate", "gate", false, 0, 0)
-        .unwrap();
-    set_step_status(&wf_mgr, &step_id, WorkflowStepStatus::Waiting);
-
-    let node = make_gate_node(GateType::HumanApproval, OnTimeout::Continue);
-    let result = handle_gate_timeout(&mut state, &step_id, &node);
-
-    assert!(result.is_ok(), "on_timeout=continue should return Ok");
-    let steps = wf_mgr.get_workflow_steps(&run_id).unwrap();
-    assert_eq!(steps[0].status, WorkflowStepStatus::TimedOut);
-    assert!(
-        state.all_succeeded,
-        "on_timeout=continue should not set all_succeeded=false"
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -122,16 +77,16 @@ fn test_gate_pr_approval_approve() {
     let step_id = mgr
         .insert_step(&run.id, "pr_approval_gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateType::PrApproval, None, "48h")
+    mgr.set_step_gate_info(&step_id, GateKind::PrApproval, None, "48h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
-    mgr.approve_gate(&step_id, "reviewer-bot", Some("PR approved"), None)
+    mgr.approve_gate(&step_id, "reviewer-bot", Some("PR approved"), None, None)
         .unwrap();
 
     let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
     assert_eq!(step.status, WorkflowStepStatus::Completed);
-    assert_eq!(step.gate_type, Some(GateType::PrApproval));
+    assert_eq!(step.gate_type, Some(GateKind::PrApproval));
     assert_eq!(step.gate_approved_by.as_deref(), Some("reviewer-bot"));
 }
 
@@ -148,7 +103,7 @@ fn test_gate_pr_approval_reject() {
     let step_id = mgr
         .insert_step(&run.id, "pr_approval_gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateType::PrApproval, None, "24h")
+    mgr.set_step_gate_info(&step_id, GateKind::PrApproval, None, "24h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -177,82 +132,16 @@ fn test_gate_pr_checks_approve() {
     let step_id = mgr
         .insert_step(&run.id, "pr_checks_gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateType::PrChecks, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateKind::PrChecks, None, "1h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
-    mgr.approve_gate(&step_id, "ci-bot", Some("All checks passed"), None)
+    mgr.approve_gate(&step_id, "ci-bot", Some("All checks passed"), None, None)
         .unwrap();
 
     let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
     assert_eq!(step.status, WorkflowStepStatus::Completed);
-    assert_eq!(step.gate_type, Some(GateType::PrChecks));
-}
-
-// ---------------------------------------------------------------------------
-// Gate timeout edge cases
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_gate_timeout_pr_approval_fail() {
-    let conn = setup_db();
-    let config = make_resume_config();
-    let (mut state, run_id) = make_state_with_run(&conn, config);
-
-    let wf_mgr = WorkflowManager::new(&conn);
-    let step_id = wf_mgr
-        .insert_step(&run_id, "test_gate", "gate", false, 0, 0)
-        .unwrap();
-    set_step_status(&wf_mgr, &step_id, WorkflowStepStatus::Waiting);
-
-    let node = make_gate_node(GateType::PrApproval, OnTimeout::Fail);
-    let result = handle_gate_timeout(&mut state, &step_id, &node);
-
-    assert!(result.is_err());
-    let step = wf_mgr.get_step_by_id(&step_id).unwrap().unwrap();
-    assert_eq!(step.status, WorkflowStepStatus::Failed);
-}
-
-#[test]
-fn test_gate_timeout_pr_checks_continue() {
-    let conn = setup_db();
-    let config = make_resume_config();
-    let (mut state, run_id) = make_state_with_run(&conn, config);
-
-    let wf_mgr = WorkflowManager::new(&conn);
-    let step_id = wf_mgr
-        .insert_step(&run_id, "test_gate", "gate", false, 0, 0)
-        .unwrap();
-    set_step_status(&wf_mgr, &step_id, WorkflowStepStatus::Waiting);
-
-    let node = make_gate_node(GateType::PrChecks, OnTimeout::Continue);
-    let result = handle_gate_timeout(&mut state, &step_id, &node);
-
-    assert!(result.is_ok());
-    let step = wf_mgr.get_step_by_id(&step_id).unwrap().unwrap();
-    assert_eq!(step.status, WorkflowStepStatus::TimedOut);
-}
-
-#[test]
-fn test_gate_timeout_zero_seconds() {
-    let conn = setup_db();
-    let config = make_resume_config();
-    let (mut state, run_id) = make_state_with_run(&conn, config);
-
-    let wf_mgr = WorkflowManager::new(&conn);
-    let step_id = wf_mgr
-        .insert_step(&run_id, "test_gate", "gate", false, 0, 0)
-        .unwrap();
-    set_step_status(&wf_mgr, &step_id, WorkflowStepStatus::Waiting);
-
-    // Zero timeout should still work (immediately times out)
-    let mut node = make_gate_node(GateType::HumanApproval, OnTimeout::Fail);
-    node.timeout_secs = 0;
-    let result = handle_gate_timeout(&mut state, &step_id, &node);
-
-    assert!(result.is_err());
-    let step = wf_mgr.get_step_by_id(&step_id).unwrap().unwrap();
-    assert_eq!(step.status, WorkflowStepStatus::Failed);
+    assert_eq!(step.gate_type, Some(GateKind::PrChecks));
 }
 
 // ---------------------------------------------------------------------------
@@ -272,7 +161,7 @@ fn test_gate_multiselect_options_and_approval() {
     let step_id = mgr
         .insert_step(&run.id, "pick_items", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateType::HumanReview, Some("Select items:"), "1h")
+    mgr.set_step_gate_info(&step_id, GateKind::HumanReview, Some("Select items:"), "1h")
         .unwrap();
 
     // Simulate the executor persisting resolved options
@@ -287,7 +176,8 @@ fn test_gate_multiselect_options_and_approval() {
 
     // Approve with a subset of selections
     let selections = vec!["finding-a".to_string(), "finding-c".to_string()];
-    mgr.approve_gate(&step_id, "user", None, Some(&selections))
+    let context_out = crate::workflow::helpers::format_gate_selection_context(&selections);
+    mgr.approve_gate(&step_id, "user", None, Some(&selections), Some(context_out))
         .unwrap();
 
     // Verify post-approval state
@@ -330,7 +220,7 @@ fn test_gate_approve_empty_selections() {
     let step_id = mgr
         .insert_step(&run.id, "pick_items", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateType::HumanReview, Some("Select items:"), "1h")
+    mgr.set_step_gate_info(&step_id, GateKind::HumanReview, Some("Select items:"), "1h")
         .unwrap();
 
     let options_json = r#"[{"value":"item-x","label":"item-x"}]"#;
@@ -338,7 +228,8 @@ fn test_gate_approve_empty_selections() {
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
     // Approve with empty selections (skip all)
-    mgr.approve_gate(&step_id, "user", None, Some(&[])).unwrap();
+    mgr.approve_gate(&step_id, "user", None, Some(&[]), None)
+        .unwrap();
 
     let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
     assert_eq!(step.status, WorkflowStepStatus::Completed);

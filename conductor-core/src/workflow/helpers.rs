@@ -1,8 +1,59 @@
-use crate::workflow_dsl::{WhileNode, WorkflowNode};
-
 use super::action_executor::{ActionParams, ExecutionContext};
-use super::engine::ExecutionState;
-use super::status::WorkflowStepStatus;
+
+/// Parse a gate timeout string (e.g. `"1h"`, `"30m"`) into seconds.
+///
+/// Wraps `runkon_flow::dsl::parse_duration_str` so callers outside the bridge
+/// layer do not import runkon-flow directly.
+pub(crate) fn parse_gate_timeout_secs(s: &str) -> Option<i64> {
+    match runkon_flow::dsl::parse_duration_str(s) {
+        Ok(n) => i64::try_from(n).ok(),
+        Err(_) => None,
+    }
+}
+
+/// Format a list of gate selections into a human-readable context string.
+pub fn format_gate_selection_context(items: &[String]) -> String {
+    let mut out = String::from("User selected the following items:\n");
+    for item in items {
+        out.push_str("- ");
+        out.push_str(item);
+        out.push('\n');
+    }
+    out
+}
+
+/// Serialize an optional slice of gate selection strings to a JSON string.
+///
+/// Returns `Ok(None)` when `selections` is `None`, `Ok(Some(json))` on success,
+/// or `Err(ConductorError::Workflow(...))` if serialization fails (should never
+/// happen for `Vec<String>` but we propagate rather than panic).
+pub(crate) fn serialize_gate_selections(
+    selections: Option<&[String]>,
+) -> crate::error::Result<Option<String>> {
+    match selections {
+        None => Ok(None),
+        Some(s) => serde_json::to_string(s).map(Some).map_err(|e| {
+            crate::error::ConductorError::Workflow(format!(
+                "gate selections serialization failed: {e}"
+            ))
+        }),
+    }
+}
+
+/// Parse a gate's stored `gate_options` JSON blob into a list of option strings.
+///
+/// The stored format is a JSON array of objects with a `"value"` key:
+/// `[{"value": "opt1"}, {"value": "opt2"}]`
+pub fn parse_gate_options(json: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<serde_json::Value>>(json)
+        .ok()
+        .map(|arr| {
+            arr.into_iter()
+                .filter_map(|v| v.get("value").and_then(|s| s.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 pub(super) fn load_agent_and_build_prompt(
     ectx: &ExecutionContext,
@@ -21,137 +72,73 @@ pub(super) fn load_agent_and_build_prompt(
     Ok((agent_def, prompt))
 }
 
-/// Build a human-readable summary of a workflow execution.
-pub(super) fn build_workflow_summary(state: &ExecutionState<'_>) -> String {
-    let steps = state
-        .wf_mgr
-        .get_workflow_steps(&state.workflow_run_id)
-        .unwrap_or_default();
-
-    let total = steps.len();
-    let count_status =
-        |status: WorkflowStepStatus| steps.iter().filter(|s| s.status == status).count();
-    let completed = count_status(WorkflowStepStatus::Completed);
-    let failed = count_status(WorkflowStepStatus::Failed);
-    let skipped = count_status(WorkflowStepStatus::Skipped);
-    let timed_out = count_status(WorkflowStepStatus::TimedOut);
-
-    let mut lines = Vec::new();
-    lines.push(format!(
-        "Workflow '{}': {completed}/{total} steps completed{}{}{}",
-        state.workflow_name,
-        if failed > 0 {
-            format!(", {failed} failed")
-        } else {
-            String::new()
-        },
-        if skipped > 0 {
-            format!(", {skipped} skipped")
-        } else {
-            String::new()
-        },
-        if timed_out > 0 {
-            format!(", {timed_out} timed out")
-        } else {
-            String::new()
-        },
-    ));
-
-    for step in &steps {
-        let marker = step.status.short_label();
-        let iter_label = if step.iteration > 0 {
-            format!(" (iter {})", step.iteration)
-        } else {
-            String::new()
-        };
-        let never_executed = step.status == WorkflowStepStatus::Failed && step.started_at.is_none();
-        let step_note = if never_executed {
-            " (never executed)"
-        } else {
-            ""
-        };
-        lines.push(format!(
-            "  [{marker}] {}{iter_label}{step_note}",
-            step.step_name
-        ));
-    }
-
-    if state.all_succeeded {
-        lines.push("Status: SUCCESS".to_string());
-    } else {
-        lines.push("Status: FAILED".to_string());
-    }
-
-    lines.join("\n")
-}
-
-/// Sanitize a string for use as a tmux window name.
-/// Removes characters that tmux treats specially (`.`, `:`, `\`).
 #[cfg(test)]
-pub(super) fn sanitize_tmux_name(name: &str) -> String {
-    name.chars()
-        .map(|c| match c {
-            '.' | ':' | '\\' | '\'' | '"' => '-',
-            c if c.is_ascii_control() => '-',
-            _ => c,
-        })
-        .collect()
-}
+mod tests {
+    use super::*;
 
-/// Extract all leaf-node step keys from a workflow node.
-///
-/// Recurses into control-flow nodes (if/unless/while/always) and collects
-/// keys from all trackable leaves: `Call`, `Parallel` agents, `Gate`, and
-/// `CallWorkflow`.
-pub(super) fn collect_leaf_step_keys(node: &WorkflowNode) -> Vec<String> {
-    match node {
-        WorkflowNode::Call(c) => vec![c.agent.step_key()],
-        WorkflowNode::Parallel(p) => p.calls.iter().map(|a| a.step_key()).collect(),
-        WorkflowNode::Gate(g) => vec![g.name.clone()],
-        WorkflowNode::CallWorkflow(cw) => vec![format!("workflow:{}", cw.workflow)],
-        WorkflowNode::Script(s) => vec![s.name.clone()],
-        WorkflowNode::If(n) => n.body.iter().flat_map(collect_leaf_step_keys).collect(),
-        WorkflowNode::Unless(n) => n.body.iter().flat_map(collect_leaf_step_keys).collect(),
-        WorkflowNode::While(n) => n.body.iter().flat_map(collect_leaf_step_keys).collect(),
-        WorkflowNode::DoWhile(n) => n.body.iter().flat_map(collect_leaf_step_keys).collect(),
-        WorkflowNode::Do(n) => n.body.iter().flat_map(collect_leaf_step_keys).collect(),
-        WorkflowNode::Always(n) => n.body.iter().flat_map(collect_leaf_step_keys).collect(),
-        WorkflowNode::ForEach(n) => vec![format!("foreach:{}", n.name)],
-    }
-}
-
-/// Find the starting iteration for a while loop on resume.
-///
-/// Looks at the skip_completed set for step keys that match body nodes of the
-/// while loop. Returns the max iteration that has all body nodes completed,
-/// so the loop resumes from the iteration where it failed.
-pub(super) fn find_max_completed_while_iteration(
-    state: &ExecutionState<'_>,
-    node: &WhileNode,
-) -> u32 {
-    let skip_set = match state.resume_ctx {
-        Some(ref ctx) => &ctx.skip_completed,
-        None => return 0,
-    };
-
-    // Collect step keys from all trackable body nodes
-    let body_keys: Vec<String> = node.body.iter().flat_map(collect_leaf_step_keys).collect();
-
-    if body_keys.is_empty() {
-        return 0;
+    #[test]
+    fn parse_gate_options_valid_array_returns_values() {
+        let json = r#"[{"value": "opt1"}, {"value": "opt2"}, {"value": "opt3"}]"#;
+        let result = parse_gate_options(json);
+        assert_eq!(result, vec!["opt1", "opt2", "opt3"]);
     }
 
-    // Find the highest iteration where all body nodes are completed
-    let mut iter = 0u32;
-    loop {
-        let all_done = body_keys
-            .iter()
-            .all(|k| skip_set.contains(&(k.clone(), iter)));
-        if !all_done {
-            break;
-        }
-        iter += 1;
+    #[test]
+    fn parse_gate_options_invalid_json_returns_empty() {
+        let result = parse_gate_options("not valid json at all");
+        assert!(result.is_empty(), "invalid JSON should yield empty Vec");
     }
-    // iter is now the first incomplete iteration — start there
-    iter
+
+    #[test]
+    fn parse_gate_options_drops_objects_missing_value_key() {
+        let json = r#"[{"value": "keep"}, {"label": "no-value"}, {"value": "also-keep"}]"#;
+        let result = parse_gate_options(json);
+        assert_eq!(result, vec!["keep", "also-keep"]);
+    }
+
+    #[test]
+    fn parse_gate_options_empty_array_returns_empty() {
+        let result = parse_gate_options("[]");
+        assert!(result.is_empty(), "empty array should yield empty Vec");
+    }
+
+    #[test]
+    fn parse_gate_options_extra_fields_ignored() {
+        let json = r#"[{"value": "a", "label": "A label", "extra": 42}]"#;
+        let result = parse_gate_options(json);
+        assert_eq!(result, vec!["a"]);
+    }
+
+    // ── format_gate_selection_context ────────────────────────────────────────
+
+    #[test]
+    fn format_gate_selection_context_empty_input() {
+        let result = format_gate_selection_context(&[]);
+        assert_eq!(result, "User selected the following items:\n");
+    }
+
+    #[test]
+    fn format_gate_selection_context_single_item() {
+        let result = format_gate_selection_context(&["alpha".to_string()]);
+        assert_eq!(result, "User selected the following items:\n- alpha\n");
+    }
+
+    #[test]
+    fn format_gate_selection_context_item_with_special_characters() {
+        let result = format_gate_selection_context(&["say \"hello\"\nworld".to_string()]);
+        assert_eq!(
+            result,
+            "User selected the following items:\n- say \"hello\"\nworld\n"
+        );
+    }
+
+    #[test]
+    fn format_gate_selection_context_multi_item_golden() {
+        let items = vec!["foo".to_string(), "bar".to_string(), "baz qux".to_string()];
+        let result = format_gate_selection_context(&items);
+        assert_eq!(
+            result,
+            "User selected the following items:\n- foo\n- bar\n- baz qux\n"
+        );
+    }
 }

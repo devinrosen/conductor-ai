@@ -86,7 +86,12 @@ macro_rules! impl_pr_gate_resolver {
                     db_path: &self.db_path,
                 };
                 let result = CoreGateResolver::poll(&self.inner, run_id, &core_params, &ctx)
-                    .map_err(|e| EngineError::Persistence(e.to_string()))?;
+                    .map_err(|e| {
+                        EngineError::Workflow(format!(
+                            "pr gate '{}' poll failed: {e}",
+                            $gate_type_str
+                        ))
+                    })?;
                 Ok(gate_poll_to_rk(result))
             }
         }
@@ -109,24 +114,11 @@ fn rk_params_to_core(params: &RkGateParams) -> CoreGateParams {
         gate_name: params.gate_name.clone(),
         prompt: params.prompt.clone(),
         min_approvals: params.min_approvals,
-        approval_mode: rk_approval_mode_to_core(params.approval_mode.clone()),
+        approval_mode: params.approval_mode.clone(),
         options: params.options.clone(),
         timeout_secs: params.timeout_secs,
         bot_name: params.bot_name.clone(),
         step_id: params.step_id.clone(),
-    }
-}
-
-fn rk_approval_mode_to_core(
-    m: runkon_flow::dsl::ApprovalMode,
-) -> crate::workflow_dsl::ApprovalMode {
-    match m {
-        runkon_flow::dsl::ApprovalMode::MinApprovals => {
-            crate::workflow_dsl::ApprovalMode::MinApprovals
-        }
-        runkon_flow::dsl::ApprovalMode::ReviewDecision => {
-            crate::workflow_dsl::ApprovalMode::ReviewDecision
-        }
     }
 }
 

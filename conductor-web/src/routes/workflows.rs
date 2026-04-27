@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -8,13 +8,14 @@ use serde::{Deserialize, Serialize};
 use conductor_core::error::ConductorError;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
-    apply_workflow_input_defaults, estimation, execute_workflow, validate_resume_preconditions,
-    FanOutItemRow, GateAnalyticsRow, InputDecl, PendingGateAnalyticsRow, RunIdSlot,
-    StepFailureHeatmapRow, StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity,
-    WorkflowDef, WorkflowExecConfig, WorkflowExecInput, WorkflowFailureRateTrendRow,
-    WorkflowManager, WorkflowPercentiles, WorkflowRegressionSignal, WorkflowResumeStandalone,
-    WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus,
-    WorkflowTokenAggregate, WorkflowTokenTrendRow, REGRESSION_MIN_RECENT_RUNS,
+    apply_workflow_input_defaults, estimation, execute_workflow_standalone,
+    validate_resume_preconditions, FanOutItemRow, GateAnalyticsRow, InputDecl,
+    PendingGateAnalyticsRow, RunIdSlot, StepFailureHeatmapRow, StepRetryAnalyticsRow,
+    StepTokenHeatmapRow, TimeGranularity, WorkflowDef, WorkflowExecConfig, WorkflowExecStandalone,
+    WorkflowFailureRateTrendRow, WorkflowManager, WorkflowPercentiles, WorkflowRegressionSignal,
+    WorkflowResumeStandalone, WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus,
+    WorkflowRunStep, WorkflowStepStatus, WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    REGRESSION_MIN_RECENT_RUNS,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -445,7 +446,7 @@ pub async fn run_workflow(
     Json(req): Json<RunWorkflowRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     // Validate inputs while holding the lock
-    let (wt_path, wt_slug, wt_ticket_id, repo_path, repo_slug, repo_id, model) = {
+    let (wt_path, wt_slug, wt_ticket_id, repo_path, repo_slug, repo_id, model, def) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
         let wt_mgr = WorktreeManager::new(&db, &config);
@@ -454,8 +455,8 @@ pub async fn run_workflow(
         let wt = wt_mgr.get_by_id(&worktree_id)?;
         let repo = repo_mgr.get_by_id(&wt.repo_id)?;
 
-        // Validate workflow exists
-        let _def = WorkflowManager::load_def_by_name(&wt.path, &repo.local_path, &req.name)?;
+        // Validate workflow exists and load definition
+        let def = WorkflowManager::load_def_by_name(&wt.path, &repo.local_path, &req.name)?;
 
         // Reject if a top-level workflow run is already active on this worktree
         let wf_mgr = WorkflowManager::new(&db);
@@ -481,6 +482,7 @@ pub async fn run_workflow(
             repo.slug.clone(),
             repo.id.clone(),
             model,
+            def,
         )
     };
 
@@ -488,6 +490,10 @@ pub async fn run_workflow(
     let dry_run = req.dry_run.unwrap_or(false);
     let mut inputs = req.inputs.unwrap_or_default();
     let wt_id = worktree_id.clone();
+
+    // Validate required inputs and apply defaults before spawning so validation
+    // errors are returned immediately to the client (not after a background wait).
+    apply_workflow_input_defaults(&def, &mut inputs).map_err(ApiError::Core)?;
 
     // Spawn blocking task with its own DB connection so the shared AppState
     // mutex is not held for the entire workflow execution (which would starve
@@ -506,20 +512,6 @@ pub async fn run_workflow(
     let state_clone = state.clone();
     let db_path = state.db_path.clone();
     tokio::task::spawn_blocking(move || {
-        let def = match WorkflowManager::load_def_by_name(&wt_path, &repo_path, &workflow_name) {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::error!("Failed to load workflow def: {e}");
-                return;
-            }
-        };
-
-        // Validate required inputs and apply defaults (matches CLI and ephemeral paths)
-        if let Err(e) = apply_workflow_input_defaults(&def, &mut inputs) {
-            tracing::error!("Workflow input validation failed: {e}");
-            return;
-        }
-
         let params = conductor_core::workflow::WorkflowExecStandalone {
             config,
             workflow: def,
@@ -621,6 +613,14 @@ pub async fn run_workflow(
                 } else if let Err(e) = &notification_conn {
                     tracing::error!("notify: DB open failed, skipping notification: {e}");
                 }
+
+                state_clone
+                    .events
+                    .emit(ConductorEvent::WorkflowRunStatusChanged {
+                        run_id: error_run_id,
+                        worktree_id: params.worktree_id.clone(),
+                        status: "failed".to_string(),
+                    });
             }
         }
 
@@ -804,25 +804,25 @@ pub async fn post_workflow_run(
             ..Default::default()
         };
 
-        let input = WorkflowExecInput {
-            conn: &conn,
-            config: &config,
-            workflow: &def,
-            worktree_id: wt_id_clone.as_deref(),
-            working_dir: &wt_path,
-            repo_path: &repo_path,
-            ticket_id: wt_ticket_id.as_deref(),
-            repo_id: if wt_id_clone.is_none() {
-                Some(&repo_id)
-            } else {
-                None
-            },
-            model: model.as_deref(),
-            exec_config: &exec_config,
-            inputs: inputs.clone(),
+        let repo_id_for_exec = if wt_id_clone.is_none() {
+            Some(repo_id.clone())
+        } else {
+            None
+        };
+        let input = WorkflowExecStandalone {
+            config: config.clone(),
+            workflow: def,
+            worktree_id: wt_id_clone.clone(),
+            working_dir: wt_path,
+            repo_path,
+            ticket_id: wt_ticket_id,
+            repo_id: repo_id_for_exec,
+            model,
+            exec_config,
+            inputs,
             depth: 0,
             parent_workflow_run_id: None,
-            target_label: Some(&target_label),
+            target_label: Some(target_label.clone()),
             default_bot_name: None,
             iteration: 0,
             run_id_notify: Some(std::sync::Arc::clone(&run_id_slot)),
@@ -831,9 +831,10 @@ pub async fn post_workflow_run(
             extra_plugin_dirs: vec![],
             force: false,
             parent_step_id: None,
+            db_path: Some(db_path),
         };
 
-        let result = execute_workflow(&input);
+        let result = execute_workflow_standalone(&input);
         let notifications = config.notifications.clone();
         let notify_hooks = config.notify.hooks.clone();
 
@@ -1072,10 +1073,15 @@ pub async fn list_all_workflow_runs_handler(
             let current_iteration = current.map(|s| s.iteration);
 
             // Compute total_steps and max_iterations from definition_snapshot
-            let def: Option<WorkflowDef> = run
-                .definition_snapshot
-                .as_deref()
-                .and_then(|snap| serde_json::from_str(snap).ok());
+            let def: Option<WorkflowDef> = run.definition_snapshot.as_deref().and_then(|snap| {
+                serde_json::from_str(snap).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        run_id = %run.id,
+                        "Failed to deserialize definition_snapshot: {e}"
+                    );
+                    None
+                })
+            });
             let total_steps = def.as_ref().map(|d| d.total_nodes());
             let max_iterations = current_step_name
                 .as_deref()
@@ -1827,21 +1833,35 @@ fn find_waiting_gate_or_err(
 )]
 /// POST /api/workflows/runs/{id}/gate/approve
 pub async fn approve_gate(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(req): Json<GateActionRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    if !peer.ip().is_loopback() {
+        return Err(ApiError::Core(
+            conductor_core::error::ConductorError::InvalidInput(
+                "gate approval is only permitted from localhost".to_string(),
+            ),
+        ));
+    }
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
 
     let step = find_waiting_gate_or_err(&mgr, &id)?;
 
     let approved_by = std::env::var("USER").unwrap_or_else(|_| "user".to_string());
+    let context_out = req
+        .selections
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(conductor_core::workflow::helpers::format_gate_selection_context);
     mgr.approve_gate(
         &step.id,
         &approved_by,
         req.feedback.as_deref(),
         req.selections.as_deref(),
+        context_out,
     )?;
 
     state
@@ -1872,9 +1892,17 @@ pub async fn approve_gate(
 )]
 /// POST /api/workflows/runs/{id}/gate/reject
 pub async fn reject_gate(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    if !peer.ip().is_loopback() {
+        return Err(ApiError::Core(
+            conductor_core::error::ConductorError::InvalidInput(
+                "gate rejection is only permitted from localhost".to_string(),
+            ),
+        ));
+    }
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
 
@@ -3377,5 +3405,55 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    // --- gate loopback guard tests ---
+
+    #[tokio::test]
+    async fn approve_gate_rejects_non_loopback_request() {
+        use axum::extract::ConnectInfo;
+        use std::net::SocketAddr;
+
+        let state = empty_state();
+        let app = api_router().with_state(state);
+        let non_loopback: SocketAddr = "192.168.1.100:0".parse().unwrap();
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/api/workflows/runs/any-run-id/gate/approve")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({}).to_string()))
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(non_loopback));
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "non-loopback approve_gate must be rejected with 400"
+        );
+    }
+
+    #[tokio::test]
+    async fn reject_gate_rejects_non_loopback_request() {
+        use axum::extract::ConnectInfo;
+        use std::net::SocketAddr;
+
+        let state = empty_state();
+        let app = api_router().with_state(state);
+        let non_loopback: SocketAddr = "192.168.1.100:0".parse().unwrap();
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/api/workflows/runs/any-run-id/gate/reject")
+            .header("content-type", "application/json")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(non_loopback));
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "non-loopback reject_gate must be rejected with 400"
+        );
     }
 }

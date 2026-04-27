@@ -12,7 +12,7 @@ use serde::Deserialize;
 use crate::agent_config::{default_role, AgentRole};
 use crate::error::{ConductorError, Result};
 use crate::text_util::{parse_frontmatter, resolve_conductor_subdir_for_file};
-use crate::workflow_dsl::WorkflowTrigger;
+use runkon_flow::dsl::WorkflowTrigger;
 
 /// YAML frontmatter for a workflow `.md` file.
 #[derive(Debug, Clone, Deserialize)]
@@ -269,7 +269,7 @@ pub fn load_workflow_by_name(
     repo_path: &str,
     name: &str,
 ) -> Result<WorkflowDef> {
-    crate::workflow_dsl::validate_workflow_name(name)?;
+    runkon_flow::dsl::validate_workflow_name(name).map_err(ConductorError::Workflow)?;
 
     let filename = format!("{name}.md");
     let workflows_dir =

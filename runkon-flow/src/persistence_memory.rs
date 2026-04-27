@@ -18,8 +18,9 @@ struct InMemoryStore {
     runs: HashMap<String, WorkflowRun>,
     steps: HashMap<String, WorkflowRunStep>,
     fan_out_items: HashMap<String, FanOutItemRow>,
-    /// Secondary index: (step_run_id, item_id) → fan_out_item id for O(1) idempotency check.
-    fan_out_index: HashMap<(String, String), String>,
+    /// Secondary index: step_run_id → item_id → fan_out_item id for O(1) idempotency check
+    /// without allocating a tuple key on the cache-hit path.
+    fan_out_index: HashMap<String, HashMap<String, String>>,
     /// Insertion-order list of fan_out_item ids; used to return items in stable order
     /// (mirrors real SQLite behaviour where rows sort by rowid = insertion order).
     fan_out_order: Vec<String>,
@@ -101,9 +102,25 @@ fn lock_err() -> EngineError {
     EngineError::Persistence("InMemoryWorkflowPersistence: mutex poisoned".into())
 }
 
+fn format_gate_selection_context(selections: &[String]) -> String {
+    let mut s = "User selected the following items:\n".to_string();
+    for item in selections {
+        s.push_str(&format!("- {item}\n"));
+    }
+    s
+}
+
 impl InMemoryWorkflowPersistence {
-    fn lock(&self) -> Result<std::sync::MutexGuard<InMemoryStore>, EngineError> {
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, InMemoryStore>, EngineError> {
         self.store.lock().map_err(|_| lock_err())
+    }
+
+    fn with_store<F, T>(&self, f: F) -> Result<T, EngineError>
+    where
+        F: FnOnce(&mut InMemoryStore) -> Result<T, EngineError>,
+    {
+        let mut store = self.store.lock().map_err(|_| lock_err())?;
+        f(&mut store)
     }
 }
 
@@ -311,13 +328,20 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         item_ref: &str,
     ) -> Result<String, EngineError> {
         let mut store = self.lock()?;
-        // Idempotent: O(1) lookup via secondary index.
-        let index_key = (step_run_id.to_string(), item_id.to_string());
-        if let Some(existing_id) = store.fan_out_index.get(&index_key) {
+        // Idempotent: O(1) lookup via nested index — no tuple allocation on hit path.
+        if let Some(existing_id) = store
+            .fan_out_index
+            .get(step_run_id)
+            .and_then(|m| m.get(item_id))
+        {
             return Ok(existing_id.clone());
         }
         let id = ulid::Ulid::new().to_string();
-        store.fan_out_index.insert(index_key, id.clone());
+        store
+            .fan_out_index
+            .entry(step_run_id.to_string())
+            .or_default()
+            .insert(item_id.to_string(), id.clone());
         store.fan_out_order.push(id.clone());
         store.fan_out_items.insert(
             id.clone(),
@@ -428,18 +452,10 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         step.gate_approved_at = Some(now.clone());
         step.gate_approved_by = Some(approved_by.to_string());
         step.gate_feedback = feedback.map(String::from);
-        step.gate_selections = selections.map(|s| {
-            serde_json::to_string(s).unwrap_or_else(|e| {
-                tracing::warn!("approve_gate: failed to serialize selections: {e}");
-                String::new()
-            })
-        });
+        step.gate_selections = selections
+            .map(|s| serde_json::to_string(s).expect("Vec<String> serialization is infallible"));
         if let Some(items) = selections.filter(|s| !s.is_empty()) {
-            let mut out = String::from("User selected the following items:\n");
-            for item in items {
-                out.push_str(&format!("- {item}\n"));
-            }
-            step.context_out = Some(out);
+            step.context_out = Some(format_gate_selection_context(items));
         }
         step.status = WorkflowStepStatus::Completed;
         step.ended_at = Some(now);

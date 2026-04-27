@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use axum::http::HeaderValue;
+use axum::http::{header, HeaderValue, Method};
 use conductor_core::agent::AgentManager;
 use conductor_core::config::{conductor_dir, db_path, ensure_dirs, load_config, save_config};
 use conductor_core::db::open_database;
 use tokio::sync::{Mutex, RwLock};
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use conductor_web::assets::static_handler;
@@ -286,7 +286,7 @@ async fn main() -> Result<()> {
                                 for run_id in claimed {
                                     conductor_core::workflow::spawn_workflow_resume(
                                         run_id,
-                                        (*cfg).clone(),
+                                        Arc::new((*cfg).clone()),
                                         conductor_bin_dir.clone(),
                                     );
                                 }
@@ -761,8 +761,12 @@ async fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("invalid CONDUCTOR_PORT: {e}"))?;
 
     let mut origins: Vec<HeaderValue> = vec![
-        format!("http://localhost:{port}").parse().unwrap(),
-        format!("http://127.0.0.1:{port}").parse().unwrap(),
+        format!("http://localhost:{port}")
+            .parse()
+            .expect("localhost CORS origin is always valid for a u16 port"),
+        format!("http://127.0.0.1:{port}")
+            .parse()
+            .expect("localhost CORS origin is always valid for a u16 port"),
     ];
     if let Ok(v) = "http://localhost:5173".parse() {
         origins.push(v);
@@ -773,8 +777,14 @@ async fn main() -> Result<()> {
 
     let cors = CorsLayer::new()
         .allow_origin(origins)
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::PATCH,
+        ])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
 
     let app = api_router()
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", ApiDoc::openapi()))
@@ -786,7 +796,11 @@ async fn main() -> Result<()> {
     tracing::info!("Listening on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }

@@ -7,7 +7,7 @@ use crate::workflow::persistence::WorkflowPersistence;
 
 use crate::config::Config;
 use crate::error::Result;
-use crate::workflow_dsl::ApprovalMode;
+use runkon_flow::dsl::ApprovalMode;
 
 use super::resolvers::{
     HumanApprovalGateResolver, HumanGateKind, PrApprovalGateResolver, PrChecksGateResolver,
@@ -21,6 +21,7 @@ use super::resolvers::{
 #[derive(Debug)]
 pub(in crate::workflow) enum GatePoll {
     Approved(Option<String>),
+    #[allow(dead_code)]
     Rejected(String),
     Pending,
 }
@@ -54,6 +55,7 @@ pub(in crate::workflow) struct GateContext<'a> {
 // ---------------------------------------------------------------------------
 
 pub(in crate::workflow) trait GateResolver: Send + Sync {
+    #[allow(dead_code)]
     fn gate_type(&self) -> &str;
     fn poll(&self, run_id: &str, params: &GateParams, ctx: &GateContext<'_>) -> Result<GatePoll>;
 }
@@ -103,7 +105,13 @@ impl GitHubTokenCache {
         if bot_name.is_none() && config.github.app.is_none() {
             return None;
         }
-        let mut cache = self.cache.lock().expect("token cache mutex poisoned");
+        let mut cache = match self.cache.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                tracing::warn!("token cache mutex poisoned; skipping token cache");
+                return None;
+            }
+        };
         let needs_refresh = cache
             .as_ref()
             .map(|(cached_token, fetched_at)| {
@@ -131,11 +139,13 @@ impl GitHubTokenCache {
 // Registry builder
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn register(map: &mut HashMap<String, Box<dyn GateResolver>>, resolver: Box<dyn GateResolver>) {
     let key = resolver.gate_type().to_string();
     map.insert(key, resolver);
 }
 
+#[allow(dead_code)]
 pub(in crate::workflow) fn build_default_gate_resolvers(
     persistence: Arc<dyn WorkflowPersistence>,
     working_dir: String,
@@ -276,7 +286,7 @@ mod tests {
         );
     }
 
-    fn make_params(mode: crate::workflow_dsl::ApprovalMode) -> GateParams {
+    fn make_params(mode: runkon_flow::dsl::ApprovalMode) -> GateParams {
         GateParams {
             gate_name: "test-gate".into(),
             prompt: None,
@@ -291,7 +301,7 @@ mod tests {
 
     fn poll_resolver_with_unavailable_gh(
         resolver_key: &str,
-        mode: crate::workflow_dsl::ApprovalMode,
+        mode: runkon_flow::dsl::ApprovalMode,
     ) -> GatePoll {
         let token_cache = Arc::new(GitHubTokenCache::new(None));
         let resolvers = build_default_gate_resolvers(
@@ -318,7 +328,7 @@ mod tests {
     fn test_pr_approval_resolver_poll_returns_pending_when_gh_unavailable() {
         let poll = poll_resolver_with_unavailable_gh(
             "pr_approval",
-            crate::workflow_dsl::ApprovalMode::MinApprovals,
+            runkon_flow::dsl::ApprovalMode::MinApprovals,
         );
         assert!(
             matches!(poll, GatePoll::Pending),
@@ -330,7 +340,7 @@ mod tests {
     fn test_pr_approval_resolver_poll_review_decision_pending_when_gh_unavailable() {
         let poll = poll_resolver_with_unavailable_gh(
             "pr_approval",
-            crate::workflow_dsl::ApprovalMode::ReviewDecision,
+            runkon_flow::dsl::ApprovalMode::ReviewDecision,
         );
         assert!(
             matches!(poll, GatePoll::Pending),
@@ -342,7 +352,7 @@ mod tests {
     fn test_pr_checks_resolver_poll_returns_pending_when_gh_unavailable() {
         let poll = poll_resolver_with_unavailable_gh(
             "pr_checks",
-            crate::workflow_dsl::ApprovalMode::MinApprovals,
+            runkon_flow::dsl::ApprovalMode::MinApprovals,
         );
         assert!(
             matches!(poll, GatePoll::Pending),

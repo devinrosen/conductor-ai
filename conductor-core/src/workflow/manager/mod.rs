@@ -10,7 +10,6 @@ mod steps;
 mod tests;
 
 pub use definitions::InvalidWorkflowEntry;
-pub use fan_out::FanOutItemRow;
 
 #[allow(unused_imports)]
 pub(super) use helpers::{row_to_workflow_run, row_to_workflow_step};

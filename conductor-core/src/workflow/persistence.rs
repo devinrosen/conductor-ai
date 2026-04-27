@@ -1,7 +1,25 @@
 use crate::workflow::engine_error::EngineError;
-use crate::workflow::manager::FanOutItemRow;
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::workflow::types::{WorkflowRun, WorkflowRunStep};
+
+/// A single row in the `workflow_run_step_fan_out_items` table.
+///
+/// Defined here (in the persistence trait module) rather than in the manager layer
+/// so that implementations of `WorkflowPersistence` can reference it without a
+/// dependency on `manager`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct FanOutItemRow {
+    pub id: String,
+    pub step_run_id: String,
+    pub item_type: String,
+    pub item_id: String,
+    pub item_ref: String,
+    pub child_run_id: Option<String>,
+    pub status: String,
+    pub dispatched_at: Option<String>,
+    pub completed_at: Option<String>,
+}
 
 /// Parameters for creating a new workflow run.
 pub struct NewRun {
@@ -33,6 +51,7 @@ pub struct NewStep {
 }
 
 /// Fields to update on an existing workflow step.
+#[derive(Default)]
 pub struct StepUpdate {
     pub status: WorkflowStepStatus,
     pub child_run_id: Option<String>,
@@ -42,6 +61,44 @@ pub struct StepUpdate {
     pub retry_count: Option<i64>,
     pub structured_output: Option<String>,
     pub step_error: Option<String>,
+}
+
+impl StepUpdate {
+    /// Convenience constructor for a successful step completion.
+    pub fn completed(
+        child_run_id: Option<String>,
+        result_text: Option<String>,
+        context_out: Option<String>,
+        markers_out: Option<String>,
+        attempt: u32,
+        structured_output: Option<String>,
+    ) -> Self {
+        Self {
+            status: WorkflowStepStatus::Completed,
+            child_run_id,
+            result_text,
+            context_out,
+            markers_out,
+            retry_count: Some(attempt as i64),
+            structured_output,
+            step_error: None,
+        }
+    }
+
+    /// Convenience constructor for a failed step.
+    pub fn failed(err_msg: impl Into<String>, attempt: u32) -> Self {
+        let err_msg = err_msg.into();
+        Self {
+            status: WorkflowStepStatus::Failed,
+            child_run_id: None,
+            result_text: Some(err_msg.clone()),
+            context_out: None,
+            markers_out: None,
+            retry_count: Some(attempt as i64),
+            structured_output: None,
+            step_error: Some(err_msg),
+        }
+    }
 }
 
 /// Status values for fan-out items, mirroring the string constants stored in the DB.
@@ -99,6 +156,9 @@ pub enum GateApprovalState {
     },
 }
 
+// NOTE: This function body mirrors `runkon_flow::traits::persistence::gate_approval_state_from_fields`
+// exactly. A true re-export is blocked until conductor-core and runkon-flow share a single
+// `GateApprovalState` + `WorkflowStepStatus` (tracked in issue #2631).
 pub(crate) fn gate_approval_state_from_fields(
     approved_at: Option<&str>,
     status: WorkflowStepStatus,
@@ -117,10 +177,14 @@ pub(crate) fn gate_approval_state_from_fields(
     GateApprovalState::Pending
 }
 
+// Unstable migration scaffolding: this trait is planned for removal/unification
+// with runkon-flow's `WorkflowPersistence` once conductor-core and runkon-flow
+// types are fully unified (tracked in issue #2631). Do not add new callers.
 /// Abstracts all persistence reads and writes needed by the workflow engine.
 ///
 /// `Send + Sync` are required for use behind `Arc<dyn WorkflowPersistence>`.
 /// All methods acquire a lock internally; no external synchronization is needed.
+#[doc(hidden)]
 pub trait WorkflowPersistence: Send + Sync {
     // --- Run lifecycle ---
 
@@ -183,6 +247,23 @@ pub trait WorkflowPersistence: Send + Sync {
         step_id: &str,
         rejected_by: &str,
         feedback: Option<&str>,
+    ) -> Result<(), EngineError>;
+
+    // --- Engine lifecycle hooks ---
+
+    fn is_run_cancelled(&self, run_id: &str) -> Result<bool, EngineError>;
+    fn tick_heartbeat(&self, run_id: &str) -> Result<(), EngineError>;
+    #[allow(clippy::too_many_arguments)]
+    fn persist_metrics(
+        &self,
+        run_id: &str,
+        input_tokens: i64,
+        output_tokens: i64,
+        cache_read_input_tokens: i64,
+        cache_creation_input_tokens: i64,
+        cost_usd: f64,
+        num_turns: i64,
+        duration_ms: i64,
     ) -> Result<(), EngineError>;
 }
 
@@ -259,5 +340,38 @@ mod tests {
             }
             other => panic!("expected Rejected, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn step_update_completed_sets_correct_fields() {
+        let update = StepUpdate::completed(
+            Some("child-123".into()),
+            Some("result".into()),
+            Some("ctx".into()),
+            Some("markers".into()),
+            3,
+            Some("{\"key\": \"val\"}".into()),
+        );
+        assert_eq!(update.status, WorkflowStepStatus::Completed);
+        assert_eq!(update.child_run_id, Some("child-123".into()));
+        assert_eq!(update.result_text, Some("result".into()));
+        assert_eq!(update.context_out, Some("ctx".into()));
+        assert_eq!(update.markers_out, Some("markers".into()));
+        assert_eq!(update.retry_count, Some(3));
+        assert_eq!(update.structured_output, Some("{\"key\": \"val\"}".into()));
+        assert!(update.step_error.is_none());
+    }
+
+    #[test]
+    fn step_update_failed_sets_correct_fields() {
+        let update = StepUpdate::failed("oops", 2);
+        assert_eq!(update.status, WorkflowStepStatus::Failed);
+        assert_eq!(update.result_text, Some("oops".into()));
+        assert_eq!(update.step_error, Some("oops".into()));
+        assert!(update.child_run_id.is_none());
+        assert!(update.context_out.is_none());
+        assert!(update.markers_out.is_none());
+        assert!(update.structured_output.is_none());
+        assert_eq!(update.retry_count, Some(2));
     }
 }

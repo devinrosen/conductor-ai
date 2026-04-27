@@ -2409,14 +2409,14 @@ fn test_set_step_gate_info_with_prompt() {
 
     mgr.set_step_gate_info(
         &step_id,
-        GateType::PrApproval,
+        GateKind::PrApproval,
         Some("Need 2 approvals"),
         "24h",
     )
     .unwrap();
 
     let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
-    assert_eq!(step.gate_type, Some(GateType::PrApproval));
+    assert_eq!(step.gate_type, Some(GateKind::PrApproval));
     assert_eq!(step.gate_prompt.as_deref(), Some("Need 2 approvals"));
     assert_eq!(step.gate_timeout.as_deref(), Some("24h"));
 }
@@ -2429,11 +2429,11 @@ fn test_set_step_gate_info_no_prompt() {
         .insert_step(&run.id, "gate-step", "gate", false, 0, 0)
         .unwrap();
 
-    mgr.set_step_gate_info(&step_id, GateType::PrChecks, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateKind::PrChecks, None, "1h")
         .unwrap();
 
     let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
-    assert_eq!(step.gate_type, Some(GateType::PrChecks));
+    assert_eq!(step.gate_type, Some(GateKind::PrChecks));
     assert!(step.gate_prompt.is_none());
     assert_eq!(step.gate_timeout.as_deref(), Some("1h"));
 }

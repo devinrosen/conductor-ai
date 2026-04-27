@@ -3,6 +3,23 @@ use crate::workflow::types::{
     extract_workflow_title, BlockedOn, PendingGateRow, WorkflowRun, WorkflowRunStep,
 };
 
+/// Deserialize `json` as `T`, returning `T::default()` on missing or malformed input.
+///
+/// Logs a warning when deserialization fails so data-integrity issues are surfaced
+/// rather than silently coerced to the default value.
+pub(super) fn json_or_warn<T: serde::de::DeserializeOwned + Default>(
+    json: Option<&str>,
+    context: impl FnOnce() -> String,
+) -> T {
+    match json {
+        None => T::default(),
+        Some(s) => serde_json::from_str(s).unwrap_or_else(|e| {
+            tracing::warn!("{}: {e}", context());
+            T::default()
+        }),
+    }
+}
+
 /// Returns `(where_clause, params)` where `params` is a `Vec<String>` whose
 /// elements bind to the positional placeholders in the clause.
 pub(super) fn purge_where_clause(
@@ -33,15 +50,10 @@ pub(in crate::workflow) fn row_to_workflow_run(
     let id: String = row.get("id")?;
     let dry_run_int: i64 = row.get("dry_run")?;
     let inputs_json: Option<String> = row.get("inputs")?;
-    let inputs: std::collections::HashMap<String, String> = inputs_json
-        .as_deref()
-        .map(|s| {
-            serde_json::from_str(s).unwrap_or_else(|e| {
-                tracing::warn!("Malformed inputs JSON in workflow run {id}: {e}");
-                std::collections::HashMap::new()
-            })
-        })
-        .unwrap_or_default();
+    let inputs: std::collections::HashMap<String, String> =
+        json_or_warn(inputs_json.as_deref(), || {
+            format!("Malformed inputs JSON in workflow run {id}")
+        });
     let ticket_id: Option<String> = row.get("ticket_id")?;
     let repo_id: Option<String> = row.get("repo_id")?;
     let parent_workflow_run_id: Option<String> = row.get("parent_workflow_run_id")?;
@@ -49,11 +61,8 @@ pub(in crate::workflow) fn row_to_workflow_run(
     let default_bot_name: Option<String> = row.get("default_bot_name")?;
     let iteration: i64 = row.get("iteration")?;
     let blocked_on_json: Option<String> = row.get("blocked_on")?;
-    let blocked_on: Option<BlockedOn> = blocked_on_json.as_deref().and_then(|s| {
-        serde_json::from_str(s).unwrap_or_else(|e| {
-            tracing::warn!("Malformed blocked_on JSON in workflow run {id}: {e}");
-            None
-        })
+    let blocked_on: Option<BlockedOn> = json_or_warn(blocked_on_json.as_deref(), || {
+        format!("Malformed blocked_on JSON in workflow run {id}")
     });
     let total_input_tokens: Option<i64> = row.get("total_input_tokens")?;
     let total_output_tokens: Option<i64> = row.get("total_output_tokens")?;
@@ -153,7 +162,10 @@ pub(in crate::workflow) fn row_to_workflow_step(
         context_out: row.get("context_out")?,
         markers_out: row.get("markers_out")?,
         retry_count: row.get("retry_count")?,
-        gate_type: row.get("gate_type")?,
+        gate_type: {
+            let s: Option<String> = row.get("gate_type")?;
+            s.as_deref().and_then(|s| s.parse().ok())
+        },
         gate_prompt: row.get("gate_prompt")?,
         gate_timeout: row.get("gate_timeout")?,
         gate_approved_by: row.get("gate_approved_by")?,

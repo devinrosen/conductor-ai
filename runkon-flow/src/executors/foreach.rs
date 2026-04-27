@@ -143,6 +143,39 @@ fn is_eligible(
         .unwrap_or(true)
 }
 
+/// Record a successful foreach step with the standard set of defaulted arguments.
+///
+/// `record_step_success` takes 17 arguments; all of the foreach-specific ones
+/// default to `None` / `vec![]`.  This wrapper narrows the call site to the
+/// three values that actually vary: `step_key`, `step_name`, and `context`.
+fn record_foreach_step_success(
+    state: &mut ExecutionState,
+    step_key: String,
+    step_name: &str,
+    context: String,
+    iteration: u32,
+) {
+    record_step_success(
+        state,
+        step_key,
+        step_name,
+        Some(context.clone()),
+        None,   // cost_usd
+        None,   // num_turns
+        None,   // duration_ms
+        None,   // input_tokens
+        None,   // output_tokens
+        None,   // cache_read_input_tokens
+        None,   // cache_creation_input_tokens
+        vec![], // markers
+        context,
+        None, // child_run_id
+        iteration,
+        None, // structured_output
+        None, // output_file
+    );
+}
+
 /// Execute a `foreach` step: fan out a child workflow over a collection of items.
 pub fn execute_foreach(
     state: &mut ExecutionState,
@@ -284,25 +317,7 @@ pub fn execute_foreach(
             )
             .map_err(p_err)?;
 
-        record_step_success(
-            state,
-            step_key,
-            &node.name,
-            Some(context.clone()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            context,
-            None,
-            iteration,
-            None,
-            None,
-        );
+        record_foreach_step_success(state, step_key, &node.name, context, iteration);
         return Ok(());
     }
 
@@ -359,6 +374,9 @@ pub fn execute_foreach(
         Arc::clone(&child_runner),
     ));
 
+    // Clone node.inputs once outside the dispatch loop to avoid re-cloning on every iteration.
+    let base_inputs = node.inputs.clone();
+
     // Build the placeholder WorkflowDef once — same for every item.
     let placeholder_def = crate::dsl::WorkflowDef {
         name: node.workflow.clone(),
@@ -373,18 +391,40 @@ pub fn execute_foreach(
         source_path: String::new(),
     };
 
-    // Dispatch-loop tracking state
-    let mut pending: Vec<crate::types::FanOutItemRow> = pending_items;
+    // Seed terminal counts from items that were already terminal before this dispatch
+    // (e.g. partially-resumed runs).  New completions/failures/skips are tracked
+    // incrementally below so the final phase can skip a DB re-query.
+    // Single pass over existing_items to avoid iterating the slice three times.
+    let (mut completed_count, mut failed_count, mut skipped_count) =
+        existing_items
+            .iter()
+            .fold((0usize, 0usize, 0usize), |(comp, fail, skip), i| {
+                (
+                    comp + usize::from(i.status == "completed"),
+                    fail + usize::from(i.status == "failed"),
+                    skip + usize::from(i.status == "skipped"),
+                )
+            });
+
+    // Dispatch-loop tracking state.
+    // Split pending items into ready (all deps met) and waiting (deps outstanding).
+    // At the start terminal_ids is empty, so items with no deps are immediately ready.
     let mut in_flight: usize = 0;
     let mut halt = false;
     // item_ids that have reached a terminal state (completed, failed, or skipped)
     let mut terminal_ids: HashSet<String> = HashSet::new();
 
+    let (ready_vec, mut waiting): (Vec<_>, Vec<_>) = pending_items
+        .into_iter()
+        .partition(|item| is_eligible(&item.item_id, &dep_map, &terminal_ids));
+    let mut ready: std::collections::VecDeque<crate::types::FanOutItemRow> =
+        ready_vec.into_iter().collect();
+
     tracing::info!(
         "foreach '{}': starting parallel dispatch (max_slots={}, items={})",
         node.name,
         max_slots,
-        pending.len(),
+        ready.len() + waiting.len(),
     );
 
     loop {
@@ -408,13 +448,10 @@ pub fn execute_foreach(
             let item_id = db_id_to_item_id
                 .get(&item_db_id)
                 .cloned()
-                .unwrap_or_else(|| {
-                    tracing::warn!(
-                        item_db_id = %item_db_id,
-                        "foreach: dispatch map miss for completed item — item_id will be empty"
-                    );
-                    String::new()
-                });
+                .ok_or_else(|| EngineError::Workflow(format!(
+                    "foreach '{}': internal invariant violation — no item_id for db_id '{item_db_id}'",
+                    node.name
+                )))?;
             let item_ref = item_ref_map.get(&item_id).cloned().unwrap_or_else(|| {
                 tracing::warn!(
                     item_id = %item_id,
@@ -446,8 +483,10 @@ pub fn execute_foreach(
             );
 
             if succeeded {
+                completed_count += 1;
                 tracing::info!("foreach '{}': item '{}' → completed", node.name, item_ref);
             } else {
+                failed_count += 1;
                 tracing::warn!("foreach '{}': item '{}' → failed", node.name, item_ref);
             }
 
@@ -465,6 +504,7 @@ pub fn execute_foreach(
                     OnChildFail::SkipDependents => {
                         let to_skip =
                             collect_transitive_dependents(&item_id, &dependents_map, &terminal_ids);
+                        skipped_count += to_skip.len();
                         for skip_id in &to_skip {
                             if let Some(skip_db_id) = item_id_to_db_id.get(skip_id) {
                                 state
@@ -479,7 +519,8 @@ pub fn execute_foreach(
                             }
                             terminal_ids.insert(skip_id.clone());
                         }
-                        pending.retain(|i| !to_skip.contains(&i.item_id));
+                        ready.retain(|i| !to_skip.contains(&i.item_id));
+                        waiting.retain(|i| !to_skip.contains(&i.item_id));
                         if !to_skip.is_empty() {
                             tracing::info!(
                                 "foreach '{}': skipped {} dependents of '{}'",
@@ -492,6 +533,17 @@ pub fn execute_foreach(
                     OnChildFail::Continue => {}
                 }
             }
+
+            // After recording a terminal item, promote newly eligible waiting items to ready.
+            let mut still_waiting = Vec::new();
+            for item in waiting.drain(..) {
+                if is_eligible(&item.item_id, &dep_map, &terminal_ids) {
+                    ready.push_back(item);
+                } else {
+                    still_waiting.push(item);
+                }
+            }
+            waiting = still_waiting;
         }
 
         // 2. Check parent cancellation.
@@ -508,12 +560,8 @@ pub fn execute_foreach(
         let mut no_more_eligible = false;
         if !halt {
             while in_flight < max_slots {
-                let eligible_pos = pending
-                    .iter()
-                    .position(|item| is_eligible(&item.item_id, &dep_map, &terminal_ids));
-
-                let item = match eligible_pos {
-                    Some(pos) => pending.swap_remove(pos),
+                let item = match ready.pop_front() {
+                    Some(item) => item,
                     None => {
                         no_more_eligible = true;
                         break;
@@ -537,7 +585,7 @@ pub fn execute_foreach(
                     )
                     .map_err(p_err)?;
 
-                let mut child_inputs = node.inputs.clone();
+                let mut child_inputs = base_inputs.clone();
                 child_inputs.insert("item.id".to_string(), item.item_id.clone());
                 child_inputs.insert("item.ref".to_string(), item.item_ref.clone());
 
@@ -593,26 +641,11 @@ pub fn execute_foreach(
         }
     }
 
-    // Phase 3: Step completion
-    let fan_out_items = state
-        .persistence
-        .get_fan_out_items(&step_id, None)
-        .map_err(p_err)?;
-    let total = fan_out_items.len();
-    let (completed_count, failed_count, skipped_count) =
-        fan_out_items
-            .iter()
-            .fold((0usize, 0usize, 0usize), |(c, f, s), i| {
-                match i.status.as_str() {
-                    "completed" => (c + 1, f, s),
-                    "failed" => (c, f + 1, s),
-                    "skipped" => (c, f, s + 1),
-                    _ => (c, f, s),
-                }
-            });
+    // Phase 3: Step completion — use in-memory counters accumulated during dispatch
+    // to avoid an extra DB round-trip for counting terminal items.
 
     let context = format!(
-        "foreach {}: {completed_count} completed, {failed_count} failed, {skipped_count} skipped of {total} {}",
+        "foreach {}: {completed_count} completed, {failed_count} failed, {skipped_count} skipped of {total_items} {}",
         node.name, node.over,
     );
 
@@ -636,28 +669,10 @@ pub fn execute_foreach(
             )
             .map_err(p_err)?;
 
-        record_step_success(
-            state,
-            step_key,
-            &node.name,
-            Some(context.clone()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            vec![],
-            context,
-            None,
-            iteration,
-            None,
-            None,
-        );
+        record_foreach_step_success(state, step_key, &node.name, context, iteration);
     } else {
         let error_msg = format!(
-            "foreach '{}': {failed_count} of {total} items failed",
+            "foreach '{}': {failed_count} of {total_items} items failed",
             node.name
         );
 
@@ -682,4 +697,219 @@ pub fn execute_foreach(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, HashSet, VecDeque};
+
+    use crate::types::FanOutItemRow;
+
+    use super::{collect_transitive_dependents, is_eligible};
+
+    fn make_row(item_id: &str, status: &str) -> FanOutItemRow {
+        FanOutItemRow {
+            id: format!("db-{item_id}"),
+            step_run_id: "step".to_string(),
+            item_type: "repo".to_string(),
+            item_id: item_id.to_string(),
+            item_ref: format!("ref-{item_id}"),
+            child_run_id: None,
+            status: status.to_string(),
+            dispatched_at: None,
+            completed_at: None,
+        }
+    }
+
+    /// Simulates the still_waiting promotion loop: drains `waiting` into `ready` for
+    /// items whose dependencies are all in `terminal_ids`.
+    fn promote_waiting(
+        waiting: &mut Vec<FanOutItemRow>,
+        ready: &mut VecDeque<FanOutItemRow>,
+        dep_map: &HashMap<String, HashSet<String>>,
+        terminal_ids: &HashSet<String>,
+    ) {
+        let mut still_waiting = Vec::new();
+        for item in waiting.drain(..) {
+            if is_eligible(&item.item_id, dep_map, terminal_ids) {
+                ready.push_back(item);
+            } else {
+                still_waiting.push(item);
+            }
+        }
+        *waiting = still_waiting;
+    }
+
+    /// Verifies that the seeding fold correctly counts pre-existing terminal items
+    /// on partial resume without iterating the slice more than once.
+    #[test]
+    fn seed_counts_from_existing_terminal_items() {
+        let existing = [
+            make_row("a", "completed"),
+            make_row("b", "completed"),
+            make_row("c", "failed"),
+            make_row("d", "skipped"),
+            make_row("e", "pending"), // must NOT contribute to any count
+        ];
+
+        let (completed, failed, skipped) =
+            existing
+                .iter()
+                .fold((0usize, 0usize, 0usize), |(comp, fail, skip), i| {
+                    (
+                        comp + usize::from(i.status == "completed"),
+                        fail + usize::from(i.status == "failed"),
+                        skip + usize::from(i.status == "skipped"),
+                    )
+                });
+
+        assert_eq!(completed, 2, "expected 2 completed");
+        assert_eq!(failed, 1, "expected 1 failed");
+        assert_eq!(skipped, 1, "expected 1 skipped");
+    }
+
+    /// No dependencies: all items start in ready immediately (terminal_ids empty).
+    #[test]
+    fn no_dependencies_all_items_start_ready() {
+        let dep_map: HashMap<String, HashSet<String>> = HashMap::new();
+        let terminal_ids: HashSet<String> = HashSet::new();
+
+        let items = vec![
+            make_row("a", "pending"),
+            make_row("b", "pending"),
+            make_row("c", "pending"),
+        ];
+
+        let (ready_vec, waiting): (Vec<_>, Vec<_>) = items
+            .into_iter()
+            .partition(|item| is_eligible(&item.item_id, &dep_map, &terminal_ids));
+
+        assert_eq!(ready_vec.len(), 3, "all items should be ready with no deps");
+        assert!(waiting.is_empty(), "nothing should be waiting");
+    }
+
+    /// Linear chain A → B: B stays waiting until A is terminal, then B moves to ready.
+    #[test]
+    fn linear_chain_b_waits_for_a_then_becomes_ready() {
+        let mut dep_map: HashMap<String, HashSet<String>> = HashMap::new();
+        // B depends on A
+        dep_map
+            .entry("b".to_string())
+            .or_default()
+            .insert("a".to_string());
+
+        let mut terminal_ids: HashSet<String> = HashSet::new();
+
+        let items = vec![make_row("a", "pending"), make_row("b", "pending")];
+
+        let (ready_vec, mut waiting): (Vec<_>, Vec<_>) = items
+            .into_iter()
+            .partition(|item| is_eligible(&item.item_id, &dep_map, &terminal_ids));
+        let mut ready: VecDeque<FanOutItemRow> = ready_vec.into_iter().collect();
+
+        assert_eq!(ready.len(), 1, "only A should be ready initially");
+        assert_eq!(ready.front().unwrap().item_id, "a");
+        assert_eq!(waiting.len(), 1, "B should be waiting");
+
+        // Simulate A completing
+        terminal_ids.insert("a".to_string());
+        promote_waiting(&mut waiting, &mut ready, &dep_map, &terminal_ids);
+
+        // After promotion, A is consumed, B should now be in ready
+        // Drain the 'a' item from ready (it was dispatched)
+        let dispatched = ready.pop_front().unwrap();
+        assert_eq!(dispatched.item_id, "a");
+
+        assert_eq!(ready.len(), 1, "B should now be in ready after A completed");
+        assert_eq!(ready.front().unwrap().item_id, "b");
+        assert!(waiting.is_empty(), "nothing should remain waiting");
+    }
+
+    /// Diamond dependency: C and D both depend on A.
+    /// Once A completes both C and D should move to ready simultaneously.
+    #[test]
+    fn diamond_both_dependents_promoted_after_common_dep_completes() {
+        let mut dep_map: HashMap<String, HashSet<String>> = HashMap::new();
+        // C depends on A, D depends on A
+        dep_map
+            .entry("c".to_string())
+            .or_default()
+            .insert("a".to_string());
+        dep_map
+            .entry("d".to_string())
+            .or_default()
+            .insert("a".to_string());
+
+        let mut terminal_ids: HashSet<String> = HashSet::new();
+
+        let items = vec![
+            make_row("a", "pending"),
+            make_row("c", "pending"),
+            make_row("d", "pending"),
+        ];
+
+        let (ready_vec, mut waiting): (Vec<_>, Vec<_>) = items
+            .into_iter()
+            .partition(|item| is_eligible(&item.item_id, &dep_map, &terminal_ids));
+        let mut ready: VecDeque<FanOutItemRow> = ready_vec.into_iter().collect();
+
+        assert_eq!(ready.len(), 1, "only A should start ready");
+        assert_eq!(waiting.len(), 2, "C and D should be waiting");
+
+        // A completes
+        terminal_ids.insert("a".to_string());
+        promote_waiting(&mut waiting, &mut ready, &dep_map, &terminal_ids);
+
+        // Both C and D should now be ready (plus A still in deque before it's dispatched)
+        assert!(
+            waiting.is_empty(),
+            "no items should remain waiting after A completes"
+        );
+        // ready should contain A (already there) + C + D = 3
+        assert_eq!(ready.len(), 3, "A, C, D should all be in ready");
+    }
+
+    /// Items already in existing_set are skipped; their dependents become eligible.
+    #[test]
+    fn already_completed_items_enable_dependents() {
+        let mut dep_map: HashMap<String, HashSet<String>> = HashMap::new();
+        // B depends on A
+        dep_map
+            .entry("b".to_string())
+            .or_default()
+            .insert("a".to_string());
+
+        // A is already in existing_set (completed before this dispatch loop)
+        let existing_set: HashSet<String> = ["a".to_string()].into_iter().collect();
+        // terminal_ids seeds from existing completed items
+        let mut terminal_ids: HashSet<String> = existing_set.clone();
+
+        // Only B is a new pending item (A was completed earlier)
+        let pending_items = vec![make_row("b", "pending")];
+
+        let (ready_vec, waiting): (Vec<_>, Vec<_>) = pending_items
+            .into_iter()
+            .partition(|item| is_eligible(&item.item_id, &dep_map, &terminal_ids));
+        let ready: VecDeque<FanOutItemRow> = ready_vec.into_iter().collect();
+
+        assert_eq!(
+            ready.len(),
+            1,
+            "B should be immediately ready because A is already terminal"
+        );
+        assert!(waiting.is_empty());
+
+        // Also verify collect_transitive_dependents with everything already terminal
+        terminal_ids.insert("b".to_string());
+        let mut dependents_map: HashMap<String, HashSet<String>> = HashMap::new();
+        dependents_map
+            .entry("a".to_string())
+            .or_default()
+            .insert("b".to_string());
+        let transitive = collect_transitive_dependents("a", &dependents_map, &terminal_ids);
+        assert!(
+            transitive.is_empty(),
+            "B is already terminal so transitive set should be empty"
+        );
+    }
 }

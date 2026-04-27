@@ -139,6 +139,11 @@ impl WorkflowStepStatus {
             Self::Completed | Self::Failed | Self::Skipped | Self::TimedOut
         )
     }
+
+    /// Whether this status represents a step that is starting (running or waiting).
+    pub fn is_starting(&self) -> bool {
+        matches!(self, Self::Running | Self::Waiting)
+    }
 }
 
 impl std::str::FromStr for WorkflowStepStatus {
@@ -196,6 +201,17 @@ mod tests {
         assert!(!WorkflowStepStatus::Pending.is_terminal());
         assert!(!WorkflowStepStatus::Running.is_terminal());
         assert!(!WorkflowStepStatus::Waiting.is_terminal());
+    }
+
+    #[test]
+    fn step_starting_states() {
+        assert!(WorkflowStepStatus::Running.is_starting());
+        assert!(WorkflowStepStatus::Waiting.is_starting());
+        assert!(!WorkflowStepStatus::Pending.is_starting());
+        assert!(!WorkflowStepStatus::Completed.is_starting());
+        assert!(!WorkflowStepStatus::Failed.is_starting());
+        assert!(!WorkflowStepStatus::Skipped.is_starting());
+        assert!(!WorkflowStepStatus::TimedOut.is_starting());
     }
 
     #[test]

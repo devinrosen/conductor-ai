@@ -172,14 +172,23 @@ impl App {
         }
         self.state.data.workflow_runs =
             if let Some(ref wt_id) = self.state.selected_worktree_id.clone() {
-                wf_mgr.list_workflow_runs(wt_id).unwrap_or_default()
+                wf_mgr.list_workflow_runs(wt_id).unwrap_or_else(|e| {
+                    tracing::warn!("Failed to list workflow runs for worktree '{wt_id}': {e}");
+                    Default::default()
+                })
             } else if self.state.view == View::RepoDetail {
                 let repo_id = self.state.selected_repo_id.as_deref().unwrap_or("");
                 wf_mgr
                     .list_workflow_runs_for_repo(repo_id, 50)
-                    .unwrap_or_default()
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("Failed to list workflow runs for repo '{repo_id}': {e}");
+                        Default::default()
+                    })
             } else {
-                wf_mgr.list_all_workflow_runs(50).unwrap_or_default()
+                wf_mgr.list_all_workflow_runs(50).unwrap_or_else(|e| {
+                    tracing::warn!("Failed to list all workflow runs: {e}");
+                    Default::default()
+                })
             };
 
         // Load steps for the currently selected run
@@ -194,7 +203,10 @@ impl App {
         if let Some(ref run_id) = self.state.selected_workflow_run_id {
             let wf_mgr = WorkflowManager::new(&self.conn);
             self.state.data.workflow_steps =
-                collapse_loop_iterations(wf_mgr.get_workflow_steps(run_id).unwrap_or_default());
+                collapse_loop_iterations(wf_mgr.get_workflow_steps(run_id).unwrap_or_else(|e| {
+                    tracing::warn!("Failed to load steps for run '{run_id}': {e}");
+                    Default::default()
+                }));
         } else {
             self.state.data.workflow_steps.clear();
         }
@@ -1449,9 +1461,6 @@ impl App {
         inputs: std::collections::HashMap<String, String>,
         model: Option<String>,
     ) {
-        use conductor_core::config::db_path;
-        use conductor_core::db::open_database;
-
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
         let workflow_display_name = def.display_name().to_string();
@@ -1466,26 +1475,12 @@ impl App {
             use conductor_core::workflow::WorkflowExecConfig;
             use conductor_core::workflow_ephemeral::run_workflow_on_pr;
 
-            let db = db_path();
-            let conn = match open_database(&db) {
-                Ok(c) => c,
-                Err(e) => {
-                    if let Some(ref tx) = bg_tx {
-                        let _ = tx.send(Action::BackgroundError {
-                            message: format!("Failed to open database: {e}"),
-                        });
-                    }
-                    return;
-                }
-            };
-
             let exec_config = WorkflowExecConfig {
                 shutdown: Some(shutdown),
                 ..WorkflowExecConfig::default()
             };
 
             let result = run_workflow_on_pr(
-                &conn,
                 &config,
                 &pr_ref,
                 &def.name,
@@ -1623,7 +1618,11 @@ impl App {
                         .collect(),
                 )
             };
-            match wf_mgr.approve_gate(step_id, "tui-user", fb, selections.as_deref()) {
+            let context_out = selections
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(conductor_core::workflow::helpers::format_gate_selection_context);
+            match wf_mgr.approve_gate(step_id, "tui-user", fb, selections.as_deref(), context_out) {
                 Ok(()) => {
                     self.state.status_message = Some("Gate approved".to_string());
                 }
@@ -1644,17 +1643,7 @@ impl App {
                 let options: Vec<String> = step
                     .gate_options
                     .as_deref()
-                    .and_then(|json| {
-                        serde_json::from_str::<Vec<serde_json::Value>>(json)
-                            .ok()
-                            .map(|arr| {
-                                arr.into_iter()
-                                    .filter_map(|v| {
-                                        v.get("value").and_then(|s| s.as_str()).map(String::from)
-                                    })
-                                    .collect()
-                            })
-                    })
+                    .map(conductor_core::workflow::helpers::parse_gate_options)
                     .unwrap_or_default();
                 let n = options.len();
                 self.state.modal = Modal::GateAction {
