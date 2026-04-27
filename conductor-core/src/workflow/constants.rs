@@ -36,7 +36,6 @@ pub(super) const RUN_COLUMNS: &str =
      total_cache_creation_input_tokens, total_turns, total_cost_usd, total_duration_ms, model, \
      error, dismissed";
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

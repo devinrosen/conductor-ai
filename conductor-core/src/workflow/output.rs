@@ -1,4 +1,4 @@
-pub use runkon_flow::helpers::{ConductorOutput, parse_conductor_output};
+pub use runkon_flow::helpers::{parse_conductor_output, ConductorOutput};
 
 use crate::schema_config::OutputSchema;
 
