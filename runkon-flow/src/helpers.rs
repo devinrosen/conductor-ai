@@ -1,5 +1,6 @@
 use crate::dsl::{WhileNode, WorkflowNode};
 use crate::status::WorkflowStepStatus;
+use serde::{Deserialize, Serialize};
 
 // Forward declaration for ExecutionState — defined in engine.rs
 use crate::engine::ExecutionState;
@@ -9,8 +10,11 @@ use crate::engine::ExecutionState;
 // ---------------------------------------------------------------------------
 
 /// Parsed `<<<CONDUCTOR_OUTPUT>>>` block.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConductorOutput {
+    #[serde(default)]
     pub markers: Vec<String>,
+    #[serde(default)]
     pub context: String,
 }
 
@@ -379,6 +383,72 @@ mod parse_tests {
         let out = parse_conductor_output(text).unwrap();
         assert_eq!(out.markers, vec!["m1"]);
         assert_eq!(out.context, "");
+    }
+
+    #[test]
+    fn marker_in_field_value_finds_real_block() {
+        let text = r#"Some agent output.
+<<<CONDUCTOR_OUTPUT>>>
+{
+  "markers": ["done"],
+  "context": "saw <<<CONDUCTOR_OUTPUT>>> in the log and handled it"
+}
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let out = parse_conductor_output(text).unwrap();
+        assert_eq!(out.markers, vec!["done"]);
+        assert!(out.context.contains("<<<CONDUCTOR_OUTPUT>>>"));
+    }
+
+    #[test]
+    fn skips_code_examples_finds_real_block() {
+        let text = r#"Here is how to emit output:
+```bash
+echo '<<<CONDUCTOR_OUTPUT>>>'
+echo '{"markers": ["fake"], "context": "example"}'
+echo '<<<END_CONDUCTOR_OUTPUT>>>'
+```
+
+Actual output:
+<<<CONDUCTOR_OUTPUT>>>
+{"markers": ["real"], "context": "this is the real result"}
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let out = parse_conductor_output(text).unwrap();
+        assert_eq!(out.markers, vec!["real"]);
+        assert_eq!(out.context, "this is the real result");
+    }
+
+    #[test]
+    fn multiple_complete_blocks_returns_last() {
+        let text = r#"Example 1:
+<<<CONDUCTOR_OUTPUT>>>
+{"markers": ["example1"], "context": "first example"}
+<<<END_CONDUCTOR_OUTPUT>>>
+
+Example 2:
+<<<CONDUCTOR_OUTPUT>>>
+{"markers": ["example2"], "context": "second example"}
+<<<END_CONDUCTOR_OUTPUT>>>
+
+Real output:
+<<<CONDUCTOR_OUTPUT>>>
+{"markers": ["real"], "context": "the actual result"}
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let out = parse_conductor_output(text).unwrap();
+        assert_eq!(out.markers, vec!["real"]);
+        assert_eq!(out.context, "the actual result");
+    }
+
+    #[test]
+    fn malformed_json_returns_none() {
+        let text = concat!(
+            "<<<CONDUCTOR_OUTPUT>>>\n",
+            "{markers: [\"done\"]}\n",
+            "<<<END_CONDUCTOR_OUTPUT>>>\n"
+        );
+        assert!(parse_conductor_output(text).is_none());
     }
 }
 

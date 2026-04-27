@@ -54,10 +54,11 @@ pub use batch_validate::{
 
 // Re-export all public types and functions to preserve existing import paths.
 pub use constants::{
-    CONDUCTOR_OUTPUT_INSTRUCTION, REGRESSION_COST_THRESHOLD_PCT, REGRESSION_DURATION_THRESHOLD_PCT,
+    REGRESSION_COST_THRESHOLD_PCT, REGRESSION_DURATION_THRESHOLD_PCT,
     REGRESSION_FAILURE_RATE_THRESHOLD_PP, REGRESSION_MIN_RECENT_RUNS, STEP_ROLE_FOREACH,
     STEP_ROLE_WORKFLOW,
 };
+pub use runkon_flow::constants::CONDUCTOR_OUTPUT_INSTRUCTION;
 /// Returns the list of variable keys that the workflow engine injects automatically
 /// from run context (ticket and repo metadata, plus `workflow_run_id`).
 ///

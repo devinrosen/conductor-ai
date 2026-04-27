@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::schema_config;
 
-use super::constants::CONDUCTOR_OUTPUT_INSTRUCTION;
+use runkon_flow::constants::CONDUCTOR_OUTPUT_INSTRUCTION;
 
 fn substitute_variables_impl(
     template: &str,

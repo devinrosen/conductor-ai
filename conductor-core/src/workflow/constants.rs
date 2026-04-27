@@ -36,21 +36,6 @@ pub(super) const RUN_COLUMNS: &str =
      total_cache_creation_input_tokens, total_turns, total_cost_usd, total_duration_ms, model, \
      error, dismissed";
 
-/// Instruction appended to every agent prompt for structured output.
-pub const CONDUCTOR_OUTPUT_INSTRUCTION: &str = r#"
-When you have finished your work, output the following block exactly as the
-last thing in your response. Do not include this block in code examples or
-anywhere else — only as the final output.
-
-<<<CONDUCTOR_OUTPUT>>>
-{"markers": [], "context": ""}
-<<<END_CONDUCTOR_OUTPUT>>>
-
-markers: array of string signals consumed by the workflow engine
-         (e.g. ["has_review_issues", "has_critical_issues"])
-context: one or two sentence summary of what you did or found,
-         passed to the next step as {{prior_context}}
-"#;
 
 #[cfg(test)]
 mod tests {
