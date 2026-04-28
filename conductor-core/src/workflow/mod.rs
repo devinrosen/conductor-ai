@@ -19,9 +19,6 @@ pub mod helpers;
 pub(crate) mod item_provider;
 pub(crate) mod manager;
 pub(crate) mod output;
-pub mod persistence;
-#[cfg(any(test, feature = "test-helpers"))]
-pub(crate) mod persistence_memory;
 pub(crate) mod persistence_sqlite;
 pub(crate) mod prompt_builder;
 pub(crate) mod runkon_bridge;
@@ -59,10 +56,11 @@ pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
 pub use manager::recovery::{ReapedStaleRun, StaleWorkflowRun};
 pub use manager::{InvalidWorkflowEntry, WorkflowManager};
 pub use output::{parse_conductor_output, ConductorOutput};
-pub use persistence::{
-    FanOutItemRow, FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep,
-    StepUpdate, WorkflowPersistence,
+pub use runkon_flow::traits::persistence::{
+    FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,
+    WorkflowPersistence,
 };
+pub use runkon_flow::types::FanOutItemRow;
 pub use types::SpawnHeartbeatResumeParams;
 pub use types::{
     resolve_conductor_bin_dir, ActiveWorkflowCounts, GateAnalyticsRow, MetadataEntry,

@@ -10,7 +10,7 @@ use crate::workflow::manager::WorkflowManager;
 use crate::workflow::WorkflowRunStatus;
 use crate::workflow::{WorkflowRun, WorkflowRunStep};
 
-use super::persistence::{
+use runkon_flow::traits::persistence::{
     FanOutItemRow, FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep,
     StepUpdate, WorkflowPersistence,
 };
@@ -264,7 +264,7 @@ impl SqliteWorkflowPersistence {
 mod tests {
     use super::*;
     use crate::agent::AgentManager;
-    use crate::workflow::persistence::{GateApprovalState, NewRun, NewStep};
+    use runkon_flow::traits::persistence::{GateApprovalState, NewRun, NewStep};
 
     fn make_persistence() -> (SqliteWorkflowPersistence, String) {
         let conn = crate::test_helpers::setup_db();

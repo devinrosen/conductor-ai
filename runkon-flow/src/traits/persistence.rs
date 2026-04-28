@@ -1,6 +1,8 @@
 use crate::engine_error::EngineError;
 use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
-use crate::types::{FanOutItemRow, WorkflowRun, WorkflowRunStep};
+use crate::types::{WorkflowRun, WorkflowRunStep};
+
+pub use crate::types::FanOutItemRow;
 
 /// Parameters for creating a new workflow run.
 pub struct NewRun {
@@ -67,12 +69,13 @@ impl StepUpdate {
     }
 
     /// Convenience constructor for a failed step.
-    pub fn failed(err_msg: String, attempt: u32) -> Self {
+    pub fn failed(err_msg: impl Into<String>, attempt: u32) -> Self {
         Self::failed_with_child(err_msg, attempt, None)
     }
 
     /// Convenience constructor for a failed step with an optional child run ID.
-    pub fn failed_with_child(err_msg: String, attempt: u32, child_run_id: Option<String>) -> Self {
+    pub fn failed_with_child(err_msg: impl Into<String>, attempt: u32, child_run_id: Option<String>) -> Self {
+        let err_msg = err_msg.into();
         Self {
             status: WorkflowStepStatus::Failed,
             child_run_id,
@@ -347,7 +350,7 @@ mod tests {
 
     #[test]
     fn step_update_failed_sets_correct_fields() {
-        let update = StepUpdate::failed("oops".into(), 2);
+        let update = StepUpdate::failed("oops", 2);
         assert_eq!(update.status, WorkflowStepStatus::Failed);
         assert_eq!(update.result_text, Some("oops".into()));
         assert_eq!(update.step_error, Some("oops".into()));
@@ -361,7 +364,7 @@ mod tests {
     #[test]
     fn step_update_failed_with_child_sets_child_run_id() {
         let update =
-            StepUpdate::failed_with_child("child err".into(), 1, Some("child-run-42".into()));
+            StepUpdate::failed_with_child("child err", 1, Some("child-run-42".into()));
         assert_eq!(update.status, WorkflowStepStatus::Failed);
         assert_eq!(update.result_text, Some("child err".into()));
         assert_eq!(update.step_error, Some("child err".into()));

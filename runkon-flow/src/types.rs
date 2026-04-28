@@ -388,6 +388,7 @@ impl From<StepSuccess> for ContextEntry {
 
 /// A single row in the `workflow_run_step_fan_out_items` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct FanOutItemRow {
     pub id: String,
     pub step_run_id: String,

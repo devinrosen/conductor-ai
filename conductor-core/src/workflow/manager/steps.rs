@@ -375,7 +375,7 @@ impl<'a> WorkflowManager<'a> {
     pub fn get_gate_approval_state(
         &self,
         step_id: &str,
-    ) -> Result<crate::workflow::persistence::GateApprovalState> {
+    ) -> Result<runkon_flow::traits::persistence::GateApprovalState> {
         use rusqlite::OptionalExtension;
         #[allow(clippy::type_complexity)]
         let row: Option<(Option<String>, String, Option<String>, Option<String>)> = self
@@ -390,7 +390,7 @@ impl<'a> WorkflowManager<'a> {
             .map_err(ConductorError::Database)?;
 
         let Some((approved_at, status_str, feedback, selections_json)) = row else {
-            return Ok(crate::workflow::persistence::GateApprovalState::Pending);
+            return Ok(runkon_flow::traits::persistence::GateApprovalState::Pending);
         };
 
         let status = status_str
@@ -415,7 +415,7 @@ impl<'a> WorkflowManager<'a> {
         });
 
         Ok(
-            crate::workflow::persistence::gate_approval_state_from_fields(
+            runkon_flow::traits::persistence::gate_approval_state_from_fields(
                 approved_at.as_deref(),
                 status,
                 feedback,

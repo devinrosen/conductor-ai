@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::workflow::persistence::WorkflowPersistence;
+use runkon_flow::traits::persistence::WorkflowPersistence;
 
 use crate::config::Config;
 use crate::error::Result;
@@ -194,7 +194,7 @@ pub(in crate::workflow) fn build_default_gate_resolvers(
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::workflow::persistence_memory::InMemoryWorkflowPersistence;
+    use runkon_flow::persistence_memory::InMemoryWorkflowPersistence;
 
     fn make_test_persistence() -> Arc<dyn WorkflowPersistence> {
         Arc::new(InMemoryWorkflowPersistence::new())

@@ -4374,7 +4374,7 @@ fn get_gate_approval_state_returns_pending_for_missing_step() {
     assert!(
         matches!(
             state,
-            crate::workflow::persistence::GateApprovalState::Pending
+            runkon_flow::traits::persistence::GateApprovalState::Pending
         ),
         "unknown step_id should return Pending, got {state:?}"
     );
@@ -4394,7 +4394,7 @@ fn get_gate_approval_state_returns_approved_after_approval() {
     assert!(
         matches!(
             state,
-            crate::workflow::persistence::GateApprovalState::Approved { .. }
+            runkon_flow::traits::persistence::GateApprovalState::Approved { .. }
         ),
         "should be Approved after approve_gate, got {state:?}"
     );
@@ -4414,7 +4414,7 @@ fn get_gate_approval_state_returns_rejected_after_rejection() {
     assert!(
         matches!(
             state,
-            crate::workflow::persistence::GateApprovalState::Rejected { .. }
+            runkon_flow::traits::persistence::GateApprovalState::Rejected { .. }
         ),
         "should be Rejected after reject_gate, got {state:?}"
     );
@@ -4465,7 +4465,7 @@ fn get_gate_approval_state_handles_unrecognised_status_without_panic() {
     assert!(
         matches!(
             state,
-            crate::workflow::persistence::GateApprovalState::Pending
+            runkon_flow::traits::persistence::GateApprovalState::Pending
         ),
         "unrecognised status with no approved_at should return Pending, got {state:?}"
     );

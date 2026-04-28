@@ -362,13 +362,11 @@ fn build_rk_engine_components(
     shared_conn: &Arc<std::sync::Mutex<Connection>>,
     db: &std::path::Path,
 ) -> RkEngineComponents {
-    let core_persistence = Arc::new(
+    let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> = Arc::new(
         super::persistence_sqlite::SqliteWorkflowPersistence::from_shared_connection(Arc::clone(
             shared_conn,
         )),
     );
-    let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> =
-        Arc::new(super::runkon_bridge::PersistenceAdapter(core_persistence));
     let action_registry = Arc::new(super::runkon_bridge::build_rk_action_registry(
         config,
         Arc::clone(shared_conn),
