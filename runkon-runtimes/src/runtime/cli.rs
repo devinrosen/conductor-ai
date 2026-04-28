@@ -324,7 +324,6 @@ mod tests {
     use super::*;
     use crate::config::RuntimeConfig;
     use crate::run::AgentRunStatus;
-    use crate::tracker::NoopEventSink;
 
     fn make_runtime(binary: &str) -> CliRuntime {
         CliRuntime::new(

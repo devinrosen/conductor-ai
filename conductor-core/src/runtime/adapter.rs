@@ -268,4 +268,29 @@ mod tests {
         let run = run.unwrap();
         assert_eq!(run.status, runkon_runtimes::AgentRunStatus::Failed);
     }
+
+    #[test]
+    fn test_on_event_tokens() {
+        let (adapter, _tmp) = setup_adapter_with_run("test-run-008");
+        let run_id = "test-run-008";
+
+        adapter.record_pid(run_id, 4444).unwrap();
+        adapter.on_event(
+            run_id,
+            RuntimeEvent::Tokens {
+                input: 100,
+                output: 50,
+                cache_read: 10,
+                cache_create: 5,
+            },
+        );
+
+        let run = adapter.get_run(run_id).unwrap();
+        assert!(run.is_some());
+        let run = run.unwrap();
+        assert_eq!(run.input_tokens, Some(100));
+        assert_eq!(run.output_tokens, Some(50));
+        assert_eq!(run.cache_read_input_tokens, Some(10));
+        assert_eq!(run.cache_creation_input_tokens, Some(5));
+    }
 }

@@ -302,6 +302,7 @@ pub fn try_spawn_headless_run(
 
 /// Result of draining a headless subprocess stdout stream.
 #[derive(Copy, Clone)]
+#[derive(Debug, PartialEq)]
 pub enum DrainOutcome {
     /// A `result` event was seen; the run was finalized in the DB.
     Completed,
@@ -625,5 +626,109 @@ mod tests {
             mode & 0o777
         );
         let _ = std::fs::remove_file(file_path);
+    }
+
+    // ------------------------------------------------------------------
+    // drain_stream_json tests
+    // ------------------------------------------------------------------
+
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default, Clone)]
+    struct RecordingSink {
+        events: Arc<Mutex<Vec<crate::tracker::RuntimeEvent>>>,
+    }
+
+    impl crate::tracker::RunEventSink for RecordingSink {
+        fn on_event(&self, _run_id: &str, event: crate::tracker::RuntimeEvent) {
+            self.events.lock().unwrap().push(event);
+        }
+    }
+
+    fn run_drain(lines: &[&str]) -> (super::DrainOutcome, RecordingSink) {
+        let input = lines.join("\n");
+        let log_file = std::env::temp_dir().join(format!("test-drain-{:?}.log", std::thread::current().id()));
+        let sink = RecordingSink::default();
+        let outcome = super::drain_stream_json(input.as_bytes(), "run-1", &log_file, &sink);
+        let _ = std::fs::remove_file(&log_file);
+        (outcome, sink)
+    }
+
+    #[test]
+    fn drain_stream_json_result_event_returns_completed() {
+        let (outcome, sink) = run_drain(&[r#"{"type":"result","result":"hello"}"#]);
+        assert_eq!(outcome, super::DrainOutcome::Completed);
+        let events = sink.events.lock().unwrap();
+        assert!(matches!(
+            events[0],
+            crate::tracker::RuntimeEvent::Completed { .. }
+        ));
+    }
+
+    #[test]
+    fn drain_stream_json_error_result_returns_completed() {
+        let (outcome, sink) = run_drain(&[r#"{"type":"result","is_error":true,"result":"oops"}"#]);
+        assert_eq!(outcome, super::DrainOutcome::Completed);
+        let events = sink.events.lock().unwrap();
+        assert!(matches!(
+            events[0],
+            crate::tracker::RuntimeEvent::Failed { .. }
+        ));
+    }
+
+    #[test]
+    fn drain_stream_json_no_result_returns_no_result() {
+        let (outcome, sink) = run_drain(&[r#"{"type":"system","subtype":"init"}"#]);
+        assert_eq!(outcome, super::DrainOutcome::NoResult);
+        let events = sink.events.lock().unwrap();
+        // system/init lines emit an Init event even though there's no final result
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0],
+            crate::tracker::RuntimeEvent::Init { .. }
+        ));
+    }
+
+    #[test]
+    fn drain_stream_json_token_update_emitted() {
+        let (outcome, sink) = run_drain(&[
+            r#"{"type":"assistant","usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":5,"cache_creation_input_tokens":3}}"#,
+            r#"{"type":"result","result":"done"}"#,
+        ]);
+        assert_eq!(outcome, super::DrainOutcome::Completed);
+        let events = sink.events.lock().unwrap();
+        assert!(matches!(
+            events[0],
+            crate::tracker::RuntimeEvent::Tokens {
+                input: 10,
+                output: 20,
+                cache_read: 5,
+                cache_create: 3,
+            }
+        ));
+    }
+
+    #[test]
+    fn drain_stream_json_cost_turns_duration_parsed() {
+        let (outcome, sink) = run_drain(&[r#"{"type":"result","result":"ok","total_cost_usd":0.42,"num_turns":7,"duration_ms":12345,"usage":{"input_tokens":100,"output_tokens":50}}"#]);
+        assert_eq!(outcome, super::DrainOutcome::Completed);
+        let events = sink.events.lock().unwrap();
+        match &events[0] {
+            crate::tracker::RuntimeEvent::Completed {
+                cost_usd,
+                num_turns,
+                duration_ms,
+                input_tokens,
+                output_tokens,
+                ..
+            } => {
+                assert_eq!(*cost_usd, Some(0.42));
+                assert_eq!(*num_turns, Some(7));
+                assert_eq!(*duration_ms, Some(12345));
+                assert_eq!(*input_tokens, Some(100));
+                assert_eq!(*output_tokens, Some(50));
+            }
+            other => panic!("expected Completed event, got: {other:?}"),
+        }
     }
 }

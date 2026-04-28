@@ -53,3 +53,18 @@ pub fn cancel_subprocess_with_grace(pid: u32, grace_period: std::time::Duration)
         tracing::warn!("cancel_subprocess: SIGKILL to -{pid} failed: {err}");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cancel_subprocess_pid_zero_is_noop() {
+        // pid 0 means "every process in the process group" on Unix; we must not signal it.
+        super::cancel_subprocess_with_grace(0, std::time::Duration::from_millis(1));
+    }
+
+    #[test]
+    fn cancel_subprocess_pid_one_is_noop() {
+        // pid 1 is init; we must not signal it.
+        super::cancel_subprocess_with_grace(1, std::time::Duration::from_millis(1));
+    }
+}

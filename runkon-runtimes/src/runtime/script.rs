@@ -239,7 +239,6 @@ mod tests {
     use super::*;
     use crate::config::RuntimeConfig;
     use crate::run::AgentRunStatus;
-    use crate::tracker::NoopEventSink;
 
     fn make_runtime(command: Option<&str>) -> ScriptRuntime {
         ScriptRuntime::new(RuntimeConfig {

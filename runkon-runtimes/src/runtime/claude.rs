@@ -450,4 +450,58 @@ mod tests {
         let run = make_test_run(Some(dead_pid));
         assert!(runtime.cancel(&run).is_ok());
     }
+
+    /// Inject a long-running child so we can test poll without needing the real conductor binary.
+    #[cfg(unix)]
+    fn inject_sleep_child(runtime: &ClaudeRuntime, secs: u64) -> u32 {
+        use std::os::unix::process::CommandExt;
+        use std::process::Stdio;
+        let child = std::process::Command::new("sleep")
+            .arg(secs.to_string())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .expect("sleep must be available");
+        let handle = crate::headless::HeadlessHandle::from_child(child)
+            .expect("HeadlessHandle from_child failed");
+        let pid = handle.pid();
+        *runtime.handle.lock().unwrap() = Some(handle);
+        *runtime.tracker.lock().unwrap() = Some(Arc::new(NoopTracker));
+        *runtime.event_sink.lock().unwrap() = Some(Arc::new(NoopEventSink));
+        pid
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn poll_timeout_returns_no_result() {
+        let runtime = ClaudeRuntime::default();
+        let _pid = inject_sleep_child(&runtime, 60);
+        let result = runtime.poll(
+            "timeout-run",
+            None,
+            Duration::from_millis(100),
+        );
+        assert!(
+            matches!(result, Err(PollError::NoResult)),
+            "expected NoResult after timeout, got: {result:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn poll_shutdown_flag_returns_cancelled() {
+        let runtime = ClaudeRuntime::default();
+        let _pid = inject_sleep_child(&runtime, 60);
+        let flag = Arc::new(AtomicBool::new(true));
+        let result = runtime.poll(
+            "shutdown-run",
+            Some(&flag),
+            Duration::from_secs(300),
+        );
+        assert!(
+            matches!(result, Err(PollError::Cancelled)),
+            "expected Cancelled when shutdown flag is set, got: {result:?}"
+        );
+    }
 }
