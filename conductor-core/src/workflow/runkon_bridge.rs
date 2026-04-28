@@ -66,6 +66,16 @@ fn bridge_lock_err(e: impl std::fmt::Display) -> EngineError {
     EngineError::Workflow(format!("db mutex poisoned: {e}"))
 }
 
+/// Wrap a `ConductorError` from a child-workflow execute/resume call into
+/// an `EngineError`, preserving cancellation passthrough so a child cancel
+/// propagates as a cancellation rather than a generic workflow failure.
+fn wrap_child_workflow_err(e: ConductorError, ctx: String) -> EngineError {
+    match e {
+        ConductorError::WorkflowCancelled => EngineError::from(e),
+        other => EngineError::Workflow(format!("{ctx}: {other}")),
+    }
+}
+
 ///
 /// The runkon-flow `ExecutionContext` does not carry `db_path`, so we store it
 /// in the adapter and inject it when constructing the core `ExecutionContext`.
@@ -399,12 +409,8 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         })?;
 
         let exec_config = crate::workflow::WorkflowExecConfig {
-            poll_interval: parent_state.exec_config.poll_interval,
-            step_timeout: parent_state.exec_config.step_timeout,
-            fail_fast: parent_state.exec_config.fail_fast,
-            dry_run: parent_state.exec_config.dry_run,
-            shutdown: parent_state.exec_config.shutdown.clone(),
             event_sinks: parent_state.event_sinks.iter().cloned().collect(),
+            ..parent_state.exec_config.clone()
         };
 
         // Route child workflows through execute_workflow_standalone so they use
@@ -436,12 +442,8 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         };
 
         let core_result = super::coordinator::execute_workflow_standalone(&standalone_params)
-            .map_err(|e| match e {
-                ConductorError::WorkflowCancelled => EngineError::from(e),
-                other => EngineError::Workflow(format!(
-                    "child workflow '{}' failed: {other}",
-                    workflow_name
-                )),
+            .map_err(|e| {
+                wrap_child_workflow_err(e, format!("child workflow '{workflow_name}' failed"))
             })?;
 
         Ok(core_result)
@@ -464,11 +466,11 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             shutdown: None,
         };
 
-        let core_result = super::coordinator::resume_workflow(&input).map_err(|e| match e {
-            ConductorError::WorkflowCancelled => EngineError::from(e),
-            other => EngineError::Workflow(format!(
-                "failed to resume child workflow run '{workflow_run_id}': {other}"
-            )),
+        let core_result = super::coordinator::resume_workflow(&input).map_err(|e| {
+            wrap_child_workflow_err(
+                e,
+                format!("failed to resume child workflow run '{workflow_run_id}'"),
+            )
         })?;
 
         Ok(core_result)
