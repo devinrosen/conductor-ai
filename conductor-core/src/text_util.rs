@@ -1,22 +1,7 @@
 use std::path::{Path, PathBuf};
 
-/// Validate that a `run_id` is safe to use as a filesystem path component.
-///
-/// Rejects empty strings, path separators, and any character outside
-/// `[A-Za-z0-9\-_]` to prevent path-traversal attacks.
-pub fn validate_run_id(run_id: &str) -> crate::error::Result<()> {
-    if !run_id.is_empty()
-        && run_id
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-    {
-        Ok(())
-    } else {
-        Err(crate::error::ConductorError::InvalidInput(format!(
-            "invalid run_id '{run_id}': must be non-empty and contain only alphanumeric characters, hyphens, or underscores"
-        )))
-    }
-}
+// Re-export validate_run_id from runkon-runtimes
+pub use runkon_runtimes::text_util::validate_run_id;
 
 /// Slugify a string: lowercase, replace non-alphanumeric chars with hyphens,
 /// collapse consecutive hyphens, trim leading/trailing hyphens.

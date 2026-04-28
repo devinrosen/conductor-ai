@@ -1,0 +1,205 @@
+//! AgentRuntime trait and dispatch infrastructure (RFC 007).
+
+pub mod claude;
+pub mod cli;
+pub mod script;
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{atomic::AtomicBool, Arc};
+
+use crate::agent_def::AgentDef;
+use crate::config::RuntimeConfig;
+use crate::error::{RuntimeError, Result};
+use crate::permission::PermissionMode;
+use crate::run::AgentRun;
+use crate::tracker::{RunEventSink, RunTracker};
+
+/// Sealed capability token for `AgentRuntime::spawn_impl`.
+pub mod private {
+    pub struct Seal(());
+    impl Seal {
+        pub(super) fn new() -> Self {
+            Self(())
+        }
+    }
+}
+
+/// Trait implemented by every agent runtime.
+pub trait AgentRuntime {
+    /// Launch the agent for `request`.
+    fn spawn_impl(&self, request: &RuntimeRequest, _seal: private::Seal) -> Result<()>;
+
+    /// Validates `request.run_id` then delegates to `spawn_impl`.
+    fn spawn_validated(&self, request: &RuntimeRequest) -> Result<()> {
+        crate::text_util::validate_run_id(&request.run_id)?;
+        self.spawn_impl(request, private::Seal::new())
+    }
+
+    /// Block until the agent completes or is cancelled.
+    fn poll(
+        &self,
+        run_id: &str,
+        shutdown: Option<&Arc<AtomicBool>>,
+        step_timeout: std::time::Duration,
+    ) -> std::result::Result<AgentRun, PollError>;
+
+    /// Returns true if the agent process / session represented by `run` is still live.
+    fn is_alive(&self, run: &AgentRun) -> bool;
+
+    /// Forcibly cancel the agent represented by `run`.
+    fn cancel(&self, run: &AgentRun) -> Result<()>;
+}
+
+/// Per-invocation parameters passed to `AgentRuntime::spawn`.
+pub struct RuntimeRequest {
+    pub run_id: String,
+    pub agent_def: AgentDef,
+    pub prompt: String,
+    pub working_dir: PathBuf,
+    pub model: Option<String>,
+    pub bot_name: Option<String>,
+    pub plugin_dirs: Vec<String>,
+    pub tracker: Arc<dyn RunTracker>,
+    pub event_sink: Arc<dyn RunEventSink>,
+    pub log_path: PathBuf,
+}
+
+/// Error returned by `AgentRuntime::poll`.
+#[derive(Debug)]
+pub enum PollError {
+    /// Agent subprocess exited without emitting a `result` event.
+    NoResult,
+    /// Workflow shutdown was requested while the agent was running.
+    Cancelled,
+    /// Poll failed with an explanatory message.
+    Failed(String),
+}
+
+impl std::fmt::Display for PollError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoResult => write!(f, "agent exited without result"),
+            Self::Cancelled => write!(f, "executor shutdown requested"),
+            Self::Failed(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+/// Options injected at runtime construction time.
+pub struct RuntimeOptions {
+    /// Binary to spawn for headless re-invocation.
+    pub binary_path: PathBuf,
+    /// Where to write the per-run JSONL log of the agent's stdout stream.
+    pub log_path_for_run: Arc<dyn Fn(&str) -> PathBuf + Send + Sync>,
+    /// Where `CliRuntime` writes `<run_id>/output.json`.
+    pub workspace_root: PathBuf,
+}
+
+/// Resolve a runtime name to a boxed `AgentRuntime` implementation.
+pub fn resolve_runtime(
+    name: &str,
+    permission_mode: PermissionMode,
+    runtimes: &HashMap<String, RuntimeConfig>,
+    options: &RuntimeOptions,
+) -> Result<Box<dyn AgentRuntime>> {
+    if name == "claude" {
+        let claude_options = claude::ClaudeRuntimeOptions {
+            permission_mode,
+            binary_path: options.binary_path.clone(),
+            log_path_for_run: options.log_path_for_run.clone(),
+        };
+        return Ok(Box::new(claude::ClaudeRuntime::new(claude_options)));
+    }
+    let rt_config = runtimes.get(name).ok_or_else(|| {
+        RuntimeError::Config(format!(
+            "unknown runtime '{name}' — only 'claude' is built-in; \
+                 add a `[runtimes.{name}]` section to conductor.toml for CLI agents"
+        ))
+    })?;
+    match rt_config.runtime_type.as_deref().unwrap_or("cli") {
+        "cli" => Ok(Box::new(cli::CliRuntime::new(
+            rt_config.clone(),
+            options.workspace_root.clone(),
+        ))),
+        "script" => Ok(Box::new(script::ScriptRuntime::new(rt_config.clone()))),
+        t => Err(RuntimeError::Config(format!(
+            "unsupported runtime type '{t}' for '{name}'"
+        ))),
+    }
+}
+
+/// Extract a value from a serde_json::Value using a dot-separated path.
+pub fn extract_json_path(value: &serde_json::Value, path: &str) -> Option<serde_json::Value> {
+    let parts: Vec<&str> = path.split('.').collect();
+    extract_path_recursive(value, &parts)
+}
+
+fn extract_path_recursive(value: &serde_json::Value, parts: &[&str]) -> Option<serde_json::Value> {
+    if parts.is_empty() {
+        return Some(value.clone());
+    }
+    let head = parts[0];
+    let tail = &parts[1..];
+    if head == "*" {
+        let children: Vec<serde_json::Value> = match value {
+            serde_json::Value::Object(m) => m.values().cloned().collect(),
+            serde_json::Value::Array(a) => a.clone(),
+            _ => return None,
+        };
+        if tail.is_empty() {
+            return Some(serde_json::Value::Array(children));
+        }
+        let sum: f64 = children
+            .iter()
+            .filter_map(|child| extract_path_recursive(child, tail))
+            .filter_map(|v| v.as_f64())
+            .sum();
+        return Some(serde_json::json!(sum));
+    }
+    match value {
+        serde_json::Value::Object(m) => {
+            let child = m.get(head)?;
+            extract_path_recursive(child, tail)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_extract_simple_field() {
+        let v = json!({"response": "hello", "status": "ok"});
+        assert_eq!(extract_json_path(&v, "response"), Some(json!("hello")));
+    }
+
+    #[test]
+    fn test_extract_nested_field() {
+        let v = json!({"stats": {"total": 42}});
+        assert_eq!(extract_json_path(&v, "stats.total"), Some(json!(42)));
+    }
+
+    #[test]
+    fn test_extract_wildcard_sum() {
+        let v = json!({
+            "models": {
+                "a": {"tokens": {"total": 100}},
+                "b": {"tokens": {"total": 200}}
+            }
+        });
+        let result = extract_json_path(&v, "models.*.tokens.total");
+        assert!(result.is_some());
+        let n = result.unwrap().as_f64().unwrap();
+        assert!((n - 300.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_extract_missing_returns_none() {
+        let v = json!({"a": 1});
+        assert!(extract_json_path(&v, "b").is_none());
+    }
+}

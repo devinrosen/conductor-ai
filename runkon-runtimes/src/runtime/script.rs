@@ -1,9 +1,11 @@
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::Duration;
 
-use crate::agent::types::AgentRun;
 use crate::config::RuntimeConfig;
-use crate::error::{ConductorError, Result};
+use crate::error::{RuntimeError, Result};
+use crate::run::AgentRun;
+use crate::run::AgentRunStatus;
+use crate::tracker::{RunEventSink, RunTracker, RuntimeEvent};
 
 use super::{AgentRuntime, PollError, RuntimeRequest};
 
@@ -12,18 +14,24 @@ use super::{AgentRuntime, PollError, RuntimeRequest};
 /// capturing stdout as `result_text`. No tmux dependency.
 pub struct ScriptRuntime {
     config: RuntimeConfig,
+    tracker: Mutex<Option<Arc<dyn RunTracker>>>,
+    event_sink: Mutex<Option<Arc<dyn RunEventSink>>>,
 }
 
 impl ScriptRuntime {
     pub fn new(config: RuntimeConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            tracker: Mutex::new(None),
+            event_sink: Mutex::new(None),
+        }
     }
 }
 
 impl AgentRuntime for ScriptRuntime {
     fn spawn_impl(&self, request: &RuntimeRequest, _seal: super::private::Seal) -> Result<()> {
         let command = self.config.command.as_deref().ok_or_else(|| {
-            ConductorError::Config(
+            RuntimeError::Config(
                 "ScriptRuntime: `command` is required in the runtime config".to_string(),
             )
         })?;
@@ -36,44 +44,31 @@ impl AgentRuntime for ScriptRuntime {
             );
         }
 
-        // KNOWN LIMITATION: output() blocks the calling thread until the script exits.
-        // step_timeout and the shutdown AtomicBool (available in poll()) are not
-        // consulted here; callers that need cancellation should wrap spawn() in a
-        // thread and enforce the timeout externally.
         let output = std::process::Command::new("sh")
             .args(["-c", command])
             .env("CONDUCTOR_PROMPT", &request.prompt)
             .current_dir(&request.working_dir)
             .output()
             .map_err(|e| {
-                ConductorError::Agent(format!("ScriptRuntime: failed to spawn command: {e}"))
+                RuntimeError::Agent(format!("ScriptRuntime: failed to spawn command: {e}"))
             })?;
-
-        let conn = crate::db::open_database_compat(&request.db_path)
-            .map_err(|e| ConductorError::Agent(format!("ScriptRuntime: failed to open DB: {e}")))?;
-        let agent_mgr = crate::agent::AgentManager::new(&conn);
 
         if output.status.success() {
             let result_text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            agent_mgr
-                .update_run_completed(
-                    &request.run_id,
-                    None,
-                    Some(&result_text),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                )
-                .map_err(|e| {
-                    ConductorError::Agent(format!(
-                        "ScriptRuntime: failed to mark run {} completed: {e}",
-                        request.run_id
-                    ))
-                })?;
+            request.event_sink.on_event(
+                &request.run_id,
+                RuntimeEvent::Completed {
+                    result_text: Some(result_text),
+                    session_id: None,
+                    cost_usd: None,
+                    num_turns: None,
+                    duration_ms: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
+                },
+            );
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             let exit_code = output.status.code().unwrap_or(1);
@@ -82,16 +77,17 @@ impl AgentRuntime for ScriptRuntime {
             } else {
                 format!("process exited with code {exit_code}: {stderr}")
             };
-            agent_mgr
-                .update_run_failed(&request.run_id, &err_msg)
-                .map_err(|e| {
-                    ConductorError::Agent(format!(
-                        "ScriptRuntime: failed to mark run {} failed: {e}",
-                        request.run_id
-                    ))
-                })?;
+            request.event_sink.on_event(
+                &request.run_id,
+                RuntimeEvent::Failed {
+                    error: err_msg,
+                    session_id: None,
+                },
+            );
         }
 
+        *self.tracker.lock().unwrap_or_else(|e| e.into_inner()) = Some(request.tracker.clone());
+        *self.event_sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(request.event_sink.clone());
         Ok(())
     }
 
@@ -100,13 +96,15 @@ impl AgentRuntime for ScriptRuntime {
         run_id: &str,
         _shutdown: Option<&Arc<AtomicBool>>,
         _step_timeout: Duration,
-        db_path: &std::path::Path,
     ) -> std::result::Result<AgentRun, PollError> {
-        let conn = crate::db::open_database_compat(db_path)
-            .map_err(|e| PollError::Failed(format!("ScriptRuntime: failed to open DB: {e}")))?;
-        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let tracker = self
+            .tracker
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or_else(|| PollError::Failed("ScriptRuntime::poll called before spawn".into()))?;
 
-        let run = agent_mgr
+        let run = tracker
             .get_run(run_id)
             .map_err(|e| {
                 PollError::Failed(format!(
@@ -115,7 +113,6 @@ impl AgentRuntime for ScriptRuntime {
             })?
             .ok_or_else(|| PollError::Failed(format!("run {run_id} not found in DB")))?;
 
-        use crate::agent::status::AgentRunStatus;
         match run.status {
             AgentRunStatus::Failed => Err(PollError::Failed(
                 run.result_text
@@ -131,7 +128,12 @@ impl AgentRuntime for ScriptRuntime {
         false
     }
 
-    fn cancel(&self, _run: &AgentRun, _db_path: &std::path::Path) -> Result<()> {
+    fn cancel(&self, run: &AgentRun) -> Result<()> {
+        if let Ok(mut guard) = self.tracker.lock() {
+            if let Some(ref tracker) = guard.take() {
+                let _ = tracker.mark_cancelled(&run.id);
+            }
+        }
         Ok(())
     }
 }
@@ -140,6 +142,7 @@ impl AgentRuntime for ScriptRuntime {
 mod tests {
     use super::*;
     use crate::config::RuntimeConfig;
+    use crate::tracker::NoopEventSink;
 
     fn make_runtime(command: Option<&str>) -> ScriptRuntime {
         ScriptRuntime::new(RuntimeConfig {
@@ -148,14 +151,14 @@ mod tests {
         })
     }
 
-    fn make_test_run() -> AgentRun {
-        AgentRun {
+    fn make_test_run() -> crate::run::AgentRun {
+        crate::run::AgentRun {
             id: "test".to_string(),
             worktree_id: None,
             repo_id: None,
             claude_session_id: None,
             prompt: "p".to_string(),
-            status: crate::agent::status::AgentRunStatus::Running,
+            status: AgentRunStatus::Running,
             result_text: None,
             cost_usd: None,
             num_turns: None,
@@ -186,8 +189,6 @@ mod tests {
     #[test]
     fn cancel_is_noop() {
         let runtime = make_runtime(Some("echo hi"));
-        assert!(runtime
-            .cancel(&make_test_run(), std::path::Path::new("/tmp/test.db"))
-            .is_ok());
+        assert!(runtime.cancel(&make_test_run()).is_ok());
     }
 }

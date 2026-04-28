@@ -2,87 +2,11 @@ use std::path::{Component, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::status::{AgentRunStatus, FeedbackStatus, FeedbackType, StepStatus};
+use super::status::{FeedbackStatus, FeedbackType};
 use crate::error::Result;
 
-/// A single step in an agent's two-phase execution plan.
-/// Stored as individual records in the `agent_run_steps` table.
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlanStep {
-    /// ULID primary key.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    pub description: String,
-    /// Backward-compat flag derived from `status == StepStatus::Completed`.
-    #[serde(default)]
-    pub done: bool,
-    #[serde(default)]
-    pub status: StepStatus,
-    /// Ordering within the run's plan (0-based).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub position: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub started_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completed_at: Option<String>,
-}
-
-impl Default for PlanStep {
-    fn default() -> Self {
-        Self {
-            id: None,
-            description: String::new(),
-            done: false,
-            status: StepStatus::Pending,
-            position: None,
-            started_at: None,
-            completed_at: None,
-        }
-    }
-}
-
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentRun {
-    pub id: String,
-    pub worktree_id: Option<String>,
-    pub repo_id: Option<String>,
-    pub claude_session_id: Option<String>,
-    pub prompt: String,
-    pub status: AgentRunStatus,
-    pub result_text: Option<String>,
-    pub cost_usd: Option<f64>,
-    pub num_turns: Option<i64>,
-    pub duration_ms: Option<i64>,
-    pub started_at: String,
-    pub ended_at: Option<String>,
-    pub log_file: Option<String>,
-    /// The model used for this run (e.g. "claude-sonnet-4-6"). None means claude's default.
-    pub model: Option<String>,
-    /// Two-phase execution plan: JSON-serialized list of steps with completion state.
-    pub plan: Option<Vec<PlanStep>>,
-    /// If this is a child run, the ID of the parent (supervisor) run.
-    pub parent_run_id: Option<String>,
-    pub input_tokens: Option<i64>,
-    pub output_tokens: Option<i64>,
-    pub cache_read_input_tokens: Option<i64>,
-    pub cache_creation_input_tokens: Option<i64>,
-    /// GitHub App bot identity used for this run (matches `[github.apps.<name>]`).
-    pub bot_name: Option<String>,
-    /// Conversation this run belongs to (if created via the conversation API).
-    pub conversation_id: Option<String>,
-    /// PID of the headless subprocess running this agent (RFC 016).
-    /// None for pre-migration rows or when the subprocess PID has not yet been stored by the workflow executor.
-    pub subprocess_pid: Option<i64>,
-    /// Runtime identifier used to execute this run (RFC 007). Defaults to "claude".
-    #[serde(default = "default_runtime_field")]
-    pub runtime: String,
-}
-
-fn default_runtime_field() -> String {
-    "claude".to_string()
-}
+// Re-export moved types from runkon-runtimes
+pub use runkon_runtimes::{AgentRun, PlanStep};
 
 /// Resolves `..` and `.` components without touching the filesystem so that
 /// `starts_with` checks cannot be bypassed by paths like
@@ -103,52 +27,14 @@ fn lexical_normalize(path: PathBuf) -> PathBuf {
     out.iter().collect()
 }
 
-impl AgentRun {
-    /// Returns true if this run is currently active (running or waiting for feedback).
-    pub fn is_active(&self) -> bool {
-        matches!(
-            self.status,
-            AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback
-        )
-    }
-
-    /// Returns true if this run is waiting for human feedback.
-    pub fn is_waiting_for_feedback(&self) -> bool {
-        self.status == AgentRunStatus::WaitingForFeedback
-    }
-
-    /// Returns true if this run ended (failed/cancelled) with incomplete plan steps
-    /// and has a session_id available for resume.
-    pub fn needs_resume(&self) -> bool {
-        matches!(
-            self.status,
-            AgentRunStatus::Failed | AgentRunStatus::Cancelled
-        ) && self.claude_session_id.is_some()
-            && self.has_incomplete_plan_steps()
-    }
-
-    /// Returns true if the run has a plan with at least one incomplete step.
-    pub fn has_incomplete_plan_steps(&self) -> bool {
-        self.plan
-            .as_ref()
-            .is_some_and(|steps| steps.iter().any(|s| !s.done))
-    }
-
-    /// Returns the incomplete plan steps (not yet done).
-    pub fn incomplete_plan_steps(&self) -> Vec<&PlanStep> {
-        self.plan
-            .as_ref()
-            .map(|steps| steps.iter().filter(|s| !s.done).collect())
-            .unwrap_or_default()
-    }
-
+/// Extension trait for `AgentRun` that provides conductor-specific functionality.
+pub trait AgentRunExt {
     /// Returns the log file path for this run.
-    ///
-    /// Uses `log_file` when set, but validates that it is contained within
-    /// `agent_log_dir()` to prevent path traversal; returns `ConductorError::Agent`
-    /// for paths outside that directory. Falls back to the default
-    /// `~/.conductor/agent-logs/{id}.log` (validated as a ULID) otherwise.
-    pub fn log_path(&self) -> Result<PathBuf> {
+    fn log_path(&self) -> Result<PathBuf>;
+}
+
+impl AgentRunExt for AgentRun {
+    fn log_path(&self) -> Result<PathBuf> {
         match self.log_file.as_deref() {
             Some(path) => {
                 let resolved = lexical_normalize(PathBuf::from(path));
@@ -163,23 +49,6 @@ impl AgentRun {
             }
             None => crate::config::agent_log_path(&self.id),
         }
-    }
-
-    /// Build a resume prompt from the remaining plan steps.
-    pub fn build_resume_prompt(&self) -> String {
-        let incomplete = self.incomplete_plan_steps();
-        if incomplete.is_empty() {
-            return "Continue where you left off.".to_string();
-        }
-
-        let mut prompt = String::from(
-            "Continue where you left off. The following plan steps remain incomplete:\n",
-        );
-        for (i, step) in incomplete.iter().enumerate() {
-            prompt.push_str(&format!("{}. {}\n", i + 1, step.description));
-        }
-        prompt.push_str("\nPlease complete these remaining steps.");
-        prompt
     }
 }
 
@@ -231,9 +100,6 @@ impl AgentRunEvent {
     }
 
     /// Extract the `error_text` field from metadata JSON for `tool_error` events.
-    ///
-    /// Returns `None` if this is not a `tool_error` event or if the metadata
-    /// does not contain an `error_text` field.
     pub fn error_detail_text(&self) -> Option<String> {
         if self.kind != EVENT_KIND_TOOL_ERROR {
             return None;
@@ -272,7 +138,6 @@ pub struct FeedbackOption {
 }
 
 /// A human-in-the-loop feedback request created by an agent run.
-/// The agent pauses execution and waits for the user to respond.
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeedbackRequest {
@@ -373,7 +238,7 @@ mod tests {
             repo_id: None,
             claude_session_id: None,
             prompt: String::new(),
-            status: AgentRunStatus::Completed,
+            status: AgentRunStatus::Running,
             result_text: None,
             cost_usd: None,
             num_turns: None,
@@ -426,7 +291,6 @@ mod tests {
     #[test]
     fn log_path_rejects_dotdot_traversal_that_starts_with_log_dir() {
         let log_dir = crate::config::agent_log_dir();
-        // Construct a path that textually starts with log_dir but escapes via `..`
         let traversal = log_dir.join("../../../etc/passwd");
         let run = make_run(
             "01JVFJT9K7XPPQ9MH6JV7XRM3M",
@@ -441,7 +305,6 @@ mod tests {
     #[test]
     fn log_path_accepts_path_with_harmless_dotdot_inside_log_dir() {
         let log_dir = crate::config::agent_log_dir();
-        // A path that normalizes to something still inside log_dir is fine
         let inside = log_dir.join("sub/../valid.log");
         let run = make_run("01JVFJT9K7XPPQ9MH6JV7XRM3M", Some(inside.to_str().unwrap()));
         let result = run.log_path().unwrap();

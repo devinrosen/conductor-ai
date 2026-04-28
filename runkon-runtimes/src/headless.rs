@@ -1,0 +1,636 @@
+//! Shared runtime helpers for spawning and polling agent runs.
+
+use std::borrow::Cow;
+use std::process::Command;
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
+use crate::permission::PermissionMode;
+use crate::tracker::{RunEventSink, RuntimeEvent};
+
+const DEFAULT_AGENT_ERROR_MSG: &str = "Claude reported an error";
+
+/// Maximum number of CLI arguments produced by `build_agent_args`.
+const AGENT_ARGS_CAPACITY: usize = 18;
+
+/// Build the `conductor agent run` argument list for a child agent.
+pub fn build_agent_args(
+    run_id: &str,
+    worktree_path: &str,
+    prompt: &str,
+    resume_session_id: Option<&str>,
+    model: Option<&str>,
+    bot_name: Option<&str>,
+    extra_plugin_dirs: &[String],
+) -> std::result::Result<Vec<Cow<'static, str>>, String> {
+    build_agent_args_with_mode(
+        run_id,
+        worktree_path,
+        prompt,
+        resume_session_id,
+        model,
+        bot_name,
+        None,
+        extra_plugin_dirs,
+    )
+}
+
+fn push_optional_agent_flags(
+    args: &mut Vec<Cow<'static, str>>,
+    resume_session_id: Option<&str>,
+    model: Option<&str>,
+    bot_name: Option<&str>,
+    permission_mode: Option<&PermissionMode>,
+    extra_plugin_dirs: &[String],
+) {
+    if let Some(id) = resume_session_id {
+        args.push(Cow::Borrowed("--resume"));
+        args.push(Cow::Owned(id.to_string()));
+    }
+    if let Some(m) = model {
+        args.push(Cow::Borrowed("--model"));
+        args.push(Cow::Owned(m.to_string()));
+    }
+    if let Some(b) = bot_name {
+        args.push(Cow::Borrowed("--bot-name"));
+        args.push(Cow::Owned(b.to_string()));
+    }
+    if let Some(mode) = permission_mode {
+        if let Some(val) = mode.cli_flag_value() {
+            args.push(Cow::Borrowed("--permission-mode"));
+            args.push(Cow::Owned(val.to_string()));
+        }
+    }
+    for dir in extra_plugin_dirs {
+        args.push(Cow::Borrowed("--plugin-dir"));
+        args.push(Cow::Owned(dir.clone()));
+    }
+}
+
+/// Like [`build_agent_args`] but accepts an optional permission mode override.
+#[allow(clippy::too_many_arguments)]
+pub fn build_agent_args_with_mode(
+    run_id: &str,
+    working_dir: &str,
+    prompt: &str,
+    resume_session_id: Option<&str>,
+    model: Option<&str>,
+    bot_name: Option<&str>,
+    permission_mode: Option<&PermissionMode>,
+    extra_plugin_dirs: &[String],
+) -> std::result::Result<Vec<Cow<'static, str>>, String> {
+    crate::text_util::validate_run_id(run_id).map_err(|e| e.to_string())?;
+
+    let prompt_file_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&prompt_file_path)
+            .and_then(|mut f| {
+                use std::io::Write;
+                f.write_all(prompt.as_bytes())
+            })
+            .map_err(|e| {
+                format!(
+                    "Failed to write prompt file '{}': {e}",
+                    prompt_file_path.display()
+                )
+            })?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&prompt_file_path, prompt).map_err(|e| {
+            format!(
+                "Failed to write prompt file '{}': {e}",
+                prompt_file_path.display()
+            )
+        })?;
+    }
+
+    let mut args: Vec<Cow<'static, str>> = Vec::with_capacity(AGENT_ARGS_CAPACITY);
+    args.push(Cow::Borrowed("agent"));
+    args.push(Cow::Borrowed("run"));
+    args.push(Cow::Borrowed("--run-id"));
+    args.push(Cow::Owned(run_id.to_string()));
+    args.push(Cow::Borrowed("--worktree-path"));
+    args.push(Cow::Owned(working_dir.to_string()));
+    args.push(Cow::Borrowed("--prompt-file"));
+    args.push(Cow::Owned(prompt_file_path.to_string_lossy().into_owned()));
+
+    push_optional_agent_flags(
+        &mut args,
+        resume_session_id,
+        model,
+        bot_name,
+        permission_mode,
+        extra_plugin_dirs,
+    );
+
+    Ok(args)
+}
+
+/// Handle to a headless agent subprocess.
+#[cfg(unix)]
+pub struct HeadlessHandle {
+    pid: u32,
+    stdout: Option<std::process::ChildStdout>,
+    stderr: Option<std::process::ChildStderr>,
+    child: Option<std::process::Child>,
+}
+
+#[cfg(unix)]
+impl HeadlessHandle {
+    pub fn from_child(mut child: std::process::Child) -> std::result::Result<Self, String> {
+        let pid = child.id();
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "HeadlessHandle: child has no stdout pipe".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "HeadlessHandle: child has no stderr pipe".to_string())?;
+        Ok(Self {
+            pid,
+            stdout: Some(stdout),
+            stderr: Some(stderr),
+            child: Some(child),
+        })
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    pub fn into_stderr_drain_parts(
+        mut self,
+    ) -> (
+        std::process::ChildStderr,
+        std::process::ChildStdout,
+        impl FnOnce(),
+    ) {
+        let stderr = self.stderr.take().expect("stderr already taken");
+        let stdout = self.stdout.take().expect("stdout already taken");
+        let mut child = self.child.take().expect("child already taken");
+        let finish = move || {
+            let _ = child.wait();
+        };
+        (stderr, stdout, finish)
+    }
+
+    pub fn into_drain_parts(mut self) -> (std::process::ChildStdout, impl FnOnce()) {
+        let stdout = self.stdout.take().expect("stdout already taken");
+        let stderr = self.stderr.take().expect("stderr already taken");
+        let mut child = self.child.take().expect("child already taken");
+        let finish = move || {
+            drop(stderr);
+            let _ = child.wait();
+        };
+        (stdout, finish)
+    }
+
+    pub fn abort(mut self) {
+        drop(self.stdout.take());
+        drop(self.stderr.take());
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for HeadlessHandle {
+    fn drop(&mut self) {
+        drop(self.stdout.take());
+        drop(self.stderr.take());
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// Spawn a headless `conductor agent run` subprocess.
+#[cfg(unix)]
+pub fn spawn_headless(
+    args: &[Cow<'static, str>],
+    working_dir: &std::path::Path,
+    binary_path: &str,
+) -> std::result::Result<HeadlessHandle, String> {
+    use std::process::Stdio;
+    let child = Command::new(binary_path)
+        .args(args.iter().map(|a| a.as_ref()))
+        .current_dir(working_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .map_err(|e| format!("Failed to spawn conductor headless: {e}"))?;
+
+    HeadlessHandle::from_child(child)
+}
+
+/// Parameters for spawning a headless agent subprocess.
+pub struct SpawnHeadlessParams<'a> {
+    pub run_id: &'a str,
+    pub working_dir: &'a str,
+    pub prompt: &'a str,
+    pub resume_session_id: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub bot_name: Option<&'a str>,
+    pub permission_mode: Option<&'a PermissionMode>,
+    pub plugin_dirs: &'a [String],
+}
+
+/// Build headless args and spawn the conductor subprocess in one step.
+#[cfg(unix)]
+pub fn try_spawn_headless_run(
+    params: &SpawnHeadlessParams<'_>,
+    binary_path: &str,
+) -> std::result::Result<(HeadlessHandle, std::path::PathBuf), String> {
+    let (args, pf) = build_headless_agent_args(params).map_err(|e| {
+        format!(
+            "failed to prepare agent args for run {} (working_dir={}): {e}",
+            params.run_id, params.working_dir
+        )
+    })?;
+    let h = spawn_headless(&args, std::path::Path::new(params.working_dir), binary_path).map_err(
+        |e| {
+            let _ = std::fs::remove_file(&pf);
+            format!(
+                "spawn failed for run {} (working_dir={}): {e}",
+                params.run_id, params.working_dir
+            )
+        },
+    )?;
+    Ok((h, pf))
+}
+
+/// Result of draining a headless subprocess stdout stream.
+#[derive(Copy, Clone)]
+pub enum DrainOutcome {
+    /// A `result` event was seen; the run was finalized in the DB.
+    Completed,
+    /// EOF before any `result` event (SIGTERM path or unexpected crash).
+    /// Caller must mark the run as cancelled/failed in the DB.
+    NoResult,
+}
+
+/// Drain the stdout of a headless subprocess, persisting events to the DB.
+pub fn drain_stream_json(
+    stdout: impl std::io::Read,
+    run_id: &str,
+    log_file: &std::path::Path,
+    sink: &dyn RunEventSink,
+) -> DrainOutcome {
+    use std::io::{BufRead, BufReader, Write};
+
+    let mut log_writer = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_file)
+        .map_err(|e| {
+            tracing::warn!(
+                "[drain_stream_json] failed to open log file {}: {e}",
+                log_file.display()
+            );
+        })
+        .ok();
+
+    let reader = BufReader::new(stdout);
+    for line in reader.lines() {
+        let Ok(line) = line else {
+            break;
+        };
+
+        if let Some(ref mut w) = log_writer {
+            if let Err(e) = writeln!(w, "{line}") {
+                tracing::warn!("[drain_stream_json] failed to write log line: {e}");
+            }
+        }
+
+        let value = match serde_json::from_str::<serde_json::Value>(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+        match event_type {
+            "system" => {
+                let subtype = value.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
+                if subtype == "init" {
+                    let model = value.get("model").and_then(|v| v.as_str()).map(String::from);
+                    let session_id = value.get("session_id").and_then(|v| v.as_str()).map(String::from);
+                    sink.on_event(run_id, RuntimeEvent::Init { model, session_id });
+                }
+            }
+            "assistant" => {
+                let usage = value
+                    .get("message")
+                    .and_then(|m| m.get("usage"))
+                    .or_else(|| value.get("usage"));
+                if let Some(usage) = usage {
+                    let input = usage
+                        .get("input_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    let output = usage
+                        .get("output_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    let cache_read = usage
+                        .get("cache_read_input_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    let cache_create = usage
+                        .get("cache_creation_input_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    sink.on_event(
+                        run_id,
+                        RuntimeEvent::Tokens {
+                            input,
+                            output,
+                            cache_read,
+                            cache_create,
+                        },
+                    );
+                }
+            }
+            "result" => {
+                let is_error = value
+                    .get("is_error")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if is_error {
+                    let error = value
+                        .get("result")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(DEFAULT_AGENT_ERROR_MSG)
+                        .to_string();
+                    let session_id = value.get("session_id").and_then(|v| v.as_str()).map(String::from);
+                    sink.on_event(run_id, RuntimeEvent::Failed { error, session_id });
+                } else {
+                    let result_text = value
+                        .get("result")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    let session_id = value.get("session_id").and_then(|v| v.as_str()).map(String::from);
+                    let cost_usd = value.get("total_cost_usd").and_then(|v| v.as_f64());
+                    let num_turns = value.get("num_turns").and_then(|v| v.as_i64());
+                    let duration_ms = value.get("duration_ms").and_then(|v| v.as_i64());
+                    let usage = value.get("usage");
+                    let input_tokens = usage
+                        .and_then(|u| u.get("input_tokens"))
+                        .and_then(|v| v.as_i64());
+                    let output_tokens = usage
+                        .and_then(|u| u.get("output_tokens"))
+                        .and_then(|v| v.as_i64());
+                    let cache_read_input_tokens = usage
+                        .and_then(|u| u.get("cache_read_input_tokens"))
+                        .and_then(|v| v.as_i64());
+                    let cache_creation_input_tokens = usage
+                        .and_then(|u| u.get("cache_creation_input_tokens"))
+                        .and_then(|v| v.as_i64());
+                    sink.on_event(
+                        run_id,
+                        RuntimeEvent::Completed {
+                            result_text,
+                            session_id,
+                            cost_usd,
+                            num_turns,
+                            duration_ms,
+                            input_tokens,
+                            output_tokens,
+                            cache_read_input_tokens,
+                            cache_creation_input_tokens,
+                        },
+                    );
+                }
+                return DrainOutcome::Completed;
+            }
+            _ => {}
+        }
+    }
+
+    DrainOutcome::NoResult
+}
+
+/// Build `conductor agent run` args for a headless launch.
+pub fn build_headless_agent_args(
+    params: &SpawnHeadlessParams<'_>,
+) -> std::result::Result<(Vec<Cow<'static, str>>, std::path::PathBuf), String> {
+    let run_id = params.run_id;
+    let working_dir = params.working_dir;
+    let prompt = params.prompt;
+    let resume_session_id = params.resume_session_id;
+    let model = params.model;
+    let bot_name = params.bot_name;
+    let permission_mode = params.permission_mode;
+    let extra_plugin_dirs = params.plugin_dirs;
+
+    let prompt_file_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
+    {
+        use std::io::Write;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&prompt_file_path)
+                .map_err(|e| {
+                    format!(
+                        "Failed to write prompt file '{}': {e}",
+                        prompt_file_path.display()
+                    )
+                })?;
+            file.write_all(prompt.as_bytes()).map_err(|e| {
+                format!(
+                    "Failed to write prompt file '{}': {e}",
+                    prompt_file_path.display()
+                )
+            })?;
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&prompt_file_path, prompt).map_err(|e| {
+                format!(
+                    "Failed to write prompt file '{}': {e}",
+                    prompt_file_path.display()
+                )
+            })?;
+        }
+    }
+
+    let mut args: Vec<Cow<'static, str>> = Vec::with_capacity(AGENT_ARGS_CAPACITY + 2);
+    args.push(Cow::Borrowed("agent"));
+    args.push(Cow::Borrowed("run"));
+    args.push(Cow::Borrowed("--run-id"));
+    args.push(Cow::Owned(run_id.to_string()));
+    args.push(Cow::Borrowed("--worktree-path"));
+    args.push(Cow::Owned(working_dir.to_string()));
+    args.push(Cow::Borrowed("--prompt-file"));
+    args.push(Cow::Owned(prompt_file_path.to_string_lossy().into_owned()));
+
+    push_optional_agent_flags(
+        &mut args,
+        resume_session_id,
+        model,
+        bot_name,
+        permission_mode,
+        extra_plugin_dirs,
+    );
+
+    Ok((args, prompt_file_path))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    fn assert_file_prompt(args: &[Cow<'static, str>], expected_content: &str, expected_path: &str) {
+        let file_idx = args
+            .iter()
+            .position(|a| a == "--prompt-file")
+            .expect("--prompt-file flag missing");
+        let file_path: &str = args[file_idx + 1].as_ref();
+        assert_eq!(file_path, expected_path, "prompt file path mismatch");
+        assert!(
+            std::path::Path::new(file_path).exists(),
+            "prompt file should have been written"
+        );
+        assert_eq!(
+            std::fs::read_to_string(file_path).unwrap(),
+            expected_content
+        );
+        assert!(
+            !args.iter().any(|a| a == "--prompt"),
+            "--prompt should not appear"
+        );
+    }
+
+    #[test]
+    fn build_agent_args_short_prompt_uses_file() {
+        let run_id = "run-short-1";
+        let prompt = "short prompt";
+        let args =
+            super::build_agent_args(run_id, "/tmp/wt", prompt, None, None, None, &[]).unwrap();
+        let expected_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
+        assert_file_prompt(&args, prompt, expected_path.to_str().unwrap());
+        let _ = std::fs::remove_file(&expected_path);
+    }
+
+    #[test]
+    fn build_agent_args_long_prompt_uses_file() {
+        let run_id = "run-long-99";
+        let prompt = "x".repeat(513);
+        let args =
+            super::build_agent_args(run_id, "/tmp/wt", &prompt, None, None, None, &[]).unwrap();
+        let expected_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
+        assert_file_prompt(&args, &prompt, expected_path.to_str().unwrap());
+        let _ = std::fs::remove_file(&expected_path);
+    }
+
+    #[test]
+    fn build_agent_args_with_resume_sets_flag() {
+        let run_id = "run-resume-sets-flag";
+        let prompt = "short prompt";
+        let args =
+            super::build_agent_args(run_id, "/tmp/wt", prompt, Some("sess-abc"), None, None, &[])
+                .unwrap();
+        let resume_idx = args
+            .iter()
+            .position(|a| a == "--resume")
+            .expect("--resume flag missing");
+        assert_eq!(args[resume_idx + 1], "sess-abc");
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
+    }
+
+    #[test]
+    fn build_agent_args_with_model_override() {
+        let run_id = "run-model-override";
+        let args = super::build_agent_args_with_mode(
+            run_id,
+            "/tmp/wt",
+            "prompt",
+            None,
+            Some("claude-sonnet-4-6"),
+            None,
+            None,
+            &[],
+        )
+        .unwrap();
+        let idx = args
+            .iter()
+            .position(|a| a == "--model")
+            .expect("expected --model flag");
+        assert_eq!(args[idx + 1], "claude-sonnet-4-6");
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
+    }
+
+    #[test]
+    fn build_agent_args_with_bot_name() {
+        let run_id = "run-bot-name-01";
+        let args = super::build_agent_args_with_mode(
+            run_id,
+            "/tmp/wt",
+            "prompt",
+            None,
+            None,
+            Some("my-bot"),
+            None,
+            &[],
+        )
+        .unwrap();
+        let idx = args
+            .iter()
+            .position(|a| a == "--bot-name")
+            .expect("expected --bot-name flag");
+        assert_eq!(args[idx + 1], "my-bot");
+        let _ = std::fs::remove_file(
+            std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt")),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_agent_args_prompt_file_mode_0o600() {
+        use std::os::unix::fs::MetadataExt;
+        let run_id = "run-perm-600-01";
+        let args =
+            super::build_agent_args(run_id, "/tmp/wt", "secret prompt", None, None, None, &[])
+                .unwrap();
+        let file_idx = args
+            .iter()
+            .position(|a| a == "--prompt-file")
+            .expect("--prompt-file flag missing");
+        let file_path = std::path::Path::new(args[file_idx + 1].as_ref());
+        let mode = std::fs::metadata(file_path)
+            .expect("prompt file must exist")
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "prompt file must have mode 0o600, got {:#o}",
+            mode & 0o777
+        );
+        let _ = std::fs::remove_file(file_path);
+    }
+}

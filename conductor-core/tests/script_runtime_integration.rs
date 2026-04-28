@@ -5,9 +5,11 @@
 #[path = "common.rs"]
 mod common;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use conductor_core::config::RuntimeConfig;
+use conductor_core::runtime::adapter::SqliteHostAdapter;
 use conductor_core::runtime::script::ScriptRuntime;
 use conductor_core::runtime::{AgentRuntime, RuntimeRequest};
 
@@ -19,6 +21,10 @@ fn make_runtime(command: Option<&str>) -> ScriptRuntime {
 }
 
 fn make_request(run_id: &str, prompt: &str, db_path: std::path::PathBuf) -> RuntimeRequest {
+    let tracker = Arc::new(SqliteHostAdapter::new(db_path.clone()));
+    let event_sink = tracker.clone();
+    let log_path = conductor_core::config::agent_log_path(run_id)
+        .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")));
     RuntimeRequest {
         run_id: run_id.to_string(),
         agent_def: common::make_agent_def("script"),
@@ -27,7 +33,9 @@ fn make_request(run_id: &str, prompt: &str, db_path: std::path::PathBuf) -> Runt
         working_dir: std::path::PathBuf::from("/tmp"),
         bot_name: None,
         plugin_dirs: vec![],
-        db_path,
+        tracker,
+        event_sink,
+        log_path,
     }
 }
 
@@ -42,7 +50,7 @@ fn test_script_runtime_success() {
     runtime.spawn_validated(&req).expect("spawn must succeed");
 
     let result = runtime
-        .poll(&run_id, None, Duration::from_secs(5), _db_guard.path())
+        .poll(&run_id, None, Duration::from_secs(5))
         .expect("poll must succeed");
 
     assert_eq!(
@@ -71,7 +79,7 @@ fn test_script_runtime_captures_conductor_prompt() {
     runtime.spawn_validated(&req).expect("spawn must succeed");
 
     let result = runtime
-        .poll(&run_id, None, Duration::from_secs(5), _db_guard.path())
+        .poll(&run_id, None, Duration::from_secs(5))
         .expect("poll must succeed");
 
     assert_eq!(
@@ -114,7 +122,7 @@ fn test_script_runtime_nonzero_exit_is_failed() {
         .spawn_validated(&req)
         .expect("spawn must succeed even for non-zero exit");
 
-    let result = runtime.poll(&run_id, None, Duration::from_secs(5), _db_guard.path());
+    let result = runtime.poll(&run_id, None, Duration::from_secs(5));
     assert!(
         matches!(result, Err(conductor_core::runtime::PollError::Failed(_))),
         "non-zero exit must map to PollError::Failed, got: {result:?}"
@@ -133,7 +141,7 @@ fn test_script_runtime_nonzero_exit_with_stderr() {
         .spawn_validated(&req)
         .expect("spawn must succeed even for non-zero exit");
 
-    let result = runtime.poll(&run_id, None, Duration::from_secs(5), _db_guard.path());
+    let result = runtime.poll(&run_id, None, Duration::from_secs(5));
     match result {
         Err(conductor_core::runtime::PollError::Failed(msg)) => {
             assert!(
@@ -151,7 +159,8 @@ fn test_script_runtime_nonzero_exit_with_stderr() {
 
 #[test]
 fn test_script_runtime_resolve_via_config() {
-    use conductor_core::config::{Config, RuntimeConfig};
+    use conductor_core::config::{AgentPermissionMode, Config, RuntimeConfig};
+    use conductor_core::runtime::RuntimeOptions;
     use std::collections::HashMap;
 
     let mut runtimes = HashMap::new();
@@ -168,7 +177,21 @@ fn test_script_runtime_resolve_via_config() {
         ..Config::default()
     };
 
-    let runtime = conductor_core::runtime::resolve_runtime("my-script", &config);
+    let options = RuntimeOptions {
+        binary_path: std::path::PathBuf::from("conductor"),
+        log_path_for_run: Arc::new(|run_id| {
+            conductor_core::config::agent_log_path(run_id)
+                .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")))
+        }),
+        workspace_root: std::path::PathBuf::from("/tmp"),
+    };
+
+    let runtime = conductor_core::runtime::resolve_runtime(
+        "my-script",
+        AgentPermissionMode::default(),
+        &config.runtimes,
+        &options,
+    );
     assert!(
         runtime.is_ok(),
         "resolve_runtime must return Ok for type=script"

@@ -148,6 +148,17 @@ pub enum ConductorError {
     Notification(String),
 }
 
+impl From<runkon_runtimes::RuntimeError> for ConductorError {
+    fn from(err: runkon_runtimes::RuntimeError) -> Self {
+        match err {
+            runkon_runtimes::RuntimeError::InvalidInput(msg) => Self::InvalidInput(msg),
+            runkon_runtimes::RuntimeError::Config(msg) => Self::Config(msg),
+            runkon_runtimes::RuntimeError::Agent(msg) => Self::Agent(msg),
+            runkon_runtimes::RuntimeError::Workflow(msg) => Self::Workflow(msg),
+        }
+    }
+}
+
 impl ConductorError {
     /// Semantic exit code for this error.
     ///
