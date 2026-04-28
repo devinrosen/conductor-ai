@@ -21,6 +21,91 @@ fn resolve_log_path(run: &AgentRun) -> Option<PathBuf> {
     }
 }
 
+/// Owned configuration for spawning a headless agent run, sized to the union
+/// of inputs the three TUI launch flows (`start_agent_headless`,
+/// `start_repo_agent_headless`, `handle_restart_agent`) need to pass into
+/// [`drive_headless_run`].
+pub(super) struct HeadlessRunConfig {
+    pub working_dir: String,
+    pub prompt: String,
+    pub resume_session_id: Option<String>,
+    pub model: Option<String>,
+    pub bot_name: Option<String>,
+    pub permission_mode: Option<conductor_core::config::AgentPermissionMode>,
+}
+
+/// Shared post-creation logic for the three TUI headless launch flows.
+///
+/// The caller is responsible for opening the DB, creating the `AgentRun`
+/// (each flow calls a different `AgentManager` method), and constructing
+/// the surrounding modal/UI state. From there, this helper:
+///
+/// 1. Builds args + spawns the subprocess via `try_spawn_headless_run`,
+///    marking the run failed on spawn errors.
+/// 2. Records the subprocess PID on the run.
+/// 3. Sends the launch-result action via `on_launched`.
+/// 4. Drains stdout, emitting `Action::AgentEvent` per parsed event.
+/// 5. Sends `Action::AgentComplete` and removes the prompt file on exit.
+///
+/// `on_launched` decides which `Action` variant carries the launch result —
+/// flows differ (`AgentLaunchComplete`, `RepoAgentLaunched`,
+/// `AgentRestartComplete`) but all wrap a `Result<String, String>`.
+pub(super) fn drive_headless_run(
+    run: AgentRun,
+    config: HeadlessRunConfig,
+    mgr: &AgentManager<'_>,
+    tx: &crate::event::BackgroundSender,
+    on_launched: impl FnOnce(std::result::Result<String, String>) -> Action,
+    success_msg: &str,
+) {
+    let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
+        run_id: &run.id,
+        working_dir: &config.working_dir,
+        prompt: &config.prompt,
+        resume_session_id: config.resume_session_id.as_deref(),
+        model: config.model.as_deref(),
+        bot_name: config.bot_name.as_deref(),
+        permission_mode: config.permission_mode.as_ref(),
+        plugin_dirs: &[],
+    };
+
+    // `try_spawn_headless_run` combines build_headless_agent_args + spawn_headless.
+    // If spawn fails after the prompt file was written, it removes the file
+    // internally before returning Err, so no separate cleanup is needed here.
+    let (handle, prompt_file) =
+        match conductor_core::agent_runtime::try_spawn_headless_run(&spawn_params) {
+            Ok(pair) => pair,
+            Err(e) => {
+                let _ = mgr.update_run_failed(&run.id, &e);
+                let _ = tx.send(on_launched(Err(e)));
+                return;
+            }
+        };
+
+    if let Err(e) = mgr.update_run_subprocess_pid(&run.id, handle.pid()) {
+        tracing::warn!("failed to store subprocess PID for run {}: {e}", run.id);
+    }
+
+    let _ = tx.send(on_launched(Ok(success_msg.to_string())));
+
+    let run_id = run.id.clone();
+    let Some(log_path) = resolve_log_path(&run) else {
+        return;
+    };
+    let tx2 = tx.clone();
+    let (stdout, finish) = handle.into_drain_parts();
+    conductor_core::agent_runtime::drain_stream_json(stdout, &run_id, &log_path, mgr, |event| {
+        let _ = tx2.send(Action::AgentEvent {
+            run_id: run_id.clone(),
+            event: event.clone(),
+        });
+    });
+
+    let _ = std::fs::remove_file(&prompt_file);
+    finish();
+    let _ = tx.send(Action::AgentComplete { run_id });
+}
+
 impl App {
     pub(super) fn handle_toggle_agent_issues(&mut self) {
         let Some(repo) = self
@@ -522,69 +607,21 @@ impl App {
                 }
             };
 
-            let build_params = conductor_core::agent_runtime::SpawnHeadlessParams {
-                run_id: &run.id,
-                working_dir: &worktree_path,
-                prompt: &prompt,
-                resume_session_id: resume_session_id.as_deref(),
-                model: model.as_deref(),
-                bot_name: None,
-                permission_mode: None,
-                plugin_dirs: &[],
-            };
-            let (args, prompt_file) =
-                match conductor_core::agent_runtime::build_headless_agent_args(&build_params) {
-                    Ok(pair) => pair,
-                    Err(e) => {
-                        let _ = mgr.update_run_failed(&run.id, &e);
-                        let _ = tx.send(Action::AgentLaunchComplete { result: Err(e) });
-                        return;
-                    }
-                };
-
-            let handle = match conductor_core::agent_runtime::spawn_headless(
-                &args,
-                std::path::Path::new(&worktree_path),
-            ) {
-                Ok(h) => h,
-                Err(e) => {
-                    let _ = mgr.update_run_failed(&run.id, &e);
-                    let _ = std::fs::remove_file(&prompt_file);
-                    let _ = tx.send(Action::AgentLaunchComplete { result: Err(e) });
-                    return;
-                }
-            };
-
-            if let Err(e) = mgr.update_run_subprocess_pid(&run.id, handle.pid()) {
-                tracing::warn!("failed to store subprocess PID for run {}: {e}", run.id);
-            }
-
-            let _ = tx.send(Action::AgentLaunchComplete {
-                result: Ok("Agent launched (headless)".to_string()),
-            });
-
-            let run_id = run.id.clone();
-            let Some(log_path) = resolve_log_path(&run) else {
-                return;
-            };
-            let tx2 = tx.clone();
-            let (stdout, finish) = handle.into_drain_parts();
-            conductor_core::agent_runtime::drain_stream_json(
-                stdout,
-                &run_id,
-                &log_path,
-                &mgr,
-                |event| {
-                    let _ = tx2.send(Action::AgentEvent {
-                        run_id: run_id.clone(),
-                        event: event.clone(),
-                    });
+            drive_headless_run(
+                run,
+                HeadlessRunConfig {
+                    working_dir: worktree_path,
+                    prompt,
+                    resume_session_id,
+                    model,
+                    bot_name: None,
+                    permission_mode: None,
                 },
+                &mgr,
+                &tx,
+                |result| Action::AgentLaunchComplete { result },
+                "Agent launched (headless)",
             );
-
-            let _ = std::fs::remove_file(&prompt_file);
-            finish();
-            let _ = tx.send(Action::AgentComplete { run_id });
         });
     }
 
@@ -671,70 +708,21 @@ impl App {
                 }
             };
 
-            let plan_mode = conductor_core::config::AgentPermissionMode::RepoSafe;
-            let build_params = conductor_core::agent_runtime::SpawnHeadlessParams {
-                run_id: &run.id,
-                working_dir: &repo_path,
-                prompt: &prompt,
-                resume_session_id: resume_session_id.as_deref(),
-                model: None,
-                bot_name: None,
-                permission_mode: Some(&plan_mode),
-                plugin_dirs: &[],
-            };
-            let (args, prompt_file) =
-                match conductor_core::agent_runtime::build_headless_agent_args(&build_params) {
-                    Ok(pair) => pair,
-                    Err(e) => {
-                        let _ = mgr.update_run_failed(&run.id, &e);
-                        let _ = tx.send(Action::RepoAgentLaunched { result: Err(e) });
-                        return;
-                    }
-                };
-
-            let handle = match conductor_core::agent_runtime::spawn_headless(
-                &args,
-                std::path::Path::new(&repo_path),
-            ) {
-                Ok(h) => h,
-                Err(e) => {
-                    let _ = mgr.update_run_failed(&run.id, &e);
-                    let _ = std::fs::remove_file(&prompt_file);
-                    let _ = tx.send(Action::RepoAgentLaunched { result: Err(e) });
-                    return;
-                }
-            };
-
-            if let Err(e) = mgr.update_run_subprocess_pid(&run.id, handle.pid()) {
-                tracing::warn!("failed to store subprocess PID for run {}: {e}", run.id);
-            }
-
-            let _ = tx.send(Action::RepoAgentLaunched {
-                result: Ok("Repo agent launched (headless)".to_string()),
-            });
-
-            let run_id = run.id.clone();
-            let Some(log_path) = resolve_log_path(&run) else {
-                return;
-            };
-            let tx2 = tx.clone();
-            let (stdout, finish) = handle.into_drain_parts();
-            conductor_core::agent_runtime::drain_stream_json(
-                stdout,
-                &run_id,
-                &log_path,
-                &mgr,
-                |event| {
-                    let _ = tx2.send(Action::AgentEvent {
-                        run_id: run_id.clone(),
-                        event: event.clone(),
-                    });
+            drive_headless_run(
+                run,
+                HeadlessRunConfig {
+                    working_dir: repo_path,
+                    prompt,
+                    resume_session_id,
+                    model: None,
+                    bot_name: None,
+                    permission_mode: Some(conductor_core::config::AgentPermissionMode::RepoSafe),
                 },
+                &mgr,
+                &tx,
+                |result| Action::RepoAgentLaunched { result },
+                "Repo agent launched (headless)",
             );
-
-            let _ = std::fs::remove_file(&prompt_file);
-            finish();
-            let _ = tx.send(Action::AgentComplete { run_id });
         });
     }
 
@@ -801,56 +789,24 @@ impl App {
                 }
             };
 
-            let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
-                run_id: &new_run.id,
-                working_dir: &worktree_path,
-                prompt: &new_run.prompt,
-                resume_session_id: None,
-                model: new_run.model.as_deref(),
-                bot_name: new_run.bot_name.as_deref(),
-                permission_mode: None,
-                plugin_dirs: &[],
-            };
-            let (handle, prompt_file) =
-                match conductor_core::agent_runtime::try_spawn_headless_run(&spawn_params) {
-                    Ok(pair) => pair,
-                    Err(e) => {
-                        let _ = mgr.update_run_failed(&new_run.id, &e);
-                        let _ = tx.send(Action::AgentRestartComplete { result: Err(e) });
-                        return;
-                    }
-                };
-
-            if let Err(e) = mgr.update_run_subprocess_pid(&new_run.id, handle.pid()) {
-                tracing::warn!("failed to store subprocess PID for run {}: {e}", new_run.id);
-            }
-
-            let _ = tx.send(Action::AgentRestartComplete {
-                result: Ok("Agent restarted (headless)".to_string()),
-            });
-
-            let new_run_id = new_run.id.clone();
-            let Some(log_path) = resolve_log_path(&new_run) else {
-                return;
-            };
-            let tx2 = tx.clone();
-            let (stdout, finish) = handle.into_drain_parts();
-            conductor_core::agent_runtime::drain_stream_json(
-                stdout,
-                &new_run_id,
-                &log_path,
-                &mgr,
-                |event| {
-                    let _ = tx2.send(Action::AgentEvent {
-                        run_id: new_run_id.clone(),
-                        event: event.clone(),
-                    });
+            let prompt = new_run.prompt.clone();
+            let model = new_run.model.clone();
+            let bot_name = new_run.bot_name.clone();
+            drive_headless_run(
+                new_run,
+                HeadlessRunConfig {
+                    working_dir: worktree_path,
+                    prompt,
+                    resume_session_id: None,
+                    model,
+                    bot_name,
+                    permission_mode: None,
                 },
+                &mgr,
+                &tx,
+                |result| Action::AgentRestartComplete { result },
+                "Agent restarted (headless)",
             );
-
-            let _ = std::fs::remove_file(&prompt_file);
-            finish();
-            let _ = tx.send(Action::AgentComplete { run_id: new_run_id });
         });
     }
 

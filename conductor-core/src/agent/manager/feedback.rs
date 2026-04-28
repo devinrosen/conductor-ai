@@ -5,10 +5,10 @@ use crate::db::{query_collect, sql_placeholders};
 use crate::error::{ConductorError, Result};
 
 use super::super::db::{optional_row, row_to_feedback_request, FEEDBACK_SELECT};
-use super::super::status::truncate_utf8;
 use super::super::status::{FeedbackStatus, FeedbackType, FEEDBACK_MAX_LEN};
 use super::super::types::{FeedbackOption, FeedbackRequest, FeedbackRequestParams};
 use super::AgentManager;
+use crate::text_util::truncate_str;
 
 /// Normalize a raw user response based on feedback type and available options.
 ///
@@ -78,7 +78,7 @@ impl<'a> AgentManager<'a> {
         prompt: &str,
         params: Option<&FeedbackRequestParams>,
     ) -> Result<FeedbackRequest> {
-        let prompt = truncate_utf8(prompt, FEEDBACK_MAX_LEN);
+        let prompt = truncate_str(prompt, FEEDBACK_MAX_LEN);
         let id = crate::new_id();
         let now = Utc::now().to_rfc3339();
 
@@ -146,7 +146,7 @@ impl<'a> AgentManager<'a> {
 
     /// Submit a response to a pending feedback request and resume the run.
     pub fn submit_feedback(&self, feedback_id: &str, response: &str) -> Result<FeedbackRequest> {
-        let response = truncate_utf8(response, FEEDBACK_MAX_LEN);
+        let response = truncate_str(response, FEEDBACK_MAX_LEN);
         let now = Utc::now().to_rfc3339();
 
         // Update feedback request
