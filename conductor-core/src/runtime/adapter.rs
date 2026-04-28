@@ -300,4 +300,57 @@ mod tests {
         assert_eq!(run.cache_read_input_tokens, Some(10));
         assert_eq!(run.cache_creation_input_tokens, Some(5));
     }
+
+    #[test]
+    fn test_new_returns_runtime_error_for_invalid_path() {
+        // Pass a directory path — open_database_compat should fail to open it
+        // as a SQLite file.
+        let dir = tempfile::tempdir().unwrap();
+        let result = SqliteHostAdapter::new(dir.path().to_path_buf());
+        assert!(matches!(result, Err(RuntimeError::Agent(_))));
+        if let Err(RuntimeError::Agent(msg)) = result {
+            assert!(
+                msg.contains("failed to open database"),
+                "unexpected error message: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_on_event_with_missing_row_does_not_panic() {
+        // Build an adapter against a fresh DB but call on_event with a run_id
+        // that was never inserted. Each variant exercises a different
+        // mgr.update_* path; the function must log a warning and return
+        // without panicking even though the UPDATE affects zero rows.
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let _ = open_database_compat(tmp.path()).unwrap();
+        let adapter = SqliteHostAdapter::new(tmp.path().to_path_buf()).unwrap();
+
+        adapter.on_event(
+            "missing-run",
+            RuntimeEvent::Init {
+                model: Some("sonnet".into()),
+                session_id: Some("sess".into()),
+            },
+        );
+        adapter.on_event(
+            "missing-run",
+            RuntimeEvent::Tokens {
+                input: 1,
+                output: 2,
+                cache_read: 3,
+                cache_create: 4,
+            },
+        );
+        adapter.on_event(
+            "missing-run",
+            RuntimeEvent::Failed {
+                error: "boom".into(),
+                session_id: None,
+            },
+        );
+
+        // The row never existed, so `get_run` should still return None.
+        assert!(adapter.get_run("missing-run").unwrap().is_none());
+    }
 }

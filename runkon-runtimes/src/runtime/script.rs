@@ -123,22 +123,24 @@ impl AgentRuntime for ScriptRuntime {
             if let Some(flag) = shutdown {
                 if flag.load(std::sync::atomic::Ordering::Relaxed) {
                     let _ = state.child.kill();
-                    if let Err(e) = tracker.mark_cancelled(run_id) {
-                        tracing::warn!(
-                            "ScriptRuntime: failed to mark run {run_id} cancelled on shutdown: {e}"
-                        );
-                    }
+                    super::mark_cancelled_with_reason(
+                        tracker.as_ref(),
+                        run_id,
+                        "ScriptRuntime",
+                        "shutdown",
+                    );
                     return Err(PollError::Cancelled);
                 }
             }
 
             if poll_start.elapsed() > step_timeout {
                 let _ = state.child.kill();
-                if let Err(e) = tracker.mark_cancelled(run_id) {
-                    tracing::warn!(
-                        "ScriptRuntime: failed to mark run {run_id} cancelled on timeout: {e}"
-                    );
-                }
+                super::mark_cancelled_with_reason(
+                    tracker.as_ref(),
+                    run_id,
+                    "ScriptRuntime",
+                    "timeout",
+                );
                 return Err(PollError::NoResult);
             }
 

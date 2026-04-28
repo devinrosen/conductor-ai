@@ -673,6 +673,54 @@ mod tests {
         ));
     }
 
+    /// Reader that yields `prefix`, then returns an `io::Error` on the next read.
+    /// Used to exercise the stdout read-error branch of `drain_stream_json`.
+    struct ErrorAfterReader {
+        prefix: std::io::Cursor<Vec<u8>>,
+        errored: bool,
+    }
+
+    impl std::io::Read for ErrorAfterReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.prefix.read(buf)?;
+            if n == 0 && !self.errored {
+                self.errored = true;
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "test broken pipe",
+                ));
+            }
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn drain_stream_json_returns_no_result_on_stdout_read_error() {
+        // Stream yields one valid JSON line (which emits an Init event), then
+        // a hard read error before any `result` event. drain_stream_json must
+        // return NoResult cleanly without panicking.
+        let prefix = b"{\"type\":\"system\",\"subtype\":\"init\"}\n".to_vec();
+        let reader = ErrorAfterReader {
+            prefix: std::io::Cursor::new(prefix),
+            errored: false,
+        };
+        let log_file = std::env::temp_dir().join(format!(
+            "test-drain-read-err-{:?}.log",
+            std::thread::current().id()
+        ));
+        let sink = RecordingSink::default();
+        let outcome = super::drain_stream_json(reader, "run-err", &log_file, &sink);
+        let _ = std::fs::remove_file(&log_file);
+        assert_eq!(outcome, super::DrainOutcome::NoResult);
+        // The init event from before the error should still have been emitted.
+        let events = sink.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0],
+            crate::tracker::RuntimeEvent::Init { .. }
+        ));
+    }
+
     #[test]
     fn drain_stream_json_token_update_emitted() {
         let (outcome, sink) = run_drain(&[

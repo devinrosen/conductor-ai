@@ -41,6 +41,11 @@ impl CliRuntime {
 
 impl AgentRuntime for CliRuntime {
     fn spawn_impl(&self, request: &RuntimeRequest, _seal: super::private::Seal) -> Result<()> {
+        // Defense-in-depth: spawn_validated already validates, but spawn_impl is
+        // technically reachable via the sealed trait — re-validate so a future
+        // refactor that adds a new entrypoint can't bypass the path-safety check.
+        crate::text_util::validate_run_id(&request.run_id)?;
+
         let binary =
             self.config.binary.as_deref().ok_or_else(|| {
                 RuntimeError::Config("CliRuntime: `binary` is required".to_string())
@@ -100,7 +105,12 @@ impl AgentRuntime for CliRuntime {
         if prompt_via == "stdin" {
             if let Some(mut stdin) = child.stdin.take() {
                 use std::io::Write;
-                let _ = stdin.write_all(request.prompt.as_bytes());
+                if let Err(e) = stdin.write_all(request.prompt.as_bytes()) {
+                    tracing::warn!(
+                        "CliRuntime: failed to write prompt to stdin for run {}: {e}",
+                        request.run_id
+                    );
+                }
             }
         }
 
@@ -164,22 +174,24 @@ impl AgentRuntime for CliRuntime {
             if let Some(flag) = shutdown {
                 if flag.load(std::sync::atomic::Ordering::Relaxed) {
                     process_utils::cancel_subprocess(state.pid);
-                    if let Err(e) = tracker.mark_cancelled(run_id) {
-                        tracing::warn!(
-                            "CliRuntime: failed to mark run {run_id} cancelled on shutdown: {e}"
-                        );
-                    }
+                    super::mark_cancelled_with_reason(
+                        tracker.as_ref(),
+                        run_id,
+                        "CliRuntime",
+                        "shutdown",
+                    );
                     return Err(PollError::Cancelled);
                 }
             }
 
             if poll_start.elapsed() > step_timeout {
                 process_utils::cancel_subprocess(state.pid);
-                if let Err(e) = tracker.mark_cancelled(run_id) {
-                    tracing::warn!(
-                        "CliRuntime: failed to mark run {run_id} cancelled on timeout: {e}"
-                    );
-                }
+                super::mark_cancelled_with_reason(
+                    tracker.as_ref(),
+                    run_id,
+                    "CliRuntime",
+                    "timeout",
+                );
                 return Err(PollError::NoResult);
             }
 

@@ -190,11 +190,20 @@ fn poll_unix(
     let event_sink_for_drain = event_sink.clone();
     let (tx, rx) = std::sync::mpsc::channel::<DrainOutcome>();
 
+    let stderr_run_id = run_id.to_string();
     std::thread::spawn(move || {
         use std::io::{BufRead, BufReader};
         let reader = BufReader::new(stderr_pipe);
-        for line in reader.lines().map_while(|l| l.ok()) {
-            tracing::trace!(target: "conductor::agent::stderr", "{line}");
+        for line in reader.lines() {
+            match line {
+                Ok(l) => tracing::trace!(target: "conductor::agent::stderr", "{l}"),
+                Err(e) => {
+                    tracing::warn!(
+                        "ClaudeRuntime: stderr read failed for run {stderr_run_id}, ending stderr drain: {e}"
+                    );
+                    break;
+                }
+            }
         }
     });
 
@@ -212,6 +221,16 @@ fn poll_unix(
         let _ = tx.send(outcome);
     });
 
+    // Helper: tear down the running agent (warn → mark cancelled → kill process
+    // → drain remaining output up to 6s). Used by the shutdown and timeout
+    // branches below to avoid duplicating the same 4-step sequence.
+    let abort_poll = |reason: &str| {
+        tracing::warn!("ClaudeRuntime: {reason} for run {run_id}, cancelling");
+        super::mark_cancelled_with_reason(tracker.as_ref(), run_id, "ClaudeRuntime", reason);
+        process_utils::cancel_subprocess(pid);
+        let _ = rx.recv_timeout(Duration::from_secs(6));
+    };
+
     let start = std::time::Instant::now();
     let drain_outcome = loop {
         match rx.recv_timeout(Duration::from_secs(1)) {
@@ -219,26 +238,12 @@ fn poll_unix(
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if let Some(flag) = shutdown {
                     if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                        tracing::warn!(
-                            "ClaudeRuntime: shutdown requested, cancelling run {run_id}"
-                        );
-                        if let Err(e) = tracker.mark_cancelled(run_id) {
-                            tracing::warn!("ClaudeRuntime: failed to mark run {run_id} cancelled on shutdown: {e}");
-                        }
-                        process_utils::cancel_subprocess(pid);
-                        let _ = rx.recv_timeout(Duration::from_secs(6));
+                        abort_poll("shutdown requested");
                         return Err(PollError::Cancelled);
                     }
                 }
                 if start.elapsed() > step_timeout {
-                    tracing::warn!("ClaudeRuntime: step timeout reached for run {run_id}");
-                    if let Err(e) = tracker.mark_cancelled(run_id) {
-                        tracing::warn!(
-                            "ClaudeRuntime: failed to mark run {run_id} cancelled on timeout: {e}"
-                        );
-                    }
-                    process_utils::cancel_subprocess(pid);
-                    let _ = rx.recv_timeout(Duration::from_secs(6));
+                    abort_poll("step timeout reached");
                     break DrainOutcome::NoResult;
                 }
             }

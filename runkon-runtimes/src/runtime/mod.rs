@@ -216,6 +216,21 @@ pub(crate) fn mark_cancelled_via_tracker(
     }
 }
 
+/// Best-effort: mark a run as cancelled and log a uniform warning if the DB
+/// write fails. Used by every runtime's poll loop in shutdown/timeout
+/// branches; the runtime-specific subprocess kill is left to the caller
+/// because it differs by runtime (PID-based vs `Child::kill`).
+pub(crate) fn mark_cancelled_with_reason(
+    tracker: &dyn RunTracker,
+    run_id: &str,
+    context: &str,
+    reason: &str,
+) {
+    if let Err(e) = tracker.mark_cancelled(run_id) {
+        tracing::warn!("{context}: failed to mark run {run_id} cancelled on {reason}: {e}");
+    }
+}
+
 /// Best-effort: record the subprocess pid and runtime name on the tracker,
 /// logging warnings on failure rather than aborting spawn.
 pub(crate) fn record_pid_and_runtime(
