@@ -2142,8 +2142,8 @@ fn foreach_progress_spans(
     let running = items.iter().filter(|i| i.status == "running").count();
     let pending = items.iter().filter(|i| i.status == "pending").count();
 
-    let bar = if total > 0 {
-        let filled = (completed * 15 / total).min(15);
+    let bar = if let Some(filled) = (completed * 15).checked_div(total) {
+        let filled = filled.min(15);
         let empty = 15 - filled;
         format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
     } else {

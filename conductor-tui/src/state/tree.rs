@@ -270,7 +270,7 @@ pub fn build_branch_picker_tree(
     let (rest_indices, rest_positions) =
         dfs_tree_order(rest.len(), get_branch, get_parent, "", false);
 
-    for (idx, pos) in rest_indices.into_iter().zip(rest_positions.into_iter()) {
+    for (idx, pos) in rest_indices.into_iter().zip(rest_positions) {
         result.push(rest[idx].clone());
         positions.push(pos);
     }
