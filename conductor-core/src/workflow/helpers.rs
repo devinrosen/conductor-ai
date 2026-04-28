@@ -67,8 +67,28 @@ pub(super) fn load_agent_and_build_prompt(
         Some(&ectx.workflow_name),
         &ectx.plugin_dirs,
     )?;
-    let prompt =
-        crate::workflow::prompt_builder::build_agent_prompt_from_params(&agent_def, params);
+
+    // The runkon-flow engine passes snippet refs as names (from the DSL `with` field).
+    // Resolve them to actual file contents before building the prompt.
+    let mut resolved_params = params.clone();
+    if !params.snippets.is_empty() {
+        let snippet_text = crate::prompt_config::load_and_concat_snippets(
+            &working_dir_str,
+            &ectx.repo_path,
+            &params.snippets,
+            Some(&ectx.workflow_name),
+        )?;
+        resolved_params.snippets = if snippet_text.is_empty() {
+            Vec::new()
+        } else {
+            vec![snippet_text]
+        };
+    }
+
+    let prompt = crate::workflow::prompt_builder::build_agent_prompt_from_params(
+        &agent_def,
+        &resolved_params,
+    );
     Ok((agent_def, prompt))
 }
 
