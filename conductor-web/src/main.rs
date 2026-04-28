@@ -726,6 +726,16 @@ async fn main() -> Result<()> {
         .parse()
         .map_err(|e| anyhow::anyhow!("invalid CONDUCTOR_PORT: {e}"))?;
 
+    if !host.is_loopback() {
+        tracing::warn!(
+            host = %host,
+            "CONDUCTOR_HOST is bound to a non-loopback address; the conductor-web API has no \
+             authentication and will be reachable by anyone who can reach this host. Use \
+             127.0.0.1 (the default) unless an external auth layer (reverse proxy, VPN, etc.) \
+             is in front of this server."
+        );
+    }
+
     let mut origins: Vec<HeaderValue> = vec![
         format!("http://localhost:{port}").parse().unwrap(),
         format!("http://127.0.0.1:{port}").parse().unwrap(),
