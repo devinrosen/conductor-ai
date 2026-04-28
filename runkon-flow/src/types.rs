@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,7 @@ use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
 pub(crate) type StepKey = (String, u32);
 
 /// Describes what a workflow run is currently blocked on when in `Waiting` status.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BlockedOn {
@@ -36,6 +38,7 @@ pub enum BlockedOn {
 }
 
 /// A workflow run record from the database.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkflowRun {
     pub id: String,
@@ -99,6 +102,7 @@ impl WorkflowRun {
 }
 
 /// A workflow step execution record from the database.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct WorkflowRunStep {
     pub id: String,
@@ -155,13 +159,33 @@ pub struct WorkflowStepSummary {
 }
 
 /// Configuration for workflow execution.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WorkflowExecConfig {
     pub poll_interval: Duration,
     pub step_timeout: Duration,
     pub fail_fast: bool,
     pub dry_run: bool,
     pub shutdown: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Event sinks that receive observability events after each state transition.
+    /// Defaults to empty (no sinks). Use `..WorkflowExecConfig::default()` spread
+    /// syntax to leave this unset when you don't need events.
+    pub event_sinks: Vec<Arc<dyn crate::events::EventSink>>,
+}
+
+impl std::fmt::Debug for WorkflowExecConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkflowExecConfig")
+            .field("poll_interval", &self.poll_interval)
+            .field("step_timeout", &self.step_timeout)
+            .field("fail_fast", &self.fail_fast)
+            .field("dry_run", &self.dry_run)
+            .field("shutdown", &self.shutdown)
+            .field(
+                "event_sinks",
+                &format_args!("[{} sink(s)]", self.event_sinks.len()),
+            )
+            .finish()
+    }
 }
 
 impl Default for WorkflowExecConfig {
@@ -172,6 +196,7 @@ impl Default for WorkflowExecConfig {
             fail_fast: true,
             dry_run: false,
             shutdown: None,
+            event_sinks: vec![],
         }
     }
 }

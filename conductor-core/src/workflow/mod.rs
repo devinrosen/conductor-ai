@@ -24,25 +24,10 @@ pub mod persistence;
 pub(crate) mod persistence_memory;
 pub(crate) mod persistence_sqlite;
 pub(crate) mod prompt_builder;
-pub(crate) mod rk_types;
 pub(crate) mod runkon_bridge;
 pub(crate) mod runkon_gate_bridge;
 pub(crate) mod script_env_provider;
-pub(crate) mod status;
 pub(crate) mod types;
-
-// Unstable migration scaffolding: these re-exports will be removed once conductor-core
-// and runkon-flow types are fully unified (planned post-Phase 3.3).
-// Removal is tracked in issue #2631 — do not add new re-exports to this block.
-#[doc(hidden)]
-pub use runkon_flow::dsl::{
-    collect_agent_names, collect_workflow_refs, default_skills_dir, detect_workflow_cycles,
-    load_workflow_by_name, make_script_resolver, parse_workflow_str, resolve_script_path,
-    validate_script_steps, validate_workflow_semantics, AgentRef, AlwaysNode, CallNode,
-    CallWorkflowNode, Condition, DoNode, DoWhileNode, GateNode, GateType, IfNode, InputDecl,
-    InputType, OnFail, ParallelNode, UnlessNode, ValidationError, ValidationReport, WhileNode,
-    WorkflowDef, WorkflowNode, WorkflowTrigger, WorkflowWarning, MAX_WORKFLOW_DEPTH,
-};
 
 // Re-export batch validation from the workflow layer (not DSL).
 pub use batch_validate::{
@@ -78,16 +63,34 @@ pub use persistence::{
     FanOutItemRow, FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep,
     StepUpdate, WorkflowPersistence,
 };
-pub use status::{WorkflowRunStatus, WorkflowStepStatus};
 pub use types::SpawnHeartbeatResumeParams;
 pub use types::{
-    resolve_conductor_bin_dir, ActiveWorkflowCounts, BlockedOn, ContextEntry, GateAnalyticsRow,
-    GateKind, MetadataEntry, PendingGateAnalyticsRow, PendingGateRow, RunIdSlot, SpikeBaseline,
-    StepFailureHeatmapRow, StepResult, StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity,
-    WorkflowExecConfig, WorkflowExecInput, WorkflowExecStandalone, WorkflowFailureRateTrendRow,
-    WorkflowPercentiles, WorkflowRegressionSignal, WorkflowResult, WorkflowResumeInput,
-    WorkflowResumeStandalone, WorkflowRun, WorkflowRunContext, WorkflowRunMetricsRow,
-    WorkflowRunStep, WorkflowStepSummary, WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    resolve_conductor_bin_dir, ActiveWorkflowCounts, GateAnalyticsRow, MetadataEntry,
+    PendingGateAnalyticsRow, PendingGateRow, RunIdSlot, SpikeBaseline, StepFailureHeatmapRow,
+    StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity, WorkflowExecInput,
+    WorkflowExecStandalone, WorkflowFailureRateTrendRow, WorkflowPercentiles,
+    WorkflowRegressionSignal, WorkflowResumeInput, WorkflowResumeStandalone, WorkflowRunContext,
+    WorkflowRunMetricsRow, WorkflowTokenAggregate, WorkflowTokenTrendRow,
+};
+pub use types::WorkflowRunStepExt;
+
+// Re-export DSL types and helpers that downstream crates (conductor-web,
+// conductor-cli, etc.) import through `conductor_core::workflow`.
+pub use runkon_flow::dsl::{
+    collect_agent_names, collect_workflow_refs, default_skills_dir, detect_workflow_cycles,
+    load_workflow_by_name, make_script_resolver, parse_workflow_str, resolve_script_path,
+    validate_script_steps, validate_workflow_semantics, AgentRef, AlwaysNode, CallNode,
+    CallWorkflowNode, Condition, DoNode, DoWhileNode, GateNode, GateType, IfNode, InputDecl,
+    InputType, OnFail, ParallelNode, UnlessNode, ValidationError, ValidationReport, WhileNode,
+    WorkflowDef, WorkflowNode, WorkflowTrigger, WorkflowWarning, MAX_WORKFLOW_DEPTH,
+};
+
+// Re-export unified runkon-flow types so downstream crates can import them from
+// `conductor_core::workflow` as before.
+pub use runkon_flow::status::{WorkflowRunStatus, WorkflowStepStatus};
+pub use runkon_flow::types::{
+    extract_workflow_title, BlockedOn, ContextEntry, StepResult, WorkflowExecConfig,
+    WorkflowResult, WorkflowRun, WorkflowRunStep, WorkflowStepSummary,
 };
 
 use crate::agent_config::AgentSpec;

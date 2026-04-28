@@ -1,8 +1,9 @@
 use super::*;
 use crate::agent::AgentManager;
 use crate::db::sql_placeholders;
-use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
-use crate::workflow::types::{GateKind, TimeGranularity, WorkflowRun};
+use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
+use crate::workflow::{GateType, WorkflowRun};
+use crate::workflow::types::TimeGranularity;
 
 fn setup_db() -> rusqlite::Connection {
     let conn = crate::test_helpers::setup_db();
@@ -298,7 +299,7 @@ fn test_list_all_waiting_gate_steps_returns_waiting_gate_steps() {
         .unwrap();
     mgr.set_step_gate_info(
         &step_id,
-        GateKind::HumanApproval,
+        GateType::HumanApproval,
         Some("Please approve"),
         "1h",
     )
@@ -804,7 +805,7 @@ fn test_list_all_waiting_gate_steps_excludes_approved_gate_steps() {
     let step_id = mgr
         .insert_step(&run.id, "gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
         .unwrap();
     // Mark as completed (approved) — must not appear in waiting list.
     conn.execute(
@@ -842,7 +843,7 @@ fn test_list_all_waiting_gate_steps_includes_target_label() {
     let step_id = mgr
         .insert_step(&run.id, "approve-deploy", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -882,7 +883,7 @@ fn test_list_waiting_gate_steps_for_repo_via_worktree() {
         .unwrap();
     mgr.set_step_gate_info(
         &step_id,
-        GateKind::HumanApproval,
+        GateType::HumanApproval,
         Some("Please approve"),
         "1h",
     )
@@ -921,7 +922,7 @@ fn test_list_waiting_gate_steps_for_repo_via_direct_repo_id() {
     let step_id = mgr
         .insert_step(&run.id, "direct-gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -965,7 +966,7 @@ fn test_list_waiting_gate_steps_for_repo_ticket_ref_populated() {
     let step_id = mgr
         .insert_step(&run.id, "approval-gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -989,7 +990,7 @@ fn test_list_waiting_gate_steps_for_repo_excludes_other_repo() {
     let step_id = mgr
         .insert_step(&run.id, "gate-other", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -1026,7 +1027,7 @@ fn test_list_waiting_gate_steps_for_repo_excludes_completed_gate_steps() {
     let step_id = mgr
         .insert_step(&run.id, "gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
         .unwrap();
     conn.execute(
         "UPDATE workflow_run_steps SET status = 'completed', gate_approved_at = '2024-01-01T00:00:00Z' WHERE id = :id",
@@ -1049,7 +1050,7 @@ fn test_list_waiting_gate_steps_for_repo_excludes_cancelled_run() {
     let step_id = mgr
         .insert_step(&run.id, "gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
         .unwrap();
     conn.execute(
         "UPDATE workflow_runs SET status = 'cancelled' WHERE id = ?1",
@@ -1073,7 +1074,7 @@ fn test_list_waiting_gate_steps_for_repo_excludes_failed_run() {
     let step_id = mgr
         .insert_step(&run.id, "gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
         .unwrap();
     conn.execute(
         "UPDATE workflow_runs SET status = 'failed' WHERE id = ?1",
@@ -1242,7 +1243,7 @@ fn test_update_step_preserves_child_run_id_when_none_passed() {
     // Update to a terminal status passing child_run_id = None.
     mgr.update_step_status_full(
         &step_id,
-        crate::workflow::status::WorkflowStepStatus::Completed,
+        crate::workflow::WorkflowStepStatus::Completed,
         None, // child_run_id intentionally None
         Some("done"),
         None,
@@ -3330,7 +3331,7 @@ fn test_get_gate_analytics_excludes_waiting_steps() {
     let step_id = mgr
         .insert_step(&run.id, "approval", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -3361,7 +3362,7 @@ fn test_get_all_pending_gates_returns_waiting_gate() {
         .unwrap();
     mgr.set_step_gate_info(
         &step_id,
-        GateKind::HumanApproval,
+        GateType::HumanApproval,
         Some("Please review"),
         "1h",
     )
@@ -3394,7 +3395,7 @@ fn test_get_all_pending_gates_excludes_completed() {
     let step_id = mgr
         .insert_step(&run.id, "gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
         .unwrap();
     mgr.approve_gate(&step_id, "alice", None, None, None)
         .unwrap();
@@ -3429,7 +3430,7 @@ fn test_get_all_pending_gates_cross_workflow() {
     let step_a = mgr
         .insert_step(&run_a.id, "gate-a", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_a, GateKind::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_a, GateType::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&mgr, &step_a, WorkflowStepStatus::Waiting);
 
@@ -3437,7 +3438,7 @@ fn test_get_all_pending_gates_cross_workflow() {
     let step_b = mgr
         .insert_step(&run_b.id, "gate-b", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_b, GateKind::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_b, GateType::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&mgr, &step_b, WorkflowStepStatus::Waiting);
 
@@ -3459,7 +3460,7 @@ fn test_get_all_pending_gates_null_started_at() {
     let step_id = mgr
         .insert_step(&run.id, "legacy-gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
         .unwrap();
     // Force status to 'waiting' without going through update_step_status_full
     // so that started_at stays NULL (simulating pre-fix rows).
@@ -4264,7 +4265,7 @@ fn test_find_step_by_name_and_iteration_returns_non_completed_step() {
     set_step_status(
         &mgr,
         &step_id,
-        crate::workflow::status::WorkflowStepStatus::Running,
+        crate::workflow::WorkflowStepStatus::Running,
     );
 
     // Should find the running step.
@@ -4306,7 +4307,7 @@ fn test_find_step_by_name_and_iteration_ignores_completed_steps() {
     set_step_status(
         &mgr,
         &step_id,
-        crate::workflow::status::WorkflowStepStatus::Completed,
+        crate::workflow::WorkflowStepStatus::Completed,
     );
 
     // Should NOT return a completed step.
@@ -4428,14 +4429,14 @@ fn gate_kind_human_approval_roundtrips_through_db() {
     let step_id = mgr
         .insert_step(&run.id, "gate-step", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, None, "1h")
         .unwrap();
 
     let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
     assert_eq!(
         step.gate_type,
-        Some(GateKind::HumanApproval),
-        "GateKind::HumanApproval must survive a write/read DB roundtrip"
+        Some(GateType::HumanApproval),
+        "GateType::HumanApproval must survive a write/read DB roundtrip"
     );
 }
 

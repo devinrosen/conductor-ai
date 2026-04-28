@@ -271,7 +271,7 @@ pub fn spawn_db_poller(
                                     // Multiple gates: fire a single grouped notification
                                     let (_, workflow_name, target_label) = steps[0];
                                     let gate_types: Vec<
-                                        Option<&conductor_core::workflow::GateKind>,
+                                        Option<&conductor_core::workflow::GateType>,
                                     > = steps
                                         .iter()
                                         .map(|(s, _, _)| s.gate_type.as_ref())

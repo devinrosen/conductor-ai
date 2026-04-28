@@ -23,6 +23,7 @@ pub trait ActionExecutor: Send + Sync {
 }
 
 /// Per-invocation inputs passed to an `ActionExecutor`.
+#[derive(Clone)]
 pub struct ActionParams {
     /// Short name of the agent/action being dispatched (e.g. `"plan"`).
     pub name: String,

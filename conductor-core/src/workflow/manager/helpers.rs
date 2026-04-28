@@ -1,7 +1,6 @@
 use crate::db::sql_placeholders;
-use crate::workflow::types::{
-    extract_workflow_title, BlockedOn, PendingGateRow, WorkflowRun, WorkflowRunStep,
-};
+use crate::workflow::{extract_workflow_title, BlockedOn, WorkflowRun, WorkflowRunStep};
+use crate::workflow::types::PendingGateRow;
 
 /// Deserialize `json` as `T`, returning `T::default()` on missing or malformed input.
 ///

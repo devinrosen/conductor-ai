@@ -14,6 +14,120 @@ use crate::error::ConductorError;
 use crate::workflow::action_executor::ActionExecutor;
 use crate::workflow::item_provider::ItemProvider;
 
+// ---------------------------------------------------------------------------
+// Persistence type conversions (runkon-flow ↔ conductor-core)
+// ---------------------------------------------------------------------------
+// These remain necessary until Phase 3 unifies the persistence traits.
+
+macro_rules! field_copy_from {
+    ($from:ty => $to:ty { $($field:ident),+ $(,)? }) => {
+        impl From<$from> for $to {
+            fn from(src: $from) -> Self {
+                Self {
+                    $($field: src.$field),+
+                }
+            }
+        }
+    };
+}
+
+field_copy_from!(runkon_flow::traits::persistence::NewRun => crate::workflow::persistence::NewRun {
+    workflow_name,
+    worktree_id,
+    ticket_id,
+    repo_id,
+    parent_run_id,
+    dry_run,
+    trigger,
+    definition_snapshot,
+    parent_workflow_run_id,
+    target_label,
+});
+
+field_copy_from!(runkon_flow::traits::persistence::NewStep => crate::workflow::persistence::NewStep {
+    workflow_run_id,
+    step_name,
+    role,
+    can_commit,
+    position,
+    iteration,
+    retry_count,
+});
+
+field_copy_from!(runkon_flow::traits::persistence::StepUpdate => crate::workflow::persistence::StepUpdate {
+    status,
+    child_run_id,
+    result_text,
+    context_out,
+    markers_out,
+    retry_count,
+    structured_output,
+    step_error,
+});
+
+field_copy_from!(crate::workflow::persistence::FanOutItemRow => runkon_flow::types::FanOutItemRow {
+    id,
+    step_run_id,
+    item_type,
+    item_id,
+    item_ref,
+    child_run_id,
+    status,
+    dispatched_at,
+    completed_at,
+});
+
+impl From<runkon_flow::traits::persistence::FanOutItemStatus> for crate::workflow::persistence::FanOutItemStatus {
+    fn from(s: runkon_flow::traits::persistence::FanOutItemStatus) -> Self {
+        match s {
+            runkon_flow::traits::persistence::FanOutItemStatus::Pending => Self::Pending,
+            runkon_flow::traits::persistence::FanOutItemStatus::Running => Self::Running,
+            runkon_flow::traits::persistence::FanOutItemStatus::Completed => Self::Completed,
+            runkon_flow::traits::persistence::FanOutItemStatus::Failed => Self::Failed,
+            runkon_flow::traits::persistence::FanOutItemStatus::Skipped => Self::Skipped,
+        }
+    }
+}
+
+impl From<crate::workflow::persistence::FanOutItemStatus> for runkon_flow::traits::persistence::FanOutItemStatus {
+    fn from(s: crate::workflow::persistence::FanOutItemStatus) -> Self {
+        match s {
+            crate::workflow::persistence::FanOutItemStatus::Pending => Self::Pending,
+            crate::workflow::persistence::FanOutItemStatus::Running => Self::Running,
+            crate::workflow::persistence::FanOutItemStatus::Completed => Self::Completed,
+            crate::workflow::persistence::FanOutItemStatus::Failed => Self::Failed,
+            crate::workflow::persistence::FanOutItemStatus::Skipped => Self::Skipped,
+        }
+    }
+}
+
+impl From<runkon_flow::traits::persistence::FanOutItemUpdate> for crate::workflow::persistence::FanOutItemUpdate {
+    fn from(u: runkon_flow::traits::persistence::FanOutItemUpdate) -> Self {
+        match u {
+            runkon_flow::traits::persistence::FanOutItemUpdate::Running { child_run_id } => {
+                Self::Running { child_run_id }
+            }
+            runkon_flow::traits::persistence::FanOutItemUpdate::Terminal { status } => {
+                Self::Terminal { status: status.into() }
+            }
+        }
+    }
+}
+
+impl From<crate::workflow::persistence::GateApprovalState> for runkon_flow::traits::persistence::GateApprovalState {
+    fn from(s: crate::workflow::persistence::GateApprovalState) -> Self {
+        match s {
+            crate::workflow::persistence::GateApprovalState::Pending => Self::Pending,
+            crate::workflow::persistence::GateApprovalState::Approved { feedback, selections } => {
+                Self::Approved { feedback, selections }
+            }
+            crate::workflow::persistence::GateApprovalState::Rejected { feedback } => {
+                Self::Rejected { feedback }
+            }
+        }
+    }
+}
+
 /// Convert `ConductorError` to `EngineError`, preserving the cancellation
 /// signal: `WorkflowCancelled` maps to `Cancelled`, all other errors to
 /// `Workflow`.  Centralising this avoids the special-case match being
@@ -398,7 +512,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             ))
         })?;
 
-        let exec_config = crate::workflow::types::WorkflowExecConfig {
+        let exec_config = crate::workflow::WorkflowExecConfig {
             poll_interval: parent_state.exec_config.poll_interval,
             step_timeout: parent_state.exec_config.step_timeout,
             fail_fast: parent_state.exec_config.fail_fast,
@@ -488,7 +602,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
                 "failed to find resumable child run for parent='{parent_run_id}' workflow='{workflow_name}': {e}"
             )))?;
 
-        Ok(core_run.map(crate::workflow::rk_types::run_to_rk))
+        Ok(core_run)
     }
 }
 
@@ -512,7 +626,7 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for PersistenceAdapte
         new_run: runkon_flow::traits::persistence::NewRun,
     ) -> Result<runkon_flow::types::WorkflowRun, EngineError> {
         let core_run = self.0.create_run(new_run.into())?;
-        Ok(crate::workflow::rk_types::run_to_rk(core_run))
+        Ok(core_run)
     }
 
     fn get_run(
@@ -520,20 +634,15 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for PersistenceAdapte
         run_id: &str,
     ) -> Result<Option<runkon_flow::types::WorkflowRun>, EngineError> {
         let result = self.0.get_run(run_id)?;
-        Ok(result.map(crate::workflow::rk_types::run_to_rk))
+        Ok(result)
     }
 
     fn list_active_runs(
         &self,
         statuses: &[runkon_flow::status::WorkflowRunStatus],
     ) -> Result<Vec<runkon_flow::types::WorkflowRun>, EngineError> {
-        let core_statuses: Vec<crate::workflow::status::WorkflowRunStatus> =
-            statuses.iter().map(|s| s.clone().into()).collect();
-        let result = self.0.list_active_runs(&core_statuses)?;
-        Ok(result
-            .into_iter()
-            .map(crate::workflow::rk_types::run_to_rk)
-            .collect())
+        let result = self.0.list_active_runs(statuses)?;
+        Ok(result)
     }
 
     fn update_run_status(
@@ -567,10 +676,7 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for PersistenceAdapte
         run_id: &str,
     ) -> Result<Vec<runkon_flow::types::WorkflowRunStep>, EngineError> {
         let result = self.0.get_steps(run_id)?;
-        Ok(result
-            .into_iter()
-            .map(crate::workflow::rk_types::step_to_rk)
-            .collect())
+        Ok(result)
     }
 
     fn insert_fan_out_item(
@@ -599,10 +705,7 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for PersistenceAdapte
     ) -> Result<Vec<runkon_flow::types::FanOutItemRow>, EngineError> {
         let core_filter = status_filter.map(Into::into);
         let result = self.0.get_fan_out_items(step_run_id, core_filter)?;
-        Ok(result
-            .into_iter()
-            .map(crate::workflow::rk_types::fan_out_item_to_rk)
-            .collect())
+        Ok(result.into_iter().map(Into::into).collect())
     }
 
     fn get_gate_approval(
@@ -610,7 +713,7 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for PersistenceAdapte
         step_id: &str,
     ) -> Result<runkon_flow::traits::persistence::GateApprovalState, EngineError> {
         let result = self.0.get_gate_approval(step_id)?;
-        Ok(crate::workflow::rk_types::gate_approval_to_rk(result))
+        Ok(result.into())
     }
 
     fn approve_gate(
@@ -730,74 +833,193 @@ pub(super) fn build_rk_script_env_provider(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::status::WorkflowRunStatus as CoreStatus;
     use std::collections::HashMap;
 
-    fn make_core_run(id: &str, status: CoreStatus) -> crate::workflow::types::WorkflowRun {
-        crate::workflow::types::WorkflowRun {
-            id: id.to_string(),
-            workflow_name: "test-workflow".to_string(),
-            worktree_id: None,
-            parent_run_id: "parent-run".to_string(),
-            status,
-            dry_run: false,
-            trigger: "manual".to_string(),
-            started_at: "2024-01-01T00:00:00Z".to_string(),
-            ended_at: None,
-            result_summary: None,
-            error: None,
-            definition_snapshot: None,
-            inputs: HashMap::new(),
-            ticket_id: None,
-            repo_id: None,
-            parent_workflow_run_id: None,
-            target_label: None,
-            default_bot_name: None,
-            iteration: 0,
-            blocked_on: None,
-            workflow_title: None,
-            total_input_tokens: None,
-            total_output_tokens: None,
-            total_cache_read_input_tokens: None,
-            total_cache_creation_input_tokens: None,
-            total_turns: None,
-            total_cost_usd: None,
-            total_duration_ms: None,
-            model: None,
-            dismissed: false,
+    // ---------------------------------------------------------------------------
+    // Persistence type From impls
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn new_run_from_rk_maps_all_fields() {
+        let rk = runkon_flow::traits::persistence::NewRun {
+            workflow_name: "wf".into(),
+            worktree_id: Some("wt".into()),
+            ticket_id: Some("t1".into()),
+            repo_id: Some("r1".into()),
+            parent_run_id: "parent".into(),
+            dry_run: true,
+            trigger: "hook".into(),
+            definition_snapshot: Some("snap".into()),
+            parent_workflow_run_id: Some("pwf".into()),
+            target_label: Some("label".into()),
+        };
+        let core: crate::workflow::persistence::NewRun = rk.into();
+        assert_eq!(core.workflow_name, "wf");
+        assert_eq!(core.worktree_id, Some("wt".into()));
+        assert_eq!(core.ticket_id, Some("t1".into()));
+        assert_eq!(core.repo_id, Some("r1".into()));
+        assert_eq!(core.parent_run_id, "parent");
+        assert!(core.dry_run);
+        assert_eq!(core.trigger, "hook");
+        assert_eq!(core.definition_snapshot, Some("snap".into()));
+        assert_eq!(core.parent_workflow_run_id, Some("pwf".into()));
+        assert_eq!(core.target_label, Some("label".into()));
+    }
+
+    #[test]
+    fn new_step_from_rk_maps_all_fields() {
+        let rk = runkon_flow::traits::persistence::NewStep {
+            workflow_run_id: "run-1".into(),
+            step_name: "step-a".into(),
+            role: "agent".into(),
+            can_commit: true,
+            position: 3,
+            iteration: 2,
+            retry_count: Some(1),
+        };
+        let core: crate::workflow::persistence::NewStep = rk.into();
+        assert_eq!(core.workflow_run_id, "run-1");
+        assert_eq!(core.step_name, "step-a");
+        assert_eq!(core.role, "agent");
+        assert!(core.can_commit);
+        assert_eq!(core.position, 3);
+        assert_eq!(core.iteration, 2);
+        assert_eq!(core.retry_count, Some(1));
+    }
+
+    #[test]
+    fn step_update_from_rk_maps_all_fields() {
+        let rk = runkon_flow::traits::persistence::StepUpdate {
+            status: runkon_flow::status::WorkflowStepStatus::Completed,
+            child_run_id: Some("child".into()),
+            result_text: Some("ok".into()),
+            context_out: Some("ctx".into()),
+            markers_out: Some("mk".into()),
+            retry_count: Some(2),
+            structured_output: Some("{}".into()),
+            step_error: None,
+        };
+        let core: crate::workflow::persistence::StepUpdate = rk.into();
+        assert_eq!(core.status, crate::workflow::WorkflowStepStatus::Completed);
+        assert_eq!(core.child_run_id, Some("child".into()));
+        assert_eq!(core.result_text, Some("ok".into()));
+        assert_eq!(core.context_out, Some("ctx".into()));
+        assert_eq!(core.markers_out, Some("mk".into()));
+        assert_eq!(core.retry_count, Some(2));
+        assert_eq!(core.structured_output, Some("{}".into()));
+        assert!(core.step_error.is_none());
+    }
+
+    #[test]
+    fn fan_out_item_status_from_rk_maps_all_variants() {
+        use runkon_flow::traits::persistence::FanOutItemStatus as Rk;
+        use crate::workflow::persistence::FanOutItemStatus as Core;
+        assert!(matches!(Core::from(Rk::Pending), Core::Pending));
+        assert!(matches!(Core::from(Rk::Running), Core::Running));
+        assert!(matches!(Core::from(Rk::Completed), Core::Completed));
+        assert!(matches!(Core::from(Rk::Failed), Core::Failed));
+        assert!(matches!(Core::from(Rk::Skipped), Core::Skipped));
+    }
+
+    #[test]
+    fn fan_out_item_status_to_rk_maps_all_variants() {
+        use runkon_flow::traits::persistence::FanOutItemStatus as Rk;
+        use crate::workflow::persistence::FanOutItemStatus as Core;
+        assert!(matches!(Rk::from(Core::Pending), Rk::Pending));
+        assert!(matches!(Rk::from(Core::Running), Rk::Running));
+        assert!(matches!(Rk::from(Core::Completed), Rk::Completed));
+        assert!(matches!(Rk::from(Core::Failed), Rk::Failed));
+        assert!(matches!(Rk::from(Core::Skipped), Rk::Skipped));
+    }
+
+    #[test]
+    fn fan_out_item_update_from_rk_running_maps_child_run_id() {
+        let rk = runkon_flow::traits::persistence::FanOutItemUpdate::Running {
+            child_run_id: "child-1".into(),
+        };
+        let core: crate::workflow::persistence::FanOutItemUpdate = rk.into();
+        match core {
+            crate::workflow::persistence::FanOutItemUpdate::Running { child_run_id } => {
+                assert_eq!(child_run_id, "child-1");
+            }
+            other => panic!("expected Running variant, got {other:?}"),
         }
     }
 
-    // ---------------------------------------------------------------------------
-    // rk_conv::run_to_rk — status conversion
-    // ---------------------------------------------------------------------------
-
     #[test]
-    fn status_completed_maps_correctly() {
-        let run = make_core_run("r1", CoreStatus::Completed);
-        let rk = crate::workflow::rk_types::run_to_rk(run);
-        assert_eq!(rk.status, runkon_flow::status::WorkflowRunStatus::Completed);
+    fn fan_out_item_update_from_rk_terminal_maps_status() {
+        let rk = runkon_flow::traits::persistence::FanOutItemUpdate::Terminal {
+            status: runkon_flow::traits::persistence::FanOutItemStatus::Completed,
+        };
+        let core: crate::workflow::persistence::FanOutItemUpdate = rk.into();
+        match core {
+            crate::workflow::persistence::FanOutItemUpdate::Terminal { status } => {
+                assert_eq!(status, crate::workflow::persistence::FanOutItemStatus::Completed);
+            }
+            other => panic!("expected Terminal variant, got {other:?}"),
+        }
     }
 
     #[test]
-    fn status_failed_maps_correctly() {
-        let run = make_core_run("r1", CoreStatus::Failed);
-        let rk = crate::workflow::rk_types::run_to_rk(run);
-        assert_eq!(rk.status, runkon_flow::status::WorkflowRunStatus::Failed);
+    fn gate_approval_state_to_rk_pending() {
+        let core = crate::workflow::persistence::GateApprovalState::Pending;
+        let rk: runkon_flow::traits::persistence::GateApprovalState = core.into();
+        assert!(matches!(rk, runkon_flow::traits::persistence::GateApprovalState::Pending));
     }
 
     #[test]
-    fn status_running_maps_correctly() {
-        let run = make_core_run("r1", CoreStatus::Running);
-        let rk = crate::workflow::rk_types::run_to_rk(run);
-        assert_eq!(rk.status, runkon_flow::status::WorkflowRunStatus::Running);
+    fn gate_approval_state_to_rk_approved() {
+        let core = crate::workflow::persistence::GateApprovalState::Approved {
+            feedback: Some("lgtm".into()),
+            selections: Some(vec!["a".into()]),
+        };
+        let rk: runkon_flow::traits::persistence::GateApprovalState = core.into();
+        match rk {
+            runkon_flow::traits::persistence::GateApprovalState::Approved { feedback, selections } => {
+                assert_eq!(feedback, Some("lgtm".into()));
+                assert_eq!(selections, Some(vec!["a".into()]));
+            }
+            other => panic!("expected Approved, got {other:?}"),
+        }
     }
 
     #[test]
-    fn blocked_on_none_maps_to_none() {
-        let run = make_core_run("r1", CoreStatus::Completed);
-        let rk = crate::workflow::rk_types::run_to_rk(run);
-        assert!(rk.blocked_on.is_none());
+    fn gate_approval_state_to_rk_rejected() {
+        let core = crate::workflow::persistence::GateApprovalState::Rejected {
+            feedback: Some("nope".into()),
+        };
+        let rk: runkon_flow::traits::persistence::GateApprovalState = core.into();
+        match rk {
+            runkon_flow::traits::persistence::GateApprovalState::Rejected { feedback } => {
+                assert_eq!(feedback, Some("nope".into()));
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fan_out_item_row_from_core_maps_all_fields() {
+        let core = crate::workflow::persistence::FanOutItemRow {
+            id: "id-1".into(),
+            step_run_id: "step-1".into(),
+            item_type: "ticket".into(),
+            item_id: "t-1".into(),
+            item_ref: "ref-1".into(),
+            child_run_id: Some("child-1".into()),
+            status: "completed".into(),
+            dispatched_at: Some("2024-01-01".into()),
+            completed_at: Some("2024-01-02".into()),
+        };
+        let rk: runkon_flow::types::FanOutItemRow = core.into();
+        assert_eq!(rk.id, "id-1");
+        assert_eq!(rk.step_run_id, "step-1");
+        assert_eq!(rk.item_type, "ticket");
+        assert_eq!(rk.item_id, "t-1");
+        assert_eq!(rk.item_ref, "ref-1");
+        assert_eq!(rk.child_run_id, Some("child-1".into()));
+        assert_eq!(rk.status, "completed");
+        assert_eq!(rk.dispatched_at, Some("2024-01-01".into()));
+        assert_eq!(rk.completed_at, Some("2024-01-02".into()));
     }
 
     // ---------------------------------------------------------------------------

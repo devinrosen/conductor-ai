@@ -1,10 +1,8 @@
 #![allow(unused_imports)]
 
 use super::*;
-use crate::workflow::types::{
-    BlockedOn, ContextEntry, GateKind, MetadataEntry, WorkflowExecConfig, WorkflowRunStep,
-    WorkflowStepSummary,
-};
+use crate::workflow::{BlockedOn, ContextEntry, GateType, WorkflowExecConfig, WorkflowRunStep, WorkflowStepSummary};
+use crate::workflow::types::MetadataEntry;
 
 // ---------------------------------------------------------------------------
 // BlockedOn serde roundtrips
@@ -301,7 +299,7 @@ fn test_metadata_fields_all_optional_fields() {
     );
     step.started_at = Some("2025-01-01T00:00:00Z".into());
     step.ended_at = Some("2025-01-01T00:01:00Z".into());
-    step.gate_type = Some(GateKind::HumanApproval);
+    step.gate_type = Some(GateType::HumanApproval);
     step.gate_prompt = Some("Approve?".into());
     step.gate_feedback = Some("LGTM".into());
 

@@ -66,7 +66,7 @@ mod tests {
         wf_mgr
             .update_workflow_status(
                 &run1.id,
-                crate::workflow::status::WorkflowRunStatus::Completed,
+                crate::workflow::WorkflowRunStatus::Completed,
                 None,
                 None,
             )
@@ -78,7 +78,7 @@ mod tests {
         wf_mgr
             .update_workflow_status(
                 &run2.id,
-                crate::workflow::status::WorkflowRunStatus::Running,
+                crate::workflow::WorkflowRunStatus::Running,
                 None,
                 None,
             )
@@ -116,7 +116,7 @@ mod tests {
         wf_mgr
             .update_workflow_status(
                 &run1.id,
-                crate::workflow::status::WorkflowRunStatus::Failed,
+                crate::workflow::WorkflowRunStatus::Failed,
                 None,
                 None,
             )
@@ -128,7 +128,7 @@ mod tests {
         wf_mgr
             .update_workflow_status(
                 &run2.id,
-                crate::workflow::status::WorkflowRunStatus::Completed,
+                crate::workflow::WorkflowRunStatus::Completed,
                 None,
                 None,
             )
@@ -168,7 +168,7 @@ mod tests {
         wf_mgr
             .update_workflow_status(
                 &run_a.id,
-                crate::workflow::status::WorkflowRunStatus::Completed,
+                crate::workflow::WorkflowRunStatus::Completed,
                 None,
                 None,
             )
@@ -180,7 +180,7 @@ mod tests {
         wf_mgr
             .update_workflow_status(
                 &run_b.id,
-                crate::workflow::status::WorkflowRunStatus::Completed,
+                crate::workflow::WorkflowRunStatus::Completed,
                 None,
                 None,
             )
@@ -213,7 +213,7 @@ mod tests {
         wf_mgr
             .update_workflow_status(
                 &run1.id,
-                crate::workflow::status::WorkflowRunStatus::Completed,
+                crate::workflow::WorkflowRunStatus::Completed,
                 None,
                 None,
             )

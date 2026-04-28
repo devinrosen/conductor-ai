@@ -16,7 +16,7 @@ fn test_gate_approve() {
     let step_id = mgr
         .insert_step(&run.id, "human_review", "reviewer", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::HumanReview, Some("Review?"), "48h")
+    mgr.set_step_gate_info(&step_id, GateType::HumanReview, Some("Review?"), "48h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -50,7 +50,7 @@ fn test_gate_reject() {
     let step_id = mgr
         .insert_step(&run.id, "human_approval", "reviewer", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, Some("Approve?"), "24h")
+    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, Some("Approve?"), "24h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -77,7 +77,7 @@ fn test_gate_pr_approval_approve() {
     let step_id = mgr
         .insert_step(&run.id, "pr_approval_gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::PrApproval, None, "48h")
+    mgr.set_step_gate_info(&step_id, GateType::PrApproval, None, "48h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -86,7 +86,7 @@ fn test_gate_pr_approval_approve() {
 
     let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
     assert_eq!(step.status, WorkflowStepStatus::Completed);
-    assert_eq!(step.gate_type, Some(GateKind::PrApproval));
+    assert_eq!(step.gate_type, Some(GateType::PrApproval));
     assert_eq!(step.gate_approved_by.as_deref(), Some("reviewer-bot"));
 }
 
@@ -103,7 +103,7 @@ fn test_gate_pr_approval_reject() {
     let step_id = mgr
         .insert_step(&run.id, "pr_approval_gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::PrApproval, None, "24h")
+    mgr.set_step_gate_info(&step_id, GateType::PrApproval, None, "24h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -132,7 +132,7 @@ fn test_gate_pr_checks_approve() {
     let step_id = mgr
         .insert_step(&run.id, "pr_checks_gate", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::PrChecks, None, "1h")
+    mgr.set_step_gate_info(&step_id, GateType::PrChecks, None, "1h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -141,7 +141,7 @@ fn test_gate_pr_checks_approve() {
 
     let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
     assert_eq!(step.status, WorkflowStepStatus::Completed);
-    assert_eq!(step.gate_type, Some(GateKind::PrChecks));
+    assert_eq!(step.gate_type, Some(GateType::PrChecks));
 }
 
 // ---------------------------------------------------------------------------
@@ -161,7 +161,7 @@ fn test_gate_multiselect_options_and_approval() {
     let step_id = mgr
         .insert_step(&run.id, "pick_items", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::HumanReview, Some("Select items:"), "1h")
+    mgr.set_step_gate_info(&step_id, GateType::HumanReview, Some("Select items:"), "1h")
         .unwrap();
 
     // Simulate the executor persisting resolved options
@@ -220,7 +220,7 @@ fn test_gate_approve_empty_selections() {
     let step_id = mgr
         .insert_step(&run.id, "pick_items", "gate", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, GateKind::HumanReview, Some("Select items:"), "1h")
+    mgr.set_step_gate_info(&step_id, GateType::HumanReview, Some("Select items:"), "1h")
         .unwrap();
 
     let options_json = r#"[{"value":"item-x","label":"item-x"}]"#;

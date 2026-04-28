@@ -19,11 +19,11 @@ pub(super) fn completed_keys_from_steps(
 pub(super) use super::manager::WorkflowManager;
 pub(super) use super::output::{interpret_agent_output, parse_conductor_output};
 pub(super) use super::prompt_builder::substitute_variables;
-pub(super) use super::status::{WorkflowRunStatus, WorkflowStepStatus};
+pub(super) use super::{WorkflowRunStatus, WorkflowStepStatus};
 pub(super) use super::types::{
-    ContextEntry, MetadataEntry, StepKey, StepResult, WorkflowExecConfig, WorkflowResumeInput,
-    WorkflowRun, WorkflowRunStep,
+    MetadataEntry, StepKey, WorkflowResumeInput,
 };
+pub(super) use crate::workflow::{ContextEntry, StepResult, WorkflowExecConfig, WorkflowRun, WorkflowRunStep};
 pub(super) use super::*;
 pub(super) use crate::config::Config;
 pub(super) use common::*;

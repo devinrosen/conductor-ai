@@ -1,51 +1,6 @@
 use std::collections::HashMap;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-
-use super::status::{WorkflowRunStatus, WorkflowStepStatus};
-
-/// Conductor-native gate kind enum, mirroring `runkon_flow::dsl::GateType`.
-///
-/// `WorkflowRunStep` is publicly exported by conductor-core, so its `gate_type`
-/// field must not leak the runkon-flow dependency type. Converters between this
-/// type and `runkon_flow::dsl::GateType` live in `rk_types`.
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum GateKind {
-    HumanApproval,
-    HumanReview,
-    PrApproval,
-    PrChecks,
-    QualityGate,
-}
-
-impl std::fmt::Display for GateKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::HumanApproval => write!(f, "human_approval"),
-            Self::HumanReview => write!(f, "human_review"),
-            Self::PrApproval => write!(f, "pr_approval"),
-            Self::PrChecks => write!(f, "pr_checks"),
-            Self::QualityGate => write!(f, "quality_gate"),
-        }
-    }
-}
-
-impl std::str::FromStr for GateKind {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "human_approval" => Ok(Self::HumanApproval),
-            "human_review" => Ok(Self::HumanReview),
-            "pr_approval" => Ok(Self::PrApproval),
-            "pr_checks" => Ok(Self::PrChecks),
-            "quality_gate" => Ok(Self::QualityGate),
-            _ => Err(format!("unknown gate kind: {s}")),
-        }
-    }
-}
 
 /// Time granularity for workflow analytics queries.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -69,198 +24,12 @@ impl std::str::FromStr for TimeGranularity {
     }
 }
 
-/// Describes what a workflow run is currently blocked on when in `Waiting` status.
-///
-/// Uses internally-tagged JSON (`{"type":"human_approval",...}`) for forward-compatibility
-/// with future blocker types and easy consumption by non-Rust consumers.
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum BlockedOn {
-    HumanApproval {
-        gate_name: String,
-        prompt: Option<String>,
-        /// Resolved options for multi-select gates. Empty = binary approve/reject mode.
-        #[serde(default)]
-        options: Vec<String>,
-    },
-    HumanReview {
-        gate_name: String,
-        prompt: Option<String>,
-        /// Resolved options for multi-select gates. Empty = binary approve/reject mode.
-        #[serde(default)]
-        options: Vec<String>,
-    },
-    PrApproval {
-        gate_name: String,
-        approvals_needed: u32,
-    },
-    PrChecks {
-        gate_name: String,
-    },
-}
-
 /// A step key is a `(name, iteration)` pair used for skip-set and step-map lookups.
 pub(super) type StepKey = (String, u32);
 
 /// Shared slot used to communicate the workflow run ID from [`super::execute_workflow`] back to
 /// the caller before any steps execute. The `Condvar` is notified once the ID is written.
 pub type RunIdSlot = std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync::Condvar)>;
-
-/// A workflow run record from the database.
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[derive(Debug, Clone, Serialize)]
-pub struct WorkflowRun {
-    pub id: String,
-    pub workflow_name: String,
-    /// `None` for ephemeral PR runs that have no registered worktree.
-    pub worktree_id: Option<String>,
-    pub parent_run_id: String,
-    pub status: WorkflowRunStatus,
-    pub dry_run: bool,
-    pub trigger: String,
-    pub started_at: String,
-    pub ended_at: Option<String>,
-    pub result_summary: Option<String>,
-    /// Dedicated error message populated only on `Failed` transitions.
-    /// Mirrors `AgentRun.result_text` as a focused failure context field.
-    pub error: Option<String>,
-    pub definition_snapshot: Option<String>,
-    pub inputs: HashMap<String, String>,
-    pub ticket_id: Option<String>,
-    pub repo_id: Option<String>,
-    /// Link to the parent workflow run when this is a sub-workflow invocation.
-    pub parent_workflow_run_id: Option<String>,
-    /// Human-readable label for the target (e.g. `repo_slug/wt_slug`, `owner/repo#N`).
-    pub target_label: Option<String>,
-    /// Default named GitHub App bot identity for this run.
-    /// Set when the run is invoked via `call workflow { as = "..." }`.
-    pub default_bot_name: Option<String>,
-    /// Loop iteration number (0-indexed). Used by the TUI to filter
-    /// children of a parent run to show only the latest loop iteration.
-    pub iteration: i64,
-    /// What the workflow is currently blocked on (only set when status is `Waiting`).
-    pub blocked_on: Option<BlockedOn>,
-    /// Human-readable title extracted from `definition_snapshot` at load time.
-    /// `None` when no title is present in the snapshot. Use `display_name()` for rendering.
-    pub workflow_title: Option<String>,
-    // Aggregated metrics (populated at run completion)
-    pub total_input_tokens: Option<i64>,
-    pub total_output_tokens: Option<i64>,
-    pub total_cache_read_input_tokens: Option<i64>,
-    pub total_cache_creation_input_tokens: Option<i64>,
-    pub total_turns: Option<i64>,
-    pub total_cost_usd: Option<f64>,
-    pub total_duration_ms: Option<i64>,
-    pub model: Option<String>,
-    /// When true, the run is hidden from the default list view (soft-dismiss).
-    pub dismissed: bool,
-}
-
-/// Extract the human-readable title from a workflow definition snapshot JSON string.
-///
-/// Returns `None` if the snapshot is absent, malformed, or has no `title` field.
-/// Logs a warning when JSON is present but cannot be parsed.
-pub(in crate::workflow) fn extract_workflow_title(snapshot: Option<&str>) -> Option<String> {
-    let s = snapshot?;
-    match serde_json::from_str::<serde_json::Value>(s) {
-        Ok(v) => v["title"].as_str().map(String::from),
-        Err(e) => {
-            tracing::warn!(
-                "Malformed definition_snapshot JSON — could not extract workflow title: {e}"
-            );
-            None
-        }
-    }
-}
-
-impl WorkflowRun {
-    /// Whether this run was triggered by a workflow hook (prevents infinite chains).
-    /// Derived from `trigger == "hook"` rather than stored separately.
-    pub fn is_triggered_by_hook(&self) -> bool {
-        self.trigger == "hook"
-    }
-
-    /// Returns the human-readable display name for this run.
-    /// Uses `workflow_title` (extracted from `definition_snapshot` at load time) if present;
-    /// falls back to `workflow_name`.
-    pub fn display_name(&self) -> &str {
-        self.workflow_title
-            .as_deref()
-            .unwrap_or(&self.workflow_name)
-    }
-}
-
-/// A workflow step execution record from the database.
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct WorkflowRunStep {
-    pub id: String,
-    pub workflow_run_id: String,
-    pub step_name: String,
-    pub role: String,
-    pub can_commit: bool,
-    pub condition_expr: Option<String>,
-    pub status: WorkflowStepStatus,
-    pub child_run_id: Option<String>,
-    pub position: i64,
-    pub started_at: Option<String>,
-    pub ended_at: Option<String>,
-    pub result_text: Option<String>,
-    pub condition_met: Option<bool>,
-    pub iteration: i64,
-    pub parallel_group_id: Option<String>,
-    pub context_out: Option<String>,
-    pub markers_out: Option<String>,
-    pub retry_count: i64,
-    pub gate_type: Option<GateKind>,
-    pub gate_prompt: Option<String>,
-    pub gate_timeout: Option<String>,
-    pub gate_approved_by: Option<String>,
-    pub gate_approved_at: Option<String>,
-    pub gate_feedback: Option<String>,
-    /// Full structured output JSON (when schema was used).
-    pub structured_output: Option<String>,
-    /// Path to the stdout capture file for script steps (persisted for resume).
-    pub output_file: Option<String>,
-    /// Resolved gate options as JSON `[{"value":"...","label":"..."}]` (set at gate start).
-    pub gate_options: Option<String>,
-    /// User-selected gate option values as JSON `["val1","val2"]` (set on approval).
-    pub gate_selections: Option<String>,
-    pub input_tokens: Option<i64>,
-    pub output_tokens: Option<i64>,
-    pub cache_read_input_tokens: Option<i64>,
-    pub cache_creation_input_tokens: Option<i64>,
-    /// Cost of the child agent run for this step, populated via JOIN with agent_runs.
-    pub cost_usd: Option<f64>,
-    /// Turn count from the child agent run for this step, populated via JOIN with agent_runs.
-    pub num_turns: Option<i64>,
-    /// Wall-clock duration of the child agent run in ms, populated via JOIN with agent_runs.
-    pub duration_ms: Option<i64>,
-    /// Total number of fan-out items (foreach steps only).
-    pub fan_out_total: Option<i64>,
-    /// Number of successfully completed fan-out items.
-    pub fan_out_completed: i64,
-    /// Number of failed fan-out items.
-    pub fan_out_failed: i64,
-    /// Number of skipped fan-out items.
-    pub fan_out_skipped: i64,
-    /// Validation error message populated when a call step's agent output fails schema validation.
-    pub step_error: Option<String>,
-}
-
-/// Lightweight summary of the currently-running step for a workflow run.
-/// Used for inline step indicators in the worktrees panel of the TUI.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkflowStepSummary {
-    pub step_name: String,
-    /// Loop iteration count (0-indexed; 0 = first pass, 1+ = subsequent loop iterations).
-    pub iteration: i64,
-    /// Ordered list of workflow names from root down to the workflow containing the
-    /// currently-running step. E.g. `["ticket-to-pr", "review-pr"]` when `review-pr` is
-    /// a sub-workflow of `ticket-to-pr`. Empty for single-level (non-nested) workflows.
-    pub workflow_chain: Vec<String>,
-}
 
 /// Resolved execution context for a workflow that targets a prior workflow run.
 /// Returned by [`WorkflowManager::resolve_run_context`].
@@ -286,12 +55,15 @@ pub enum MetadataEntry {
     Section { heading: &'static str, body: String },
 }
 
-impl WorkflowRunStep {
+/// Extension trait for [`runkon_flow::types::WorkflowRunStep`] providing conductor-specific
+/// helper methods.
+pub trait WorkflowRunStepExt {
     /// Return structured metadata entries for this step.
-    ///
-    /// Consumers are responsible for choosing how to render the entries (e.g.
-    /// fixed-width columns for a TUI, HTML table for a web UI, etc.).
-    pub fn metadata_fields(&self) -> Vec<MetadataEntry> {
+    fn metadata_fields(&self) -> Vec<MetadataEntry>;
+}
+
+impl WorkflowRunStepExt for runkon_flow::types::WorkflowRunStep {
+    fn metadata_fields(&self) -> Vec<MetadataEntry> {
         let mut entries = vec![
             MetadataEntry::Field {
                 label: "Status",
@@ -362,104 +134,10 @@ impl WorkflowRunStep {
     }
 }
 
-/// Configuration for workflow execution.
-#[derive(Clone)]
-pub struct WorkflowExecConfig {
-    pub poll_interval: Duration,
-    pub step_timeout: Duration,
-    pub fail_fast: bool,
-    pub dry_run: bool,
-    /// Optional shutdown flag. When set to `true`, in-flight steps are
-    /// cancelled with "workflow cancelled: TUI was closed".
-    pub shutdown: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    /// Event sinks that receive observability events after each state transition.
-    /// Defaults to empty (no sinks). Use `..WorkflowExecConfig::default()` spread
-    /// syntax to leave this unset when you don't need events.
-    pub event_sinks: Vec<std::sync::Arc<dyn runkon_flow::events::EventSink>>,
-}
-
-impl std::fmt::Debug for WorkflowExecConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WorkflowExecConfig")
-            .field("poll_interval", &self.poll_interval)
-            .field("step_timeout", &self.step_timeout)
-            .field("fail_fast", &self.fail_fast)
-            .field("dry_run", &self.dry_run)
-            .field("shutdown", &self.shutdown)
-            .field(
-                "event_sinks",
-                &format_args!("[{} sink(s)]", self.event_sinks.len()),
-            )
-            .finish()
-    }
-}
-
-impl Default for WorkflowExecConfig {
-    fn default() -> Self {
-        Self {
-            poll_interval: Duration::from_secs(5),
-            step_timeout: Duration::from_secs(12 * 60 * 60),
-            fail_fast: true,
-            dry_run: false,
-            shutdown: None,
-            event_sinks: vec![],
-        }
-    }
-}
-
-/// Result of executing a workflow.
-#[derive(Debug, Clone)]
-pub struct WorkflowResult {
-    pub workflow_run_id: String,
-    /// `None` for ephemeral PR runs with no registered worktree.
-    pub worktree_id: Option<String>,
-    pub workflow_name: String,
-    pub all_succeeded: bool,
-    pub total_cost: f64,
-    pub total_turns: i64,
-    pub total_duration_ms: i64,
-    pub total_input_tokens: i64,
-    pub total_output_tokens: i64,
-    pub total_cache_read_input_tokens: i64,
-    pub total_cache_creation_input_tokens: i64,
-}
-
-/// Result of a single step execution (kept in memory during execution).
-#[derive(Debug, Clone)]
-pub struct StepResult {
-    pub step_name: String,
-    pub status: WorkflowStepStatus,
-    pub result_text: Option<String>,
-    pub cost_usd: Option<f64>,
-    pub num_turns: Option<i64>,
-    pub duration_ms: Option<i64>,
-    pub markers: Vec<String>,
-    pub context: String,
-    pub child_run_id: Option<String>,
-    /// Raw JSON string of structured output (when schema was used).
-    pub structured_output: Option<String>,
-    /// Path to the script stdout temp file (script steps only).
-    pub output_file: Option<String>,
-}
-
-/// An entry in the accumulated context history.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContextEntry {
-    pub step: String,
-    pub iteration: u32,
-    pub context: String,
-    #[serde(default)]
-    pub markers: Vec<String>,
-    #[serde(default)]
-    pub structured_output: Option<String>,
-    #[serde(default)]
-    pub output_file: Option<String>,
-}
-
 /// An enriched pending gate row used by the TUI repo detail pane (right workflow column).
 #[derive(Debug, Clone)]
 pub struct PendingGateRow {
-    pub step: WorkflowRunStep,
+    pub step: runkon_flow::types::WorkflowRunStep,
     pub workflow_name: String,
     pub target_label: Option<String>,
     /// Worktree branch (None for ephemeral PR runs).
@@ -498,7 +176,7 @@ pub struct WorkflowExecInput<'a> {
     pub working_dir: &'a str,
     pub repo_path: &'a str,
     pub model: Option<&'a str>,
-    pub exec_config: &'a WorkflowExecConfig,
+    pub exec_config: &'a runkon_flow::types::WorkflowExecConfig,
     pub inputs: HashMap<String, String>,
     pub ticket_id: Option<&'a str>,
     pub repo_id: Option<&'a str>,
@@ -555,7 +233,7 @@ pub struct WorkflowExecStandalone {
     pub ticket_id: Option<String>,
     pub repo_id: Option<String>,
     pub model: Option<String>,
-    pub exec_config: WorkflowExecConfig,
+    pub exec_config: runkon_flow::types::WorkflowExecConfig,
     pub inputs: HashMap<String, String>,
     /// Human-readable label for the target (e.g. `repo_slug/wt_slug`, `owner/repo#N`).
     pub target_label: Option<String>,
@@ -844,75 +522,6 @@ pub struct WorkflowRunMetricsRow {
 mod tests {
     use super::*;
 
-    fn make_run(workflow_name: &str, definition_snapshot: Option<&str>) -> WorkflowRun {
-        let workflow_title = super::extract_workflow_title(definition_snapshot);
-        WorkflowRun {
-            id: "test-id".into(),
-            workflow_name: workflow_name.into(),
-            worktree_id: None,
-            parent_run_id: String::new(),
-            status: WorkflowRunStatus::Completed,
-            dry_run: false,
-            trigger: "manual".into(),
-            started_at: String::new(),
-            ended_at: None,
-            result_summary: None,
-            error: None,
-            definition_snapshot: definition_snapshot.map(String::from),
-            inputs: HashMap::new(),
-            ticket_id: None,
-            repo_id: None,
-            parent_workflow_run_id: None,
-            target_label: None,
-            default_bot_name: None,
-            iteration: 0,
-            blocked_on: None,
-            workflow_title,
-            total_input_tokens: None,
-            total_output_tokens: None,
-            total_cache_read_input_tokens: None,
-            total_cache_creation_input_tokens: None,
-            total_turns: None,
-            total_cost_usd: None,
-            total_duration_ms: None,
-            model: None,
-            dismissed: false,
-        }
-    }
-
-    #[test]
-    fn display_name_falls_back_to_workflow_name_when_no_snapshot() {
-        let run = make_run("my-workflow", None);
-        assert_eq!(run.display_name(), "my-workflow");
-    }
-
-    #[test]
-    fn display_name_returns_title_from_snapshot() {
-        let snapshot = r#"{"title": "My Nice Workflow", "steps": []}"#;
-        let run = make_run("my-workflow", Some(snapshot));
-        assert_eq!(run.display_name(), "My Nice Workflow");
-    }
-
-    #[test]
-    fn display_name_falls_back_when_snapshot_has_no_title() {
-        let snapshot = r#"{"steps": [], "description": "no title here"}"#;
-        let run = make_run("my-workflow", Some(snapshot));
-        assert_eq!(run.display_name(), "my-workflow");
-    }
-
-    #[test]
-    fn display_name_falls_back_when_snapshot_is_malformed_json() {
-        let run = make_run("my-workflow", Some("{not valid json"));
-        assert_eq!(run.display_name(), "my-workflow");
-    }
-
-    #[test]
-    fn display_name_falls_back_when_title_is_non_string() {
-        let snapshot = r#"{"title": 42}"#;
-        let run = make_run("my-workflow", Some(snapshot));
-        assert_eq!(run.display_name(), "my-workflow");
-    }
-
     #[test]
     fn time_granularity_from_str_success() {
         use std::str::FromStr;
@@ -944,47 +553,87 @@ mod tests {
         );
     }
 
-    // -------------------------------------------------------------------------
-    // GateKind::from_str
-    // -------------------------------------------------------------------------
-
     #[test]
-    fn gate_kind_from_str_all_variants_roundtrip() {
-        use std::str::FromStr;
-        let cases = [
-            ("human_approval", GateKind::HumanApproval),
-            ("human_review", GateKind::HumanReview),
-            ("pr_approval", GateKind::PrApproval),
-            ("pr_checks", GateKind::PrChecks),
-            ("quality_gate", GateKind::QualityGate),
-        ];
-        for (s, expected) in cases {
-            let parsed =
-                GateKind::from_str(s).unwrap_or_else(|e| panic!("parse failed for '{s}': {e}"));
-            assert_eq!(parsed, expected, "from_str roundtrip failed for '{s}'");
-            assert_eq!(
-                parsed.to_string(),
-                s,
-                "Display roundtrip failed for {expected:?}"
-            );
-        }
+    fn metadata_fields_always_includes_base_fields() {
+        use super::MetadataEntry;
+        use runkon_flow::status::WorkflowStepStatus;
+
+        let step = runkon_flow::types::WorkflowRunStep {
+            status: WorkflowStepStatus::Completed,
+            role: "agent".into(),
+            can_commit: true,
+            iteration: 2,
+            ..Default::default()
+        };
+        let fields = step.metadata_fields();
+        assert_eq!(fields.len(), 4);
+        assert!(matches!(&fields[0], MetadataEntry::Field { label, value } if label == &"Status" && value == "completed"));
+        assert!(matches!(&fields[1], MetadataEntry::Field { label, value } if label == &"Role" && value == "agent"));
+        assert!(matches!(&fields[2], MetadataEntry::Field { label, value } if label == &"Can commit" && value == "true"));
+        assert!(matches!(&fields[3], MetadataEntry::Field { label, value } if label == &"Iteration" && value == "2"));
     }
 
     #[test]
-    fn gate_kind_from_str_error_on_unknown() {
-        use std::str::FromStr;
-        let result = GateKind::from_str("unknown_gate");
-        assert!(result.is_err(), "expected Err for unknown gate kind");
-        assert_eq!(result.unwrap_err(), "unknown gate kind: unknown_gate");
+    fn metadata_fields_includes_optional_fields_when_present() {
+        use super::MetadataEntry;
+        use runkon_flow::dsl::GateType;
+        use runkon_flow::status::WorkflowStepStatus;
+
+        let step = runkon_flow::types::WorkflowRunStep {
+            status: WorkflowStepStatus::Failed,
+            role: "gate".into(),
+            can_commit: false,
+            iteration: 0,
+            started_at: Some("2024-01-01T00:00:00Z".into()),
+            ended_at: Some("2024-01-01T01:00:00Z".into()),
+            gate_type: Some(GateType::HumanApproval),
+            gate_prompt: Some("Approve?".into()),
+            gate_feedback: Some("lgtm".into()),
+            result_text: Some("result".into()),
+            context_out: Some("ctx".into()),
+            markers_out: Some("markers".into()),
+            ..Default::default()
+        };
+        let fields = step.metadata_fields();
+        let labels: Vec<&str> = fields.iter().map(|e| match e {
+            MetadataEntry::Field { label, .. } => *label,
+            MetadataEntry::Section { heading, .. } => *heading,
+        }).collect();
+
+        assert_eq!(labels, vec![
+            "Status",
+            "Role",
+            "Can commit",
+            "Iteration",
+            "Started",
+            "Ended",
+            "Gate type",
+            "Gate Prompt",
+            "Gate Feedback",
+            "Result",
+            "Context Out",
+            "Markers Out",
+        ]);
     }
 
     #[test]
-    fn gate_kind_parse_via_option_ok_returns_none_for_unknown() {
-        // Production path: .parse::<GateKind>().ok() coerces unknown to None.
-        let parsed: Option<GateKind> = "bogus".parse().ok();
+    fn metadata_fields_omits_optional_fields_when_absent() {
+        use super::MetadataEntry;
+        use runkon_flow::status::WorkflowStepStatus;
+
+        let step = runkon_flow::types::WorkflowRunStep {
+            status: WorkflowStepStatus::Pending,
+            role: "agent".into(),
+            can_commit: false,
+            iteration: 0,
+            ..Default::default()
+        };
+        let fields = step.metadata_fields();
+        // Only the four base fields should be present.
+        assert_eq!(fields.len(), 4);
         assert!(
-            parsed.is_none(),
-            "unknown gate kind should parse to None via .ok()"
+            fields.iter().all(|e| matches!(e, MetadataEntry::Field { .. })),
+            "expected only Field entries when no optional fields are set"
         );
     }
 }

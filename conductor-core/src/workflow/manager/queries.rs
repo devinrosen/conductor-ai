@@ -21,16 +21,17 @@ use crate::workflow::constants::{
 static STEP_SELECT_EXPANDED: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     WorkflowManager::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
 });
-use crate::workflow::status::WorkflowRunStatus;
+use crate::workflow::WorkflowRunStatus;
 
 /// SQL fragment that filters to runs whose worktree is active or which have no worktree.
 const ACTIVE_WORKTREE_GUARD: &str =
     "workflow_runs.worktree_id IS NULL OR worktrees.status = 'active'";
+use crate::workflow::{extract_workflow_title, WorkflowRun, WorkflowRunStep, WorkflowStepSummary};
 use crate::workflow::types::{
-    extract_workflow_title, ActiveWorkflowCounts, GateAnalyticsRow, PendingGateAnalyticsRow,
+    ActiveWorkflowCounts, GateAnalyticsRow, PendingGateAnalyticsRow,
     PendingGateRow, StepFailureHeatmapRow, StepRetryAnalyticsRow, StepTokenHeatmapRow,
     TimeGranularity, WorkflowFailureRateTrendRow, WorkflowPercentiles, WorkflowRegressionSignal,
-    WorkflowRun, WorkflowRunContext, WorkflowRunMetricsRow, WorkflowRunStep, WorkflowStepSummary,
+    WorkflowRunContext, WorkflowRunMetricsRow,
     WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
 
