@@ -60,6 +60,16 @@ impl ClaudeRuntime {
             event_sink: Arc::new(Mutex::new(None)),
         }
     }
+
+    /// Lock `mutex`, recovering from poison and mapping to a `RuntimeError`.
+    fn lock_mutex<'a, T>(
+        mutex: &'a Mutex<T>,
+        context: &str,
+    ) -> Result<std::sync::MutexGuard<'a, T>> {
+        mutex
+            .lock()
+            .map_err(|_| RuntimeError::Workflow(format!("ClaudeRuntime: {context} mutex poisoned")))
+    }
 }
 
 impl Default for ClaudeRuntime {
@@ -87,18 +97,10 @@ impl AgentRuntime for ClaudeRuntime {
                 &self.options.binary_path.to_string_lossy(),
             )
             .map_err(RuntimeError::Workflow)?;
-            *self.handle
-                .lock()
-                .map_err(|_| RuntimeError::Workflow("ClaudeRuntime: handle mutex poisoned during spawn".into()))? = Some(h);
-            *self.prompt_file
-                .lock()
-                .map_err(|_| RuntimeError::Workflow("ClaudeRuntime: prompt_file mutex poisoned during spawn".into()))? = Some(pf);
-            *self.tracker
-                .lock()
-                .map_err(|_| RuntimeError::Workflow("ClaudeRuntime: tracker mutex poisoned during spawn".into()))? = Some(request.tracker.clone());
-            *self.event_sink
-                .lock()
-                .map_err(|_| RuntimeError::Workflow("ClaudeRuntime: event_sink mutex poisoned during spawn".into()))? = Some(request.event_sink.clone());
+            *Self::lock_mutex(&self.handle, "handle")? = Some(h);
+            *Self::lock_mutex(&self.prompt_file, "prompt_file")? = Some(pf);
+            *Self::lock_mutex(&self.tracker, "tracker")? = Some(request.tracker.clone());
+            *Self::lock_mutex(&self.event_sink, "event_sink")? = Some(request.event_sink.clone());
             Ok(())
         }
         #[cfg(not(unix))]

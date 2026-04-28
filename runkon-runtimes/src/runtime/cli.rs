@@ -164,14 +164,18 @@ impl AgentRuntime for CliRuntime {
             if let Some(flag) = shutdown {
                 if flag.load(std::sync::atomic::Ordering::Relaxed) {
                     process_utils::cancel_subprocess(state.pid);
-                    let _ = tracker.mark_cancelled(run_id);
+                    if let Err(e) = tracker.mark_cancelled(run_id) {
+                        tracing::warn!("CliRuntime: failed to mark run {run_id} cancelled on shutdown: {e}");
+                    }
                     return Err(PollError::Cancelled);
                 }
             }
 
             if poll_start.elapsed() > step_timeout {
                 process_utils::cancel_subprocess(state.pid);
-                let _ = tracker.mark_cancelled(run_id);
+                if let Err(e) = tracker.mark_cancelled(run_id) {
+                    tracing::warn!("CliRuntime: failed to mark run {run_id} cancelled on timeout: {e}");
+                }
                 return Err(PollError::NoResult);
             }
 
@@ -242,7 +246,10 @@ impl AgentRuntime for CliRuntime {
                     std::thread::sleep(Duration::from_millis(500));
                 }
                 Err(e) => {
-                    let _ = tracker.mark_failed_if_running(run_id, &e.to_string());
+                    let reason = e.to_string();
+                    if let Err(db_err) = tracker.mark_failed_if_running(run_id, &reason) {
+                        tracing::warn!("CliRuntime: failed to mark run {run_id} failed after wait error: {db_err}");
+                    }
                     return Err(PollError::Failed(format!("wait error: {e}")));
                 }
             }

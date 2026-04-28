@@ -40,28 +40,34 @@ impl std::str::FromStr for AgentRunStatus {
 }
 
 #[cfg(feature = "rusqlite")]
+macro_rules! impl_rusqlite_string_enum {
+    ($ty:ty) => {
+        impl rusqlite::types::ToSql for $ty {
+            fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+                Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
+            }
+        }
+
+        impl rusqlite::types::FromSql for $ty {
+            fn column_result(
+                value: rusqlite::types::ValueRef<'_>,
+            ) -> rusqlite::types::FromSqlResult<Self> {
+                let s = String::column_result(value)?;
+                s.parse().map_err(|e: String| {
+                    rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        e,
+                    )))
+                })
+            }
+        }
+    };
+}
+
+#[cfg(feature = "rusqlite")]
 mod rusqlite_impl {
     use super::AgentRunStatus;
-
-    impl rusqlite::types::ToSql for AgentRunStatus {
-        fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-            Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
-        }
-    }
-
-    impl rusqlite::types::FromSql for AgentRunStatus {
-        fn column_result(
-            value: rusqlite::types::ValueRef<'_>,
-        ) -> rusqlite::types::FromSqlResult<Self> {
-            let s = String::column_result(value)?;
-            s.parse().map_err(|e: String| {
-                rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    e,
-                )))
-            })
-        }
-    }
+    impl_rusqlite_string_enum!(AgentRunStatus);
 }
 
 /// Status of a single plan step.
@@ -104,26 +110,7 @@ impl std::str::FromStr for StepStatus {
 #[cfg(feature = "rusqlite")]
 mod rusqlite_impl_step {
     use super::StepStatus;
-
-    impl rusqlite::types::ToSql for StepStatus {
-        fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-            Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
-        }
-    }
-
-    impl rusqlite::types::FromSql for StepStatus {
-        fn column_result(
-            value: rusqlite::types::ValueRef<'_>,
-        ) -> rusqlite::types::FromSqlResult<Self> {
-            let s = String::column_result(value)?;
-            s.parse().map_err(|e: String| {
-                rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    e,
-                )))
-            })
-        }
-    }
+    impl_rusqlite_string_enum!(StepStatus);
 }
 
 /// A single step in an agent's two-phase execution plan.

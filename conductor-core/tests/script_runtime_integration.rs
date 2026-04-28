@@ -21,7 +21,7 @@ fn make_runtime(command: Option<&str>) -> ScriptRuntime {
 }
 
 fn make_request(run_id: &str, prompt: &str, db_path: std::path::PathBuf) -> RuntimeRequest {
-    let tracker = Arc::new(SqliteHostAdapter::new(db_path.clone()));
+    let tracker = Arc::new(SqliteHostAdapter::new(db_path.clone()).unwrap());
     let event_sink = tracker.clone();
     let log_path = conductor_core::config::agent_log_path(run_id)
         .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")));

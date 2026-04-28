@@ -68,20 +68,8 @@ fn push_optional_agent_flags(
     }
 }
 
-/// Like [`build_agent_args`] but accepts an optional permission mode override.
-#[allow(clippy::too_many_arguments)]
-pub fn build_agent_args_with_mode(
-    run_id: &str,
-    working_dir: &str,
-    prompt: &str,
-    resume_session_id: Option<&str>,
-    model: Option<&str>,
-    bot_name: Option<&str>,
-    permission_mode: Option<&PermissionMode>,
-    extra_plugin_dirs: &[String],
-) -> std::result::Result<Vec<Cow<'static, str>>, String> {
-    crate::text_util::validate_run_id(run_id).map_err(|e| e.to_string())?;
-
+/// Write `prompt` to a temp file with mode 0o600 (Unix) and return the path.
+fn write_prompt_file(run_id: &str, prompt: &str) -> std::result::Result<std::path::PathBuf, String> {
     let prompt_file_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
 
     #[cfg(unix)]
@@ -114,6 +102,25 @@ pub fn build_agent_args_with_mode(
             )
         })?;
     }
+
+    Ok(prompt_file_path)
+}
+
+/// Like [`build_agent_args`] but accepts an optional permission mode override.
+#[allow(clippy::too_many_arguments)]
+pub fn build_agent_args_with_mode(
+    run_id: &str,
+    working_dir: &str,
+    prompt: &str,
+    resume_session_id: Option<&str>,
+    model: Option<&str>,
+    bot_name: Option<&str>,
+    permission_mode: Option<&PermissionMode>,
+    extra_plugin_dirs: &[String],
+) -> std::result::Result<Vec<Cow<'static, str>>, String> {
+    crate::text_util::validate_run_id(run_id).map_err(|e| e.to_string())?;
+
+    let prompt_file_path = write_prompt_file(run_id, prompt)?;
 
     let mut args: Vec<Cow<'static, str>> = Vec::with_capacity(AGENT_ARGS_CAPACITY);
     args.push(Cow::Borrowed("agent"));
@@ -439,41 +446,7 @@ pub fn build_headless_agent_args(
     let permission_mode = params.permission_mode;
     let extra_plugin_dirs = params.plugin_dirs;
 
-    let prompt_file_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
-    {
-        use std::io::Write;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&prompt_file_path)
-                .map_err(|e| {
-                    format!(
-                        "Failed to write prompt file '{}': {e}",
-                        prompt_file_path.display()
-                    )
-                })?;
-            file.write_all(prompt.as_bytes()).map_err(|e| {
-                format!(
-                    "Failed to write prompt file '{}': {e}",
-                    prompt_file_path.display()
-                )
-            })?;
-        }
-        #[cfg(not(unix))]
-        {
-            std::fs::write(&prompt_file_path, prompt).map_err(|e| {
-                format!(
-                    "Failed to write prompt file '{}': {e}",
-                    prompt_file_path.display()
-                )
-            })?;
-        }
-    }
+    let prompt_file_path = write_prompt_file(run_id, prompt)?;
 
     let mut args: Vec<Cow<'static, str>> = Vec::with_capacity(AGENT_ARGS_CAPACITY + 2);
     args.push(Cow::Borrowed("agent"));

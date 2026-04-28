@@ -21,8 +21,8 @@ pub fn cancel_subprocess(pid: u32) {
 /// Inner implementation of [`cancel_subprocess`] with a configurable grace period.
 #[cfg(unix)]
 pub fn cancel_subprocess_with_grace(pid: u32, grace_period: std::time::Duration) {
-    if pid == 0 {
-        tracing::warn!("cancel_subprocess: pid 0 is invalid, refusing to signal process group");
+    if pid == 0 || pid == 1 {
+        tracing::warn!("cancel_subprocess: pid {pid} is invalid, refusing to signal process group");
         return;
     }
 

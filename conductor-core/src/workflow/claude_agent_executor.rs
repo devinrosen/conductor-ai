@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::agent::AgentRunStatus;
@@ -50,13 +49,7 @@ impl ActionExecutor for ClaudeAgentExecutor {
         let (agent_def, prompt) = super::helpers::load_agent_and_build_prompt(ectx, params)?;
 
         let options = RuntimeOptions {
-            binary_path: std::env::current_exe()
-                .ok()
-                .and_then(|p| {
-                    let sibling = p.parent()?.join("conductor");
-                    sibling.exists().then(|| sibling)
-                })
-                .unwrap_or_else(|| PathBuf::from("conductor")),
+            binary_path: crate::agent_runtime::resolve_conductor_bin().into(),
             log_path_for_run: Arc::new(|run_id| {
                 agent_log_path(run_id).unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")))
             }),
@@ -70,7 +63,10 @@ impl ActionExecutor for ClaudeAgentExecutor {
             &options,
         )?;
 
-        let tracker = Arc::new(SqliteHostAdapter::new(ectx.db_path.clone()));
+        let tracker = Arc::new(
+            SqliteHostAdapter::new(ectx.db_path.clone())
+                .map_err(|e| ConductorError::Agent(e.to_string()))?,
+        );
         let event_sink = tracker.clone();
         let log_path = agent_log_path(&ectx.run_id)?;
 

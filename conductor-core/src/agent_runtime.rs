@@ -16,7 +16,7 @@ pub use runkon_runtimes::headless::{
 ///
 /// Looks for a sibling `conductor` next to the current executable first,
 /// then falls back to the bare name (relying on `$PATH`).
-fn resolve_conductor_bin() -> String {
+pub fn resolve_conductor_bin() -> String {
     let resolved = std::env::current_exe()
         .ok()
         .and_then(|p| {
