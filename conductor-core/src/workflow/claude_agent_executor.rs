@@ -51,7 +51,8 @@ impl ActionExecutor for ClaudeAgentExecutor {
         let options = RuntimeOptions {
             binary_path: crate::agent_runtime::resolve_conductor_bin().into(),
             log_path_for_run: Arc::new(|run_id| {
-                agent_log_path(run_id).unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")))
+                agent_log_path(run_id)
+                    .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")))
             }),
             workspace_root: self.config.general.workspace_root.clone(),
         };
@@ -80,11 +81,8 @@ impl ActionExecutor for ClaudeAgentExecutor {
 
         runtime.spawn_validated(&request)?;
 
-        let completed = match runtime.poll(
-            &ectx.run_id,
-            ectx.shutdown.as_ref(),
-            ectx.step_timeout,
-        ) {
+        let completed = match runtime.poll(&ectx.run_id, ectx.shutdown.as_ref(), ectx.step_timeout)
+        {
             Ok(run) => run,
             Err(PollError::Cancelled) => {
                 return Err(ConductorError::WorkflowCancelled);

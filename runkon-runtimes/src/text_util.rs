@@ -1,4 +1,4 @@
-use crate::error::{RuntimeError, Result};
+use crate::error::{Result, RuntimeError};
 
 /// Validate that a `run_id` is safe to use as a filesystem path component.
 ///

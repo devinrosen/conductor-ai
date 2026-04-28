@@ -8,8 +8,8 @@ use crate::agent::AgentManager;
 use crate::error::{ConductorError, Result};
 
 use super::WorkflowManager;
-use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::workflow::{extract_workflow_title, WorkflowRun};
+use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
 
 impl<'a> WorkflowManager<'a> {
     pub fn create_workflow_run(

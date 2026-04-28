@@ -197,5 +197,4 @@ impl AgentRun {
     pub fn is_waiting_for_feedback(&self) -> bool {
         self.status == AgentRunStatus::WaitingForFeedback
     }
-
 }

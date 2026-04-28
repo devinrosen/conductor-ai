@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::Duration;
 
-use crate::error::{RuntimeError, Result};
+use crate::error::{Result, RuntimeError};
 use crate::headless::{DrainOutcome, SpawnHeadlessParams};
 use crate::permission::PermissionMode;
 use crate::process_utils;
@@ -26,9 +26,7 @@ impl Default for ClaudeRuntimeOptions {
         Self {
             permission_mode: PermissionMode::default(),
             binary_path: PathBuf::from(crate::headless::resolve_conductor_bin()),
-            log_path_for_run: Arc::new(|run_id| {
-                std::env::temp_dir().join(format!("{run_id}.log"))
-            }),
+            log_path_for_run: Arc::new(|run_id| std::env::temp_dir().join(format!("{run_id}.log"))),
         }
     }
 }
@@ -54,7 +52,6 @@ impl ClaudeRuntime {
             event_sink: Arc::new(Mutex::new(None)),
         }
     }
-
 }
 
 impl Default for ClaudeRuntime {
@@ -85,7 +82,8 @@ impl AgentRuntime for ClaudeRuntime {
             *self.handle.lock().unwrap_or_else(|e| e.into_inner()) = Some(h);
             *self.prompt_file.lock().unwrap_or_else(|e| e.into_inner()) = Some(pf);
             *self.tracker.lock().unwrap_or_else(|e| e.into_inner()) = Some(request.tracker.clone());
-            *self.event_sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(request.event_sink.clone());
+            *self.event_sink.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(request.event_sink.clone());
             Ok(())
         }
         #[cfg(not(unix))]
@@ -155,21 +153,29 @@ fn poll_unix(
         .take()
         .ok_or_else(|| PollError::Failed("ClaudeRuntime::poll called before spawn".into()))?;
 
-    let prompt_file = rt.prompt_file.lock().unwrap_or_else(|e| e.into_inner()).take();
+    let prompt_file = rt
+        .prompt_file
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
 
     let tracker = rt
         .tracker
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .take()
-        .ok_or_else(|| PollError::Failed("ClaudeRuntime::poll called before spawn (tracker missing)".into()))?;
+        .ok_or_else(|| {
+            PollError::Failed("ClaudeRuntime::poll called before spawn (tracker missing)".into())
+        })?;
 
     let event_sink = rt
         .event_sink
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .take()
-        .ok_or_else(|| PollError::Failed("ClaudeRuntime::poll called before spawn (event_sink missing)".into()))?;
+        .ok_or_else(|| {
+            PollError::Failed("ClaudeRuntime::poll called before spawn (event_sink missing)".into())
+        })?;
 
     let pid = handle.pid();
     let log_path = (rt.options.log_path_for_run)(run_id);
@@ -227,7 +233,9 @@ fn poll_unix(
                 if start.elapsed() > step_timeout {
                     tracing::warn!("ClaudeRuntime: step timeout reached for run {run_id}");
                     if let Err(e) = tracker.mark_cancelled(run_id) {
-                        tracing::warn!("ClaudeRuntime: failed to mark run {run_id} cancelled on timeout: {e}");
+                        tracing::warn!(
+                            "ClaudeRuntime: failed to mark run {run_id} cancelled on timeout: {e}"
+                        );
                     }
                     process_utils::cancel_subprocess(pid);
                     let _ = rx.recv_timeout(Duration::from_secs(6));
@@ -248,7 +256,9 @@ fn poll_unix(
             .ok_or_else(|| PollError::Failed(format!("run {run_id} not found in DB after drain"))),
         DrainOutcome::NoResult => {
             if let Err(e) = tracker.mark_failed_if_running(run_id, "agent exited without result") {
-                tracing::warn!("ClaudeRuntime: failed to mark run {run_id} failed after no-result: {e}");
+                tracing::warn!(
+                    "ClaudeRuntime: failed to mark run {run_id} failed after no-result: {e}"
+                );
             }
             Err(PollError::NoResult)
         }
@@ -327,11 +337,7 @@ mod tests {
     #[test]
     fn poll_before_spawn_returns_failed() {
         let runtime = ClaudeRuntime::default();
-        let result = runtime.poll(
-            "some-run-id",
-            None,
-            Duration::from_millis(10),
-        );
+        let result = runtime.poll("some-run-id", None, Duration::from_millis(10));
         assert!(
             matches!(result, Err(PollError::Failed(_))),
             "expected Failed, got: {result:?}"
@@ -342,11 +348,7 @@ mod tests {
     #[test]
     fn poll_fails_on_non_unix() {
         let runtime = ClaudeRuntime::default();
-        let result = runtime.poll(
-            "some-run-id",
-            None,
-            Duration::from_millis(10),
-        );
+        let result = runtime.poll("some-run-id", None, Duration::from_millis(10));
         assert!(
             matches!(result, Err(PollError::Failed(_))),
             "expected Failed on non-Unix, got: {result:?}"
@@ -423,11 +425,7 @@ mod tests {
     fn poll_timeout_returns_no_result() {
         let runtime = ClaudeRuntime::default();
         let _pid = inject_sleep_child(&runtime, 60);
-        let result = runtime.poll(
-            "timeout-run",
-            None,
-            Duration::from_millis(100),
-        );
+        let result = runtime.poll("timeout-run", None, Duration::from_millis(100));
         assert!(
             matches!(result, Err(PollError::NoResult)),
             "expected NoResult after timeout, got: {result:?}"
@@ -440,11 +438,7 @@ mod tests {
         let runtime = ClaudeRuntime::default();
         let _pid = inject_sleep_child(&runtime, 60);
         let flag = Arc::new(AtomicBool::new(true));
-        let result = runtime.poll(
-            "shutdown-run",
-            Some(&flag),
-            Duration::from_secs(300),
-        );
+        let result = runtime.poll("shutdown-run", Some(&flag), Duration::from_secs(300));
         assert!(
             matches!(result, Err(PollError::Cancelled)),
             "expected Cancelled when shutdown flag is set, got: {result:?}"

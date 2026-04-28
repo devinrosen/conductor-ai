@@ -1665,28 +1665,61 @@ bot_name = "my-bot"
     #[test]
     fn test_agent_permission_mode_ext_cli_flag() {
         use super::AgentPermissionModeExt;
-        assert_eq!(AgentPermissionMode::AutoMode.cli_flag(), "--enable-auto-mode");
-        assert_eq!(AgentPermissionMode::SkipPermissions.cli_flag(), "--dangerously-skip-permissions");
+        assert_eq!(
+            AgentPermissionMode::AutoMode.cli_flag(),
+            "--enable-auto-mode"
+        );
+        assert_eq!(
+            AgentPermissionMode::SkipPermissions.cli_flag(),
+            "--dangerously-skip-permissions"
+        );
         assert_eq!(AgentPermissionMode::Plan.cli_flag(), "--permission-mode");
-        assert_eq!(AgentPermissionMode::RepoSafe.cli_flag(), "--permission-mode");
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.cli_flag(),
+            "--permission-mode"
+        );
     }
 
     #[test]
     fn test_agent_permission_mode_ext_claude_permission_flag() {
         use super::AgentPermissionModeExt;
-        assert_eq!(AgentPermissionMode::AutoMode.claude_permission_flag(), "--enable-auto-mode");
-        assert_eq!(AgentPermissionMode::SkipPermissions.claude_permission_flag(), "--dangerously-skip-permissions");
-        assert_eq!(AgentPermissionMode::Plan.claude_permission_flag(), "--permission-mode");
-        assert_eq!(AgentPermissionMode::RepoSafe.claude_permission_flag(), "--dangerously-skip-permissions");
+        assert_eq!(
+            AgentPermissionMode::AutoMode.claude_permission_flag(),
+            "--enable-auto-mode"
+        );
+        assert_eq!(
+            AgentPermissionMode::SkipPermissions.claude_permission_flag(),
+            "--dangerously-skip-permissions"
+        );
+        assert_eq!(
+            AgentPermissionMode::Plan.claude_permission_flag(),
+            "--permission-mode"
+        );
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.claude_permission_flag(),
+            "--dangerously-skip-permissions"
+        );
     }
 
     #[test]
     fn test_agent_permission_mode_ext_claude_permission_flag_value() {
         use super::AgentPermissionModeExt;
-        assert_eq!(AgentPermissionMode::AutoMode.claude_permission_flag_value(), None);
-        assert_eq!(AgentPermissionMode::SkipPermissions.claude_permission_flag_value(), None);
-        assert_eq!(AgentPermissionMode::Plan.claude_permission_flag_value(), Some("plan"));
-        assert_eq!(AgentPermissionMode::RepoSafe.claude_permission_flag_value(), None);
+        assert_eq!(
+            AgentPermissionMode::AutoMode.claude_permission_flag_value(),
+            None
+        );
+        assert_eq!(
+            AgentPermissionMode::SkipPermissions.claude_permission_flag_value(),
+            None
+        );
+        assert_eq!(
+            AgentPermissionMode::Plan.claude_permission_flag_value(),
+            Some("plan")
+        );
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.claude_permission_flag_value(),
+            None
+        );
     }
 
     #[test]
@@ -1696,6 +1729,9 @@ bot_name = "my-bot"
         assert_eq!(AgentPermissionMode::SkipPermissions.allowed_tools(), None);
         assert!(AgentPermissionMode::Plan.allowed_tools().is_some());
         assert!(AgentPermissionMode::RepoSafe.allowed_tools().is_some());
-        assert_eq!(AgentPermissionMode::Plan.allowed_tools(), AgentPermissionMode::RepoSafe.allowed_tools());
+        assert_eq!(
+            AgentPermissionMode::Plan.allowed_tools(),
+            AgentPermissionMode::RepoSafe.allowed_tools()
+        );
     }
 }

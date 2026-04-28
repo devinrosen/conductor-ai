@@ -32,7 +32,12 @@ pub fn setup_test_db(run_id: &str, runtime: &str) -> tempfile::NamedTempFile {
 }
 
 /// Build a [`RuntimeRequest`] with a [`SqliteHostAdapter`] tracker/sink backed by `db_path`.
-pub fn make_request(run_id: &str, prompt: &str, db_path: std::path::PathBuf, runtime: &str) -> RuntimeRequest {
+pub fn make_request(
+    run_id: &str,
+    prompt: &str,
+    db_path: std::path::PathBuf,
+    runtime: &str,
+) -> RuntimeRequest {
     let tracker = Arc::new(SqliteHostAdapter::new(db_path.clone()).unwrap());
     let event_sink = tracker.clone();
     RuntimeRequest {

@@ -26,14 +26,13 @@ use crate::workflow::WorkflowRunStatus;
 /// SQL fragment that filters to runs whose worktree is active or which have no worktree.
 const ACTIVE_WORKTREE_GUARD: &str =
     "workflow_runs.worktree_id IS NULL OR worktrees.status = 'active'";
-use crate::workflow::{extract_workflow_title, WorkflowRun, WorkflowRunStep, WorkflowStepSummary};
 use crate::workflow::types::{
-    ActiveWorkflowCounts, GateAnalyticsRow, PendingGateAnalyticsRow,
-    PendingGateRow, StepFailureHeatmapRow, StepRetryAnalyticsRow, StepTokenHeatmapRow,
-    TimeGranularity, WorkflowFailureRateTrendRow, WorkflowPercentiles, WorkflowRegressionSignal,
-    WorkflowRunContext, WorkflowRunMetricsRow,
-    WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    ActiveWorkflowCounts, GateAnalyticsRow, PendingGateAnalyticsRow, PendingGateRow,
+    StepFailureHeatmapRow, StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity,
+    WorkflowFailureRateTrendRow, WorkflowPercentiles, WorkflowRegressionSignal, WorkflowRunContext,
+    WorkflowRunMetricsRow, WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
+use crate::workflow::{extract_workflow_title, WorkflowRun, WorkflowRunStep, WorkflowStepSummary};
 
 /// Returns `(recent - baseline) / baseline * 100` when both values are present and baseline > 0.
 fn pct_change(recent: Option<f64>, baseline: Option<f64>) -> Option<f64> {

@@ -85,8 +85,6 @@ fn setup_test_db(run_id: &str) -> (tempfile::NamedTempFile, std::sync::MutexGuar
     (tmp, lock)
 }
 
-
-
 #[test]
 fn test_cli_runtime_success() {
     let json_body = r#"{"response":"hello world","stats":{"total_tokens":42}}"#;
@@ -96,7 +94,12 @@ fn test_cli_runtime_success() {
     let run_id = format!("test-cli-{}", ulid::Ulid::new());
     let (_db_guard, _lock) = setup_test_db(&run_id);
 
-    let req = common::make_request(&run_id, "test prompt", _db_guard.path().to_path_buf(), "cli");
+    let req = common::make_request(
+        &run_id,
+        "test prompt",
+        _db_guard.path().to_path_buf(),
+        "cli",
+    );
 
     runtime.spawn_validated(&req).expect("spawn must succeed");
 
@@ -197,7 +200,12 @@ exit 0"#
     let run_id = format!("test-stdin-{}", ulid::Ulid::new());
     let (_db_guard, _lock) = setup_test_db(&run_id);
 
-    let req = common::make_request(&run_id, "hello from stdin", _db_guard.path().to_path_buf(), "cli");
+    let req = common::make_request(
+        &run_id,
+        "hello from stdin",
+        _db_guard.path().to_path_buf(),
+        "cli",
+    );
 
     runtime
         .spawn_validated(&req)
@@ -295,9 +303,7 @@ fn test_cli_runtime_cancel_kills_process_and_marks_cancelled() {
     );
     assert!(runtime.is_alive(&run), "run must be alive before cancel");
 
-    runtime
-        .cancel(&run)
-        .expect("cancel must succeed");
+    runtime.cancel(&run).expect("cancel must succeed");
 
     // Process should be gone.
     assert!(

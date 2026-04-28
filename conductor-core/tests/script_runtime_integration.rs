@@ -19,15 +19,18 @@ fn make_runtime(command: Option<&str>) -> ScriptRuntime {
     })
 }
 
-
-
 #[test]
 fn test_script_runtime_success() {
     let run_id = format!("test-script-{}", ulid::Ulid::new());
     let _db_guard = common::setup_test_db(&run_id, "script");
 
     let runtime = make_runtime(Some("echo hello"));
-    let req = common::make_request(&run_id, "test prompt", _db_guard.path().to_path_buf(), "script");
+    let req = common::make_request(
+        &run_id,
+        "test prompt",
+        _db_guard.path().to_path_buf(),
+        "script",
+    );
 
     runtime.spawn_validated(&req).expect("spawn must succeed");
 
