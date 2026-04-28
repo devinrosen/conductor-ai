@@ -12,9 +12,8 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::Duration;
 
 use conductor_core::config::RuntimeConfig;
-use conductor_core::runtime::adapter::SqliteHostAdapter;
 use conductor_core::runtime::cli::CliRuntime;
-use conductor_core::runtime::{AgentRuntime, RuntimeRequest};
+use conductor_core::runtime::AgentRuntime;
 
 // Serializes tests that mutate CONDUCTOR_DB_PATH so they don't race.
 static DB_PATH_LOCK: Mutex<()> = Mutex::new(());
@@ -86,24 +85,7 @@ fn setup_test_db(run_id: &str) -> (tempfile::NamedTempFile, std::sync::MutexGuar
     (tmp, lock)
 }
 
-fn make_request(run_id: &str, prompt: &str, db_path: PathBuf) -> RuntimeRequest {
-    let tracker = Arc::new(SqliteHostAdapter::new(db_path.clone()).unwrap());
-    let event_sink = tracker.clone();
-    let log_path = conductor_core::config::agent_log_path(run_id)
-        .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")));
-    RuntimeRequest {
-        run_id: run_id.to_string(),
-        agent_def: common::make_agent_def("cli"),
-        prompt: prompt.to_string(),
-        model: None,
-        working_dir: PathBuf::from("/tmp"),
-        bot_name: None,
-        plugin_dirs: vec![],
-        tracker,
-        event_sink,
-        log_path,
-    }
-}
+
 
 #[test]
 fn test_cli_runtime_success() {
@@ -114,7 +96,7 @@ fn test_cli_runtime_success() {
     let run_id = format!("test-cli-{}", ulid::Ulid::new());
     let (_db_guard, _lock) = setup_test_db(&run_id);
 
-    let req = make_request(&run_id, "test prompt", _db_guard.path().to_path_buf());
+    let req = common::make_request(&run_id, "test prompt", _db_guard.path().to_path_buf(), "cli");
 
     runtime.spawn_validated(&req).expect("spawn must succeed");
 
@@ -152,7 +134,7 @@ fn assert_nonzero_exit_maps_to_failed(exit_code: i32, run_id_prefix: &str) {
     let run_id = format!("{}-{}", run_id_prefix, ulid::Ulid::new());
     let (_db_guard, _lock) = setup_test_db(&run_id);
 
-    let req = make_request(&run_id, "bad prompt", _db_guard.path().to_path_buf());
+    let req = common::make_request(&run_id, "bad prompt", _db_guard.path().to_path_buf(), "cli");
 
     runtime.spawn_validated(&req).expect("spawn must succeed");
 
@@ -215,7 +197,7 @@ exit 0"#
     let run_id = format!("test-stdin-{}", ulid::Ulid::new());
     let (_db_guard, _lock) = setup_test_db(&run_id);
 
-    let req = make_request(&run_id, "hello from stdin", _db_guard.path().to_path_buf());
+    let req = common::make_request(&run_id, "hello from stdin", _db_guard.path().to_path_buf(), "cli");
 
     runtime
         .spawn_validated(&req)
@@ -265,7 +247,7 @@ fn spawn_slow_script(
     let run_id = format!("{}-{}", id_prefix, ulid::Ulid::new());
     let (db_guard, lock) = setup_test_db(&run_id);
 
-    let req = make_request(&run_id, "prompt", db_guard.path().to_path_buf());
+    let req = common::make_request(&run_id, "prompt", db_guard.path().to_path_buf(), "cli");
 
     runtime.spawn_validated(&req).expect("spawn must succeed");
 
@@ -353,7 +335,7 @@ fn test_cli_runtime_cancel_with_no_pid_marks_cancelled() {
     let dummy_run_id = format!("dummy-{}", ulid::Ulid::new());
     let _ = conductor_core::db::open_database(db_guard.path())
         .map(|conn| conn.execute("INSERT INTO agent_runs (id, status, agent_name, worktree_id, repo_id, created_at) VALUES (?1, 'Running', 'cli', 'wt', 'repo', datetime('now'))", [&dummy_run_id]));
-    let dummy_req = make_request(&dummy_run_id, "p", db_guard.path().to_path_buf());
+    let dummy_req = common::make_request(&dummy_run_id, "p", db_guard.path().to_path_buf(), "cli");
     let _ = runtime.spawn_validated(&dummy_req);
 
     runtime
@@ -366,10 +348,11 @@ fn test_cli_runtime_cancel_with_no_pid_marks_cancelled() {
 #[test]
 fn test_cli_runtime_rejects_invalid_run_id() {
     let runtime = make_runtime("/bin/echo", "response", None);
-    let req = make_request(
+    let req = common::make_request(
         "../../etc/cron.d/payload",
         "test",
         conductor_core::config::db_path(),
+        "cli",
     );
     let err = runtime
         .spawn_validated(&req)
@@ -392,7 +375,7 @@ fn test_cli_runtime_poll_handles_unreadable_output_file() {
     let run_id = format!("test-unreadable-{}", ulid::Ulid::new());
     let (_db_guard, _lock) = setup_test_db(&run_id);
 
-    let req = make_request(&run_id, "test", _db_guard.path().to_path_buf());
+    let req = common::make_request(&run_id, "test", _db_guard.path().to_path_buf(), "cli");
 
     runtime.spawn_validated(&req).expect("spawn must succeed");
 
@@ -430,7 +413,7 @@ fn test_cli_runtime_poll_handles_unreadable_output_file_on_error_exit() {
     let run_id = format!("test-unreadable-err-{}", ulid::Ulid::new());
     let (_db_guard, _lock) = setup_test_db(&run_id);
 
-    let req = make_request(&run_id, "test", _db_guard.path().to_path_buf());
+    let req = common::make_request(&run_id, "test", _db_guard.path().to_path_buf(), "cli");
 
     runtime.spawn_validated(&req).expect("spawn must succeed");
     std::thread::sleep(Duration::from_millis(200));

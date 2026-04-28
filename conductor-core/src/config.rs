@@ -9,6 +9,58 @@ use crate::error::{ConductorError, Result};
 pub use runkon_runtimes::config::RuntimeConfig;
 pub use runkon_runtimes::permission::PermissionMode as AgentPermissionMode;
 
+/// Extension trait for [`AgentPermissionMode`] that provides conductor-specific
+/// and Claude-Code-CLI-specific flag mappings.
+///
+/// Kept in conductor-core (not runkon-runtimes) so the portable crate stays
+/// vendor-neutral.
+pub trait AgentPermissionModeExt {
+    /// Returns the conductor CLI flag for this mode (used in `conductor agent run` passthrough args).
+    fn cli_flag(&self) -> &str;
+    /// Returns the actual permission flag to pass to the `claude` subprocess.
+    fn claude_permission_flag(&self) -> &str;
+    /// Returns the optional value argument that follows the claude permission flag.
+    fn claude_permission_flag_value(&self) -> Option<&str>;
+    /// Returns the `--allowedTools` pattern for this mode, if any.
+    fn allowed_tools(&self) -> Option<&'static str>;
+}
+
+impl AgentPermissionModeExt for AgentPermissionMode {
+    fn cli_flag(&self) -> &str {
+        match self {
+            Self::AutoMode => "--enable-auto-mode",
+            Self::SkipPermissions => "--dangerously-skip-permissions",
+            Self::Plan => "--permission-mode",
+            Self::RepoSafe => "--permission-mode",
+        }
+    }
+
+    fn claude_permission_flag(&self) -> &str {
+        match self {
+            Self::AutoMode => "--enable-auto-mode",
+            Self::SkipPermissions => "--dangerously-skip-permissions",
+            Self::Plan => "--permission-mode",
+            Self::RepoSafe => "--dangerously-skip-permissions",
+        }
+    }
+
+    fn claude_permission_flag_value(&self) -> Option<&str> {
+        match self {
+            Self::Plan => Some("plan"),
+            _ => None,
+        }
+    }
+
+    fn allowed_tools(&self) -> Option<&'static str> {
+        match self {
+            Self::Plan | Self::RepoSafe => {
+                Some("Bash,Glob,Grep,Read,WebFetch,WebSearch,mcp__conductor__*,mcp__*")
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Controls whether an agent is auto-started after creating a worktree from a ticket.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

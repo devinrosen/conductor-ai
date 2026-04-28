@@ -62,7 +62,6 @@ pub struct RuntimeRequest {
     pub plugin_dirs: Vec<String>,
     pub tracker: Arc<dyn RunTracker>,
     pub event_sink: Arc<dyn RunEventSink>,
-    pub log_path: PathBuf,
 }
 
 /// Error returned by `AgentRuntime::poll`.

@@ -31,6 +31,19 @@ fn lexical_normalize(path: PathBuf) -> PathBuf {
 pub trait AgentRunExt {
     /// Returns the log file path for this run.
     fn log_path(&self) -> Result<PathBuf>;
+
+    /// Returns true if this run ended (failed/cancelled) with incomplete plan steps
+    /// and has a session_id available for resume.
+    fn needs_resume(&self) -> bool;
+
+    /// Returns true if the run has a plan with at least one incomplete step.
+    fn has_incomplete_plan_steps(&self) -> bool;
+
+    /// Returns the incomplete plan steps (not yet done).
+    fn incomplete_plan_steps(&self) -> Vec<&PlanStep>;
+
+    /// Build a resume prompt from the remaining plan steps.
+    fn build_resume_prompt(&self) -> String;
 }
 
 impl AgentRunExt for AgentRun {
@@ -49,6 +62,44 @@ impl AgentRunExt for AgentRun {
             }
             None => crate::config::agent_log_path(&self.id),
         }
+    }
+
+    fn needs_resume(&self) -> bool {
+        use runkon_runtimes::AgentRunStatus;
+        matches!(
+            self.status,
+            AgentRunStatus::Failed | AgentRunStatus::Cancelled
+        ) && self.claude_session_id.is_some()
+            && self.has_incomplete_plan_steps()
+    }
+
+    fn has_incomplete_plan_steps(&self) -> bool {
+        self.plan
+            .as_ref()
+            .is_some_and(|steps| steps.iter().any(|s| !s.done))
+    }
+
+    fn incomplete_plan_steps(&self) -> Vec<&PlanStep> {
+        self.plan
+            .as_ref()
+            .map(|steps| steps.iter().filter(|s| !s.done).collect())
+            .unwrap_or_default()
+    }
+
+    fn build_resume_prompt(&self) -> String {
+        let incomplete = self.incomplete_plan_steps();
+        if incomplete.is_empty() {
+            return "Continue where you left off.".to_string();
+        }
+
+        let mut prompt = String::from(
+            "Continue where you left off. The following plan steps remain incomplete:\n",
+        );
+        for (i, step) in incomplete.iter().enumerate() {
+            prompt.push_str(&format!("{}. {}\n", i + 1, step.description));
+        }
+        prompt.push_str("\nPlease complete these remaining steps.");
+        prompt
     }
 }
 

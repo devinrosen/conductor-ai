@@ -25,13 +25,7 @@ impl Default for ClaudeRuntimeOptions {
     fn default() -> Self {
         Self {
             permission_mode: PermissionMode::default(),
-            binary_path: std::env::current_exe()
-                .ok()
-                .and_then(|p| {
-                    let sibling = p.parent()?.join("conductor");
-                    sibling.exists().then(|| sibling)
-                })
-                .unwrap_or_else(|| PathBuf::from("conductor")),
+            binary_path: PathBuf::from(crate::headless::resolve_conductor_bin()),
             log_path_for_run: Arc::new(|run_id| {
                 std::env::temp_dir().join(format!("{run_id}.log"))
             }),
@@ -153,7 +147,9 @@ impl AgentRuntime for ClaudeRuntime {
             }
             if let Ok(mut guard) = self.tracker.lock() {
                 if let Some(ref tracker) = guard.take() {
-                    let _ = tracker.mark_cancelled(&run.id);
+                    if let Err(e) = tracker.mark_cancelled(&run.id) {
+                        tracing::warn!("ClaudeRuntime: failed to mark run {} cancelled: {e}", run.id);
+                    }
                 }
             }
         }
@@ -245,7 +241,9 @@ fn poll_unix(
                         tracing::warn!(
                             "ClaudeRuntime: shutdown requested, cancelling run {run_id}"
                         );
-                        let _ = tracker.mark_cancelled(run_id);
+                        if let Err(e) = tracker.mark_cancelled(run_id) {
+                            tracing::warn!("ClaudeRuntime: failed to mark run {run_id} cancelled on shutdown: {e}");
+                        }
                         process_utils::cancel_subprocess(pid);
                         let _ = rx.recv_timeout(Duration::from_secs(6));
                         return Err(PollError::Cancelled);
@@ -253,7 +251,9 @@ fn poll_unix(
                 }
                 if start.elapsed() > step_timeout {
                     tracing::warn!("ClaudeRuntime: step timeout reached for run {run_id}");
-                    let _ = tracker.mark_cancelled(run_id);
+                    if let Err(e) = tracker.mark_cancelled(run_id) {
+                        tracing::warn!("ClaudeRuntime: failed to mark run {run_id} cancelled on timeout: {e}");
+                    }
                     process_utils::cancel_subprocess(pid);
                     let _ = rx.recv_timeout(Duration::from_secs(6));
                     break DrainOutcome::NoResult;
@@ -272,7 +272,9 @@ fn poll_unix(
             .map_err(|e| PollError::Failed(format!("DB error after drain: {e}")))?
             .ok_or_else(|| PollError::Failed(format!("run {run_id} not found in DB after drain"))),
         DrainOutcome::NoResult => {
-            let _ = tracker.mark_failed_if_running(run_id, "agent exited without result");
+            if let Err(e) = tracker.mark_failed_if_running(run_id, "agent exited without result") {
+                tracing::warn!("ClaudeRuntime: failed to mark run {run_id} failed after no-result: {e}");
+            }
             Err(PollError::NoResult)
         }
     }
@@ -303,7 +305,6 @@ mod tests {
             plugin_dirs: vec![],
             tracker: Arc::new(NoopTracker),
             event_sink: Arc::new(NoopEventSink),
-            log_path: std::env::temp_dir().join(format!("{run_id}.log")),
         }
     }
 

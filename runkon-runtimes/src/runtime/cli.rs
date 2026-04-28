@@ -285,7 +285,9 @@ impl AgentRuntime for CliRuntime {
 
         if let Ok(mut guard) = self.tracker.lock() {
             if let Some(ref tracker) = guard.take() {
-                let _ = tracker.mark_cancelled(&run.id);
+                if let Err(e) = tracker.mark_cancelled(&run.id) {
+                    tracing::warn!("CliRuntime: failed to mark run {} cancelled: {e}", run.id);
+                }
             }
         }
         Ok(())

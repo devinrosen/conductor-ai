@@ -1,3 +1,5 @@
+use std::io::Read;
+use std::process::{Child, Stdio};
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::Duration;
 
@@ -9,11 +11,17 @@ use crate::tracker::{RunEventSink, RunTracker, RuntimeEvent};
 
 use super::{AgentRuntime, PollError, RuntimeRequest};
 
-/// ScriptRuntime runs any shell command synchronously via `sh -c <command>`,
+struct ScriptState {
+    child: Child,
+    start: std::time::Instant,
+}
+
+/// ScriptRuntime runs any shell command via `sh -c <command>`,
 /// passing the prompt through the `CONDUCTOR_PROMPT` environment variable and
 /// capturing stdout as `result_text`. No tmux dependency.
 pub struct ScriptRuntime {
     config: RuntimeConfig,
+    state: Mutex<Option<ScriptState>>,
     tracker: Mutex<Option<Arc<dyn RunTracker>>>,
     event_sink: Mutex<Option<Arc<dyn RunEventSink>>>,
 }
@@ -22,6 +30,7 @@ impl ScriptRuntime {
     pub fn new(config: RuntimeConfig) -> Self {
         Self {
             config,
+            state: Mutex::new(None),
             tracker: Mutex::new(None),
             event_sink: Mutex::new(None),
         }
@@ -44,48 +53,37 @@ impl AgentRuntime for ScriptRuntime {
             );
         }
 
-        let output = std::process::Command::new("sh")
+        let child = std::process::Command::new("sh")
             .args(["-c", command])
             .env("CONDUCTOR_PROMPT", &request.prompt)
             .current_dir(&request.working_dir)
-            .output()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|e| {
                 RuntimeError::Agent(format!("ScriptRuntime: failed to spawn command: {e}"))
             })?;
 
-        if output.status.success() {
-            let result_text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            request.event_sink.on_event(
-                &request.run_id,
-                RuntimeEvent::Completed {
-                    result_text: Some(result_text),
-                    session_id: None,
-                    cost_usd: None,
-                    num_turns: None,
-                    duration_ms: None,
-                    input_tokens: None,
-                    output_tokens: None,
-                    cache_read_input_tokens: None,
-                    cache_creation_input_tokens: None,
-                },
+        let pid = child.id();
+        request.tracker.record_pid(&request.run_id, pid).map_err(|e| {
+            tracing::warn!(
+                "ScriptRuntime: failed to persist pid {pid} for run {}: {e}",
+                request.run_id
             );
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let exit_code = output.status.code().unwrap_or(1);
-            let err_msg = if stderr.is_empty() {
-                format!("process exited with code {exit_code}")
-            } else {
-                format!("process exited with code {exit_code}: {stderr}")
-            };
-            request.event_sink.on_event(
-                &request.run_id,
-                RuntimeEvent::Failed {
-                    error: err_msg,
-                    session_id: None,
-                },
+            e
+        }).ok();
+        request.tracker.record_runtime(&request.run_id, "script").map_err(|e| {
+            tracing::warn!(
+                "ScriptRuntime: failed to persist runtime for run {}: {e}",
+                request.run_id
             );
-        }
+            e
+        }).ok();
 
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(ScriptState {
+            child,
+            start: std::time::Instant::now(),
+        });
         *self.tracker.lock().unwrap_or_else(|e| e.into_inner()) = Some(request.tracker.clone());
         *self.event_sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(request.event_sink.clone());
         Ok(())
@@ -94,33 +92,124 @@ impl AgentRuntime for ScriptRuntime {
     fn poll(
         &self,
         run_id: &str,
-        _shutdown: Option<&Arc<AtomicBool>>,
-        _step_timeout: Duration,
+        shutdown: Option<&Arc<AtomicBool>>,
+        step_timeout: Duration,
     ) -> std::result::Result<AgentRun, PollError> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .ok_or_else(|| PollError::Failed("ScriptRuntime::poll called before spawn".into()))?;
+
         let tracker = self
             .tracker
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
-            .ok_or_else(|| PollError::Failed("ScriptRuntime::poll called before spawn".into()))?;
+            .ok_or_else(|| PollError::Failed("ScriptRuntime::poll called before spawn (tracker missing)".into()))?;
 
-        let run = tracker
-            .get_run(run_id)
-            .map_err(|e| {
-                PollError::Failed(format!(
-                    "ScriptRuntime: failed to fetch run {run_id} from DB: {e}"
-                ))
-            })?
-            .ok_or_else(|| PollError::Failed(format!("run {run_id} not found in DB")))?;
+        let event_sink = self
+            .event_sink
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or_else(|| PollError::Failed("ScriptRuntime::poll called before spawn (event_sink missing)".into()))?;
 
-        match run.status {
-            AgentRunStatus::Failed => Err(PollError::Failed(
-                run.result_text
-                    .clone()
-                    .unwrap_or_else(|| "script failed".to_string()),
-            )),
-            AgentRunStatus::Completed => Ok(run),
-            _ => Err(PollError::NoResult),
+        let poll_start = std::time::Instant::now();
+        loop {
+            if let Some(flag) = shutdown {
+                if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = state.child.kill();
+                    if let Err(e) = tracker.mark_cancelled(run_id) {
+                        tracing::warn!("ScriptRuntime: failed to mark run {run_id} cancelled on shutdown: {e}");
+                    }
+                    return Err(PollError::Cancelled);
+                }
+            }
+
+            if poll_start.elapsed() > step_timeout {
+                let _ = state.child.kill();
+                if let Err(e) = tracker.mark_cancelled(run_id) {
+                    tracing::warn!("ScriptRuntime: failed to mark run {run_id} cancelled on timeout: {e}");
+                }
+                return Err(PollError::NoResult);
+            }
+
+            match state.child.try_wait() {
+                Ok(Some(exit_status)) => {
+                    let exit_code = exit_status.code().unwrap_or(1);
+                    let is_error = exit_code != 0;
+                    let duration_ms = state.start.elapsed().as_millis() as i64;
+
+                    let mut stdout = String::new();
+                    let mut stderr = String::new();
+                    if let Some(mut out) = state.child.stdout.take() {
+                        let _ = out.read_to_string(&mut stdout);
+                    }
+                    if let Some(mut err) = state.child.stderr.take() {
+                        let _ = err.read_to_string(&mut stderr);
+                    }
+
+                    if is_error {
+                        let err_msg = {
+                            let s = stderr.trim();
+                            if s.is_empty() {
+                                format!("process exited with code {exit_code}")
+                            } else {
+                                format!("process exited with code {exit_code}: {s}")
+                            }
+                        };
+                        event_sink.on_event(
+                            run_id,
+                            RuntimeEvent::Failed {
+                                error: err_msg,
+                                session_id: None,
+                            },
+                        );
+                    } else {
+                        event_sink.on_event(
+                            run_id,
+                            RuntimeEvent::Completed {
+                                result_text: Some(stdout.trim().to_string()),
+                                session_id: None,
+                                cost_usd: None,
+                                num_turns: None,
+                                duration_ms: Some(duration_ms),
+                                input_tokens: None,
+                                output_tokens: None,
+                                cache_read_input_tokens: None,
+                                cache_creation_input_tokens: None,
+                            },
+                        );
+                    }
+
+                    let run = tracker
+                        .get_run(run_id)
+                        .map_err(|e| PollError::Failed(format!("DB error: {e}")))?
+                        .ok_or_else(|| PollError::Failed(format!("run {run_id} not found in DB")))?;
+
+                    return match run.status {
+                        AgentRunStatus::Failed => Err(PollError::Failed(
+                            run.result_text
+                                .clone()
+                                .unwrap_or_else(|| "script failed".to_string()),
+                        )),
+                        AgentRunStatus::Completed => Ok(run),
+                        _ => Err(PollError::NoResult),
+                    };
+                }
+                Ok(None) => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(e) => {
+                    let reason = e.to_string();
+                    if let Err(db_err) = tracker.mark_failed_if_running(run_id, &reason) {
+                        tracing::warn!("ScriptRuntime: failed to mark run {run_id} failed after wait error: {db_err}");
+                    }
+                    return Err(PollError::Failed(format!("wait error: {e}")));
+                }
+            }
         }
     }
 
@@ -129,6 +218,11 @@ impl AgentRuntime for ScriptRuntime {
     }
 
     fn cancel(&self, run: &AgentRun) -> Result<()> {
+        if let Ok(mut guard) = self.state.lock() {
+            if let Some(mut state) = guard.take() {
+                let _ = state.child.kill();
+            }
+        }
         if let Ok(mut guard) = self.tracker.lock() {
             if let Some(ref tracker) = guard.take() {
                 if let Err(e) = tracker.mark_cancelled(&run.id) {
@@ -144,6 +238,7 @@ impl AgentRuntime for ScriptRuntime {
 mod tests {
     use super::*;
     use crate::config::RuntimeConfig;
+    use crate::run::AgentRunStatus;
     use crate::tracker::NoopEventSink;
 
     fn make_runtime(command: Option<&str>) -> ScriptRuntime {

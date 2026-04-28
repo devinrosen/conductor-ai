@@ -1,6 +1,7 @@
 use std::process::Command;
 
 use conductor_core::agent::PlanStep;
+use conductor_core::config::AgentPermissionModeExt;
 use conductor_core::error::ConductorError;
 use conductor_core::tickets::TicketInput;
 

@@ -11,6 +11,24 @@ use crate::tracker::{RunEventSink, RuntimeEvent};
 
 const DEFAULT_AGENT_ERROR_MSG: &str = "Claude reported an error";
 
+/// Resolve the path to the `conductor` binary.
+///
+/// Looks for a sibling `conductor` next to the current executable first,
+/// then falls back to the bare name (relying on `$PATH`).
+pub fn resolve_conductor_bin() -> String {
+    let resolved = std::env::current_exe()
+        .ok()
+        .and_then(|p| {
+            let sibling = p.parent()?.join("conductor");
+            sibling
+                .exists()
+                .then(|| sibling.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "conductor".to_string());
+    tracing::debug!("[conductor] resolved binary: {resolved}");
+    resolved
+}
+
 /// Maximum number of CLI arguments produced by `build_agent_args`.
 const AGENT_ARGS_CAPACITY: usize = 18;
 
@@ -437,6 +455,8 @@ pub fn drain_stream_json(
 pub fn build_headless_agent_args(
     params: &SpawnHeadlessParams<'_>,
 ) -> std::result::Result<(Vec<Cow<'static, str>>, std::path::PathBuf), String> {
+    crate::text_util::validate_run_id(params.run_id).map_err(|e| e.to_string())?;
+
     let run_id = params.run_id;
     let working_dir = params.working_dir;
     let prompt = params.prompt;

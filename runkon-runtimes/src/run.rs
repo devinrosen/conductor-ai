@@ -198,45 +198,4 @@ impl AgentRun {
         self.status == AgentRunStatus::WaitingForFeedback
     }
 
-    /// Returns true if this run ended (failed/cancelled) with incomplete plan steps
-    /// and has a session_id available for resume.
-    pub fn needs_resume(&self) -> bool {
-        matches!(
-            self.status,
-            AgentRunStatus::Failed | AgentRunStatus::Cancelled
-        ) && self.claude_session_id.is_some()
-            && self.has_incomplete_plan_steps()
-    }
-
-    /// Returns true if the run has a plan with at least one incomplete step.
-    pub fn has_incomplete_plan_steps(&self) -> bool {
-        self.plan
-            .as_ref()
-            .is_some_and(|steps| steps.iter().any(|s| !s.done))
-    }
-
-    /// Returns the incomplete plan steps (not yet done).
-    pub fn incomplete_plan_steps(&self) -> Vec<&PlanStep> {
-        self.plan
-            .as_ref()
-            .map(|steps| steps.iter().filter(|s| !s.done).collect())
-            .unwrap_or_default()
-    }
-
-    /// Build a resume prompt from the remaining plan steps.
-    pub fn build_resume_prompt(&self) -> String {
-        let incomplete = self.incomplete_plan_steps();
-        if incomplete.is_empty() {
-            return "Continue where you left off.".to_string();
-        }
-
-        let mut prompt = String::from(
-            "Continue where you left off. The following plan steps remain incomplete:\n",
-        );
-        for (i, step) in incomplete.iter().enumerate() {
-            prompt.push_str(&format!("{}. {}\n", i + 1, step.description));
-        }
-        prompt.push_str("\nPlease complete these remaining steps.");
-        prompt
-    }
 }

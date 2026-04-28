@@ -68,7 +68,6 @@ impl ActionExecutor for ClaudeAgentExecutor {
                 .map_err(|e| ConductorError::Agent(e.to_string()))?,
         );
         let event_sink = tracker.clone();
-        let log_path = agent_log_path(&ectx.run_id)?;
 
         let request = crate::runtime::RuntimeRequest {
             run_id: ectx.run_id.clone(),
@@ -80,7 +79,6 @@ impl ActionExecutor for ClaudeAgentExecutor {
             plugin_dirs: ectx.plugin_dirs.clone(),
             tracker,
             event_sink,
-            log_path,
         };
 
         runtime.spawn_validated(&request)?;

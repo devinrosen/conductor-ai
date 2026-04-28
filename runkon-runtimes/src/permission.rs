@@ -16,49 +16,15 @@ pub enum PermissionMode {
 }
 
 impl PermissionMode {
-    /// Returns the conductor CLI flag for this mode (used in `conductor agent run` passthrough args).
-    pub fn cli_flag(&self) -> &str {
-        match self {
-            Self::AutoMode => "--enable-auto-mode",
-            Self::SkipPermissions => "--dangerously-skip-permissions",
-            Self::Plan => "--permission-mode",
-            Self::RepoSafe => "--permission-mode",
-        }
-    }
-
-    /// Returns the optional value argument that follows the conductor CLI flag.
+    /// Returns the optional value argument that follows the generic permission flag.
+    ///
+    /// This is the only permission-mode method retained in the portable crate because
+    /// the headless arg builder (`push_optional_agent_flags`) needs it. All other
+    /// vendor-specific flag mappings live in the host crate (conductor-core).
     pub fn cli_flag_value(&self) -> Option<&str> {
         match self {
             Self::Plan => Some("plan"),
             Self::RepoSafe => Some("repo-safe"),
-            _ => None,
-        }
-    }
-
-    /// Returns the actual permission flag to pass to the `claude` subprocess.
-    pub fn claude_permission_flag(&self) -> &str {
-        match self {
-            Self::AutoMode => "--enable-auto-mode",
-            Self::SkipPermissions => "--dangerously-skip-permissions",
-            Self::Plan => "--permission-mode",
-            Self::RepoSafe => "--dangerously-skip-permissions",
-        }
-    }
-
-    /// Returns the optional value argument that follows the claude permission flag.
-    pub fn claude_permission_flag_value(&self) -> Option<&str> {
-        match self {
-            Self::Plan => Some("plan"),
-            _ => None,
-        }
-    }
-
-    /// Returns the `--allowedTools` pattern for this mode, if any.
-    pub fn allowed_tools(&self) -> Option<&'static str> {
-        match self {
-            Self::Plan | Self::RepoSafe => {
-                Some("Bash,Glob,Grep,Read,WebFetch,WebSearch,mcp__conductor__*,mcp__*")
-            }
             _ => None,
         }
     }

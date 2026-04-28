@@ -9,9 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use conductor_core::config::RuntimeConfig;
-use conductor_core::runtime::adapter::SqliteHostAdapter;
 use conductor_core::runtime::script::ScriptRuntime;
-use conductor_core::runtime::{AgentRuntime, RuntimeRequest};
+use conductor_core::runtime::AgentRuntime;
 
 fn make_runtime(command: Option<&str>) -> ScriptRuntime {
     ScriptRuntime::new(RuntimeConfig {
@@ -20,24 +19,7 @@ fn make_runtime(command: Option<&str>) -> ScriptRuntime {
     })
 }
 
-fn make_request(run_id: &str, prompt: &str, db_path: std::path::PathBuf) -> RuntimeRequest {
-    let tracker = Arc::new(SqliteHostAdapter::new(db_path.clone()).unwrap());
-    let event_sink = tracker.clone();
-    let log_path = conductor_core::config::agent_log_path(run_id)
-        .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")));
-    RuntimeRequest {
-        run_id: run_id.to_string(),
-        agent_def: common::make_agent_def("script"),
-        prompt: prompt.to_string(),
-        model: None,
-        working_dir: std::path::PathBuf::from("/tmp"),
-        bot_name: None,
-        plugin_dirs: vec![],
-        tracker,
-        event_sink,
-        log_path,
-    }
-}
+
 
 #[test]
 fn test_script_runtime_success() {
@@ -45,7 +27,7 @@ fn test_script_runtime_success() {
     let _db_guard = common::setup_test_db(&run_id, "script");
 
     let runtime = make_runtime(Some("echo hello"));
-    let req = make_request(&run_id, "test prompt", _db_guard.path().to_path_buf());
+    let req = common::make_request(&run_id, "test prompt", _db_guard.path().to_path_buf(), "script");
 
     runtime.spawn_validated(&req).expect("spawn must succeed");
 
@@ -70,10 +52,11 @@ fn test_script_runtime_captures_conductor_prompt() {
     let _db_guard = common::setup_test_db(&run_id, "script");
 
     let runtime = make_runtime(Some("echo $CONDUCTOR_PROMPT"));
-    let req = make_request(
+    let req = common::make_request(
         &run_id,
         "my-unique-prompt-string",
         _db_guard.path().to_path_buf(),
+        "script",
     );
 
     runtime.spawn_validated(&req).expect("spawn must succeed");
@@ -99,7 +82,7 @@ fn test_script_runtime_missing_command_errors() {
     let _db_guard = common::setup_test_db(&run_id, "script");
 
     let runtime = make_runtime(None);
-    let req = make_request(&run_id, "prompt", _db_guard.path().to_path_buf());
+    let req = common::make_request(&run_id, "prompt", _db_guard.path().to_path_buf(), "script");
 
     let err = runtime
         .spawn_validated(&req)
@@ -116,7 +99,7 @@ fn test_script_runtime_nonzero_exit_is_failed() {
     let _db_guard = common::setup_test_db(&run_id, "script");
 
     let runtime = make_runtime(Some("exit 1"));
-    let req = make_request(&run_id, "prompt", _db_guard.path().to_path_buf());
+    let req = common::make_request(&run_id, "prompt", _db_guard.path().to_path_buf(), "script");
 
     runtime
         .spawn_validated(&req)
@@ -135,7 +118,7 @@ fn test_script_runtime_nonzero_exit_with_stderr() {
     let _db_guard = common::setup_test_db(&run_id, "script");
 
     let runtime = make_runtime(Some("echo 'something went wrong' >&2; exit 2"));
-    let req = make_request(&run_id, "prompt", _db_guard.path().to_path_buf());
+    let req = common::make_request(&run_id, "prompt", _db_guard.path().to_path_buf(), "script");
 
     runtime
         .spawn_validated(&req)
@@ -201,10 +184,11 @@ fn test_script_runtime_resolve_via_config() {
 #[test]
 fn test_script_runtime_rejects_invalid_run_id() {
     let runtime = make_runtime(Some("echo hello"));
-    let req = make_request(
+    let req = common::make_request(
         "../../etc/cron.d/payload",
         "test",
         conductor_core::config::db_path(),
+        "script",
     );
     let err = runtime
         .spawn_validated(&req)
