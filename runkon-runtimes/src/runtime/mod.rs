@@ -52,6 +52,11 @@ pub trait AgentRuntime {
 }
 
 /// Per-invocation parameters passed to `AgentRuntime::spawn`.
+///
+/// The `model` field is a workflow-level *override*; the agent definition
+/// also carries a `model` from its frontmatter. Runtimes should call
+/// [`RuntimeRequest::resolved_model`] rather than reading `self.model`
+/// directly so the override-then-frontmatter precedence is honored.
 pub struct RuntimeRequest {
     pub run_id: String,
     pub agent_def: AgentDef,
@@ -62,6 +67,16 @@ pub struct RuntimeRequest {
     pub plugin_dirs: Vec<String>,
     pub tracker: Arc<dyn RunTracker>,
     pub event_sink: Arc<dyn RunEventSink>,
+}
+
+impl RuntimeRequest {
+    /// Final model to launch the agent with: workflow-level override
+    /// (`self.model`) wins; otherwise fall back to the agent file's
+    /// frontmatter `model:` field. `None` means no model flag is set,
+    /// and the spawned subprocess inherits the host's default.
+    pub fn resolved_model(&self) -> Option<&str> {
+        self.model.as_deref().or(self.agent_def.model.as_deref())
+    }
 }
 
 /// Error returned by `AgentRuntime::poll`.
@@ -168,7 +183,67 @@ fn extract_path_recursive(value: &serde_json::Value, parts: &[&str]) -> Option<s
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_def::{AgentDef, AgentRole};
+    use crate::tracker::NoopEventSink;
     use serde_json::json;
+
+    struct NoopTracker;
+    impl RunTracker for NoopTracker {
+        fn record_pid(&self, _run_id: &str, _pid: u32) -> Result<()> {
+            Ok(())
+        }
+        fn record_runtime(&self, _run_id: &str, _name: &str) -> Result<()> {
+            Ok(())
+        }
+        fn mark_cancelled(&self, _run_id: &str) -> Result<()> {
+            Ok(())
+        }
+        fn mark_failed_if_running(&self, _run_id: &str, _reason: &str) -> Result<()> {
+            Ok(())
+        }
+        fn get_run(&self, _run_id: &str) -> Result<Option<AgentRun>> {
+            Ok(None)
+        }
+    }
+
+    fn make_request(req_model: Option<&str>, def_model: Option<&str>) -> RuntimeRequest {
+        RuntimeRequest {
+            run_id: "r".to_string(),
+            agent_def: AgentDef {
+                name: "test".to_string(),
+                role: AgentRole::Reviewer,
+                can_commit: false,
+                model: def_model.map(String::from),
+                runtime: "claude".to_string(),
+                prompt: String::new(),
+            },
+            prompt: "p".to_string(),
+            working_dir: PathBuf::from("/tmp"),
+            model: req_model.map(String::from),
+            bot_name: None,
+            plugin_dirs: vec![],
+            tracker: Arc::new(NoopTracker),
+            event_sink: Arc::new(NoopEventSink),
+        }
+    }
+
+    #[test]
+    fn resolved_model_prefers_request_override_over_agent_def() {
+        let req = make_request(Some("sonnet"), Some("haiku"));
+        assert_eq!(req.resolved_model(), Some("sonnet"));
+    }
+
+    #[test]
+    fn resolved_model_falls_back_to_agent_def() {
+        let req = make_request(None, Some("claude-sonnet-4-6"));
+        assert_eq!(req.resolved_model(), Some("claude-sonnet-4-6"));
+    }
+
+    #[test]
+    fn resolved_model_returns_none_when_neither_set() {
+        let req = make_request(None, None);
+        assert_eq!(req.resolved_model(), None);
+    }
 
     #[test]
     fn test_extract_simple_field() {

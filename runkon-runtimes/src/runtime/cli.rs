@@ -52,8 +52,7 @@ impl AgentRuntime for CliRuntime {
             })?;
 
         let resolved_model = request
-            .model
-            .as_deref()
+            .resolved_model()
             .or(self.config.default_model.as_deref())
             .unwrap_or("");
 

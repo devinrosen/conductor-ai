@@ -69,7 +69,7 @@ impl AgentRuntime for ClaudeRuntime {
                 working_dir: request.working_dir.to_str().unwrap_or("."),
                 prompt: &request.prompt,
                 resume_session_id: None,
-                model: request.model.as_deref(),
+                model: request.resolved_model(),
                 bot_name: request.bot_name.as_deref(),
                 permission_mode: Some(&self.options.permission_mode),
                 plugin_dirs: &request.plugin_dirs,
