@@ -4537,6 +4537,7 @@ version = "0.9.2"
 dependencies = [
  "chrono",
  "dirs",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
@@ -4544,6 +4545,7 @@ dependencies = [
  "threadpool",
  "tracing",
  "ulid",
+ "utoipa",
  "wait-timeout",
 ]
 

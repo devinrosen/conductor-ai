@@ -18,9 +18,10 @@ use crate::worktree::WorktreeManager;
 use runkon_flow::dsl::WorkflowDef;
 
 use super::manager::WorkflowManager;
-use super::status::{WorkflowRunStatus, WorkflowStepStatus};
+use super::{WorkflowRunStatus, WorkflowStepStatus};
+use super::WorkflowResult;
 use super::types::{
-    SpawnHeartbeatResumeParams, WorkflowExecStandalone, WorkflowResult, WorkflowResumeInput,
+    SpawnHeartbeatResumeParams, WorkflowExecStandalone, WorkflowResumeInput,
     WorkflowResumeStandalone,
 };
 
@@ -600,13 +601,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
 
     let schema_resolver = make_schema_resolver(workflow.name.clone());
 
-    let rk_exec_config = runkon_flow::types::WorkflowExecConfig {
-        poll_interval: params.exec_config.poll_interval,
-        step_timeout: params.exec_config.step_timeout,
-        fail_fast: params.exec_config.fail_fast,
-        dry_run: params.exec_config.dry_run,
-        shutdown: params.exec_config.shutdown.clone(),
-    };
+    let rk_exec_config = params.exec_config.clone();
     let event_sinks: Arc<[Arc<dyn runkon_flow::EventSink>]> =
         Arc::from(params.exec_config.event_sinks.clone());
 
@@ -1568,7 +1563,7 @@ mod tests {
             ticket_id,
             repo_id: None,
             model: None,
-            exec_config: crate::workflow::types::WorkflowExecConfig {
+            exec_config: crate::workflow::WorkflowExecConfig {
                 dry_run: false,
                 ..Default::default()
             },

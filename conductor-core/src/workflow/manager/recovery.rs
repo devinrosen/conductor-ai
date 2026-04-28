@@ -12,8 +12,9 @@ use super::helpers::{purge_where_clause, row_to_workflow_run};
 
 use super::WorkflowManager;
 use crate::workflow::constants::RUN_COLUMNS;
-use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
-use crate::workflow::types::{StepKey, WorkflowRun};
+use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
+use crate::workflow::WorkflowRun;
+use crate::workflow::types::StepKey;
 
 const ORPHAN_BETWEEN_STEPS_MSG: &str =
     "Orphaned: executor died between steps \u{2014} auto-resumed by watchdog";

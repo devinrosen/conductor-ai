@@ -105,7 +105,7 @@ mod tests {
     fn make_waiting_gate(db_path: &std::path::Path) -> (String, String) {
         use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;
-        use conductor_core::workflow::{GateKind, WorkflowManager, WorkflowStepStatus};
+        use conductor_core::workflow::{GateType, WorkflowManager, WorkflowStepStatus};
 
         let conn = open_database(db_path).expect("open db");
 
@@ -125,7 +125,7 @@ mod tests {
             .insert_step(&run.id, "human_review", "reviewer", false, 0, 0)
             .expect("insert step");
 
-        mgr.set_step_gate_info(&step_id, GateKind::HumanApproval, Some("Approve?"), "24h")
+        mgr.set_step_gate_info(&step_id, GateType::HumanApproval, Some("Approve?"), "24h")
             .expect("set gate info");
 
         mgr.update_step_status(

@@ -1,5 +1,5 @@
 use conductor_core::tickets::TicketLabel;
-use conductor_core::workflow::GateKind;
+use conductor_core::workflow::GateType;
 use conductor_core::worktree::{Worktree, WorktreeStatus};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -386,13 +386,13 @@ pub fn ticket_agent_total_spans(
 ///
 /// Used by both the pending-gates panel and the workflow run list to ensure
 /// consistent iconography across views.
-pub fn gate_type_icon(gate_type: Option<&GateKind>, theme: &Theme) -> (&'static str, Color) {
+pub fn gate_type_icon(gate_type: Option<&GateType>, theme: &Theme) -> (&'static str, Color) {
     match gate_type {
-        Some(GateKind::PrChecks) => ("⏳", theme.status_waiting),
-        Some(GateKind::PrApproval | GateKind::HumanApproval | GateKind::HumanReview) => {
+        Some(GateType::PrChecks) => ("⏳", theme.status_waiting),
+        Some(GateType::PrApproval | GateType::HumanApproval | GateType::HumanReview) => {
             ("👤", theme.label_warning)
         }
-        Some(GateKind::QualityGate) => ("🔍", theme.status_waiting),
+        Some(GateType::QualityGate) => ("🔍", theme.status_waiting),
         None => ("⏸", theme.status_waiting),
     }
 }

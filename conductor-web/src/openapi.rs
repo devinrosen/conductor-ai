@@ -17,7 +17,7 @@ use conductor_core::repo::Repo;
 use conductor_core::tickets::{Ticket, TicketLabel};
 #[allow(unused_imports)]
 use conductor_core::workflow::{
-    BlockedOn, GateAnalyticsRow, GateKind, PendingGateAnalyticsRow, StepFailureHeatmapRow,
+    BlockedOn, GateAnalyticsRow, GateType, PendingGateAnalyticsRow, StepFailureHeatmapRow,
     StepRetryAnalyticsRow, StepTokenHeatmapRow, WorkflowFailureRateTrendRow, WorkflowPercentiles,
     WorkflowRegressionSignal, WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus,
     WorkflowRunStep, WorkflowStepStatus, WorkflowTokenAggregate, WorkflowTokenTrendRow,

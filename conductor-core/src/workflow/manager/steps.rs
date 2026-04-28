@@ -4,10 +4,10 @@ use chrono::Utc;
 use rusqlite::named_params;
 
 use crate::error::{ConductorError, Result};
-use crate::workflow::types::GateKind;
+use crate::workflow::GateType;
 
 use super::WorkflowManager;
-use crate::workflow::status::WorkflowStepStatus;
+use crate::workflow::WorkflowStepStatus;
 
 impl<'a> WorkflowManager<'a> {
     /// Execute a single SQL UPDATE and map the rusqlite error to [`ConductorError`].
@@ -245,7 +245,7 @@ impl<'a> WorkflowManager<'a> {
     pub fn set_step_gate_info(
         &self,
         step_id: &str,
-        gate_type: GateKind,
+        gate_type: GateType,
         gate_prompt: Option<&str>,
         gate_timeout: &str,
     ) -> Result<()> {
@@ -500,7 +500,7 @@ impl<'a> WorkflowManager<'a> {
 mod tests {
     use super::*;
     use crate::test_helpers;
-    use crate::workflow::status::WorkflowStepStatus;
+    use crate::workflow::WorkflowStepStatus;
 
     fn setup(conn: &rusqlite::Connection) -> (String, String) {
         let parent_id = test_helpers::make_agent_parent_id(conn);

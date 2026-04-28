@@ -14,6 +14,108 @@ use crate::error::ConductorError;
 use crate::workflow::action_executor::ActionExecutor;
 use crate::workflow::item_provider::ItemProvider;
 
+// ---------------------------------------------------------------------------
+// Persistence type conversions (runkon-flow ↔ conductor-core)
+// ---------------------------------------------------------------------------
+// These remain necessary until Phase 3 unifies the persistence traits.
+
+impl From<runkon_flow::traits::persistence::NewRun> for crate::workflow::persistence::NewRun {
+    fn from(src: runkon_flow::traits::persistence::NewRun) -> Self {
+        Self {
+            workflow_name: src.workflow_name,
+            worktree_id: src.worktree_id,
+            ticket_id: src.ticket_id,
+            repo_id: src.repo_id,
+            parent_run_id: src.parent_run_id,
+            dry_run: src.dry_run,
+            trigger: src.trigger,
+            definition_snapshot: src.definition_snapshot,
+            parent_workflow_run_id: src.parent_workflow_run_id,
+            target_label: src.target_label,
+        }
+    }
+}
+
+impl From<runkon_flow::traits::persistence::NewStep> for crate::workflow::persistence::NewStep {
+    fn from(src: runkon_flow::traits::persistence::NewStep) -> Self {
+        Self {
+            workflow_run_id: src.workflow_run_id,
+            step_name: src.step_name,
+            role: src.role,
+            can_commit: src.can_commit,
+            position: src.position,
+            iteration: src.iteration,
+            retry_count: src.retry_count,
+        }
+    }
+}
+
+impl From<runkon_flow::traits::persistence::StepUpdate> for crate::workflow::persistence::StepUpdate {
+    fn from(src: runkon_flow::traits::persistence::StepUpdate) -> Self {
+        Self {
+            status: src.status,
+            child_run_id: src.child_run_id,
+            result_text: src.result_text,
+            context_out: src.context_out,
+            markers_out: src.markers_out,
+            retry_count: src.retry_count,
+            structured_output: src.structured_output,
+            step_error: src.step_error,
+        }
+    }
+}
+
+impl From<runkon_flow::traits::persistence::FanOutItemStatus> for crate::workflow::persistence::FanOutItemStatus {
+    fn from(s: runkon_flow::traits::persistence::FanOutItemStatus) -> Self {
+        match s {
+            runkon_flow::traits::persistence::FanOutItemStatus::Pending => Self::Pending,
+            runkon_flow::traits::persistence::FanOutItemStatus::Running => Self::Running,
+            runkon_flow::traits::persistence::FanOutItemStatus::Completed => Self::Completed,
+            runkon_flow::traits::persistence::FanOutItemStatus::Failed => Self::Failed,
+            runkon_flow::traits::persistence::FanOutItemStatus::Skipped => Self::Skipped,
+        }
+    }
+}
+
+impl From<crate::workflow::persistence::FanOutItemStatus> for runkon_flow::traits::persistence::FanOutItemStatus {
+    fn from(s: crate::workflow::persistence::FanOutItemStatus) -> Self {
+        match s {
+            crate::workflow::persistence::FanOutItemStatus::Pending => Self::Pending,
+            crate::workflow::persistence::FanOutItemStatus::Running => Self::Running,
+            crate::workflow::persistence::FanOutItemStatus::Completed => Self::Completed,
+            crate::workflow::persistence::FanOutItemStatus::Failed => Self::Failed,
+            crate::workflow::persistence::FanOutItemStatus::Skipped => Self::Skipped,
+        }
+    }
+}
+
+impl From<runkon_flow::traits::persistence::FanOutItemUpdate> for crate::workflow::persistence::FanOutItemUpdate {
+    fn from(u: runkon_flow::traits::persistence::FanOutItemUpdate) -> Self {
+        match u {
+            runkon_flow::traits::persistence::FanOutItemUpdate::Running { child_run_id } => {
+                Self::Running { child_run_id }
+            }
+            runkon_flow::traits::persistence::FanOutItemUpdate::Terminal { status } => {
+                Self::Terminal { status: status.into() }
+            }
+        }
+    }
+}
+
+impl From<crate::workflow::persistence::GateApprovalState> for runkon_flow::traits::persistence::GateApprovalState {
+    fn from(s: crate::workflow::persistence::GateApprovalState) -> Self {
+        match s {
+            crate::workflow::persistence::GateApprovalState::Pending => Self::Pending,
+            crate::workflow::persistence::GateApprovalState::Approved { feedback, selections } => {
+                Self::Approved { feedback, selections }
+            }
+            crate::workflow::persistence::GateApprovalState::Rejected { feedback } => {
+                Self::Rejected { feedback }
+            }
+        }
+    }
+}
+
 /// Convert `ConductorError` to `EngineError`, preserving the cancellation
 /// signal: `WorkflowCancelled` maps to `Cancelled`, all other errors to
 /// `Workflow`.  Centralising this avoids the special-case match being
@@ -398,7 +500,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             ))
         })?;
 
-        let exec_config = crate::workflow::types::WorkflowExecConfig {
+        let exec_config = crate::workflow::WorkflowExecConfig {
             poll_interval: parent_state.exec_config.poll_interval,
             step_timeout: parent_state.exec_config.step_timeout,
             fail_fast: parent_state.exec_config.fail_fast,
@@ -488,7 +590,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
                 "failed to find resumable child run for parent='{parent_run_id}' workflow='{workflow_name}': {e}"
             )))?;
 
-        Ok(core_run.map(crate::workflow::rk_types::run_to_rk))
+        Ok(core_run)
     }
 }
 
@@ -512,7 +614,7 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for PersistenceAdapte
         new_run: runkon_flow::traits::persistence::NewRun,
     ) -> Result<runkon_flow::types::WorkflowRun, EngineError> {
         let core_run = self.0.create_run(new_run.into())?;
-        Ok(crate::workflow::rk_types::run_to_rk(core_run))
+        Ok(core_run)
     }
 
     fn get_run(
@@ -520,20 +622,17 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for PersistenceAdapte
         run_id: &str,
     ) -> Result<Option<runkon_flow::types::WorkflowRun>, EngineError> {
         let result = self.0.get_run(run_id)?;
-        Ok(result.map(crate::workflow::rk_types::run_to_rk))
+        Ok(result)
     }
 
     fn list_active_runs(
         &self,
         statuses: &[runkon_flow::status::WorkflowRunStatus],
     ) -> Result<Vec<runkon_flow::types::WorkflowRun>, EngineError> {
-        let core_statuses: Vec<crate::workflow::status::WorkflowRunStatus> =
+        let core_statuses: Vec<crate::workflow::WorkflowRunStatus> =
             statuses.iter().map(|s| s.clone().into()).collect();
         let result = self.0.list_active_runs(&core_statuses)?;
-        Ok(result
-            .into_iter()
-            .map(crate::workflow::rk_types::run_to_rk)
-            .collect())
+        Ok(result)
     }
 
     fn update_run_status(
@@ -567,10 +666,7 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for PersistenceAdapte
         run_id: &str,
     ) -> Result<Vec<runkon_flow::types::WorkflowRunStep>, EngineError> {
         let result = self.0.get_steps(run_id)?;
-        Ok(result
-            .into_iter()
-            .map(crate::workflow::rk_types::step_to_rk)
-            .collect())
+        Ok(result)
     }
 
     fn insert_fan_out_item(
@@ -601,7 +697,17 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for PersistenceAdapte
         let result = self.0.get_fan_out_items(step_run_id, core_filter)?;
         Ok(result
             .into_iter()
-            .map(crate::workflow::rk_types::fan_out_item_to_rk)
+            .map(|r| runkon_flow::types::FanOutItemRow {
+                id: r.id,
+                step_run_id: r.step_run_id,
+                item_type: r.item_type,
+                item_id: r.item_id,
+                item_ref: r.item_ref,
+                child_run_id: r.child_run_id,
+                status: r.status,
+                dispatched_at: r.dispatched_at,
+                completed_at: r.completed_at,
+            })
             .collect())
     }
 
@@ -610,7 +716,7 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for PersistenceAdapte
         step_id: &str,
     ) -> Result<runkon_flow::traits::persistence::GateApprovalState, EngineError> {
         let result = self.0.get_gate_approval(step_id)?;
-        Ok(crate::workflow::rk_types::gate_approval_to_rk(result))
+        Ok(result.into())
     }
 
     fn approve_gate(
@@ -730,11 +836,11 @@ pub(super) fn build_rk_script_env_provider(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::status::WorkflowRunStatus as CoreStatus;
+    use crate::workflow::WorkflowRunStatus as CoreStatus;
     use std::collections::HashMap;
 
-    fn make_core_run(id: &str, status: CoreStatus) -> crate::workflow::types::WorkflowRun {
-        crate::workflow::types::WorkflowRun {
+    fn make_core_run(id: &str, status: CoreStatus) -> crate::workflow::WorkflowRun {
+        crate::workflow::WorkflowRun {
             id: id.to_string(),
             workflow_name: "test-workflow".to_string(),
             worktree_id: None,
@@ -775,28 +881,28 @@ mod tests {
     #[test]
     fn status_completed_maps_correctly() {
         let run = make_core_run("r1", CoreStatus::Completed);
-        let rk = crate::workflow::rk_types::run_to_rk(run);
+        let rk = run;
         assert_eq!(rk.status, runkon_flow::status::WorkflowRunStatus::Completed);
     }
 
     #[test]
     fn status_failed_maps_correctly() {
         let run = make_core_run("r1", CoreStatus::Failed);
-        let rk = crate::workflow::rk_types::run_to_rk(run);
+        let rk = run;
         assert_eq!(rk.status, runkon_flow::status::WorkflowRunStatus::Failed);
     }
 
     #[test]
     fn status_running_maps_correctly() {
         let run = make_core_run("r1", CoreStatus::Running);
-        let rk = crate::workflow::rk_types::run_to_rk(run);
+        let rk = run;
         assert_eq!(rk.status, runkon_flow::status::WorkflowRunStatus::Running);
     }
 
     #[test]
     fn blocked_on_none_maps_to_none() {
         let run = make_core_run("r1", CoreStatus::Completed);
-        let rk = crate::workflow::rk_types::run_to_rk(run);
+        let rk = run;
         assert!(rk.blocked_on.is_none());
     }
 

@@ -6,8 +6,8 @@ use std::sync::Mutex;
 use chrono::Utc;
 
 use crate::workflow::engine_error::EngineError;
-use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
-use crate::workflow::types::{WorkflowRun, WorkflowRunStep};
+use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
+use crate::workflow::{WorkflowRun, WorkflowRunStep};
 
 use super::persistence::{
     gate_approval_state_from_fields, FanOutItemRow, FanOutItemStatus, FanOutItemUpdate,
@@ -411,7 +411,7 @@ mod tests {
         FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,
         WorkflowPersistence,
     };
-    use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
+    use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
 
     fn make_new_run(name: &str) -> NewRun {
         NewRun {

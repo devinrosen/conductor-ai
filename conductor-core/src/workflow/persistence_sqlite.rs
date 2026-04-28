@@ -7,8 +7,8 @@ use rusqlite::Connection;
 use crate::error::ConductorError;
 use crate::workflow::engine_error::EngineError;
 use crate::workflow::manager::WorkflowManager;
-use crate::workflow::status::WorkflowRunStatus;
-use crate::workflow::types::{WorkflowRun, WorkflowRunStep};
+use crate::workflow::WorkflowRunStatus;
+use crate::workflow::{WorkflowRun, WorkflowRunStep};
 
 use super::persistence::{
     FanOutItemRow, FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep,

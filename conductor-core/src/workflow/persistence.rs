@@ -1,6 +1,6 @@
 use crate::workflow::engine_error::EngineError;
-use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
-use crate::workflow::types::{WorkflowRun, WorkflowRunStep};
+use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
+use crate::workflow::{WorkflowRun, WorkflowRunStep};
 
 /// A single row in the `workflow_run_step_fan_out_items` table.
 ///
@@ -270,7 +270,7 @@ pub trait WorkflowPersistence: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::status::WorkflowStepStatus;
+    use crate::workflow::WorkflowStepStatus;
 
     #[test]
     fn pending_when_status_is_waiting_and_no_approved_at() {
