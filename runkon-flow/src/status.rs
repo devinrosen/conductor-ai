@@ -157,30 +157,46 @@ mod sql_impls {
     use super::{WorkflowRunStatus, WorkflowStepStatus};
     use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 
-    macro_rules! impl_sql_for_status {
-        ($ty:ty) => {
-            impl ToSql for $ty {
-                fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-                    Ok(ToSqlOutput::from(self.to_string()))
-                }
-            }
-
-            impl FromSql for $ty {
-                fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-                    let s = String::column_result(value)?;
-                    s.parse().map_err(|e: String| {
-                        FromSqlError::Other(Box::new(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            e,
-                        )))
-                    })
-                }
-            }
-        };
+    fn status_to_sql(status: &impl std::fmt::Display) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::from(status.to_string()))
     }
 
-    impl_sql_for_status!(WorkflowRunStatus);
-    impl_sql_for_status!(WorkflowStepStatus);
+    fn status_from_sql<T>(value: ValueRef<'_>) -> FromSqlResult<T>
+    where
+        T: std::str::FromStr<Err = String>,
+    {
+        let s = String::column_result(value)?;
+        s.parse().map_err(|e: String| {
+            FromSqlError::Other(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e,
+            )))
+        })
+    }
+
+    impl ToSql for WorkflowRunStatus {
+        fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+            status_to_sql(self)
+        }
+    }
+
+    impl FromSql for WorkflowRunStatus {
+        fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+            status_from_sql(value)
+        }
+    }
+
+    impl ToSql for WorkflowStepStatus {
+        fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+            status_to_sql(self)
+        }
+    }
+
+    impl FromSql for WorkflowStepStatus {
+        fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+            status_from_sql(value)
+        }
+    }
 }
 
 #[cfg(test)]
