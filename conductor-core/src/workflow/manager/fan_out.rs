@@ -3,7 +3,7 @@ use rusqlite::{named_params, OptionalExtension};
 
 use crate::db::{query_collect, sql_placeholders, with_in_clause};
 use crate::error::{ConductorError, Result};
-use crate::workflow::persistence::FanOutItemRow;
+use runkon_flow::types::FanOutItemRow;
 
 use super::WorkflowManager;
 
