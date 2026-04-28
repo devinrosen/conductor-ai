@@ -518,19 +518,7 @@ mod tests {
         AgentRef, AlwaysNode, CallNode, CallWorkflowNode, Condition, DoNode, ForEachNode, GateNode,
         GateType, IfNode, OnMaxIter, ParallelNode, ScriptNode, UnlessNode, WhileNode, WorkflowNode,
     };
-
-    fn call_node(name: &str) -> WorkflowNode {
-        WorkflowNode::Call(CallNode {
-            agent: AgentRef::Name(name.to_string()),
-            retries: 0,
-            on_fail: None,
-            output: None,
-            with: vec![],
-            bot_name: None,
-            plugin_dirs: vec![],
-            timeout: None,
-        })
-    }
+    use crate::test_helpers::call_node;
 
     fn script_node(name: &str) -> WorkflowNode {
         WorkflowNode::Script(ScriptNode {

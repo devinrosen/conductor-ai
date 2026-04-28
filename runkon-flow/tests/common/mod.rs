@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use runkon_flow::cancellation::CancellationToken;
 use runkon_flow::dsl::{
-    AgentRef, ApprovalMode, CallNode, ForEachNode, GateNode, GateType, OnChildFail, OnCycle,
-    OnTimeout, WorkflowDef, WorkflowNode, WorkflowTrigger,
+    ApprovalMode, ForEachNode, GateNode, GateType, OnChildFail, OnCycle, OnTimeout, WorkflowDef,
+    WorkflowNode, WorkflowTrigger,
 };
 use runkon_flow::engine::{
     ChildWorkflowInput, ChildWorkflowRunner, ExecutionState, ResumeContext, WorktreeContext,
@@ -91,7 +91,7 @@ impl ActionExecutor for FailingExecutor {
 // ---------------------------------------------------------------------------
 
 #[allow(unused_imports)]
-pub use runkon_flow::test_helpers::{ForwardSink, VecSink};
+pub use runkon_flow::test_helpers::{call_node, make_def, ForwardSink, VecSink};
 
 // ---------------------------------------------------------------------------
 // State construction helpers
@@ -191,21 +191,8 @@ pub fn make_state_with_resume_ctx(
 // ---------------------------------------------------------------------------
 // WorkflowDef construction helpers
 // ---------------------------------------------------------------------------
-
-pub fn make_def(name: &str, body: Vec<WorkflowNode>) -> WorkflowDef {
-    WorkflowDef {
-        name: name.to_string(),
-        title: None,
-        description: String::new(),
-        trigger: WorkflowTrigger::Manual,
-        targets: vec![],
-        group: None,
-        inputs: vec![],
-        body,
-        always: vec![],
-        source_path: "test.wf".to_string(),
-    }
-}
+// `make_def` and `call_node` are re-exported from `runkon_flow::test_helpers`
+// at the top of this file.
 
 pub fn make_def_with_always(
     name: &str,
@@ -224,19 +211,6 @@ pub fn make_def_with_always(
         always,
         source_path: "test.wf".to_string(),
     }
-}
-
-pub fn call_node(agent: &str) -> WorkflowNode {
-    WorkflowNode::Call(CallNode {
-        agent: AgentRef::Name(agent.to_string()),
-        retries: 0,
-        on_fail: None,
-        output: None,
-        with: vec![],
-        bot_name: None,
-        plugin_dirs: vec![],
-        timeout: None,
-    })
 }
 
 pub fn gate_node(name: &str) -> WorkflowNode {
