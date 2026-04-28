@@ -69,6 +69,9 @@ pub(super) fn drive_headless_run(
         plugin_dirs: &[],
     };
 
+    // `try_spawn_headless_run` combines build_headless_agent_args + spawn_headless.
+    // If spawn fails after the prompt file was written, it removes the file
+    // internally before returning Err, so no separate cleanup is needed here.
     let (handle, prompt_file) =
         match conductor_core::agent_runtime::try_spawn_headless_run(&spawn_params) {
             Ok(pair) => pair,
