@@ -269,8 +269,8 @@ impl AgentRuntime for CliRuntime {
         let child = self
             .state
             .lock()
-            .ok()
-            .and_then(|mut guard| guard.take())
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
             .map(|s| s.child);
 
         if let Some(mut c) = child {
@@ -283,13 +283,7 @@ impl AgentRuntime for CliRuntime {
             }
         }
 
-        if let Ok(mut guard) = self.tracker.lock() {
-            if let Some(ref tracker) = guard.take() {
-                if let Err(e) = tracker.mark_cancelled(&run.id) {
-                    tracing::warn!("CliRuntime: failed to mark run {} cancelled: {e}", run.id);
-                }
-            }
-        }
+        super::mark_cancelled_via_tracker(&self.tracker, &run.id, "CliRuntime");
         Ok(())
     }
 }
@@ -323,7 +317,7 @@ fn parse_output(
 mod tests {
     use super::*;
     use crate::config::RuntimeConfig;
-    use crate::run::AgentRunStatus;
+    use crate::runtime::test_util::make_test_run;
 
     fn make_runtime(binary: &str) -> CliRuntime {
         CliRuntime::new(
@@ -333,35 +327,6 @@ mod tests {
             },
             std::env::temp_dir().join("conductor-workspaces"),
         )
-    }
-
-    fn make_test_run(subprocess_pid: Option<i64>) -> crate::run::AgentRun {
-        crate::run::AgentRun {
-            id: "test".to_string(),
-            worktree_id: None,
-            repo_id: None,
-            claude_session_id: None,
-            prompt: "p".to_string(),
-            status: AgentRunStatus::Running,
-            result_text: None,
-            cost_usd: None,
-            num_turns: None,
-            duration_ms: None,
-            started_at: "2024-01-01T00:00:00Z".to_string(),
-            ended_at: None,
-            log_file: None,
-            model: None,
-            plan: None,
-            parent_run_id: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
-            bot_name: None,
-            conversation_id: None,
-            subprocess_pid,
-            runtime: "cli".to_string(),
-        }
     }
 
     #[test]
@@ -385,14 +350,14 @@ mod tests {
     #[test]
     fn is_alive_returns_false_when_no_pid() {
         let runtime = make_runtime("echo");
-        assert!(!runtime.is_alive(&make_test_run(None)));
+        assert!(!runtime.is_alive(&make_test_run("cli", None)));
     }
 
     #[cfg(unix)]
     #[test]
     fn is_alive_returns_true_for_self() {
         let runtime = make_runtime("echo");
-        let run = make_test_run(Some(std::process::id() as i64));
+        let run = make_test_run("cli", Some(std::process::id() as i64));
         assert!(runtime.is_alive(&run));
     }
 

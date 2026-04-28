@@ -55,15 +55,6 @@ impl ClaudeRuntime {
         }
     }
 
-    /// Lock `mutex`, recovering from poison and mapping to a `RuntimeError`.
-    fn lock_mutex<'a, T>(
-        mutex: &'a Mutex<T>,
-        context: &str,
-    ) -> Result<std::sync::MutexGuard<'a, T>> {
-        mutex
-            .lock()
-            .map_err(|_| RuntimeError::Workflow(format!("ClaudeRuntime: {context} mutex poisoned")))
-    }
 }
 
 impl Default for ClaudeRuntime {
@@ -91,10 +82,10 @@ impl AgentRuntime for ClaudeRuntime {
                 &self.options.binary_path.to_string_lossy(),
             )
             .map_err(RuntimeError::Workflow)?;
-            *Self::lock_mutex(&self.handle, "handle")? = Some(h);
-            *Self::lock_mutex(&self.prompt_file, "prompt_file")? = Some(pf);
-            *Self::lock_mutex(&self.tracker, "tracker")? = Some(request.tracker.clone());
-            *Self::lock_mutex(&self.event_sink, "event_sink")? = Some(request.event_sink.clone());
+            *self.handle.lock().unwrap_or_else(|e| e.into_inner()) = Some(h);
+            *self.prompt_file.lock().unwrap_or_else(|e| e.into_inner()) = Some(pf);
+            *self.tracker.lock().unwrap_or_else(|e| e.into_inner()) = Some(request.tracker.clone());
+            *self.event_sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(request.event_sink.clone());
             Ok(())
         }
         #[cfg(not(unix))]
@@ -137,21 +128,13 @@ impl AgentRuntime for ClaudeRuntime {
     fn cancel(&self, run: &AgentRun) -> Result<()> {
         #[cfg(unix)]
         {
-            if let Ok(mut guard) = self.handle.lock() {
-                if let Some(h) = guard.take() {
-                    h.abort();
-                }
+            if let Some(h) = self.handle.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                h.abort();
             }
             if let Some(pid) = run.subprocess_pid {
                 process_utils::cancel_subprocess(pid as u32);
             }
-            if let Ok(mut guard) = self.tracker.lock() {
-                if let Some(ref tracker) = guard.take() {
-                    if let Err(e) = tracker.mark_cancelled(&run.id) {
-                        tracing::warn!("ClaudeRuntime: failed to mark run {} cancelled: {e}", run.id);
-                    }
-                }
-            }
+            super::mark_cancelled_via_tracker(&self.tracker, &run.id, "ClaudeRuntime");
         }
         let _ = run;
         Ok(())
@@ -168,31 +151,23 @@ fn poll_unix(
     let handle = rt
         .handle
         .lock()
-        .map_err(|_| PollError::Failed("ClaudeRuntime handle mutex poisoned".into()))?
+        .unwrap_or_else(|e| e.into_inner())
         .take()
         .ok_or_else(|| PollError::Failed("ClaudeRuntime::poll called before spawn".into()))?;
 
-    let prompt_file = match rt.prompt_file.lock() {
-        Ok(mut g) => g.take(),
-        Err(_) => {
-            tracing::warn!(
-                "ClaudeRuntime: prompt_file mutex poisoned in poll — prompt file will not be cleaned up"
-            );
-            None
-        }
-    };
+    let prompt_file = rt.prompt_file.lock().unwrap_or_else(|e| e.into_inner()).take();
 
     let tracker = rt
         .tracker
         .lock()
-        .map_err(|_| PollError::Failed("ClaudeRuntime tracker mutex poisoned".into()))?
+        .unwrap_or_else(|e| e.into_inner())
         .take()
         .ok_or_else(|| PollError::Failed("ClaudeRuntime::poll called before spawn (tracker missing)".into()))?;
 
     let event_sink = rt
         .event_sink
         .lock()
-        .map_err(|_| PollError::Failed("ClaudeRuntime event_sink mutex poisoned".into()))?
+        .unwrap_or_else(|e| e.into_inner())
         .take()
         .ok_or_else(|| PollError::Failed("ClaudeRuntime::poll called before spawn (event_sink missing)".into()))?;
 
@@ -284,7 +259,7 @@ fn poll_unix(
 mod tests {
     use super::*;
     use crate::agent_def::{AgentDef, AgentRole};
-    use crate::run::AgentRunStatus;
+    use crate::runtime::test_util::make_test_run;
     use crate::tracker::NoopEventSink;
 
     fn make_request(run_id: &str) -> RuntimeRequest {
@@ -325,35 +300,6 @@ mod tests {
         }
         fn get_run(&self, _run_id: &str) -> Result<Option<AgentRun>> {
             Ok(None)
-        }
-    }
-
-    fn make_test_run(subprocess_pid: Option<i64>) -> crate::run::AgentRun {
-        crate::run::AgentRun {
-            id: "test-run".to_string(),
-            worktree_id: None,
-            repo_id: None,
-            claude_session_id: None,
-            prompt: "p".to_string(),
-            status: AgentRunStatus::Running,
-            result_text: None,
-            cost_usd: None,
-            num_turns: None,
-            duration_ms: None,
-            started_at: "2024-01-01T00:00:00Z".to_string(),
-            ended_at: None,
-            log_file: None,
-            model: None,
-            plan: None,
-            parent_run_id: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
-            bot_name: None,
-            conversation_id: None,
-            subprocess_pid,
-            runtime: "claude".to_string(),
         }
     }
 
@@ -410,7 +356,7 @@ mod tests {
     #[test]
     fn is_alive_returns_false_when_no_pid() {
         let runtime = ClaudeRuntime::default();
-        let run = make_test_run(None);
+        let run = make_test_run("claude", None);
         assert!(!runtime.is_alive(&run));
     }
 
@@ -418,7 +364,7 @@ mod tests {
     #[test]
     fn is_alive_returns_true_for_self() {
         let runtime = ClaudeRuntime::default();
-        let run = make_test_run(Some(std::process::id() as i64));
+        let run = make_test_run("claude", Some(std::process::id() as i64));
         assert!(runtime.is_alive(&run));
     }
 
@@ -429,14 +375,14 @@ mod tests {
         child.wait().unwrap();
         let dead_pid = child.id() as i64;
         let runtime = ClaudeRuntime::default();
-        let run = make_test_run(Some(dead_pid));
+        let run = make_test_run("claude", Some(dead_pid));
         assert!(!runtime.is_alive(&run));
     }
 
     #[test]
     fn cancel_with_no_handle_and_no_pid() {
         let runtime = ClaudeRuntime::default();
-        let run = make_test_run(None);
+        let run = make_test_run("claude", None);
         assert!(runtime.cancel(&run).is_ok());
     }
 
@@ -447,7 +393,7 @@ mod tests {
         child.wait().unwrap();
         let dead_pid = child.id() as i64;
         let runtime = ClaudeRuntime::default();
-        let run = make_test_run(Some(dead_pid));
+        let run = make_test_run("claude", Some(dead_pid));
         assert!(runtime.cancel(&run).is_ok());
     }
 

@@ -218,18 +218,10 @@ impl AgentRuntime for ScriptRuntime {
     }
 
     fn cancel(&self, run: &AgentRun) -> Result<()> {
-        if let Ok(mut guard) = self.state.lock() {
-            if let Some(mut state) = guard.take() {
-                let _ = state.child.kill();
-            }
+        if let Some(mut state) = self.state.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            let _ = state.child.kill();
         }
-        if let Ok(mut guard) = self.tracker.lock() {
-            if let Some(ref tracker) = guard.take() {
-                if let Err(e) = tracker.mark_cancelled(&run.id) {
-                    tracing::warn!("ScriptRuntime: failed to mark run {} cancelled: {e}", run.id);
-                }
-            }
-        }
+        super::mark_cancelled_via_tracker(&self.tracker, &run.id, "ScriptRuntime");
         Ok(())
     }
 }
@@ -238,7 +230,7 @@ impl AgentRuntime for ScriptRuntime {
 mod tests {
     use super::*;
     use crate::config::RuntimeConfig;
-    use crate::run::AgentRunStatus;
+    use crate::runtime::test_util::make_test_run;
 
     fn make_runtime(command: Option<&str>) -> ScriptRuntime {
         ScriptRuntime::new(RuntimeConfig {
@@ -247,44 +239,15 @@ mod tests {
         })
     }
 
-    fn make_test_run() -> crate::run::AgentRun {
-        crate::run::AgentRun {
-            id: "test".to_string(),
-            worktree_id: None,
-            repo_id: None,
-            claude_session_id: None,
-            prompt: "p".to_string(),
-            status: AgentRunStatus::Running,
-            result_text: None,
-            cost_usd: None,
-            num_turns: None,
-            duration_ms: None,
-            started_at: "2024-01-01T00:00:00Z".to_string(),
-            ended_at: None,
-            log_file: None,
-            model: None,
-            plan: None,
-            parent_run_id: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
-            bot_name: None,
-            conversation_id: None,
-            subprocess_pid: None,
-            runtime: "script".to_string(),
-        }
-    }
-
     #[test]
     fn is_alive_always_false() {
         let runtime = make_runtime(Some("echo hi"));
-        assert!(!runtime.is_alive(&make_test_run()));
+        assert!(!runtime.is_alive(&make_test_run("script", None)));
     }
 
     #[test]
     fn cancel_is_noop() {
         let runtime = make_runtime(Some("echo hi"));
-        assert!(runtime.cancel(&make_test_run()).is_ok());
+        assert!(runtime.cancel(&make_test_run("script", None)).is_ok());
     }
 }

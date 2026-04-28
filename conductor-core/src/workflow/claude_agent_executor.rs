@@ -63,10 +63,7 @@ impl ActionExecutor for ClaudeAgentExecutor {
             &options,
         )?;
 
-        let tracker = Arc::new(
-            SqliteHostAdapter::new(ectx.db_path.clone())
-                .map_err(|e| ConductorError::Agent(e.to_string()))?,
-        );
+        let tracker = Arc::new(SqliteHostAdapter::new(ectx.db_path.clone())?);
         let event_sink = tracker.clone();
 
         let request = crate::runtime::RuntimeRequest {

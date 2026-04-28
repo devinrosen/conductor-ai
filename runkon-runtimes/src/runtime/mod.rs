@@ -113,7 +113,7 @@ pub fn resolve_runtime(
     let rt_config = runtimes.get(name).ok_or_else(|| {
         RuntimeError::Config(format!(
             "unknown runtime '{name}' — only 'claude' is built-in; \
-                 add a `[runtimes.{name}]` section to conductor.toml for CLI agents"
+                 add a `[runtimes.{name}]` section to your host config for CLI agents"
         ))
     })?;
     match rt_config.runtime_type.as_deref().unwrap_or("cli") {
@@ -200,5 +200,52 @@ mod tests {
     fn test_extract_missing_returns_none() {
         let v = json!({"a": 1});
         assert!(extract_json_path(&v, "b").is_none());
+    }
+}
+
+/// Helper to mark a run as cancelled via a tracker stored in a `Mutex<Option<Arc<dyn RunTracker>>>`.
+pub(crate) fn mark_cancelled_via_tracker(
+    tracker_mtx: &std::sync::Mutex<Option<std::sync::Arc<dyn RunTracker>>>,
+    run_id: &str,
+    context: &str,
+) {
+    if let Some(ref tracker) = tracker_mtx.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        if let Err(e) = tracker.mark_cancelled(run_id) {
+            tracing::warn!("{context}: failed to mark run {run_id} cancelled: {e}");
+        }
+    }
+}
+
+#[cfg(test)]
+pub mod test_util {
+    use crate::run::{AgentRun, AgentRunStatus};
+
+    pub fn make_test_run(runtime: &str, subprocess_pid: Option<i64>) -> AgentRun {
+        AgentRun {
+            id: "test-run".to_string(),
+            worktree_id: None,
+            repo_id: None,
+            claude_session_id: None,
+            prompt: "p".to_string(),
+            status: AgentRunStatus::Running,
+            result_text: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            started_at: "2024-01-01T00:00:00Z".to_string(),
+            ended_at: None,
+            log_file: None,
+            model: None,
+            plan: None,
+            parent_run_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            bot_name: None,
+            conversation_id: None,
+            subprocess_pid,
+            runtime: runtime.to_string(),
+        }
     }
 }
