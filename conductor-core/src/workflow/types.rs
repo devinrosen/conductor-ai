@@ -59,9 +59,6 @@ pub enum MetadataEntry {
 /// helper methods.
 pub trait WorkflowRunStepExt {
     /// Return structured metadata entries for this step.
-    ///
-    /// Consumers are responsible for choosing how to render the entries (e.g.
-    /// fixed-width columns for a TUI, HTML table for a web UI, etc.).
     fn metadata_fields(&self) -> Vec<MetadataEntry>;
 }
 
