@@ -555,4 +555,88 @@ mod tests {
             "Invalid granularity: invalid. Must be 'daily' or 'weekly'"
         );
     }
+
+    #[test]
+    fn metadata_fields_always_includes_base_fields() {
+        use super::MetadataEntry;
+        use runkon_flow::status::WorkflowStepStatus;
+
+        let step = runkon_flow::types::WorkflowRunStep {
+            status: WorkflowStepStatus::Completed,
+            role: "agent".into(),
+            can_commit: true,
+            iteration: 2,
+            ..Default::default()
+        };
+        let fields = step.metadata_fields();
+        assert_eq!(fields.len(), 4);
+        assert!(matches!(&fields[0], MetadataEntry::Field { label, value } if label == &"Status" && value == "completed"));
+        assert!(matches!(&fields[1], MetadataEntry::Field { label, value } if label == &"Role" && value == "agent"));
+        assert!(matches!(&fields[2], MetadataEntry::Field { label, value } if label == &"Can commit" && value == "true"));
+        assert!(matches!(&fields[3], MetadataEntry::Field { label, value } if label == &"Iteration" && value == "2"));
+    }
+
+    #[test]
+    fn metadata_fields_includes_optional_fields_when_present() {
+        use super::MetadataEntry;
+        use runkon_flow::dsl::GateType;
+        use runkon_flow::status::WorkflowStepStatus;
+
+        let step = runkon_flow::types::WorkflowRunStep {
+            status: WorkflowStepStatus::Failed,
+            role: "gate".into(),
+            can_commit: false,
+            iteration: 0,
+            started_at: Some("2024-01-01T00:00:00Z".into()),
+            ended_at: Some("2024-01-01T01:00:00Z".into()),
+            gate_type: Some(GateType::HumanApproval),
+            gate_prompt: Some("Approve?".into()),
+            gate_feedback: Some("lgtm".into()),
+            result_text: Some("result".into()),
+            context_out: Some("ctx".into()),
+            markers_out: Some("markers".into()),
+            ..Default::default()
+        };
+        let fields = step.metadata_fields();
+        let labels: Vec<&str> = fields.iter().map(|e| match e {
+            MetadataEntry::Field { label, .. } => *label,
+            MetadataEntry::Section { heading, .. } => *heading,
+        }).collect();
+
+        assert_eq!(labels, vec![
+            "Status",
+            "Role",
+            "Can commit",
+            "Iteration",
+            "Started",
+            "Ended",
+            "Gate type",
+            "Gate Prompt",
+            "Gate Feedback",
+            "Result",
+            "Context Out",
+            "Markers Out",
+        ]);
+    }
+
+    #[test]
+    fn metadata_fields_omits_optional_fields_when_absent() {
+        use super::MetadataEntry;
+        use runkon_flow::status::WorkflowStepStatus;
+
+        let step = runkon_flow::types::WorkflowRunStep {
+            status: WorkflowStepStatus::Pending,
+            role: "agent".into(),
+            can_commit: false,
+            iteration: 0,
+            ..Default::default()
+        };
+        let fields = step.metadata_fields();
+        // Only the four base fields should be present.
+        assert_eq!(fields.len(), 4);
+        assert!(
+            fields.iter().all(|e| matches!(e, MetadataEntry::Field { .. })),
+            "expected only Field entries when no optional fields are set"
+        );
+    }
 }

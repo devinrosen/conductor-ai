@@ -138,6 +138,7 @@ impl TryFrom<&str> for FanOutItemStatus {
 }
 
 /// Update payload for a fan-out item, mapping the two existing update variants.
+#[derive(Debug)]
 pub enum FanOutItemUpdate {
     Running { child_run_id: String },
     Terminal { status: FanOutItemStatus },

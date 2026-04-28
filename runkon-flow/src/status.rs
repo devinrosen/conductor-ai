@@ -157,41 +157,30 @@ mod sql_impls {
     use super::{WorkflowRunStatus, WorkflowStepStatus};
     use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 
-    impl ToSql for WorkflowRunStatus {
-        fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-            Ok(ToSqlOutput::from(self.to_string()))
-        }
+    macro_rules! impl_sql_for_status {
+        ($ty:ty) => {
+            impl ToSql for $ty {
+                fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+                    Ok(ToSqlOutput::from(self.to_string()))
+                }
+            }
+
+            impl FromSql for $ty {
+                fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+                    let s = String::column_result(value)?;
+                    s.parse().map_err(|e: String| {
+                        FromSqlError::Other(Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            e,
+                        )))
+                    })
+                }
+            }
+        };
     }
 
-    impl FromSql for WorkflowRunStatus {
-        fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-            let s = String::column_result(value)?;
-            s.parse().map_err(|e: String| {
-                FromSqlError::Other(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    e,
-                )))
-            })
-        }
-    }
-
-    impl ToSql for WorkflowStepStatus {
-        fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-            Ok(ToSqlOutput::from(self.to_string()))
-        }
-    }
-
-    impl FromSql for WorkflowStepStatus {
-        fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-            let s = String::column_result(value)?;
-            s.parse().map_err(|e: String| {
-                FromSqlError::Other(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    e,
-                )))
-            })
-        }
-    }
+    impl_sql_for_status!(WorkflowRunStatus);
+    impl_sql_for_status!(WorkflowStepStatus);
 }
 
 #[cfg(test)]
@@ -277,5 +266,81 @@ mod tests {
                 && WorkflowRunStatus::NeedsResume.is_active()),
             "NeedsResume must not be both terminal and active"
         );
+    }
+
+    #[cfg(feature = "rusqlite")]
+    mod rusqlite_roundtrip {
+        use super::*;
+
+        #[test]
+        fn workflow_run_status_roundtrip() {
+            let conn = rusqlite::Connection::open_in_memory().unwrap();
+            conn.execute("CREATE TABLE t (status TEXT)", []).unwrap();
+            for status in [
+                WorkflowRunStatus::Pending,
+                WorkflowRunStatus::Running,
+                WorkflowRunStatus::Completed,
+                WorkflowRunStatus::Failed,
+                WorkflowRunStatus::Cancelled,
+                WorkflowRunStatus::Waiting,
+                WorkflowRunStatus::NeedsResume,
+                WorkflowRunStatus::Cancelling,
+            ] {
+                conn.execute("INSERT INTO t (status) VALUES (?1)", [&status])
+                    .unwrap();
+                let recovered: WorkflowRunStatus = conn
+                    .query_row("SELECT status FROM t", [], |row| row.get(0))
+                    .unwrap();
+                assert_eq!(status, recovered, "round-trip failed for {status}");
+                conn.execute("DELETE FROM t", []).unwrap();
+            }
+        }
+
+        #[test]
+        fn workflow_step_status_roundtrip() {
+            let conn = rusqlite::Connection::open_in_memory().unwrap();
+            conn.execute("CREATE TABLE t (status TEXT)", []).unwrap();
+            for status in [
+                WorkflowStepStatus::Pending,
+                WorkflowStepStatus::Running,
+                WorkflowStepStatus::Completed,
+                WorkflowStepStatus::Failed,
+                WorkflowStepStatus::Skipped,
+                WorkflowStepStatus::Waiting,
+                WorkflowStepStatus::TimedOut,
+            ] {
+                conn.execute("INSERT INTO t (status) VALUES (?1)", [&status])
+                    .unwrap();
+                let recovered: WorkflowStepStatus = conn
+                    .query_row("SELECT status FROM t", [], |row| row.get(0))
+                    .unwrap();
+                assert_eq!(status, recovered, "round-trip failed for {status}");
+                conn.execute("DELETE FROM t", []).unwrap();
+            }
+        }
+
+        #[test]
+        fn workflow_run_status_invalid_string_errors() {
+            let conn = rusqlite::Connection::open_in_memory().unwrap();
+            conn.execute("CREATE TABLE t (status TEXT)", []).unwrap();
+            conn.execute("INSERT INTO t (status) VALUES (?1)", ["not_a_status"])
+                .unwrap();
+            let result = conn.query_row::<WorkflowRunStatus, _, _>("SELECT status FROM t", [], |row| {
+                row.get(0)
+            });
+            assert!(result.is_err(), "expected error for invalid status string");
+        }
+
+        #[test]
+        fn workflow_step_status_invalid_string_errors() {
+            let conn = rusqlite::Connection::open_in_memory().unwrap();
+            conn.execute("CREATE TABLE t (status TEXT)", []).unwrap();
+            conn.execute("INSERT INTO t (status) VALUES (?1)", ["not_a_status"])
+                .unwrap();
+            let result = conn.query_row::<WorkflowStepStatus, _, _>("SELECT status FROM t", [], |row| {
+                row.get(0)
+            });
+            assert!(result.is_err(), "expected error for invalid status string");
+        }
     }
 }
