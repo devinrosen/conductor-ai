@@ -14,20 +14,28 @@ pub mod workflows;
 pub mod worktrees;
 
 use crate::state::AppState;
-use axum::http::HeaderValue;
+use axum::http::{header, HeaderValue, Method};
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 
 /// Build the API router with CORS restricted to the given origins.
 ///
 /// This keeps CORS configuration inside conductor-web so that embedders
 /// (e.g. conductor-desktop) don't need to depend on axum/tower-http directly.
+/// Methods and headers are restricted to the specific values the API uses,
+/// matching the production server config in `conductor-web/src/main.rs`.
 pub fn api_router_with_cors(allowed_origins: Vec<HeaderValue>) -> Router<AppState> {
     let cors = CorsLayer::new()
         .allow_origin(allowed_origins)
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::PATCH,
+        ])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
     api_router().layer(cors)
 }
 

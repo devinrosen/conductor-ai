@@ -367,3 +367,18 @@ Example for `workflow_run.completed`:
 ```
 
 See `docs/examples/hooks/` for working shell and HTTP hook examples.
+
+---
+
+## Security model
+
+Shell hooks run user-configured commands via `sh -c <hook.run>`. The command string is read directly from `config.toml` and is **not** validated, sandboxed, or restricted to an allow-list. Event data is passed safely through environment variables, but the hook body itself executes with full shell privileges as the conductor user.
+
+**Threat:** anyone who can write to `~/.conductor/config.toml` — or to a repo-local `.conductor/config.toml` that conductor reads — can achieve arbitrary code execution under the conductor user on the next matching event.
+
+**Implications:**
+
+- Treat conductor config files as trusted input. Do not source them from a shared writable location, and do not check repo-local `.conductor/config.toml` from a branch you would not run code from.
+- Untrusted PRs that modify `.conductor/config.toml` should be reviewed for hook additions/changes the same way you would review a `Makefile` change — they are equivalent in privilege.
+- HTTP hooks have a smaller blast radius (only the configured URL is reachable; secrets in `$VAR` headers come from the host process environment), but the URL itself is still arbitrary — apply the same trust model to the config file.
+- Conductor does not currently provide a hook allow-list, sandbox, or signed-config mechanism. Defense relies on filesystem permissions on the config file.

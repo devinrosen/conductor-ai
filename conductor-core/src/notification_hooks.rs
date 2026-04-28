@@ -1,3 +1,24 @@
+//! Notification hook execution.
+//!
+//! # Security model
+//!
+//! Shell hooks run user-configured commands via `sh -c <hook.run>`. The
+//! command string itself is read directly from the conductor config file
+//! and is **not** validated, sandboxed, or restricted to an allow-list.
+//! Event data is passed via environment variables (safe), but the hook
+//! body has full shell privileges.
+//!
+//! This means: anyone who can write to `~/.conductor/config.toml` (or any
+//! repo's `.conductor/config.toml` that conductor reads) can achieve
+//! arbitrary code execution under the conductor user the next time a
+//! matching event fires. Treat the conductor config files as trusted
+//! input — do not let untrusted PRs/branches modify them, and do not
+//! source config from a shared writable location.
+//!
+//! HTTP hooks have a different (smaller) blast radius: only the
+//! configured URL is reachable; headers beginning with `$` resolve from
+//! the host process environment.
+
 use std::process::Stdio;
 use std::time::Duration;
 
