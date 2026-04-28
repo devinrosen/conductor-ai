@@ -659,6 +659,7 @@ dependencies = [
  "notify",
  "regex-lite",
  "runkon-flow",
+ "runkon-runtimes",
  "rusqlite",
  "rust-embed",
  "serde",
@@ -4547,6 +4548,20 @@ dependencies = [
  "ulid",
  "utoipa",
  "wait-timeout",
+]
+
+[[package]]
+name = "runkon-runtimes"
+version = "0.9.2"
+dependencies = [
+ "libc",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "utoipa",
 ]
 
 [[package]]

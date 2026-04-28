@@ -314,8 +314,7 @@ mod tests {
                 .unwrap();
             conn.execute("INSERT INTO t (status) VALUES (?1)", ["not_a_status"])
                 .unwrap();
-            let result =
-                conn.query_row::<T, _, _>("SELECT status FROM t", [], |row| row.get(0));
+            let result = conn.query_row::<T, _, _>("SELECT status FROM t", [], |row| row.get(0));
             assert!(result.is_err(), "expected error for invalid status string");
         }
 

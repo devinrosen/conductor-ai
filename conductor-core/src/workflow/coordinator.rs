@@ -18,12 +18,12 @@ use crate::worktree::WorktreeManager;
 use runkon_flow::dsl::WorkflowDef;
 
 use super::manager::WorkflowManager;
-use super::{WorkflowRunStatus, WorkflowStepStatus};
-use super::WorkflowResult;
 use super::types::{
     SpawnHeartbeatResumeParams, WorkflowExecStandalone, WorkflowResumeInput,
     WorkflowResumeStandalone,
 };
+use super::WorkflowResult;
+use super::{WorkflowRunStatus, WorkflowStepStatus};
 
 /// Input keys that the workflow engine injects automatically from the run context
 /// (ticket and repo metadata). Consumers can use this slice to identify inputs
@@ -675,7 +675,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         }
     }
 
-    Ok(rk_result.into())
+    Ok(rk_result)
 }
 
 /// Validate resume preconditions that can be checked from status alone.
@@ -1088,7 +1088,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         .resume(&rk_def, &mut rk_state)
         .map_err(|e| map_engine_error(e, &wf_run.workflow_name, "resume"))?;
 
-    Ok(rk_result.into())
+    Ok(rk_result)
 }
 
 #[cfg(test)]

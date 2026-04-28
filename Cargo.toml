@@ -1,5 +1,5 @@
 [workspace]
-members = ["conductor-core", "conductor-cli", "conductor-tui", "conductor-web", "conductor-desktop", "runkon-flow"]
+members = ["conductor-core", "conductor-cli", "conductor-tui", "conductor-web", "conductor-desktop", "runkon-flow", "runkon-runtimes"]
 resolver = "2"
 
 [workspace.package]

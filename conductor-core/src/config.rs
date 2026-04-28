@@ -5,33 +5,28 @@ use std::sync::OnceLock;
 
 use crate::error::{ConductorError, Result};
 
-/// Controls which permission flag is passed to Claude Code when launching agent runs.
+// Re-export moved types from runkon-runtimes
+pub use runkon_runtimes::config::RuntimeConfig;
+pub use runkon_runtimes::permission::PermissionMode as AgentPermissionMode;
+
+/// Extension trait for [`AgentPermissionMode`] that provides conductor-specific
+/// and Claude-Code-CLI-specific flag mappings.
 ///
-/// ```toml
-/// [general]
-/// agent_permission_mode = "skip-permissions" # default — uses --dangerously-skip-permissions
-/// agent_permission_mode = "auto-mode"        # uses --enable-auto-mode (may prompt in headless agents)
-/// ```
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AgentPermissionMode {
-    /// Use `--enable-auto-mode` (may prompt for permissions in headless agents).
-    AutoMode,
-    /// Use `--dangerously-skip-permissions` (default for headless agent runs).
-    #[default]
-    SkipPermissions,
-    /// Use `--permission-mode plan` (read-only mode for repo-scoped agents).
-    Plan,
-    /// Use `--dangerously-skip-permissions` + `--allowedTools` read-safe pattern.
-    /// Excludes file-writing tools (Edit, Write, MultiEdit, NotebookEdit) at the
-    /// Claude tool level without locking into plan-mode's "propose before acting"
-    /// flow, so Bash/gh remain fully executable.
-    RepoSafe,
+/// Kept in conductor-core (not runkon-runtimes) so the portable crate stays
+/// vendor-neutral.
+pub trait AgentPermissionModeExt {
+    /// Returns the conductor CLI flag for this mode (used in `conductor agent run` passthrough args).
+    fn cli_flag(&self) -> &str;
+    /// Returns the actual permission flag to pass to the `claude` subprocess.
+    fn claude_permission_flag(&self) -> &str;
+    /// Returns the optional value argument that follows the claude permission flag.
+    fn claude_permission_flag_value(&self) -> Option<&str>;
+    /// Returns the `--allowedTools` pattern for this mode, if any.
+    fn allowed_tools(&self) -> Option<&'static str>;
 }
 
-impl AgentPermissionMode {
-    /// Returns the conductor CLI flag for this mode (used in `conductor agent run` passthrough args).
-    pub fn cli_flag(&self) -> &str {
+impl AgentPermissionModeExt for AgentPermissionMode {
+    fn cli_flag(&self) -> &str {
         match self {
             Self::AutoMode => "--enable-auto-mode",
             Self::SkipPermissions => "--dangerously-skip-permissions",
@@ -40,20 +35,7 @@ impl AgentPermissionMode {
         }
     }
 
-    /// Returns the optional value argument that follows the conductor CLI flag.
-    pub fn cli_flag_value(&self) -> Option<&str> {
-        match self {
-            Self::Plan => Some("plan"),
-            Self::RepoSafe => Some("repo-safe"),
-            _ => None,
-        }
-    }
-
-    /// Returns the actual permission flag to pass to the `claude` subprocess.
-    ///
-    /// This differs from `cli_flag()` for `RepoSafe`: conductor receives
-    /// `--permission-mode repo-safe`, but claude receives `--dangerously-skip-permissions`.
-    pub fn claude_permission_flag(&self) -> &str {
+    fn claude_permission_flag(&self) -> &str {
         match self {
             Self::AutoMode => "--enable-auto-mode",
             Self::SkipPermissions => "--dangerously-skip-permissions",
@@ -62,20 +44,14 @@ impl AgentPermissionMode {
         }
     }
 
-    /// Returns the optional value argument that follows the claude permission flag.
-    pub fn claude_permission_flag_value(&self) -> Option<&str> {
+    fn claude_permission_flag_value(&self) -> Option<&str> {
         match self {
             Self::Plan => Some("plan"),
             _ => None,
         }
     }
 
-    /// Returns the `--allowedTools` pattern for this mode, if any.
-    ///
-    /// Plan and RepoSafe modes allow read-only and shell tools (Bash, Glob, Grep, Read,
-    /// WebFetch, WebSearch) plus all MCP tools, while excluding file-writing tools
-    /// (Edit, Write, MultiEdit, NotebookEdit).
-    pub fn allowed_tools(&self) -> Option<&'static str> {
+    fn allowed_tools(&self) -> Option<&'static str> {
         match self {
             Self::Plan | Self::RepoSafe => {
                 Some("Bash,Glob,Grep,Read,WebFetch,WebSearch,mcp__conductor__*,mcp__*")
@@ -223,49 +199,6 @@ pub struct HookConfig {
 pub struct NotifyConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hooks: Vec<HookConfig>,
-}
-
-/// Configuration for a named agent runtime (RFC 007).
-///
-/// # Example: Gemini CLI
-/// ```toml
-/// [runtimes.gemini]
-/// type = "cli"
-/// binary = "gemini"
-/// args = ["-m", "{{model}}", "-p", "{{prompt}}", "--approval-mode=yolo"]
-/// default_model = "gemini-2.5-flash"
-/// result_field = "response"
-/// token_fields = "stats.models.*.tokens.total"
-/// ```
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RuntimeConfig {
-    /// "cli", "api", or "script". Defaults to "cli".
-    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
-    pub runtime_type: Option<String>,
-    /// For "cli": binary name (e.g. "gemini"). Must be on PATH.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub binary: Option<String>,
-    /// For "cli": arg template. {{prompt}} and {{model}} are substituted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub args: Option<Vec<String>>,
-    /// For "cli": how to pass the prompt. "arg" (default) or "stdin".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt_via: Option<String>,
-    /// Default model ID passed as {{model}}. Overridden by agent frontmatter `model:`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_model: Option<String>,
-    /// Dot-path into JSON stdout to extract result_text (e.g. "response").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result_field: Option<String>,
-    /// Dot-path into JSON stdout to extract total token count (optional).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_fields: Option<String>,
-    /// For "api": env var name holding the API key.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_key_env: Option<String>,
-    /// For "script": shell command to execute.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1723,5 +1656,82 @@ bot_name = "my-bot"
     fn agent_log_path_path_traversal_rejected() {
         let err = super::agent_log_path("../../secret").unwrap_err();
         assert!(err.to_string().contains("invalid run_id"));
+    }
+
+    // -----------------------------------------------------------------------
+    // AgentPermissionModeExt tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_agent_permission_mode_ext_cli_flag() {
+        use super::AgentPermissionModeExt;
+        assert_eq!(
+            AgentPermissionMode::AutoMode.cli_flag(),
+            "--enable-auto-mode"
+        );
+        assert_eq!(
+            AgentPermissionMode::SkipPermissions.cli_flag(),
+            "--dangerously-skip-permissions"
+        );
+        assert_eq!(AgentPermissionMode::Plan.cli_flag(), "--permission-mode");
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.cli_flag(),
+            "--permission-mode"
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_ext_claude_permission_flag() {
+        use super::AgentPermissionModeExt;
+        assert_eq!(
+            AgentPermissionMode::AutoMode.claude_permission_flag(),
+            "--enable-auto-mode"
+        );
+        assert_eq!(
+            AgentPermissionMode::SkipPermissions.claude_permission_flag(),
+            "--dangerously-skip-permissions"
+        );
+        assert_eq!(
+            AgentPermissionMode::Plan.claude_permission_flag(),
+            "--permission-mode"
+        );
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.claude_permission_flag(),
+            "--dangerously-skip-permissions"
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_ext_claude_permission_flag_value() {
+        use super::AgentPermissionModeExt;
+        assert_eq!(
+            AgentPermissionMode::AutoMode.claude_permission_flag_value(),
+            None
+        );
+        assert_eq!(
+            AgentPermissionMode::SkipPermissions.claude_permission_flag_value(),
+            None
+        );
+        assert_eq!(
+            AgentPermissionMode::Plan.claude_permission_flag_value(),
+            Some("plan")
+        );
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.claude_permission_flag_value(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_ext_allowed_tools() {
+        use super::AgentPermissionModeExt;
+        assert_eq!(AgentPermissionMode::AutoMode.allowed_tools(), None);
+        assert_eq!(AgentPermissionMode::SkipPermissions.allowed_tools(), None);
+        assert!(AgentPermissionMode::Plan.allowed_tools().is_some());
+        assert!(AgentPermissionMode::RepoSafe.allowed_tools().is_some());
+        assert_eq!(
+            AgentPermissionMode::Plan.allowed_tools(),
+            AgentPermissionMode::RepoSafe.allowed_tools()
+        );
     }
 }

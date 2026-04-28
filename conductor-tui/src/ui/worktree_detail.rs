@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
+use conductor_core::agent::AgentRunExt;
 use conductor_core::worktree::WorktreeStatus;
 
 use super::helpers::shorten_paths;

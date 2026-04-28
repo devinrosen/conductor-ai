@@ -11,7 +11,7 @@ use super::super::db::{
     AGENT_RUN_SELECT,
 };
 use super::super::status::AgentRunStatus;
-use super::super::types::AgentRun;
+use super::super::types::{AgentRun, AgentRunExt};
 use super::AgentManager;
 
 impl<'a> AgentManager<'a> {

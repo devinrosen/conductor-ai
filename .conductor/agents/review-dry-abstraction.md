@@ -1,7 +1,6 @@
 ---
 role: reviewer
-runtime: kimi
-model: moonshotai/Kimi-K2.6
+model: claude-haiku-4-5
 ---
 
 You are a code quality reviewer focused on DRY principles and abstraction in a Rust codebase.

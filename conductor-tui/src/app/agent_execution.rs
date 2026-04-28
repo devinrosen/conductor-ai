@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use conductor_core::agent::{AgentManager, AgentRun, FeedbackRequest};
+use conductor_core::agent::{AgentManager, AgentRun, AgentRunExt, FeedbackRequest};
 use conductor_core::config::AutoStartAgent;
 use conductor_core::tickets::build_agent_prompt;
 use conductor_core::worktree::{WorktreeCreateOptions, WorktreeManager};

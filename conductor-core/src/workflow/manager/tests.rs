@@ -1,9 +1,9 @@
 use super::*;
 use crate::agent::AgentManager;
 use crate::db::sql_placeholders;
-use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
-use crate::workflow::{GateType, WorkflowRun};
 use crate::workflow::types::TimeGranularity;
+use crate::workflow::{GateType, WorkflowRun};
+use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
 
 fn setup_db() -> rusqlite::Connection {
     let conn = crate::test_helpers::setup_db();
@@ -4262,11 +4262,7 @@ fn test_find_step_by_name_and_iteration_returns_non_completed_step() {
     let step_id = mgr
         .insert_step(&run.id, step_name, "foreach", false, 0, 1)
         .unwrap();
-    set_step_status(
-        &mgr,
-        &step_id,
-        crate::workflow::WorkflowStepStatus::Running,
-    );
+    set_step_status(&mgr, &step_id, crate::workflow::WorkflowStepStatus::Running);
 
     // Should find the running step.
     let found = mgr

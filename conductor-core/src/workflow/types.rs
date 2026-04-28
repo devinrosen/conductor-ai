@@ -567,10 +567,18 @@ mod tests {
         };
         let fields = step.metadata_fields();
         assert_eq!(fields.len(), 4);
-        assert!(matches!(&fields[0], MetadataEntry::Field { label, value } if label == &"Status" && value == "completed"));
-        assert!(matches!(&fields[1], MetadataEntry::Field { label, value } if label == &"Role" && value == "agent"));
-        assert!(matches!(&fields[2], MetadataEntry::Field { label, value } if label == &"Can commit" && value == "true"));
-        assert!(matches!(&fields[3], MetadataEntry::Field { label, value } if label == &"Iteration" && value == "2"));
+        assert!(
+            matches!(&fields[0], MetadataEntry::Field { label, value } if label == &"Status" && value == "completed")
+        );
+        assert!(
+            matches!(&fields[1], MetadataEntry::Field { label, value } if label == &"Role" && value == "agent")
+        );
+        assert!(
+            matches!(&fields[2], MetadataEntry::Field { label, value } if label == &"Can commit" && value == "true")
+        );
+        assert!(
+            matches!(&fields[3], MetadataEntry::Field { label, value } if label == &"Iteration" && value == "2")
+        );
     }
 
     #[test]
@@ -595,25 +603,31 @@ mod tests {
             ..Default::default()
         };
         let fields = step.metadata_fields();
-        let labels: Vec<&str> = fields.iter().map(|e| match e {
-            MetadataEntry::Field { label, .. } => *label,
-            MetadataEntry::Section { heading, .. } => *heading,
-        }).collect();
+        let labels: Vec<&str> = fields
+            .iter()
+            .map(|e| match e {
+                MetadataEntry::Field { label, .. } => *label,
+                MetadataEntry::Section { heading, .. } => *heading,
+            })
+            .collect();
 
-        assert_eq!(labels, vec![
-            "Status",
-            "Role",
-            "Can commit",
-            "Iteration",
-            "Started",
-            "Ended",
-            "Gate type",
-            "Gate Prompt",
-            "Gate Feedback",
-            "Result",
-            "Context Out",
-            "Markers Out",
-        ]);
+        assert_eq!(
+            labels,
+            vec![
+                "Status",
+                "Role",
+                "Can commit",
+                "Iteration",
+                "Started",
+                "Ended",
+                "Gate type",
+                "Gate Prompt",
+                "Gate Feedback",
+                "Result",
+                "Context Out",
+                "Markers Out",
+            ]
+        );
     }
 
     #[test]
@@ -632,7 +646,9 @@ mod tests {
         // Only the four base fields should be present.
         assert_eq!(fields.len(), 4);
         assert!(
-            fields.iter().all(|e| matches!(e, MetadataEntry::Field { .. })),
+            fields
+                .iter()
+                .all(|e| matches!(e, MetadataEntry::Field { .. })),
             "expected only Field entries when no optional fields are set"
         );
     }

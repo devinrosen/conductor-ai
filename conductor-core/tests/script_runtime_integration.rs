@@ -5,11 +5,12 @@
 #[path = "common.rs"]
 mod common;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use conductor_core::config::RuntimeConfig;
 use conductor_core::runtime::script::ScriptRuntime;
-use conductor_core::runtime::{AgentRuntime, RuntimeRequest};
+use conductor_core::runtime::AgentRuntime;
 
 fn make_runtime(command: Option<&str>) -> ScriptRuntime {
     ScriptRuntime::new(RuntimeConfig {
@@ -18,31 +19,23 @@ fn make_runtime(command: Option<&str>) -> ScriptRuntime {
     })
 }
 
-fn make_request(run_id: &str, prompt: &str, db_path: std::path::PathBuf) -> RuntimeRequest {
-    RuntimeRequest {
-        run_id: run_id.to_string(),
-        agent_def: common::make_agent_def("script"),
-        prompt: prompt.to_string(),
-        model: None,
-        working_dir: std::path::PathBuf::from("/tmp"),
-        bot_name: None,
-        plugin_dirs: vec![],
-        db_path,
-    }
-}
-
 #[test]
 fn test_script_runtime_success() {
     let run_id = format!("test-script-{}", ulid::Ulid::new());
     let _db_guard = common::setup_test_db(&run_id, "script");
 
     let runtime = make_runtime(Some("echo hello"));
-    let req = make_request(&run_id, "test prompt", _db_guard.path().to_path_buf());
+    let req = common::make_request(
+        &run_id,
+        "test prompt",
+        _db_guard.path().to_path_buf(),
+        "script",
+    );
 
     runtime.spawn_validated(&req).expect("spawn must succeed");
 
     let result = runtime
-        .poll(&run_id, None, Duration::from_secs(5), _db_guard.path())
+        .poll(&run_id, None, Duration::from_secs(5))
         .expect("poll must succeed");
 
     assert_eq!(
@@ -62,16 +55,17 @@ fn test_script_runtime_captures_conductor_prompt() {
     let _db_guard = common::setup_test_db(&run_id, "script");
 
     let runtime = make_runtime(Some("echo $CONDUCTOR_PROMPT"));
-    let req = make_request(
+    let req = common::make_request(
         &run_id,
         "my-unique-prompt-string",
         _db_guard.path().to_path_buf(),
+        "script",
     );
 
     runtime.spawn_validated(&req).expect("spawn must succeed");
 
     let result = runtime
-        .poll(&run_id, None, Duration::from_secs(5), _db_guard.path())
+        .poll(&run_id, None, Duration::from_secs(5))
         .expect("poll must succeed");
 
     assert_eq!(
@@ -91,7 +85,7 @@ fn test_script_runtime_missing_command_errors() {
     let _db_guard = common::setup_test_db(&run_id, "script");
 
     let runtime = make_runtime(None);
-    let req = make_request(&run_id, "prompt", _db_guard.path().to_path_buf());
+    let req = common::make_request(&run_id, "prompt", _db_guard.path().to_path_buf(), "script");
 
     let err = runtime
         .spawn_validated(&req)
@@ -108,13 +102,13 @@ fn test_script_runtime_nonzero_exit_is_failed() {
     let _db_guard = common::setup_test_db(&run_id, "script");
 
     let runtime = make_runtime(Some("exit 1"));
-    let req = make_request(&run_id, "prompt", _db_guard.path().to_path_buf());
+    let req = common::make_request(&run_id, "prompt", _db_guard.path().to_path_buf(), "script");
 
     runtime
         .spawn_validated(&req)
         .expect("spawn must succeed even for non-zero exit");
 
-    let result = runtime.poll(&run_id, None, Duration::from_secs(5), _db_guard.path());
+    let result = runtime.poll(&run_id, None, Duration::from_secs(5));
     assert!(
         matches!(result, Err(conductor_core::runtime::PollError::Failed(_))),
         "non-zero exit must map to PollError::Failed, got: {result:?}"
@@ -127,13 +121,13 @@ fn test_script_runtime_nonzero_exit_with_stderr() {
     let _db_guard = common::setup_test_db(&run_id, "script");
 
     let runtime = make_runtime(Some("echo 'something went wrong' >&2; exit 2"));
-    let req = make_request(&run_id, "prompt", _db_guard.path().to_path_buf());
+    let req = common::make_request(&run_id, "prompt", _db_guard.path().to_path_buf(), "script");
 
     runtime
         .spawn_validated(&req)
         .expect("spawn must succeed even for non-zero exit");
 
-    let result = runtime.poll(&run_id, None, Duration::from_secs(5), _db_guard.path());
+    let result = runtime.poll(&run_id, None, Duration::from_secs(5));
     match result {
         Err(conductor_core::runtime::PollError::Failed(msg)) => {
             assert!(
@@ -151,7 +145,8 @@ fn test_script_runtime_nonzero_exit_with_stderr() {
 
 #[test]
 fn test_script_runtime_resolve_via_config() {
-    use conductor_core::config::{Config, RuntimeConfig};
+    use conductor_core::config::{AgentPermissionMode, Config, RuntimeConfig};
+    use conductor_core::runtime::RuntimeOptions;
     use std::collections::HashMap;
 
     let mut runtimes = HashMap::new();
@@ -168,7 +163,21 @@ fn test_script_runtime_resolve_via_config() {
         ..Config::default()
     };
 
-    let runtime = conductor_core::runtime::resolve_runtime("my-script", &config);
+    let options = RuntimeOptions {
+        binary_path: std::path::PathBuf::from("conductor"),
+        log_path_for_run: Arc::new(|run_id| {
+            conductor_core::config::agent_log_path(run_id)
+                .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")))
+        }),
+        workspace_root: std::path::PathBuf::from("/tmp"),
+    };
+
+    let runtime = conductor_core::runtime::resolve_runtime(
+        "my-script",
+        AgentPermissionMode::default(),
+        &config.runtimes,
+        &options,
+    );
     assert!(
         runtime.is_ok(),
         "resolve_runtime must return Ok for type=script"
@@ -178,10 +187,11 @@ fn test_script_runtime_resolve_via_config() {
 #[test]
 fn test_script_runtime_rejects_invalid_run_id() {
     let runtime = make_runtime(Some("echo hello"));
-    let req = make_request(
+    let req = common::make_request(
         "../../etc/cron.d/payload",
         "test",
         conductor_core::config::db_path(),
+        "script",
     );
     let err = runtime
         .spawn_validated(&req)

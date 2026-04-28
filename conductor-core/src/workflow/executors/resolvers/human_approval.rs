@@ -58,8 +58,8 @@ mod tests {
     use super::*;
     use crate::workflow::executors::gate_resolver::{GateContext, GateParams};
     use crate::workflow::persistence_sqlite::SqliteWorkflowPersistence;
-    use runkon_flow::traits::persistence::WorkflowPersistence;
     use runkon_flow::dsl::ApprovalMode;
+    use runkon_flow::traits::persistence::WorkflowPersistence;
     use rusqlite::Connection;
     use std::sync::Arc;
     use tempfile::NamedTempFile;
