@@ -19,51 +19,63 @@ use crate::workflow::item_provider::ItemProvider;
 // ---------------------------------------------------------------------------
 // These remain necessary until Phase 3 unifies the persistence traits.
 
-impl From<runkon_flow::traits::persistence::NewRun> for crate::workflow::persistence::NewRun {
-    fn from(src: runkon_flow::traits::persistence::NewRun) -> Self {
-        Self {
-            workflow_name: src.workflow_name,
-            worktree_id: src.worktree_id,
-            ticket_id: src.ticket_id,
-            repo_id: src.repo_id,
-            parent_run_id: src.parent_run_id,
-            dry_run: src.dry_run,
-            trigger: src.trigger,
-            definition_snapshot: src.definition_snapshot,
-            parent_workflow_run_id: src.parent_workflow_run_id,
-            target_label: src.target_label,
+macro_rules! field_copy_from {
+    ($from:ty => $to:ty { $($field:ident),+ $(,)? }) => {
+        impl From<$from> for $to {
+            fn from(src: $from) -> Self {
+                Self {
+                    $($field: src.$field),+
+                }
+            }
         }
-    }
+    };
 }
 
-impl From<runkon_flow::traits::persistence::NewStep> for crate::workflow::persistence::NewStep {
-    fn from(src: runkon_flow::traits::persistence::NewStep) -> Self {
-        Self {
-            workflow_run_id: src.workflow_run_id,
-            step_name: src.step_name,
-            role: src.role,
-            can_commit: src.can_commit,
-            position: src.position,
-            iteration: src.iteration,
-            retry_count: src.retry_count,
-        }
-    }
-}
+field_copy_from!(runkon_flow::traits::persistence::NewRun => crate::workflow::persistence::NewRun {
+    workflow_name,
+    worktree_id,
+    ticket_id,
+    repo_id,
+    parent_run_id,
+    dry_run,
+    trigger,
+    definition_snapshot,
+    parent_workflow_run_id,
+    target_label,
+});
 
-impl From<runkon_flow::traits::persistence::StepUpdate> for crate::workflow::persistence::StepUpdate {
-    fn from(src: runkon_flow::traits::persistence::StepUpdate) -> Self {
-        Self {
-            status: src.status,
-            child_run_id: src.child_run_id,
-            result_text: src.result_text,
-            context_out: src.context_out,
-            markers_out: src.markers_out,
-            retry_count: src.retry_count,
-            structured_output: src.structured_output,
-            step_error: src.step_error,
-        }
-    }
-}
+field_copy_from!(runkon_flow::traits::persistence::NewStep => crate::workflow::persistence::NewStep {
+    workflow_run_id,
+    step_name,
+    role,
+    can_commit,
+    position,
+    iteration,
+    retry_count,
+});
+
+field_copy_from!(runkon_flow::traits::persistence::StepUpdate => crate::workflow::persistence::StepUpdate {
+    status,
+    child_run_id,
+    result_text,
+    context_out,
+    markers_out,
+    retry_count,
+    structured_output,
+    step_error,
+});
+
+field_copy_from!(crate::workflow::persistence::FanOutItemRow => runkon_flow::types::FanOutItemRow {
+    id,
+    step_run_id,
+    item_type,
+    item_id,
+    item_ref,
+    child_run_id,
+    status,
+    dispatched_at,
+    completed_at,
+});
 
 impl From<runkon_flow::traits::persistence::FanOutItemStatus> for crate::workflow::persistence::FanOutItemStatus {
     fn from(s: runkon_flow::traits::persistence::FanOutItemStatus) -> Self {
@@ -112,22 +124,6 @@ impl From<crate::workflow::persistence::GateApprovalState> for runkon_flow::trai
             crate::workflow::persistence::GateApprovalState::Rejected { feedback } => {
                 Self::Rejected { feedback }
             }
-        }
-    }
-}
-
-impl From<crate::workflow::persistence::FanOutItemRow> for runkon_flow::types::FanOutItemRow {
-    fn from(r: crate::workflow::persistence::FanOutItemRow) -> Self {
-        Self {
-            id: r.id,
-            step_run_id: r.step_run_id,
-            item_type: r.item_type,
-            item_id: r.item_id,
-            item_ref: r.item_ref,
-            child_run_id: r.child_run_id,
-            status: r.status,
-            dispatched_at: r.dispatched_at,
-            completed_at: r.completed_at,
         }
     }
 }
@@ -645,9 +641,7 @@ impl runkon_flow::traits::persistence::WorkflowPersistence for PersistenceAdapte
         &self,
         statuses: &[runkon_flow::status::WorkflowRunStatus],
     ) -> Result<Vec<runkon_flow::types::WorkflowRun>, EngineError> {
-        let core_statuses: Vec<crate::workflow::WorkflowRunStatus> =
-            statuses.iter().map(|s| s.clone().into()).collect();
-        let result = self.0.list_active_runs(&core_statuses)?;
+        let result = self.0.list_active_runs(statuses)?;
         Ok(result)
     }
 

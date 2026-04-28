@@ -287,76 +287,83 @@ mod tests {
     #[cfg(feature = "rusqlite")]
     mod rusqlite_roundtrip {
         use super::*;
+        use rusqlite::types::{FromSql, ToSql};
+
+        fn roundtrip_all<T>(conn: &rusqlite::Connection, variants: &[T])
+        where
+            T: ToSql + FromSql + std::fmt::Display + PartialEq + std::fmt::Debug,
+        {
+            conn.execute("CREATE TABLE IF NOT EXISTS t (status TEXT)", [])
+                .unwrap();
+            for variant in variants {
+                conn.execute("INSERT INTO t (status) VALUES (?1)", [variant])
+                    .unwrap();
+                let recovered: T = conn
+                    .query_row("SELECT status FROM t", [], |row| row.get(0))
+                    .unwrap();
+                assert_eq!(*variant, recovered, "round-trip failed for {variant}");
+                conn.execute("DELETE FROM t", []).unwrap();
+            }
+        }
+
+        fn invalid_string_errors<T>(conn: &rusqlite::Connection)
+        where
+            T: FromSql,
+        {
+            conn.execute("CREATE TABLE IF NOT EXISTS t (status TEXT)", [])
+                .unwrap();
+            conn.execute("INSERT INTO t (status) VALUES (?1)", ["not_a_status"])
+                .unwrap();
+            let result =
+                conn.query_row::<T, _, _>("SELECT status FROM t", [], |row| row.get(0));
+            assert!(result.is_err(), "expected error for invalid status string");
+        }
 
         #[test]
         fn workflow_run_status_roundtrip() {
             let conn = rusqlite::Connection::open_in_memory().unwrap();
-            conn.execute("CREATE TABLE t (status TEXT)", []).unwrap();
-            for status in [
-                WorkflowRunStatus::Pending,
-                WorkflowRunStatus::Running,
-                WorkflowRunStatus::Completed,
-                WorkflowRunStatus::Failed,
-                WorkflowRunStatus::Cancelled,
-                WorkflowRunStatus::Waiting,
-                WorkflowRunStatus::NeedsResume,
-                WorkflowRunStatus::Cancelling,
-            ] {
-                conn.execute("INSERT INTO t (status) VALUES (?1)", [&status])
-                    .unwrap();
-                let recovered: WorkflowRunStatus = conn
-                    .query_row("SELECT status FROM t", [], |row| row.get(0))
-                    .unwrap();
-                assert_eq!(status, recovered, "round-trip failed for {status}");
-                conn.execute("DELETE FROM t", []).unwrap();
-            }
+            roundtrip_all(
+                &conn,
+                &[
+                    WorkflowRunStatus::Pending,
+                    WorkflowRunStatus::Running,
+                    WorkflowRunStatus::Completed,
+                    WorkflowRunStatus::Failed,
+                    WorkflowRunStatus::Cancelled,
+                    WorkflowRunStatus::Waiting,
+                    WorkflowRunStatus::NeedsResume,
+                    WorkflowRunStatus::Cancelling,
+                ],
+            );
         }
 
         #[test]
         fn workflow_step_status_roundtrip() {
             let conn = rusqlite::Connection::open_in_memory().unwrap();
-            conn.execute("CREATE TABLE t (status TEXT)", []).unwrap();
-            for status in [
-                WorkflowStepStatus::Pending,
-                WorkflowStepStatus::Running,
-                WorkflowStepStatus::Completed,
-                WorkflowStepStatus::Failed,
-                WorkflowStepStatus::Skipped,
-                WorkflowStepStatus::Waiting,
-                WorkflowStepStatus::TimedOut,
-            ] {
-                conn.execute("INSERT INTO t (status) VALUES (?1)", [&status])
-                    .unwrap();
-                let recovered: WorkflowStepStatus = conn
-                    .query_row("SELECT status FROM t", [], |row| row.get(0))
-                    .unwrap();
-                assert_eq!(status, recovered, "round-trip failed for {status}");
-                conn.execute("DELETE FROM t", []).unwrap();
-            }
+            roundtrip_all(
+                &conn,
+                &[
+                    WorkflowStepStatus::Pending,
+                    WorkflowStepStatus::Running,
+                    WorkflowStepStatus::Completed,
+                    WorkflowStepStatus::Failed,
+                    WorkflowStepStatus::Skipped,
+                    WorkflowStepStatus::Waiting,
+                    WorkflowStepStatus::TimedOut,
+                ],
+            );
         }
 
         #[test]
         fn workflow_run_status_invalid_string_errors() {
             let conn = rusqlite::Connection::open_in_memory().unwrap();
-            conn.execute("CREATE TABLE t (status TEXT)", []).unwrap();
-            conn.execute("INSERT INTO t (status) VALUES (?1)", ["not_a_status"])
-                .unwrap();
-            let result = conn.query_row::<WorkflowRunStatus, _, _>("SELECT status FROM t", [], |row| {
-                row.get(0)
-            });
-            assert!(result.is_err(), "expected error for invalid status string");
+            invalid_string_errors::<WorkflowRunStatus>(&conn);
         }
 
         #[test]
         fn workflow_step_status_invalid_string_errors() {
             let conn = rusqlite::Connection::open_in_memory().unwrap();
-            conn.execute("CREATE TABLE t (status TEXT)", []).unwrap();
-            conn.execute("INSERT INTO t (status) VALUES (?1)", ["not_a_status"])
-                .unwrap();
-            let result = conn.query_row::<WorkflowStepStatus, _, _>("SELECT status FROM t", [], |row| {
-                row.get(0)
-            });
-            assert!(result.is_err(), "expected error for invalid status string");
+            invalid_string_errors::<WorkflowStepStatus>(&conn);
         }
     }
 }
