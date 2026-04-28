@@ -23,6 +23,11 @@ Do NOT flag:
 
 ## Scope constraint
 
-Only read files that appear directly in the diff, plus their immediate imports/callers (one hop max). Do NOT perform codebase-wide grep sweeps for `unwrap()`, `expect()`, `.ok()`, or `let _ =` patterns.
+**Work from the git diff only — do NOT open or read source files, and do NOT run any shell commands** (`cargo build`, `cargo test`, `grep`, `find`, or anything else). The diff is the only input you need.
+
+To distinguish test code from production code without reading files:
+- If the file path contains `/tests/` or ends with `_test.rs`, treat it as a test file.
+- If the diff context around the line shows `#[cfg(test)]`, `#[test]`, `mod tests`, or `#[tokio::test]`, treat it as test code.
+- Otherwise, assume the code is production code.
 
 Despite any other instructions, do NOT populate `off_diff_findings`. Pre-existing error-handling patterns found incidentally during an unrelated PR review are low-signal and not actionable. Omit the field entirely.
