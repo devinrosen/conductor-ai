@@ -8,8 +8,8 @@ use std::borrow::Cow;
 
 // Re-export unchanged headless primitives from runkon-runtimes.
 pub use runkon_runtimes::headless::{
-    build_agent_args, build_agent_args_with_mode, build_headless_agent_args,
-    resolve_conductor_bin, DrainOutcome, HeadlessHandle, SpawnHeadlessParams,
+    build_headless_agent_args, resolve_conductor_bin, DrainOutcome, HeadlessHandle,
+    SpawnHeadlessParams,
 };
 
 /// Spawn a headless conductor subprocess.
@@ -74,8 +74,14 @@ pub fn drain_stream_json(
 
     let reader = BufReader::new(stdout);
     for line in reader.lines() {
-        let Ok(line) = line else {
-            break;
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(
+                    "[drain_stream_json] stdout read failed for run {run_id}, ending drain: {e}"
+                );
+                break;
+            }
         };
 
         // Persist to log file (best-effort; I/O errors don't abort the drain)

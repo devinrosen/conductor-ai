@@ -4,7 +4,7 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::Duration;
 
 use crate::config::RuntimeConfig;
-use crate::error::{RuntimeError, Result};
+use crate::error::{Result, RuntimeError};
 use crate::run::AgentRun;
 use crate::run::AgentRunStatus;
 use crate::tracker::{RunEventSink, RunTracker, RuntimeEvent};
@@ -65,27 +65,21 @@ impl AgentRuntime for ScriptRuntime {
             })?;
 
         let pid = child.id();
-        request.tracker.record_pid(&request.run_id, pid).map_err(|e| {
-            tracing::warn!(
-                "ScriptRuntime: failed to persist pid {pid} for run {}: {e}",
-                request.run_id
-            );
-            e
-        }).ok();
-        request.tracker.record_runtime(&request.run_id, "script").map_err(|e| {
-            tracing::warn!(
-                "ScriptRuntime: failed to persist runtime for run {}: {e}",
-                request.run_id
-            );
-            e
-        }).ok();
+        super::record_pid_and_runtime(
+            request.tracker.as_ref(),
+            &request.run_id,
+            pid,
+            "script",
+            "ScriptRuntime",
+        );
 
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(ScriptState {
             child,
             start: std::time::Instant::now(),
         });
         *self.tracker.lock().unwrap_or_else(|e| e.into_inner()) = Some(request.tracker.clone());
-        *self.event_sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(request.event_sink.clone());
+        *self.event_sink.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(request.event_sink.clone());
         Ok(())
     }
 
@@ -107,14 +101,22 @@ impl AgentRuntime for ScriptRuntime {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
-            .ok_or_else(|| PollError::Failed("ScriptRuntime::poll called before spawn (tracker missing)".into()))?;
+            .ok_or_else(|| {
+                PollError::Failed(
+                    "ScriptRuntime::poll called before spawn (tracker missing)".into(),
+                )
+            })?;
 
         let event_sink = self
             .event_sink
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
-            .ok_or_else(|| PollError::Failed("ScriptRuntime::poll called before spawn (event_sink missing)".into()))?;
+            .ok_or_else(|| {
+                PollError::Failed(
+                    "ScriptRuntime::poll called before spawn (event_sink missing)".into(),
+                )
+            })?;
 
         let poll_start = std::time::Instant::now();
         loop {
@@ -122,7 +124,9 @@ impl AgentRuntime for ScriptRuntime {
                 if flag.load(std::sync::atomic::Ordering::Relaxed) {
                     let _ = state.child.kill();
                     if let Err(e) = tracker.mark_cancelled(run_id) {
-                        tracing::warn!("ScriptRuntime: failed to mark run {run_id} cancelled on shutdown: {e}");
+                        tracing::warn!(
+                            "ScriptRuntime: failed to mark run {run_id} cancelled on shutdown: {e}"
+                        );
                     }
                     return Err(PollError::Cancelled);
                 }
@@ -131,7 +135,9 @@ impl AgentRuntime for ScriptRuntime {
             if poll_start.elapsed() > step_timeout {
                 let _ = state.child.kill();
                 if let Err(e) = tracker.mark_cancelled(run_id) {
-                    tracing::warn!("ScriptRuntime: failed to mark run {run_id} cancelled on timeout: {e}");
+                    tracing::warn!(
+                        "ScriptRuntime: failed to mark run {run_id} cancelled on timeout: {e}"
+                    );
                 }
                 return Err(PollError::NoResult);
             }
@@ -145,10 +151,18 @@ impl AgentRuntime for ScriptRuntime {
                     let mut stdout = String::new();
                     let mut stderr = String::new();
                     if let Some(mut out) = state.child.stdout.take() {
-                        let _ = out.read_to_string(&mut stdout);
+                        if let Err(e) = out.read_to_string(&mut stdout) {
+                            tracing::warn!(
+                                "ScriptRuntime: stdout read failed for run {run_id}: {e}"
+                            );
+                        }
                     }
                     if let Some(mut err) = state.child.stderr.take() {
-                        let _ = err.read_to_string(&mut stderr);
+                        if let Err(e) = err.read_to_string(&mut stderr) {
+                            tracing::warn!(
+                                "ScriptRuntime: stderr read failed for run {run_id}: {e}"
+                            );
+                        }
                     }
 
                     if is_error {
@@ -187,7 +201,9 @@ impl AgentRuntime for ScriptRuntime {
                     let run = tracker
                         .get_run(run_id)
                         .map_err(|e| PollError::Failed(format!("DB error: {e}")))?
-                        .ok_or_else(|| PollError::Failed(format!("run {run_id} not found in DB")))?;
+                        .ok_or_else(|| {
+                            PollError::Failed(format!("run {run_id} not found in DB"))
+                        })?;
 
                     return match run.status {
                         AgentRunStatus::Failed => Err(PollError::Failed(

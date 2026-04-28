@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use rusqlite::Connection;
 use runkon_runtimes::tracker::{RunEventSink, RunTracker, RuntimeEvent};
 use runkon_runtimes::{AgentRun, RuntimeError};
+use rusqlite::Connection;
 
 use crate::agent::types::LogResult;
 use crate::agent::AgentManager;
@@ -71,18 +71,17 @@ impl RunTracker for SqliteHostAdapter {
 
 impl RunEventSink for SqliteHostAdapter {
     fn on_event(&self, run_id: &str, event: RuntimeEvent) {
-        let result = self.with_mgr(|mgr| match &event {
-            RuntimeEvent::Init { model, session_id } => mgr.update_run_model_and_session(
-                run_id,
-                model.as_deref(),
-                session_id.as_deref(),
-            ),
+        let event_label = event_label(&event);
+        let result = self.with_mgr(|mgr| match event {
+            RuntimeEvent::Init { model, session_id } => {
+                mgr.update_run_model_and_session(run_id, model.as_deref(), session_id.as_deref())
+            }
             RuntimeEvent::Tokens {
                 input,
                 output,
                 cache_read,
                 cache_create,
-            } => mgr.update_run_tokens_partial(run_id, *input, *output, *cache_read, *cache_create),
+            } => mgr.update_run_tokens_partial(run_id, input, output, cache_read, cache_create),
             RuntimeEvent::Completed {
                 result_text,
                 session_id,
@@ -95,30 +94,38 @@ impl RunEventSink for SqliteHostAdapter {
                 cache_creation_input_tokens,
             } => {
                 let log_result = LogResult {
-                    result_text: result_text.clone(),
-                    session_id: session_id.clone(),
-                    cost_usd: *cost_usd,
-                    num_turns: *num_turns,
-                    duration_ms: *duration_ms,
+                    result_text,
+                    session_id,
+                    cost_usd,
+                    num_turns,
+                    duration_ms,
                     is_error: false,
-                    input_tokens: *input_tokens,
-                    output_tokens: *output_tokens,
-                    cache_read_input_tokens: *cache_read_input_tokens,
-                    cache_creation_input_tokens: *cache_creation_input_tokens,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
                 };
                 mgr.update_run_completed_if_running_full(run_id, &log_result)
             }
             RuntimeEvent::Failed { error, session_id } => {
-                mgr.update_run_failed_with_session(run_id, error, session_id.as_deref())
+                mgr.update_run_failed_with_session(run_id, &error, session_id.as_deref())
             }
         });
 
         if let Err(ref e) = result {
             tracing::warn!(
-                "SqliteHostAdapter::on_event failed for run {run_id} ({:?}): {e}",
-                event
+                "SqliteHostAdapter::on_event failed for run {run_id} ({event_label}): {e}"
             );
         }
+    }
+}
+
+fn event_label(event: &RuntimeEvent) -> &'static str {
+    match event {
+        RuntimeEvent::Init { .. } => "Init",
+        RuntimeEvent::Tokens { .. } => "Tokens",
+        RuntimeEvent::Completed { .. } => "Completed",
+        RuntimeEvent::Failed { .. } => "Failed",
     }
 }
 

@@ -29,30 +29,8 @@ pub fn resolve_conductor_bin() -> String {
     resolved
 }
 
-/// Maximum number of CLI arguments produced by `build_agent_args`.
-const AGENT_ARGS_CAPACITY: usize = 18;
-
-/// Build the `conductor agent run` argument list for a child agent.
-pub fn build_agent_args(
-    run_id: &str,
-    worktree_path: &str,
-    prompt: &str,
-    resume_session_id: Option<&str>,
-    model: Option<&str>,
-    bot_name: Option<&str>,
-    extra_plugin_dirs: &[String],
-) -> std::result::Result<Vec<Cow<'static, str>>, String> {
-    build_agent_args_with_mode(
-        run_id,
-        worktree_path,
-        prompt,
-        resume_session_id,
-        model,
-        bot_name,
-        None,
-        extra_plugin_dirs,
-    )
-}
+/// Maximum number of CLI arguments produced by `build_headless_agent_args`.
+const AGENT_ARGS_CAPACITY: usize = 20;
 
 fn push_optional_agent_flags(
     args: &mut Vec<Cow<'static, str>>,
@@ -87,7 +65,10 @@ fn push_optional_agent_flags(
 }
 
 /// Write `prompt` to a temp file with mode 0o600 (Unix) and return the path.
-fn write_prompt_file(run_id: &str, prompt: &str) -> std::result::Result<std::path::PathBuf, String> {
+fn write_prompt_file(
+    run_id: &str,
+    prompt: &str,
+) -> std::result::Result<std::path::PathBuf, String> {
     let prompt_file_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
 
     #[cfg(unix)]
@@ -122,44 +103,6 @@ fn write_prompt_file(run_id: &str, prompt: &str) -> std::result::Result<std::pat
     }
 
     Ok(prompt_file_path)
-}
-
-/// Like [`build_agent_args`] but accepts an optional permission mode override.
-#[allow(clippy::too_many_arguments)]
-pub fn build_agent_args_with_mode(
-    run_id: &str,
-    working_dir: &str,
-    prompt: &str,
-    resume_session_id: Option<&str>,
-    model: Option<&str>,
-    bot_name: Option<&str>,
-    permission_mode: Option<&PermissionMode>,
-    extra_plugin_dirs: &[String],
-) -> std::result::Result<Vec<Cow<'static, str>>, String> {
-    crate::text_util::validate_run_id(run_id).map_err(|e| e.to_string())?;
-
-    let prompt_file_path = write_prompt_file(run_id, prompt)?;
-
-    let mut args: Vec<Cow<'static, str>> = Vec::with_capacity(AGENT_ARGS_CAPACITY);
-    args.push(Cow::Borrowed("agent"));
-    args.push(Cow::Borrowed("run"));
-    args.push(Cow::Borrowed("--run-id"));
-    args.push(Cow::Owned(run_id.to_string()));
-    args.push(Cow::Borrowed("--worktree-path"));
-    args.push(Cow::Owned(working_dir.to_string()));
-    args.push(Cow::Borrowed("--prompt-file"));
-    args.push(Cow::Owned(prompt_file_path.to_string_lossy().into_owned()));
-
-    push_optional_agent_flags(
-        &mut args,
-        resume_session_id,
-        model,
-        bot_name,
-        permission_mode,
-        extra_plugin_dirs,
-    );
-
-    Ok(args)
 }
 
 /// Handle to a headless agent subprocess.
@@ -223,6 +166,10 @@ impl HeadlessHandle {
     }
 
     pub fn abort(mut self) {
+        self.cleanup();
+    }
+
+    fn cleanup(&mut self) {
         drop(self.stdout.take());
         drop(self.stderr.take());
         if let Some(mut child) = self.child.take() {
@@ -235,12 +182,7 @@ impl HeadlessHandle {
 #[cfg(unix)]
 impl Drop for HeadlessHandle {
     fn drop(&mut self) {
-        drop(self.stdout.take());
-        drop(self.stderr.take());
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        self.cleanup();
     }
 }
 
@@ -301,8 +243,7 @@ pub fn try_spawn_headless_run(
 }
 
 /// Result of draining a headless subprocess stdout stream.
-#[derive(Copy, Clone)]
-#[derive(Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum DrainOutcome {
     /// A `result` event was seen; the run was finalized in the DB.
     Completed,
@@ -334,8 +275,14 @@ pub fn drain_stream_json(
 
     let reader = BufReader::new(stdout);
     for line in reader.lines() {
-        let Ok(line) = line else {
-            break;
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(
+                    "[drain_stream_json] stdout read failed for run {run_id}, ending drain: {e}"
+                );
+                break;
+            }
         };
 
         if let Some(ref mut w) = log_writer {
@@ -355,8 +302,14 @@ pub fn drain_stream_json(
             "system" => {
                 let subtype = value.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
                 if subtype == "init" {
-                    let model = value.get("model").and_then(|v| v.as_str()).map(String::from);
-                    let session_id = value.get("session_id").and_then(|v| v.as_str()).map(String::from);
+                    let model = value
+                        .get("model")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    let session_id = value
+                        .get("session_id")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
                     sink.on_event(run_id, RuntimeEvent::Init { model, session_id });
                 }
             }
@@ -404,14 +357,20 @@ pub fn drain_stream_json(
                         .and_then(|v| v.as_str())
                         .unwrap_or(DEFAULT_AGENT_ERROR_MSG)
                         .to_string();
-                    let session_id = value.get("session_id").and_then(|v| v.as_str()).map(String::from);
+                    let session_id = value
+                        .get("session_id")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
                     sink.on_event(run_id, RuntimeEvent::Failed { error, session_id });
                 } else {
                     let result_text = value
                         .get("result")
                         .and_then(|v| v.as_str())
                         .map(String::from);
-                    let session_id = value.get("session_id").and_then(|v| v.as_str()).map(String::from);
+                    let session_id = value
+                        .get("session_id")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
                     let cost_usd = value.get("total_cost_usd").and_then(|v| v.as_f64());
                     let num_turns = value.get("num_turns").and_then(|v| v.as_i64());
                     let duration_ms = value.get("duration_ms").and_then(|v| v.as_i64());
@@ -516,12 +475,32 @@ mod tests {
         );
     }
 
+    fn make_params<'a>(
+        run_id: &'a str,
+        prompt: &'a str,
+        resume_session_id: Option<&'a str>,
+        model: Option<&'a str>,
+        bot_name: Option<&'a str>,
+    ) -> super::SpawnHeadlessParams<'a> {
+        super::SpawnHeadlessParams {
+            run_id,
+            working_dir: "/tmp/wt",
+            prompt,
+            resume_session_id,
+            model,
+            bot_name,
+            permission_mode: None,
+            plugin_dirs: &[],
+        }
+    }
+
     #[test]
     fn build_agent_args_short_prompt_uses_file() {
         let run_id = "run-short-1";
         let prompt = "short prompt";
-        let args =
-            super::build_agent_args(run_id, "/tmp/wt", prompt, None, None, None, &[]).unwrap();
+        let (args, _) =
+            super::build_headless_agent_args(&make_params(run_id, prompt, None, None, None))
+                .unwrap();
         let expected_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
         assert_file_prompt(&args, prompt, expected_path.to_str().unwrap());
         let _ = std::fs::remove_file(&expected_path);
@@ -531,8 +510,9 @@ mod tests {
     fn build_agent_args_long_prompt_uses_file() {
         let run_id = "run-long-99";
         let prompt = "x".repeat(513);
-        let args =
-            super::build_agent_args(run_id, "/tmp/wt", &prompt, None, None, None, &[]).unwrap();
+        let (args, _) =
+            super::build_headless_agent_args(&make_params(run_id, &prompt, None, None, None))
+                .unwrap();
         let expected_path = std::env::temp_dir().join(format!("conductor-prompt-{run_id}.txt"));
         assert_file_prompt(&args, &prompt, expected_path.to_str().unwrap());
         let _ = std::fs::remove_file(&expected_path);
@@ -541,10 +521,14 @@ mod tests {
     #[test]
     fn build_agent_args_with_resume_sets_flag() {
         let run_id = "run-resume-sets-flag";
-        let prompt = "short prompt";
-        let args =
-            super::build_agent_args(run_id, "/tmp/wt", prompt, Some("sess-abc"), None, None, &[])
-                .unwrap();
+        let (args, _) = super::build_headless_agent_args(&make_params(
+            run_id,
+            "short prompt",
+            Some("sess-abc"),
+            None,
+            None,
+        ))
+        .unwrap();
         let resume_idx = args
             .iter()
             .position(|a| a == "--resume")
@@ -558,16 +542,13 @@ mod tests {
     #[test]
     fn build_agent_args_with_model_override() {
         let run_id = "run-model-override";
-        let args = super::build_agent_args_with_mode(
+        let (args, _) = super::build_headless_agent_args(&make_params(
             run_id,
-            "/tmp/wt",
             "prompt",
             None,
             Some("claude-sonnet-4-6"),
             None,
-            None,
-            &[],
-        )
+        ))
         .unwrap();
         let idx = args
             .iter()
@@ -582,16 +563,13 @@ mod tests {
     #[test]
     fn build_agent_args_with_bot_name() {
         let run_id = "run-bot-name-01";
-        let args = super::build_agent_args_with_mode(
+        let (args, _) = super::build_headless_agent_args(&make_params(
             run_id,
-            "/tmp/wt",
             "prompt",
             None,
             None,
             Some("my-bot"),
-            None,
-            &[],
-        )
+        ))
         .unwrap();
         let idx = args
             .iter()
@@ -608,9 +586,14 @@ mod tests {
     fn build_agent_args_prompt_file_mode_0o600() {
         use std::os::unix::fs::MetadataExt;
         let run_id = "run-perm-600-01";
-        let args =
-            super::build_agent_args(run_id, "/tmp/wt", "secret prompt", None, None, None, &[])
-                .unwrap();
+        let (args, _) = super::build_headless_agent_args(&make_params(
+            run_id,
+            "secret prompt",
+            None,
+            None,
+            None,
+        ))
+        .unwrap();
         let file_idx = args
             .iter()
             .position(|a| a == "--prompt-file")
@@ -647,7 +630,8 @@ mod tests {
 
     fn run_drain(lines: &[&str]) -> (super::DrainOutcome, RecordingSink) {
         let input = lines.join("\n");
-        let log_file = std::env::temp_dir().join(format!("test-drain-{:?}.log", std::thread::current().id()));
+        let log_file =
+            std::env::temp_dir().join(format!("test-drain-{:?}.log", std::thread::current().id()));
         let sink = RecordingSink::default();
         let outcome = super::drain_stream_json(input.as_bytes(), "run-1", &log_file, &sink);
         let _ = std::fs::remove_file(&log_file);
@@ -710,7 +694,9 @@ mod tests {
 
     #[test]
     fn drain_stream_json_cost_turns_duration_parsed() {
-        let (outcome, sink) = run_drain(&[r#"{"type":"result","result":"ok","total_cost_usd":0.42,"num_turns":7,"duration_ms":12345,"usage":{"input_tokens":100,"output_tokens":50}}"#]);
+        let (outcome, sink) = run_drain(&[
+            r#"{"type":"result","result":"ok","total_cost_usd":0.42,"num_turns":7,"duration_ms":12345,"usage":{"input_tokens":100,"output_tokens":50}}"#,
+        ]);
         assert_eq!(outcome, super::DrainOutcome::Completed);
         let events = sink.events.lock().unwrap();
         match &events[0] {

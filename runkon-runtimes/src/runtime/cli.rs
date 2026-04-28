@@ -3,7 +3,7 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::Duration;
 
 use crate::config::RuntimeConfig;
-use crate::error::{RuntimeError, Result};
+use crate::error::{Result, RuntimeError};
 use crate::process_utils;
 use crate::run::AgentRun;
 use crate::tracker::{RunEventSink, RunTracker, RuntimeEvent};
@@ -41,9 +41,10 @@ impl CliRuntime {
 
 impl AgentRuntime for CliRuntime {
     fn spawn_impl(&self, request: &RuntimeRequest, _seal: super::private::Seal) -> Result<()> {
-        let binary = self.config.binary.as_deref().ok_or_else(|| {
-            RuntimeError::Config("CliRuntime: `binary` is required".to_string())
-        })?;
+        let binary =
+            self.config.binary.as_deref().ok_or_else(|| {
+                RuntimeError::Config("CliRuntime: `binary` is required".to_string())
+            })?;
 
         let resolved_model = request
             .model
@@ -105,21 +106,13 @@ impl AgentRuntime for CliRuntime {
 
         let pid = child.id();
 
-        request.tracker.record_pid(&request.run_id, pid).map_err(|e| {
-            tracing::warn!(
-                "CliRuntime: failed to persist subprocess pid {pid} for run {}: {e}",
-                request.run_id
-            );
-            e
-        }).ok();
-        request.tracker.record_runtime(&request.run_id, &request.agent_def.runtime).map_err(|e| {
-            tracing::warn!(
-                "CliRuntime: failed to persist runtime '{}' for run {}: {e}",
-                request.agent_def.runtime,
-                request.run_id
-            );
-            e
-        }).ok();
+        super::record_pid_and_runtime(
+            request.tracker.as_ref(),
+            &request.run_id,
+            pid,
+            &request.agent_def.runtime,
+            "CliRuntime",
+        );
 
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = Some(CliState {
             child,
@@ -128,7 +121,8 @@ impl AgentRuntime for CliRuntime {
             start: std::time::Instant::now(),
         });
         *self.tracker.lock().unwrap_or_else(|e| e.into_inner()) = Some(request.tracker.clone());
-        *self.event_sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(request.event_sink.clone());
+        *self.event_sink.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(request.event_sink.clone());
         Ok(())
     }
 
@@ -150,14 +144,20 @@ impl AgentRuntime for CliRuntime {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
-            .ok_or_else(|| PollError::Failed("CliRuntime::poll called before spawn (tracker missing)".into()))?;
+            .ok_or_else(|| {
+                PollError::Failed("CliRuntime::poll called before spawn (tracker missing)".into())
+            })?;
 
         let event_sink = self
             .event_sink
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
-            .ok_or_else(|| PollError::Failed("CliRuntime::poll called before spawn (event_sink missing)".into()))?;
+            .ok_or_else(|| {
+                PollError::Failed(
+                    "CliRuntime::poll called before spawn (event_sink missing)".into(),
+                )
+            })?;
 
         let poll_start = std::time::Instant::now();
         loop {
@@ -165,7 +165,9 @@ impl AgentRuntime for CliRuntime {
                 if flag.load(std::sync::atomic::Ordering::Relaxed) {
                     process_utils::cancel_subprocess(state.pid);
                     if let Err(e) = tracker.mark_cancelled(run_id) {
-                        tracing::warn!("CliRuntime: failed to mark run {run_id} cancelled on shutdown: {e}");
+                        tracing::warn!(
+                            "CliRuntime: failed to mark run {run_id} cancelled on shutdown: {e}"
+                        );
                     }
                     return Err(PollError::Cancelled);
                 }
@@ -174,7 +176,9 @@ impl AgentRuntime for CliRuntime {
             if poll_start.elapsed() > step_timeout {
                 process_utils::cancel_subprocess(state.pid);
                 if let Err(e) = tracker.mark_cancelled(run_id) {
-                    tracing::warn!("CliRuntime: failed to mark run {run_id} cancelled on timeout: {e}");
+                    tracing::warn!(
+                        "CliRuntime: failed to mark run {run_id} cancelled on timeout: {e}"
+                    );
                 }
                 return Err(PollError::NoResult);
             }
@@ -364,11 +368,7 @@ mod tests {
     #[test]
     fn poll_before_spawn_returns_failed() {
         let runtime = make_runtime("echo");
-        let result = runtime.poll(
-            "no-such-run",
-            None,
-            Duration::from_millis(10),
-        );
+        let result = runtime.poll("no-such-run", None, Duration::from_millis(10));
         assert!(matches!(result, Err(PollError::Failed(_))));
     }
 
@@ -379,11 +379,7 @@ mod tests {
             let _guard = runtime.state.lock().unwrap();
             panic!("intentional poison");
         }));
-        let result = runtime.poll(
-            "no-such-run",
-            None,
-            Duration::from_millis(10),
-        );
+        let result = runtime.poll("no-such-run", None, Duration::from_millis(10));
         assert!(matches!(result, Err(PollError::Failed(_))));
     }
 }

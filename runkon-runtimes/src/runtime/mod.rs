@@ -10,7 +10,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 
 use crate::agent_def::AgentDef;
 use crate::config::RuntimeConfig;
-use crate::error::{RuntimeError, Result};
+use crate::error::{Result, RuntimeError};
 use crate::permission::PermissionMode;
 use crate::run::AgentRun;
 use crate::tracker::{RunEventSink, RunTracker};
@@ -213,6 +213,23 @@ pub(crate) fn mark_cancelled_via_tracker(
         if let Err(e) = tracker.mark_cancelled(run_id) {
             tracing::warn!("{context}: failed to mark run {run_id} cancelled: {e}");
         }
+    }
+}
+
+/// Best-effort: record the subprocess pid and runtime name on the tracker,
+/// logging warnings on failure rather than aborting spawn.
+pub(crate) fn record_pid_and_runtime(
+    tracker: &dyn RunTracker,
+    run_id: &str,
+    pid: u32,
+    runtime: &str,
+    context: &str,
+) {
+    if let Err(e) = tracker.record_pid(run_id, pid) {
+        tracing::warn!("{context}: failed to persist subprocess pid {pid} for run {run_id}: {e}");
+    }
+    if let Err(e) = tracker.record_runtime(run_id, runtime) {
+        tracing::warn!("{context}: failed to persist runtime '{runtime}' for run {run_id}: {e}");
     }
 }
 
