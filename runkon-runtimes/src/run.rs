@@ -42,31 +42,6 @@ impl std::str::FromStr for RunStatus {
     }
 }
 
-#[cfg(feature = "rusqlite")]
-mod rusqlite_impl {
-    use super::RunStatus;
-
-    impl rusqlite::types::ToSql for RunStatus {
-        fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-            Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
-        }
-    }
-
-    impl rusqlite::types::FromSql for RunStatus {
-        fn column_result(
-            value: rusqlite::types::ValueRef<'_>,
-        ) -> rusqlite::types::FromSqlResult<Self> {
-            let s = String::column_result(value)?;
-            s.parse().map_err(|e: String| {
-                rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    e,
-                )))
-            })
-        }
-    }
-}
-
 /// Handle to a runtime-spawned agent run, carrying only the fields any
 /// runtime in this crate (or a host like conductor) actually reads through
 /// the [`AgentRuntime`](crate::runtime::AgentRuntime) trait.

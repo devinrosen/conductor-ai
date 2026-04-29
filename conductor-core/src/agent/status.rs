@@ -47,23 +47,7 @@ impl std::str::FromStr for AgentRunStatus {
     }
 }
 
-impl rusqlite::types::ToSql for AgentRunStatus {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-        Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
-    }
-}
-
-impl rusqlite::types::FromSql for AgentRunStatus {
-    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
-        let s = String::column_result(value)?;
-        s.parse().map_err(|e: String| {
-            rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                e,
-            )))
-        })
-    }
-}
+crate::impl_sql_enum!(AgentRunStatus);
 
 impl From<AgentRunStatus> for runkon_runtimes::RunStatus {
     fn from(s: AgentRunStatus) -> Self {
@@ -127,23 +111,7 @@ impl std::str::FromStr for StepStatus {
     }
 }
 
-impl rusqlite::types::ToSql for StepStatus {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-        Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
-    }
-}
-
-impl rusqlite::types::FromSql for StepStatus {
-    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
-        let s = String::column_result(value)?;
-        s.parse().map_err(|e: String| {
-            rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                e,
-            )))
-        })
-    }
-}
+crate::impl_sql_enum!(StepStatus);
 
 /// Default error message used when the agent reports an error without a message.
 pub const DEFAULT_AGENT_ERROR_MSG: &str = "Claude reported an error";

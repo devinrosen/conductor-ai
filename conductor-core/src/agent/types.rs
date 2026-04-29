@@ -431,6 +431,99 @@ mod tests {
         }
     }
 
+    /// Build a fully-populated `AgentRun` so `to_run_handle` projection can be
+    /// asserted field-by-field.
+    fn make_full_run() -> AgentRun {
+        AgentRun {
+            id: "01JVFJT9K7XPPQ9MH6JV7XRM3M".into(),
+            worktree_id: Some("wt-1".into()),
+            repo_id: Some("repo-1".into()),
+            claude_session_id: Some("sess-abc".into()),
+            prompt: "do the thing".into(),
+            status: AgentRunStatus::Completed,
+            result_text: Some("done".into()),
+            cost_usd: Some(0.42),
+            num_turns: Some(7),
+            duration_ms: Some(1234),
+            started_at: "2025-01-01T00:00:00Z".into(),
+            ended_at: Some("2025-01-01T00:01:00Z".into()),
+            log_file: Some("/tmp/log".into()),
+            model: Some("sonnet".into()),
+            plan: Some(vec![PlanStep::default()]),
+            parent_run_id: Some("parent-1".into()),
+            input_tokens: Some(100),
+            output_tokens: Some(50),
+            cache_read_input_tokens: Some(20),
+            cache_creation_input_tokens: Some(10),
+            bot_name: Some("conductor-bot".into()),
+            conversation_id: Some("conv-1".into()),
+            subprocess_pid: Some(12345),
+            runtime: "claude".into(),
+        }
+    }
+
+    #[test]
+    fn to_run_handle_projects_portable_fields() {
+        let run = make_full_run();
+        let handle = run.to_run_handle();
+
+        assert_eq!(handle.id, run.id);
+        assert_eq!(handle.subprocess_pid, run.subprocess_pid);
+        assert_eq!(handle.runtime, run.runtime);
+        // claude_session_id maps to the generic `session_id` on the portable handle.
+        assert_eq!(handle.session_id, run.claude_session_id);
+        assert_eq!(handle.result_text, run.result_text);
+        assert_eq!(handle.started_at, run.started_at);
+        assert_eq!(handle.ended_at, run.ended_at);
+        assert_eq!(handle.log_file, run.log_file);
+        assert_eq!(handle.model, run.model);
+        assert_eq!(handle.cost_usd, run.cost_usd);
+        assert_eq!(handle.num_turns, run.num_turns);
+        assert_eq!(handle.duration_ms, run.duration_ms);
+        assert_eq!(handle.input_tokens, run.input_tokens);
+        assert_eq!(handle.output_tokens, run.output_tokens);
+        assert_eq!(handle.cache_read_input_tokens, run.cache_read_input_tokens);
+        assert_eq!(
+            handle.cache_creation_input_tokens,
+            run.cache_creation_input_tokens
+        );
+        assert_eq!(handle.status, runkon_runtimes::RunStatus::Completed);
+    }
+
+    #[test]
+    fn to_run_handle_collapses_waiting_for_feedback_to_running() {
+        let mut run = make_full_run();
+        run.status = AgentRunStatus::WaitingForFeedback;
+        let handle = run.to_run_handle();
+        // The runtime layer doesn't model paused-for-feedback; it appears as
+        // "still active" — i.e. Running — to AgentRuntime callers.
+        assert_eq!(handle.status, runkon_runtimes::RunStatus::Running);
+    }
+
+    #[test]
+    fn to_run_handle_status_mapping_for_terminal_states() {
+        for (input, expected) in [
+            (AgentRunStatus::Running, runkon_runtimes::RunStatus::Running),
+            (
+                AgentRunStatus::Completed,
+                runkon_runtimes::RunStatus::Completed,
+            ),
+            (AgentRunStatus::Failed, runkon_runtimes::RunStatus::Failed),
+            (
+                AgentRunStatus::Cancelled,
+                runkon_runtimes::RunStatus::Cancelled,
+            ),
+        ] {
+            let mut run = make_full_run();
+            run.status = input;
+            assert_eq!(
+                run.to_run_handle().status,
+                expected,
+                "AgentRunStatus::{input:?} must project to RunStatus::{expected:?}"
+            );
+        }
+    }
+
     #[test]
     fn log_path_rejects_log_file_outside_log_dir() {
         let run = make_run("01JVFJT9K7XPPQ9MH6JV7XRM3M", Some("/tmp/custom.log"));
