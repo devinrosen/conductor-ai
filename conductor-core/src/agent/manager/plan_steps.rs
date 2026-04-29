@@ -130,7 +130,7 @@ mod tests {
     use super::super::setup_db;
     use super::super::AgentManager;
     use crate::agent::status::StepStatus;
-    use crate::agent::types::{AgentRunExt, PlanStep};
+    use crate::agent::types::PlanStep;
 
     #[test]
     fn test_update_run_plan() {
@@ -484,7 +484,7 @@ mod tests {
     #[test]
     fn test_build_resume_prompt() {
         use crate::agent::status::AgentRunStatus;
-        use crate::agent::types::{AgentRun, AgentRunExt};
+        use crate::agent::types::AgentRun;
 
         let run = AgentRun {
             id: "test".to_string(),

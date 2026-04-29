@@ -24,9 +24,9 @@ pub use status::{
 };
 
 pub use types::{
-    ActiveAgentCounts, AgentCreatedIssue, AgentEvent, AgentRun, AgentRunEvent, AgentRunExt,
-    ClaudeJsonResult, CostPhase, FeedbackOption, FeedbackRequest, FeedbackRequestParams, LogResult,
-    PlanStep, RunTreeTotals, TicketAgentTotals, EVENT_KIND_TOOL_ERROR, META_KEY_ERROR_TEXT,
+    ActiveAgentCounts, AgentCreatedIssue, AgentEvent, AgentRun, AgentRunEvent, ClaudeJsonResult,
+    CostPhase, FeedbackOption, FeedbackRequest, FeedbackRequestParams, LogResult, PlanStep,
+    RunTreeTotals, TicketAgentTotals, EVENT_KIND_TOOL_ERROR, META_KEY_ERROR_TEXT,
 };
 
 #[cfg(test)]
