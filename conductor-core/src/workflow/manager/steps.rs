@@ -9,6 +9,21 @@ use crate::workflow::GateType;
 use super::WorkflowManager;
 use crate::workflow::WorkflowStepStatus;
 
+/// Agent-run metrics to mirror onto a linked `workflow_run_steps` row (Path X.1).
+///
+/// Grouped to avoid a positional `Option<T>` explosion at call sites.
+/// Fields left as `None` are ignored (COALESCE leaves existing DB values intact).
+#[derive(Debug, Clone, Default)]
+pub struct StepMetrics {
+    pub cost_usd: Option<f64>,
+    pub num_turns: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cache_read_input_tokens: Option<i64>,
+    pub cache_creation_input_tokens: Option<i64>,
+}
+
 impl<'a> WorkflowManager<'a> {
     /// Execute a single SQL UPDATE and map the rusqlite error to [`ConductorError`].
     ///
@@ -269,6 +284,36 @@ impl<'a> WorkflowManager<'a> {
         self.execute_step_sql(
             "UPDATE workflow_run_steps SET gate_options = :options_json WHERE id = :id",
             named_params![":options_json": options_json, ":id": step_id],
+        )
+    }
+
+    /// Mirror agent-run metrics onto the linked workflow step row (Path X.1).
+    ///
+    /// Keyed by `child_run_id` so callers need not know the step's own id.
+    /// Uses COALESCE so a `None` field in [`StepMetrics`] leaves the existing column untouched.
+    /// Called by `AgentManager` after writing the same values to `agent_runs`,
+    /// keeping `workflow_run_steps` readable without a JOIN.
+    pub fn mirror_step_metrics_from_run(&self, run_id: &str, metrics: StepMetrics) -> Result<()> {
+        self.execute_step_sql(
+            "UPDATE workflow_run_steps \
+             SET cost_usd = COALESCE(:cost_usd, cost_usd), \
+                 num_turns = COALESCE(:num_turns, num_turns), \
+                 duration_ms = COALESCE(:duration_ms, duration_ms), \
+                 input_tokens = COALESCE(:input_tokens, input_tokens), \
+                 output_tokens = COALESCE(:output_tokens, output_tokens), \
+                 cache_read_input_tokens = COALESCE(:cache_read_input_tokens, cache_read_input_tokens), \
+                 cache_creation_input_tokens = COALESCE(:cache_creation_input_tokens, cache_creation_input_tokens) \
+             WHERE child_run_id = :run_id",
+            named_params![
+                ":cost_usd": metrics.cost_usd,
+                ":num_turns": metrics.num_turns,
+                ":duration_ms": metrics.duration_ms,
+                ":input_tokens": metrics.input_tokens,
+                ":output_tokens": metrics.output_tokens,
+                ":cache_read_input_tokens": metrics.cache_read_input_tokens,
+                ":cache_creation_input_tokens": metrics.cache_creation_input_tokens,
+                ":run_id": run_id,
+            ],
         )
     }
 
@@ -623,5 +668,98 @@ mod tests {
         // COALESCE in SQL keeps the existing child_run_id when None is passed.
         assert_eq!(step.child_run_id.as_deref(), Some("child-run-3"));
         assert_eq!(step.step_error.as_deref(), Some("something went wrong"));
+    }
+
+    #[test]
+    fn mirror_step_metrics_writes_all_fields() {
+        let conn = test_helpers::setup_db();
+        let (_run_id, step_id) = setup(&conn);
+        let mgr = WorkflowManager::new(&conn);
+
+        mgr.mark_step_running(&step_id, WorkflowStepStatus::Running, Some("run-mirror-1"))
+            .unwrap();
+
+        mgr.mirror_step_metrics_from_run(
+            "run-mirror-1",
+            StepMetrics {
+                cost_usd: Some(1.23),
+                num_turns: Some(5),
+                duration_ms: Some(1000),
+                input_tokens: Some(100),
+                output_tokens: Some(200),
+                cache_read_input_tokens: Some(50),
+                cache_creation_input_tokens: Some(25),
+            },
+        )
+        .unwrap();
+
+        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        assert_eq!(step.cost_usd, Some(1.23));
+        assert_eq!(step.num_turns, Some(5));
+        assert_eq!(step.duration_ms, Some(1000));
+        assert_eq!(step.input_tokens, Some(100));
+        assert_eq!(step.output_tokens, Some(200));
+        assert_eq!(step.cache_read_input_tokens, Some(50));
+        assert_eq!(step.cache_creation_input_tokens, Some(25));
+    }
+
+    #[test]
+    fn mirror_step_metrics_coalesce_preserves_existing_when_none() {
+        let conn = test_helpers::setup_db();
+        let (_run_id, step_id) = setup(&conn);
+        let mgr = WorkflowManager::new(&conn);
+
+        mgr.mark_step_running(&step_id, WorkflowStepStatus::Running, Some("run-mirror-2"))
+            .unwrap();
+
+        // Write full metrics first.
+        mgr.mirror_step_metrics_from_run(
+            "run-mirror-2",
+            StepMetrics {
+                cost_usd: Some(9.99),
+                num_turns: Some(3),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Second call — only token fields, cost_usd/num_turns must be preserved.
+        mgr.mirror_step_metrics_from_run(
+            "run-mirror-2",
+            StepMetrics {
+                input_tokens: Some(42),
+                output_tokens: Some(84),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        assert_eq!(step.cost_usd, Some(9.99), "cost_usd must be preserved");
+        assert_eq!(step.num_turns, Some(3), "num_turns must be preserved");
+        assert_eq!(step.input_tokens, Some(42));
+        assert_eq!(step.output_tokens, Some(84));
+    }
+
+    #[test]
+    fn mirror_step_metrics_no_op_for_unknown_run_id() {
+        let conn = test_helpers::setup_db();
+        let (_run_id, step_id) = setup(&conn);
+        let mgr = WorkflowManager::new(&conn);
+
+        // No step has child_run_id = "does-not-exist", so the UPDATE affects 0 rows.
+        // The method must succeed (not error) in this case.
+        mgr.mirror_step_metrics_from_run(
+            "does-not-exist",
+            StepMetrics {
+                cost_usd: Some(1.0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Original step untouched.
+        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        assert!(step.cost_usd.is_none());
     }
 }

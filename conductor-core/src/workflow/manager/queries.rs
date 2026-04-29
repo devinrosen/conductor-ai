@@ -52,14 +52,10 @@ fn granularity_to_strftime_format(granularity: TimeGranularity) -> &'static str 
 }
 
 impl<'a> WorkflowManager<'a> {
-    /// Cost and token columns from the agent_runs join, used in gate step queries.
-    const AGENT_RUN_TOKEN_COLS: &'static str =
-        "ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens, ar.cost_usd, ar.num_turns, ar.duration_ms";
-
-    /// Common SELECT clause for step queries with agent run token and cost data.
-    const STEP_SELECT_WITH_TOKENS: &'static str = "SELECT {cols}, ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens, ar.cost_usd, ar.num_turns, ar.duration_ms \
-                 FROM workflow_run_steps s \
-                 LEFT JOIN agent_runs ar ON s.child_run_id = ar.id";
+    /// Common SELECT clause for step queries. Token / cost / duration columns
+    /// live on `workflow_run_steps` directly since migration 081 — no JOIN to
+    /// `agent_runs` required.
+    const STEP_SELECT_WITH_TOKENS: &'static str = "SELECT {cols} FROM workflow_run_steps s";
 
     /// Common subquery to get N most recent completed runs for a workflow.
     const N_RECENT_COMPLETED_RUNS_SUBQUERY: &'static str = "SELECT id FROM workflow_runs \
@@ -852,15 +848,13 @@ impl<'a> WorkflowManager<'a> {
         let placeholders = sql_placeholders(WorkflowRunStatus::ACTIVE.len());
         let active_strings = WorkflowRunStatus::active_strings();
         let sql = format!(
-            "SELECT {cols}, {token_cols}, r.workflow_name, r.target_label \
+            "SELECT {cols}, r.workflow_name, r.target_label \
              FROM workflow_run_steps s \
-             LEFT JOIN agent_runs ar ON ar.id = s.child_run_id \
              JOIN workflow_runs r ON r.id = s.workflow_run_id \
              WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
              AND r.status IN ({placeholders}) \
              ORDER BY s.started_at",
             cols = &*STEP_COLUMNS_WITH_PREFIX,
-            token_cols = Self::AGENT_RUN_TOKEN_COLS,
         );
         crate::db::query_collect(
             self.conn,
@@ -878,9 +872,8 @@ impl<'a> WorkflowManager<'a> {
         let active_strings = WorkflowRunStatus::active_strings();
         let status_placeholders = sql_placeholders(active_strings.len());
         let sql = format!(
-            "SELECT {cols}, {token_cols}, r.workflow_name, r.target_label, wt.branch, t.source_id AS ticket_ref, r.definition_snapshot \
+            "SELECT {cols}, r.workflow_name, r.target_label, wt.branch, t.source_id AS ticket_ref, r.definition_snapshot \
              FROM workflow_run_steps s \
-             LEFT JOIN agent_runs ar ON ar.id = s.child_run_id \
              JOIN workflow_runs r ON r.id = s.workflow_run_id \
              LEFT JOIN worktrees wt ON wt.id = r.worktree_id \
              LEFT JOIN tickets t ON t.id = r.ticket_id \
@@ -889,7 +882,6 @@ impl<'a> WorkflowManager<'a> {
              AND (r.repo_id = ? OR wt.repo_id = ?) \
              ORDER BY s.started_at",
             cols = &*STEP_COLUMNS_WITH_PREFIX,
-            token_cols = Self::AGENT_RUN_TOKEN_COLS,
         );
         let mut all_params: Vec<rusqlite::types::Value> = active_strings
             .into_iter()
@@ -2043,11 +2035,13 @@ mod tests {
         assert!(empty.is_empty(), "empty input → empty result");
     }
 
-    /// Verify that token values stored in `agent_runs` are correctly propagated into
-    /// `WorkflowRunStep` when fetched via `find_waiting_gate` (which uses
-    /// `STEP_SELECT_WITH_TOKENS` + `row_to_workflow_step`).
+    /// Verify that token values stored on `workflow_run_steps` (Path X.1) surface
+    /// on `WorkflowRunStep` when fetched via `find_waiting_gate` (which uses
+    /// `STEP_SELECT_WITH_TOKENS` + `row_to_workflow_step`). Tokens used to come
+    /// from a JOIN to `agent_runs`; after migration 081 they live directly on
+    /// the step row.
     #[test]
-    fn find_waiting_gate_propagates_agent_run_tokens() {
+    fn find_waiting_gate_propagates_step_tokens() {
         let conn = setup_db();
 
         conn.execute(
@@ -2059,21 +2053,12 @@ mod tests {
         .unwrap();
 
         conn.execute(
-            "INSERT INTO agent_runs \
-             (id, prompt, status, started_at, input_tokens, output_tokens, \
-              cache_read_input_tokens, cache_creation_input_tokens) \
-             VALUES ('ar-gate-1', 'do something', 'completed', datetime('now'), \
-                     1000, 200, 50, 75)",
-            [],
-        )
-        .unwrap();
-
-        conn.execute(
             "INSERT INTO workflow_run_steps \
              (id, workflow_run_id, step_name, role, status, position, \
-              gate_type, child_run_id) \
+              gate_type, child_run_id, \
+              input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens) \
              VALUES ('step-gate-1', 'run-gate-1', 'review', 'gate', 'waiting', 0, \
-                     'human_approval', 'ar-gate-1')",
+                     'human_approval', NULL, 1000, 200, 50, 75)",
             [],
         )
         .unwrap();

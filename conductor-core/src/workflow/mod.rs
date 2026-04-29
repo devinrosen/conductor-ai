@@ -54,7 +54,7 @@ pub use coordinator::{
 };
 pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
 pub use manager::recovery::{ReapedStaleRun, StaleWorkflowRun};
-pub use manager::{InvalidWorkflowEntry, WorkflowManager};
+pub use manager::{InvalidWorkflowEntry, StepMetrics, WorkflowManager};
 pub use output::{parse_conductor_output, ConductorOutput};
 pub use runkon_flow::traits::persistence::{
     FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,
