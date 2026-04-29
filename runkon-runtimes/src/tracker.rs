@@ -1,5 +1,5 @@
 use crate::error::RuntimeError;
-use crate::run::AgentRun;
+use crate::run::RunHandle;
 
 /// Lifecycle tracking for a spawned agent run.
 ///
@@ -10,7 +10,7 @@ pub trait RunTracker: Send + Sync {
     fn record_runtime(&self, run_id: &str, runtime_name: &str) -> Result<(), RuntimeError>;
     fn mark_cancelled(&self, run_id: &str) -> Result<(), RuntimeError>;
     fn mark_failed_if_running(&self, run_id: &str, reason: &str) -> Result<(), RuntimeError>;
-    fn get_run(&self, run_id: &str) -> Result<Option<AgentRun>, RuntimeError>;
+    fn get_run(&self, run_id: &str) -> Result<Option<RunHandle>, RuntimeError>;
 }
 
 /// Best-effort streaming progress sink for agent stdout events.

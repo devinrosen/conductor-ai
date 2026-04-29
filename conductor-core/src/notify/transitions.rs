@@ -132,7 +132,7 @@ pub fn detect_agent_terminal_transitions<'a>(
                 });
             }
         }
-        seen.insert(run.id.clone(), run.status.clone());
+        seen.insert(run.id.clone(), run.status);
     }
 
     *initialized = true;

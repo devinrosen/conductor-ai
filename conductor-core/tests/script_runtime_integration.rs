@@ -38,10 +38,7 @@ fn test_script_runtime_success() {
         .poll(&run_id, None, Duration::from_secs(5))
         .expect("poll must succeed");
 
-    assert_eq!(
-        result.status,
-        conductor_core::agent::AgentRunStatus::Completed
-    );
+    assert_eq!(result.status, runkon_runtimes::RunStatus::Completed);
     let text = result.result_text.expect("result_text must be set");
     assert!(
         text.contains("hello"),
@@ -68,10 +65,7 @@ fn test_script_runtime_captures_conductor_prompt() {
         .poll(&run_id, None, Duration::from_secs(5))
         .expect("poll must succeed");
 
-    assert_eq!(
-        result.status,
-        conductor_core::agent::AgentRunStatus::Completed
-    );
+    assert_eq!(result.status, runkon_runtimes::RunStatus::Completed);
     let text = result.result_text.expect("result_text must be set");
     assert!(
         text.contains("my-unique-prompt-string"),

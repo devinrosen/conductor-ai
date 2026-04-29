@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use runkon_runtimes::tracker::{RunEventSink, RunTracker, RuntimeEvent};
-use runkon_runtimes::{AgentRun, RuntimeError};
+use runkon_runtimes::{RunHandle, RuntimeError};
 use rusqlite::Connection;
 
 use crate::agent::types::LogResult;
@@ -64,8 +64,14 @@ impl RunTracker for SqliteHostAdapter {
         self.with_mgr(|mgr| mgr.update_run_failed_if_running(run_id, reason))
     }
 
-    fn get_run(&self, run_id: &str) -> Result<Option<AgentRun>, RuntimeError> {
-        self.with_mgr(|mgr| mgr.get_run(run_id))
+    fn get_run(&self, run_id: &str) -> Result<Option<RunHandle>, RuntimeError> {
+        // The runtime layer only needs the RunHandle subset; project the full
+        // conductor AgentRun down at the boundary so worktree_id / repo_id /
+        // prompt / plan etc. never cross into runkon-runtimes.
+        self.with_mgr(|mgr| {
+            mgr.get_run(run_id)
+                .map(|opt| opt.map(|r| r.to_run_handle()))
+        })
     }
 }
 
@@ -187,7 +193,7 @@ mod tests {
         let run = adapter.get_run(run_id).unwrap();
         assert!(run.is_some());
         let run = run.unwrap();
-        assert_eq!(run.status, runkon_runtimes::AgentRunStatus::Cancelled);
+        assert_eq!(run.status, runkon_runtimes::RunStatus::Cancelled);
     }
 
     #[test]
@@ -203,7 +209,7 @@ mod tests {
         let run = adapter.get_run(run_id).unwrap();
         assert!(run.is_some());
         let run = run.unwrap();
-        assert_eq!(run.status, runkon_runtimes::AgentRunStatus::Failed);
+        assert_eq!(run.status, runkon_runtimes::RunStatus::Failed);
     }
 
     #[test]
@@ -224,7 +230,7 @@ mod tests {
         assert!(run.is_some());
         let run = run.unwrap();
         assert_eq!(run.model, Some("sonnet".to_string()));
-        assert_eq!(run.claude_session_id, Some("sess-123".to_string()));
+        assert_eq!(run.session_id, Some("sess-123".to_string()));
     }
 
     #[test]
@@ -251,7 +257,7 @@ mod tests {
         let run = adapter.get_run(run_id).unwrap();
         assert!(run.is_some());
         let run = run.unwrap();
-        assert_eq!(run.status, runkon_runtimes::AgentRunStatus::Completed);
+        assert_eq!(run.status, runkon_runtimes::RunStatus::Completed);
         assert_eq!(run.result_text, Some("done".to_string()));
         assert_eq!(run.cost_usd, Some(0.42));
     }
@@ -273,7 +279,7 @@ mod tests {
         let run = adapter.get_run(run_id).unwrap();
         assert!(run.is_some());
         let run = run.unwrap();
-        assert_eq!(run.status, runkon_runtimes::AgentRunStatus::Failed);
+        assert_eq!(run.status, runkon_runtimes::RunStatus::Failed);
     }
 
     #[test]

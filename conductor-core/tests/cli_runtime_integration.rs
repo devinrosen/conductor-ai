@@ -108,10 +108,7 @@ fn test_cli_runtime_success() {
         .expect("poll must succeed");
 
     assert_eq!(result.runtime.as_str(), "cli");
-    assert_eq!(
-        result.status,
-        conductor_core::agent::AgentRunStatus::Completed
-    );
+    assert_eq!(result.status, runkon_runtimes::RunStatus::Completed);
     assert!(
         result.subprocess_pid.is_some(),
         "subprocess_pid must be persisted so is_alive() and orphan reaper can track the run"
@@ -147,7 +144,7 @@ fn assert_nonzero_exit_maps_to_failed(exit_code: i32, run_id_prefix: &str) {
 
     assert_eq!(
         result.status,
-        conductor_core::agent::AgentRunStatus::Failed,
+        runkon_runtimes::RunStatus::Failed,
         "exit code {exit_code} must map to a failed run"
     );
 }
@@ -215,10 +212,7 @@ exit 0"#
         .poll(&run_id, None, Duration::from_secs(10))
         .expect("stdin poll must succeed");
 
-    assert_eq!(
-        result.status,
-        conductor_core::agent::AgentRunStatus::Completed
-    );
+    assert_eq!(result.status, runkon_runtimes::RunStatus::Completed);
     let _ = f; // keep tempfile alive
 }
 
@@ -301,13 +295,14 @@ fn test_cli_runtime_cancel_kills_process_and_marks_cancelled() {
         run.subprocess_pid.is_some(),
         "subprocess_pid must be set after spawn"
     );
-    assert!(runtime.is_alive(&run), "run must be alive before cancel");
+    let handle = run.to_run_handle();
+    assert!(runtime.is_alive(&handle), "run must be alive before cancel");
 
-    runtime.cancel(&run).expect("cancel must succeed");
+    runtime.cancel(&handle).expect("cancel must succeed");
 
     // Process should be gone.
     assert!(
-        !runtime.is_alive(&run),
+        !runtime.is_alive(&handle),
         "run must not be alive after cancel"
     );
 
@@ -345,7 +340,7 @@ fn test_cli_runtime_cancel_with_no_pid_marks_cancelled() {
     let _ = runtime.spawn_validated(&dummy_req);
 
     runtime
-        .cancel(&run)
+        .cancel(&run.to_run_handle())
         .expect("cancel must succeed when subprocess_pid is None");
 
     assert_run_cancelled(&db_guard, &run_id);
@@ -403,7 +398,7 @@ fn test_cli_runtime_poll_handles_unreadable_output_file() {
 
     assert_eq!(
         result.status,
-        conductor_core::agent::AgentRunStatus::Completed,
+        runkon_runtimes::RunStatus::Completed,
         "run must be Completed when process exits 0 even if output file is unreadable"
     );
 }
@@ -436,7 +431,7 @@ fn test_cli_runtime_poll_handles_unreadable_output_file_on_error_exit() {
 
     assert_eq!(
         result.status,
-        conductor_core::agent::AgentRunStatus::Failed,
+        runkon_runtimes::RunStatus::Failed,
         "run must be Failed when process exits 1 even if output file is unreadable"
     );
     assert!(

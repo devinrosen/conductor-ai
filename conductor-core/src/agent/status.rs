@@ -1,7 +1,117 @@
 use serde::{Deserialize, Serialize};
 
-// Re-export moved types from runkon-runtimes
-pub use runkon_runtimes::{AgentRunStatus, StepStatus};
+/// Lifecycle status of a conductor agent run.
+///
+/// Defined natively in conductor-core (not re-exported from runkon-runtimes)
+/// so that workflow-engine states like `WaitingForFeedback` — which no
+/// runtime in `runkon-runtimes` ever emits — stay out of the portable crate.
+/// Convert to the runtime-layer [`runkon_runtimes::RunStatus`] at the
+/// boundary; `WaitingForFeedback` collapses to `RunStatus::Running` since
+/// the runtime sees a paused-for-feedback run as "logically still active,
+/// not yet terminal".
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRunStatus {
+    Running,
+    WaitingForFeedback,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl std::fmt::Display for AgentRunStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Running => "running",
+            Self::WaitingForFeedback => "waiting_for_feedback",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl std::str::FromStr for AgentRunStatus {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "running" => Ok(Self::Running),
+            "waiting_for_feedback" => Ok(Self::WaitingForFeedback),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
+            _ => Err(format!("unknown AgentRunStatus: {s}")),
+        }
+    }
+}
+
+crate::impl_sql_enum!(AgentRunStatus);
+
+impl From<AgentRunStatus> for runkon_runtimes::RunStatus {
+    fn from(s: AgentRunStatus) -> Self {
+        match s {
+            // Runtime layer doesn't model "waiting for feedback" — those runs
+            // appear "running" from its perspective; the actual subprocess has
+            // exited but the conductor-side row hasn't reached a terminal state.
+            AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback => Self::Running,
+            AgentRunStatus::Completed => Self::Completed,
+            AgentRunStatus::Failed => Self::Failed,
+            AgentRunStatus::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
+impl From<runkon_runtimes::RunStatus> for AgentRunStatus {
+    fn from(s: runkon_runtimes::RunStatus) -> Self {
+        match s {
+            runkon_runtimes::RunStatus::Running => Self::Running,
+            runkon_runtimes::RunStatus::Completed => Self::Completed,
+            runkon_runtimes::RunStatus::Failed => Self::Failed,
+            runkon_runtimes::RunStatus::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
+/// Status of a single plan step in conductor's two-phase agent execution model.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StepStatus {
+    #[default]
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+}
+
+impl std::fmt::Display for StepStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Pending => "pending",
+            Self::InProgress => "in_progress",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl std::str::FromStr for StepStatus {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(Self::Pending),
+            "in_progress" => Ok(Self::InProgress),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            _ => Err(format!("unknown StepStatus: {s}")),
+        }
+    }
+}
+
+crate::impl_sql_enum!(StepStatus);
 
 /// Default error message used when the agent reports an error without a message.
 pub const DEFAULT_AGENT_ERROR_MSG: &str = "Claude reported an error";
@@ -149,6 +259,80 @@ crate::impl_sql_enum!(FeedbackType);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_run_status_from_str_roundtrips_each_variant() {
+        for status in [
+            AgentRunStatus::Running,
+            AgentRunStatus::WaitingForFeedback,
+            AgentRunStatus::Completed,
+            AgentRunStatus::Failed,
+            AgentRunStatus::Cancelled,
+        ] {
+            let s = status.to_string();
+            let parsed: AgentRunStatus = s.parse().expect("known variant must parse");
+            assert_eq!(parsed, status, "{s:?} round-trip");
+        }
+    }
+
+    #[test]
+    fn agent_run_status_from_str_rejects_unknown() {
+        let err = "not-a-real-status".parse::<AgentRunStatus>().unwrap_err();
+        assert!(
+            err.contains("not-a-real-status"),
+            "error must echo the bad input; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn step_status_from_str_roundtrips_each_variant() {
+        for status in [
+            StepStatus::Pending,
+            StepStatus::InProgress,
+            StepStatus::Completed,
+            StepStatus::Failed,
+        ] {
+            let s = status.to_string();
+            let parsed: StepStatus = s.parse().expect("known variant must parse");
+            assert_eq!(parsed, status, "{s:?} round-trip");
+        }
+    }
+
+    #[test]
+    fn step_status_from_str_rejects_unknown() {
+        let err = "wibble".parse::<StepStatus>().unwrap_err();
+        assert!(
+            err.contains("wibble"),
+            "error must echo the bad input; got {err:?}"
+        );
+    }
+
+    /// `From<AgentRunStatus> for RunStatus` is exercised end-to-end by the
+    /// `to_run_handle_status_mapping_for_terminal_states` test in
+    /// `agent::types::tests`. This test guards the reverse direction
+    /// (`From<RunStatus> for AgentRunStatus`) for callers that need to map a
+    /// portable `RunHandle` status back into the conductor enum.
+    #[test]
+    fn from_run_status_maps_each_variant() {
+        for (input, expected) in [
+            (runkon_runtimes::RunStatus::Running, AgentRunStatus::Running),
+            (
+                runkon_runtimes::RunStatus::Completed,
+                AgentRunStatus::Completed,
+            ),
+            (runkon_runtimes::RunStatus::Failed, AgentRunStatus::Failed),
+            (
+                runkon_runtimes::RunStatus::Cancelled,
+                AgentRunStatus::Cancelled,
+            ),
+        ] {
+            let got: AgentRunStatus = input.into();
+            assert_eq!(
+                got, expected,
+                "RunStatus::{input:?} must map to AgentRunStatus::{expected:?}"
+            );
+        }
+    }
 
     #[test]
     fn parse_structured_plain_text() {

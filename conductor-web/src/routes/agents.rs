@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use conductor_core::agent::{
     parse_agent_log, AgentCreatedIssue, AgentEvent, AgentManager, AgentRun, AgentRunEvent,
-    AgentRunExt, AgentRunStatus, FeedbackRequest, RunTreeTotals, TicketAgentTotals,
+    AgentRunStatus, FeedbackRequest, RunTreeTotals, TicketAgentTotals,
 };
 use conductor_core::error::ConductorError;
 use conductor_core::repo::RepoManager;
