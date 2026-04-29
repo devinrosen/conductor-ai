@@ -12,7 +12,7 @@ use crate::agent_def::AgentDef;
 use crate::config::RuntimeConfig;
 use crate::error::{Result, RuntimeError};
 use crate::permission::PermissionMode;
-use crate::run::AgentRun;
+use crate::run::RunHandle;
 use crate::tracker::{RunEventSink, RunTracker};
 
 /// Sealed capability token for `AgentRuntime::spawn_impl`.
@@ -42,13 +42,13 @@ pub trait AgentRuntime {
         run_id: &str,
         shutdown: Option<&Arc<AtomicBool>>,
         step_timeout: std::time::Duration,
-    ) -> std::result::Result<AgentRun, PollError>;
+    ) -> std::result::Result<RunHandle, PollError>;
 
     /// Returns true if the agent process / session represented by `run` is still live.
-    fn is_alive(&self, run: &AgentRun) -> bool;
+    fn is_alive(&self, run: &RunHandle) -> bool;
 
     /// Forcibly cancel the agent represented by `run`.
-    fn cancel(&self, run: &AgentRun) -> Result<()>;
+    fn cancel(&self, run: &RunHandle) -> Result<()>;
 }
 
 /// Per-invocation parameters passed to `AgentRuntime::spawn`.
@@ -201,7 +201,7 @@ mod tests {
         fn mark_failed_if_running(&self, _run_id: &str, _reason: &str) -> Result<()> {
             Ok(())
         }
-        fn get_run(&self, _run_id: &str) -> Result<Option<AgentRun>> {
+        fn get_run(&self, _run_id: &str) -> Result<Option<RunHandle>> {
             Ok(None)
         }
     }
@@ -325,34 +325,27 @@ pub(crate) fn record_pid_and_runtime(
 
 #[cfg(test)]
 pub mod test_util {
-    use crate::run::{AgentRun, AgentRunStatus};
+    use crate::run::{RunHandle, RunStatus};
 
-    pub fn make_test_run(runtime: &str, subprocess_pid: Option<i64>) -> AgentRun {
-        AgentRun {
+    pub fn make_test_run(runtime: &str, subprocess_pid: Option<i64>) -> RunHandle {
+        RunHandle {
             id: "test-run".to_string(),
-            worktree_id: None,
-            repo_id: None,
-            claude_session_id: None,
-            prompt: "p".to_string(),
-            status: AgentRunStatus::Running,
+            status: RunStatus::Running,
+            subprocess_pid,
+            runtime: runtime.to_string(),
+            session_id: None,
             result_text: None,
-            cost_usd: None,
-            num_turns: None,
-            duration_ms: None,
             started_at: "2024-01-01T00:00:00Z".to_string(),
             ended_at: None,
             log_file: None,
             model: None,
-            plan: None,
-            parent_run_id: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
             input_tokens: None,
             output_tokens: None,
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
-            bot_name: None,
-            conversation_id: None,
-            subprocess_pid,
-            runtime: runtime.to_string(),
         }
     }
 }

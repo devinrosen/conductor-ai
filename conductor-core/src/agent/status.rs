@@ -1,7 +1,149 @@
 use serde::{Deserialize, Serialize};
 
-// Re-export moved types from runkon-runtimes
-pub use runkon_runtimes::{AgentRunStatus, StepStatus};
+/// Lifecycle status of a conductor agent run.
+///
+/// Defined natively in conductor-core (not re-exported from runkon-runtimes)
+/// so that workflow-engine states like `WaitingForFeedback` — which no
+/// runtime in `runkon-runtimes` ever emits — stay out of the portable crate.
+/// Convert to the runtime-layer [`runkon_runtimes::RunStatus`] at the
+/// boundary; `WaitingForFeedback` collapses to `RunStatus::Running` since
+/// the runtime sees a paused-for-feedback run as "logically still active,
+/// not yet terminal".
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRunStatus {
+    Running,
+    WaitingForFeedback,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl std::fmt::Display for AgentRunStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Running => "running",
+            Self::WaitingForFeedback => "waiting_for_feedback",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl std::str::FromStr for AgentRunStatus {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "running" => Ok(Self::Running),
+            "waiting_for_feedback" => Ok(Self::WaitingForFeedback),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
+            _ => Err(format!("unknown AgentRunStatus: {s}")),
+        }
+    }
+}
+
+impl rusqlite::types::ToSql for AgentRunStatus {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
+    }
+}
+
+impl rusqlite::types::FromSql for AgentRunStatus {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let s = String::column_result(value)?;
+        s.parse().map_err(|e: String| {
+            rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e,
+            )))
+        })
+    }
+}
+
+impl From<AgentRunStatus> for runkon_runtimes::RunStatus {
+    fn from(s: AgentRunStatus) -> Self {
+        match s {
+            // Runtime layer doesn't model "waiting for feedback" — those runs
+            // appear "running" from its perspective; the actual subprocess has
+            // exited but the conductor-side row hasn't reached a terminal state.
+            AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback => Self::Running,
+            AgentRunStatus::Completed => Self::Completed,
+            AgentRunStatus::Failed => Self::Failed,
+            AgentRunStatus::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
+impl From<runkon_runtimes::RunStatus> for AgentRunStatus {
+    fn from(s: runkon_runtimes::RunStatus) -> Self {
+        match s {
+            runkon_runtimes::RunStatus::Running => Self::Running,
+            runkon_runtimes::RunStatus::Completed => Self::Completed,
+            runkon_runtimes::RunStatus::Failed => Self::Failed,
+            runkon_runtimes::RunStatus::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
+/// Status of a single plan step in conductor's two-phase agent execution model.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StepStatus {
+    #[default]
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+}
+
+impl std::fmt::Display for StepStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Pending => "pending",
+            Self::InProgress => "in_progress",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl std::str::FromStr for StepStatus {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(Self::Pending),
+            "in_progress" => Ok(Self::InProgress),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            _ => Err(format!("unknown StepStatus: {s}")),
+        }
+    }
+}
+
+impl rusqlite::types::ToSql for StepStatus {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
+    }
+}
+
+impl rusqlite::types::FromSql for StepStatus {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let s = String::column_result(value)?;
+        s.parse().map_err(|e: String| {
+            rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e,
+            )))
+        })
+    }
+}
 
 /// Default error message used when the agent reports an error without a message.
 pub const DEFAULT_AGENT_ERROR_MSG: &str = "Claude reported an error";

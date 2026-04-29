@@ -16,6 +16,6 @@ pub use agent_def::{AgentDef, AgentRole};
 pub use config::RuntimeConfig;
 pub use error::{Result, RuntimeError};
 pub use permission::PermissionMode;
-pub use run::{AgentRun, AgentRunStatus, PlanStep, StepStatus};
+pub use run::{RunHandle, RunStatus};
 pub use runtime::{AgentRuntime, PollError, RuntimeOptions, RuntimeRequest};
 pub use tracker::{NoopEventSink, RunEventSink, RunTracker, RuntimeEvent};

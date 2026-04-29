@@ -5,8 +5,7 @@ use std::time::Duration;
 
 use crate::config::RuntimeConfig;
 use crate::error::{Result, RuntimeError};
-use crate::run::AgentRun;
-use crate::run::AgentRunStatus;
+use crate::run::{RunHandle, RunStatus};
 use crate::tracker::{RunEventSink, RunTracker, RuntimeEvent};
 
 use super::{AgentRuntime, PollError, RuntimeRequest};
@@ -88,7 +87,7 @@ impl AgentRuntime for ScriptRuntime {
         run_id: &str,
         shutdown: Option<&Arc<AtomicBool>>,
         step_timeout: Duration,
-    ) -> std::result::Result<AgentRun, PollError> {
+    ) -> std::result::Result<RunHandle, PollError> {
         let mut state = self
             .state
             .lock()
@@ -208,12 +207,12 @@ impl AgentRuntime for ScriptRuntime {
                         })?;
 
                     return match run.status {
-                        AgentRunStatus::Failed => Err(PollError::Failed(
+                        RunStatus::Failed => Err(PollError::Failed(
                             run.result_text
                                 .clone()
                                 .unwrap_or_else(|| "script failed".to_string()),
                         )),
-                        AgentRunStatus::Completed => Ok(run),
+                        RunStatus::Completed => Ok(run),
                         _ => Err(PollError::NoResult),
                     };
                 }
@@ -231,11 +230,11 @@ impl AgentRuntime for ScriptRuntime {
         }
     }
 
-    fn is_alive(&self, _run: &AgentRun) -> bool {
+    fn is_alive(&self, _run: &RunHandle) -> bool {
         false
     }
 
-    fn cancel(&self, run: &AgentRun) -> Result<()> {
+    fn cancel(&self, run: &RunHandle) -> Result<()> {
         if let Some(mut state) = self.state.lock().unwrap_or_else(|e| e.into_inner()).take() {
             let _ = state.child.kill();
         }

@@ -1,22 +1,26 @@
 use serde::{Deserialize, Serialize};
 
-/// Status of an agent run.
+/// Lifecycle status of a runtime-spawned agent.
+///
+/// Vendor-neutral: only the four states that any runtime in this crate
+/// (`ClaudeRuntime`, `CliRuntime`, `ScriptRuntime`) needs to emit. Host
+/// applications layering richer states on top (conductor's
+/// `WaitingForFeedback` for paused-for-human-input runs, etc.) keep them in
+/// their own enum and convert at the boundary.
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AgentRunStatus {
+pub enum RunStatus {
     Running,
-    WaitingForFeedback,
     Completed,
     Failed,
     Cancelled,
 }
 
-impl std::fmt::Display for AgentRunStatus {
+impl std::fmt::Display for RunStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Self::Running => "running",
-            Self::WaitingForFeedback => "waiting_for_feedback",
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
@@ -25,176 +29,78 @@ impl std::fmt::Display for AgentRunStatus {
     }
 }
 
-impl std::str::FromStr for AgentRunStatus {
+impl std::str::FromStr for RunStatus {
     type Err = String;
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "running" => Ok(Self::Running),
-            "waiting_for_feedback" => Ok(Self::WaitingForFeedback),
             "completed" => Ok(Self::Completed),
             "failed" => Ok(Self::Failed),
             "cancelled" => Ok(Self::Cancelled),
-            _ => Err(format!("unknown AgentRunStatus: {s}")),
+            _ => Err(format!("unknown RunStatus: {s}")),
         }
     }
-}
-
-#[cfg(feature = "rusqlite")]
-macro_rules! impl_rusqlite_string_enum {
-    ($ty:ty) => {
-        impl rusqlite::types::ToSql for $ty {
-            fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-                Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
-            }
-        }
-
-        impl rusqlite::types::FromSql for $ty {
-            fn column_result(
-                value: rusqlite::types::ValueRef<'_>,
-            ) -> rusqlite::types::FromSqlResult<Self> {
-                let s = String::column_result(value)?;
-                s.parse().map_err(|e: String| {
-                    rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        e,
-                    )))
-                })
-            }
-        }
-    };
 }
 
 #[cfg(feature = "rusqlite")]
 mod rusqlite_impl {
-    use super::AgentRunStatus;
-    impl_rusqlite_string_enum!(AgentRunStatus);
-}
+    use super::RunStatus;
 
-/// Status of a single plan step.
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum StepStatus {
-    #[default]
-    Pending,
-    InProgress,
-    Completed,
-    Failed,
-}
-
-impl std::fmt::Display for StepStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Self::Pending => "pending",
-            Self::InProgress => "in_progress",
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-        };
-        write!(f, "{s}")
+    impl rusqlite::types::ToSql for RunStatus {
+        fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+            Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
+        }
     }
-}
 
-impl std::str::FromStr for StepStatus {
-    type Err = String;
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "pending" => Ok(Self::Pending),
-            "in_progress" => Ok(Self::InProgress),
-            "completed" => Ok(Self::Completed),
-            "failed" => Ok(Self::Failed),
-            _ => Err(format!("unknown StepStatus: {s}")),
+    impl rusqlite::types::FromSql for RunStatus {
+        fn column_result(
+            value: rusqlite::types::ValueRef<'_>,
+        ) -> rusqlite::types::FromSqlResult<Self> {
+            let s = String::column_result(value)?;
+            s.parse().map_err(|e: String| {
+                rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    e,
+                )))
+            })
         }
     }
 }
 
-#[cfg(feature = "rusqlite")]
-mod rusqlite_impl_step {
-    use super::StepStatus;
-    impl_rusqlite_string_enum!(StepStatus);
-}
-
-/// A single step in an agent's two-phase execution plan.
+/// Handle to a runtime-spawned agent run, carrying only the fields any
+/// runtime in this crate (or a host like conductor) actually reads through
+/// the [`AgentRuntime`](crate::runtime::AgentRuntime) trait.
+///
+/// Richer host-domain records (e.g. conductor's `AgentRun` with
+/// `worktree_id`, `repo_id`, `prompt`, plan steps, etc.) live in the host
+/// crate and are converted to / from `RunHandle` at the boundary by the
+/// [`RunTracker`](crate::tracker::RunTracker) implementation.
+///
+/// `session_id` is the host-supplied resume identifier (e.g. Claude's
+/// session id) — the field name is generic so non-Claude runtimes can store
+/// their own resumable identifier here without a vendor-named field
+/// surfacing in this crate.
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlanStep {
-    /// ULID primary key.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    pub description: String,
-    /// Backward-compat flag derived from `status == StepStatus::Completed`.
-    #[serde(default)]
-    pub done: bool,
-    #[serde(default)]
-    pub status: StepStatus,
-    /// Ordering within the run's plan (0-based).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub position: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub started_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completed_at: Option<String>,
-}
-
-impl Default for PlanStep {
-    fn default() -> Self {
-        Self {
-            id: None,
-            description: String::new(),
-            done: false,
-            status: StepStatus::Pending,
-            position: None,
-            started_at: None,
-            completed_at: None,
-        }
-    }
-}
-
-/// A single agent run.
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentRun {
+pub struct RunHandle {
     pub id: String,
-    pub worktree_id: Option<String>,
-    pub repo_id: Option<String>,
-    pub claude_session_id: Option<String>,
-    pub prompt: String,
-    pub status: AgentRunStatus,
+    pub status: RunStatus,
+    pub subprocess_pid: Option<i64>,
+    /// Name of the runtime that spawned this run (`"claude"`, `"cli"`,
+    /// `"script"`, or a host-defined value).
+    pub runtime: String,
+    /// Resumable session id captured by the runtime (vendor-neutral name).
+    pub session_id: Option<String>,
     pub result_text: Option<String>,
-    pub cost_usd: Option<f64>,
-    pub num_turns: Option<i64>,
-    pub duration_ms: Option<i64>,
     pub started_at: String,
     pub ended_at: Option<String>,
     pub log_file: Option<String>,
     pub model: Option<String>,
-    pub plan: Option<Vec<PlanStep>>,
-    pub parent_run_id: Option<String>,
+    pub cost_usd: Option<f64>,
+    pub num_turns: Option<i64>,
+    pub duration_ms: Option<i64>,
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub cache_read_input_tokens: Option<i64>,
     pub cache_creation_input_tokens: Option<i64>,
-    pub bot_name: Option<String>,
-    pub conversation_id: Option<String>,
-    pub subprocess_pid: Option<i64>,
-    #[serde(default = "default_runtime_field")]
-    pub runtime: String,
-}
-
-fn default_runtime_field() -> String {
-    "claude".to_string()
-}
-
-impl AgentRun {
-    /// Returns true if this run is currently active (running or waiting for feedback).
-    pub fn is_active(&self) -> bool {
-        matches!(
-            self.status,
-            AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback
-        )
-    }
-
-    /// Returns true if this run is waiting for human feedback.
-    pub fn is_waiting_for_feedback(&self) -> bool {
-        self.status == AgentRunStatus::WaitingForFeedback
-    }
 }

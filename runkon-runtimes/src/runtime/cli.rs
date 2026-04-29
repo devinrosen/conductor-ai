@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::config::RuntimeConfig;
 use crate::error::{Result, RuntimeError};
 use crate::process_utils;
-use crate::run::AgentRun;
+use crate::run::RunHandle;
 use crate::tracker::{RunEventSink, RunTracker, RuntimeEvent};
 
 use super::{AgentRuntime, PollError, RuntimeRequest};
@@ -140,7 +140,7 @@ impl AgentRuntime for CliRuntime {
         run_id: &str,
         shutdown: Option<&Arc<AtomicBool>>,
         step_timeout: Duration,
-    ) -> std::result::Result<AgentRun, PollError> {
+    ) -> std::result::Result<RunHandle, PollError> {
         let mut state = self
             .state
             .lock()
@@ -271,7 +271,7 @@ impl AgentRuntime for CliRuntime {
         }
     }
 
-    fn is_alive(&self, run: &AgentRun) -> bool {
+    fn is_alive(&self, run: &RunHandle) -> bool {
         #[cfg(unix)]
         if let Some(pid) = run.subprocess_pid {
             return process_utils::pid_is_alive(pid as u32);
@@ -280,7 +280,7 @@ impl AgentRuntime for CliRuntime {
         false
     }
 
-    fn cancel(&self, run: &AgentRun) -> Result<()> {
+    fn cancel(&self, run: &RunHandle) -> Result<()> {
         let child = self
             .state
             .lock()

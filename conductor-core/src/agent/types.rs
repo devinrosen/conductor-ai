@@ -2,11 +2,132 @@ use std::path::{Component, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::status::{FeedbackStatus, FeedbackType};
+use super::status::{AgentRunStatus, FeedbackStatus, FeedbackType, StepStatus};
 use crate::error::Result;
 
-// Re-export moved types from runkon-runtimes
-pub use runkon_runtimes::{AgentRun, PlanStep};
+/// A single step in an agent's two-phase execution plan.
+///
+/// Defined natively in conductor-core (not re-exported from runkon-runtimes)
+/// since plan-step semantics are conductor's two-phase agent execution
+/// model, not a portable runtime concept.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanStep {
+    /// ULID primary key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub description: String,
+    /// Backward-compat flag derived from `status == StepStatus::Completed`.
+    #[serde(default)]
+    pub done: bool,
+    #[serde(default)]
+    pub status: StepStatus,
+    /// Ordering within the run's plan (0-based).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+}
+
+impl Default for PlanStep {
+    fn default() -> Self {
+        Self {
+            id: None,
+            description: String::new(),
+            done: false,
+            status: StepStatus::Pending,
+            position: None,
+            started_at: None,
+            completed_at: None,
+        }
+    }
+}
+
+/// A single agent run as conductor persists it.
+///
+/// Defined natively here (not re-exported from runkon-runtimes) so that
+/// conductor-domain fields (`worktree_id`, `repo_id`, `conversation_id`,
+/// `parent_run_id`, `bot_name`, `plan`) and the conductor-only
+/// `WaitingForFeedback` status stay out of the portable crate. The runtime
+/// layer sees a [`runkon_runtimes::RunHandle`] subset; conversion happens at
+/// the boundary in [`SqliteHostAdapter`](crate::runtime::adapter::SqliteHostAdapter).
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentRun {
+    pub id: String,
+    pub worktree_id: Option<String>,
+    pub repo_id: Option<String>,
+    pub claude_session_id: Option<String>,
+    pub prompt: String,
+    pub status: AgentRunStatus,
+    pub result_text: Option<String>,
+    pub cost_usd: Option<f64>,
+    pub num_turns: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub log_file: Option<String>,
+    pub model: Option<String>,
+    pub plan: Option<Vec<PlanStep>>,
+    pub parent_run_id: Option<String>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cache_read_input_tokens: Option<i64>,
+    pub cache_creation_input_tokens: Option<i64>,
+    pub bot_name: Option<String>,
+    pub conversation_id: Option<String>,
+    pub subprocess_pid: Option<i64>,
+    #[serde(default = "default_runtime_field")]
+    pub runtime: String,
+}
+
+fn default_runtime_field() -> String {
+    "claude".to_string()
+}
+
+impl AgentRun {
+    /// Returns true if this run is currently active (running or waiting for feedback).
+    pub fn is_active(&self) -> bool {
+        matches!(
+            self.status,
+            AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback
+        )
+    }
+
+    /// Returns true if this run is waiting for human feedback.
+    pub fn is_waiting_for_feedback(&self) -> bool {
+        self.status == AgentRunStatus::WaitingForFeedback
+    }
+
+    /// Project this conductor record into the portable [`runkon_runtimes::RunHandle`]
+    /// subset consumed by the runtime layer (`AgentRuntime` / `RunTracker` traits).
+    /// Drops conductor-domain fields (`worktree_id`, `repo_id`, `prompt`, `plan`,
+    /// `parent_run_id`, `bot_name`, `conversation_id`) and collapses
+    /// `WaitingForFeedback` to `Running`.
+    pub fn to_run_handle(&self) -> runkon_runtimes::RunHandle {
+        runkon_runtimes::RunHandle {
+            id: self.id.clone(),
+            status: self.status.into(),
+            subprocess_pid: self.subprocess_pid,
+            runtime: self.runtime.clone(),
+            session_id: self.claude_session_id.clone(),
+            result_text: self.result_text.clone(),
+            started_at: self.started_at.clone(),
+            ended_at: self.ended_at.clone(),
+            log_file: self.log_file.clone(),
+            model: self.model.clone(),
+            cost_usd: self.cost_usd,
+            num_turns: self.num_turns,
+            duration_ms: self.duration_ms,
+            input_tokens: self.input_tokens,
+            output_tokens: self.output_tokens,
+            cache_read_input_tokens: self.cache_read_input_tokens,
+            cache_creation_input_tokens: self.cache_creation_input_tokens,
+        }
+    }
+}
 
 /// Resolves `..` and `.` components without touching the filesystem so that
 /// `starts_with` checks cannot be bypassed by paths like
@@ -65,7 +186,6 @@ impl AgentRunExt for AgentRun {
     }
 
     fn needs_resume(&self) -> bool {
-        use runkon_runtimes::AgentRunStatus;
         matches!(
             self.status,
             AgentRunStatus::Failed | AgentRunStatus::Cancelled

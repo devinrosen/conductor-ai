@@ -8,7 +8,7 @@ use crate::error::{Result, RuntimeError};
 use crate::headless::{DrainOutcome, SpawnHeadlessParams};
 use crate::permission::PermissionMode;
 use crate::process_utils;
-use crate::run::AgentRun;
+use crate::run::RunHandle;
 use crate::tracker::{RunEventSink, RunTracker};
 
 use super::{AgentRuntime, PollError, RuntimeRequest};
@@ -100,7 +100,7 @@ impl AgentRuntime for ClaudeRuntime {
         run_id: &str,
         shutdown: Option<&Arc<AtomicBool>>,
         step_timeout: Duration,
-    ) -> std::result::Result<AgentRun, PollError> {
+    ) -> std::result::Result<RunHandle, PollError> {
         #[cfg(unix)]
         {
             poll_unix(self, run_id, shutdown, step_timeout)
@@ -114,7 +114,7 @@ impl AgentRuntime for ClaudeRuntime {
         }
     }
 
-    fn is_alive(&self, run: &AgentRun) -> bool {
+    fn is_alive(&self, run: &RunHandle) -> bool {
         #[cfg(unix)]
         if let Some(pid) = run.subprocess_pid {
             return process_utils::pid_is_alive(pid as u32);
@@ -123,7 +123,7 @@ impl AgentRuntime for ClaudeRuntime {
         false
     }
 
-    fn cancel(&self, run: &AgentRun) -> Result<()> {
+    fn cancel(&self, run: &RunHandle) -> Result<()> {
         #[cfg(unix)]
         {
             if let Some(h) = self.handle.lock().unwrap_or_else(|e| e.into_inner()).take() {
@@ -145,7 +145,7 @@ fn poll_unix(
     run_id: &str,
     shutdown: Option<&Arc<AtomicBool>>,
     step_timeout: Duration,
-) -> std::result::Result<AgentRun, PollError> {
+) -> std::result::Result<RunHandle, PollError> {
     let handle = rt
         .handle
         .lock()
@@ -313,7 +313,7 @@ mod tests {
         fn mark_failed_if_running(&self, _run_id: &str, _reason: &str) -> Result<()> {
             Ok(())
         }
-        fn get_run(&self, _run_id: &str) -> Result<Option<AgentRun>> {
+        fn get_run(&self, _run_id: &str) -> Result<Option<RunHandle>> {
             Ok(None)
         }
     }

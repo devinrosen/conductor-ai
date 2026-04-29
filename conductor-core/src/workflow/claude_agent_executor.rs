@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::agent::AgentRunStatus;
 use crate::config::{agent_log_path, Config};
 use crate::error::{ConductorError, Result};
 use crate::runtime::adapter::SqliteHostAdapter;
@@ -8,6 +7,7 @@ use crate::runtime::{PollError, RuntimeOptions};
 use crate::workflow::action_executor::{
     ActionExecutor, ActionOutput, ActionParams, ExecutionContext,
 };
+use runkon_runtimes::RunStatus;
 
 /// Wraps `AgentRuntime` dispatch behind the `ActionExecutor` trait.
 ///
@@ -95,7 +95,7 @@ impl ActionExecutor for ClaudeAgentExecutor {
             }
         };
 
-        let succeeded = completed.status == AgentRunStatus::Completed;
+        let succeeded = completed.status == RunStatus::Completed;
 
         let (markers, context, structured_output) =
             crate::workflow::output::interpret_agent_output(
