@@ -201,8 +201,8 @@ impl App {
         // Determine resume state: either a normal resume (completed run with session_id)
         // or a needs_resume (failed/cancelled run with incomplete plan steps)
         let (resume_session_id, needs_resume) = match latest_run {
-            Some(run) if run.needs_resume() => (run.claude_session_id.clone(), true),
-            Some(run) => (run.claude_session_id.clone(), false),
+            Some(run) if run.needs_resume() => (run.session_id.clone(), true),
+            Some(run) => (run.session_id.clone(), false),
             None => (None, false),
         };
 
@@ -647,7 +647,7 @@ impl App {
             .data
             .latest_repo_agent_runs
             .get(&repo.id)
-            .and_then(|run| run.claude_session_id.clone());
+            .and_then(|run| run.session_id.clone());
 
         let title = if resume_session_id.is_some() {
             "Repo Agent (Resume)".to_string()

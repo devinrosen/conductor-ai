@@ -869,7 +869,7 @@ mod tests {
             id: id.to_string(),
             worktree_id: None,
             repo_id: None,
-            claude_session_id: None,
+            session_id: None,
             prompt: String::new(),
             status: AgentRunStatus::Running,
             result_text: None,

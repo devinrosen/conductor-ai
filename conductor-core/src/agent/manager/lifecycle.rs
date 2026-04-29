@@ -106,7 +106,7 @@ impl<'a> AgentManager<'a> {
             id: id.clone(),
             worktree_id: worktree_id.map(String::from),
             repo_id: repo_id.map(String::from),
-            claude_session_id: None,
+            session_id: None,
             prompt: prompt.to_string(),
             status: AgentRunStatus::Running,
             result_text: None,
@@ -170,7 +170,7 @@ impl<'a> AgentManager<'a> {
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE agent_runs SET status = 'completed', claude_session_id = :session_id, \
+            "UPDATE agent_runs SET status = 'completed', session_id = :session_id, \
              result_text = :result_text, cost_usd = :cost_usd, num_turns = :num_turns, \
              duration_ms = :duration_ms, ended_at = :ended_at, \
              input_tokens = :input_tokens, output_tokens = :output_tokens, \
@@ -208,7 +208,7 @@ impl<'a> AgentManager<'a> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
             "UPDATE agent_runs SET status = 'failed', result_text = :error, ended_at = :ended_at, \
-             claude_session_id = COALESCE(:session_id, claude_session_id) \
+             session_id = COALESCE(:session_id, session_id) \
              WHERE id = :id",
             named_params! {
                 ":error": error,
@@ -258,7 +258,7 @@ impl<'a> AgentManager<'a> {
     ///
     /// This is the authoritative write for the headless drain path. It persists
     /// `cost_usd`, `num_turns`, `duration_ms`, all token counts, and optionally
-    /// `claude_session_id` (via COALESCE so an eagerly-stored session_id is not
+    /// `session_id` (via COALESCE so an eagerly-stored session_id is not
     /// clobbered). The `AND status = 'running'` guard prevents double-writes if
     /// the subprocess has already finalized the row.
     pub fn update_run_completed_if_running_full(
@@ -271,7 +271,7 @@ impl<'a> AgentManager<'a> {
         self.conn.execute(
             "UPDATE agent_runs \
              SET status = 'completed', result_text = :result_text, ended_at = :ended_at, \
-                 claude_session_id = COALESCE(:session_id, claude_session_id), \
+                 session_id = COALESCE(:session_id, session_id), \
                  cost_usd = COALESCE(:cost_usd, cost_usd), \
                  num_turns = COALESCE(:num_turns, num_turns), \
                  duration_ms = COALESCE(:duration_ms, duration_ms), \
@@ -349,7 +349,7 @@ impl<'a> AgentManager<'a> {
     /// This enables resume even if the run fails or is cancelled.
     pub fn update_run_session_id(&self, run_id: &str, session_id: &str) -> Result<()> {
         self.conn.execute(
-            "UPDATE agent_runs SET claude_session_id = :session_id WHERE id = :id",
+            "UPDATE agent_runs SET session_id = :session_id WHERE id = :id",
             named_params! {
                 ":session_id": session_id,
                 ":id": run_id,
@@ -438,7 +438,7 @@ impl<'a> AgentManager<'a> {
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE agent_runs \
-             SET model = COALESCE(:model, model), claude_session_id = COALESCE(:session_id, claude_session_id) \
+             SET model = COALESCE(:model, model), session_id = COALESCE(:session_id, session_id) \
              WHERE id = :id",
             named_params! {
                 ":model": model,
@@ -571,7 +571,7 @@ mod tests {
 
         let latest = mgr.latest_for_worktree("w1").unwrap().unwrap();
         assert_eq!(latest.status, AgentRunStatus::Completed);
-        assert_eq!(latest.claude_session_id.as_deref(), Some("sess-123"));
+        assert_eq!(latest.session_id.as_deref(), Some("sess-123"));
         assert_eq!(latest.cost_usd, Some(0.05));
     }
 
@@ -632,7 +632,7 @@ mod tests {
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.status, AgentRunStatus::Failed);
         assert_eq!(fetched.result_text.as_deref(), Some("Context exhausted"));
-        assert_eq!(fetched.claude_session_id.as_deref(), Some("sess-456"));
+        assert_eq!(fetched.session_id.as_deref(), Some("sess-456"));
     }
 
     #[test]
@@ -641,12 +641,12 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         let run = mgr.create_run(Some("w1"), "Fix the bug", None).unwrap();
-        assert!(run.claude_session_id.is_none());
+        assert!(run.session_id.is_none());
 
         mgr.update_run_session_id(&run.id, "sess-early").unwrap();
 
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
-        assert_eq!(fetched.claude_session_id.as_deref(), Some("sess-early"));
+        assert_eq!(fetched.session_id.as_deref(), Some("sess-early"));
     }
 
     #[test]
@@ -661,7 +661,7 @@ mod tests {
         mgr.update_run_failed(&run.id, "Crashed").unwrap();
 
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
-        assert_eq!(fetched.claude_session_id.as_deref(), Some("sess-eager"));
+        assert_eq!(fetched.session_id.as_deref(), Some("sess-eager"));
     }
 
     #[test]
@@ -984,7 +984,7 @@ mod tests {
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.status, AgentRunStatus::Completed);
         assert_eq!(fetched.result_text.as_deref(), Some("All done"));
-        assert_eq!(fetched.claude_session_id.as_deref(), Some("sess-result"));
+        assert_eq!(fetched.session_id.as_deref(), Some("sess-result"));
         assert_eq!(fetched.cost_usd, Some(0.05));
         assert_eq!(fetched.num_turns, Some(3));
         assert_eq!(fetched.duration_ms, Some(5000));
@@ -1026,7 +1026,7 @@ mod tests {
         assert_eq!(fetched.status, AgentRunStatus::Completed);
         // COALESCE(NULL, "sess-early") → preserves eagerly stored session_id
         assert_eq!(
-            fetched.claude_session_id.as_deref(),
+            fetched.session_id.as_deref(),
             Some("sess-early"),
             "eagerly stored session_id must be preserved when result event has none"
         );
@@ -1091,7 +1091,7 @@ mod tests {
             Some("original-model"),
             "model should not be clobbered by NULL"
         );
-        assert_eq!(fetched.claude_session_id.as_deref(), Some("sess-abc"));
+        assert_eq!(fetched.session_id.as_deref(), Some("sess-abc"));
 
         // Update again with session_id=None — COALESCE should preserve original session
         mgr.update_run_model_and_session(&run.id, Some("new-model"), None)
@@ -1103,7 +1103,7 @@ mod tests {
             "model should be updated when not NULL"
         );
         assert_eq!(
-            fetched.claude_session_id.as_deref(),
+            fetched.session_id.as_deref(),
             Some("sess-abc"),
             "session should not be clobbered by NULL"
         );

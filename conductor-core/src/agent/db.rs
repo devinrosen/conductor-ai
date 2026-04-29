@@ -11,7 +11,7 @@ pub(super) const FEEDBACK_SELECT: &str =
 
 /// Shared SELECT column list for the `agent_runs` table (plain, unaliased form).
 pub(super) const AGENT_RUN_SELECT: &str =
-    "SELECT id, worktree_id, repo_id, claude_session_id, prompt, status, result_text, \
+    "SELECT id, worktree_id, repo_id, session_id, prompt, status, result_text, \
      cost_usd, num_turns, duration_ms, started_at, ended_at, log_file, \
      model, plan, parent_run_id, \
      input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
@@ -37,7 +37,7 @@ macro_rules! agent_run_cols {
             $alias,
             "repo_id, ",
             $alias,
-            "claude_session_id, ",
+            "session_id, ",
             $alias,
             "prompt, ",
             $alias,
@@ -90,7 +90,7 @@ macro_rules! agent_run_cols {
             $alias,
             "repo_id, ",
             $alias,
-            "claude_session_id, ",
+            "session_id, ",
             $alias,
             "prompt, ",
             $alias,
@@ -217,7 +217,7 @@ pub(super) fn row_to_agent_run(row: &rusqlite::Row) -> rusqlite::Result<AgentRun
         id: row.get("id")?,
         worktree_id: row.get("worktree_id")?,
         repo_id: row.get("repo_id")?,
-        claude_session_id: row.get("claude_session_id")?,
+        session_id: row.get("session_id")?,
         prompt: row.get("prompt")?,
         status: row.get("status")?,
         result_text: row.get("result_text")?,
@@ -275,7 +275,7 @@ mod tests {
         "id",
         "worktree_id",
         "repo_id",
-        "claude_session_id",
+        "session_id",
         "prompt",
         "status",
         "result_text",
@@ -372,12 +372,12 @@ mod tests {
         let conn = test_db();
         conn.execute(
             "INSERT INTO agent_runs (id, prompt, status, started_at, worktree_id, repo_id, \
-             claude_session_id, result_text, cost_usd, num_turns, duration_ms, ended_at, \
+             session_id, result_text, cost_usd, num_turns, duration_ms, ended_at, \
              log_file, model, plan, parent_run_id, \
              input_tokens, output_tokens, cache_read_input_tokens, \
              cache_creation_input_tokens, bot_name) \
              VALUES (:id, :prompt, :status, :started_at, :worktree_id, :repo_id, \
-                     :claude_session_id, :result_text, :cost_usd, :num_turns, :duration_ms, :ended_at, \
+                     :session_id, :result_text, :cost_usd, :num_turns, :duration_ms, :ended_at, \
                      :log_file, :model, :plan, :parent_run_id, \
                      :input_tokens, :output_tokens, :cache_read_input_tokens, \
                      :cache_creation_input_tokens, :bot_name)",
@@ -388,7 +388,7 @@ mod tests {
                 ":started_at": "2025-01-01T00:00:00Z",
                 ":worktree_id": "wt-001",
                 ":repo_id": "repo-001",
-                ":claude_session_id": "sess-001",
+                ":session_id": "sess-001",
                 ":result_text": "all done",
                 ":cost_usd": 1.5,
                 ":num_turns": 10i64,
@@ -418,7 +418,7 @@ mod tests {
         assert_eq!(run.id, "run-001");
         assert_eq!(run.worktree_id.as_deref(), Some("wt-001"));
         assert_eq!(run.repo_id.as_deref(), Some("repo-001"));
-        assert_eq!(run.claude_session_id.as_deref(), Some("sess-001"));
+        assert_eq!(run.session_id.as_deref(), Some("sess-001"));
         assert_eq!(run.prompt, "do the thing");
         assert_eq!(run.status, crate::agent::status::AgentRunStatus::Running);
         assert_eq!(run.result_text.as_deref(), Some("all done"));
@@ -457,7 +457,7 @@ mod tests {
         assert_eq!(run.id, "run-null");
         assert!(run.worktree_id.is_none());
         assert!(run.repo_id.is_none());
-        assert!(run.claude_session_id.is_none());
+        assert!(run.session_id.is_none());
         assert!(run.result_text.is_none());
         assert!(run.cost_usd.is_none());
         assert!(run.num_turns.is_none());

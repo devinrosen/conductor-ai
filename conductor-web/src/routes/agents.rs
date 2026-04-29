@@ -749,9 +749,9 @@ pub async fn get_prompt(
     let (resume_session_id, needs_resume, incomplete_steps) = match &latest_run {
         Some(run) if run.needs_resume() => {
             let incomplete = run.incomplete_plan_steps().len();
-            (run.claude_session_id.clone(), true, incomplete)
+            (run.session_id.clone(), true, incomplete)
         }
-        Some(run) => (run.claude_session_id.clone(), false, 0),
+        Some(run) => (run.session_id.clone(), false, 0),
         None => (None, false, 0),
     };
 
@@ -1211,7 +1211,7 @@ pub async fn start_repo_agent(
         } else {
             agent_mgr
                 .latest_repo_scoped(&repo_id)?
-                .and_then(|run| run.claude_session_id)
+                .and_then(|run| run.session_id)
         };
 
         let run = agent_mgr.create_repo_run(&repo_id, &body.prompt, model.as_deref())?;
