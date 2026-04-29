@@ -1619,12 +1619,22 @@ mod tests {
         from_step: Option<&'a str>,
         db_path: std::path::PathBuf,
     ) -> WorkflowResumeInput<'a> {
+        make_resume_input_with_restart(config, run_id, from_step, db_path, false)
+    }
+
+    fn make_resume_input_with_restart<'a>(
+        config: &'a crate::config::Config,
+        run_id: &'a str,
+        from_step: Option<&'a str>,
+        db_path: std::path::PathBuf,
+        restart: bool,
+    ) -> WorkflowResumeInput<'a> {
         WorkflowResumeInput {
             config,
             workflow_run_id: run_id,
             model: None,
             from_step,
-            restart: false,
+            restart,
             conductor_bin_dir: None,
             event_sinks: vec![],
             db_path: Some(db_path),
@@ -2004,17 +2014,13 @@ mod tests {
         };
 
         let config = crate::config::Config::default();
-        let input = WorkflowResumeInput {
-            config: &config,
-            workflow_run_id: &run_id,
-            model: None,
-            from_step: None,
-            restart: true,
-            conductor_bin_dir: None,
-            event_sinks: vec![],
-            db_path: Some(db_file.path().to_path_buf()),
-            shutdown: None,
-        };
+        let input = make_resume_input_with_restart(
+            &config,
+            &run_id,
+            None,
+            db_file.path().to_path_buf(),
+            true,
+        );
         let result = resume_workflow(&input).expect("restart of empty workflow must succeed");
         assert!(
             result.all_succeeded,
