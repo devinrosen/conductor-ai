@@ -595,6 +595,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
     let script_env_provider = super::runkon_bridge::build_rk_script_env_provider(
         params.conductor_bin_dir.clone(),
         params.extra_plugin_dirs.clone(),
+        Arc::new(config.clone()),
     );
 
     let schema_resolver = make_schema_resolver(workflow.name.clone());
@@ -1036,8 +1037,11 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         wf_run.repo_id.clone(),
     ));
 
-    let script_env_provider =
-        super::runkon_bridge::build_rk_script_env_provider(input.conductor_bin_dir.clone(), vec![]);
+    let script_env_provider = super::runkon_bridge::build_rk_script_env_provider(
+        input.conductor_bin_dir.clone(),
+        vec![],
+        Arc::new(config.clone()),
+    );
 
     let schema_resolver = make_schema_resolver(wf_run.workflow_name.clone());
 
@@ -1615,12 +1619,22 @@ mod tests {
         from_step: Option<&'a str>,
         db_path: std::path::PathBuf,
     ) -> WorkflowResumeInput<'a> {
+        make_resume_input_with_restart(config, run_id, from_step, db_path, false)
+    }
+
+    fn make_resume_input_with_restart<'a>(
+        config: &'a crate::config::Config,
+        run_id: &'a str,
+        from_step: Option<&'a str>,
+        db_path: std::path::PathBuf,
+        restart: bool,
+    ) -> WorkflowResumeInput<'a> {
         WorkflowResumeInput {
             config,
             workflow_run_id: run_id,
             model: None,
             from_step,
-            restart: false,
+            restart,
             conductor_bin_dir: None,
             event_sinks: vec![],
             db_path: Some(db_path),
@@ -1723,6 +1737,294 @@ mod tests {
         assert!(
             slot.is_some(),
             "run_id_notify slot must be populated before any engine work"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // execute_workflow_standalone — happy path
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn execute_workflow_standalone_happy_path_succeeds_and_persists_run() {
+        // An empty workflow (no steps, no targets) completes immediately.
+        // Verifies: validation passes, DB run record is created and reaches
+        // "completed" state, and the engine returns all_succeeded=true.
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        crate::db::open_database(db_file.path()).unwrap();
+
+        let params = make_standalone_params(db_file.path().to_path_buf(), None, None);
+        let result = execute_workflow_standalone(&params)
+            .expect("empty workflow should complete without error");
+        assert!(
+            result.all_succeeded,
+            "empty workflow must complete with all_succeeded=true"
+        );
+
+        let conn = crate::db::open_database(db_file.path()).unwrap();
+        let status: String = conn
+            .query_row("SELECT status FROM workflow_runs LIMIT 1", [], |r| r.get(0))
+            .expect("workflow run must be persisted in the database");
+        assert_eq!(
+            status, "completed",
+            "workflow run status must be 'completed' after a successful empty-workflow run"
+        );
+    }
+
+    #[test]
+    fn execute_workflow_standalone_inputs_are_persisted() {
+        // Verify that caller-supplied inputs are written to the DB before the
+        // engine executes, so restarts and resumes can read them back.
+        // Note: apply_workflow_input_defaults is the caller's responsibility;
+        // here we pass a pre-merged map directly via params.inputs.
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        crate::db::open_database(db_file.path()).unwrap();
+
+        let mut params = make_standalone_params(db_file.path().to_path_buf(), None, None);
+        params
+            .inputs
+            .insert("env".to_string(), "staging".to_string());
+
+        execute_workflow_standalone(&params).expect("empty workflow should succeed");
+
+        let conn = crate::db::open_database(db_file.path()).unwrap();
+        let inputs_json: String = conn
+            .query_row("SELECT inputs FROM workflow_runs LIMIT 1", [], |r| r.get(0))
+            .expect("workflow run must be persisted");
+        let inputs: HashMap<String, String> = serde_json::from_str(&inputs_json).unwrap();
+        assert_eq!(
+            inputs.get("env").map(String::as_str),
+            Some("staging"),
+            "caller-supplied input values must be persisted to the DB before engine executes"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // resume_workflow_standalone — error and success paths
+    // -------------------------------------------------------------------------
+
+    fn make_resume_standalone(
+        run_id: &str,
+        from_step: Option<String>,
+        restart: bool,
+        db_path: std::path::PathBuf,
+    ) -> crate::workflow::types::WorkflowResumeStandalone {
+        crate::workflow::types::WorkflowResumeStandalone {
+            config: crate::config::Config::default(),
+            workflow_run_id: run_id.to_string(),
+            model: None,
+            from_step,
+            restart,
+            db_path: Some(db_path),
+            conductor_bin_dir: None,
+            shutdown: None,
+        }
+    }
+
+    fn insert_failed_run_with_repo(
+        conn: &rusqlite::Connection,
+        snapshot_json: Option<&str>,
+    ) -> String {
+        crate::test_helpers::insert_test_repo(conn, "r1", "test-repo", "/tmp");
+        let parent = crate::agent::AgentManager::new(conn)
+            .create_run(None, "workflow", None)
+            .unwrap();
+        let wf_mgr = WorkflowManager::new(conn);
+        let run = wf_mgr
+            .create_workflow_run_with_targets(
+                "test-wf",
+                None,
+                None,
+                Some("r1"),
+                &parent.id,
+                false,
+                "manual",
+                snapshot_json,
+                None,
+                None,
+            )
+            .unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET status = 'failed' WHERE id = ?1",
+            rusqlite::params![run.id],
+        )
+        .unwrap();
+        run.id
+    }
+
+    #[test]
+    fn resume_workflow_standalone_missing_run_returns_err() {
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        crate::db::open_database(db_file.path()).unwrap();
+
+        let params =
+            make_resume_standalone("no-such-run-id", None, false, db_file.path().to_path_buf());
+        let err = resume_workflow_standalone(&params).unwrap_err();
+        assert!(
+            err.to_string().contains("not found"),
+            "expected 'not found' error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn resume_workflow_standalone_missing_snapshot_returns_err() {
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        let run_id = {
+            let conn = crate::db::open_database(db_file.path()).unwrap();
+            insert_failed_run_with_repo(&conn, None) // no definition_snapshot
+        };
+
+        let params = make_resume_standalone(&run_id, None, false, db_file.path().to_path_buf());
+        let err = resume_workflow_standalone(&params).unwrap_err();
+        assert!(
+            err.to_string().contains("no definition snapshot"),
+            "expected 'no definition snapshot' error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn resume_workflow_standalone_success_with_empty_workflow() {
+        // A failed run whose snapshot encodes an empty workflow (no steps) resumes
+        // immediately to completion. Validates the full setup → FlowEngine.resume()
+        // path without any external subprocess or agent.
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        let snapshot = serde_json::to_string(&make_wf(vec![])).unwrap();
+        let run_id = {
+            let conn = crate::db::open_database(db_file.path()).unwrap();
+            insert_failed_run_with_repo(&conn, Some(&snapshot))
+        };
+
+        let params = make_resume_standalone(&run_id, None, false, db_file.path().to_path_buf());
+        let result =
+            resume_workflow_standalone(&params).expect("resume of empty workflow must succeed");
+        assert!(
+            result.all_succeeded,
+            "resumed empty workflow must complete with all_succeeded=true"
+        );
+    }
+
+    #[test]
+    fn resume_workflow_standalone_with_restart_true_succeeds() {
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        let snapshot = serde_json::to_string(&make_wf(vec![])).unwrap();
+        let run_id = {
+            let conn = crate::db::open_database(db_file.path()).unwrap();
+            insert_failed_run_with_repo(&conn, Some(&snapshot))
+        };
+
+        let params = make_resume_standalone(&run_id, None, true, db_file.path().to_path_buf());
+        let result =
+            resume_workflow_standalone(&params).expect("restart of empty workflow must succeed");
+        assert!(
+            result.all_succeeded,
+            "restarted empty workflow must complete with all_succeeded=true"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // resume_workflow — happy path with worktree and repo-id targets
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn resume_workflow_happy_path_with_repo_id() {
+        // Verifies the full resume_workflow flow: DB resets, FlowEngine.resume()
+        // call, and final completed status. Uses a repo-based run (worktree_id=None)
+        // so no worktree filesystem access is required.
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        let snapshot = serde_json::to_string(&make_wf(vec![])).unwrap();
+        let run_id = {
+            let conn = crate::db::open_database(db_file.path()).unwrap();
+            insert_failed_run_with_repo(&conn, Some(&snapshot))
+        };
+
+        let config = crate::config::Config::default();
+        let input = make_resume_input(&config, &run_id, None, db_file.path().to_path_buf());
+        let result = resume_workflow(&input).expect("resume of empty workflow must succeed");
+        assert!(
+            result.all_succeeded,
+            "resumed empty workflow must complete with all_succeeded=true"
+        );
+
+        let conn = crate::db::open_database(db_file.path()).unwrap();
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM workflow_runs WHERE id = ?1",
+                rusqlite::params![run_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            status, "completed",
+            "workflow run must reach 'completed' status after successful resume"
+        );
+    }
+
+    #[test]
+    fn resume_workflow_happy_path_with_worktree() {
+        // Verifies resume when the run has a worktree_id. The worktree path
+        // `/tmp` exists so no fallback to repo root is needed, and the empty
+        // workflow completes without any step execution.
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        let snapshot = serde_json::to_string(&make_wf(vec![])).unwrap();
+        let run_id = {
+            let conn = crate::db::open_database(db_file.path()).unwrap();
+            // insert_test_repo / insert_test_worktree use "/tmp" paths that exist.
+            crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp");
+            crate::test_helpers::insert_test_worktree(&conn, "w1", "r1", "feat-test", "/tmp");
+            let parent = crate::agent::AgentManager::new(&conn)
+                .create_run(Some("w1"), "workflow", None)
+                .unwrap();
+            let wf_mgr = WorkflowManager::new(&conn);
+            let run = wf_mgr
+                .create_workflow_run(
+                    "test-wf",
+                    Some("w1"),
+                    &parent.id,
+                    false,
+                    "manual",
+                    Some(&snapshot),
+                )
+                .unwrap();
+            conn.execute(
+                "UPDATE workflow_runs SET status = 'failed' WHERE id = ?1",
+                rusqlite::params![run.id],
+            )
+            .unwrap();
+            run.id
+        };
+
+        let config = crate::config::Config::default();
+        let input = make_resume_input(&config, &run_id, None, db_file.path().to_path_buf());
+        let result = resume_workflow(&input).expect("resume with worktree must succeed");
+        assert!(
+            result.all_succeeded,
+            "resumed empty workflow must complete with all_succeeded=true"
+        );
+    }
+
+    #[test]
+    fn resume_workflow_with_restart_resets_all_steps() {
+        // With restart=true, resume_workflow clears all steps, then runs the
+        // engine from scratch. For an empty workflow this is a no-op, but the
+        // function must still return Ok.
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        let snapshot = serde_json::to_string(&make_wf(vec![])).unwrap();
+        let run_id = {
+            let conn = crate::db::open_database(db_file.path()).unwrap();
+            insert_failed_run_with_repo(&conn, Some(&snapshot))
+        };
+
+        let config = crate::config::Config::default();
+        let input = make_resume_input_with_restart(
+            &config,
+            &run_id,
+            None,
+            db_file.path().to_path_buf(),
+            true,
+        );
+        let result = resume_workflow(&input).expect("restart of empty workflow must succeed");
+        assert!(
+            result.all_succeeded,
+            "restarted empty workflow must complete with all_succeeded=true"
         );
     }
 }
