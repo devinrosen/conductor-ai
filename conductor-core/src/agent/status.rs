@@ -260,6 +260,53 @@ crate::impl_sql_enum!(FeedbackType);
 mod tests {
     use super::*;
 
+    #[test]
+    fn agent_run_status_from_str_roundtrips_each_variant() {
+        for status in [
+            AgentRunStatus::Running,
+            AgentRunStatus::WaitingForFeedback,
+            AgentRunStatus::Completed,
+            AgentRunStatus::Failed,
+            AgentRunStatus::Cancelled,
+        ] {
+            let s = status.to_string();
+            let parsed: AgentRunStatus = s.parse().expect("known variant must parse");
+            assert_eq!(parsed, status, "{s:?} round-trip");
+        }
+    }
+
+    #[test]
+    fn agent_run_status_from_str_rejects_unknown() {
+        let err = "not-a-real-status".parse::<AgentRunStatus>().unwrap_err();
+        assert!(
+            err.contains("not-a-real-status"),
+            "error must echo the bad input; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn step_status_from_str_roundtrips_each_variant() {
+        for status in [
+            StepStatus::Pending,
+            StepStatus::InProgress,
+            StepStatus::Completed,
+            StepStatus::Failed,
+        ] {
+            let s = status.to_string();
+            let parsed: StepStatus = s.parse().expect("known variant must parse");
+            assert_eq!(parsed, status, "{s:?} round-trip");
+        }
+    }
+
+    #[test]
+    fn step_status_from_str_rejects_unknown() {
+        let err = "wibble".parse::<StepStatus>().unwrap_err();
+        assert!(
+            err.contains("wibble"),
+            "error must echo the bad input; got {err:?}"
+        );
+    }
+
     /// `From<AgentRunStatus> for RunStatus` is exercised end-to-end by the
     /// `to_run_handle_status_mapping_for_terminal_states` test in
     /// `agent::types::tests`. This test guards the reverse direction

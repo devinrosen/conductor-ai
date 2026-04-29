@@ -463,6 +463,50 @@ mod tests {
     }
 
     #[test]
+    fn is_active_true_for_running_and_waiting_for_feedback() {
+        let mut run = make_full_run();
+        run.status = AgentRunStatus::Running;
+        assert!(run.is_active(), "Running must be active");
+        run.status = AgentRunStatus::WaitingForFeedback;
+        assert!(run.is_active(), "WaitingForFeedback must be active");
+    }
+
+    #[test]
+    fn is_active_false_for_terminal_statuses() {
+        let mut run = make_full_run();
+        for status in [
+            AgentRunStatus::Completed,
+            AgentRunStatus::Failed,
+            AgentRunStatus::Cancelled,
+        ] {
+            run.status = status;
+            assert!(
+                !run.is_active(),
+                "{status:?} is terminal and must not be active"
+            );
+        }
+    }
+
+    #[test]
+    fn is_waiting_for_feedback_only_true_for_that_variant() {
+        let mut run = make_full_run();
+        run.status = AgentRunStatus::WaitingForFeedback;
+        assert!(run.is_waiting_for_feedback());
+        for status in [
+            AgentRunStatus::Running,
+            AgentRunStatus::Completed,
+            AgentRunStatus::Failed,
+            AgentRunStatus::Cancelled,
+        ] {
+            run.status = status;
+            assert!(
+                !run.is_waiting_for_feedback(),
+                "{status:?} is not WaitingForFeedback"
+            );
+        }
+    }
+
+    #[test]
     fn to_run_handle_projects_portable_fields() {
         let run = make_full_run();
         let handle = run.to_run_handle();
