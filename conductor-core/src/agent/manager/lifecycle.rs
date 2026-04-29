@@ -298,26 +298,15 @@ impl<'a> AgentManager<'a> {
         // Unlike the agent_runs UPDATE above, this is unconditional w.r.t. the
         // step's status — workflow steps transition independently and the
         // engine relies on these values being readable after the run terminates.
-        self.conn.execute(
-            "UPDATE workflow_run_steps \
-             SET cost_usd = COALESCE(:cost_usd, cost_usd), \
-                 num_turns = COALESCE(:num_turns, num_turns), \
-                 duration_ms = COALESCE(:duration_ms, duration_ms), \
-                 input_tokens = COALESCE(:input_tokens, input_tokens), \
-                 output_tokens = COALESCE(:output_tokens, output_tokens), \
-                 cache_read_input_tokens = COALESCE(:cache_read_input_tokens, cache_read_input_tokens), \
-                 cache_creation_input_tokens = COALESCE(:cache_creation_input_tokens, cache_creation_input_tokens) \
-             WHERE child_run_id = :id",
-            named_params! {
-                ":cost_usd": log_result.cost_usd,
-                ":num_turns": log_result.num_turns,
-                ":duration_ms": log_result.duration_ms,
-                ":input_tokens": log_result.input_tokens,
-                ":output_tokens": log_result.output_tokens,
-                ":cache_read_input_tokens": log_result.cache_read_input_tokens,
-                ":cache_creation_input_tokens": log_result.cache_creation_input_tokens,
-                ":id": run_id,
-            },
+        crate::workflow::WorkflowManager::new(self.conn).mirror_step_metrics_from_run(
+            run_id,
+            log_result.cost_usd,
+            log_result.num_turns,
+            log_result.duration_ms,
+            log_result.input_tokens,
+            log_result.output_tokens,
+            log_result.cache_read_input_tokens,
+            log_result.cache_creation_input_tokens,
         )?;
         Ok(())
     }
@@ -400,19 +389,15 @@ impl<'a> AgentManager<'a> {
                 ":id": run_id,
             },
         )?;
-        self.conn.execute(
-            "UPDATE workflow_run_steps \
-             SET input_tokens = :input_tokens, output_tokens = :output_tokens, \
-                 cache_read_input_tokens = :cache_read_input_tokens, \
-                 cache_creation_input_tokens = :cache_creation_input_tokens \
-             WHERE child_run_id = :id",
-            named_params! {
-                ":input_tokens": input_tokens,
-                ":output_tokens": output_tokens,
-                ":cache_read_input_tokens": cache_read_input_tokens,
-                ":cache_creation_input_tokens": cache_creation_input_tokens,
-                ":id": run_id,
-            },
+        crate::workflow::WorkflowManager::new(self.conn).mirror_step_metrics_from_run(
+            run_id,
+            None,
+            None,
+            None,
+            Some(input_tokens),
+            Some(output_tokens),
+            Some(cache_read_input_tokens),
+            Some(cache_creation_input_tokens),
         )?;
         Ok(())
     }

@@ -272,6 +272,47 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
+    /// Mirror agent-run metrics onto the linked workflow step row (Path X.1).
+    ///
+    /// Keyed by `child_run_id` so callers need not know the step's own id.
+    /// Uses COALESCE so a `None` value leaves the existing column untouched.
+    /// Called by `AgentManager` after writing the same values to `agent_runs`,
+    /// keeping `workflow_run_steps` readable without a JOIN.
+    #[allow(clippy::too_many_arguments)]
+    pub fn mirror_step_metrics_from_run(
+        &self,
+        run_id: &str,
+        cost_usd: Option<f64>,
+        num_turns: Option<i64>,
+        duration_ms: Option<i64>,
+        input_tokens: Option<i64>,
+        output_tokens: Option<i64>,
+        cache_read_input_tokens: Option<i64>,
+        cache_creation_input_tokens: Option<i64>,
+    ) -> Result<()> {
+        self.execute_step_sql(
+            "UPDATE workflow_run_steps \
+             SET cost_usd = COALESCE(:cost_usd, cost_usd), \
+                 num_turns = COALESCE(:num_turns, num_turns), \
+                 duration_ms = COALESCE(:duration_ms, duration_ms), \
+                 input_tokens = COALESCE(:input_tokens, input_tokens), \
+                 output_tokens = COALESCE(:output_tokens, output_tokens), \
+                 cache_read_input_tokens = COALESCE(:cache_read_input_tokens, cache_read_input_tokens), \
+                 cache_creation_input_tokens = COALESCE(:cache_creation_input_tokens, cache_creation_input_tokens) \
+             WHERE child_run_id = :run_id",
+            named_params![
+                ":cost_usd": cost_usd,
+                ":num_turns": num_turns,
+                ":duration_ms": duration_ms,
+                ":input_tokens": input_tokens,
+                ":output_tokens": output_tokens,
+                ":cache_read_input_tokens": cache_read_input_tokens,
+                ":cache_creation_input_tokens": cache_creation_input_tokens,
+                ":run_id": run_id,
+            ],
+        )
+    }
+
     /// Approve a gate: set gate_approved_at, gate_approved_by, optional feedback, and optional selections.
     pub fn approve_gate(
         &self,
