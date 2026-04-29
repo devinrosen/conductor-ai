@@ -260,6 +260,33 @@ crate::impl_sql_enum!(FeedbackType);
 mod tests {
     use super::*;
 
+    /// `From<AgentRunStatus> for RunStatus` is exercised end-to-end by the
+    /// `to_run_handle_status_mapping_for_terminal_states` test in
+    /// `agent::types::tests`. This test guards the reverse direction
+    /// (`From<RunStatus> for AgentRunStatus`) for callers that need to map a
+    /// portable `RunHandle` status back into the conductor enum.
+    #[test]
+    fn from_run_status_maps_each_variant() {
+        for (input, expected) in [
+            (runkon_runtimes::RunStatus::Running, AgentRunStatus::Running),
+            (
+                runkon_runtimes::RunStatus::Completed,
+                AgentRunStatus::Completed,
+            ),
+            (runkon_runtimes::RunStatus::Failed, AgentRunStatus::Failed),
+            (
+                runkon_runtimes::RunStatus::Cancelled,
+                AgentRunStatus::Cancelled,
+            ),
+        ] {
+            let got: AgentRunStatus = input.into();
+            assert_eq!(
+                got, expected,
+                "RunStatus::{input:?} must map to AgentRunStatus::{expected:?}"
+            );
+        }
+    }
+
     #[test]
     fn parse_structured_plain_text() {
         let parsed = parse_feedback_marker_structured("[NEEDS_FEEDBACK] What should I do?");
