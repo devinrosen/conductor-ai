@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 81;
+pub const LATEST_SCHEMA_VERSION: u32 = 82;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1238,6 +1238,38 @@ pub fn run(conn: &Connection) -> Result<()> {
             )?;
         }
         bump_version(conn, 81)?;
+    }
+
+    // Migration 082: rename agent_runs.claude_session_id → session_id.
+    // Issue #2709 — finishes aligning the conductor-side column with the
+    // already-renamed runkon-runtimes RunHandle.session_id field.
+    // Column-existence guard handles DBs that already have the new name from
+    // feature branches and partial-schema test setups that lack agent_runs.
+    if version < 82 {
+        let has_agent_runs_table: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='table' AND name='agent_runs'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        // Only rename when the source column actually exists. Some unit tests
+        // build minimal agent_runs fixtures with neither the old nor the new
+        // column; the rename is a no-op there.
+        let has_old_column: bool = has_agent_runs_table
+            && conn
+                .prepare("SELECT claude_session_id FROM agent_runs LIMIT 0")
+                .is_ok();
+        let has_new_column: bool = has_agent_runs_table
+            && conn
+                .prepare("SELECT session_id FROM agent_runs LIMIT 0")
+                .is_ok();
+        if has_old_column && !has_new_column {
+            conn.execute_batch(include_str!("migrations/082_rename_claude_session_id.sql"))?;
+        }
+        bump_version(conn, 82)?;
     }
 
     Ok(())

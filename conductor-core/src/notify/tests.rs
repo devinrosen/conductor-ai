@@ -1643,7 +1643,7 @@ fn make_agent_run(id: &str, status: AgentRunStatus) -> AgentRun {
         id: id.to_string(),
         worktree_id: None,
         repo_id: None,
-        claude_session_id: None,
+        session_id: None,
         prompt: String::new(),
         status,
         result_text: None,

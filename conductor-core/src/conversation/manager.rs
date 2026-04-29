@@ -105,15 +105,15 @@ impl<'a> ConversationManager<'a> {
         Ok(count > 0)
     }
 
-    /// Return the `claude_session_id` of the most recent *completed* run in the
+    /// Return the `session_id` of the most recent *completed* run in the
     /// conversation, or `None` if no such run exists (fresh session).
     pub fn last_completed_session_id(&self, conversation_id: &str) -> Result<Option<String>> {
         let result: rusqlite::Result<Option<String>> = self.conn.query_row(
-            "SELECT claude_session_id FROM agent_runs \
+            "SELECT session_id FROM agent_runs \
              WHERE conversation_id = :conversation_id AND status = 'completed' \
              ORDER BY started_at DESC LIMIT 1",
             named_params! { ":conversation_id": conversation_id },
-            |row| row.get("claude_session_id"),
+            |row| row.get("session_id"),
         );
         match result {
             Ok(v) => Ok(v),

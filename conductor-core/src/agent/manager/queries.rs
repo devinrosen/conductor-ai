@@ -1145,10 +1145,7 @@ mod tests {
 
         let latest = mgr.latest_repo_scoped("r1").unwrap().unwrap();
         assert_eq!(latest.id, newer.id);
-        assert_eq!(
-            latest.claude_session_id.as_deref(),
-            Some("sess-repo-latest")
-        );
+        assert_eq!(latest.session_id.as_deref(), Some("sess-repo-latest"));
     }
 
     /// Verify the auto-resume session pattern used by `start_repo_agent`:
@@ -1164,7 +1161,7 @@ mod tests {
         let resume_id = mgr
             .latest_repo_scoped("r1")
             .unwrap()
-            .and_then(|run| run.claude_session_id);
+            .and_then(|run| run.session_id);
         assert!(
             resume_id.is_none(),
             "no prior run means no session to resume"
@@ -1190,7 +1187,7 @@ mod tests {
         let resume_id = mgr
             .latest_repo_scoped("r1")
             .unwrap()
-            .and_then(|run| run.claude_session_id);
+            .and_then(|run| run.session_id);
         assert_eq!(resume_id.as_deref(), Some("sess-abc"));
 
         // Note: the `new_session=true` branch in start_repo_agent is a trivial

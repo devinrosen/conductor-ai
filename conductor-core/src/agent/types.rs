@@ -59,7 +59,7 @@ pub struct AgentRun {
     pub id: String,
     pub worktree_id: Option<String>,
     pub repo_id: Option<String>,
-    pub claude_session_id: Option<String>,
+    pub session_id: Option<String>,
     pub prompt: String,
     pub status: AgentRunStatus,
     pub result_text: Option<String>,
@@ -112,7 +112,7 @@ impl AgentRun {
             status: self.status.into(),
             subprocess_pid: self.subprocess_pid,
             runtime: self.runtime.clone(),
-            session_id: self.claude_session_id.clone(),
+            session_id: self.session_id.clone(),
             result_text: self.result_text.clone(),
             started_at: self.started_at.clone(),
             ended_at: self.ended_at.clone(),
@@ -152,7 +152,7 @@ impl AgentRun {
         matches!(
             self.status,
             AgentRunStatus::Failed | AgentRunStatus::Cancelled
-        ) && self.claude_session_id.is_some()
+        ) && self.session_id.is_some()
             && self.has_incomplete_plan_steps()
     }
 
@@ -396,7 +396,7 @@ mod tests {
             id: id.to_string(),
             worktree_id: None,
             repo_id: None,
-            claude_session_id: None,
+            session_id: None,
             prompt: String::new(),
             status: AgentRunStatus::Running,
             result_text: None,
@@ -427,7 +427,7 @@ mod tests {
             id: "01JVFJT9K7XPPQ9MH6JV7XRM3M".into(),
             worktree_id: Some("wt-1".into()),
             repo_id: Some("repo-1".into()),
-            claude_session_id: Some("sess-abc".into()),
+            session_id: Some("sess-abc".into()),
             prompt: "do the thing".into(),
             status: AgentRunStatus::Completed,
             result_text: Some("done".into()),
@@ -503,8 +503,9 @@ mod tests {
         assert_eq!(handle.id, run.id);
         assert_eq!(handle.subprocess_pid, run.subprocess_pid);
         assert_eq!(handle.runtime, run.runtime);
-        // claude_session_id maps to the generic `session_id` on the portable handle.
-        assert_eq!(handle.session_id, run.claude_session_id);
+        // session_id is now a plain field copy (issue #2709 renamed the conductor
+        // column / struct field to match the portable RunHandle field name).
+        assert_eq!(handle.session_id, run.session_id);
         assert_eq!(handle.result_text, run.result_text);
         assert_eq!(handle.started_at, run.started_at);
         assert_eq!(handle.ended_at, run.ended_at);

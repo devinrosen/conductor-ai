@@ -216,9 +216,9 @@ pub(crate) fn run_agent(
         // Look up the previous run that owns this session_id
         if let Some(wt_id) = run.worktree_id.as_deref() {
             if let Ok(prev_runs) = mgr.list_for_worktree(wt_id) {
-                let prev_run = prev_runs.iter().find(|r| {
-                    r.claude_session_id.as_deref() == resume_session_id && r.id != run_id
-                });
+                let prev_run = prev_runs
+                    .iter()
+                    .find(|r| r.session_id.as_deref() == resume_session_id && r.id != run_id);
                 if let Some(prev) = prev_run {
                     if prev.has_incomplete_plan_steps() {
                         let incomplete: Vec<&PlanStep> = prev.incomplete_plan_steps();
