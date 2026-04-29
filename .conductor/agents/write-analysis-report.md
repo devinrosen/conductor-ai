@@ -59,5 +59,5 @@ Prior step context (per-persona UX analysis): {{prior_context}}
    git commit -m "docs: add UX analysis report <date>"
    ```
 
-8. Emit `<<<CONDUCTOR_OUTPUT>>>` with:
+8. Emit `<<<FLOW_OUTPUT>>>` with:
    - `context`: path to the written report and a one-sentence summary of the top finding

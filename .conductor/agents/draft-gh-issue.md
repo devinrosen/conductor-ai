@@ -23,9 +23,9 @@ User's initial idea: {{rough_idea}}
    ```
    If not authenticated, stop immediately and output:
    ```
-   <<<CONDUCTOR_OUTPUT>>>
+   <<<FLOW_OUTPUT>>>
    {"markers": [], "context": "ERROR: gh CLI is not authenticated. Run 'gh auth login' and re-run this workflow."}
-   <<<END_CONDUCTOR_OUTPUT>>>
+   <<<END_FLOW_OUTPUT>>>
    ```
 
 2. **Determine the GitHub remote** `<owner>/<repo>` for this repo:
@@ -88,12 +88,12 @@ Format your final output as:
 <full issue body in markdown>
 ```
 
-Then emit the conductor output block:
+Then emit the flow output block:
 
 ```
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "Draft issue: <title>\nLabels: <labels>\nAssignee: <assignee>\nBody:\n<full body>"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 ```
 
 Include the complete draft in the `context` field so the next step can create the issue from it.

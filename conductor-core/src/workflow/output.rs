@@ -1,8 +1,8 @@
-pub use runkon_flow::helpers::{parse_conductor_output, ConductorOutput};
+pub use runkon_flow::helpers::{parse_flow_output, FlowOutput};
 
 use crate::schema_config::OutputSchema;
 
-/// Interpret agent output using a schema (if present) or generic `CONDUCTOR_OUTPUT` parsing.
+/// Interpret agent output using a schema (if present) or generic `FLOW_OUTPUT` parsing.
 ///
 /// Returns `(markers, context, structured_json)`. The `succeeded` flag controls whether
 /// a schema validation failure is treated as an error (`Err`) or silently falls back.
@@ -24,16 +24,12 @@ pub(super) fn interpret_agent_output(
             }
             _ => {
                 // No output block found or parsing error on a failed run — fall back
-                let fallback = result_text
-                    .and_then(parse_conductor_output)
-                    .unwrap_or_default();
+                let fallback = result_text.and_then(parse_flow_output).unwrap_or_default();
                 Ok((fallback.markers, fallback.context, None))
             }
         }
     } else {
-        let output = result_text
-            .and_then(parse_conductor_output)
-            .unwrap_or_default();
+        let output = result_text.and_then(parse_flow_output).unwrap_or_default();
         Ok((output.markers, output.context, None))
     }
 }

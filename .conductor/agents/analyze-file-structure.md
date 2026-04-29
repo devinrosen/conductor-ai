@@ -95,7 +95,7 @@ Context format:
 ```
 
 ```
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": ["has_split_recommendations"], "context": "## File Structure Analysis\n\n### `src/app.rs` ..."}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 ```

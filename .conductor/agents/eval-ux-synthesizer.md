@@ -60,5 +60,5 @@ Full context history: {{prior_contexts}}
 
 Each improvement item should include: the specific file(s) to change, what to change, and why it matters.
 
-If the overall score is below 70, include `has_blocking_findings` in CONDUCTOR_OUTPUT markers.
+If the overall score is below 70, include `has_blocking_findings` in FLOW_OUTPUT markers.
 Include `has_review_issues` if any critical issues are found.

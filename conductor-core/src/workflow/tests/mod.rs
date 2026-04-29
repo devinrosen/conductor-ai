@@ -17,7 +17,7 @@ pub(super) fn completed_keys_from_steps(
         .collect()
 }
 pub(super) use super::manager::WorkflowManager;
-pub(super) use super::output::{interpret_agent_output, parse_conductor_output};
+pub(super) use super::output::{interpret_agent_output, parse_flow_output};
 pub(super) use super::prompt_builder::substitute_variables;
 pub(super) use super::types::{MetadataEntry, StepKey, WorkflowResumeInput};
 pub(super) use super::*;

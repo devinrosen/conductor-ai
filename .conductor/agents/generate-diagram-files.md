@@ -41,5 +41,5 @@ Diagram types to generate: {{types}}
    git commit -m "docs: generate {{types}} diagrams"
    ```
 
-5. Emit `<<<CONDUCTOR_OUTPUT>>>` with:
+5. Emit `<<<FLOW_OUTPUT>>>` with:
    - `context`: list of files written and a one-sentence summary of each

@@ -190,5 +190,5 @@ If validation fails:
 
 - The `targets` field in `meta` is required. Use `["worktree"]` for branch-scoped work, `["repo"]` for repository-level work.
 - Agent names in `call` statements must match the filename without `.md` (e.g., `call review-security` resolves to `.conductor/agents/review-security.md`).
-- `while` and `do {} while` conditions reference `<step-name>.<marker>` where `<step-name>` is the name of a prior `call` statement and `<marker>` is a string the agent emits in its `CONDUCTOR_OUTPUT` markers array.
+- `while` and `do {} while` conditions reference `<step-name>.<marker>` where `<step-name>` is the name of a prior `call` statement and `<marker>` is a string the agent emits in its `FLOW_OUTPUT` markers array.
 - A workflow that only calls read-only agents can still be useful — dry-run mode is safe for all agents with `can_commit: false`.

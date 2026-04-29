@@ -3,14 +3,14 @@
 use super::*;
 
 #[test]
-fn test_parse_conductor_output() {
+fn test_parse_flow_output() {
     let text = r#"Here is my analysis...
 
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": ["has_review_issues", "has_critical_issues"], "context": "Found 2 issues in src/lib.rs"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 "#;
-    let output = parse_conductor_output(text).unwrap();
+    let output = parse_flow_output(text).unwrap();
     assert_eq!(
         output.markers,
         vec!["has_review_issues", "has_critical_issues"]
@@ -19,31 +19,32 @@ fn test_parse_conductor_output() {
 }
 
 #[test]
-fn test_parse_conductor_output_missing() {
-    assert!(parse_conductor_output("no output block here").is_none());
+fn test_parse_flow_output_missing() {
+    assert!(parse_flow_output("no output block here").is_none());
 }
 
 #[test]
-fn test_parse_conductor_output_no_markers() {
-    let text = "<<<CONDUCTOR_OUTPUT>>>\n{\"markers\": [], \"context\": \"All good\"}\n<<<END_CONDUCTOR_OUTPUT>>>";
-    let output = parse_conductor_output(text).unwrap();
+fn test_parse_flow_output_no_markers() {
+    let text =
+        "<<<FLOW_OUTPUT>>>\n{\"markers\": [], \"context\": \"All good\"}\n<<<END_FLOW_OUTPUT>>>";
+    let output = parse_flow_output(text).unwrap();
     assert!(output.markers.is_empty());
     assert_eq!(output.context, "All good");
 }
 
 #[test]
-fn test_parse_conductor_output_marker_in_field_value() {
+fn test_parse_flow_output_marker_in_field_value() {
     // The real block has the marker string inside a field value — must still parse correctly.
     let text = r#"The agent output block:
-<<<CONDUCTOR_OUTPUT>>>
-{"markers": ["real"], "context": "actual output with <<<CONDUCTOR_OUTPUT>>> mentioned inside"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
+{"markers": ["real"], "context": "actual output with <<<FLOW_OUTPUT>>> mentioned inside"}
+<<<END_FLOW_OUTPUT>>>
 "#;
-    let output = parse_conductor_output(text).unwrap();
+    let output = parse_flow_output(text).unwrap();
     assert_eq!(output.markers, vec!["real"]);
     assert_eq!(
         output.context,
-        "actual output with <<<CONDUCTOR_OUTPUT>>> mentioned inside"
+        "actual output with <<<FLOW_OUTPUT>>> mentioned inside"
     );
 }
 
@@ -97,7 +98,8 @@ fn test_workflow_step_status_roundtrip() {
 #[test]
 fn test_interpret_agent_output_schema_valid() {
     let schema = make_test_schema();
-    let text = "<<<CONDUCTOR_OUTPUT>>>\n{\"approved\": true, \"summary\": \"all good\"}\n<<<END_CONDUCTOR_OUTPUT>>>";
+    let text =
+        "<<<FLOW_OUTPUT>>>\n{\"approved\": true, \"summary\": \"all good\"}\n<<<END_FLOW_OUTPUT>>>";
     let (markers, context, json) = interpret_agent_output(Some(text), Some(&schema), true).unwrap();
     assert_eq!(context, "all good");
     assert!(json.is_some());
@@ -109,7 +111,7 @@ fn test_interpret_agent_output_schema_valid() {
 fn test_interpret_agent_output_schema_validation_fails_succeeded() {
     let schema = make_test_schema();
     // Missing required field "approved"
-    let text = "<<<CONDUCTOR_OUTPUT>>>\n{\"summary\": \"oops\"}\n<<<END_CONDUCTOR_OUTPUT>>>";
+    let text = "<<<FLOW_OUTPUT>>>\n{\"summary\": \"oops\"}\n<<<END_FLOW_OUTPUT>>>";
     let result = interpret_agent_output(Some(text), Some(&schema), true);
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("structured output validation"));
@@ -119,10 +121,10 @@ fn test_interpret_agent_output_schema_validation_fails_succeeded() {
 fn test_interpret_agent_output_schema_validation_fails_not_succeeded_falls_back() {
     let schema = make_test_schema();
     // Missing required field — but succeeded=false so it falls back
-    let text = "<<<CONDUCTOR_OUTPUT>>>\n{\"summary\": \"oops\"}\n<<<END_CONDUCTOR_OUTPUT>>>";
+    let text = "<<<FLOW_OUTPUT>>>\n{\"summary\": \"oops\"}\n<<<END_FLOW_OUTPUT>>>";
     let (markers, context, json) =
         interpret_agent_output(Some(text), Some(&schema), false).unwrap();
-    // Falls back to generic parse_conductor_output which doesn't find markers/context
+    // Falls back to generic parse_flow_output which doesn't find markers/context
     assert!(json.is_none());
     assert!(markers.is_empty());
     assert!(context.is_empty());
@@ -130,7 +132,7 @@ fn test_interpret_agent_output_schema_validation_fails_not_succeeded_falls_back(
 
 #[test]
 fn test_interpret_agent_output_no_schema_generic_parsing() {
-    let text = "<<<CONDUCTOR_OUTPUT>>>\n{\"markers\": [\"done\"], \"context\": \"finished\"}\n<<<END_CONDUCTOR_OUTPUT>>>";
+    let text = "<<<FLOW_OUTPUT>>>\n{\"markers\": [\"done\"], \"context\": \"finished\"}\n<<<END_FLOW_OUTPUT>>>";
     let (markers, context, json) = interpret_agent_output(Some(text), None, true).unwrap();
     assert_eq!(markers, vec!["done"]);
     assert_eq!(context, "finished");
@@ -151,18 +153,18 @@ fn test_interpret_agent_output_no_text() {
 // Regression tests for invalid backslash escape handling
 // ---------------------------------------------------------------------------
 
-/// `parse_conductor_output` must succeed when a field value contains `\.`
+/// `parse_flow_output` must succeed when a field value contains `\.`
 /// (Swift key-path syntax), which is not a valid JSON escape sequence.
 #[test]
-fn test_parse_conductor_output_backslash_in_context() {
-    let text = r#"<<<CONDUCTOR_OUTPUT>>>
+fn test_parse_flow_output_backslash_in_context() {
+    let text = r#"<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "Added @Environment(\.openURL) to toolbar"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 "#;
-    let output = parse_conductor_output(text);
+    let output = parse_flow_output(text);
     assert!(
         output.is_some(),
-        "parse_conductor_output must succeed with bare backslash in context"
+        "parse_flow_output must succeed with bare backslash in context"
     );
     let output = output.unwrap();
     assert!(
@@ -178,7 +180,7 @@ fn test_interpret_agent_output_backslash_succeeded_true() {
     let schema = make_test_schema();
     // `\.` in the summary field — invalid JSON escape that the sanitizer must fix.
     let text =
-        "<<<CONDUCTOR_OUTPUT>>>\n{\"approved\": true, \"summary\": \"Use @Environment(\\.openURL)\"}\n<<<END_CONDUCTOR_OUTPUT>>>";
+        "<<<FLOW_OUTPUT>>>\n{\"approved\": true, \"summary\": \"Use @Environment(\\.openURL)\"}\n<<<END_FLOW_OUTPUT>>>";
     let result = interpret_agent_output(Some(text), Some(&schema), true);
     assert!(
         result.is_ok(),

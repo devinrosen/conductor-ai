@@ -25,4 +25,4 @@ Write the comment body to `/tmp/coverage-report.md` before posting. The comment 
 
 Keep the comment concise and actionable. Use markdown formatting.
 
-After posting the comment, output a summary in your CONDUCTOR_OUTPUT context field.
+After posting the comment, output a summary in your FLOW_OUTPUT context field.

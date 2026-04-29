@@ -36,7 +36,7 @@ Steps:
    - Subtract 15 if reviewers disagree on blocking status
    - Minimum 0
 
-5. Produce CONDUCTOR_OUTPUT with structured fields:
+5. Produce FLOW_OUTPUT with structured fields:
    - `verdict`: "pass" or "fail"
    - `confidence`: number 0-100
    - `consensus_mode`: "consensus" or "discussion"

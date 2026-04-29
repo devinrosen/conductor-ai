@@ -53,21 +53,21 @@ Gate feedback (if provided): {{gate_feedback}}
 ## Output
 
 ```
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": ["issues_filed"], "context": "Created <N> GitHub issues for high-severity mobile UX findings: <list of issue numbers/titles>"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 ```
 
 If dry-run:
 ```
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "Dry run — would create <N> issues for high-severity findings: <titles>"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 ```
 
 If no high-severity findings were found in the report:
 ```
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "No high-severity findings to file issues for"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 ```

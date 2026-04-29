@@ -66,7 +66,7 @@ List any large files that are generated, data files, or have only L-effort split
 Set context to the full markdown report text (truncated to ~2000 chars if very long, with a note that the full report is in `analysis-report.md`).
 
 ```
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "# Repo Analysis Report\n\n## Executive Summary\n..."}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 ```

@@ -39,7 +39,7 @@ pub use constants::{
     REGRESSION_FAILURE_RATE_THRESHOLD_PP, REGRESSION_MIN_RECENT_RUNS, STEP_ROLE_FOREACH,
     STEP_ROLE_WORKFLOW,
 };
-pub use runkon_flow::constants::CONDUCTOR_OUTPUT_INSTRUCTION;
+pub use runkon_flow::constants::FLOW_OUTPUT_INSTRUCTION;
 /// Returns the list of variable keys that the workflow engine injects automatically
 /// from run context (ticket and repo metadata, plus `workflow_run_id`).
 ///
@@ -56,7 +56,7 @@ pub use coordinator::{
 pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
 pub use manager::recovery::{ReapedStaleRun, StaleWorkflowRun};
 pub use manager::{InvalidWorkflowEntry, StepMetrics, WorkflowManager};
-pub use output::{parse_conductor_output, ConductorOutput};
+pub use output::{parse_flow_output, FlowOutput};
 pub use runkon_flow::traits::persistence::{
     FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,
     WorkflowPersistence,

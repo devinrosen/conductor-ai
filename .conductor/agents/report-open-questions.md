@@ -29,5 +29,5 @@ Prior step context (ticket assessment with open questions): {{prior_context}}
 
 4. Do not write any files or make any git changes.
 
-5. Emit `<<<CONDUCTOR_OUTPUT>>>` with:
+5. Emit `<<<FLOW_OUTPUT>>>` with:
    - `context`: the formatted open questions block above

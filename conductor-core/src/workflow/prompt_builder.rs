@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::schema_config;
 
-use super::CONDUCTOR_OUTPUT_INSTRUCTION;
+use super::FLOW_OUTPUT_INSTRUCTION;
 
 fn substitute_variables_impl(
     template: &str,
@@ -115,7 +115,7 @@ fn build_prompt_core(
             prompt.push_str(&schema_config::generate_prompt_instructions(s));
         }
         None => {
-            prompt.push_str(CONDUCTOR_OUTPUT_INSTRUCTION);
+            prompt.push_str(FLOW_OUTPUT_INSTRUCTION);
         }
     }
     prompt

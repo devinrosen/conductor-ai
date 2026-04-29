@@ -99,7 +99,7 @@ If no issues were created (auth failure or no eligible items):
 - Set context to an explanation of why no issues were created.
 
 ```
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": ["issues_created"], "context": "Created N GitHub issues for top refactoring recommendations:\n- #123: ..."}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 ```

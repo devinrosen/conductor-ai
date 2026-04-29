@@ -32,5 +32,5 @@ Prior step context: {{prior_context}}
 
 6. Capture the PR URL (from the `gh pr create` output or `gh pr view --json url -q .url`).
 
-7. Emit `<<<CONDUCTOR_OUTPUT>>>` with:
+7. Emit `<<<FLOW_OUTPUT>>>` with:
    - `context`: the PR URL and a one-sentence description of what was merged

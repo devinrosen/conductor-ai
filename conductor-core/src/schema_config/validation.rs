@@ -20,7 +20,7 @@ pub struct StructuredOutput {
     pub json_string: String,
 }
 
-/// Find the start position of the real `<<<CONDUCTOR_OUTPUT>>>` block.
+/// Find the start position of the real `<<<FLOW_OUTPUT>>>` block.
 ///
 /// Returns the position of the last occurrence of `marker` where the immediately
 /// following content (after trimming whitespace) starts with `{`, `[`, or a markdown
@@ -28,7 +28,7 @@ pub struct StructuredOutput {
 /// - Occurrences inside sentences or code examples are not followed by JSON
 /// - Occurrences inside a JSON field value appear mid-string, not at a JSON boundary
 /// - The real block start is always immediately followed by JSON or a code-fenced JSON block
-pub fn find_conductor_output_start(text: &str, marker: &str) -> Option<usize> {
+pub fn find_flow_output_start(text: &str, marker: &str) -> Option<usize> {
     let mut last_valid = None;
     let mut search_pos = 0;
     while let Some(rel) = text[search_pos..].find(marker) {
@@ -42,7 +42,7 @@ pub fn find_conductor_output_start(text: &str, marker: &str) -> Option<usize> {
     last_valid
 }
 
-/// Extract and clean the raw JSON string from a `<<<CONDUCTOR_OUTPUT>>>` block.
+/// Extract and clean the raw JSON string from a `<<<FLOW_OUTPUT>>>` block.
 ///
 /// Finds the last valid start marker occurrence, slices to the end marker,
 /// trims whitespace, and strips markdown code fences. Returns `None` if no
@@ -51,10 +51,10 @@ pub fn find_conductor_output_start(text: &str, marker: &str) -> Option<usize> {
 /// Trailing-comma stripping is intentionally omitted here — callers that need
 /// it (e.g. `parse_structured_output`) apply it themselves.
 pub fn extract_output_block(text: &str) -> Option<String> {
-    let start_marker = "<<<CONDUCTOR_OUTPUT>>>";
-    let end_marker = "<<<END_CONDUCTOR_OUTPUT>>>";
+    let start_marker = "<<<FLOW_OUTPUT>>>";
+    let end_marker = "<<<END_FLOW_OUTPUT>>>";
 
-    let start = find_conductor_output_start(text, start_marker)?;
+    let start = find_flow_output_start(text, start_marker)?;
     let json_start = start + start_marker.len();
     let end = text[json_start..].find(end_marker)?;
     let raw = text[json_start..json_start + end].trim();
@@ -62,11 +62,11 @@ pub fn extract_output_block(text: &str) -> Option<String> {
     Some(strip_code_fences(raw))
 }
 
-/// Parse the `<<<CONDUCTOR_OUTPUT>>>` block as structured JSON, validate against
+/// Parse the `<<<FLOW_OUTPUT>>>` block as structured JSON, validate against
 /// the schema, and derive markers.
 pub fn parse_structured_output(text: &str, schema: &OutputSchema) -> Result<StructuredOutput> {
     let cleaned = extract_output_block(text).ok_or_else(|| {
-        ConductorError::Schema("No <<<CONDUCTOR_OUTPUT>>> block found in agent output".to_string())
+        ConductorError::Schema("No <<<FLOW_OUTPUT>>> block found in agent output".to_string())
     })?;
 
     // Strip trailing commas (common LLM artifact)
@@ -75,7 +75,7 @@ pub fn parse_structured_output(text: &str, schema: &OutputSchema) -> Result<Stru
     let cleaned = fix_backslash_escapes(&cleaned);
 
     let value: serde_json::Value = serde_json::from_str(&cleaned)
-        .map_err(|e| ConductorError::Schema(format!("Invalid JSON in CONDUCTOR_OUTPUT: {e}")))?;
+        .map_err(|e| ConductorError::Schema(format!("Invalid JSON in FLOW_OUTPUT: {e}")))?;
 
     // Validate against schema
     validate_value(&value, &schema.fields)?;
@@ -133,7 +133,7 @@ fn derive_context(value: &serde_json::Value, schema: &OutputSchema) -> String {
 ///
 /// This is used by the direct API execution path (see `api_call.rs`) where the
 /// Anthropic API has already enforced schema conformance via `tool_use`. There is
-/// no `<<<CONDUCTOR_OUTPUT>>>` block to extract and no JSON validation step needed —
+/// no `<<<FLOW_OUTPUT>>>` block to extract and no JSON validation step needed —
 /// the value is already a clean, schema-conformant JSON object.
 pub fn derive_output_from_value(
     value: serde_json::Value,
@@ -178,9 +178,9 @@ pub fn strip_code_fences(s: &str) -> String {
 // ---------------------------------------------------------------------------
 
 fn validate_value(value: &serde_json::Value, fields: &[FieldDef]) -> Result<()> {
-    let obj = value.as_object().ok_or_else(|| {
-        ConductorError::Schema("CONDUCTOR_OUTPUT must be a JSON object".to_string())
-    })?;
+    let obj = value
+        .as_object()
+        .ok_or_else(|| ConductorError::Schema("FLOW_OUTPUT must be a JSON object".to_string()))?;
 
     for field in fields {
         match obj.get(&field.name) {
