@@ -176,6 +176,9 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
         "PYTHONPATH",
         "RUBYLIB",
         "NODE_PATH",
+        // Protect the bot-identity token resolved by `as = "..."` from being
+        // silently overwritten by a workflow-authored env block.
+        "GH_TOKEN",
     ];
     for (k, v) in &node.env {
         if k.contains('=') || k.contains('\0') {
