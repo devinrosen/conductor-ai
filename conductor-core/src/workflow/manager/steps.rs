@@ -751,7 +751,10 @@ mod tests {
         // The method must succeed (not error) in this case.
         mgr.mirror_step_metrics_from_run(
             "does-not-exist",
-            StepMetrics { cost_usd: Some(1.0), ..Default::default() },
+            StepMetrics {
+                cost_usd: Some(1.0),
+                ..Default::default()
+            },
         )
         .unwrap();
 
