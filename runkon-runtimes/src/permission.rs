@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// Opaque permission mode forwarded through to the headless agent CLI.
 ///
@@ -12,7 +12,13 @@ use serde::{Deserialize, Serialize};
 /// `Default` produces no permission flag value; `Other(s)` forwards `s` as-is
 /// as the value argument to whichever permission flag the host adds to the
 /// CLI invocation.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Deserialize` is intentionally absent: `PermissionMode::Other` must only
+/// be created from compile-time-known strings via the host crate's typed enum
+/// (e.g. `AgentPermissionMode::to_runtime_permission_mode`). Allowing
+/// deserialization from untrusted input would bypass that invariant and could
+/// inject arbitrary strings as CLI flags.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub enum PermissionMode {
     /// No permission flag value forwarded.
     #[default]

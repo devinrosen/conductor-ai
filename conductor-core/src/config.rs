@@ -876,6 +876,51 @@ mod tests {
     }
 
     #[test]
+    fn test_agent_permission_mode_to_runtime_permission_mode() {
+        use runkon_runtimes::permission::PermissionMode;
+        assert_eq!(
+            AgentPermissionMode::AutoMode
+                .to_runtime_permission_mode()
+                .cli_flag_value(),
+            None
+        );
+        assert_eq!(
+            AgentPermissionMode::SkipPermissions
+                .to_runtime_permission_mode()
+                .cli_flag_value(),
+            None
+        );
+        assert_eq!(
+            AgentPermissionMode::Plan
+                .to_runtime_permission_mode()
+                .cli_flag_value(),
+            Some("plan")
+        );
+        assert_eq!(
+            AgentPermissionMode::RepoSafe
+                .to_runtime_permission_mode()
+                .cli_flag_value(),
+            Some("repo-safe")
+        );
+        assert_eq!(
+            AgentPermissionMode::AutoMode.to_runtime_permission_mode(),
+            PermissionMode::Default
+        );
+        assert_eq!(
+            AgentPermissionMode::SkipPermissions.to_runtime_permission_mode(),
+            PermissionMode::Default
+        );
+        assert_eq!(
+            AgentPermissionMode::Plan.to_runtime_permission_mode(),
+            PermissionMode::Other(std::borrow::Cow::Borrowed("plan"))
+        );
+        assert_eq!(
+            AgentPermissionMode::RepoSafe.to_runtime_permission_mode(),
+            PermissionMode::Other(std::borrow::Cow::Borrowed("repo-safe"))
+        );
+    }
+
+    #[test]
     fn test_agent_permission_mode_claude_permission_flag() {
         assert_eq!(
             AgentPermissionMode::AutoMode.claude_permission_flag(),
