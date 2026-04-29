@@ -1,276 +1,36 @@
-#[cfg(test)]
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+//! Backwards-compat re-export of the canonical implementation that now lives in
+//! `runkon_flow::persistence_sqlite` (Phase 4 step 4.3).
+//!
+//! Existing call sites import [`SqliteWorkflowPersistence`] from
+//! `crate::workflow` — keeping the path stable here lets the move land without
+//! ripple changes through the engine, CLI, TUI, and web layers. The integration
+//! tests below verify the runkon-flow implementation against conductor's actual
+//! schema (migrations + helper tables) rather than re-testing trait semantics.
 
-use rusqlite::Connection;
-
-use crate::error::ConductorError;
-use crate::workflow::engine_error::EngineError;
-use crate::workflow::manager::WorkflowManager;
-use crate::workflow::WorkflowRunStatus;
-use crate::workflow::{WorkflowRun, WorkflowRunStep};
-
-use runkon_flow::traits::persistence::{
-    FanOutItemRow, FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep,
-    StepUpdate, WorkflowPersistence,
-};
-
-/// SQLite-backed implementation of `WorkflowPersistence`.
-///
-/// Wraps a `rusqlite::Connection` behind `Arc<Mutex<_>>` so it satisfies the
-/// `Send + Sync` requirement of `WorkflowPersistence`. Every method acquires the
-/// lock, instantiates a transient `WorkflowManager`, delegates to it, and maps
-/// `ConductorError` → `EngineError::Persistence`.
-pub struct SqliteWorkflowPersistence {
-    conn: Arc<Mutex<Connection>>,
-}
-
-impl SqliteWorkflowPersistence {
-    /// Open a new SQLite connection at `path`, configured for WAL mode and
-    /// foreign key enforcement. Creates the file if it does not already exist.
-    #[cfg(test)]
-    pub fn open(path: &Path) -> crate::error::Result<Self> {
-        let conn = Connection::open(path).map_err(ConductorError::Database)?;
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(ConductorError::Database)?;
-        conn.pragma_update(None, "foreign_keys", true)
-            .map_err(ConductorError::Database)?;
-        conn.pragma_update(None, "busy_timeout", 5000)
-            .map_err(ConductorError::Database)?;
-        Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
-        })
-    }
-
-    /// Wrap an existing shared connection. Used by `execute_workflow_standalone`
-    /// to share one `Connection` between the setup phase and the engine.
-    pub fn from_shared_connection(conn: Arc<Mutex<Connection>>) -> Self {
-        Self { conn }
-    }
-}
-
-fn to_engine_err(e: ConductorError) -> EngineError {
-    EngineError::Persistence(e.to_string())
-}
-
-fn lock_err() -> EngineError {
-    EngineError::Persistence("SqliteWorkflowPersistence: mutex poisoned".into())
-}
-
-impl SqliteWorkflowPersistence {
-    /// Acquire the connection lock, instantiate a `WorkflowManager`, run `f`,
-    /// and map any `ConductorError` to `EngineError::Persistence`.
-    fn with_manager<F, T>(&self, f: F) -> Result<T, EngineError>
-    where
-        F: for<'c> FnOnce(WorkflowManager<'c>) -> crate::error::Result<T>,
-    {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        f(WorkflowManager::new(&guard)).map_err(to_engine_err)
-    }
-}
-
-impl WorkflowPersistence for SqliteWorkflowPersistence {
-    fn create_run(&self, new_run: NewRun) -> Result<WorkflowRun, EngineError> {
-        self.with_manager(|mgr| {
-            mgr.create_workflow_run_with_targets(
-                &new_run.workflow_name,
-                new_run.worktree_id.as_deref(),
-                new_run.ticket_id.as_deref(),
-                new_run.repo_id.as_deref(),
-                &new_run.parent_run_id,
-                new_run.dry_run,
-                &new_run.trigger,
-                new_run.definition_snapshot.as_deref(),
-                new_run.parent_workflow_run_id.as_deref(),
-                new_run.target_label.as_deref(),
-            )
-        })
-    }
-
-    fn get_run(&self, run_id: &str) -> Result<Option<WorkflowRun>, EngineError> {
-        self.with_manager(|mgr| mgr.get_workflow_run(run_id))
-    }
-
-    fn list_active_runs(
-        &self,
-        statuses: &[WorkflowRunStatus],
-    ) -> Result<Vec<WorkflowRun>, EngineError> {
-        self.with_manager(|mgr| mgr.list_active_workflow_runs(statuses))
-    }
-
-    fn update_run_status(
-        &self,
-        run_id: &str,
-        status: WorkflowRunStatus,
-        result_summary: Option<&str>,
-        error: Option<&str>,
-    ) -> Result<(), EngineError> {
-        self.with_manager(|mgr| mgr.update_workflow_status(run_id, status, result_summary, error))
-    }
-
-    fn insert_step(&self, new_step: NewStep) -> Result<String, EngineError> {
-        self.with_manager(|mgr| {
-            if let Some(retry_count) = new_step.retry_count {
-                mgr.insert_step_running(
-                    &new_step.workflow_run_id,
-                    &new_step.step_name,
-                    &new_step.role,
-                    new_step.can_commit,
-                    new_step.position,
-                    new_step.iteration,
-                    retry_count,
-                )
-            } else {
-                mgr.insert_step(
-                    &new_step.workflow_run_id,
-                    &new_step.step_name,
-                    &new_step.role,
-                    new_step.can_commit,
-                    new_step.position,
-                    new_step.iteration,
-                )
-            }
-        })
-    }
-
-    fn update_step(&self, step_id: &str, update: StepUpdate) -> Result<(), EngineError> {
-        self.with_manager(|mgr| {
-            mgr.update_step_status_full(
-                step_id,
-                update.status,
-                update.child_run_id.as_deref(),
-                update.result_text.as_deref(),
-                update.context_out.as_deref(),
-                update.markers_out.as_deref(),
-                update.retry_count,
-                update.structured_output.as_deref(),
-                update.step_error.as_deref(),
-            )
-        })
-    }
-
-    fn get_steps(&self, run_id: &str) -> Result<Vec<WorkflowRunStep>, EngineError> {
-        self.with_manager(|mgr| mgr.get_workflow_steps(run_id))
-    }
-
-    fn insert_fan_out_item(
-        &self,
-        step_run_id: &str,
-        item_type: &str,
-        item_id: &str,
-        item_ref: &str,
-    ) -> Result<String, EngineError> {
-        self.with_manager(|mgr| mgr.insert_fan_out_item(step_run_id, item_type, item_id, item_ref))
-    }
-
-    fn update_fan_out_item(
-        &self,
-        item_id: &str,
-        update: FanOutItemUpdate,
-    ) -> Result<(), EngineError> {
-        self.with_manager(|mgr| match update {
-            FanOutItemUpdate::Running { child_run_id } => {
-                mgr.update_fan_out_item_running(item_id, &child_run_id)
-            }
-            FanOutItemUpdate::Terminal { status } => {
-                mgr.update_fan_out_item_terminal(item_id, status.as_str())
-            }
-        })
-    }
-
-    fn get_fan_out_items(
-        &self,
-        step_run_id: &str,
-        status_filter: Option<FanOutItemStatus>,
-    ) -> Result<Vec<FanOutItemRow>, EngineError> {
-        let status_str = status_filter.map(|s| s.as_str());
-        self.with_manager(|mgr| mgr.get_fan_out_items(step_run_id, status_str))
-    }
-
-    fn get_gate_approval(&self, step_id: &str) -> Result<GateApprovalState, EngineError> {
-        self.with_manager(|mgr| mgr.get_gate_approval_state(step_id))
-    }
-
-    fn approve_gate(
-        &self,
-        step_id: &str,
-        approved_by: &str,
-        feedback: Option<&str>,
-        selections: Option<&[String]>,
-    ) -> Result<(), EngineError> {
-        let context_out = selections
-            .filter(|s| !s.is_empty())
-            .map(crate::workflow::helpers::format_gate_selection_context);
-        self.with_manager(|mgr| {
-            mgr.approve_gate(step_id, approved_by, feedback, selections, context_out)
-        })
-    }
-
-    fn reject_gate(
-        &self,
-        step_id: &str,
-        rejected_by: &str,
-        feedback: Option<&str>,
-    ) -> Result<(), EngineError> {
-        self.with_manager(|mgr| mgr.reject_gate(step_id, rejected_by, feedback))
-    }
-
-    fn is_run_cancelled(&self, run_id: &str) -> Result<bool, EngineError> {
-        self.with_manager(|mgr| mgr.is_run_cancelled(run_id))
-    }
-
-    fn tick_heartbeat(&self, run_id: &str) -> Result<(), EngineError> {
-        self.with_manager(|mgr| mgr.tick_heartbeat(run_id))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn persist_metrics(
-        &self,
-        run_id: &str,
-        input_tokens: i64,
-        output_tokens: i64,
-        cache_read_input_tokens: i64,
-        cache_creation_input_tokens: i64,
-        cost_usd: f64,
-        num_turns: i64,
-        duration_ms: i64,
-    ) -> Result<(), EngineError> {
-        self.with_manager(|mgr| {
-            mgr.persist_workflow_metrics(
-                run_id,
-                input_tokens,
-                output_tokens,
-                cache_read_input_tokens,
-                cache_creation_input_tokens,
-                num_turns, // positional swap: rk cost_usd pos 6 maps to core pos 7
-                cost_usd,
-                duration_ms,
-                None,
-            )
-        })
-    }
-}
-
-#[cfg(test)]
-impl SqliteWorkflowPersistence {
-    fn from_connection(conn: Connection) -> Self {
-        Self {
-            conn: Arc::new(Mutex::new(conn)),
-        }
-    }
-}
+pub use runkon_flow::persistence_sqlite::SqliteWorkflowPersistence;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    use runkon_flow::traits::persistence::{
+        GateApprovalState, NewRun, NewStep, WorkflowPersistence,
+    };
+
     use crate::agent::AgentManager;
-    use runkon_flow::traits::persistence::{GateApprovalState, NewRun, NewStep};
+    use crate::workflow::WorkflowRunStatus;
+
+    use super::SqliteWorkflowPersistence;
 
     fn make_persistence() -> (SqliteWorkflowPersistence, String) {
         let conn = crate::test_helpers::setup_db();
         let agent_mgr = AgentManager::new(&conn);
         let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-        (SqliteWorkflowPersistence::from_connection(conn), parent.id)
+        let shared = Arc::new(Mutex::new(conn));
+        (
+            SqliteWorkflowPersistence::from_shared_connection(shared),
+            parent.id,
+        )
     }
 
     fn make_new_run(parent_run_id: String) -> NewRun {
@@ -356,17 +116,13 @@ mod tests {
         assert!(active.iter().any(|r| r.id == run.id));
     }
 
-    // ---------------------------------------------------------------------------
-    // from_shared_connection()
-    // ---------------------------------------------------------------------------
-
     #[test]
     fn from_shared_connection_creates_working_persistence() {
         let conn = crate::test_helpers::setup_db();
         let agent_mgr = AgentManager::new(&conn);
         let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
-        let shared = Arc::new(std::sync::Mutex::new(conn));
+        let shared = Arc::new(Mutex::new(conn));
         let p = SqliteWorkflowPersistence::from_shared_connection(Arc::clone(&shared));
 
         let run = p.create_run(make_new_run(parent.id)).unwrap();
@@ -385,7 +141,7 @@ mod tests {
         let agent_mgr = AgentManager::new(&conn);
         let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
-        let shared = Arc::new(std::sync::Mutex::new(conn));
+        let shared = Arc::new(Mutex::new(conn));
         let p = SqliteWorkflowPersistence::from_shared_connection(Arc::clone(&shared));
 
         let run = p.create_run(make_new_run(parent.id)).unwrap();
@@ -399,10 +155,6 @@ mod tests {
             "run written via persistence should be visible through shared conn"
         );
     }
-
-    // ---------------------------------------------------------------------------
-    // is_run_cancelled()
-    // ---------------------------------------------------------------------------
 
     #[test]
     fn is_run_cancelled_returns_true_for_cancelled_status() {
@@ -437,16 +189,13 @@ mod tests {
         assert!(!p.is_run_cancelled("nonexistent-run-id").unwrap());
     }
 
-    /// `persist_metrics` swaps `cost_usd` (pos 6) and `num_turns` (pos 7) when
-    /// forwarding to `persist_workflow_metrics`, which expects `total_turns` before
-    /// `total_cost_usd`. This test guards against a future signature drift that would
-    /// silently swap the columns in the DB.
+    /// `persist_metrics` must land cost_usd in `total_cost_usd` and num_turns in
+    /// `total_turns`. Guards against future signature drift between trait and SQL.
     #[test]
     fn persist_metrics_maps_cost_and_turns_to_correct_columns() {
         let (p, parent_id) = make_persistence();
         let run = p.create_run(make_new_run(parent_id)).unwrap();
 
-        // Use distinguishable values so a swap is immediately visible.
         let cost_usd = 42.5_f64;
         let num_turns = 7_i64;
 
@@ -467,18 +216,14 @@ mod tests {
     }
 
     /// `approve_gate` with non-empty `selections` must write `context_out` to the step row.
-    ///
-    /// The `SqliteWorkflowPersistence` implementation calls
-    /// `format_gate_selection_context` when `selections` is non-empty, so the
-    /// resulting `context_out` should contain each selection item.
     #[test]
-    fn test_approve_gate_with_selections_sets_context_out() {
+    fn approve_gate_with_selections_sets_context_out() {
         let conn = crate::test_helpers::setup_db();
         let agent_mgr = AgentManager::new(&conn);
         let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
-        let shared = std::sync::Arc::new(std::sync::Mutex::new(conn));
-        let p = SqliteWorkflowPersistence::from_shared_connection(std::sync::Arc::clone(&shared));
+        let shared = Arc::new(Mutex::new(conn));
+        let p = SqliteWorkflowPersistence::from_shared_connection(Arc::clone(&shared));
 
         let run = p.create_run(make_new_run(parent.id)).unwrap();
         let step_id = p
@@ -509,7 +254,6 @@ mod tests {
         p.approve_gate(&step_id, "human", None, Some(&selections))
             .unwrap();
 
-        // Read back the step to verify context_out was written.
         let steps = p.get_steps(&run.id).unwrap();
         let step = steps.iter().find(|s| s.id == step_id).unwrap();
         let context_out = step
@@ -529,7 +273,7 @@ mod tests {
     /// `approve_gate` with `selections = Some(&[])` (empty slice) must NOT set
     /// `context_out` — the persistence layer filters empty selections out.
     #[test]
-    fn test_approve_gate_with_empty_selections_sets_no_context_out() {
+    fn approve_gate_with_empty_selections_sets_no_context_out() {
         let (p, parent_id) = make_persistence();
         let run = p.create_run(make_new_run(parent_id)).unwrap();
         let step_id = p
@@ -544,8 +288,6 @@ mod tests {
             })
             .unwrap();
 
-        // Pass an empty selections slice — validation is skipped for empty slices,
-        // and `format_gate_selection_context` is not called, so context_out stays None.
         p.approve_gate(&step_id, "human", None, Some(&[])).unwrap();
 
         let steps = p.get_steps(&run.id).unwrap();
@@ -595,5 +337,20 @@ mod tests {
             }
             other => panic!("expected Approved, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn open_creates_usable_connection_at_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.db");
+        // Apply conductor migrations so the workflow tables exist.
+        crate::db::open_database(&path).expect("migrations should apply");
+        // open() must succeed and produce a functional persistence instance.
+        let p = SqliteWorkflowPersistence::open(&path).expect("open() should succeed");
+        // A get on a nonexistent run returns Ok(None), proving the connection is live.
+        assert!(
+            p.get_run("nonexistent-run-id").unwrap().is_none(),
+            "get_run on a fresh DB should return None for unknown IDs"
+        );
     }
 }
