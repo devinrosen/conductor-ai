@@ -7,26 +7,30 @@ use crate::error::{ConductorError, Result};
 
 // Re-export moved types from runkon-runtimes
 pub use runkon_runtimes::config::RuntimeConfig;
-pub use runkon_runtimes::permission::PermissionMode as AgentPermissionMode;
 
-/// Extension trait for [`AgentPermissionMode`] that provides conductor-specific
-/// and Claude-Code-CLI-specific flag mappings.
+/// Controls which permission flag is passed to Claude Code when launching agent runs.
 ///
-/// Kept in conductor-core (not runkon-runtimes) so the portable crate stays
-/// vendor-neutral.
-pub trait AgentPermissionModeExt {
-    /// Returns the conductor CLI flag for this mode (used in `conductor agent run` passthrough args).
-    fn cli_flag(&self) -> &str;
-    /// Returns the actual permission flag to pass to the `claude` subprocess.
-    fn claude_permission_flag(&self) -> &str;
-    /// Returns the optional value argument that follows the claude permission flag.
-    fn claude_permission_flag_value(&self) -> Option<&str>;
-    /// Returns the `--allowedTools` pattern for this mode, if any.
-    fn allowed_tools(&self) -> Option<&'static str>;
+/// Defined natively in conductor-core (not re-exported from runkon-runtimes)
+/// so the portable runtime crate stays vendor-neutral. Convert to the opaque
+/// [`runkon_runtimes::permission::PermissionMode`] via
+/// [`Self::to_runtime_permission_mode`] when constructing a `RuntimeRequest`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentPermissionMode {
+    /// `--enable-auto-mode` (may prompt for permissions in headless agents).
+    AutoMode,
+    /// `--dangerously-skip-permissions` (default for headless agent runs).
+    #[default]
+    SkipPermissions,
+    /// `--permission-mode plan` (read-only mode for repo-scoped agents).
+    Plan,
+    /// `--dangerously-skip-permissions` + `--allowedTools` read-safe pattern.
+    RepoSafe,
 }
 
-impl AgentPermissionModeExt for AgentPermissionMode {
-    fn cli_flag(&self) -> &str {
+impl AgentPermissionMode {
+    /// Conductor CLI flag for this mode (used in `conductor agent run` passthrough args).
+    pub fn cli_flag(&self) -> &'static str {
         match self {
             Self::AutoMode => "--enable-auto-mode",
             Self::SkipPermissions => "--dangerously-skip-permissions",
@@ -35,7 +39,8 @@ impl AgentPermissionModeExt for AgentPermissionMode {
         }
     }
 
-    fn claude_permission_flag(&self) -> &str {
+    /// Permission flag passed directly to the `claude` subprocess.
+    pub fn claude_permission_flag(&self) -> &'static str {
         match self {
             Self::AutoMode => "--enable-auto-mode",
             Self::SkipPermissions => "--dangerously-skip-permissions",
@@ -44,19 +49,42 @@ impl AgentPermissionModeExt for AgentPermissionMode {
         }
     }
 
-    fn claude_permission_flag_value(&self) -> Option<&str> {
+    /// Optional value argument that follows the claude permission flag.
+    pub fn claude_permission_flag_value(&self) -> Option<&'static str> {
         match self {
             Self::Plan => Some("plan"),
             _ => None,
         }
     }
 
-    fn allowed_tools(&self) -> Option<&'static str> {
+    /// Optional value argument for the conductor CLI flag (`--permission-mode <value>`).
+    pub fn cli_flag_value(&self) -> Option<&'static str> {
+        match self {
+            Self::Plan => Some("plan"),
+            Self::RepoSafe => Some("repo-safe"),
+            _ => None,
+        }
+    }
+
+    /// `--allowedTools` pattern for this mode, if any.
+    pub fn allowed_tools(&self) -> Option<&'static str> {
         match self {
             Self::Plan | Self::RepoSafe => {
                 Some("Bash,Glob,Grep,Read,WebFetch,WebSearch,mcp__conductor__*,mcp__*")
             }
             _ => None,
+        }
+    }
+
+    /// Convert into the opaque permission mode consumed by `runkon-runtimes`'
+    /// headless arg builder. Maps each variant to its [`Self::cli_flag_value`]
+    /// so the runtime crate never sees Claude-CLI strings at compile time.
+    pub fn to_runtime_permission_mode(self) -> runkon_runtimes::permission::PermissionMode {
+        match self.cli_flag_value() {
+            Some(v) => {
+                runkon_runtimes::permission::PermissionMode::Other(std::borrow::Cow::Borrowed(v))
+            }
+            None => runkon_runtimes::permission::PermissionMode::Default,
         }
     }
 }
@@ -1664,7 +1692,6 @@ bot_name = "my-bot"
 
     #[test]
     fn test_agent_permission_mode_ext_cli_flag() {
-        use super::AgentPermissionModeExt;
         assert_eq!(
             AgentPermissionMode::AutoMode.cli_flag(),
             "--enable-auto-mode"
@@ -1682,7 +1709,6 @@ bot_name = "my-bot"
 
     #[test]
     fn test_agent_permission_mode_ext_claude_permission_flag() {
-        use super::AgentPermissionModeExt;
         assert_eq!(
             AgentPermissionMode::AutoMode.claude_permission_flag(),
             "--enable-auto-mode"
@@ -1703,7 +1729,6 @@ bot_name = "my-bot"
 
     #[test]
     fn test_agent_permission_mode_ext_claude_permission_flag_value() {
-        use super::AgentPermissionModeExt;
         assert_eq!(
             AgentPermissionMode::AutoMode.claude_permission_flag_value(),
             None
@@ -1724,7 +1749,6 @@ bot_name = "my-bot"
 
     #[test]
     fn test_agent_permission_mode_ext_allowed_tools() {
-        use super::AgentPermissionModeExt;
         assert_eq!(AgentPermissionMode::AutoMode.allowed_tools(), None);
         assert_eq!(AgentPermissionMode::SkipPermissions.allowed_tools(), None);
         assert!(AgentPermissionMode::Plan.allowed_tools().is_some());

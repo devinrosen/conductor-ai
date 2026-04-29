@@ -1221,7 +1221,8 @@ pub async fn start_repo_agent(
     // DB and config locks are now dropped.
 
     // Spawn headless subprocess with repo-safe permission mode and wire stdout to SSE.
-    let repo_safe = conductor_core::config::AgentPermissionMode::RepoSafe;
+    let repo_safe =
+        conductor_core::config::AgentPermissionMode::RepoSafe.to_runtime_permission_mode();
     let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
         run_id: &run.id,
         working_dir: &repo_path,
