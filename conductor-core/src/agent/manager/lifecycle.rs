@@ -294,6 +294,31 @@ impl<'a> AgentManager<'a> {
                 ":id": run_id,
             },
         )?;
+        // Mirror metrics onto the linked workflow step row, if any (Path X.1).
+        // Unlike the agent_runs UPDATE above, this is unconditional w.r.t. the
+        // step's status — workflow steps transition independently and the
+        // engine relies on these values being readable after the run terminates.
+        self.conn.execute(
+            "UPDATE workflow_run_steps \
+             SET cost_usd = COALESCE(:cost_usd, cost_usd), \
+                 num_turns = COALESCE(:num_turns, num_turns), \
+                 duration_ms = COALESCE(:duration_ms, duration_ms), \
+                 input_tokens = COALESCE(:input_tokens, input_tokens), \
+                 output_tokens = COALESCE(:output_tokens, output_tokens), \
+                 cache_read_input_tokens = COALESCE(:cache_read_input_tokens, cache_read_input_tokens), \
+                 cache_creation_input_tokens = COALESCE(:cache_creation_input_tokens, cache_creation_input_tokens) \
+             WHERE child_run_id = :id",
+            named_params! {
+                ":cost_usd": log_result.cost_usd,
+                ":num_turns": log_result.num_turns,
+                ":duration_ms": log_result.duration_ms,
+                ":input_tokens": log_result.input_tokens,
+                ":output_tokens": log_result.output_tokens,
+                ":cache_read_input_tokens": log_result.cache_read_input_tokens,
+                ":cache_creation_input_tokens": log_result.cache_creation_input_tokens,
+                ":id": run_id,
+            },
+        )?;
         Ok(())
     }
 
@@ -349,6 +374,10 @@ impl<'a> AgentManager<'a> {
     /// using `+=` would multiply-count tokens.  The final [`update_run_completed`]
     /// call overwrites these columns with the authoritative values from the
     /// `result` event.
+    ///
+    /// The same values are mirrored onto any `workflow_run_steps` row whose
+    /// `child_run_id` points at this run (Path X.1) so runkon-flow's persistence
+    /// layer can read step metrics without JOINing `agent_runs`.
     pub fn update_run_tokens_partial(
         &self,
         run_id: &str,
@@ -363,6 +392,20 @@ impl<'a> AgentManager<'a> {
                  cache_read_input_tokens = :cache_read_input_tokens, \
                  cache_creation_input_tokens = :cache_creation_input_tokens \
              WHERE id = :id",
+            named_params! {
+                ":input_tokens": input_tokens,
+                ":output_tokens": output_tokens,
+                ":cache_read_input_tokens": cache_read_input_tokens,
+                ":cache_creation_input_tokens": cache_creation_input_tokens,
+                ":id": run_id,
+            },
+        )?;
+        self.conn.execute(
+            "UPDATE workflow_run_steps \
+             SET input_tokens = :input_tokens, output_tokens = :output_tokens, \
+                 cache_read_input_tokens = :cache_read_input_tokens, \
+                 cache_creation_input_tokens = :cache_creation_input_tokens \
+             WHERE child_run_id = :id",
             named_params! {
                 ":input_tokens": input_tokens,
                 ":output_tokens": output_tokens,

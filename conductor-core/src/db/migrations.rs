@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 80;
+pub const LATEST_SCHEMA_VERSION: u32 = 81;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1187,6 +1187,57 @@ pub fn run(conn: &Connection) -> Result<()> {
             })?;
         }
         bump_version(conn, 80)?;
+    }
+
+    // Migration 081: hoist token / cost / duration columns onto workflow_run_steps.
+    // Path X.1 — lets runkon-flow's persistence layer read step metrics without
+    // JOINing the conductor-specific agent_runs table. Column-existence guard
+    // handles DBs that already have these columns from feature branches.
+    //
+    // Backfill is split out of the .sql file so partial-schema test setups
+    // (missing agent_runs or its token columns) survive the ALTER TABLE step.
+    // Both the workflow_run_steps existence check and the agent_runs source-
+    // column check are required because some unit tests build minimal fixtures
+    // that omit one or both tables.
+    if version < 81 {
+        let has_workflow_run_steps_table: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='table' AND name='workflow_run_steps'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        let has_step_input_tokens: bool = has_workflow_run_steps_table
+            && conn
+                .prepare("SELECT input_tokens FROM workflow_run_steps LIMIT 0")
+                .is_ok();
+        if has_workflow_run_steps_table && !has_step_input_tokens {
+            conn.execute_batch(include_str!(
+                "migrations/081_workflow_step_token_columns.sql"
+            ))?;
+        }
+        // Backfill from agent_runs only when both tables and the source columns
+        // exist. In production migrations always reach here with both present;
+        // only synthetic test schemas omit them.
+        let agent_runs_has_input_tokens: bool = conn
+            .prepare("SELECT input_tokens FROM agent_runs LIMIT 0")
+            .is_ok();
+        if agent_runs_has_input_tokens {
+            conn.execute_batch(
+                "UPDATE workflow_run_steps \
+                 SET (input_tokens, output_tokens, cache_read_input_tokens, \
+                      cache_creation_input_tokens, cost_usd, num_turns, duration_ms) = ( \
+                     SELECT ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, \
+                            ar.cache_creation_input_tokens, ar.cost_usd, ar.num_turns, ar.duration_ms \
+                     FROM agent_runs ar \
+                     WHERE ar.id = workflow_run_steps.child_run_id) \
+                 WHERE child_run_id IS NOT NULL \
+                   AND input_tokens IS NULL",
+            )?;
+        }
+        bump_version(conn, 81)?;
     }
 
     Ok(())
