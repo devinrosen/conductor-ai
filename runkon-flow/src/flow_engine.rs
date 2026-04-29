@@ -816,7 +816,11 @@ mod tests {
     fn custom_script_env_provider_is_stored_in_bundle() {
         struct FixedEnvProvider;
         impl ScriptEnvProvider for FixedEnvProvider {
-            fn env(&self, _ctx: &dyn RunContext) -> HashMap<String, String> {
+            fn env(
+                &self,
+                _ctx: &dyn RunContext,
+                _bot_name: Option<&str>,
+            ) -> HashMap<String, String> {
                 let mut m = HashMap::new();
                 m.insert("CUSTOM_VAR".to_string(), "42".to_string());
                 m
@@ -841,7 +845,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let env = engine.script_env_provider.env(&NoopCtx);
+        let env = engine.script_env_provider.env(&NoopCtx, None);
         assert_eq!(env.get("CUSTOM_VAR").map(String::as_str), Some("42"));
     }
 

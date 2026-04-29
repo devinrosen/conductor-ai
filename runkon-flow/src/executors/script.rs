@@ -108,7 +108,9 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
     // Build environment variables
     let mut env_vars: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
-    // Inject PATH and other env from the script env provider
+    // Inject PATH, GH_TOKEN (when `as = "..."` resolves to a host-known bot),
+    // and other env from the script env provider. Falls back to the
+    // workflow-level default bot when the step doesn't specify one.
     {
         struct ScriptRunCtx<'a> {
             working_dir: &'a str,
@@ -138,7 +140,11 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
             working_dir: &state.worktree_ctx.working_dir,
             repo_path: &state.worktree_ctx.repo_path,
         };
-        let provider_env = state.script_env_provider.env(&run_ctx);
+        let effective_bot = node
+            .bot_name
+            .as_deref()
+            .or(state.default_bot_name.as_deref());
+        let provider_env = state.script_env_provider.env(&run_ctx, effective_bot);
         env_vars.extend(provider_env);
     }
 

@@ -595,6 +595,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
     let script_env_provider = super::runkon_bridge::build_rk_script_env_provider(
         params.conductor_bin_dir.clone(),
         params.extra_plugin_dirs.clone(),
+        Arc::new(config.clone()),
     );
 
     let schema_resolver = make_schema_resolver(workflow.name.clone());
@@ -1036,8 +1037,11 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         wf_run.repo_id.clone(),
     ));
 
-    let script_env_provider =
-        super::runkon_bridge::build_rk_script_env_provider(input.conductor_bin_dir.clone(), vec![]);
+    let script_env_provider = super::runkon_bridge::build_rk_script_env_provider(
+        input.conductor_bin_dir.clone(),
+        vec![],
+        Arc::new(config.clone()),
+    );
 
     let schema_resolver = make_schema_resolver(wf_run.workflow_name.clone());
 

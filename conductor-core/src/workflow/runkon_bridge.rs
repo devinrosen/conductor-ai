@@ -541,16 +541,24 @@ pub(super) fn build_rk_item_provider_registry(
 
 /// Build a `ScriptEnvProvider` for use with runkon-flow.
 ///
-/// Uses `ConductorScriptEnvProvider` so that script steps inherit the
-/// conductor binary directory and any extra plugin directories on `PATH`.
+/// Uses `ConductorScriptEnvProvider` so that script steps inherit:
+/// - the conductor binary directory and any extra plugin directories on `PATH`
+/// - a `GH_TOKEN` resolved from a per-step `as = "..."` (or workflow-level
+///   default bot) when the named bot is configured under `[github.apps.<name>]`
+///
+/// `config` is wrapped in an `Arc` so the provider can stay alive past the
+/// caller's stack frame and resolve a fresh installation token per script
+/// step (tokens have a 1-hour lifetime, so re-resolving each call is fine).
 pub(super) fn build_rk_script_env_provider(
     conductor_bin_dir: Option<std::path::PathBuf>,
     extra_plugin_dirs: Vec<String>,
+    config: Arc<crate::config::Config>,
 ) -> Arc<dyn runkon_flow::traits::script_env_provider::ScriptEnvProvider> {
     Arc::new(
         crate::workflow::script_env_provider::ConductorScriptEnvProvider::new(
             conductor_bin_dir,
             extra_plugin_dirs,
+            config,
         ),
     )
 }
