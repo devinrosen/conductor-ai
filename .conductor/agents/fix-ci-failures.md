@@ -17,7 +17,7 @@ Run:
 gh pr checks
 ```
 
-If all checks pass (no failures), emit `has_failures: false` in CONDUCTOR_OUTPUT and stop — no further work needed.
+If all checks pass (no failures), emit `has_failures: false` in FLOW_OUTPUT and stop — no further work needed.
 
 ### 2. Fetch failure logs
 
@@ -49,7 +49,7 @@ Classify each failure as **fixable** or **not fixable**:
 - Failures in unrelated services or jobs
 - Any failure whose root cause is outside the PR's file set
 
-If **any** failure is not fixable, output a clear explanation of what failed and why it cannot be fixed, then exit with a non-zero status (do NOT emit `has_failures` in CONDUCTOR_OUTPUT — let the workflow surface the error to the user).
+If **any** failure is not fixable, output a clear explanation of what failed and why it cannot be fixed, then exit with a non-zero status (do NOT emit `has_failures` in FLOW_OUTPUT — let the workflow surface the error to the user).
 
 ### 4. Fix the code
 
@@ -94,15 +94,15 @@ If `--watch` is not available or times out, poll manually with `gh pr checks` in
 ### 8. Report result
 
 After checks complete:
-- If all pass → emit `has_failures: false` in CONDUCTOR_OUTPUT.
-- If any still fail → emit `has_failures: true` in CONDUCTOR_OUTPUT (the outer workflow will run another iteration, up to 3 total).
+- If all pass → emit `has_failures: false` in FLOW_OUTPUT.
+- If any still fail → emit `has_failures: true` in FLOW_OUTPUT (the outer workflow will run another iteration, up to 3 total).
 
-## CONDUCTOR_OUTPUT format
+## FLOW_OUTPUT format
 
 ```
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "<one sentence summary>"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 ```
 
 Use `"markers": ["has_failures"]` when CI is still failing; use `"markers": []` when all checks pass.

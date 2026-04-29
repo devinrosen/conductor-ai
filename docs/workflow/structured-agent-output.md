@@ -1,7 +1,7 @@
 # Structured Agent Output
 
 This document describes an optional structured output system for workflow
-agents. It builds on the existing `CONDUCTOR_OUTPUT` mechanism by allowing
+agents. It builds on the existing `FLOW_OUTPUT` mechanism by allowing
 workflows to define output schemas that the engine injects into agent prompts,
 then parses, validates, and acts on programmatically.
 
@@ -9,7 +9,7 @@ then parses, validates, and acts on programmatically.
 
 ## Motivation
 
-The current `CONDUCTOR_OUTPUT` block serves two purposes:
+The current `FLOW_OUTPUT` block serves two purposes:
 
 1. **Control flow** — markers drive `if`/`while` conditions
 2. **Context threading** — a free-text summary passed to the next step
@@ -119,7 +119,7 @@ parallel {
 }
 ```
 
-When no `output` is specified, the default `CONDUCTOR_OUTPUT` markers + context
+When no `output` is specified, the default `FLOW_OUTPUT` markers + context
 behavior applies. No breaking change.
 
 ### Schema resolution
@@ -148,7 +148,7 @@ call review-security { output = "./custom/schemas/my-review.yaml" }
 
 When a `call` has an `output` schema, the engine generates JSON output
 instructions from the schema and appends them to the agent's prompt (replacing
-the generic `CONDUCTOR_OUTPUT` instructions).
+the generic `FLOW_OUTPUT` instructions).
 
 For the `review-findings` schema, the appended instructions would be:
 
@@ -157,7 +157,7 @@ When you have finished your work, output the following block exactly as the
 last thing in your response. Do not include this block in code examples or
 anywhere else — only as the final output.
 
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {
   "findings": [
     {
@@ -172,14 +172,14 @@ anywhere else — only as the final output.
   "approved": true,
   "summary": "one or two sentence summary of your review"
 }
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 
 The "findings" array should contain one entry per issue found. If there are
 no issues, return an empty array and set "approved" to true.
 "suggestion" is optional and may be omitted.
 ```
 
-The delimiters remain `<<<CONDUCTOR_OUTPUT>>>` / `<<<END_CONDUCTOR_OUTPUT>>>`
+The delimiters remain `<<<FLOW_OUTPUT>>>` / `<<<END_FLOW_OUTPUT>>>`
 for consistency. The only change is the shape of the JSON between them.
 
 ---
@@ -465,7 +465,7 @@ points:
    the schema definition
 2. **Prompt building** (`build_agent_prompt`) — if the call has an `output`
    schema, generate schema-specific output instructions instead of the generic
-   `CONDUCTOR_OUTPUT` instructions
+   `FLOW_OUTPUT` instructions
 3. **Output parsing** — parse the JSON between delimiters, validate against
    schema, extract derived markers and context
 4. **Step record** — store the full structured output in

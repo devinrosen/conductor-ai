@@ -55,7 +55,7 @@ The ticket is: {{ticket}}
    - Key decisions are deferred ("TBD", "decide later")
    - It references work that hasn't been done yet
 
-8. Emit `<<<CONDUCTOR_OUTPUT>>>` with:
+8. Emit `<<<FLOW_OUTPUT>>>` with:
    - `markers`: include `is_refined` if the ticket is ready for autonomous diagram updates
    - `context`: ticket title, brief summary of the change, and (if not refined) a numbered list of specific open questions. Also include:
      - `Figma context:` heading with any found Figma URLs (or "none" if none found)

@@ -72,4 +72,4 @@ Prior step context: {{prior_context}}
    - Concrete, actionable recommendations to improve workflow reliability, speed, or clarity
    - At least one suggestion per identified issue
 
-3. Emit CONDUCTOR_OUTPUT with a one-sentence summary of the top finding (e.g. "Step `implement` failed on retry 2 due to a cargo build error — no retries were configured").
+3. Emit FLOW_OUTPUT with a one-sentence summary of the top finding (e.g. "Step `implement` failed on retry 2 due to a cargo build error — no retries were configured").

@@ -39,7 +39,7 @@ This inverts VISION's human-first premise explicitly. Downstream consequences:
 
 - `CLAUDE.md`'s worktree workflow block is CLI-centric and reflects the human-first era — agents increasingly drive worktree creation via MCP.
 - TUI-centric features like the Features tab are candidates for folding into general Workflows views.
-- Small MCP improvements (typed `data` in `CONDUCTOR_OUTPUT`, `CONDUCTOR_RUN_ID` scoping, a `conductor://worktree/context` resource) are higher leverage than equivalent TUI work.
+- Small MCP improvements (typed `data` in `FLOW_OUTPUT`, `CONDUCTOR_RUN_ID` scoping, a `conductor://worktree/context` resource) are higher leverage than equivalent TUI work.
 
 ### 4. Library-first until measured
 

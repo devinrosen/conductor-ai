@@ -1,7 +1,7 @@
 //! Schema-based structured output for workflow agents.
 //!
 //! Schemas live in `.conductor/schemas/<name>.yaml` and define the JSON shape
-//! that an agent's `CONDUCTOR_OUTPUT` block must conform to. The workflow engine
+//! that an agent's `FLOW_OUTPUT` block must conform to. The workflow engine
 //! uses schemas to:
 //!
 //! 1. Generate schema-specific output instructions in the agent prompt

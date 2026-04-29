@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::cancellation::CancellationToken;
-use crate::constants::CONDUCTOR_OUTPUT_INSTRUCTION;
+use crate::constants::FLOW_OUTPUT_INSTRUCTION;
 use crate::dsl::{InputType, OnFail, WorkflowDef, WorkflowNode};
 use crate::engine_error::{EngineError, Result};
 use crate::events::{EngineEvent, EventSink};
@@ -885,9 +885,9 @@ pub fn build_variable_map(state: &ExecutionState) -> HashMap<&str, String> {
     crate::prompt_builder::build_variable_map(state)
 }
 
-/// Generate the CONDUCTOR_OUTPUT instruction (used when no schema is set).
-pub fn conductor_output_instruction() -> &'static str {
-    CONDUCTOR_OUTPUT_INSTRUCTION
+/// Generate the FLOW_OUTPUT instruction (used when no schema is set).
+pub fn flow_output_instruction() -> &'static str {
+    FLOW_OUTPUT_INSTRUCTION
 }
 
 #[cfg(test)]

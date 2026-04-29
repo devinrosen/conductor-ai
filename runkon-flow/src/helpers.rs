@@ -6,23 +6,23 @@ use serde::{Deserialize, Serialize};
 use crate::engine::ExecutionState;
 
 // ---------------------------------------------------------------------------
-// Conductor output block parsing
+// Flow output block parsing
 // ---------------------------------------------------------------------------
 
-/// Parsed `<<<CONDUCTOR_OUTPUT>>>` block.
+/// Parsed `<<<FLOW_OUTPUT>>>` block.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ConductorOutput {
+pub struct FlowOutput {
     #[serde(default)]
     pub markers: Vec<String>,
     #[serde(default)]
     pub context: String,
 }
 
-/// Extract markers and context from a `<<<CONDUCTOR_OUTPUT>>> … <<<END_CONDUCTOR_OUTPUT>>>`
+/// Extract markers and context from a `<<<FLOW_OUTPUT>>> … <<<END_FLOW_OUTPUT>>>`
 /// block embedded in `text`. Returns `None` when no valid block is found.
-pub fn parse_conductor_output(text: &str) -> Option<ConductorOutput> {
-    const START: &str = "<<<CONDUCTOR_OUTPUT>>>";
-    const END: &str = "<<<END_CONDUCTOR_OUTPUT>>>";
+pub fn parse_flow_output(text: &str) -> Option<FlowOutput> {
+    const START: &str = "<<<FLOW_OUTPUT>>>";
+    const END: &str = "<<<END_FLOW_OUTPUT>>>";
 
     // Find the last START marker whose content starts with `{`, `[`, or a markdown
     // code fence (``` …) — guards against occurrences inside JSON string values or
@@ -54,11 +54,11 @@ pub fn parse_conductor_output(text: &str) -> Option<ConductorOutput> {
     let cleaned = strip_trailing_commas(raw);
     let cleaned = fix_backslash_escapes(&cleaned);
 
-    serde_json::from_str::<ConductorOutput>(&cleaned)
+    serde_json::from_str::<FlowOutput>(&cleaned)
         .map_err(|e| {
             let snippet: String = cleaned.chars().take(200).collect();
             tracing::warn!(
-                "parse_conductor_output: invalid JSON in CONDUCTOR_OUTPUT block: {e}\n  snippet: {snippet}"
+                "parse_flow_output: invalid JSON in FLOW_OUTPUT block: {e}\n  snippet: {snippet}"
             );
         })
         .ok()
@@ -307,19 +307,19 @@ pub fn find_max_completed_while_iteration(state: &ExecutionState, node: &WhileNo
 
 #[cfg(test)]
 mod parse_tests {
-    use super::parse_conductor_output;
+    use super::parse_flow_output;
 
     #[test]
     fn parses_well_formed_block_with_markers_and_context() {
         let text = concat!(
             "some preamble\n",
-            "<<<CONDUCTOR_OUTPUT>>>\n",
+            "<<<FLOW_OUTPUT>>>\n",
             r#"{"markers":["a","b"],"context":"hello world"}"#,
             "\n",
-            "<<<END_CONDUCTOR_OUTPUT>>>\n",
+            "<<<END_FLOW_OUTPUT>>>\n",
             "some suffix"
         );
-        let out = parse_conductor_output(text).unwrap();
+        let out = parse_flow_output(text).unwrap();
         assert_eq!(out.markers, vec!["a", "b"]);
         assert_eq!(out.context, "hello world");
     }
@@ -327,12 +327,12 @@ mod parse_tests {
     #[test]
     fn strips_trailing_commas_before_braces() {
         let text = concat!(
-            "<<<CONDUCTOR_OUTPUT>>>\n",
+            "<<<FLOW_OUTPUT>>>\n",
             r#"{"markers":["x",],"context":"ctx",}"#,
             "\n",
-            "<<<END_CONDUCTOR_OUTPUT>>>"
+            "<<<END_FLOW_OUTPUT>>>"
         );
-        let out = parse_conductor_output(text).unwrap();
+        let out = parse_flow_output(text).unwrap();
         assert_eq!(out.markers, vec!["x"]);
         assert_eq!(out.context, "ctx");
     }
@@ -342,12 +342,12 @@ mod parse_tests {
         // \p is not a valid JSON escape sequence; fix_backslash_escapes doubles it
         // so the JSON becomes parseable.
         let text = concat!(
-            "<<<CONDUCTOR_OUTPUT>>>\n",
+            "<<<FLOW_OUTPUT>>>\n",
             r#"{"markers":[],"context":"C:\path\to\file"}"#,
             "\n",
-            "<<<END_CONDUCTOR_OUTPUT>>>"
+            "<<<END_FLOW_OUTPUT>>>"
         );
-        let out = parse_conductor_output(text).unwrap();
+        let out = parse_flow_output(text).unwrap();
         // Successfully parsed despite the invalid backslash sequences.
         assert!(out.context.contains("path"));
     }
@@ -357,45 +357,45 @@ mod parse_tests {
         // \\ is a valid JSON escape for a literal backslash; fix_backslash_escapes
         // must not corrupt it into an unparseable sequence.
         let text = concat!(
-            "<<<CONDUCTOR_OUTPUT>>>\n",
+            "<<<FLOW_OUTPUT>>>\n",
             r#"{"markers":[],"context":"C:\\Users\\dev"}"#,
             "\n",
-            "<<<END_CONDUCTOR_OUTPUT>>>"
+            "<<<END_FLOW_OUTPUT>>>"
         );
-        let out = parse_conductor_output(text).unwrap();
+        let out = parse_flow_output(text).unwrap();
         assert_eq!(out.context, r"C:\Users\dev");
     }
 
     #[test]
     fn strips_markdown_code_fence() {
         let text = concat!(
-            "<<<CONDUCTOR_OUTPUT>>>\n",
+            "<<<FLOW_OUTPUT>>>\n",
             "```json\n",
             r#"{"markers":["fenced"],"context":"fenced context"}"#,
             "\n",
             "```\n",
-            "<<<END_CONDUCTOR_OUTPUT>>>"
+            "<<<END_FLOW_OUTPUT>>>"
         );
-        let out = parse_conductor_output(text).unwrap();
+        let out = parse_flow_output(text).unwrap();
         assert_eq!(out.markers, vec!["fenced"]);
         assert_eq!(out.context, "fenced context");
     }
 
     #[test]
     fn returns_none_when_no_block_present() {
-        assert!(parse_conductor_output("no conductor output block here").is_none());
-        assert!(parse_conductor_output("").is_none());
+        assert!(parse_flow_output("no flow output block here").is_none());
+        assert!(parse_flow_output("").is_none());
     }
 
     #[test]
     fn markers_field_missing_defaults_to_empty_vec() {
         let text = concat!(
-            "<<<CONDUCTOR_OUTPUT>>>\n",
+            "<<<FLOW_OUTPUT>>>\n",
             r#"{"context":"only context, no markers"}"#,
             "\n",
-            "<<<END_CONDUCTOR_OUTPUT>>>"
+            "<<<END_FLOW_OUTPUT>>>"
         );
-        let out = parse_conductor_output(text).unwrap();
+        let out = parse_flow_output(text).unwrap();
         assert!(out.markers.is_empty());
         assert_eq!(out.context, "only context, no markers");
     }
@@ -403,12 +403,12 @@ mod parse_tests {
     #[test]
     fn context_field_missing_defaults_to_empty_string() {
         let text = concat!(
-            "<<<CONDUCTOR_OUTPUT>>>\n",
+            "<<<FLOW_OUTPUT>>>\n",
             r#"{"markers":["m1"]}"#,
             "\n",
-            "<<<END_CONDUCTOR_OUTPUT>>>"
+            "<<<END_FLOW_OUTPUT>>>"
         );
-        let out = parse_conductor_output(text).unwrap();
+        let out = parse_flow_output(text).unwrap();
         assert_eq!(out.markers, vec!["m1"]);
         assert_eq!(out.context, "");
     }
@@ -416,33 +416,33 @@ mod parse_tests {
     #[test]
     fn marker_in_field_value_finds_real_block() {
         let text = r#"Some agent output.
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {
   "markers": ["done"],
-  "context": "saw <<<CONDUCTOR_OUTPUT>>> in the log and handled it"
+  "context": "saw <<<FLOW_OUTPUT>>> in the log and handled it"
 }
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 "#;
-        let out = parse_conductor_output(text).unwrap();
+        let out = parse_flow_output(text).unwrap();
         assert_eq!(out.markers, vec!["done"]);
-        assert!(out.context.contains("<<<CONDUCTOR_OUTPUT>>>"));
+        assert!(out.context.contains("<<<FLOW_OUTPUT>>>"));
     }
 
     #[test]
     fn skips_code_examples_finds_real_block() {
         let text = r#"Here is how to emit output:
 ```bash
-echo '<<<CONDUCTOR_OUTPUT>>>'
+echo '<<<FLOW_OUTPUT>>>'
 echo '{"markers": ["fake"], "context": "example"}'
-echo '<<<END_CONDUCTOR_OUTPUT>>>'
+echo '<<<END_FLOW_OUTPUT>>>'
 ```
 
 Actual output:
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": ["real"], "context": "this is the real result"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 "#;
-        let out = parse_conductor_output(text).unwrap();
+        let out = parse_flow_output(text).unwrap();
         assert_eq!(out.markers, vec!["real"]);
         assert_eq!(out.context, "this is the real result");
     }
@@ -450,21 +450,21 @@ Actual output:
     #[test]
     fn multiple_complete_blocks_returns_last() {
         let text = r#"Example 1:
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": ["example1"], "context": "first example"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 
 Example 2:
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": ["example2"], "context": "second example"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 
 Real output:
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": ["real"], "context": "the actual result"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 "#;
-        let out = parse_conductor_output(text).unwrap();
+        let out = parse_flow_output(text).unwrap();
         assert_eq!(out.markers, vec!["real"]);
         assert_eq!(out.context, "the actual result");
     }
@@ -472,11 +472,11 @@ Real output:
     #[test]
     fn malformed_json_returns_none() {
         let text = concat!(
-            "<<<CONDUCTOR_OUTPUT>>>\n",
+            "<<<FLOW_OUTPUT>>>\n",
             "{markers: [\"done\"]}\n",
-            "<<<END_CONDUCTOR_OUTPUT>>>\n"
+            "<<<END_FLOW_OUTPUT>>>\n"
         );
-        assert!(parse_conductor_output(text).is_none());
+        assert!(parse_flow_output(text).is_none());
     }
 
     #[test]
@@ -484,13 +484,13 @@ Real output:
         // Direct deserialization is stricter than the old manual extraction:
         // a "markers" field that is a string instead of an array must fail.
         let text = concat!(
-            "<<<CONDUCTOR_OUTPUT>>>\n",
+            "<<<FLOW_OUTPUT>>>\n",
             r#"{"markers":"not-an-array","context":"ok"}"#,
             "\n",
-            "<<<END_CONDUCTOR_OUTPUT>>>\n"
+            "<<<END_FLOW_OUTPUT>>>\n"
         );
         assert!(
-            parse_conductor_output(text).is_none(),
+            parse_flow_output(text).is_none(),
             "markers field with non-array type should cause parse failure"
         );
     }
@@ -499,13 +499,13 @@ Real output:
     fn context_field_with_wrong_type_returns_none() {
         // A "context" field that is a number instead of a string must fail.
         let text = concat!(
-            "<<<CONDUCTOR_OUTPUT>>>\n",
+            "<<<FLOW_OUTPUT>>>\n",
             r#"{"markers":["m1"],"context":42}"#,
             "\n",
-            "<<<END_CONDUCTOR_OUTPUT>>>\n"
+            "<<<END_FLOW_OUTPUT>>>\n"
         );
         assert!(
-            parse_conductor_output(text).is_none(),
+            parse_flow_output(text).is_none(),
             "context field with non-string type should cause parse failure"
         );
     }

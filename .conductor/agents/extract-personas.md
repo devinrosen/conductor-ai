@@ -47,5 +47,5 @@ You are a personas analyst. Your job is to scan the codebase for all distinct us
    git commit -m "docs: add personas.md for diagram workflows"
    ```
 
-6. Emit `<<<CONDUCTOR_OUTPUT>>>` with:
+6. Emit `<<<FLOW_OUTPUT>>>` with:
    - `context`: summary of personas found and written

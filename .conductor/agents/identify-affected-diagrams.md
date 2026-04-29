@@ -27,5 +27,5 @@ Prior step context (ticket details): {{prior_context}}
 
 4. If `{{types}}` is non-empty, restrict to only those types.
 
-5. Emit `<<<CONDUCTOR_OUTPUT>>>` with:
+5. Emit `<<<FLOW_OUTPUT>>>` with:
    - `context`: comma-separated list of affected diagram filenames and a one-sentence reason for each

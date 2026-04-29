@@ -30,7 +30,7 @@ Severity guide:
 
 Only flag `critical` or `warning` issues. Do not emit suggestion-level or style findings.
 
-Your `CONDUCTOR_OUTPUT` `context` field must be a **JSON object** (not plain text) so the aggregator can parse it. Use this structure:
+Your `FLOW_OUTPUT` `context` field must be a **JSON object** (not plain text) so the aggregator can parse it. Use this structure:
 
 ```json
 {
@@ -61,5 +61,5 @@ Your `CONDUCTOR_OUTPUT` `context` field must be a **JSON object** (not plain tex
 - `off_diff_findings`: issues in **unchanged/removed code** — never affect `approved`, filed as separate GitHub issues; only include `critical` or `warning` severity
 - Omit `off_diff_findings` entirely if there are none
 
-If you find **critical** or **warning** `findings`, include `has_review_issues` in your CONDUCTOR_OUTPUT markers.
+If you find **critical** or **warning** `findings`, include `has_review_issues` in your FLOW_OUTPUT markers.
 If you find no findings, do NOT include that marker.

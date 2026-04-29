@@ -35,4 +35,4 @@ Prior step context: {{prior_context}}
 
    Keep the entry concise. Prefer one clear sentence per bullet. Avoid jargon unless it matches the repo's existing CHANGELOG style.
 
-4. Emit `<<<CONDUCTOR_OUTPUT>>>` with the full draft release notes entry as the `context` string. This is the primary output of the workflow — write the complete entry in the context field so it is captured as the workflow result.
+4. Emit `<<<FLOW_OUTPUT>>>` with the full draft release notes entry as the `context` string. This is the primary output of the workflow — write the complete entry in the context field so it is captured as the workflow result.

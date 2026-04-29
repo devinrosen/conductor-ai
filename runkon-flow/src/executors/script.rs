@@ -347,7 +347,7 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
             duration_ms
         );
 
-        let (markers, context) = crate::helpers::parse_conductor_output(&stdout)
+        let (markers, context) = crate::helpers::parse_flow_output(&stdout)
             .map(|out| (out.markers, out.context))
             .unwrap_or_else(|| {
                 let ctx = stdout.chars().take(2000).collect();
@@ -509,17 +509,17 @@ mod tests {
         }
     }
 
-    /// When the script emits a valid CONDUCTOR_OUTPUT block, markers and context
+    /// When the script emits a valid FLOW_OUTPUT block, markers and context
     /// must be extracted and stored on the step record.
     #[test]
-    fn conductor_output_markers_propagate_to_step_record() {
+    fn flow_output_markers_propagate_to_step_record() {
         let (persistence, run_id) = make_persistence();
         let mut state = make_state(Arc::clone(&persistence), run_id.clone());
         // Use printf to avoid shell newline differences across platforms.
         let script = concat!(
-            "printf '<<<CONDUCTOR_OUTPUT>>>\\n",
+            "printf '<<<FLOW_OUTPUT>>>\\n",
             r#"{"markers":["test_passed"],"context":"step ctx"}"#,
-            "\\n<<<END_CONDUCTOR_OUTPUT>>>\\n'"
+            "\\n<<<END_FLOW_OUTPUT>>>\\n'"
         );
         let node = make_node("check", script);
         execute_script(&mut state, &node, 0).unwrap();
@@ -537,10 +537,10 @@ mod tests {
         assert_eq!(step.context_out.as_deref(), Some("step ctx"));
     }
 
-    /// When the script produces no CONDUCTOR_OUTPUT block, context falls back to
+    /// When the script produces no FLOW_OUTPUT block, context falls back to
     /// raw stdout truncated to 2000 characters.
     #[test]
-    fn falls_back_to_raw_stdout_when_no_conductor_output_block() {
+    fn falls_back_to_raw_stdout_when_no_flow_output_block() {
         let (persistence, run_id) = make_persistence();
         let mut state = make_state(Arc::clone(&persistence), run_id.clone());
         let node = make_node("info", "echo 'plain output'");

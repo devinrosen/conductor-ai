@@ -200,7 +200,7 @@ while review.has_review_issues {
 
 A condition is either `<step>.<marker>` or a bare identifier naming a boolean
 input. For `if` with a `step.marker` condition, the engine checks whether the
-named step's most recent `CONDUCTOR_OUTPUT` includes that marker string in its
+named step's most recent `FLOW_OUTPUT` includes that marker string in its
 `markers` array. For a boolean input condition, the body executes when the
 input value is `"true"`. `unless` is the inverse — the body executes when the
 condition is **absent** or **false**.
@@ -676,12 +676,12 @@ for the full rules, including `on_fail` and `parallel` usage.
 ## Structured output
 
 Every agent prompt is automatically appended with instructions to emit a
-`CONDUCTOR_OUTPUT` block:
+`FLOW_OUTPUT` block:
 
 ```
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": ["has_review_issues"], "context": "Found 3 issues in auth module"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 ```
 
 The engine finds the **last** occurrence of the delimiters and parses the JSON
@@ -813,7 +813,7 @@ by the parent.
 
 ### Output
 
-The sub-workflow's final step's `CONDUCTOR_OUTPUT` (markers + context) becomes
+The sub-workflow's final step's `FLOW_OUTPUT` (markers + context) becomes
 the output of the `call workflow` step in the parent. This means:
 
 - Downstream `if`/`while` conditions in the parent can reference markers from
@@ -965,7 +965,7 @@ For each agent invocation:
 
 1. Agent `.md` body (with `{{variable}}` substitution)
 2. `with` snippets (each snippet also goes through variable substitution)
-3. Schema output instructions / `CONDUCTOR_OUTPUT` block
+3. Schema output instructions / `FLOW_OUTPUT` block
 
 Snippets are separated from the main prompt and from each other with a blank
 line (`\n\n`).
@@ -1357,7 +1357,7 @@ both fields around its body before returning.
 |---|---|---|
 | `iteration` | INTEGER | Loop iteration counter (default 0) |
 | `parallel_group_id` | TEXT | Groups concurrent steps |
-| `context_out` | TEXT | `CONDUCTOR_OUTPUT` context field |
+| `context_out` | TEXT | `FLOW_OUTPUT` context field |
 | `markers_out` | TEXT | JSON array of emitted markers |
 | `retry_count` | INTEGER | Number of retries attempted |
 | `gate_type` | TEXT | Gate variant |

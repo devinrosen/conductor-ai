@@ -58,7 +58,7 @@ If the fetch fails, fall back to `git log --oneline -20`.
 
 ## Step 6 — Output
 
-Emit `<<<CONDUCTOR_OUTPUT>>>` with a `context` string containing:
+Emit `<<<FLOW_OUTPUT>>>` with a `context` string containing:
 - Full ticket title and body
 - Summary of all linked/blocking issues and their states
 - The resolved `base_branch` (from linked PR, or the worktree's configured target branch)

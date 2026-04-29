@@ -46,7 +46,7 @@ Steps:
 
 ## Phase 2 — Produce output
 
-3. Produce your CONDUCTOR_OUTPUT with the correct structured fields so the workflow engine can derive outcome markers automatically from the schema:
+3. Produce your FLOW_OUTPUT with the correct structured fields so the workflow engine can derive outcome markers automatically from the schema:
 
    - Set `overall_approved: false` if **any** reviewer is classified as blocking in Phase 1 (i.e. has `has_review_issues` marker OR has critical/warning findings in `structured_output`). Set `overall_approved: true` only if no reviewer is blocking.
    - Populate `reviewed_by` with a comma-separated string of human-readable reviewer display names (e.g. "DB Migrations, Security, Performance") for each reviewer that ran and returned results.

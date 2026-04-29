@@ -37,5 +37,5 @@ Full context history (personas + diagrams): {{prior_contexts}}
    - <description>
    ```
 
-6. Emit `<<<CONDUCTOR_OUTPUT>>>` with:
+6. Emit `<<<FLOW_OUTPUT>>>` with:
    - `context`: the full structured analysis

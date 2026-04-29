@@ -21,5 +21,5 @@ For each finding, report:
 - Priority (high/medium/low)
 - Why this gap matters (what behavior could go untested)
 
-If you find areas that need tests, include the marker `has_missing_tests` in your CONDUCTOR_OUTPUT markers.
+If you find areas that need tests, include the marker `has_missing_tests` in your FLOW_OUTPUT markers.
 If test coverage is already sufficient, do not include that marker.

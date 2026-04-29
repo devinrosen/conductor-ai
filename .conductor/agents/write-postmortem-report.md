@@ -34,4 +34,4 @@ Prior step context: {{prior_context}}
    ls .conductor/postmortems/
    ```
 
-5. Emit CONDUCTOR_OUTPUT with context: the path to the written report, e.g. `.conductor/postmortems/{{workflow_run_id}}.md`.
+5. Emit FLOW_OUTPUT with context: the path to the written report, e.g. `.conductor/postmortems/{{workflow_run_id}}.md`.
