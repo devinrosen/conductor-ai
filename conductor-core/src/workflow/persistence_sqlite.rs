@@ -338,4 +338,19 @@ mod tests {
             other => panic!("expected Approved, got {other:?}"),
         }
     }
+
+    #[test]
+    fn open_creates_usable_connection_at_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.db");
+        // Apply conductor migrations so the workflow tables exist.
+        crate::db::open_database(&path).expect("migrations should apply");
+        // open() must succeed and produce a functional persistence instance.
+        let p = SqliteWorkflowPersistence::open(&path).expect("open() should succeed");
+        // A get on a nonexistent run returns Ok(None), proving the connection is live.
+        assert!(
+            p.get_run("nonexistent-run-id").unwrap().is_none(),
+            "get_run on a fresh DB should return None for unknown IDs"
+        );
+    }
 }

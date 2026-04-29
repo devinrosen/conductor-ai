@@ -359,12 +359,9 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
-            "SELECT workflow_runs.* \
-             FROM workflow_runs \
-             LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-             WHERE (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
-               AND workflow_runs.status IN ({placeholders}) \
-             ORDER BY workflow_runs.started_at DESC \
+            "SELECT {RUN_COLUMNS} FROM workflow_runs \
+             WHERE status IN ({placeholders}) \
+             ORDER BY started_at DESC \
              LIMIT 500"
         );
         let status_strings: Vec<String> = effective.iter().map(|s| s.to_string()).collect();
