@@ -1,31 +1,40 @@
-use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
-/// Controls which permission flag is passed to Claude Code when launching agent runs.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+use serde::Serialize;
+
+/// Opaque permission mode forwarded through to the headless agent CLI.
+///
+/// `runkon-runtimes` deliberately does not encode any specific permission
+/// taxonomy (Claude's `plan` / `repo-safe`, etc.). Vendor-specific values
+/// live in the host crate (e.g. conductor-core's `AgentPermissionMode`) and
+/// are converted into this opaque form when constructing a `RuntimeRequest`.
+///
+/// `Default` produces no permission flag value; `Other(s)` forwards `s` as-is
+/// as the value argument to whichever permission flag the host adds to the
+/// CLI invocation.
+///
+/// `Deserialize` is intentionally absent: `PermissionMode::Other` must only
+/// be created from compile-time-known strings via the host crate's typed enum
+/// (e.g. `AgentPermissionMode::to_runtime_permission_mode`). Allowing
+/// deserialization from untrusted input would bypass that invariant and could
+/// inject arbitrary strings as CLI flags.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub enum PermissionMode {
-    /// Use `--enable-auto-mode` (may prompt for permissions in headless agents).
-    AutoMode,
-    /// Use `--dangerously-skip-permissions` (default for headless agent runs).
+    /// No permission flag value forwarded.
     #[default]
-    SkipPermissions,
-    /// Use `--permission-mode plan` (read-only mode for repo-scoped agents).
-    Plan,
-    /// Use `--dangerously-skip-permissions` + `--allowedTools` read-safe pattern.
-    RepoSafe,
+    Default,
+    /// Forward this raw flag value to the headless arg builder.
+    Other(Cow<'static, str>),
 }
 
 impl PermissionMode {
-    /// Returns the optional value argument that follows the generic permission flag.
-    ///
-    /// This is the only permission-mode method retained in the portable crate because
-    /// the headless arg builder (`push_optional_agent_flags`) needs it. All other
-    /// vendor-specific flag mappings live in the host crate (conductor-core).
+    /// Returns the optional value argument that follows the host-specific
+    /// permission flag in the headless CLI invocation. `None` means no
+    /// permission flag is appended to the args.
     pub fn cli_flag_value(&self) -> Option<&str> {
         match self {
-            Self::Plan => Some("plan"),
-            Self::RepoSafe => Some("repo-safe"),
-            _ => None,
+            Self::Default => None,
+            Self::Other(s) => Some(s.as_ref()),
         }
     }
 }

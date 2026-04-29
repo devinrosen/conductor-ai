@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use conductor_core::agent::{
     build_startup_context, parse_events_from_line, AgentManager, AgentRunExt, PlanStep,
 };
-use conductor_core::config::{load_config, AgentPermissionModeExt, Config};
+use conductor_core::config::{load_config, Config};
 use conductor_core::github;
 use conductor_core::github_app;
 use conductor_core::repo::RepoManager;

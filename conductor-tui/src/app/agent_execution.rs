@@ -58,6 +58,9 @@ pub(super) fn drive_headless_run(
     on_launched: impl FnOnce(std::result::Result<String, String>) -> Action,
     success_msg: &str,
 ) {
+    let runtime_permission = config
+        .permission_mode
+        .map(|m| m.to_runtime_permission_mode());
     let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
         run_id: &run.id,
         working_dir: &config.working_dir,
@@ -65,7 +68,7 @@ pub(super) fn drive_headless_run(
         resume_session_id: config.resume_session_id.as_deref(),
         model: config.model.as_deref(),
         bot_name: config.bot_name.as_deref(),
-        permission_mode: config.permission_mode.as_ref(),
+        permission_mode: runtime_permission.as_ref(),
         plugin_dirs: &[],
     };
 

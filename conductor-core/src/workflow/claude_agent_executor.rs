@@ -59,7 +59,10 @@ impl ActionExecutor for ClaudeAgentExecutor {
 
         let runtime = crate::runtime::resolve_runtime(
             &agent_def.runtime,
-            self.config.general.agent_permission_mode,
+            self.config
+                .general
+                .agent_permission_mode
+                .to_runtime_permission_mode(),
             &self.config.runtimes,
             &options,
         )?;

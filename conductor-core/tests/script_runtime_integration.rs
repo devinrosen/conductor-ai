@@ -174,7 +174,7 @@ fn test_script_runtime_resolve_via_config() {
 
     let runtime = conductor_core::runtime::resolve_runtime(
         "my-script",
-        AgentPermissionMode::default(),
+        AgentPermissionMode::default().to_runtime_permission_mode(),
         &config.runtimes,
         &options,
     );
