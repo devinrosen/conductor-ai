@@ -300,13 +300,15 @@ impl<'a> AgentManager<'a> {
         // engine relies on these values being readable after the run terminates.
         crate::workflow::WorkflowManager::new(self.conn).mirror_step_metrics_from_run(
             run_id,
-            log_result.cost_usd,
-            log_result.num_turns,
-            log_result.duration_ms,
-            log_result.input_tokens,
-            log_result.output_tokens,
-            log_result.cache_read_input_tokens,
-            log_result.cache_creation_input_tokens,
+            crate::workflow::StepMetrics {
+                cost_usd: log_result.cost_usd,
+                num_turns: log_result.num_turns,
+                duration_ms: log_result.duration_ms,
+                input_tokens: log_result.input_tokens,
+                output_tokens: log_result.output_tokens,
+                cache_read_input_tokens: log_result.cache_read_input_tokens,
+                cache_creation_input_tokens: log_result.cache_creation_input_tokens,
+            },
         )?;
         Ok(())
     }
@@ -391,13 +393,13 @@ impl<'a> AgentManager<'a> {
         )?;
         crate::workflow::WorkflowManager::new(self.conn).mirror_step_metrics_from_run(
             run_id,
-            None,
-            None,
-            None,
-            Some(input_tokens),
-            Some(output_tokens),
-            Some(cache_read_input_tokens),
-            Some(cache_creation_input_tokens),
+            crate::workflow::StepMetrics {
+                input_tokens: Some(input_tokens),
+                output_tokens: Some(output_tokens),
+                cache_read_input_tokens: Some(cache_read_input_tokens),
+                cache_creation_input_tokens: Some(cache_creation_input_tokens),
+                ..Default::default()
+            },
         )?;
         Ok(())
     }
