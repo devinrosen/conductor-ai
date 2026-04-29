@@ -7,7 +7,6 @@ use runkon_flow::traits::persistence::WorkflowPersistence;
 
 use crate::config::Config;
 use crate::error::Result;
-use runkon_flow::dsl::ApprovalMode;
 
 use super::resolvers::{
     HumanApprovalGateResolver, HumanGateKind, PrApprovalGateResolver, PrChecksGateResolver,
@@ -16,6 +15,18 @@ use super::resolvers::{
 // ---------------------------------------------------------------------------
 // Core types
 // ---------------------------------------------------------------------------
+
+/// PR-approval semantics consumed by the conductor-core gate resolvers.
+///
+/// Mirrors `runkon_flow::dsl::ApprovalMode` but is owned by conductor-core so
+/// internal executor types do not depend on the runkon-flow DSL surface
+/// directly. The bridge layer (`runkon_gate_bridge.rs`) converts via `From`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(in crate::workflow) enum ApprovalMode {
+    #[default]
+    MinApprovals,
+    ReviewDecision,
+}
 
 /// Outcome of a single poll tick from a `GateResolver`.
 #[derive(Debug)]
@@ -286,7 +297,7 @@ mod tests {
         );
     }
 
-    fn make_params(mode: runkon_flow::dsl::ApprovalMode) -> GateParams {
+    fn make_params(mode: ApprovalMode) -> GateParams {
         GateParams {
             gate_name: "test-gate".into(),
             prompt: None,
@@ -299,10 +310,7 @@ mod tests {
         }
     }
 
-    fn poll_resolver_with_unavailable_gh(
-        resolver_key: &str,
-        mode: runkon_flow::dsl::ApprovalMode,
-    ) -> GatePoll {
+    fn poll_resolver_with_unavailable_gh(resolver_key: &str, mode: ApprovalMode) -> GatePoll {
         let token_cache = Arc::new(GitHubTokenCache::new(None));
         let resolvers = build_default_gate_resolvers(
             make_test_persistence(),
@@ -326,10 +334,7 @@ mod tests {
 
     #[test]
     fn test_pr_approval_resolver_poll_returns_pending_when_gh_unavailable() {
-        let poll = poll_resolver_with_unavailable_gh(
-            "pr_approval",
-            runkon_flow::dsl::ApprovalMode::MinApprovals,
-        );
+        let poll = poll_resolver_with_unavailable_gh("pr_approval", ApprovalMode::MinApprovals);
         assert!(
             matches!(poll, GatePoll::Pending),
             "pr_approval poll must return Pending when gh is unavailable"
@@ -338,10 +343,7 @@ mod tests {
 
     #[test]
     fn test_pr_approval_resolver_poll_review_decision_pending_when_gh_unavailable() {
-        let poll = poll_resolver_with_unavailable_gh(
-            "pr_approval",
-            runkon_flow::dsl::ApprovalMode::ReviewDecision,
-        );
+        let poll = poll_resolver_with_unavailable_gh("pr_approval", ApprovalMode::ReviewDecision);
         assert!(
             matches!(poll, GatePoll::Pending),
             "pr_approval ReviewDecision poll must return Pending when gh is unavailable"
@@ -350,10 +352,7 @@ mod tests {
 
     #[test]
     fn test_pr_checks_resolver_poll_returns_pending_when_gh_unavailable() {
-        let poll = poll_resolver_with_unavailable_gh(
-            "pr_checks",
-            runkon_flow::dsl::ApprovalMode::MinApprovals,
-        );
+        let poll = poll_resolver_with_unavailable_gh("pr_checks", ApprovalMode::MinApprovals);
         assert!(
             matches!(poll, GatePoll::Pending),
             "pr_checks poll must return Pending when gh is unavailable"

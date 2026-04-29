@@ -16,10 +16,19 @@ use runkon_flow::traits::persistence::WorkflowPersistence as RkPersistence;
 use runkon_flow::FlowEngineBuilder;
 
 use super::executors::gate_resolver::{
-    GateContext as CoreGateContext, GateParams as CoreGateParams, GatePoll as CoreGatePoll,
-    GateResolver as CoreGateResolver, GitHubTokenCache,
+    ApprovalMode as CoreApprovalMode, GateContext as CoreGateContext, GateParams as CoreGateParams,
+    GatePoll as CoreGatePoll, GateResolver as CoreGateResolver, GitHubTokenCache,
 };
 use super::executors::resolvers::{PrApprovalGateResolver, PrChecksGateResolver};
+
+impl From<runkon_flow::dsl::ApprovalMode> for CoreApprovalMode {
+    fn from(m: runkon_flow::dsl::ApprovalMode) -> Self {
+        match m {
+            runkon_flow::dsl::ApprovalMode::MinApprovals => CoreApprovalMode::MinApprovals,
+            runkon_flow::dsl::ApprovalMode::ReviewDecision => CoreApprovalMode::ReviewDecision,
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Human gates (human_approval + human_review)
@@ -114,7 +123,7 @@ fn rk_params_to_core(params: &RkGateParams) -> CoreGateParams {
         gate_name: params.gate_name.clone(),
         prompt: params.prompt.clone(),
         min_approvals: params.min_approvals,
-        approval_mode: params.approval_mode.clone(),
+        approval_mode: params.approval_mode.clone().into(),
         options: params.options.clone(),
         timeout_secs: params.timeout_secs,
         bot_name: params.bot_name.clone(),
