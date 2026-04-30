@@ -654,6 +654,7 @@ impl Parser {
         let mut call_outputs: HashMap<String, String> = HashMap::new();
         let mut call_with: HashMap<String, Vec<String>> = HashMap::new();
         let mut call_if: HashMap<String, (String, String)> = HashMap::new();
+        let mut call_retries: HashMap<String, u32> = HashMap::new();
         while self.peek() == &Token::Call {
             self.advance();
             let agent = self.expect_agent_ref()?;
@@ -673,7 +674,17 @@ impl Parser {
                     let (step_name, marker_name) = s.split_once('.').ok_or_else(|| {
                         format!("if value `{s}` must be in the form `step.marker` (no dot found)")
                     })?;
-                    call_if.insert(idx, (step_name.to_string(), marker_name.to_string()));
+                    call_if.insert(
+                        idx.clone(),
+                        (step_name.to_string(), marker_name.to_string()),
+                    );
+                }
+                if let Some(v) = call_kvs.get("retries") {
+                    let r = v
+                        .as_str()
+                        .parse::<u32>()
+                        .map_err(|e| format!("parallel call {idx}: invalid retries: {e}"))?;
+                    call_retries.insert(idx, r);
                 }
             }
             calls.push(agent);
@@ -693,6 +704,7 @@ impl Parser {
             with: block_with,
             call_with,
             call_if,
+            call_retries,
         })
     }
 
