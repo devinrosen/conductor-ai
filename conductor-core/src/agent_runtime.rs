@@ -96,18 +96,18 @@ impl<'a, F: Fn(&crate::agent::types::AgentEvent)> runkon_runtimes::tracker::Even
                     cache_read_input_tokens,
                     cache_creation_input_tokens,
                 };
-                if let Err(e) =
-                    self.mgr.update_run_completed_if_running_full(run_id, &log_result)
+                if let Err(e) = self
+                    .mgr
+                    .update_run_completed_if_running_full(run_id, &log_result)
                 {
                     tracing::warn!("[drain_stream_json] failed to mark run completed: {e}");
                 }
             }
             RuntimeEvent::Failed { error, session_id } => {
-                if let Err(e) = self.mgr.update_run_failed_with_session(
-                    run_id,
-                    &error,
-                    session_id.as_deref(),
-                ) {
+                if let Err(e) =
+                    self.mgr
+                        .update_run_failed_with_session(run_id, &error, session_id.as_deref())
+                {
                     tracing::warn!("[drain_stream_json] failed to mark run failed: {e}");
                 }
             }
@@ -190,7 +190,9 @@ mod tests {
         drain(
             &conn,
             &run_id,
-            &[r#"{"type":"system","subtype":"init","model":"claude-sonnet-4-6","session_id":"sess-abc"}"#],
+            &[
+                r#"{"type":"system","subtype":"init","model":"claude-sonnet-4-6","session_id":"sess-abc"}"#,
+            ],
         );
         let mgr = crate::agent::AgentManager::new(&conn);
         let run = mgr.get_run(&run_id).unwrap().unwrap();
@@ -204,7 +206,9 @@ mod tests {
         drain(
             &conn,
             &run_id,
-            &[r#"{"type":"assistant","usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":5,"cache_creation_input_tokens":3}}"#],
+            &[
+                r#"{"type":"assistant","usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":5,"cache_creation_input_tokens":3}}"#,
+            ],
         );
         let mgr = crate::agent::AgentManager::new(&conn);
         let run = mgr.get_run(&run_id).unwrap().unwrap();
@@ -225,10 +229,7 @@ mod tests {
         assert_eq!(outcome, DrainOutcome::Completed);
         let mgr = crate::agent::AgentManager::new(&conn);
         let run = mgr.get_run(&run_id).unwrap().unwrap();
-        assert_eq!(
-            run.status,
-            crate::agent::status::AgentRunStatus::Completed
-        );
+        assert_eq!(run.status, crate::agent::status::AgentRunStatus::Completed);
         assert_eq!(run.result_text, Some("all done".to_string()));
         assert_eq!(run.cost_usd, Some(0.42));
     }
@@ -239,7 +240,9 @@ mod tests {
         let (outcome, _) = drain(
             &conn,
             &run_id,
-            &[r#"{"type":"result","is_error":true,"result":"something went wrong","session_id":"sess-fail"}"#],
+            &[
+                r#"{"type":"result","is_error":true,"result":"something went wrong","session_id":"sess-fail"}"#,
+            ],
         );
         assert_eq!(outcome, DrainOutcome::Completed);
         let mgr = crate::agent::AgentManager::new(&conn);
@@ -254,7 +257,9 @@ mod tests {
         let (_, events) = drain(
             &conn,
             &run_id,
-            &[r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Hello world"}],"usage":{"input_tokens":5,"output_tokens":3}}}"#],
+            &[
+                r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Hello world"}],"usage":{"input_tokens":5,"output_tokens":3}}}"#,
+            ],
         );
         assert!(
             events.iter().any(|e| e.kind == "text"),
