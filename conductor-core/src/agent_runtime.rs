@@ -37,6 +37,91 @@ pub fn try_spawn_headless_run(
     runkon_runtimes::headless::try_spawn_headless_run(params, &binary_path)
 }
 
+struct CombinedSink<'a, F> {
+    mgr: &'a crate::agent::AgentManager<'a>,
+    on_event_cb: F,
+}
+
+impl<'a, F: Fn(&crate::agent::types::AgentEvent)> runkon_runtimes::tracker::EventSink
+    for CombinedSink<'a, F>
+{
+    fn on_event(&self, run_id: &str, event: runkon_runtimes::tracker::RuntimeEvent) {
+        use runkon_runtimes::tracker::RuntimeEvent;
+        match event {
+            RuntimeEvent::Init { model, session_id } => {
+                if let Err(e) = self.mgr.update_run_model_and_session(
+                    run_id,
+                    model.as_deref(),
+                    session_id.as_deref(),
+                ) {
+                    tracing::warn!("[drain_stream_json] failed to update model/session: {e}");
+                }
+            }
+            RuntimeEvent::Tokens {
+                input,
+                output,
+                cache_read,
+                cache_create,
+            } => {
+                if let Err(e) = self.mgr.update_run_tokens_partial(
+                    run_id,
+                    input,
+                    output,
+                    cache_read,
+                    cache_create,
+                ) {
+                    tracing::warn!("[drain_stream_json] failed to update tokens: {e}");
+                }
+            }
+            RuntimeEvent::Completed {
+                result_text,
+                session_id,
+                cost_usd,
+                num_turns,
+                duration_ms,
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+            } => {
+                let log_result = crate::agent::types::LogResult {
+                    result_text,
+                    session_id,
+                    cost_usd,
+                    num_turns,
+                    duration_ms,
+                    is_error: false,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
+                };
+                if let Err(e) = self
+                    .mgr
+                    .update_run_completed_if_running_full(run_id, &log_result)
+                {
+                    tracing::warn!("[drain_stream_json] failed to mark run completed: {e}");
+                }
+            }
+            RuntimeEvent::Failed { error, session_id } => {
+                if let Err(e) =
+                    self.mgr
+                        .update_run_failed_with_session(run_id, &error, session_id.as_deref())
+                {
+                    tracing::warn!("[drain_stream_json] failed to mark run failed: {e}");
+                }
+            }
+        }
+    }
+
+    fn on_raw_value(&self, _run_id: &str, value: &serde_json::Value) {
+        let events = crate::agent::log_parsing::parse_events_from_value(value);
+        for event in &events {
+            (self.on_event_cb)(event);
+        }
+    }
+}
+
 /// Drain the stdout of a headless subprocess, persisting events to the DB.
 ///
 /// Reads `stdout` line-by-line via `BufReader`, writes each line to `log_file`,
@@ -58,124 +143,158 @@ pub fn drain_stream_json(
     mgr: &crate::agent::AgentManager<'_>,
     on_event: impl Fn(&crate::agent::types::AgentEvent),
 ) -> DrainOutcome {
-    use std::io::{BufRead, BufReader, Write};
+    let sink = CombinedSink {
+        mgr,
+        on_event_cb: on_event,
+    };
+    runkon_runtimes::headless::drain_stream_json(stdout, run_id, log_file, &sink)
+}
 
-    let mut log_writer = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_file)
-        .map_err(|e| {
-            tracing::warn!(
-                "[drain_stream_json] failed to open log file {}: {e}",
-                log_file.display()
-            );
-        })
-        .ok();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let reader = BufReader::new(stdout);
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(e) => {
-                tracing::warn!(
-                    "[drain_stream_json] stdout read failed for run {run_id}, ending drain: {e}"
-                );
-                break;
-            }
-        };
-
-        // Persist to log file (best-effort; I/O errors don't abort the drain)
-        if let Some(ref mut w) = log_writer {
-            if let Err(e) = writeln!(w, "{line}") {
-                tracing::warn!("[drain_stream_json] failed to write log line: {e}");
-            }
-        }
-
-        // Parse once for both display events and DB writes
-        let value = match serde_json::from_str::<serde_json::Value>(&line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        // Fire display-event callback
-        let events = crate::agent::log_parsing::parse_events_from_value(&value);
-        for event in &events {
-            on_event(event);
-        }
-
-        let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
-
-        match event_type {
-            "system" => {
-                let subtype = value.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
-                if subtype == "init" {
-                    let model = value.get("model").and_then(|v| v.as_str());
-                    let session_id = value.get("session_id").and_then(|v| v.as_str());
-                    if let Err(e) = mgr.update_run_model_and_session(run_id, model, session_id) {
-                        tracing::warn!("[drain_stream_json] failed to update model/session: {e}");
-                    }
-                }
-            }
-            "assistant" => {
-                let usage = value
-                    .get("message")
-                    .and_then(|m| m.get("usage"))
-                    .or_else(|| value.get("usage"));
-                if let Some(usage) = usage {
-                    let input = usage
-                        .get("input_tokens")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0);
-                    let output = usage
-                        .get("output_tokens")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0);
-                    let cache_read = usage
-                        .get("cache_read_input_tokens")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0);
-                    let cache_create = usage
-                        .get("cache_creation_input_tokens")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0);
-                    if let Err(e) = mgr.update_run_tokens_partial(
-                        run_id,
-                        input,
-                        output,
-                        cache_read,
-                        cache_create,
-                    ) {
-                        tracing::warn!("[drain_stream_json] failed to update tokens: {e}");
-                    }
-                }
-            }
-            "result" => {
-                let log_result = crate::agent::log_parsing::parse_result_event(&value);
-                if log_result.is_error {
-                    let error_msg = log_result
-                        .result_text
-                        .as_deref()
-                        .unwrap_or(crate::agent::status::DEFAULT_AGENT_ERROR_MSG);
-                    if let Err(e) = mgr.update_run_failed_with_session(
-                        run_id,
-                        error_msg,
-                        log_result.session_id.as_deref(),
-                    ) {
-                        tracing::warn!("[drain_stream_json] failed to mark run failed: {e}");
-                    }
-                } else {
-                    // Use the if_running variant to avoid clobbering a value already written
-                    // by the subprocess itself (double-write safety). Persist all result-event
-                    // fields (cost_usd, num_turns, duration_ms, final token counts).
-                    if let Err(e) = mgr.update_run_completed_if_running_full(run_id, &log_result) {
-                        tracing::warn!("[drain_stream_json] failed to mark run completed: {e}");
-                    }
-                }
-                return DrainOutcome::Completed;
-            }
-            _ => {}
-        }
+    fn setup() -> (rusqlite::Connection, String) {
+        let conn = crate::test_helpers::setup_db();
+        let mgr = crate::agent::AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "test prompt", None).unwrap();
+        (conn, run.id)
     }
 
-    DrainOutcome::NoResult
+    fn temp_log() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "test-agent-runtime-{:?}.log",
+            std::thread::current().id()
+        ))
+    }
+
+    fn drain(
+        conn: &rusqlite::Connection,
+        run_id: &str,
+        json_lines: &[&str],
+    ) -> (DrainOutcome, Vec<crate::agent::types::AgentEvent>) {
+        let input = json_lines.join("\n");
+        let log = temp_log();
+        let mgr = crate::agent::AgentManager::new(conn);
+        let captured = std::cell::RefCell::new(Vec::new());
+        let outcome = drain_stream_json(input.as_bytes(), run_id, &log, &mgr, |ev| {
+            captured.borrow_mut().push(ev.clone());
+        });
+        let _ = std::fs::remove_file(&log);
+        (outcome, captured.into_inner())
+    }
+
+    #[test]
+    fn combined_sink_init_calls_mgr() {
+        let (conn, run_id) = setup();
+        drain(
+            &conn,
+            &run_id,
+            &[
+                r#"{"type":"system","subtype":"init","model":"claude-sonnet-4-6","session_id":"sess-abc"}"#,
+            ],
+        );
+        let mgr = crate::agent::AgentManager::new(&conn);
+        let run = mgr.get_run(&run_id).unwrap().unwrap();
+        assert_eq!(run.model, Some("claude-sonnet-4-6".to_string()));
+        assert_eq!(run.session_id, Some("sess-abc".to_string()));
+    }
+
+    #[test]
+    fn combined_sink_tokens_calls_mgr() {
+        let (conn, run_id) = setup();
+        drain(
+            &conn,
+            &run_id,
+            &[
+                r#"{"type":"assistant","usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":5,"cache_creation_input_tokens":3}}"#,
+            ],
+        );
+        let mgr = crate::agent::AgentManager::new(&conn);
+        let run = mgr.get_run(&run_id).unwrap().unwrap();
+        assert_eq!(run.input_tokens, Some(10));
+        assert_eq!(run.output_tokens, Some(20));
+        assert_eq!(run.cache_read_input_tokens, Some(5));
+        assert_eq!(run.cache_creation_input_tokens, Some(3));
+    }
+
+    #[test]
+    fn combined_sink_completed_returns_completed() {
+        let (conn, run_id) = setup();
+        let (outcome, _) = drain(
+            &conn,
+            &run_id,
+            &[r#"{"type":"result","result":"all done","total_cost_usd":0.42,"num_turns":3}"#],
+        );
+        assert_eq!(outcome, DrainOutcome::Completed);
+        let mgr = crate::agent::AgentManager::new(&conn);
+        let run = mgr.get_run(&run_id).unwrap().unwrap();
+        assert_eq!(run.status, crate::agent::status::AgentRunStatus::Completed);
+        assert_eq!(run.result_text, Some("all done".to_string()));
+        assert_eq!(run.cost_usd, Some(0.42));
+    }
+
+    #[test]
+    fn combined_sink_failed_returns_completed() {
+        let (conn, run_id) = setup();
+        let (outcome, _) = drain(
+            &conn,
+            &run_id,
+            &[
+                r#"{"type":"result","is_error":true,"result":"something went wrong","session_id":"sess-fail"}"#,
+            ],
+        );
+        assert_eq!(outcome, DrainOutcome::Completed);
+        let mgr = crate::agent::AgentManager::new(&conn);
+        let run = mgr.get_run(&run_id).unwrap().unwrap();
+        assert_eq!(run.status, crate::agent::status::AgentRunStatus::Failed);
+        assert_eq!(run.session_id, Some("sess-fail".to_string()));
+    }
+
+    #[test]
+    fn combined_sink_fires_display_events() {
+        let (conn, run_id) = setup();
+        let (_, events) = drain(
+            &conn,
+            &run_id,
+            &[
+                r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Hello world"}],"usage":{"input_tokens":5,"output_tokens":3}}}"#,
+            ],
+        );
+        assert!(
+            events.iter().any(|e| e.kind == "text"),
+            "expected at least one text display event, got: {events:?}"
+        );
+    }
+
+    #[test]
+    fn drain_no_result_returns_no_result() {
+        let (conn, run_id) = setup();
+        let (outcome, _) = drain(
+            &conn,
+            &run_id,
+            &[
+                r#"{"type":"system","subtype":"init","model":"claude-sonnet-4-6","session_id":"sess-abc"}"#,
+                r#"{"type":"assistant","message":{"content":[{"type":"text","text":"thinking..."}]}}"#,
+            ],
+        );
+        assert_eq!(outcome, DrainOutcome::NoResult);
+    }
+
+    #[test]
+    fn combined_sink_manager_errors_do_not_abort_drain() {
+        let (conn, run_id) = setup();
+        // Force all manager DB writes to fail so the tracing::warn! branches execute.
+        conn.execute_batch("ALTER TABLE agent_runs RENAME TO agent_runs_bak")
+            .unwrap();
+        let (outcome, _) = drain(
+            &conn,
+            &run_id,
+            &[r#"{"type":"result","result":"done","total_cost_usd":0.1,"num_turns":1}"#],
+        );
+        // DrainOutcome is determined by the event stream, not DB write success.
+        assert_eq!(outcome, DrainOutcome::Completed);
+        conn.execute_batch("ALTER TABLE agent_runs_bak RENAME TO agent_runs")
+            .unwrap();
+    }
 }

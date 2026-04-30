@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use runkon_runtimes::tracker::{RunEventSink, RunTracker, RuntimeEvent};
+use runkon_runtimes::tracker::{EventSink, RunTracker, RuntimeEvent};
 use runkon_runtimes::{RunHandle, RuntimeError};
 use rusqlite::Connection;
 
@@ -75,7 +75,7 @@ impl RunTracker for SqliteHostAdapter {
     }
 }
 
-impl RunEventSink for SqliteHostAdapter {
+impl EventSink for SqliteHostAdapter {
     fn on_event(&self, run_id: &str, event: RuntimeEvent) {
         let event_label = event_label(&event);
         let result = self.with_mgr(|mgr| match event {
@@ -138,7 +138,7 @@ fn event_label(event: &RuntimeEvent) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use runkon_runtimes::tracker::RunTracker;
+    use runkon_runtimes::tracker::{EventSink, RunTracker};
 
     fn setup_adapter_with_run(run_id: &str) -> (SqliteHostAdapter, tempfile::NamedTempFile) {
         let tmp = tempfile::NamedTempFile::new().unwrap();

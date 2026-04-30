@@ -32,7 +32,7 @@ use crate::workflow::types::{
     WorkflowFailureRateTrendRow, WorkflowPercentiles, WorkflowRegressionSignal, WorkflowRunContext,
     WorkflowRunMetricsRow, WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
-use crate::workflow::{extract_workflow_title, WorkflowRun, WorkflowRunStep, WorkflowStepSummary};
+use crate::workflow::{WorkflowRun, WorkflowRunStep, WorkflowStepSummary};
 
 /// Returns `(recent - baseline) / baseline * 100` when both values are present and baseline > 0.
 fn pct_change(recent: Option<f64>, baseline: Option<f64>) -> Option<f64> {
@@ -414,9 +414,9 @@ impl<'a> WorkflowManager<'a> {
                      WHERE workflow_runs.repo_id = :repo_id \
                        AND ({ACTIVE_WORKTREE_GUARD}) \
                        AND workflow_runs.status = :status \
-                     ORDER BY workflow_runs.started_at DESC LIMIT {limit} OFFSET {offset}"
+                     ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
                 ),
-                named_params! { ":repo_id": repo_id, ":status": status_str },
+                named_params! { ":repo_id": repo_id, ":status": status_str, ":limit": limit as i64, ":offset": offset as i64 },
                 row_to_workflow_run,
             )
         } else {
@@ -872,7 +872,7 @@ impl<'a> WorkflowManager<'a> {
         let active_strings = WorkflowRunStatus::active_strings();
         let status_placeholders = sql_placeholders(active_strings.len());
         let sql = format!(
-            "SELECT {cols}, r.workflow_name, r.target_label, wt.branch, t.source_id AS ticket_ref, r.definition_snapshot \
+            "SELECT {cols}, r.workflow_name, r.target_label, wt.branch, t.source_id AS ticket_ref, r.workflow_title \
              FROM workflow_run_steps s \
              JOIN workflow_runs r ON r.id = s.workflow_run_id \
              LEFT JOIN worktrees wt ON wt.id = r.worktree_id \
@@ -1240,7 +1240,7 @@ impl<'a> WorkflowManager<'a> {
                     COALESCE(AVG(CASE WHEN status='completed' THEN total_cache_creation_input_tokens END), 0.0) AS avg_cache_creation, \
                     COUNT(*) AS run_count, \
                     COALESCE(CAST(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS REAL) / NULLIF(COUNT(*), 0) * 100.0, 0.0) AS success_rate, \
-                    MAX(definition_snapshot) AS definition_snapshot \
+                    MAX(workflow_title) AS workflow_title \
              FROM workflow_runs \
              WHERE status IN ('completed', 'failed') \
                AND (:repo_id IS NULL OR repo_id = :repo_id) \
@@ -1248,8 +1248,7 @@ impl<'a> WorkflowManager<'a> {
              ORDER BY avg_input + avg_output DESC, run_count DESC",
         )?;
         let rows = stmt.query_map(named_params! { ":repo_id": repo_id }, |row| {
-            let definition_snapshot: Option<String> = row.get("definition_snapshot")?;
-            let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
+            let workflow_title: Option<String> = row.get("workflow_title")?;
             Ok(WorkflowTokenAggregate {
                 workflow_name: row.get("workflow_name")?,
                 avg_input: row.get("avg_input")?,
@@ -1645,7 +1644,7 @@ impl<'a> WorkflowManager<'a> {
                  total_duration_ms,
                  total_cost_usd,
                  status,
-                 definition_snapshot,
+                 workflow_title,
                  ROW_NUMBER() OVER (PARTITION BY workflow_name ORDER BY total_duration_ms) AS rn_dur,
                  ROW_NUMBER() OVER (PARTITION BY workflow_name ORDER BY total_cost_usd)   AS rn_cost,
                  COUNT(*) OVER (PARTITION BY workflow_name)                               AS cnt
@@ -1662,7 +1661,7 @@ impl<'a> WorkflowManager<'a> {
                  AVG(CASE WHEN rn_cost = (cnt * 75 + 99) / 100 THEN total_cost_usd    END) AS p75_cost_usd,
                  COALESCE(CAST(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS REAL)
                    / NULLIF(COUNT(*), 0) * 100.0, 0.0)                                    AS failure_rate,
-                 MAX(definition_snapshot)                                                  AS definition_snapshot
+                 MAX(workflow_title)                                                        AS workflow_title
                FROM recent_ranked
                GROUP BY workflow_name
                HAVING COUNT(*) >= :min_recent_runs
@@ -1702,7 +1701,7 @@ impl<'a> WorkflowManager<'a> {
                b.p75_cost_usd        AS baseline_p75_cost_usd,
                r.failure_rate        AS recent_failure_rate,
                b.failure_rate        AS baseline_failure_rate,
-               r.definition_snapshot
+               r.workflow_title
              FROM recent r
              INNER JOIN baseline b ON r.workflow_name = b.workflow_name
              ORDER BY r.workflow_name",
@@ -1719,8 +1718,7 @@ impl<'a> WorkflowManager<'a> {
                 let baseline_p75_cost_usd: Option<f64> = row.get("baseline_p75_cost_usd")?;
                 let recent_failure_rate: f64 = row.get("recent_failure_rate")?;
                 let baseline_failure_rate: f64 = row.get("baseline_failure_rate")?;
-                let definition_snapshot: Option<String> = row.get("definition_snapshot")?;
-                let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
+                let workflow_title: Option<String> = row.get("workflow_title")?;
 
                 // Compute percentage change for duration and cost.
                 let duration_change_pct =

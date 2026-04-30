@@ -1,6 +1,5 @@
-use crate::db::sql_placeholders;
 use crate::workflow::types::PendingGateRow;
-use crate::workflow::{extract_workflow_title, BlockedOn, WorkflowRun, WorkflowRunStep};
+use crate::workflow::{BlockedOn, WorkflowRun, WorkflowRunStep};
 
 /// Deserialize `json` as `T`, returning `T::default()` on missing or malformed input.
 ///
@@ -17,30 +16,6 @@ pub(super) fn json_or_warn<T: serde::de::DeserializeOwned + Default>(
             T::default()
         }),
     }
-}
-
-/// Returns `(where_clause, params)` where `params` is a `Vec<String>` whose
-/// elements bind to the positional placeholders in the clause.
-pub(super) fn purge_where_clause(
-    statuses: &[&str],
-    repo_id: Option<&str>,
-) -> (String, Vec<String>) {
-    let n = statuses.len();
-    let placeholders = sql_placeholders(n);
-    let where_clause = if repo_id.is_some() {
-        format!(
-            "status IN ({placeholders}) AND worktree_id IN \
-             (SELECT id FROM worktrees WHERE repo_id = ?{})",
-            n + 1
-        )
-    } else {
-        format!("status IN ({placeholders})")
-    };
-    let mut params: Vec<String> = statuses.iter().map(|s| s.to_string()).collect();
-    if let Some(rid) = repo_id {
-        params.push(rid.to_string());
-    }
-    (where_clause, params)
 }
 
 pub(in crate::workflow) fn row_to_workflow_run(
@@ -75,7 +50,7 @@ pub(in crate::workflow) fn row_to_workflow_run(
     let error: Option<String> = row.get("error")?;
     let dismissed_int: i64 = row.get("dismissed")?;
     let definition_snapshot: Option<String> = row.get("definition_snapshot")?;
-    let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
+    let workflow_title: Option<String> = row.get("workflow_title")?;
     Ok(WorkflowRun {
         id,
         workflow_name: row.get("workflow_name")?,
@@ -125,8 +100,7 @@ pub(super) fn pending_gate_row_mapper(row: &rusqlite::Row<'_>) -> rusqlite::Resu
     let target_label: Option<String> = row.get("target_label")?;
     let branch: Option<String> = row.get("branch")?;
     let ticket_ref: Option<String> = row.get("ticket_ref")?;
-    let definition_snapshot: Option<String> = row.get("definition_snapshot")?;
-    let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
+    let workflow_title: Option<String> = row.get("workflow_title")?;
     Ok(PendingGateRow {
         step,
         workflow_name,
