@@ -264,7 +264,7 @@ pub async fn send_message(
         prompt: &final_prompt,
         resume_session_id: resume_session_id.as_deref(),
         model: model.as_deref(),
-        bot_name: None,
+        extra_cli_args: &[],
         permission_mode: runtime_permission.as_ref(),
         plugin_dirs: &[],
     };
