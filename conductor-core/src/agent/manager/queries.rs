@@ -344,18 +344,18 @@ impl<'a> AgentManager<'a> {
 
         // Accumulate WHERE conditions and parameter values in lock-step.
         let mut where_parts: Vec<String> = Vec::new();
-        let mut param_values: Vec<String> = Vec::new();
+        let mut param_values: Vec<rusqlite::types::Value> = Vec::new();
 
         if let Some(wt_id) = worktree_id {
-            param_values.push(wt_id.to_owned());
+            param_values.push(rusqlite::types::Value::Text(wt_id.to_owned()));
             where_parts.push("worktree_id = ?".to_string());
         } else if let Some(r_id) = repo_id {
-            param_values.push(r_id.to_owned());
+            param_values.push(rusqlite::types::Value::Text(r_id.to_owned()));
             where_parts.push("w.repo_id = ?".to_string());
         }
 
         if let Some(s) = status {
-            param_values.push(s.to_string());
+            param_values.push(rusqlite::types::Value::Text(s.to_string()));
             let col = if use_join { "ar.status" } else { "status" };
             where_parts.push(format!("{col} = ?"));
         }
@@ -371,8 +371,10 @@ impl<'a> AgentManager<'a> {
             "started_at"
         };
 
+        param_values.push(rusqlite::types::Value::Integer(limit as i64));
+        param_values.push(rusqlite::types::Value::Integer(offset as i64));
         let sql = format!(
-            "{sql_base}{where_clause} ORDER BY {order_col} DESC LIMIT {limit} OFFSET {offset}"
+            "{sql_base}{where_clause} ORDER BY {order_col} DESC LIMIT ? OFFSET ?"
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(
