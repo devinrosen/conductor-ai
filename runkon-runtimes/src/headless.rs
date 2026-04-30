@@ -569,10 +569,9 @@ mod tests {
             Cow::Borrowed("--custom-flag"),
             Cow::Owned("custom-value".to_string()),
         )];
-        let (args, _) = super::build_headless_agent_args(&make_params(
-            run_id, "prompt", None, None, &extra,
-        ))
-        .unwrap();
+        let (args, _) =
+            super::build_headless_agent_args(&make_params(run_id, "prompt", None, None, &extra))
+                .unwrap();
         let idx = args
             .iter()
             .position(|a| a == "--custom-flag")

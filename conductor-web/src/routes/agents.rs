@@ -1139,14 +1139,16 @@ pub async fn restart_agent(
     // DB and config locks are now dropped.
 
     // Spawn headless subprocess and wire stdout to the SSE event bus.
-    let bot_name_args: Vec<(std::borrow::Cow<'static, str>, std::borrow::Cow<'static, str>)> =
-        match &new_run.bot_name {
-            Some(name) => vec![(
-                std::borrow::Cow::Borrowed("--bot-name"),
-                std::borrow::Cow::Owned(name.clone()),
-            )],
-            None => vec![],
-        };
+    let bot_name_args: Vec<(
+        std::borrow::Cow<'static, str>,
+        std::borrow::Cow<'static, str>,
+    )> = match &new_run.bot_name {
+        Some(name) => vec![(
+            std::borrow::Cow::Borrowed("--bot-name"),
+            std::borrow::Cow::Owned(name.clone()),
+        )],
+        None => vec![],
+    };
     let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
         run_id: &new_run.id,
         working_dir: &wt_path,

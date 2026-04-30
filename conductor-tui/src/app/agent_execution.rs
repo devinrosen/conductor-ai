@@ -61,14 +61,16 @@ pub(super) fn drive_headless_run(
     let runtime_permission = config
         .permission_mode
         .map(|m| m.to_runtime_permission_mode());
-    let bot_name_args: Vec<(std::borrow::Cow<'static, str>, std::borrow::Cow<'static, str>)> =
-        match &config.bot_name {
-            Some(name) => vec![(
-                std::borrow::Cow::Borrowed("--bot-name"),
-                std::borrow::Cow::Owned(name.clone()),
-            )],
-            None => vec![],
-        };
+    let bot_name_args: Vec<(
+        std::borrow::Cow<'static, str>,
+        std::borrow::Cow<'static, str>,
+    )> = match &config.bot_name {
+        Some(name) => vec![(
+            std::borrow::Cow::Borrowed("--bot-name"),
+            std::borrow::Cow::Owned(name.clone()),
+        )],
+        None => vec![],
+    };
     let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
         run_id: &run.id,
         working_dir: &config.working_dir,
