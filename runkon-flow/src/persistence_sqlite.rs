@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use chrono::Utc;
 use rusqlite::{named_params, Connection, OptionalExtension};
 
+use crate::constants::RUN_COLUMNS;
 use crate::engine_error::EngineError;
 use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::traits::persistence::{
@@ -18,19 +19,6 @@ use crate::traits::persistence::{
     GateApprovalState, NewRun, NewStep, StepUpdate, WorkflowPersistence,
 };
 use crate::types::{extract_workflow_title, BlockedOn, WorkflowRun, WorkflowRunStep};
-
-// ---------------------------------------------------------------------------
-// Column lists
-// ---------------------------------------------------------------------------
-
-/// Column list for `workflow_runs` SELECT queries.
-const RUN_COLUMNS: &str =
-    "id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
-     started_at, ended_at, result_summary, definition_snapshot, inputs, ticket_id, repo_id, \
-     parent_workflow_run_id, target_label, default_bot_name, iteration, blocked_on, \
-     total_input_tokens, total_output_tokens, total_cache_read_input_tokens, \
-     total_cache_creation_input_tokens, total_turns, total_cost_usd, total_duration_ms, model, \
-     error, dismissed, workflow_title";
 
 /// Column list for `workflow_run_steps` SELECT queries (used by `row_to_step`).
 const STEP_COLUMNS: &str =

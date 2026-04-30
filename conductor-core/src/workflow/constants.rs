@@ -1,4 +1,4 @@
-pub use runkon_flow::constants::{STEP_ROLE_FOREACH, STEP_ROLE_WORKFLOW};
+pub use runkon_flow::constants::{RUN_COLUMNS, STEP_ROLE_FOREACH, STEP_ROLE_WORKFLOW};
 
 /// Minimum number of recent runs required to emit a regression signal.
 pub const REGRESSION_MIN_RECENT_RUNS: i64 = 5;
@@ -25,15 +25,6 @@ pub(super) const STEP_COLUMNS: &str =
 /// Derived from `STEP_COLUMNS` at first access to avoid duplication.
 pub(super) static STEP_COLUMNS_WITH_PREFIX: std::sync::LazyLock<String> =
     std::sync::LazyLock::new(|| crate::db::prefix_columns(STEP_COLUMNS, "s."));
-
-/// Column list for `workflow_runs` SELECT queries (used by `row_to_workflow_run`).
-pub(super) const RUN_COLUMNS: &str =
-    "id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
-     started_at, ended_at, result_summary, definition_snapshot, inputs, ticket_id, repo_id, \
-     parent_workflow_run_id, target_label, default_bot_name, iteration, blocked_on, \
-     total_input_tokens, total_output_tokens, total_cache_read_input_tokens, \
-     total_cache_creation_input_tokens, total_turns, total_cost_usd, total_duration_ms, model, \
-     error, dismissed, workflow_title";
 
 #[cfg(test)]
 mod tests {
