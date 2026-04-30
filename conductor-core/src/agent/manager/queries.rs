@@ -373,9 +373,7 @@ impl<'a> AgentManager<'a> {
 
         param_values.push(rusqlite::types::Value::Integer(limit as i64));
         param_values.push(rusqlite::types::Value::Integer(offset as i64));
-        let sql = format!(
-            "{sql_base}{where_clause} ORDER BY {order_col} DESC LIMIT ? OFFSET ?"
-        );
+        let sql = format!("{sql_base}{where_clause} ORDER BY {order_col} DESC LIMIT ? OFFSET ?");
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(
             rusqlite::params_from_iter(param_values.iter()),
