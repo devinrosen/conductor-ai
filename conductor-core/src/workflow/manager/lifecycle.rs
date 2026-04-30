@@ -53,13 +53,14 @@ impl<'a> WorkflowManager<'a> {
         let id = crate::new_id();
         let now = Utc::now().to_rfc3339();
 
+        let workflow_title = extract_workflow_title(definition_snapshot);
         self.conn.execute(
             "INSERT INTO workflow_runs (id, workflow_name, worktree_id, ticket_id, repo_id, \
              parent_run_id, status, dry_run, trigger, started_at, definition_snapshot, \
-             parent_workflow_run_id, target_label) \
+             parent_workflow_run_id, target_label, workflow_title) \
              VALUES (:id, :workflow_name, :worktree_id, :ticket_id, :repo_id, :parent_run_id, \
              :status, :dry_run, :trigger, :started_at, :definition_snapshot, \
-             :parent_workflow_run_id, :target_label)",
+             :parent_workflow_run_id, :target_label, :workflow_title)",
             named_params![
                 ":id": id,
                 ":workflow_name": workflow_name,
@@ -74,10 +75,9 @@ impl<'a> WorkflowManager<'a> {
                 ":definition_snapshot": definition_snapshot,
                 ":parent_workflow_run_id": parent_workflow_run_id,
                 ":target_label": target_label,
+                ":workflow_title": workflow_title,
             ],
         )?;
-
-        let workflow_title = extract_workflow_title(definition_snapshot);
         Ok(WorkflowRun {
             id,
             workflow_name: workflow_name.to_string(),

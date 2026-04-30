@@ -1,5 +1,5 @@
 use crate::workflow::types::PendingGateRow;
-use crate::workflow::{extract_workflow_title, BlockedOn, WorkflowRun, WorkflowRunStep};
+use crate::workflow::{BlockedOn, WorkflowRun, WorkflowRunStep};
 
 /// Deserialize `json` as `T`, returning `T::default()` on missing or malformed input.
 ///
@@ -50,7 +50,7 @@ pub(in crate::workflow) fn row_to_workflow_run(
     let error: Option<String> = row.get("error")?;
     let dismissed_int: i64 = row.get("dismissed")?;
     let definition_snapshot: Option<String> = row.get("definition_snapshot")?;
-    let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
+    let workflow_title: Option<String> = row.get("workflow_title")?;
     Ok(WorkflowRun {
         id,
         workflow_name: row.get("workflow_name")?,
@@ -100,8 +100,7 @@ pub(super) fn pending_gate_row_mapper(row: &rusqlite::Row<'_>) -> rusqlite::Resu
     let target_label: Option<String> = row.get("target_label")?;
     let branch: Option<String> = row.get("branch")?;
     let ticket_ref: Option<String> = row.get("ticket_ref")?;
-    let definition_snapshot: Option<String> = row.get("definition_snapshot")?;
-    let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
+    let workflow_title: Option<String> = row.get("workflow_title")?;
     Ok(PendingGateRow {
         step,
         workflow_name,

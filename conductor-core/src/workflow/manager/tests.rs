@@ -4466,3 +4466,118 @@ fn get_gate_approval_state_handles_unrecognised_status_without_panic() {
         "unrecognised status with no approved_at should return Pending, got {state:?}"
     );
 }
+
+#[test]
+fn test_workflow_title_stored_and_read_from_column() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let parent_id = make_parent_id(&conn, "w1");
+    let snapshot = r#"{"title":"My Workflow","steps":[]}"#;
+
+    let run = mgr
+        .create_workflow_run(
+            "wf-title",
+            Some("w1"),
+            &parent_id,
+            false,
+            "manual",
+            Some(snapshot),
+        )
+        .unwrap();
+
+    assert_eq!(run.workflow_title.as_deref(), Some("My Workflow"));
+
+    // Read back through the query layer to confirm the column is persisted.
+    let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert_eq!(fetched.workflow_title.as_deref(), Some("My Workflow"));
+
+    // Null out definition_snapshot to prove workflow_title is read from its own column.
+    conn.execute(
+        "UPDATE workflow_runs SET definition_snapshot = NULL WHERE id = ?1",
+        rusqlite::params![run.id],
+    )
+    .unwrap();
+    let fetched_no_snapshot = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert_eq!(
+        fetched_no_snapshot.workflow_title.as_deref(),
+        Some("My Workflow"),
+        "workflow_title must survive definition_snapshot being nulled out"
+    );
+}
+
+#[test]
+fn test_workflow_title_null_snapshot_at_create_time() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let parent_id = make_parent_id(&conn, "w1");
+
+    let run = mgr
+        .create_workflow_run(
+            "wf-no-snapshot",
+            Some("w1"),
+            &parent_id,
+            false,
+            "manual",
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(
+        run.workflow_title, None,
+        "NULL snapshot at write time must yield None workflow_title"
+    );
+    let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert_eq!(fetched.workflow_title, None);
+}
+
+#[test]
+fn test_workflow_title_snapshot_without_title_field() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let parent_id = make_parent_id(&conn, "w1");
+    let snapshot = r#"{"steps":[],"description":"no title key here"}"#;
+
+    let run = mgr
+        .create_workflow_run(
+            "wf-no-title-key",
+            Some("w1"),
+            &parent_id,
+            false,
+            "manual",
+            Some(snapshot),
+        )
+        .unwrap();
+
+    assert_eq!(
+        run.workflow_title, None,
+        "snapshot without 'title' field must yield None workflow_title"
+    );
+    let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert_eq!(fetched.workflow_title, None);
+}
+
+#[test]
+fn test_workflow_title_malformed_snapshot_json() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let parent_id = make_parent_id(&conn, "w1");
+    let snapshot = r#"{"title": "broken", "steps": [INVALID}"#;
+
+    let run = mgr
+        .create_workflow_run(
+            "wf-bad-json",
+            Some("w1"),
+            &parent_id,
+            false,
+            "manual",
+            Some(snapshot),
+        )
+        .unwrap();
+
+    assert_eq!(
+        run.workflow_title, None,
+        "malformed JSON snapshot must yield None workflow_title (not panic)"
+    );
+    let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert_eq!(fetched.workflow_title, None);
+}
