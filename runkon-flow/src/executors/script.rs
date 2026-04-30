@@ -353,7 +353,17 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
         let parsed = crate::helpers::parse_flow_output(&stdout);
         let (markers, context, structured_output) = match parsed {
             Some(out) => {
-                let json = serde_json::to_string(&out).ok();
+                let json = serde_json::to_string(&out)
+                    .map_err(|e| {
+                        tracing::warn!(
+                            step = %node.name,
+                            error = %e,
+                            "script: failed to re-serialize FlowOutput as structured_output \
+                             — downstream `{{name}}` variable injection from this step's \
+                             extras will be unavailable",
+                        );
+                    })
+                    .ok();
                 (out.markers, out.context, json)
             }
             None => {

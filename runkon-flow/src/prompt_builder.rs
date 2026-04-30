@@ -144,11 +144,30 @@ pub fn build_variable_map(state: &ExecutionState) -> HashMap<String, String> {
         };
         let parsed = match serde_json::from_str::<serde_json::Value>(json) {
             Ok(v) => v,
-            Err(_) => continue,
+            Err(e) => {
+                // structured_output is always written by script.rs via
+                // serde_json, so a parse failure here is a real bug — but
+                // not fatal to the run. Log and skip so other steps' exports
+                // still flow.
+                tracing::warn!(
+                    step = %c.step,
+                    error = %e,
+                    "build_variable_map: structured_output is not valid JSON — \
+                     {{name}} variable exports from this step will be unavailable",
+                );
+                continue;
+            }
         };
         let obj = match parsed.as_object() {
             Some(o) => o,
-            None => continue,
+            None => {
+                tracing::warn!(
+                    step = %c.step,
+                    "build_variable_map: structured_output JSON is not an object — \
+                     {{name}} variable exports from this step will be unavailable",
+                );
+                continue;
+            }
         };
         for (key, value) in obj {
             if key == "markers" || key == "context" {

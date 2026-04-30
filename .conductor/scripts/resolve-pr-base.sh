@@ -30,8 +30,11 @@ if [ -z "${BASE_BRANCH}" ]; then
   exit 1
 fi
 
-cat <<EOF
-<<<FLOW_OUTPUT>>>
-{"markers": ["base_branch_resolved"], "context": "${BASE_BRANCH}", "base_branch": "${BASE_BRANCH}"}
-<<<END_FLOW_OUTPUT>>>
-EOF
+# Build the FLOW_OUTPUT JSON via `jq -n --arg` so any quotes / backslashes /
+# control chars in BASE_BRANCH are encoded safely. String interpolation here
+# would let a crafted branch name (e.g. one containing `\` or `"`) inject
+# extra keys into the parsed FlowOutput.
+PAYLOAD=$(jq -nc --arg base "${BASE_BRANCH}" \
+  '{markers: ["base_branch_resolved"], context: $base, base_branch: $base}')
+
+printf '<<<FLOW_OUTPUT>>>\n%s\n<<<END_FLOW_OUTPUT>>>\n' "${PAYLOAD}"
