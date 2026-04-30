@@ -1079,6 +1079,34 @@ impl<'a> WorkflowManager<'a> {
         Ok(deleted)
     }
 
+    /// Build the WHERE clause and bound parameters shared by [`purge`] and [`purge_count`].
+    ///
+    /// Returns `(where_clause, params)` where `where_clause` is a SQL fragment
+    /// (no leading `WHERE` keyword) suitable for both DELETE and SELECT COUNT(*).
+    /// All values are bound positionally — no string-formatted user data.
+    fn build_purge_params(
+        repo_id: Option<&str>,
+        statuses: &[&str],
+    ) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+        let n = statuses.len();
+        let placeholders = sql_placeholders(n);
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = statuses
+            .iter()
+            .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::ToSql>)
+            .collect();
+        let where_clause = if let Some(rid) = repo_id {
+            params.push(Box::new(rid.to_string()));
+            format!(
+                "status IN ({placeholders}) \
+                 AND worktree_id IN (SELECT id FROM worktrees WHERE repo_id = ?{})",
+                n + 1
+            )
+        } else {
+            format!("status IN ({placeholders})")
+        };
+        (where_clause, params)
+    }
+
     /// Delete workflow runs with the given statuses, optionally scoped to a repo.
     ///
     /// `statuses` should be a non-empty slice of terminal status strings
@@ -1090,22 +1118,8 @@ impl<'a> WorkflowManager<'a> {
         if statuses.is_empty() {
             return Ok(0);
         }
-        let n = statuses.len();
-        let placeholders = sql_placeholders(n);
-        let mut params: Vec<Box<dyn rusqlite::ToSql>> = statuses
-            .iter()
-            .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::ToSql>)
-            .collect();
-        let sql = if let Some(rid) = repo_id {
-            params.push(Box::new(rid.to_string()));
-            format!(
-                "DELETE FROM workflow_runs WHERE status IN ({placeholders}) \
-                 AND worktree_id IN (SELECT id FROM worktrees WHERE repo_id = ?{})",
-                n + 1
-            )
-        } else {
-            format!("DELETE FROM workflow_runs WHERE status IN ({placeholders})")
-        };
+        let (where_clause, params) = Self::build_purge_params(repo_id, statuses);
+        let sql = format!("DELETE FROM workflow_runs WHERE {where_clause}");
         Ok(self
             .conn
             .execute(&sql, rusqlite::params_from_iter(params))?)
@@ -1118,22 +1132,8 @@ impl<'a> WorkflowManager<'a> {
         if statuses.is_empty() {
             return Ok(0);
         }
-        let n = statuses.len();
-        let placeholders = sql_placeholders(n);
-        let mut params: Vec<Box<dyn rusqlite::ToSql>> = statuses
-            .iter()
-            .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::ToSql>)
-            .collect();
-        let sql = if let Some(rid) = repo_id {
-            params.push(Box::new(rid.to_string()));
-            format!(
-                "SELECT COUNT(*) FROM workflow_runs WHERE status IN ({placeholders}) \
-                 AND worktree_id IN (SELECT id FROM worktrees WHERE repo_id = ?{})",
-                n + 1
-            )
-        } else {
-            format!("SELECT COUNT(*) FROM workflow_runs WHERE status IN ({placeholders})")
-        };
+        let (where_clause, params) = Self::build_purge_params(repo_id, statuses);
+        let sql = format!("SELECT COUNT(*) FROM workflow_runs WHERE {where_clause}");
         let count: i64 = self
             .conn
             .query_row(&sql, rusqlite::params_from_iter(params), |row| row.get(0))?;
