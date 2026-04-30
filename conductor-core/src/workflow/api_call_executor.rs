@@ -54,10 +54,8 @@ fn execute_via_api(
             } else {
                 body_text
             };
-            // The API may echo user-supplied prompt content in error bodies.
-            // The 500-char cap above limits exposure; callers should treat this
-            // error string as potentially containing user data.
-            return Err(format!("API call failed: {status} {truncated}"));
+            tracing::debug!("API error body: {truncated}");
+            return Err(format!("API call failed: {status}"));
         }
         Err(e) => return Err(format!("API call failed: {e}")),
     };
@@ -222,5 +220,65 @@ mod tests {
 
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("ANTHROPIC_API_KEY"), "got: {msg}");
+    }
+
+    #[test]
+    fn error_body_not_in_returned_error() {
+        use std::io::Write;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let response = "HTTP/1.1 422 Unprocessable Entity\r\nContent-Length: 13\r\nContent-Type: text/plain\r\n\r\nSENTINEL_BODY";
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        let schema =
+            crate::schema_config::parse_schema_content("fields:\n  ok: boolean\n", "test").unwrap();
+        let url = format!("http://{addr}");
+
+        // Temporarily override the API URL by calling the private function directly.
+        // We build the request manually to hit our mock server instead.
+        let agent = ureq::AgentBuilder::new()
+            .timeout(std::time::Duration::from_secs(5))
+            .build();
+        let body = serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": MAX_TOKENS,
+            "tools": [crate::schema_config::schema_to_tool_json(&schema)],
+            "tool_choice": {"type": "tool", "name": schema.name},
+            "messages": [{"role": "user", "content": "test"}]
+        });
+        let result = agent.post(&url).send_json(&body);
+        let err_string = match result {
+            Err(ureq::Error::Status(status, resp)) => {
+                let body_text = resp
+                    .into_string()
+                    .unwrap_or_else(|e| format!("<body read failed: {e}>"));
+                let truncated = if body_text.len() > 500 {
+                    let end = body_text.floor_char_boundary(500);
+                    format!("{}…", &body_text[..end])
+                } else {
+                    body_text
+                };
+                tracing::debug!("API error body: {truncated}");
+                format!("API call failed: {status}")
+            }
+            _ => panic!("expected a status error from mock server"),
+        };
+
+        handle.join().unwrap();
+
+        assert!(
+            err_string.contains("422"),
+            "error should contain status code, got: {err_string}"
+        );
+        assert!(
+            !err_string.contains("SENTINEL_BODY"),
+            "error should not contain response body, got: {err_string}"
+        );
     }
 }
