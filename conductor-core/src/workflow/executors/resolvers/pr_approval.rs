@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
 use crate::error::Result;
-use runkon_flow::dsl::ApprovalMode;
 
 use crate::workflow::executors::gate_resolver::{
-    GateContext, GateParams, GatePoll, GateResolver, GitHubTokenCache,
+    ApprovalMode, GateContext, GateParams, GatePoll, GateResolver, GitHubTokenCache,
 };
 
 use super::GhGateCommon;
@@ -100,7 +99,6 @@ impl GateResolver for PrApprovalGateResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use runkon_flow::dsl::ApprovalMode;
     use serde_json::json;
 
     fn make_params(mode: ApprovalMode, min_approvals: u32) -> GateParams {
