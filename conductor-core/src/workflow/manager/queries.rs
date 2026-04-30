@@ -414,9 +414,9 @@ impl<'a> WorkflowManager<'a> {
                      WHERE workflow_runs.repo_id = :repo_id \
                        AND ({ACTIVE_WORKTREE_GUARD}) \
                        AND workflow_runs.status = :status \
-                     ORDER BY workflow_runs.started_at DESC LIMIT {limit} OFFSET {offset}"
+                     ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
                 ),
-                named_params! { ":repo_id": repo_id, ":status": status_str },
+                named_params! { ":repo_id": repo_id, ":status": status_str, ":limit": limit as i64, ":offset": offset as i64 },
                 row_to_workflow_run,
             )
         } else {
