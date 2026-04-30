@@ -462,7 +462,7 @@ pub async fn start_agent(
         prompt: &prompt,
         resume_session_id: resume_session_id.as_deref(),
         model: model.as_deref(),
-        bot_name: None,
+        extra_cli_args: &[],
         permission_mode: None,
         plugin_dirs: &[],
     };
@@ -1139,13 +1139,21 @@ pub async fn restart_agent(
     // DB and config locks are now dropped.
 
     // Spawn headless subprocess and wire stdout to the SSE event bus.
+    let bot_name_args: Vec<(std::borrow::Cow<'static, str>, std::borrow::Cow<'static, str>)> =
+        match &new_run.bot_name {
+            Some(name) => vec![(
+                std::borrow::Cow::Borrowed("--bot-name"),
+                std::borrow::Cow::Owned(name.clone()),
+            )],
+            None => vec![],
+        };
     let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
         run_id: &new_run.id,
         working_dir: &wt_path,
         prompt: &new_run.prompt,
         resume_session_id: None,
         model: new_run.model.as_deref(),
-        bot_name: new_run.bot_name.as_deref(),
+        extra_cli_args: &bot_name_args,
         permission_mode: None,
         plugin_dirs: &[],
     };
@@ -1229,7 +1237,7 @@ pub async fn start_repo_agent(
         prompt: &run.prompt,
         resume_session_id: resume_session_id.as_deref(),
         model: model.as_deref(),
-        bot_name: None,
+        extra_cli_args: &[],
         permission_mode: Some(&repo_safe),
         plugin_dirs: &[],
     };

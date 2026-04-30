@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::config::{agent_log_path, Config};
@@ -76,7 +77,10 @@ impl ActionExecutor for ClaudeAgentExecutor {
             prompt,
             working_dir: ectx.working_dir.clone(),
             model: ectx.model.clone(),
-            bot_name: ectx.bot_name.clone(),
+            extra_cli_args: match &ectx.bot_name {
+                Some(name) => vec![(Cow::Borrowed("--bot-name"), Cow::Owned(name.clone()))],
+                None => vec![],
+            },
             plugin_dirs: ectx.plugin_dirs.clone(),
             tracker,
             event_sink,

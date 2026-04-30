@@ -46,7 +46,7 @@ pub fn make_request(
         prompt: prompt.to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
-        bot_name: None,
+        extra_cli_args: vec![],
         plugin_dirs: vec![],
         tracker,
         event_sink,
