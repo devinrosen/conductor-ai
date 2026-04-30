@@ -46,6 +46,17 @@ impl<'a> PushSubscriptionManager<'a> {
         }
     }
 
+    fn row_to_subscription(row: &rusqlite::Row) -> rusqlite::Result<PushSubscription> {
+        Ok(PushSubscription {
+            id: row.get(0)?,
+            endpoint: row.get(1)?,
+            p256dh: row.get(2)?,
+            auth: row.get(3)?,
+            created_at: row.get(4)?,
+            updated_at: row.get(5)?,
+        })
+    }
+
     /// Create or update a push subscription
     pub fn upsert_subscription(
         &self,
@@ -71,16 +82,7 @@ impl<'a> PushSubscriptionManager<'a> {
             "SELECT id, endpoint, p256dh, auth, created_at, updated_at
              FROM push_subscriptions WHERE endpoint = ?1",
             rusqlite::params![endpoint],
-            |row| {
-                Ok(PushSubscription {
-                    id: row.get(0)?,
-                    endpoint: row.get(1)?,
-                    p256dh: row.get(2)?,
-                    auth: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
-                })
-            },
+            Self::row_to_subscription,
         )?;
 
         Ok(subscription)
@@ -104,16 +106,7 @@ impl<'a> PushSubscriptionManager<'a> {
         )?;
 
         let subscriptions = stmt
-            .query_map([], |row| {
-                Ok(PushSubscription {
-                    id: row.get(0)?,
-                    endpoint: row.get(1)?,
-                    p256dh: row.get(2)?,
-                    auth: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
-                })
-            })?
+            .query_map([], Self::row_to_subscription)?
             .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
 
         Ok(subscriptions)
