@@ -347,12 +347,20 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
             duration_ms
         );
 
-        let (markers, context) = crate::helpers::parse_flow_output(&stdout)
-            .map(|out| (out.markers, out.context))
-            .unwrap_or_else(|| {
-                let ctx = stdout.chars().take(2000).collect();
-                (vec![], ctx)
-            });
+        // Parse FLOW_OUTPUT once; keep the full struct so we can persist its
+        // JSON shape (including any `extras` fields) as structured_output for
+        // downstream variable injection — see prompt_builder::build_variable_map.
+        let parsed = crate::helpers::parse_flow_output(&stdout);
+        let (markers, context, structured_output) = match parsed {
+            Some(out) => {
+                let json = serde_json::to_string(&out).ok();
+                (out.markers, out.context, json)
+            }
+            None => {
+                let ctx: String = stdout.chars().take(2000).collect();
+                (vec![], ctx, None)
+            }
+        };
 
         let markers_json =
             crate::helpers::serialize_or_empty_array(&markers, &format!("script '{}'", node.name));
@@ -365,7 +373,7 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
             Some(context.clone()),
             Some(markers_json),
             0,
-            None,
+            structured_output.clone(),
         )?;
 
         record_step_success(
@@ -378,6 +386,7 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
                 markers,
                 context,
                 iteration,
+                structured_output,
                 ..crate::types::StepSuccess::default()
             },
         );

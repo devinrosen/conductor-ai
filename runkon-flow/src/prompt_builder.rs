@@ -121,6 +121,25 @@ pub fn build_variable_map(state: &ExecutionState) -> HashMap<&str, String> {
     }
     // dry_run: "true" or "false"
     vars.insert("dry_run", state.exec_config.dry_run.to_string());
+
+    // {{base_branch}}: pre-resolved PR base branch from a `resolve-pr-base.sh`
+    // script step (or any step that emits `base_branch: "<branch>"` in its
+    // FLOW_OUTPUT). #2736 — agents and detect-* scripts read this instead of
+    // running `gh pr view` themselves, which is brittle when the agent cd's
+    // out of the worktree and the silent fallback diffs against the wrong base.
+    //
+    // Walk forward through prior contexts; later writes overwrite earlier
+    // ones with the same name.
+    for c in &state.contexts {
+        if let Some(json) = &c.structured_output {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json) {
+                if let Some(s) = parsed.get("base_branch").and_then(|v| v.as_str()) {
+                    vars.insert("base_branch", s.to_string());
+                }
+            }
+        }
+    }
+
     vars
 }
 
@@ -184,5 +203,111 @@ mod tests {
         // The run template only references {{cmd}}; {{evil}} should not be expanded.
         let result = substitute_variables("run {{cmd}}", &vars);
         assert_eq!(result, "run '{{evil}}'");
+    }
+
+    /// `build_variable_map` exposes `{{base_branch}}` from any prior step's
+    /// structured_output JSON containing a top-level `base_branch` string.
+    /// #2736 — `resolve-pr-base.sh` writes this once at the start of
+    /// review-pr.wf and downstream consumers read it without re-running gh.
+    #[test]
+    fn build_variable_map_exposes_base_branch_from_prior_context() {
+        use crate::test_helpers::CountingPersistence;
+        use std::sync::Arc;
+
+        let cp = Arc::new(CountingPersistence::new());
+        let mut state = crate::test_helpers::make_test_execution_state(
+            cp as Arc<dyn crate::traits::persistence::WorkflowPersistence>,
+            "run-1".into(),
+        );
+
+        // No prior context → {{base_branch}} should be unset.
+        let vars = build_variable_map(&state);
+        assert!(
+            !vars.contains_key("base_branch"),
+            "no prior step → no base_branch variable"
+        );
+
+        // A prior step with structured_output carrying base_branch → exposed.
+        state.contexts.push(crate::types::ContextEntry {
+            step: "resolve-pr-base".into(),
+            iteration: 0,
+            context: "release/0.10.0".into(),
+            markers: vec!["base_branch_resolved".into()],
+            structured_output: Some(
+                r#"{"markers":["base_branch_resolved"],"context":"release/0.10.0","base_branch":"release/0.10.0"}"#
+                    .into(),
+            ),
+            output_file: None,
+        });
+        let vars = build_variable_map(&state);
+        assert_eq!(
+            vars.get("base_branch").map(String::as_str),
+            Some("release/0.10.0"),
+            "base_branch must be exposed from prior structured_output"
+        );
+
+        // A later step with no base_branch → previous value persists.
+        state.contexts.push(crate::types::ContextEntry {
+            step: "detect-file-types".into(),
+            iteration: 0,
+            context: "code changes".into(),
+            markers: vec![],
+            structured_output: Some(r#"{"markers":[],"context":"Found 2 files"}"#.into()),
+            output_file: None,
+        });
+        let vars = build_variable_map(&state);
+        assert_eq!(
+            vars.get("base_branch").map(String::as_str),
+            Some("release/0.10.0"),
+            "later step without base_branch must not clobber the value"
+        );
+
+        // A later step that overwrites base_branch → wins.
+        state.contexts.push(crate::types::ContextEntry {
+            step: "override".into(),
+            iteration: 0,
+            context: "main".into(),
+            markers: vec![],
+            structured_output: Some(
+                r#"{"markers":[],"context":"main","base_branch":"main"}"#.into(),
+            ),
+            output_file: None,
+        });
+        let vars = build_variable_map(&state);
+        assert_eq!(
+            vars.get("base_branch").map(String::as_str),
+            Some("main"),
+            "later step with base_branch must overwrite earlier value"
+        );
+    }
+
+    /// Substitution: a template referencing {{base_branch}} resolves to the
+    /// value exposed by `build_variable_map`. End-to-end verification that the
+    /// engine variable injection works for the new variable.
+    #[test]
+    fn substitute_uses_base_branch_from_variable_map() {
+        use crate::test_helpers::CountingPersistence;
+        use std::sync::Arc;
+
+        let cp = Arc::new(CountingPersistence::new());
+        let mut state = crate::test_helpers::make_test_execution_state(
+            cp as Arc<dyn crate::traits::persistence::WorkflowPersistence>,
+            "run-1".into(),
+        );
+        state.contexts.push(crate::types::ContextEntry {
+            step: "resolve-pr-base".into(),
+            iteration: 0,
+            context: "release/0.10.0".into(),
+            markers: vec![],
+            structured_output: Some(
+                r#"{"markers":[],"context":"release/0.10.0","base_branch":"release/0.10.0"}"#
+                    .into(),
+            ),
+            output_file: None,
+        });
+
+        let vars = build_variable_map(&state);
+        let rendered = substitute_variables("git diff origin/{{base_branch}}...HEAD", &vars);
+        assert_eq!(rendered, "git diff origin/release/0.10.0...HEAD");
     }
 }
