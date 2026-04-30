@@ -22,6 +22,25 @@ If the diff exceeds ~50KB, focus on files most relevant to your review area.
 - Pure deletions with no replacement unless they introduce a regression
 - Formatting-only changes (whitespace, import ordering)
 
+## Path verification (required for every finding)
+
+Before emitting any entry in `findings`, verify that the cited `file` path
+appears in the diff. The diff lists files via `diff --git a/<path> b/<path>`
+and `+++ b/<path>` headers. If you cannot find the path in those headers,
+**drop the finding** — it does not belong in `findings`.
+
+Recognising a common pattern (CORS configuration, error handling shape,
+logging idioms, etc.) is **not** evidence the code exists in this PR. The
+diff is the only authoritative source. A submit-review safety net filters
+hallucinated findings deterministically, but each false finding still
+wastes reviewer attention — do not emit one in the first place.
+
+This rule applies to `off_diff_findings` too: those must point to real
+files visible in the diff context (the surrounding `--- a/<path>` blocks
+of unchanged code, or files mentioned in the diff stat). A finding about
+code that does not appear anywhere in the diff is almost certainly
+hallucinated — drop it.
+
 ## Output format
 
 Severity guide:
