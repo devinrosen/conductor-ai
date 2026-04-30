@@ -28,13 +28,19 @@ fi
 # safety net: drop any blocking_findings whose `file` is not in the diff.
 # off_diff_findings are intentionally off-diff and not filtered here.
 # ---------------------------------------------------------------------------
-BASE_BRANCH=$(gh pr view "${PR_NUMBER}" --json baseRefName -q .baseRefName 2>/dev/null || echo main)
-DIFF_FILES_JSON=$(git diff --name-only "origin/${BASE_BRANCH}...HEAD" 2>/dev/null \
-  | jq -R -s 'split("\n") | map(select(length > 0))' || echo "[]")
+BASE_BRANCH=$(gh pr view "${PR_NUMBER}" --json baseRefName -q .baseRefName 2>/dev/null)
+if [ -z "${BASE_BRANCH}" ]; then
+  echo "Warning: could not resolve PR base branch for PR #${PR_NUMBER} — skipping off-diff filter."
+  echo "         Findings will pass through unfiltered (not silently filtered against the wrong base)."
+  DIFF_FILE_COUNT=0
+else
+  DIFF_FILES_JSON=$(git diff --name-only "origin/${BASE_BRANCH}...HEAD" 2>/dev/null \
+    | jq -R -s 'split("\n") | map(select(length > 0))' || echo "[]")
+  DIFF_FILE_COUNT=$(echo "${DIFF_FILES_JSON}" | jq 'length')
+fi
 
-DIFF_FILE_COUNT=$(echo "${DIFF_FILES_JSON}" | jq 'length')
 if [ "${DIFF_FILE_COUNT}" -eq 0 ]; then
-  echo "Warning: git diff returned no files for origin/${BASE_BRANCH}...HEAD — skipping off-diff filter to avoid silently dropping legitimate findings."
+  echo "Warning: git diff returned no files for origin/${BASE_BRANCH:-<unresolved>}...HEAD — skipping off-diff filter to avoid silently dropping legitimate findings."
 else
   PRIOR_OUTPUT_FILTERED=$(echo "${PRIOR_OUTPUT}" | jq --argjson diff "${DIFF_FILES_JSON}" '
     ((.blocking_findings // []) | length) as $before
