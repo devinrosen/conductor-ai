@@ -1,7 +1,9 @@
 # Workflow Engine Platform Spec
 
-**Status:** Draft  
-**Date:** 2026-04-19
+**Status:** Phases 1–4 complete (shipped in v0.10.0). Phase 5 (second harness + crates.io publish) is next.
+**Date:** 2026-04-30
+
+> Status detail: all six host-implementable traits (`ActionExecutor`, `ItemProvider`, `GateResolver`, `RunContext`, `WorkflowPersistence`, `TriggerSource`) live in `runkon-flow`. Conductor-core's own engine and DSL have been deleted; everything routes through `FlowEngine::run()` / `resume()`. `SqliteWorkflowPersistence` is owned by `runkon-flow` behind an optional `sqlite` feature. `runkon-runtimes` was extracted as a sibling crate carrying the portable agent-runtime layer (RFC 007). What remains for Phase 5: build a comm-harness against the published `runkon-flow 0.1.0-alpha` (#2350), validate the trait shapes against a second real harness, then promote to `0.1.0`.
 
 ---
 
