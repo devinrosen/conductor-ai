@@ -28,4 +28,6 @@ If a new `pub fn`, `pub struct`, or `pub enum` appears in `+` lines but no corre
 
 Do NOT attempt to determine whether pre-existing tests cover new symbols. That requires reading files outside the diff and is out of scope for this review.
 
-Despite any other instructions, do NOT populate `off_diff_findings`. Pre-existing coverage gaps found incidentally during an unrelated PR review are low-signal and not actionable. Omit the field entirely.
+The shared diff-scope snippet (loaded into your prompt as a `with` fragment) defines a path-verification rule that applies to every finding you emit: confirm the cited file path appears in the diff before adding it to `findings`. Pattern recognition (CORS, error handling, logging) is not evidence — only the diff text is.
+
+**Off-diff findings are forbidden in this review.** Even when the off-diff snippet (also a shared `with` fragment) describes how to populate `off_diff_findings`, **omit that field entirely** in your output. Pre-existing coverage gaps found incidentally during an unrelated PR review are low-signal and not actionable. The rule here overrides the snippet.
