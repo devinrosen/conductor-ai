@@ -1279,7 +1279,7 @@ pub fn run(conn: &Connection) -> Result<()> {
             .prepare("SELECT workflow_title FROM workflow_runs LIMIT 0")
             .is_ok();
         if !has_col {
-            conn.execute_batch("ALTER TABLE workflow_runs ADD COLUMN workflow_title TEXT;")?;
+            conn.execute_batch(include_str!("migrations/083_workflow_run_title.sql"))?;
             // Only backfill if definition_snapshot column exists (some minimal test
             // schemas omit it; the column was added in migration 021).
             let has_snapshot: bool = conn
