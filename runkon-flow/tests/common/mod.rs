@@ -304,7 +304,7 @@ impl ChildWorkflowRunner for MockChildRunner {
     fn execute_child(
         &self,
         workflow_name: &str,
-        _parent_state: &ExecutionState,
+        _parent_ctx: &runkon_flow::engine::ChildWorkflowContext,
         params: ChildWorkflowInput,
     ) -> runkon_flow::engine_error::Result<WorkflowResult> {
         let item_id = params.inputs.get("item.id").cloned().unwrap_or_default();
@@ -317,6 +317,7 @@ impl ChildWorkflowRunner for MockChildRunner {
         &self,
         _workflow_run_id: &str,
         _model: Option<&str>,
+        _parent_ctx: &runkon_flow::engine::ChildWorkflowContext,
     ) -> runkon_flow::engine_error::Result<WorkflowResult> {
         unimplemented!("MockChildRunner does not support resume_child")
     }
@@ -584,7 +585,7 @@ impl ChildWorkflowRunner for CancellingMockRunner {
     fn execute_child(
         &self,
         workflow_name: &str,
-        _parent_state: &ExecutionState,
+        _parent_ctx: &runkon_flow::engine::ChildWorkflowContext,
         params: ChildWorkflowInput,
     ) -> runkon_flow::engine_error::Result<WorkflowResult> {
         let item_id = params.inputs.get("item.id").cloned().unwrap_or_default();
@@ -601,6 +602,7 @@ impl ChildWorkflowRunner for CancellingMockRunner {
         &self,
         _workflow_run_id: &str,
         _model: Option<&str>,
+        _parent_ctx: &runkon_flow::engine::ChildWorkflowContext,
     ) -> runkon_flow::engine_error::Result<WorkflowResult> {
         unimplemented!("CancellingMockRunner does not support resume_child")
     }

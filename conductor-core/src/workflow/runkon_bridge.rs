@@ -385,20 +385,46 @@ impl ConductorChildWorkflowRunner {
             conn,
         }
     }
+
+    /// Project a parent's `ChildWorkflowContext` into the `WorkflowResumeInput`
+    /// that `super::coordinator::resume_workflow` consumes.
+    ///
+    /// Extracted so the `event_sinks` propagation is unit-testable without
+    /// spinning up a real workflow run — see the regression test in
+    /// `tests::resume_input_propagates_event_sinks_from_parent_ctx` which
+    /// guards against `event_sinks: vec![]` re-creeping back in.
+    fn build_resume_input<'a>(
+        &'a self,
+        workflow_run_id: &'a str,
+        model: Option<&'a str>,
+        parent_ctx: &runkon_flow::engine::ChildWorkflowContext,
+    ) -> crate::workflow::types::WorkflowResumeInput<'a> {
+        crate::workflow::types::WorkflowResumeInput {
+            config: &self.config,
+            workflow_run_id,
+            model,
+            from_step: None,
+            restart: false,
+            conductor_bin_dir: None,
+            event_sinks: parent_ctx.event_sinks.iter().cloned().collect(),
+            db_path: Some(self.db_path.clone()),
+            shutdown: None,
+        }
+    }
 }
 
 impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
     fn execute_child(
         &self,
         workflow_name: &str,
-        parent_state: &runkon_flow::engine::ExecutionState,
+        parent_ctx: &runkon_flow::engine::ChildWorkflowContext,
         params: runkon_flow::engine::ChildWorkflowInput,
     ) -> runkon_flow::engine_error::Result<runkon_flow::types::WorkflowResult> {
         // Load the real workflow definition from disk. The runner resolves the
         // actual definition by name from the worktree/repo .conductor/workflows/ directory.
         let core_def = runkon_flow::dsl::load_workflow_by_name(
-            &parent_state.worktree_ctx.working_dir,
-            &parent_state.worktree_ctx.repo_path,
+            &parent_ctx.worktree_ctx.working_dir,
+            &parent_ctx.worktree_ctx.repo_path,
             workflow_name,
         )
         .map_err(|e| {
@@ -409,8 +435,8 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         })?;
 
         let exec_config = crate::workflow::WorkflowExecConfig {
-            event_sinks: parent_state.event_sinks.iter().cloned().collect(),
-            ..parent_state.exec_config.clone()
+            event_sinks: parent_ctx.event_sinks.iter().cloned().collect(),
+            ..parent_ctx.exec_config.clone()
         };
 
         // Route child workflows through execute_workflow_standalone so they use
@@ -419,22 +445,22 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         let standalone_params = crate::workflow::types::WorkflowExecStandalone {
             config: self.config.clone(),
             workflow: core_def,
-            worktree_id: parent_state.worktree_ctx.worktree_id.clone(),
-            working_dir: parent_state.worktree_ctx.working_dir.clone(),
-            repo_path: parent_state.worktree_ctx.repo_path.clone(),
-            ticket_id: parent_state.inputs.get("ticket_id").cloned(),
-            repo_id: parent_state.inputs.get("repo_id").cloned(),
-            model: parent_state.model.clone(),
+            worktree_id: parent_ctx.worktree_ctx.worktree_id.clone(),
+            working_dir: parent_ctx.worktree_ctx.working_dir.clone(),
+            repo_path: parent_ctx.worktree_ctx.repo_path.clone(),
+            ticket_id: parent_ctx.inputs.get("ticket_id").cloned(),
+            repo_id: parent_ctx.inputs.get("repo_id").cloned(),
+            model: parent_ctx.model.clone(),
             exec_config,
             inputs: params.inputs,
-            target_label: parent_state.target_label.clone(),
+            target_label: parent_ctx.target_label.clone(),
             run_id_notify: None,
-            triggered_by_hook: parent_state.triggered_by_hook,
+            triggered_by_hook: parent_ctx.triggered_by_hook,
             conductor_bin_dir: None,
             force: false,
-            extra_plugin_dirs: parent_state.worktree_ctx.extra_plugin_dirs.clone(),
+            extra_plugin_dirs: parent_ctx.worktree_ctx.extra_plugin_dirs.clone(),
             db_path: Some(self.db_path.clone()),
-            parent_workflow_run_id: Some(parent_state.workflow_run_id.clone()),
+            parent_workflow_run_id: Some(parent_ctx.workflow_run_id.clone()),
             depth: params.depth,
             parent_step_id: params.parent_step_id,
             default_bot_name: params.bot_name,
@@ -453,18 +479,9 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         &self,
         workflow_run_id: &str,
         model: Option<&str>,
+        parent_ctx: &runkon_flow::engine::ChildWorkflowContext,
     ) -> runkon_flow::engine_error::Result<runkon_flow::types::WorkflowResult> {
-        let input = crate::workflow::types::WorkflowResumeInput {
-            config: &self.config,
-            workflow_run_id,
-            model,
-            from_step: None,
-            restart: false,
-            conductor_bin_dir: None,
-            event_sinks: vec![],
-            db_path: Some(self.db_path.clone()),
-            shutdown: None,
-        };
+        let input = self.build_resume_input(workflow_run_id, model, parent_ctx);
 
         let core_result = super::coordinator::resume_workflow(&input).map_err(|e| {
             wrap_child_workflow_err(
@@ -652,5 +669,96 @@ mod tests {
             result.unwrap().is_empty(),
             "dependencies for nonexistent step should be empty"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Regression test: resume_child must propagate parent_ctx.event_sinks into
+    // WorkflowResumeInput. Prior bug: `event_sinks: vec![]` silently dropped
+    // step events on resumed child workflows.
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn resume_input_propagates_event_sinks_from_parent_ctx() {
+        use runkon_flow::engine::ChildWorkflowContext;
+        use runkon_flow::events::{EngineEventData, EventSink};
+
+        struct CountingSink;
+        impl EventSink for CountingSink {
+            fn emit(&self, _: &EngineEventData) {}
+        }
+
+        let conn = Arc::new(Mutex::new(crate::test_helpers::setup_db()));
+        let runner = ConductorChildWorkflowRunner::new(
+            std::path::PathBuf::from("/tmp/test.db"),
+            crate::config::Config::default(),
+            conn,
+        );
+
+        let sinks: Arc<[Arc<dyn EventSink>]> = Arc::from(vec![
+            Arc::new(CountingSink) as Arc<dyn EventSink>,
+            Arc::new(CountingSink) as Arc<dyn EventSink>,
+        ]);
+
+        let parent_ctx = ChildWorkflowContext {
+            worktree_ctx: runkon_flow::engine::WorktreeContext {
+                worktree_id: None,
+                working_dir: String::new(),
+                repo_path: String::new(),
+                ticket_id: None,
+                repo_id: None,
+                extra_plugin_dirs: vec![],
+            },
+            workflow_run_id: "parent-run".to_string(),
+            model: None,
+            target_label: None,
+            exec_config: crate::workflow::WorkflowExecConfig::default(),
+            inputs: HashMap::new(),
+            triggered_by_hook: false,
+            event_sinks: Arc::clone(&sinks),
+        };
+
+        let input = runner.build_resume_input("child-run-1", None, &parent_ctx);
+
+        assert_eq!(
+            input.event_sinks.len(),
+            2,
+            "event_sinks must be propagated from parent_ctx; \
+             regression check for prior `event_sinks: vec![]` bug"
+        );
+        assert_eq!(input.workflow_run_id, "child-run-1");
+    }
+
+    #[test]
+    fn resume_input_with_empty_parent_sinks_yields_empty_sinks() {
+        use runkon_flow::engine::ChildWorkflowContext;
+        use runkon_flow::events::EventSink;
+
+        let conn = Arc::new(Mutex::new(crate::test_helpers::setup_db()));
+        let runner = ConductorChildWorkflowRunner::new(
+            std::path::PathBuf::from("/tmp/test.db"),
+            crate::config::Config::default(),
+            conn,
+        );
+
+        let parent_ctx = ChildWorkflowContext {
+            worktree_ctx: runkon_flow::engine::WorktreeContext {
+                worktree_id: None,
+                working_dir: String::new(),
+                repo_path: String::new(),
+                ticket_id: None,
+                repo_id: None,
+                extra_plugin_dirs: vec![],
+            },
+            workflow_run_id: "parent-run".to_string(),
+            model: None,
+            target_label: None,
+            exec_config: crate::workflow::WorkflowExecConfig::default(),
+            inputs: HashMap::new(),
+            triggered_by_hook: false,
+            event_sinks: Arc::<[Arc<dyn EventSink>]>::from(vec![]),
+        };
+
+        let input = runner.build_resume_input("child-run-2", None, &parent_ctx);
+        assert!(input.event_sinks.is_empty());
     }
 }

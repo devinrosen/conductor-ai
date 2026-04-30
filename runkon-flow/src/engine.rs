@@ -100,16 +100,44 @@ pub struct ChildWorkflowInput {
     pub cancellation: CancellationToken,
 }
 
+/// Subset of `ExecutionState` exposed to `ChildWorkflowRunner` implementations.
+///
+/// The full `ExecutionState` carries the engine's mutable runtime — registries,
+/// accumulators, schema resolver, position pointer, cancellation token —
+/// none of which a harness needs to spawn a child workflow run. Passing it
+/// across the trait boundary makes every `ExecutionState` field rename or
+/// restructuring a breaking change for every `ChildWorkflowRunner` implementor.
+///
+/// `ChildWorkflowContext` is the narrow, stable surface: every field listed
+/// here is something the bridge actually reads when constructing the child
+/// run. Build via [`ExecutionState::child_workflow_context`].
+#[derive(Clone)]
+pub struct ChildWorkflowContext {
+    pub worktree_ctx: WorktreeContext,
+    pub workflow_run_id: String,
+    pub model: Option<String>,
+    pub target_label: Option<String>,
+    pub exec_config: WorkflowExecConfig,
+    pub inputs: HashMap<String, String>,
+    pub triggered_by_hook: bool,
+    pub event_sinks: Arc<[Arc<dyn EventSink>]>,
+}
+
 /// Trait for executing child workflows — allows conductor-core to inject its adapter.
 pub trait ChildWorkflowRunner: Send + Sync {
     fn execute_child(
         &self,
         workflow_name: &str,
-        parent_state: &ExecutionState,
+        parent_ctx: &ChildWorkflowContext,
         params: ChildWorkflowInput,
     ) -> Result<WorkflowResult>;
 
-    fn resume_child(&self, workflow_run_id: &str, model: Option<&str>) -> Result<WorkflowResult>;
+    fn resume_child(
+        &self,
+        workflow_run_id: &str,
+        model: Option<&str>,
+        parent_ctx: &ChildWorkflowContext,
+    ) -> Result<WorkflowResult>;
 
     fn find_resumable_child(
         &self,
@@ -122,6 +150,21 @@ impl ExecutionState {
     /// Create a fresh heartbeat counter, initialized to 0 so the first tick fires immediately.
     pub fn new_heartbeat() -> Arc<AtomicI64> {
         Arc::new(AtomicI64::new(0))
+    }
+
+    /// Project this state into the narrow surface a `ChildWorkflowRunner`
+    /// implementation needs to spawn a child run.
+    pub fn child_workflow_context(&self) -> ChildWorkflowContext {
+        ChildWorkflowContext {
+            worktree_ctx: self.worktree_ctx.clone(),
+            workflow_run_id: self.workflow_run_id.clone(),
+            model: self.model.clone(),
+            target_label: self.target_label.clone(),
+            exec_config: self.exec_config.clone(),
+            inputs: self.inputs.clone(),
+            triggered_by_hook: self.triggered_by_hook,
+            event_sinks: Arc::clone(&self.event_sinks),
+        }
     }
 
     /// Fork a child execution state from this parent.
@@ -966,7 +1009,7 @@ mod tests {
             fn execute_child(
                 &self,
                 _workflow_name: &str,
-                _parent_state: &ExecutionState,
+                _parent_ctx: &ChildWorkflowContext,
                 _params: ChildWorkflowInput,
             ) -> Result<crate::types::WorkflowResult> {
                 unimplemented!()
@@ -975,6 +1018,7 @@ mod tests {
                 &self,
                 _workflow_run_id: &str,
                 _model: Option<&str>,
+                _parent_ctx: &ChildWorkflowContext,
             ) -> Result<crate::types::WorkflowResult> {
                 unimplemented!()
             }
@@ -1097,5 +1141,106 @@ mod tests {
             &child.current_execution_id,
             &child.current_execution_id
         ));
+    }
+
+    #[test]
+    fn child_workflow_context_projects_all_eight_fields() {
+        use crate::cancellation::CancellationToken;
+        use crate::events::{EngineEventData, EventSink};
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::traits::script_env_provider::NoOpScriptEnvProvider;
+        use crate::types::WorkflowExecConfig;
+
+        struct TestSink;
+        impl EventSink for TestSink {
+            fn emit(&self, _: &EngineEventData) {}
+        }
+
+        let sinks: Arc<[Arc<dyn EventSink>]> = Arc::from(vec![
+            Arc::new(TestSink) as Arc<dyn EventSink>,
+            Arc::new(TestSink) as Arc<dyn EventSink>,
+        ]);
+
+        let mut state_inputs = HashMap::new();
+        state_inputs.insert("ticket_id".to_string(), "TICK-42".to_string());
+        state_inputs.insert("repo_id".to_string(), "repo-7".to_string());
+
+        // Distinguishable by some non-default field; event_sinks below is the primary check.
+        let exec_config = WorkflowExecConfig {
+            dry_run: true,
+            ..WorkflowExecConfig::default()
+        };
+
+        let parent = ExecutionState {
+            persistence: Arc::new(InMemoryWorkflowPersistence::new()),
+            action_registry: Arc::new(crate::traits::action_executor::ActionRegistry::new(
+                HashMap::new(),
+                None,
+            )),
+            script_env_provider: Arc::new(NoOpScriptEnvProvider),
+            workflow_run_id: "run-projection-test".to_string(),
+            workflow_name: "wf-projection".to_string(),
+            worktree_ctx: WorktreeContext {
+                worktree_id: Some("wt-9".to_string()),
+                working_dir: "/tmp/proj".to_string(),
+                repo_path: "/repo/proj".to_string(),
+                ticket_id: Some("TICK-42".to_string()),
+                repo_id: Some("repo-7".to_string()),
+                extra_plugin_dirs: vec!["plugin-a".to_string()],
+            },
+            model: Some("opus".to_string()),
+            exec_config: exec_config.clone(),
+            inputs: state_inputs.clone(),
+            parent_run_id: "parent-7".to_string(),
+            depth: 2,
+            target_label: Some("proj-label".to_string()),
+            step_results: HashMap::new(),
+            contexts: vec![],
+            position: 11,
+            all_succeeded: false,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cache_read_input_tokens: 0,
+            total_cache_creation_input_tokens: 0,
+            last_gate_feedback: None,
+            block_output: None,
+            block_with: vec![],
+            resume_ctx: None,
+            default_bot_name: None,
+            triggered_by_hook: true,
+            schema_resolver: None,
+            child_runner: None,
+            last_heartbeat_at: ExecutionState::new_heartbeat(),
+            registry: Arc::new(crate::traits::item_provider::ItemProviderRegistry::new()),
+            event_sinks: Arc::clone(&sinks),
+            cancellation: CancellationToken::new(),
+            current_execution_id: Arc::new(std::sync::Mutex::new(None)),
+        };
+
+        let ctx = parent.child_workflow_context();
+
+        // All eight fields project verbatim.
+        assert_eq!(ctx.worktree_ctx.worktree_id.as_deref(), Some("wt-9"));
+        assert_eq!(ctx.worktree_ctx.working_dir, "/tmp/proj");
+        assert_eq!(ctx.worktree_ctx.repo_path, "/repo/proj");
+        assert_eq!(ctx.worktree_ctx.ticket_id.as_deref(), Some("TICK-42"));
+        assert_eq!(ctx.worktree_ctx.repo_id.as_deref(), Some("repo-7"));
+        assert_eq!(ctx.worktree_ctx.extra_plugin_dirs, vec!["plugin-a"]);
+        assert_eq!(ctx.workflow_run_id, "run-projection-test");
+        assert_eq!(ctx.model.as_deref(), Some("opus"));
+        assert_eq!(ctx.target_label.as_deref(), Some("proj-label"));
+        assert!(ctx.exec_config.dry_run);
+        assert_eq!(ctx.inputs, state_inputs);
+        assert!(ctx.triggered_by_hook);
+
+        // event_sinks slice is shared, not deep-copied.
+        assert_eq!(ctx.event_sinks.len(), 2);
+        assert!(
+            Arc::ptr_eq(&ctx.event_sinks, &sinks),
+            "event_sinks slice should be shared via Arc, not cloned"
+        );
     }
 }

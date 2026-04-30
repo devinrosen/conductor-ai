@@ -134,7 +134,11 @@ pub fn execute_call_workflow(
                 prior_child.id,
             );
 
-            let msg = match child_runner.resume_child(&prior_child.id, state.model.as_deref()) {
+            let msg = match child_runner.resume_child(
+                &prior_child.id,
+                state.model.as_deref(),
+                &state.child_workflow_context(),
+            ) {
                 Ok(result) if result.all_succeeded => {
                     tracing::info!(
                         "Sub-workflow '{}' resumed and completed: cost=${:.4}, {} turns",
@@ -262,7 +266,7 @@ pub fn execute_call_workflow(
         // Use the child_runner to execute — it resolves the real def by name
         match child_runner.execute_child(
             &node.workflow,
-            state,
+            &state.child_workflow_context(),
             crate::engine::ChildWorkflowInput {
                 inputs: resolved_inputs,
                 iteration,
