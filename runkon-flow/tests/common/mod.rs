@@ -317,6 +317,7 @@ impl ChildWorkflowRunner for MockChildRunner {
         &self,
         _workflow_run_id: &str,
         _model: Option<&str>,
+        _parent_ctx: &runkon_flow::engine::ChildWorkflowContext,
     ) -> runkon_flow::engine_error::Result<WorkflowResult> {
         unimplemented!("MockChildRunner does not support resume_child")
     }
@@ -601,6 +602,7 @@ impl ChildWorkflowRunner for CancellingMockRunner {
         &self,
         _workflow_run_id: &str,
         _model: Option<&str>,
+        _parent_ctx: &runkon_flow::engine::ChildWorkflowContext,
     ) -> runkon_flow::engine_error::Result<WorkflowResult> {
         unimplemented!("CancellingMockRunner does not support resume_child")
     }

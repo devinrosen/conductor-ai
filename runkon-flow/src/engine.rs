@@ -132,7 +132,12 @@ pub trait ChildWorkflowRunner: Send + Sync {
         params: ChildWorkflowInput,
     ) -> Result<WorkflowResult>;
 
-    fn resume_child(&self, workflow_run_id: &str, model: Option<&str>) -> Result<WorkflowResult>;
+    fn resume_child(
+        &self,
+        workflow_run_id: &str,
+        model: Option<&str>,
+        parent_ctx: &ChildWorkflowContext,
+    ) -> Result<WorkflowResult>;
 
     fn find_resumable_child(
         &self,
@@ -1013,6 +1018,7 @@ mod tests {
                 &self,
                 _workflow_run_id: &str,
                 _model: Option<&str>,
+                _parent_ctx: &ChildWorkflowContext,
             ) -> Result<crate::types::WorkflowResult> {
                 unimplemented!()
             }

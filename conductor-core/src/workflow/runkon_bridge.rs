@@ -453,6 +453,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         &self,
         workflow_run_id: &str,
         model: Option<&str>,
+        parent_ctx: &runkon_flow::engine::ChildWorkflowContext,
     ) -> runkon_flow::engine_error::Result<runkon_flow::types::WorkflowResult> {
         let input = crate::workflow::types::WorkflowResumeInput {
             config: &self.config,
@@ -461,7 +462,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             from_step: None,
             restart: false,
             conductor_bin_dir: None,
-            event_sinks: vec![],
+            event_sinks: parent_ctx.event_sinks.iter().cloned().collect(),
             db_path: Some(self.db_path.clone()),
             shutdown: None,
         };
