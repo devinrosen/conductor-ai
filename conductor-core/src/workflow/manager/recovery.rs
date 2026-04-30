@@ -242,7 +242,8 @@ impl<'a> WorkflowManager<'a> {
                 params.push(Box::new(step_id.clone()));
             }
 
-            self.conn.execute(&sql, rusqlite::params_from_iter(params))?;
+            self.conn
+                .execute(&sql, rusqlite::params_from_iter(params))?;
         }
 
         Ok(())
@@ -1893,7 +1894,10 @@ mod tests {
             .unwrap();
         assert_eq!(status_c, "completed");
         assert_eq!(result_text_c.as_deref(), Some("the result"));
-        assert!(ended_at_c.is_some(), "ended_at must be set for completed step");
+        assert!(
+            ended_at_c.is_some(),
+            "ended_at must be set for completed step"
+        );
 
         let (status_f, result_text_f, ended_at_f): (String, Option<String>, Option<String>) = conn
             .query_row(
@@ -1903,7 +1907,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(status_f, "failed");
-        assert!(result_text_f.is_none(), "failed step result_text must be NULL");
+        assert!(
+            result_text_f.is_none(),
+            "failed step result_text must be NULL"
+        );
         assert!(ended_at_f.is_some(), "ended_at must be set for failed step");
     }
 
