@@ -181,10 +181,11 @@ fn test_script_runtime_resolve_via_config() {
 #[test]
 fn test_script_runtime_rejects_invalid_run_id() {
     let runtime = make_runtime(Some("echo hello"));
+    let tmp_db = tempfile::NamedTempFile::new().expect("temp db");
     let req = common::make_request(
         "../../etc/cron.d/payload",
         "test",
-        conductor_core::config::db_path(),
+        tmp_db.path().to_path_buf(),
         "script",
     );
     let err = runtime
