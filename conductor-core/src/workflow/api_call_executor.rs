@@ -11,6 +11,7 @@ const MAX_TOKENS: u64 = 8192;
 
 const DEFAULT_API_MODEL: &str = "claude-sonnet-4-6";
 
+#[derive(Debug)]
 struct ApiCallResult {
     json: serde_json::Value,
     json_string: String,
@@ -24,6 +25,7 @@ fn execute_via_api(
     model: &str,
     timeout: std::time::Duration,
     api_key: &str,
+    url: &str,
 ) -> std::result::Result<ApiCallResult, String> {
     let tool_json = schema_to_tool_json(schema);
     let body = serde_json::json!({
@@ -35,7 +37,7 @@ fn execute_via_api(
     });
     let agent = ureq::AgentBuilder::new().timeout(timeout).build();
     let response_result = agent
-        .post(ANTHROPIC_API_URL)
+        .post(url)
         .set("x-api-key", api_key)
         .set("anthropic-version", ANTHROPIC_API_VERSION)
         .set("content-type", "application/json")
@@ -133,7 +135,7 @@ impl ActionExecutor for ApiCallExecutor {
         let model = ectx.model.as_deref().unwrap_or(DEFAULT_API_MODEL);
 
         let result =
-            execute_via_api(&prompt, schema, model, ectx.step_timeout, &api_key).map_err(|e| {
+            execute_via_api(&prompt, schema, model, ectx.step_timeout, &api_key, ANTHROPIC_API_URL).map_err(|e| {
                 ConductorError::Workflow(format!("API call for '{}' failed: {e}", params.name))
             })?;
 
@@ -240,35 +242,15 @@ mod tests {
             crate::schema_config::parse_schema_content("fields:\n  ok: boolean\n", "test").unwrap();
         let url = format!("http://{addr}");
 
-        // Temporarily override the API URL by calling the private function directly.
-        // We build the request manually to hit our mock server instead.
-        let agent = ureq::AgentBuilder::new()
-            .timeout(std::time::Duration::from_secs(5))
-            .build();
-        let body = serde_json::json!({
-            "model": "claude-sonnet-4-6",
-            "max_tokens": MAX_TOKENS,
-            "tools": [crate::schema_config::schema_to_tool_json(&schema)],
-            "tool_choice": {"type": "tool", "name": schema.name},
-            "messages": [{"role": "user", "content": "test"}]
-        });
-        let result = agent.post(&url).send_json(&body);
-        let err_string = match result {
-            Err(ureq::Error::Status(status, resp)) => {
-                let body_text = resp
-                    .into_string()
-                    .unwrap_or_else(|e| format!("<body read failed: {e}>"));
-                let truncated = if body_text.len() > 500 {
-                    let end = body_text.floor_char_boundary(500);
-                    format!("{}…", &body_text[..end])
-                } else {
-                    body_text
-                };
-                tracing::debug!("API error body: {truncated}");
-                format!("API call failed: {status}")
-            }
-            _ => panic!("expected a status error from mock server"),
-        };
+        let err_string = execute_via_api(
+            "test",
+            &schema,
+            "claude-sonnet-4-6",
+            std::time::Duration::from_secs(5),
+            "dummy-key",
+            &url,
+        )
+        .unwrap_err();
 
         handle.join().unwrap();
 
