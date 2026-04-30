@@ -334,6 +334,11 @@ pub fn execute_foreach(
     let pool = threadpool::ThreadPool::new(max_slots);
 
     loop {
+        // Heartbeat tick + external cancel poll. Best-effort — the cancel
+        // signal lands on `state.cancellation`, and the controlled drain at the
+        // `is_cancelled()` check below picks it up. #2731.
+        let _ = state.tick_heartbeat_throttled();
+
         // 1. When threads are in-flight, block briefly on the first result to yield
         //    the CPU instead of spinning. Then drain any additional ready results.
         let mut completed: Vec<(String, bool)> = Vec::new();
@@ -961,5 +966,130 @@ mod tests {
         );
         assert_eq!(ctx.parent_workflow_ctx.inputs, parent_inputs);
         assert_eq!(ctx.parent_workflow_ctx.workflow_run_id, "parent-run");
+    }
+
+    /// Regression for #2731: the foreach wait loop must keep `tick_heartbeat`
+    /// firing while children are running. Foreach already had a 50 ms
+    /// `recv_timeout`, but it didn't ping the heartbeat — so a long-running
+    /// child meant `last_heartbeat` went stale and the watchdog reaped the run.
+    #[test]
+    fn foreach_wait_loop_ticks_heartbeat_during_long_children() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use crate::dsl::{ForEachNode, OnChildFail, OnCycle};
+        use crate::engine::{ChildWorkflowContext, ChildWorkflowInput, ChildWorkflowRunner};
+        use crate::engine_error::Result;
+        use crate::traits::item_provider::{
+            FanOutItem, ItemProvider, ItemProviderRegistry, ProviderContext,
+        };
+        use crate::traits::persistence::{NewRun, WorkflowPersistence};
+        use crate::types::WorkflowResult;
+
+        struct OneItemProvider;
+        impl ItemProvider for OneItemProvider {
+            fn name(&self) -> &str {
+                "test_items"
+            }
+            fn items(
+                &self,
+                _ctx: &ProviderContext,
+                _scope: Option<&crate::dsl::ForeachScope>,
+                _filter: &HashMap<String, String>,
+                _existing_set: &HashSet<String>,
+            ) -> Result<Vec<FanOutItem>> {
+                Ok(vec![FanOutItem {
+                    item_type: "test".into(),
+                    item_id: "item-1".into(),
+                    item_ref: "ref-1".into(),
+                }])
+            }
+        }
+
+        struct SleepingChildRunner;
+        impl ChildWorkflowRunner for SleepingChildRunner {
+            fn execute_child(
+                &self,
+                _: &str,
+                _: &ChildWorkflowContext,
+                _: ChildWorkflowInput,
+            ) -> Result<WorkflowResult> {
+                std::thread::sleep(Duration::from_millis(800));
+                Ok(WorkflowResult {
+                    workflow_run_id: "child-run".into(),
+                    worktree_id: None,
+                    workflow_name: "child-wf".into(),
+                    all_succeeded: true,
+                    total_cost: 0.0,
+                    total_turns: 0,
+                    total_duration_ms: 0,
+                    total_input_tokens: 0,
+                    total_output_tokens: 0,
+                    total_cache_read_input_tokens: 0,
+                    total_cache_creation_input_tokens: 0,
+                })
+            }
+            fn resume_child(
+                &self,
+                _: &str,
+                _: Option<&str>,
+                _: &ChildWorkflowContext,
+            ) -> Result<WorkflowResult> {
+                unimplemented!()
+            }
+            fn find_resumable_child(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<Option<crate::types::WorkflowRun>> {
+                Ok(None)
+            }
+        }
+
+        let cp = Arc::new(crate::test_helpers::CountingPersistence::new());
+        let run_id = cp
+            .create_run(NewRun {
+                workflow_name: "wf".to_string(),
+                worktree_id: None,
+                ticket_id: None,
+                repo_id: None,
+                parent_run_id: String::new(),
+                dry_run: false,
+                trigger: "manual".to_string(),
+                definition_snapshot: None,
+                parent_workflow_run_id: None,
+                target_label: None,
+            })
+            .unwrap()
+            .id;
+        let cp_for_state: Arc<dyn WorkflowPersistence> = Arc::clone(&cp) as _;
+
+        let mut registry = ItemProviderRegistry::new();
+        registry.register(OneItemProvider);
+
+        let mut state = crate::test_helpers::make_test_execution_state(cp_for_state, run_id);
+        state.child_runner = Some(Arc::new(SleepingChildRunner));
+        state.registry = Arc::new(registry);
+
+        let node = ForEachNode {
+            name: "foreach-test".into(),
+            over: "test_items".into(),
+            scope: None,
+            filter: HashMap::new(),
+            ordered: false,
+            on_cycle: OnCycle::Fail,
+            max_parallel: 1,
+            workflow: "child-wf".into(),
+            inputs: HashMap::new(),
+            on_child_fail: OnChildFail::Continue,
+        };
+
+        super::execute_foreach(&mut state, &node, 0).unwrap();
+
+        assert!(
+            cp.tick_count() >= 1,
+            "expected ≥1 heartbeat tick during foreach wait loop, got {}",
+            cp.tick_count()
+        );
     }
 }
