@@ -47,7 +47,7 @@ use crate::routes::repos::{
     SetModelRequest as RepoSetModelRequest, UpdateRepoSettingsRequest,
 };
 #[allow(unused_imports)]
-use crate::routes::stats::ThemeUnlockStats;
+use conductor_core::stats::ThemeUnlockStats;
 #[allow(unused_imports)]
 use crate::routes::tickets::{SyncResult, TicketDetail, TicketListQuery, TicketListResponse};
 #[allow(unused_imports)]
