@@ -2,11 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-use crate::cancellation::CancellationToken;
 use crate::dsl::{ForEachNode, OnChildFail};
 use crate::engine::{
     emit_event, record_step_failure, record_step_success, restore_step, should_skip,
-    ChildWorkflowInput, ExecutionState,
+    ChildWorkflowContext, ChildWorkflowInput, ExecutionState,
 };
 use crate::engine_error::{EngineError, Result};
 use crate::events::EngineEvent;
@@ -22,9 +21,13 @@ use super::p_err;
 /// the parent `ExecutionState` are kept, so the main thread retains full `&mut`
 /// access throughout the dispatch loop.
 struct ForeachParentCtx {
-    /// Pre-forked template with empty runtime collections — cheap to clone.
-    template: ExecutionState,
     child_runner: Arc<dyn crate::engine::ChildWorkflowRunner>,
+    /// Projection of the parent state used by the bridge to resolve child-run
+    /// lineage (ticket_id / repo_id / event sinks / …). Captured directly from
+    /// the parent — must not come from a forked clone, because `fork_child`
+    /// clears `inputs` and the bridge reads ticket_id/repo_id out of inputs.
+    /// See #2728.
+    parent_workflow_ctx: ChildWorkflowContext,
 }
 
 impl ForeachParentCtx {
@@ -32,25 +35,10 @@ impl ForeachParentCtx {
         state: &ExecutionState,
         child_runner: Arc<dyn crate::engine::ChildWorkflowRunner>,
     ) -> Self {
-        // fork_child creates a state with all runtime collections already empty,
-        // so cloning the template later is cheap.
-        let mut template = state.fork_child(crate::cancellation::CancellationToken::new());
-        template.child_runner = Some(Arc::clone(&child_runner));
         Self {
-            template,
+            parent_workflow_ctx: state.child_workflow_context(),
             child_runner,
         }
-    }
-
-    fn make_child_state(&self, cancellation: CancellationToken) -> ExecutionState {
-        let mut child = self.template.clone();
-        child.cancellation = cancellation;
-        // Each foreach item gets its own current_execution_id slot. Cloning the
-        // template would otherwise share one Arc<Mutex<...>> across all parallel
-        // siblings — a bug-in-waiting if anything reads this state per-child
-        // (e.g. cancel_run resolving the in-flight executor).
-        child.current_execution_id = Arc::new(std::sync::Mutex::new(None));
-        child
     }
 }
 
@@ -532,17 +520,11 @@ pub fn execute_foreach(
                 let depth = state.depth;
 
                 pool.execute(move || {
-                    let child_state = ctx.make_child_state(child_cancellation.clone());
-                    // Behavior-preserving: the trait now takes &ChildWorkflowContext, but
-                    // we continue to project from the forked child_state to keep this PR
-                    // a refactor only. #2728 tracks the fix to source the bridge view
-                    // from the parent's real state so foreach child runs inherit
-                    // ticket_id / repo_id lineage.
                     let succeeded = ctx
                         .child_runner
                         .execute_child(
                             &workflow_name,
-                            &child_state.child_workflow_context(),
+                            &ctx.parent_workflow_ctx,
                             ChildWorkflowInput {
                                 inputs,
                                 iteration,
@@ -852,17 +834,18 @@ mod tests {
         );
     }
 
-    /// Regression: each foreach child must get its OWN `current_execution_id` slot.
+    /// Regression for #2728: `ForeachParentCtx::from_state` must capture the
+    /// parent's *real* projection, not the forked-template's empty inputs.
     ///
-    /// Prior behavior (pre-fix in #2597 round 2): `make_child_state` returned
-    /// `self.template.clone()`, which shares the inner `Arc<Mutex<...>>` across
-    /// every parallel sibling. If anything ever reads this state per-child
-    /// (e.g. `FlowEngine::cancel_run` resolving the in-flight executor for a
-    /// specific child), siblings would clobber each other's slot via the shared
-    /// Arc. The fix reassigns a fresh `Arc<Mutex<None>>` per child; this test
-    /// asserts that two children don't share the Arc.
+    /// Prior behavior: pool.execute projected `ChildWorkflowContext` from a
+    /// `child_state` cloned from `template = state.fork_child(...)`, and
+    /// `fork_child` clears `inputs`. The bridge resolves `ticket_id` /
+    /// `repo_id` via `parent_ctx.inputs.get(...)`, so foreach children always
+    /// got `ticket_id = None` / `repo_id = None` on `workflow_runs`. This test
+    /// asserts that the captured `parent_workflow_ctx.inputs` carries the
+    /// parent's actual values.
     #[test]
-    fn make_child_state_isolates_current_execution_id_per_child() {
+    fn from_state_captures_parent_inputs_for_child_workflow_context() {
         use std::sync::{Arc, Mutex};
 
         use crate::cancellation::CancellationToken;
@@ -902,6 +885,11 @@ mod tests {
             }
         }
 
+        let mut parent_inputs = HashMap::new();
+        parent_inputs.insert("ticket_id".to_string(), "TICK-100".to_string());
+        parent_inputs.insert("repo_id".to_string(), "repo-42".to_string());
+        parent_inputs.insert("foo".to_string(), "bar".to_string());
+
         let parent = ExecutionState {
             persistence: Arc::new(InMemoryWorkflowPersistence::new()),
             action_registry: Arc::new(crate::traits::action_executor::ActionRegistry::new(
@@ -909,7 +897,7 @@ mod tests {
                 None,
             )),
             script_env_provider: Arc::new(NoOpScriptEnvProvider),
-            workflow_run_id: "parent".into(),
+            workflow_run_id: "parent-run".into(),
             workflow_name: "wf".into(),
             worktree_ctx: WorktreeContext {
                 worktree_id: None,
@@ -921,7 +909,7 @@ mod tests {
             },
             model: None,
             exec_config: WorkflowExecConfig::default(),
-            inputs: HashMap::new(),
+            inputs: parent_inputs.clone(),
             parent_run_id: String::new(),
             depth: 0,
             target_label: None,
@@ -953,21 +941,25 @@ mod tests {
 
         let ctx = super::ForeachParentCtx::from_state(&parent, Arc::new(DummyChildRunner));
 
-        let child1 = ctx.make_child_state(CancellationToken::new());
-        let child2 = ctx.make_child_state(CancellationToken::new());
-
-        assert!(
-            !Arc::ptr_eq(&child1.current_execution_id, &child2.current_execution_id),
-            "each foreach child must get its own current_execution_id Arc; \
-             sharing one across parallel siblings would let cancel_run target \
-             the wrong in-flight executor"
+        // Captured projection must carry parent's intact inputs.
+        assert_eq!(
+            ctx.parent_workflow_ctx
+                .inputs
+                .get("ticket_id")
+                .map(String::as_str),
+            Some("TICK-100"),
+            "foreach parent_workflow_ctx must preserve parent's ticket_id; \
+             the bridge resolves child-run ticket_id from this map. #2728"
         );
-
-        // Behavioral check: writing into one child's slot must not be visible from another.
-        *child1.current_execution_id.lock().unwrap() = Some(("executor-A".into(), "step-A".into()));
-        assert!(
-            child2.current_execution_id.lock().unwrap().is_none(),
-            "writes to child1.current_execution_id must not leak into child2"
+        assert_eq!(
+            ctx.parent_workflow_ctx
+                .inputs
+                .get("repo_id")
+                .map(String::as_str),
+            Some("repo-42"),
+            "foreach parent_workflow_ctx must preserve parent's repo_id"
         );
+        assert_eq!(ctx.parent_workflow_ctx.inputs, parent_inputs);
+        assert_eq!(ctx.parent_workflow_ctx.workflow_run_id, "parent-run");
     }
 }
