@@ -47,8 +47,6 @@ use crate::routes::repos::{
     SetModelRequest as RepoSetModelRequest, UpdateRepoSettingsRequest,
 };
 #[allow(unused_imports)]
-use crate::routes::stats::ThemeUnlockStats;
-#[allow(unused_imports)]
 use crate::routes::tickets::{SyncResult, TicketDetail, TicketListQuery, TicketListResponse};
 #[allow(unused_imports)]
 use crate::routes::workflows::{
@@ -60,6 +58,8 @@ use crate::routes::worktrees::{
     CreateWorktreeRequest, CreateWorktreeResponse, LinkTicketRequest,
     SetModelRequest as WorktreeSetModelRequest, WorktreeListQuery,
 };
+#[allow(unused_imports)]
+use conductor_core::stats::ThemeUnlockStats;
 
 /// OpenAPI documentation for the Conductor REST API.
 #[derive(OpenApi)]
