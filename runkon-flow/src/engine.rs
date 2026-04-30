@@ -645,7 +645,7 @@ pub fn record_step_success(
 /// check for missing required inputs.
 pub fn resolve_child_inputs(
     raw_inputs: &HashMap<String, String>,
-    vars: &HashMap<&str, String>,
+    vars: &HashMap<String, String>,
     input_decls: &[crate::dsl::InputDecl],
 ) -> std::result::Result<HashMap<String, String>, String> {
     let mut child_inputs = HashMap::new();
@@ -941,7 +941,7 @@ pub fn check_max_iterations(
 }
 
 /// Build the variable map from execution state for substitution.
-pub fn build_variable_map(state: &ExecutionState) -> HashMap<&str, String> {
+pub fn build_variable_map(state: &ExecutionState) -> HashMap<String, String> {
     crate::prompt_builder::build_variable_map(state)
 }
 

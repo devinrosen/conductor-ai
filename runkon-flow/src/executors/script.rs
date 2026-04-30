@@ -97,9 +97,9 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
     // Build variable map for substitution, shell-quoting all values to prevent
     // injection when they are interpolated into the sh -c command string.
     let vars = build_variable_map(state);
-    let shell_safe_vars: std::collections::HashMap<&str, String> = vars
+    let shell_safe_vars: std::collections::HashMap<String, String> = vars
         .iter()
-        .map(|(k, v)| (*k, crate::prompt_builder::shell_quote(v)))
+        .map(|(k, v)| (k.clone(), crate::prompt_builder::shell_quote(v)))
         .collect();
     let script_cmd = crate::prompt_builder::substitute_variables(&node.run, &shell_safe_vars);
 

@@ -4,7 +4,7 @@ use crate::engine::{ExecutionState, ENGINE_INJECTED_KEYS};
 
 fn substitute_variables_impl(
     template: &str,
-    vars: &HashMap<&str, String>,
+    vars: &HashMap<String, String>,
     strip_unresolved: bool,
 ) -> String {
     // Single-pass tokeniser: scan the original template once, emitting each
@@ -44,13 +44,13 @@ fn substitute_variables_impl(
 }
 
 /// For agent prompts: substitutes variables AND strips unresolved `{{…}}` placeholders.
-pub fn substitute_variables(prompt: &str, vars: &HashMap<&str, String>) -> String {
+pub fn substitute_variables(prompt: &str, vars: &HashMap<String, String>) -> String {
     substitute_variables_impl(prompt, vars, true)
 }
 
 /// For data contexts (env vars, sub-workflow inputs): substitutes variables but
 /// preserves any `{{…}}` text that was not a template variable.
-pub fn substitute_variables_keep_literal(template: &str, vars: &HashMap<&str, String>) -> String {
+pub fn substitute_variables_keep_literal(template: &str, vars: &HashMap<String, String>) -> String {
     substitute_variables_impl(template, vars, false)
 }
 
@@ -62,33 +62,33 @@ pub fn shell_quote(s: &str) -> String {
 }
 
 /// Build the variable map from execution state (used for substitution in sub-workflow inputs).
-pub fn build_variable_map(state: &ExecutionState) -> HashMap<&str, String> {
-    let mut vars: HashMap<&str, String> = HashMap::new();
+pub fn build_variable_map(state: &ExecutionState) -> HashMap<String, String> {
+    let mut vars: HashMap<String, String> = HashMap::new();
 
     // Non-injected user-defined inputs
     for (k, v) in &state.inputs {
         if !ENGINE_INJECTED_KEYS.contains(&k.as_str()) {
-            vars.insert(k.as_str(), v.clone());
+            vars.insert(k.clone(), v.clone());
         }
     }
 
     // Engine-injected variables from the worktree context
     let wt = &state.worktree_ctx;
     if let Some(ref tid) = wt.ticket_id {
-        vars.insert("ticket_id", tid.clone());
+        vars.insert("ticket_id".into(), tid.clone());
     }
     if let Some(ref rid) = wt.repo_id {
-        vars.insert("repo_id", rid.clone());
+        vars.insert("repo_id".into(), rid.clone());
     }
-    vars.insert("repo_path", wt.repo_path.clone());
-    vars.insert("workflow_run_id", state.workflow_run_id.clone());
+    vars.insert("repo_path".into(), wt.repo_path.clone());
+    vars.insert("workflow_run_id".into(), state.workflow_run_id.clone());
 
     let prior_context = state
         .contexts
         .last()
         .map(|c| c.context.clone())
         .unwrap_or_default();
-    vars.insert("prior_context", prior_context);
+    vars.insert("prior_context".into(), prior_context);
     let prior_contexts_json = if state.contexts.is_empty() {
         "[]".to_string()
     } else {
@@ -97,9 +97,9 @@ pub fn build_variable_map(state: &ExecutionState) -> HashMap<&str, String> {
             "build_variable_map:prior_contexts",
         )
     };
-    vars.insert("prior_contexts", prior_contexts_json);
+    vars.insert("prior_contexts".into(), prior_contexts_json);
     if let Some(ref gf) = state.last_gate_feedback {
-        vars.insert("gate_feedback", gf.clone());
+        vars.insert("gate_feedback".into(), gf.clone());
     }
     // prior_output: raw JSON from the last step's structured output (if any)
     if let Some(last_output) = state
@@ -108,7 +108,7 @@ pub fn build_variable_map(state: &ExecutionState) -> HashMap<&str, String> {
         .rev()
         .find_map(|c| c.structured_output.as_ref())
     {
-        vars.insert("prior_output", last_output.clone());
+        vars.insert("prior_output".into(), last_output.clone());
     }
     // prior_output_file: path to the last script step's stdout temp file (if any)
     if let Some(path) = state
@@ -117,25 +117,54 @@ pub fn build_variable_map(state: &ExecutionState) -> HashMap<&str, String> {
         .rev()
         .find_map(|c| c.output_file.as_ref())
     {
-        vars.insert("prior_output_file", path.clone());
+        vars.insert("prior_output_file".into(), path.clone());
     }
     // dry_run: "true" or "false"
-    vars.insert("dry_run", state.exec_config.dry_run.to_string());
+    vars.insert("dry_run".into(), state.exec_config.dry_run.to_string());
 
-    // {{base_branch}}: pre-resolved PR base branch from a `resolve-pr-base.sh`
-    // script step (or any step that emits `base_branch: "<branch>"` in its
-    // FLOW_OUTPUT). #2736 — agents and detect-* scripts read this instead of
-    // running `gh pr view` themselves, which is brittle when the agent cd's
-    // out of the worktree and the silent fallback diffs against the wrong base.
+    // Script-exported variables from prior steps' FLOW_OUTPUT extras (#2736).
     //
-    // Walk forward through prior contexts; later writes overwrite earlier
-    // ones with the same name.
+    // Any string-valued top-level field other than `markers` and `context` in
+    // a step's structured_output is exposed as `{{name}}` to subsequent steps.
+    // Used by `resolve-pr-base.sh` to plumb `{{base_branch}}` to all
+    // downstream consumers; future scripts can export additional values
+    // without engine-side code changes.
+    //
+    // Shadowing guard: keys present in `ENGINE_INJECTED_KEYS` cannot be
+    // overwritten by a script — those are reserved for engine-controlled
+    // state (workflow_run_id, ticket_id, repo_path, etc.). A script that
+    // tries to export one of these gets a warning and is ignored.
+    //
+    // Iteration order: walk forward (oldest first); later writes from
+    // non-reserved names overwrite earlier ones.
     for c in &state.contexts {
-        if let Some(json) = &c.structured_output {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json) {
-                if let Some(s) = parsed.get("base_branch").and_then(|v| v.as_str()) {
-                    vars.insert("base_branch", s.to_string());
-                }
+        let json = match &c.structured_output {
+            Some(j) => j,
+            None => continue,
+        };
+        let parsed = match serde_json::from_str::<serde_json::Value>(json) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let obj = match parsed.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+        for (key, value) in obj {
+            if key == "markers" || key == "context" {
+                // Engine-recognized FlowOutput fields, not exports.
+                continue;
+            }
+            if ENGINE_INJECTED_KEYS.contains(&key.as_str()) {
+                tracing::warn!(
+                    step = %c.step,
+                    var = %key,
+                    "script tried to export reserved variable name — ignoring",
+                );
+                continue;
+            }
+            if let Some(s) = value.as_str() {
+                vars.insert(key.clone(), s.to_string());
             }
         }
     }
@@ -156,16 +185,16 @@ mod tests {
 
     #[test]
     fn substitute_resolves_known_strips_unknown() {
-        let mut vars = HashMap::new();
-        vars.insert("name", "world".to_string());
+        let mut vars: HashMap<String, String> = HashMap::new();
+        vars.insert("name".into(), "world".to_string());
         let result = substitute_variables("hello {{name}} and {{unknown}}", &vars);
         assert_eq!(result, "hello world and ");
     }
 
     #[test]
     fn substitute_keep_literal_preserves_unresolved() {
-        let mut vars = HashMap::new();
-        vars.insert("name", "world".to_string());
+        let mut vars: HashMap<String, String> = HashMap::new();
+        vars.insert("name".into(), "world".to_string());
         let result = substitute_variables_keep_literal("hello {{name}} and {{unknown}}", &vars);
         assert_eq!(result, "hello world and {{unknown}}");
     }
@@ -173,8 +202,8 @@ mod tests {
     #[test]
     fn substitute_keep_literal_preserves_embedded_json() {
         let json_value = r#"{"risks":["{{deterministic-review.score}}","other"]}"#.to_string();
-        let mut vars = HashMap::new();
-        vars.insert("prior_output", json_value);
+        let mut vars: HashMap<String, String> = HashMap::new();
+        vars.insert("prior_output".into(), json_value);
         let result = substitute_variables_keep_literal("{{prior_output}}", &vars);
         assert_eq!(
             result,
@@ -185,9 +214,9 @@ mod tests {
     #[test]
     fn substitute_no_double_substitution() {
         // If variable A's value contains {{B}}, B must not be expanded in the output.
-        let mut vars = HashMap::new();
-        vars.insert("a", "{{b}}".to_string());
-        vars.insert("b", "injected".to_string());
+        let mut vars: HashMap<String, String> = HashMap::new();
+        vars.insert("a".into(), "{{b}}".to_string());
+        vars.insert("b".into(), "injected".to_string());
         let result = substitute_variables_keep_literal("{{a}}", &vars);
         // Should emit the literal value of a, not expand {{b}} inside it.
         assert_eq!(result, "{{b}}");
@@ -197,9 +226,9 @@ mod tests {
     fn shell_quote_no_double_substitution() {
         // Simulates the shell-quoting path used in script execution:
         // a shell-safe var map is built then substituted into the run template.
-        let mut vars = HashMap::new();
-        vars.insert("cmd", "'{{evil}}'".to_string()); // already shell-quoted value
-        vars.insert("evil", ";rm -rf /".to_string());
+        let mut vars: HashMap<String, String> = HashMap::new();
+        vars.insert("cmd".into(), "'{{evil}}'".to_string()); // already shell-quoted value
+        vars.insert("evil".into(), ";rm -rf /".to_string());
         // The run template only references {{cmd}}; {{evil}} should not be expanded.
         let result = substitute_variables("run {{cmd}}", &vars);
         assert_eq!(result, "run '{{evil}}'");
@@ -309,5 +338,105 @@ mod tests {
         let vars = build_variable_map(&state);
         let rendered = substitute_variables("git diff origin/{{base_branch}}...HEAD", &vars);
         assert_eq!(rendered, "git diff origin/release/0.10.0...HEAD");
+    }
+
+    /// Generic exports: any string-valued top-level field beyond
+    /// `markers`/`context` becomes a `{{name}}` variable. Used by future
+    /// scripts that want to plumb their own values without engine-side
+    /// code changes — see #2736 review round 2.
+    #[test]
+    fn build_variable_map_exposes_arbitrary_string_extras() {
+        use crate::test_helpers::CountingPersistence;
+        use std::sync::Arc;
+
+        let cp = Arc::new(CountingPersistence::new());
+        let mut state = crate::test_helpers::make_test_execution_state(
+            cp as Arc<dyn crate::traits::persistence::WorkflowPersistence>,
+            "run-1".into(),
+        );
+        state.contexts.push(crate::types::ContextEntry {
+            step: "some-script".into(),
+            iteration: 0,
+            context: "ok".into(),
+            markers: vec![],
+            structured_output: Some(
+                r#"{"markers":[],"context":"ok","pr_number":"42","tag":"v1.2.3"}"#.into(),
+            ),
+            output_file: None,
+        });
+
+        let vars = build_variable_map(&state);
+        assert_eq!(vars.get("pr_number").map(String::as_str), Some("42"));
+        assert_eq!(vars.get("tag").map(String::as_str), Some("v1.2.3"));
+    }
+
+    /// Shadowing guard: a script that tries to export a key already injected by
+    /// the engine (workflow_run_id, ticket_id, repo_path, …) is ignored. The
+    /// engine-injected value wins. Prevents a malicious or careless script
+    /// from overriding load-bearing engine state.
+    #[test]
+    fn build_variable_map_blocks_engine_injected_key_shadowing() {
+        use crate::test_helpers::CountingPersistence;
+        use std::sync::Arc;
+
+        let cp = Arc::new(CountingPersistence::new());
+        let mut state = crate::test_helpers::make_test_execution_state(
+            cp as Arc<dyn crate::traits::persistence::WorkflowPersistence>,
+            "run-real".into(),
+        );
+        state.worktree_ctx.repo_path = "/repo/real".into();
+        state.worktree_ctx.ticket_id = Some("TICK-real".into());
+
+        // Script tries to override every engine-injected key it can find.
+        // Prefer ENGINE_INJECTED_KEYS as the source of truth so this test
+        // stays correct as that list evolves.
+        let mut malicious = serde_json::Map::new();
+        malicious.insert("markers".into(), serde_json::Value::Array(vec![]));
+        malicious.insert("context".into(), serde_json::Value::String("evil".into()));
+        for key in ENGINE_INJECTED_KEYS {
+            malicious.insert(
+                (*key).into(),
+                serde_json::Value::String(format!("HIJACKED:{key}")),
+            );
+        }
+        let json = serde_json::to_string(&serde_json::Value::Object(malicious)).unwrap();
+        state.contexts.push(crate::types::ContextEntry {
+            step: "evil-script".into(),
+            iteration: 0,
+            context: "evil".into(),
+            markers: vec![],
+            structured_output: Some(json),
+            output_file: None,
+        });
+
+        let vars = build_variable_map(&state);
+
+        // Engine-injected values should NOT be overridden.
+        assert_eq!(
+            vars.get("workflow_run_id").map(String::as_str),
+            Some("run-real"),
+            "workflow_run_id must not be hijacked"
+        );
+        assert_eq!(
+            vars.get("repo_path").map(String::as_str),
+            Some("/repo/real"),
+            "repo_path must not be hijacked"
+        );
+        assert_eq!(
+            vars.get("ticket_id").map(String::as_str),
+            Some("TICK-real"),
+            "ticket_id must not be hijacked"
+        );
+
+        // Sanity: every engine-injected key is non-hijacked, regardless of
+        // whether it was set on the state we constructed.
+        for key in ENGINE_INJECTED_KEYS {
+            if let Some(v) = vars.get(*key) {
+                assert!(
+                    !v.starts_with("HIJACKED:"),
+                    "engine-injected key '{key}' was overridden by script export"
+                );
+            }
+        }
     }
 }
