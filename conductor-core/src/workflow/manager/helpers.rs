@@ -1,4 +1,3 @@
-use crate::db::sql_placeholders;
 use crate::workflow::types::PendingGateRow;
 use crate::workflow::{extract_workflow_title, BlockedOn, WorkflowRun, WorkflowRunStep};
 
@@ -17,30 +16,6 @@ pub(super) fn json_or_warn<T: serde::de::DeserializeOwned + Default>(
             T::default()
         }),
     }
-}
-
-/// Returns `(where_clause, params)` where `params` is a `Vec<String>` whose
-/// elements bind to the positional placeholders in the clause.
-pub(super) fn purge_where_clause(
-    statuses: &[&str],
-    repo_id: Option<&str>,
-) -> (String, Vec<String>) {
-    let n = statuses.len();
-    let placeholders = sql_placeholders(n);
-    let where_clause = if repo_id.is_some() {
-        format!(
-            "status IN ({placeholders}) AND worktree_id IN \
-             (SELECT id FROM worktrees WHERE repo_id = ?{})",
-            n + 1
-        )
-    } else {
-        format!("status IN ({placeholders})")
-    };
-    let mut params: Vec<String> = statuses.iter().map(|s| s.to_string()).collect();
-    if let Some(rid) = repo_id {
-        params.push(rid.to_string());
-    }
-    (where_clause, params)
 }
 
 pub(in crate::workflow) fn row_to_workflow_run(
