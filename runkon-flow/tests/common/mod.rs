@@ -304,7 +304,7 @@ impl ChildWorkflowRunner for MockChildRunner {
     fn execute_child(
         &self,
         workflow_name: &str,
-        _parent_state: &ExecutionState,
+        _parent_ctx: &runkon_flow::engine::ChildWorkflowContext,
         params: ChildWorkflowInput,
     ) -> runkon_flow::engine_error::Result<WorkflowResult> {
         let item_id = params.inputs.get("item.id").cloned().unwrap_or_default();
@@ -584,7 +584,7 @@ impl ChildWorkflowRunner for CancellingMockRunner {
     fn execute_child(
         &self,
         workflow_name: &str,
-        _parent_state: &ExecutionState,
+        _parent_ctx: &runkon_flow::engine::ChildWorkflowContext,
         params: ChildWorkflowInput,
     ) -> runkon_flow::engine_error::Result<WorkflowResult> {
         let item_id = params.inputs.get("item.id").cloned().unwrap_or_default();

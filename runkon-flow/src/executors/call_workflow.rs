@@ -262,7 +262,7 @@ pub fn execute_call_workflow(
         // Use the child_runner to execute — it resolves the real def by name
         match child_runner.execute_child(
             &node.workflow,
-            state,
+            &state.child_workflow_context(),
             crate::engine::ChildWorkflowInput {
                 inputs: resolved_inputs,
                 iteration,

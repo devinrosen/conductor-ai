@@ -100,12 +100,35 @@ pub struct ChildWorkflowInput {
     pub cancellation: CancellationToken,
 }
 
+/// Subset of `ExecutionState` exposed to `ChildWorkflowRunner` implementations.
+///
+/// The full `ExecutionState` carries the engine's mutable runtime — registries,
+/// accumulators, schema resolver, position pointer, cancellation token —
+/// none of which a harness needs to spawn a child workflow run. Passing it
+/// across the trait boundary makes every `ExecutionState` field rename or
+/// restructuring a breaking change for every `ChildWorkflowRunner` implementor.
+///
+/// `ChildWorkflowContext` is the narrow, stable surface: every field listed
+/// here is something the bridge actually reads when constructing the child
+/// run. Build via [`ExecutionState::child_workflow_context`].
+#[derive(Clone)]
+pub struct ChildWorkflowContext {
+    pub worktree_ctx: WorktreeContext,
+    pub workflow_run_id: String,
+    pub model: Option<String>,
+    pub target_label: Option<String>,
+    pub exec_config: WorkflowExecConfig,
+    pub inputs: HashMap<String, String>,
+    pub triggered_by_hook: bool,
+    pub event_sinks: Arc<[Arc<dyn EventSink>]>,
+}
+
 /// Trait for executing child workflows — allows conductor-core to inject its adapter.
 pub trait ChildWorkflowRunner: Send + Sync {
     fn execute_child(
         &self,
         workflow_name: &str,
-        parent_state: &ExecutionState,
+        parent_ctx: &ChildWorkflowContext,
         params: ChildWorkflowInput,
     ) -> Result<WorkflowResult>;
 
@@ -122,6 +145,21 @@ impl ExecutionState {
     /// Create a fresh heartbeat counter, initialized to 0 so the first tick fires immediately.
     pub fn new_heartbeat() -> Arc<AtomicI64> {
         Arc::new(AtomicI64::new(0))
+    }
+
+    /// Project this state into the narrow surface a `ChildWorkflowRunner`
+    /// implementation needs to spawn a child run.
+    pub fn child_workflow_context(&self) -> ChildWorkflowContext {
+        ChildWorkflowContext {
+            worktree_ctx: self.worktree_ctx.clone(),
+            workflow_run_id: self.workflow_run_id.clone(),
+            model: self.model.clone(),
+            target_label: self.target_label.clone(),
+            exec_config: self.exec_config.clone(),
+            inputs: self.inputs.clone(),
+            triggered_by_hook: self.triggered_by_hook,
+            event_sinks: Arc::clone(&self.event_sinks),
+        }
     }
 
     /// Fork a child execution state from this parent.
@@ -966,7 +1004,7 @@ mod tests {
             fn execute_child(
                 &self,
                 _workflow_name: &str,
-                _parent_state: &ExecutionState,
+                _parent_ctx: &ChildWorkflowContext,
                 _params: ChildWorkflowInput,
             ) -> Result<crate::types::WorkflowResult> {
                 unimplemented!()

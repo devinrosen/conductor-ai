@@ -391,14 +391,14 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
     fn execute_child(
         &self,
         workflow_name: &str,
-        parent_state: &runkon_flow::engine::ExecutionState,
+        parent_ctx: &runkon_flow::engine::ChildWorkflowContext,
         params: runkon_flow::engine::ChildWorkflowInput,
     ) -> runkon_flow::engine_error::Result<runkon_flow::types::WorkflowResult> {
         // Load the real workflow definition from disk. The runner resolves the
         // actual definition by name from the worktree/repo .conductor/workflows/ directory.
         let core_def = runkon_flow::dsl::load_workflow_by_name(
-            &parent_state.worktree_ctx.working_dir,
-            &parent_state.worktree_ctx.repo_path,
+            &parent_ctx.worktree_ctx.working_dir,
+            &parent_ctx.worktree_ctx.repo_path,
             workflow_name,
         )
         .map_err(|e| {
@@ -409,8 +409,8 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         })?;
 
         let exec_config = crate::workflow::WorkflowExecConfig {
-            event_sinks: parent_state.event_sinks.iter().cloned().collect(),
-            ..parent_state.exec_config.clone()
+            event_sinks: parent_ctx.event_sinks.iter().cloned().collect(),
+            ..parent_ctx.exec_config.clone()
         };
 
         // Route child workflows through execute_workflow_standalone so they use
@@ -419,22 +419,22 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         let standalone_params = crate::workflow::types::WorkflowExecStandalone {
             config: self.config.clone(),
             workflow: core_def,
-            worktree_id: parent_state.worktree_ctx.worktree_id.clone(),
-            working_dir: parent_state.worktree_ctx.working_dir.clone(),
-            repo_path: parent_state.worktree_ctx.repo_path.clone(),
-            ticket_id: parent_state.inputs.get("ticket_id").cloned(),
-            repo_id: parent_state.inputs.get("repo_id").cloned(),
-            model: parent_state.model.clone(),
+            worktree_id: parent_ctx.worktree_ctx.worktree_id.clone(),
+            working_dir: parent_ctx.worktree_ctx.working_dir.clone(),
+            repo_path: parent_ctx.worktree_ctx.repo_path.clone(),
+            ticket_id: parent_ctx.inputs.get("ticket_id").cloned(),
+            repo_id: parent_ctx.inputs.get("repo_id").cloned(),
+            model: parent_ctx.model.clone(),
             exec_config,
             inputs: params.inputs,
-            target_label: parent_state.target_label.clone(),
+            target_label: parent_ctx.target_label.clone(),
             run_id_notify: None,
-            triggered_by_hook: parent_state.triggered_by_hook,
+            triggered_by_hook: parent_ctx.triggered_by_hook,
             conductor_bin_dir: None,
             force: false,
-            extra_plugin_dirs: parent_state.worktree_ctx.extra_plugin_dirs.clone(),
+            extra_plugin_dirs: parent_ctx.worktree_ctx.extra_plugin_dirs.clone(),
             db_path: Some(self.db_path.clone()),
-            parent_workflow_run_id: Some(parent_state.workflow_run_id.clone()),
+            parent_workflow_run_id: Some(parent_ctx.workflow_run_id.clone()),
             depth: params.depth,
             parent_step_id: params.parent_step_id,
             default_bot_name: params.bot_name,

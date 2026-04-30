@@ -528,11 +528,16 @@ pub fn execute_foreach(
 
                 pool.execute(move || {
                     let child_state = ctx.make_child_state(child_cancellation.clone());
+                    // Behavior-preserving: the trait now takes &ChildWorkflowContext, but
+                    // we continue to project from the forked child_state to keep this PR
+                    // a refactor only. #2728 tracks the fix to source the bridge view
+                    // from the parent's real state so foreach child runs inherit
+                    // ticket_id / repo_id lineage.
                     let succeeded = ctx
                         .child_runner
                         .execute_child(
                             &workflow_name,
-                            &child_state,
+                            &child_state.child_workflow_context(),
                             ChildWorkflowInput {
                                 inputs,
                                 iteration,
