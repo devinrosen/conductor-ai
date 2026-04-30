@@ -65,11 +65,21 @@ pub fn shell_quote(s: &str) -> String {
 pub fn build_variable_map(state: &ExecutionState) -> HashMap<String, String> {
     let mut vars: HashMap<String, String> = HashMap::new();
 
-    // Non-injected user-defined inputs
+    // Copy all of `state.inputs` through. This includes both user-supplied
+    // inputs and engine-populated values that conductor-core injects via
+    // `inject_ticket_variables` / `inject_repo_variables` (`ticket_url`,
+    // `ticket_title`, `ticket_body`, `ticket_source_id`, `ticket_source_type`,
+    // `ticket_raw_json`, `repo_name`).
+    //
+    // Earlier this loop filtered out every key in `ENGINE_INJECTED_KEYS` to
+    // prevent user shadowing of engine values, but the engine only re-injects
+    // 4 of the 11 names (`ticket_id`, `repo_id`, `repo_path`, `workflow_run_id`)
+    // explicitly below — so the other 7 ended up empty in the variable map.
+    // See #2636. Those 4 still get re-asserted below from `worktree_ctx`,
+    // which preserves the "engine wins on conflict" property for the keys
+    // the engine actually owns.
     for (k, v) in &state.inputs {
-        if !ENGINE_INJECTED_KEYS.contains(&k.as_str()) {
-            vars.insert(k.clone(), v.clone());
-        }
+        vars.insert(k.clone(), v.clone());
     }
 
     // Engine-injected variables from the worktree context
@@ -501,5 +511,108 @@ mod tests {
         assert!(!vars.contains_key("broken-step"));
         // Good step's extras still appear — proves the loop continues past failures.
         assert_eq!(vars.get("payload").map(String::as_str), Some("survived"));
+    }
+
+    /// Regression for #2636: engine-populated values from `state.inputs`
+    /// (`ticket_url` etc., set by conductor-core's `inject_ticket_variables`)
+    /// must reach the variable map. Previously the loop filtered every key in
+    /// `ENGINE_INJECTED_KEYS` and only 4 of the 11 names were re-injected from
+    /// `worktree_ctx`, so the other 7 ended up empty.
+    #[test]
+    fn build_variable_map_injects_ticket_url_and_friends_from_state_inputs() {
+        use crate::test_helpers::CountingPersistence;
+        use std::sync::Arc;
+
+        let cp = Arc::new(CountingPersistence::new());
+        let mut state = crate::test_helpers::make_test_execution_state(
+            cp as Arc<dyn crate::traits::persistence::WorkflowPersistence>,
+            "run-1".into(),
+        );
+        // Simulate conductor-core's inject_ticket_variables / inject_repo_variables.
+        state.inputs.insert(
+            "ticket_url".into(),
+            "https://github.com/owner/repo/issues/42".into(),
+        );
+        state
+            .inputs
+            .insert("ticket_title".into(), "Fix something".into());
+        state
+            .inputs
+            .insert("ticket_body".into(), "body text".into());
+        state.inputs.insert("ticket_source_id".into(), "42".into());
+        state
+            .inputs
+            .insert("ticket_source_type".into(), "github".into());
+        state.inputs.insert("ticket_raw_json".into(), "{}".into());
+        state.inputs.insert("repo_name".into(), "owner/repo".into());
+        // And one regular user input for sanity.
+        state
+            .inputs
+            .insert("user_var".into(), "user-supplied".into());
+
+        let vars = build_variable_map(&state);
+
+        assert_eq!(
+            vars.get("ticket_url").map(String::as_str),
+            Some("https://github.com/owner/repo/issues/42"),
+            "ticket_url must be exposed — this is the #2636 bug"
+        );
+        assert_eq!(
+            vars.get("ticket_title").map(String::as_str),
+            Some("Fix something"),
+        );
+        assert_eq!(
+            vars.get("ticket_body").map(String::as_str),
+            Some("body text")
+        );
+        assert_eq!(vars.get("ticket_source_id").map(String::as_str), Some("42"));
+        assert_eq!(
+            vars.get("ticket_source_type").map(String::as_str),
+            Some("github"),
+        );
+        assert_eq!(vars.get("ticket_raw_json").map(String::as_str), Some("{}"));
+        assert_eq!(
+            vars.get("repo_name").map(String::as_str),
+            Some("owner/repo")
+        );
+        // User inputs still flow.
+        assert_eq!(
+            vars.get("user_var").map(String::as_str),
+            Some("user-supplied"),
+        );
+    }
+
+    /// `worktree_ctx` values still win for the 4 keys the engine injects
+    /// explicitly — protects against stale `state.inputs` values diverging
+    /// from the actual run's worktree (e.g. on resume).
+    #[test]
+    fn build_variable_map_worktree_ctx_overrides_state_inputs_for_owned_keys() {
+        use crate::test_helpers::CountingPersistence;
+        use std::sync::Arc;
+
+        let cp = Arc::new(CountingPersistence::new());
+        let mut state = crate::test_helpers::make_test_execution_state(
+            cp as Arc<dyn crate::traits::persistence::WorkflowPersistence>,
+            "run-real".into(),
+        );
+        // worktree_ctx is the source of truth for these.
+        state.worktree_ctx.ticket_id = Some("TICK-real".into());
+        state.worktree_ctx.repo_id = Some("repo-real".into());
+        state.worktree_ctx.repo_path = "/real".into();
+        // state.inputs has stale values that would otherwise win after the
+        // filter was removed in #2636.
+        state.inputs.insert("ticket_id".into(), "TICK-stale".into());
+        state.inputs.insert("repo_id".into(), "repo-stale".into());
+        state.inputs.insert("repo_path".into(), "/stale".into());
+
+        let vars = build_variable_map(&state);
+
+        assert_eq!(vars.get("ticket_id").map(String::as_str), Some("TICK-real"));
+        assert_eq!(vars.get("repo_id").map(String::as_str), Some("repo-real"));
+        assert_eq!(vars.get("repo_path").map(String::as_str), Some("/real"));
+        assert_eq!(
+            vars.get("workflow_run_id").map(String::as_str),
+            Some("run-real"),
+        );
     }
 }
