@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Get changed files relative to PR base branch
-BASE_BRANCH=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || echo main)
-changed_files=$(git diff origin/${BASE_BRANCH}...HEAD --name-only 2>/dev/null || true)
+# BASE_BRANCH is injected by the workflow from the resolve-pr-base step.
+# We refuse to silently fall back to a guess — a wrong base produces a
+# fabricated diff that contaminates every conditional reviewer. See #2736.
+if [ -z "${BASE_BRANCH:-}" ]; then
+  echo "ERROR: BASE_BRANCH env var not set — workflow must run resolve-pr-base first." >&2
+  exit 1
+fi
+
+changed_files=$(git diff "origin/${BASE_BRANCH}...HEAD" --name-only 2>/dev/null || true)
 
 # Filter for code files, excluding .conductor/, docs/, .github/, and root-level *.md
 code_files=()

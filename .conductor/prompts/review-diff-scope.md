@@ -2,29 +2,14 @@
 
 Get the diff for this PR using the appropriate command for the review scope:
 
-- If the scope is **full** (default): detect the PR base branch from the
-  current branch's open PR and diff against it. **Run the command from the
-  current working directory — do NOT `cd` anywhere.** The worktree is
-  already cwd; `cd`ing into a different checkout (e.g. the canonical repo
-  path) silently breaks `gh pr view`, which then falls back to `main` and
-  produces a wrong diff.
+- If the scope is **full** (default): the PR's base branch has already been
+  resolved by the workflow's `resolve-pr-base` step and is injected as
+  `{{base_branch}}`. Use it literally — do not run `gh pr view` or compute
+  the base yourself.
 
   ```bash
-  # Resolve the PR's base branch. Use `gh pr list --head` rather than
-  # `gh pr view` so the lookup keys on the explicit branch name and is not
-  # affected by cwd or the currently checked-out HEAD of an unrelated repo.
-  BRANCH=$(git rev-parse --abbrev-ref HEAD)
-  BASE_BRANCH=$(gh pr list --head "$BRANCH" --state open \
-                  --json baseRefName -q '.[0].baseRefName' 2>/dev/null)
-  if [ -z "$BASE_BRANCH" ]; then
-    echo "ERROR: could not resolve PR base branch for $BRANCH — aborting" >&2
-    exit 1
-  fi
-  git diff "origin/${BASE_BRANCH}...HEAD"
+  git diff "origin/{{base_branch}}...HEAD"
   ```
-
-  Do NOT silently fall back to `main` if base detection fails. A wrong base
-  produces a fabricated diff that contaminates every downstream finding.
 
 - If the scope is **incremental**: run `git diff HEAD~1` to see only the latest commit.
 

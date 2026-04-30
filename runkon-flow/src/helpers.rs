@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::dsl::{WhileNode, WorkflowNode};
 use crate::status::WorkflowStepStatus;
 use serde::{Deserialize, Serialize};
@@ -10,12 +12,23 @@ use crate::engine::ExecutionState;
 // ---------------------------------------------------------------------------
 
 /// Parsed `<<<FLOW_OUTPUT>>>` block.
+///
+/// `markers` and `context` are core engine-recognized fields. Any other
+/// top-level JSON fields are preserved in `extras` so they round-trip through
+/// re-serialization. Engine plumbing (e.g. `prompt_builder` exposing
+/// `{{base_branch}}` from a `resolve-pr-base.sh` step — see #2736) reads from
+/// `extras` to inject typed values as template variables for subsequent steps.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FlowOutput {
     #[serde(default)]
     pub markers: Vec<String>,
     #[serde(default)]
     pub context: String,
+    /// Extra top-level fields preserved on parse and re-emitted on serialize.
+    /// Allows scripts to expose typed values to downstream steps via the
+    /// engine's variable substitution layer.
+    #[serde(flatten, default)]
+    pub extras: HashMap<String, serde_json::Value>,
 }
 
 /// Extract markers and context from a `<<<FLOW_OUTPUT>>> … <<<END_FLOW_OUTPUT>>>`
@@ -385,6 +398,42 @@ mod parse_tests {
     fn returns_none_when_no_block_present() {
         assert!(parse_flow_output("no flow output block here").is_none());
         assert!(parse_flow_output("").is_none());
+    }
+
+    /// `extras` captures any top-level fields beyond `markers` and `context`,
+    /// and re-serialization round-trips them so downstream readers
+    /// (e.g. `prompt_builder::build_variable_map` looking for `base_branch`)
+    /// can pick them up. #2736.
+    #[test]
+    fn extras_fields_are_preserved_on_parse_and_serialize() {
+        let text = concat!(
+            "<<<FLOW_OUTPUT>>>\n",
+            r#"{"markers":["base_branch_resolved"],"context":"release/0.10.0","base_branch":"release/0.10.0"}"#,
+            "\n",
+            "<<<END_FLOW_OUTPUT>>>"
+        );
+        let out = parse_flow_output(text).expect("parse must succeed");
+
+        // Core fields still extracted correctly.
+        assert_eq!(out.markers, vec!["base_branch_resolved".to_string()]);
+        assert_eq!(out.context, "release/0.10.0");
+
+        // Extra fields land in `extras`.
+        assert_eq!(
+            out.extras.get("base_branch").and_then(|v| v.as_str()),
+            Some("release/0.10.0"),
+            "base_branch should round-trip into extras"
+        );
+
+        // Re-serialization must include the extras at the top level so
+        // structured_output JSON readers find them.
+        let json = serde_json::to_string(&out).expect("serialize must succeed");
+        let reparsed: serde_json::Value =
+            serde_json::from_str(&json).expect("reparse must succeed");
+        assert_eq!(
+            reparsed.get("base_branch").and_then(|v| v.as_str()),
+            Some("release/0.10.0")
+        );
     }
 
     #[test]
