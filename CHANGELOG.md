@@ -33,7 +33,7 @@ The headline of 0.10.0 is **the workflow engine extraction is done.** `runkon-fl
 - **`foreach` child workflow runs** now inherit `ticket_id` and `repo_id` lineage from the parent run. Previously the lineage was lost because `ForeachParentCtx::make_child_state` projected from a forked `child_state` whose `inputs` had been cleared. (#2733)
 - **Heartbeat watchdog races** during long parallel/foreach waits — `last_heartbeat` is now refreshed inside both wait loops via `ExecutionState::tick_heartbeat_throttled()`, preventing the watchdog reaper from claiming a still-running workflow after >60 s. Concrete repro on review-pr previously double-ran review-aggregator + submit-review (PR review was posted twice). (#2734)
 - **`as = "<bot>"` on script steps** now correctly threads the bot identity through script execution and injects `GH_TOKEN` for that bot. (#2716, #2717)
-- **`retries` on parallel-block calls** previously silently ignored — `ActionParams::retries_remaining` was passed but the parallel executor never retried failed branches. (#2578) <!-- TODO: confirm PR number once #2578 lands -->
+- **`retries` on parallel-block calls** previously silently ignored — `ActionParams::retries_remaining` was passed but the parallel executor never retried failed branches. (#2740, closes #2578)
 - **Cancellation token isolation** in foreach: each fan-out item now gets its own `current_execution_id` Arc so a `cancel_run` targeting one in-flight executor cannot clobber another sibling's slot. (#2729)
 - **Shell scripts emit `<<<FLOW_OUTPUT>>>` markers** — earlier rename pass missed `*.sh` and conditional reviewers in `review-pr.wf` silently skipped because their detect-* steps had empty `markers_out`. (#2730)
 
