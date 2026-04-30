@@ -624,6 +624,7 @@ mod tests {
             with: vec![],
             call_with: Default::default(),
             call_if: Default::default(),
+            call_retries: Default::default(),
         });
         let keys = collect_leaf_step_keys(&node);
         assert_eq!(keys, vec!["agent_a".to_string(), "agent_b".to_string()]);

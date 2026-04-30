@@ -1602,6 +1602,7 @@ mod tests {
             with: vec![],
             call_with: HashMap::new(),
             call_if: HashMap::new(),
+            call_retries: HashMap::new(),
         });
 
         let def = make_def("wf", vec![parallel]);

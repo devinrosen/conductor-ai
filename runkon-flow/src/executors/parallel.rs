@@ -47,15 +47,19 @@ pub fn execute_parallel(
         agent_step_key: String,
         ectx: ExecutionContext,
         params: ActionParams,
+        retries: u32,
+    }
+
+    struct CallInput {
+        idx: usize,
+        agent_step_key: String,
+        call_schema: Option<crate::output_schema::OutputSchema>,
+        effective_with: Vec<String>,
+        retries: u32,
     }
 
     let mut skipped_count = 0u32;
-    let mut call_inputs: Vec<(
-        usize,
-        String,
-        Option<crate::output_schema::OutputSchema>,
-        Vec<String>,
-    )> = Vec::new();
+    let mut call_inputs: Vec<CallInput> = Vec::new();
 
     // First pass: skip any already-completed agents on resume
     for (i, agent_ref) in node.calls.iter().enumerate() {
@@ -87,7 +91,14 @@ pub fn execute_parallel(
             node.with.clone()
         };
 
-        call_inputs.push((i, agent_step_key.clone(), effective_schema, effective_with));
+        let retries = node.call_retries.get(&i.to_string()).copied().unwrap_or(0);
+        call_inputs.push(CallInput {
+            idx: i,
+            agent_step_key: agent_step_key.clone(),
+            call_schema: effective_schema,
+            effective_with,
+            retries,
+        });
     }
 
     // Pre-dispatch pass: evaluate per-call `if` conditions, create step records, and build
@@ -103,7 +114,14 @@ pub fn execute_parallel(
     // to exit early when fail_fast fires.
     let scope_token = state.cancellation.child();
 
-    for (i, agent_step_key, call_schema, effective_with) in call_inputs {
+    for call_input in call_inputs {
+        let CallInput {
+            idx: i,
+            agent_step_key,
+            call_schema,
+            effective_with,
+            retries,
+        } = call_input;
         let pos = pos_base + i as i64;
         let agent_ref = &node.calls[i];
         let agent_label = agent_ref.label();
@@ -186,7 +204,7 @@ pub fn execute_parallel(
             state.exec_config.dry_run,
             state.last_gate_feedback.clone(),
             call_schema,
-            0,
+            retries,
             None,
         );
 
@@ -196,6 +214,7 @@ pub fn execute_parallel(
             agent_step_key,
             ectx,
             params,
+            retries,
         });
     }
 
@@ -207,6 +226,7 @@ pub fn execute_parallel(
         String,
         String,
         std::result::Result<ActionOutput, EngineError>,
+        u32,
     )>();
 
     for dispatch_input in dispatch_queue {
@@ -214,32 +234,55 @@ pub fn execute_parallel(
         let registry = Arc::clone(&state.action_registry);
         let scope = scope_token.clone();
         std::thread::spawn(move || {
-            let result = if scope.is_cancelled() {
-                Err(EngineError::Cancelled(CancellationReason::FailFast))
-            } else {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    registry.dispatch(
-                        &dispatch_input.params.name,
-                        &dispatch_input.ectx,
-                        &dispatch_input.params,
-                    )
+            let max_attempts = 1 + dispatch_input.retries;
+            let mut last_error = String::new();
+            let mut params = dispatch_input.params;
+            let mut final_attempt = 0u32;
+            let mut result: std::result::Result<ActionOutput, EngineError> =
+                Err(EngineError::Workflow("no attempts made".into()));
+
+            for attempt in 0..max_attempts {
+                if scope.is_cancelled() {
+                    result = Err(EngineError::Cancelled(CancellationReason::FailFast));
+                    break;
+                }
+                params.retries_remaining = max_attempts - attempt - 1;
+                params.retry_error = if attempt == 0 {
+                    None
+                } else {
+                    Some(last_error.clone())
+                };
+                final_attempt = attempt;
+
+                result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    registry.dispatch(&params.name, &dispatch_input.ectx, &params)
                 }))
                 .unwrap_or_else(|payload| {
                     let msg = if let Some(s) = payload.downcast_ref::<&str>() {
-                        format!("executor '{}' panicked: {s}", dispatch_input.params.name)
+                        format!("executor '{}' panicked: {s}", params.name)
                     } else if let Some(s) = payload.downcast_ref::<String>() {
-                        format!("executor '{}' panicked: {s}", dispatch_input.params.name)
+                        format!("executor '{}' panicked: {s}", params.name)
                     } else {
-                        format!("executor '{}' panicked", dispatch_input.params.name)
+                        format!("executor '{}' panicked", params.name)
                     };
                     Err(EngineError::Workflow(msg))
-                })
-            };
+                });
+
+                match &result {
+                    Ok(_) => break,
+                    Err(EngineError::Cancelled(_)) => break,
+                    Err(e) => {
+                        last_error = e.to_string();
+                    }
+                }
+            }
+
             if let Err(e) = tx.send((
                 dispatch_input.step_id,
                 dispatch_input.agent_name,
                 dispatch_input.agent_step_key,
                 result,
+                final_attempt,
             )) {
                 tracing::warn!("parallel: result channel broken (receiver dropped): {}", e);
             }
@@ -256,14 +299,14 @@ pub fn execute_parallel(
     let mut results: Vec<ParallelCallResult> = Vec::new();
     loop {
         match completion_rx.recv_timeout(std::time::Duration::from_millis(500)) {
-            Ok((step_id, agent_name, agent_step_key, result)) => {
+            Ok((step_id, agent_name, agent_step_key, result, attempt)) => {
                 let failed = result.is_err();
                 results.push(ParallelCallResult {
                     agent_name,
                     step_id,
                     agent_step_key,
                     result,
-                    attempt: 0,
+                    attempt,
                 });
                 if failed && node.fail_fast {
                     scope_token.cancel(CancellationReason::FailFast);
@@ -519,6 +562,7 @@ mod tests {
             with: vec![],
             call_with: HashMap::new(),
             call_if: HashMap::new(),
+            call_retries: HashMap::new(),
         };
 
         execute_parallel(&mut state, &node, 0).unwrap();
@@ -599,6 +643,7 @@ mod tests {
             with: vec![],
             call_with: HashMap::new(),
             call_if: HashMap::new(),
+            call_retries: HashMap::new(),
         };
 
         // execute_parallel should succeed (the panic is caught internally).
@@ -661,6 +706,7 @@ mod tests {
             with: vec![],
             call_with: HashMap::new(),
             call_if: HashMap::new(),
+            call_retries: HashMap::new(),
         };
 
         execute_parallel(&mut state, &node, 0).unwrap();
@@ -715,6 +761,7 @@ mod tests {
             with: vec![],
             call_with: HashMap::new(),
             call_if: HashMap::new(),
+            call_retries: HashMap::new(),
         };
 
         execute_parallel(&mut state, &node, 0).unwrap();
@@ -788,6 +835,7 @@ mod tests {
             with: vec![],
             call_with: HashMap::new(),
             call_if: HashMap::new(),
+            call_retries: HashMap::new(),
         };
 
         execute_parallel(&mut state, &node, 0).ok();
@@ -873,6 +921,7 @@ mod tests {
             with: vec![],
             call_with: HashMap::new(),
             call_if: HashMap::new(),
+            call_retries: HashMap::new(),
         };
 
         execute_parallel(&mut state, &node, 0).unwrap();
@@ -886,6 +935,155 @@ mod tests {
              without #2731 fix this would be 0 because the receiver blocks \
              for the whole duration of the slowest branch.",
             cp.tick_count()
+        );
+    }
+
+    /// Verifies that a failing parallel branch with `retries = 1` is dispatched twice
+    /// (first attempt + one retry) and ultimately succeeds when the second attempt succeeds.
+    #[test]
+    fn parallel_retries_on_failed_branch_succeeds_on_second_attempt() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        struct FailOnceThenSucceed {
+            call_count: Arc<AtomicU32>,
+        }
+        impl ActionExecutor for FailOnceThenSucceed {
+            fn name(&self) -> &str {
+                "fail_once"
+            }
+            fn execute(
+                &self,
+                _ectx: &crate::traits::action_executor::ExecutionContext,
+                _params: &ActionParams,
+            ) -> Result<ActionOutput, EngineError> {
+                let n = self.call_count.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    Err(EngineError::Workflow("first attempt fails".to_string()))
+                } else {
+                    Ok(ActionOutput {
+                        markers: vec!["retried_ok".to_string()],
+                        ..Default::default()
+                    })
+                }
+            }
+        }
+
+        let call_count = Arc::new(AtomicU32::new(0));
+        let mut named = HashMap::new();
+        named.insert(
+            "fail_once".to_string(),
+            Box::new(FailOnceThenSucceed {
+                call_count: Arc::clone(&call_count),
+            }) as Box<dyn ActionExecutor>,
+        );
+        let registry = crate::traits::action_executor::ActionRegistry::new(named, None);
+
+        let (persistence, run_id) = make_persistence_with_run();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone(), registry);
+
+        let mut call_retries = HashMap::new();
+        call_retries.insert("0".to_string(), 1u32);
+
+        let node = ParallelNode {
+            fail_fast: false,
+            min_success: None,
+            calls: vec![AgentRef::Name("fail_once".to_string())],
+            output: None,
+            call_outputs: HashMap::new(),
+            with: vec![],
+            call_with: HashMap::new(),
+            call_if: HashMap::new(),
+            call_retries,
+        };
+
+        execute_parallel(&mut state, &node, 0).unwrap();
+
+        // The executor should have been called exactly twice (attempt 0 + retry 1).
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            2,
+            "executor should be dispatched twice (initial + 1 retry)"
+        );
+
+        // The step should be Completed, not Failed.
+        let steps = persistence.get_steps(&run_id).unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(
+            steps[0].status,
+            WorkflowStepStatus::Completed,
+            "step should be Completed after successful retry; got {:?}",
+            steps[0].status
+        );
+    }
+
+    /// Verifies that a branch with `retries = 1` that always fails is marked Failed
+    /// after exactly two dispatch attempts (initial + 1 retry).
+    #[test]
+    fn parallel_retries_exhausted_marks_step_failed() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        struct AlwaysFail {
+            call_count: Arc<AtomicU32>,
+        }
+        impl ActionExecutor for AlwaysFail {
+            fn name(&self) -> &str {
+                "always_fail"
+            }
+            fn execute(
+                &self,
+                _ectx: &crate::traits::action_executor::ExecutionContext,
+                _params: &ActionParams,
+            ) -> Result<ActionOutput, EngineError> {
+                self.call_count.fetch_add(1, Ordering::SeqCst);
+                Err(EngineError::Workflow("always fails".to_string()))
+            }
+        }
+
+        let call_count = Arc::new(AtomicU32::new(0));
+        let mut named = HashMap::new();
+        named.insert(
+            "always_fail".to_string(),
+            Box::new(AlwaysFail {
+                call_count: Arc::clone(&call_count),
+            }) as Box<dyn ActionExecutor>,
+        );
+        let registry = crate::traits::action_executor::ActionRegistry::new(named, None);
+
+        let (persistence, run_id) = make_persistence_with_run();
+        let mut state = make_state(Arc::clone(&persistence), run_id.clone(), registry);
+
+        let mut call_retries = HashMap::new();
+        call_retries.insert("0".to_string(), 1u32);
+
+        let node = ParallelNode {
+            fail_fast: false,
+            min_success: None,
+            calls: vec![AgentRef::Name("always_fail".to_string())],
+            output: None,
+            call_outputs: HashMap::new(),
+            with: vec![],
+            call_with: HashMap::new(),
+            call_if: HashMap::new(),
+            call_retries,
+        };
+
+        execute_parallel(&mut state, &node, 0).unwrap();
+
+        // Should be dispatched retries+1 = 2 times total.
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            2,
+            "executor should be dispatched twice (initial + 1 retry) before giving up"
+        );
+
+        // The step should be Failed after exhausting all retries.
+        let steps = persistence.get_steps(&run_id).unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(
+            steps[0].status,
+            WorkflowStepStatus::Failed,
+            "step should be Failed after all retries exhausted; got {:?}",
+            steps[0].status
         );
     }
 }
