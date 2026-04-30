@@ -11,6 +11,7 @@ const MAX_TOKENS: u64 = 8192;
 
 const DEFAULT_API_MODEL: &str = "claude-sonnet-4-6";
 
+#[derive(Debug)]
 struct ApiCallResult {
     json: serde_json::Value,
     json_string: String,
@@ -24,6 +25,7 @@ fn execute_via_api(
     model: &str,
     timeout: std::time::Duration,
     api_key: &str,
+    url: &str,
 ) -> std::result::Result<ApiCallResult, String> {
     let tool_json = schema_to_tool_json(schema);
     let body = serde_json::json!({
@@ -35,7 +37,7 @@ fn execute_via_api(
     });
     let agent = ureq::AgentBuilder::new().timeout(timeout).build();
     let response_result = agent
-        .post(ANTHROPIC_API_URL)
+        .post(url)
         .set("x-api-key", api_key)
         .set("anthropic-version", ANTHROPIC_API_VERSION)
         .set("content-type", "application/json")
@@ -54,10 +56,8 @@ fn execute_via_api(
             } else {
                 body_text
             };
-            // The API may echo user-supplied prompt content in error bodies.
-            // The 500-char cap above limits exposure; callers should treat this
-            // error string as potentially containing user data.
-            return Err(format!("API call failed: {status} {truncated}"));
+            tracing::debug!("API error body: {truncated}");
+            return Err(format!("API call failed: {status}"));
         }
         Err(e) => return Err(format!("API call failed: {e}")),
     };
@@ -134,10 +134,17 @@ impl ActionExecutor for ApiCallExecutor {
 
         let model = ectx.model.as_deref().unwrap_or(DEFAULT_API_MODEL);
 
-        let result =
-            execute_via_api(&prompt, schema, model, ectx.step_timeout, &api_key).map_err(|e| {
-                ConductorError::Workflow(format!("API call for '{}' failed: {e}", params.name))
-            })?;
+        let result = execute_via_api(
+            &prompt,
+            schema,
+            model,
+            ectx.step_timeout,
+            &api_key,
+            ANTHROPIC_API_URL,
+        )
+        .map_err(|e| {
+            ConductorError::Workflow(format!("API call for '{}' failed: {e}", params.name))
+        })?;
 
         let structured = crate::schema_config::derive_output_from_value(result.json, schema);
 
@@ -222,5 +229,45 @@ mod tests {
 
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("ANTHROPIC_API_KEY"), "got: {msg}");
+    }
+
+    #[test]
+    fn error_body_not_in_returned_error() {
+        use std::io::Write;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let response = "HTTP/1.1 422 Unprocessable Entity\r\nContent-Length: 13\r\nContent-Type: text/plain\r\n\r\nSENTINEL_BODY";
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        let schema =
+            crate::schema_config::parse_schema_content("fields:\n  ok: boolean\n", "test").unwrap();
+        let url = format!("http://{addr}");
+
+        let err_string = execute_via_api(
+            "test",
+            &schema,
+            "claude-sonnet-4-6",
+            std::time::Duration::from_secs(5),
+            "dummy-key",
+            &url,
+        )
+        .unwrap_err();
+
+        handle.join().unwrap();
+
+        assert!(
+            err_string.contains("422"),
+            "error should contain status code, got: {err_string}"
+        );
+        assert!(
+            !err_string.contains("SENTINEL_BODY"),
+            "error should not contain response body, got: {err_string}"
+        );
     }
 }
