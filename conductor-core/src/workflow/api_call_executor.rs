@@ -134,10 +134,17 @@ impl ActionExecutor for ApiCallExecutor {
 
         let model = ectx.model.as_deref().unwrap_or(DEFAULT_API_MODEL);
 
-        let result =
-            execute_via_api(&prompt, schema, model, ectx.step_timeout, &api_key, ANTHROPIC_API_URL).map_err(|e| {
-                ConductorError::Workflow(format!("API call for '{}' failed: {e}", params.name))
-            })?;
+        let result = execute_via_api(
+            &prompt,
+            schema,
+            model,
+            ectx.step_timeout,
+            &api_key,
+            ANTHROPIC_API_URL,
+        )
+        .map_err(|e| {
+            ConductorError::Workflow(format!("API call for '{}' failed: {e}", params.name))
+        })?;
 
         let structured = crate::schema_config::derive_output_from_value(result.json, schema);
 
