@@ -194,6 +194,61 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
+    /// Bulk-update a set of stuck steps to their terminal states in one SQL
+    /// statement per chunk.  Called exclusively from `recover_stuck_steps`.
+    ///
+    /// Builds a CASE-expression UPDATE instead of N individual statements to
+    /// reduce statement-preparation overhead to O(1).  Chunks at 199 rows to
+    /// stay below SQLite's 999-variable limit (5×199+1 = 996 parameters).
+    fn bulk_recover_steps(
+        &self,
+        items: &[(String, WorkflowStepStatus, Option<String>)],
+        ended_at: &str,
+    ) -> Result<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        for chunk in items.chunks(199) {
+            let n = chunk.len();
+            let case_arms = (0..n)
+                .map(|_| "WHEN ? THEN ?")
+                .collect::<Vec<_>>()
+                .join(" ");
+            let in_placeholders = sql_placeholders(n);
+            let sql = format!(
+                "UPDATE workflow_run_steps \
+                 SET status      = CASE id {case_arms} END, \
+                     ended_at    = ?, \
+                     result_text = CASE id {case_arms} END, \
+                     context_out = NULL, \
+                     markers_out = NULL, \
+                     structured_output = NULL, \
+                     step_error  = NULL \
+                 WHERE id IN ({in_placeholders})"
+            );
+
+            let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(5 * n + 1);
+            for (step_id, status, _) in chunk {
+                params.push(Box::new(step_id.clone()));
+                params.push(Box::new(status.to_string()));
+            }
+            params.push(Box::new(ended_at.to_string()));
+            for (step_id, _, result_text) in chunk {
+                params.push(Box::new(step_id.clone()));
+                params.push(Box::new(result_text.clone()));
+            }
+            for (step_id, _, _) in chunk {
+                params.push(Box::new(step_id.clone()));
+            }
+
+            self.conn
+                .execute(&sql, rusqlite::params_from_iter(params))?;
+        }
+
+        Ok(())
+    }
+
     /// Recover steps stuck in `running` status whose child agent run has
     /// already reached a terminal state (completed, failed, or cancelled).
     ///
@@ -220,7 +275,7 @@ impl<'a> WorkflowManager<'a> {
         let child_runs = agent_mgr.get_runs_by_ids(&child_ids)?;
 
         // Filter in Rust to those with terminal statuses.
-        let stuck: Vec<(String, String, WorkflowStepStatus, Option<String>)> = running_steps
+        let stuck: Vec<(String, WorkflowStepStatus, Option<String>)> = running_steps
             .into_iter()
             .filter_map(|(step_id, child_run_id)| {
                 let Some(run) = child_runs.get(&child_run_id) else {
@@ -240,29 +295,15 @@ impl<'a> WorkflowManager<'a> {
                     }
                     _ => return None,
                 };
-                Some((step_id, child_run_id, step_status, run.result_text.clone()))
+                Some((step_id, step_status, run.result_text.clone()))
             })
             .collect();
 
-        // Wrap all updates in a savepoint so they commit in one round-trip
-        // instead of N separate auto-commit transactions.
+        let ended_at = chrono::Utc::now().to_rfc3339();
+        let n = stuck.len();
         self.with_savepoint("recover_stuck_steps", || {
-            let mut recovered = 0usize;
-            for (step_id, child_run_id, step_status, result_text) in stuck {
-                self.mark_step_terminal(
-                    &step_id,
-                    step_status,
-                    Some(&child_run_id),
-                    result_text.as_deref(),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                )?;
-                recovered += 1;
-            }
-            Ok(recovered)
+            self.bulk_recover_steps(&stuck, &ended_at)?;
+            Ok(n)
         })
     }
 
@@ -1808,6 +1849,69 @@ mod tests {
             )
             .unwrap();
         assert_eq!(status, "pending");
+    }
+
+    // ── recover_stuck_steps bulk UPDATE ──────────────────────────────────────
+
+    /// Regression: multiple stuck steps with mixed statuses (completed with
+    /// result_text, failed with NULL result_text) must all be recovered in a
+    /// single `recover_stuck_steps` call via the bulk CASE-expression UPDATE.
+    #[test]
+    fn test_recover_stuck_steps_bulk() {
+        let (conn, parent_id) = setup();
+        insert_workflow_run(&conn, "wfrun-bulk", &parent_id);
+
+        // Create two agent runs and mark them terminal.
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let run_completed = agent_mgr.create_run(Some("w1"), "prompt", None).unwrap();
+        let run_failed = agent_mgr.create_run(Some("w1"), "prompt", None).unwrap();
+
+        conn.execute(
+            "UPDATE agent_runs SET status = 'completed', result_text = 'the result' WHERE id = :id",
+            rusqlite::named_params![":id": run_completed.id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET status = 'failed' WHERE id = :id",
+            rusqlite::named_params![":id": run_failed.id],
+        )
+        .unwrap();
+
+        // Insert two running steps pointing to those agent runs.
+        insert_running_agent_step(&conn, "wfrun-bulk", "step-c", &run_completed.id, 0);
+        insert_running_agent_step(&conn, "wfrun-bulk", "step-f", &run_failed.id, 1);
+
+        let mgr = WorkflowManager::new(&conn);
+        let recovered = mgr.recover_stuck_steps().unwrap();
+        assert_eq!(recovered, 2, "both stuck steps must be recovered");
+
+        let (status_c, result_text_c, ended_at_c): (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT status, result_text, ended_at FROM workflow_run_steps WHERE id = 'step-c'",
+                [],
+                |r| Ok((r.get("status")?, r.get("result_text")?, r.get("ended_at")?)),
+            )
+            .unwrap();
+        assert_eq!(status_c, "completed");
+        assert_eq!(result_text_c.as_deref(), Some("the result"));
+        assert!(
+            ended_at_c.is_some(),
+            "ended_at must be set for completed step"
+        );
+
+        let (status_f, result_text_f, ended_at_f): (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT status, result_text, ended_at FROM workflow_run_steps WHERE id = 'step-f'",
+                [],
+                |r| Ok((r.get("status")?, r.get("result_text")?, r.get("ended_at")?)),
+            )
+            .unwrap();
+        assert_eq!(status_f, "failed");
+        assert!(
+            result_text_f.is_none(),
+            "failed step result_text must be NULL"
+        );
+        assert!(ended_at_f.is_some(), "ended_at must be set for failed step");
     }
 
     /// Regression test: terminate_subprocesses must complete without error even when
