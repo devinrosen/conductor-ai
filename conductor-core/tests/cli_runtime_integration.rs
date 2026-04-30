@@ -349,10 +349,11 @@ fn test_cli_runtime_cancel_with_no_pid_marks_cancelled() {
 #[test]
 fn test_cli_runtime_rejects_invalid_run_id() {
     let runtime = make_runtime("/bin/echo", "response", None);
+    let tmp_db = tempfile::NamedTempFile::new().expect("temp db");
     let req = common::make_request(
         "../../etc/cron.d/payload",
         "test",
-        conductor_core::config::db_path(),
+        tmp_db.path().to_path_buf(),
         "cli",
     );
     let err = runtime
