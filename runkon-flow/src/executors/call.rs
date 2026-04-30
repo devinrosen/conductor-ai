@@ -172,10 +172,6 @@ fn execute_call_inner(
                         continue;
                     }
                     last_hb.store(now_secs, Ordering::Relaxed);
-                    if let Err(e) = persistence.tick_heartbeat(&run_id) {
-                        tracing::warn!("heartbeat tick failed for {run_id}: {e}");
-                        continue;
-                    }
                     match persistence.is_run_cancelled(&run_id) {
                         Ok(true) => {
                             tracing::info!("run {run_id} cancelled externally");
@@ -186,6 +182,9 @@ fn execute_call_inner(
                         Err(e) => {
                             tracing::warn!("cancellation check failed for {run_id}: {e}");
                         }
+                    }
+                    if let Err(e) = persistence.tick_heartbeat(&run_id) {
+                        tracing::warn!("heartbeat tick failed for {run_id}: {e}");
                     }
                 }
             });
