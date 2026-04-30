@@ -266,4 +266,35 @@ mod tests {
             "expected at least one text display event, got: {events:?}"
         );
     }
+
+    #[test]
+    fn drain_no_result_returns_no_result() {
+        let (conn, run_id) = setup();
+        let (outcome, _) = drain(
+            &conn,
+            &run_id,
+            &[
+                r#"{"type":"system","subtype":"init","model":"claude-sonnet-4-6","session_id":"sess-abc"}"#,
+                r#"{"type":"assistant","message":{"content":[{"type":"text","text":"thinking..."}]}}"#,
+            ],
+        );
+        assert_eq!(outcome, DrainOutcome::NoResult);
+    }
+
+    #[test]
+    fn combined_sink_manager_errors_do_not_abort_drain() {
+        let (conn, run_id) = setup();
+        // Force all manager DB writes to fail so the tracing::warn! branches execute.
+        conn.execute_batch("ALTER TABLE agent_runs RENAME TO agent_runs_bak")
+            .unwrap();
+        let (outcome, _) = drain(
+            &conn,
+            &run_id,
+            &[r#"{"type":"result","result":"done","total_cost_usd":0.1,"num_turns":1}"#],
+        );
+        // DrainOutcome is determined by the event stream, not DB write success.
+        assert_eq!(outcome, DrainOutcome::Completed);
+        conn.execute_batch("ALTER TABLE agent_runs_bak RENAME TO agent_runs")
+            .unwrap();
+    }
 }
