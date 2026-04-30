@@ -851,4 +851,123 @@ mod tests {
             "B is already terminal so transitive set should be empty"
         );
     }
+
+    /// Regression: each foreach child must get its OWN `current_execution_id` slot.
+    ///
+    /// Prior behavior (pre-fix in #2597 round 2): `make_child_state` returned
+    /// `self.template.clone()`, which shares the inner `Arc<Mutex<...>>` across
+    /// every parallel sibling. If anything ever reads this state per-child
+    /// (e.g. `FlowEngine::cancel_run` resolving the in-flight executor for a
+    /// specific child), siblings would clobber each other's slot via the shared
+    /// Arc. The fix reassigns a fresh `Arc<Mutex<None>>` per child; this test
+    /// asserts that two children don't share the Arc.
+    #[test]
+    fn make_child_state_isolates_current_execution_id_per_child() {
+        use std::sync::{Arc, Mutex};
+
+        use crate::cancellation::CancellationToken;
+        use crate::engine::{
+            ChildWorkflowContext, ChildWorkflowInput, ChildWorkflowRunner, ExecutionState,
+            WorktreeContext,
+        };
+        use crate::engine_error::Result;
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::traits::script_env_provider::NoOpScriptEnvProvider;
+        use crate::types::{WorkflowExecConfig, WorkflowResult};
+
+        struct DummyChildRunner;
+        impl ChildWorkflowRunner for DummyChildRunner {
+            fn execute_child(
+                &self,
+                _: &str,
+                _: &ChildWorkflowContext,
+                _: ChildWorkflowInput,
+            ) -> Result<WorkflowResult> {
+                unimplemented!()
+            }
+            fn resume_child(
+                &self,
+                _: &str,
+                _: Option<&str>,
+                _: &ChildWorkflowContext,
+            ) -> Result<WorkflowResult> {
+                unimplemented!()
+            }
+            fn find_resumable_child(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<Option<crate::types::WorkflowRun>> {
+                unimplemented!()
+            }
+        }
+
+        let parent = ExecutionState {
+            persistence: Arc::new(InMemoryWorkflowPersistence::new()),
+            action_registry: Arc::new(crate::traits::action_executor::ActionRegistry::new(
+                HashMap::new(),
+                None,
+            )),
+            script_env_provider: Arc::new(NoOpScriptEnvProvider),
+            workflow_run_id: "parent".into(),
+            workflow_name: "wf".into(),
+            worktree_ctx: WorktreeContext {
+                worktree_id: None,
+                working_dir: String::new(),
+                repo_path: String::new(),
+                ticket_id: None,
+                repo_id: None,
+                extra_plugin_dirs: vec![],
+            },
+            model: None,
+            exec_config: WorkflowExecConfig::default(),
+            inputs: HashMap::new(),
+            parent_run_id: String::new(),
+            depth: 0,
+            target_label: None,
+            step_results: HashMap::new(),
+            contexts: vec![],
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cache_read_input_tokens: 0,
+            total_cache_creation_input_tokens: 0,
+            last_gate_feedback: None,
+            block_output: None,
+            block_with: vec![],
+            resume_ctx: None,
+            default_bot_name: None,
+            triggered_by_hook: false,
+            schema_resolver: None,
+            child_runner: None,
+            last_heartbeat_at: ExecutionState::new_heartbeat(),
+            registry: Arc::new(crate::traits::item_provider::ItemProviderRegistry::new()),
+            event_sinks: Arc::from(vec![]),
+            cancellation: CancellationToken::new(),
+            current_execution_id: Arc::new(Mutex::new(None)),
+        };
+
+        let ctx = super::ForeachParentCtx::from_state(&parent, Arc::new(DummyChildRunner));
+
+        let child1 = ctx.make_child_state(CancellationToken::new());
+        let child2 = ctx.make_child_state(CancellationToken::new());
+
+        assert!(
+            !Arc::ptr_eq(&child1.current_execution_id, &child2.current_execution_id),
+            "each foreach child must get its own current_execution_id Arc; \
+             sharing one across parallel siblings would let cancel_run target \
+             the wrong in-flight executor"
+        );
+
+        // Behavioral check: writing into one child's slot must not be visible from another.
+        *child1.current_execution_id.lock().unwrap() = Some(("executor-A".into(), "step-A".into()));
+        assert!(
+            child2.current_execution_id.lock().unwrap().is_none(),
+            "writes to child1.current_execution_id must not leak into child2"
+        );
+    }
 }
