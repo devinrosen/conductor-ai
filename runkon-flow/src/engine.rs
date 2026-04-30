@@ -152,6 +152,64 @@ impl ExecutionState {
         Arc::new(AtomicI64::new(0))
     }
 
+    /// Throttled heartbeat tick + external cancel check.
+    ///
+    /// Bumps `last_heartbeat` in persistence at most once every 5 seconds and
+    /// polls for cross-process cancellation via `persistence.is_run_cancelled`.
+    /// On external cancel, sets `self.cancellation` and returns
+    /// `Err(EngineError::Cancelled)`.
+    ///
+    /// Callers that own the engine main loop use `?` to propagate cancellation
+    /// up. Wait loops that need to drain in-flight work (parallel, foreach)
+    /// can call this best-effort and rely on `self.cancellation.is_cancelled()`
+    /// for their controlled exit — the cancellation token is set by this
+    /// helper before the `Err` is returned.
+    ///
+    /// Without this being called from inside long-running wait loops (parallel
+    /// blocks, foreach fan-out), the heartbeat goes stale during multi-minute
+    /// waits and the watchdog reaper races the engine after >60 s — see #2731.
+    pub fn tick_heartbeat_throttled(&self) -> Result<()> {
+        use crate::cancellation_reason::CancellationReason;
+
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|e| {
+                tracing::warn!("system clock regressed: {e}; heartbeat suppressed");
+                e.duration()
+            })
+            .as_secs() as i64;
+        let last = self.last_heartbeat_at.load(Ordering::Relaxed);
+        if now_secs - last < 5 {
+            return Ok(());
+        }
+        self.last_heartbeat_at.store(now_secs, Ordering::Relaxed);
+        match self.persistence.is_run_cancelled(&self.workflow_run_id) {
+            Ok(true) => {
+                tracing::info!(
+                    "Workflow run {} cancelled externally, stopping execution",
+                    self.workflow_run_id
+                );
+                self.cancellation
+                    .cancel(CancellationReason::UserRequested(None));
+                return Err(EngineError::Cancelled(CancellationReason::UserRequested(
+                    None,
+                )));
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(
+                    "Database error during cancellation check for workflow run {}: {}",
+                    self.workflow_run_id,
+                    e
+                );
+            }
+        }
+        if let Err(e) = self.persistence.tick_heartbeat(&self.workflow_run_id) {
+            tracing::warn!("tick_heartbeat failed (non-fatal): {e}");
+        }
+        Ok(())
+    }
+
     /// Project this state into the narrow surface a `ChildWorkflowRunner`
     /// implementation needs to spawn a child run.
     pub fn child_workflow_context(&self) -> ChildWorkflowContext {
@@ -505,7 +563,6 @@ pub fn execute_nodes(
     nodes: &[WorkflowNode],
     respect_fail_fast: bool,
 ) -> Result<()> {
-    use crate::cancellation_reason::CancellationReason;
     for node in nodes {
         if respect_fail_fast && !state.all_succeeded && state.exec_config.fail_fast {
             break;
@@ -514,47 +571,7 @@ pub fn execute_nodes(
         if state.cancellation.is_cancelled() {
             return state.cancellation.error_if_cancelled();
         }
-        // Throttled cancel check + heartbeat tick — both hit the DB, so gate them together
-        // at most once every 5 seconds using the existing heartbeat timestamp.
-        {
-            let now_secs = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_else(|e| {
-                    tracing::warn!("system clock regressed: {e}; heartbeat suppressed");
-                    e.duration()
-                })
-                .as_secs() as i64;
-            let last = state.last_heartbeat_at.load(Ordering::Relaxed);
-            if now_secs - last >= 5 {
-                state.last_heartbeat_at.store(now_secs, Ordering::Relaxed);
-                // Cross-process: DB polling for Cancelling status written by another process.
-                match state.persistence.is_run_cancelled(&state.workflow_run_id) {
-                    Ok(true) => {
-                        tracing::info!(
-                            "Workflow run {} cancelled externally, stopping execution",
-                            state.workflow_run_id
-                        );
-                        state
-                            .cancellation
-                            .cancel(CancellationReason::UserRequested(None));
-                        return Err(EngineError::Cancelled(CancellationReason::UserRequested(
-                            None,
-                        )));
-                    }
-                    Ok(false) => {}
-                    Err(e) => {
-                        tracing::warn!(
-                            "Database error during cancellation check for workflow run {}: {}",
-                            state.workflow_run_id,
-                            e
-                        );
-                    }
-                }
-                if let Err(e) = state.persistence.tick_heartbeat(&state.workflow_run_id) {
-                    tracing::warn!("tick_heartbeat failed (non-fatal): {e}");
-                }
-            }
-        }
+        state.tick_heartbeat_throttled()?;
         execute_single_node(state, node, 0)?;
     }
     Ok(())
@@ -1241,6 +1258,108 @@ mod tests {
         assert!(
             Arc::ptr_eq(&ctx.event_sinks, &sinks),
             "event_sinks slice should be shared via Arc, not cloned"
+        );
+    }
+
+    use crate::test_helpers::CountingPersistence;
+
+    /// Build a minimal ExecutionState wired to a CountingPersistence.
+    fn make_state_with_counting_persistence(
+        cp: std::sync::Arc<CountingPersistence>,
+        run_id: String,
+    ) -> ExecutionState {
+        use crate::cancellation::CancellationToken;
+        use crate::traits::script_env_provider::NoOpScriptEnvProvider;
+        use crate::types::WorkflowExecConfig;
+
+        ExecutionState {
+            persistence: cp as Arc<dyn crate::traits::persistence::WorkflowPersistence>,
+            action_registry: Arc::new(crate::traits::action_executor::ActionRegistry::new(
+                HashMap::new(),
+                None,
+            )),
+            script_env_provider: Arc::new(NoOpScriptEnvProvider),
+            workflow_run_id: run_id,
+            workflow_name: "wf".into(),
+            worktree_ctx: WorktreeContext {
+                worktree_id: None,
+                working_dir: String::new(),
+                repo_path: String::new(),
+                ticket_id: None,
+                repo_id: None,
+                extra_plugin_dirs: vec![],
+            },
+            model: None,
+            exec_config: WorkflowExecConfig::default(),
+            inputs: HashMap::new(),
+            parent_run_id: String::new(),
+            depth: 0,
+            target_label: None,
+            step_results: HashMap::new(),
+            contexts: vec![],
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cache_read_input_tokens: 0,
+            total_cache_creation_input_tokens: 0,
+            last_gate_feedback: None,
+            block_output: None,
+            block_with: vec![],
+            resume_ctx: None,
+            default_bot_name: None,
+            triggered_by_hook: false,
+            schema_resolver: None,
+            child_runner: None,
+            last_heartbeat_at: ExecutionState::new_heartbeat(),
+            registry: Arc::new(crate::traits::item_provider::ItemProviderRegistry::new()),
+            event_sinks: Arc::from(vec![]),
+            cancellation: CancellationToken::new(),
+            current_execution_id: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    /// First call must tick (initial state has last_heartbeat_at = 0, far enough
+    /// in the past to clear the 5 s gate). An immediate second call must NOT
+    /// tick — it falls inside the 5 s throttle window.
+    #[test]
+    fn tick_heartbeat_throttled_first_call_ticks_second_call_throttled() {
+        let cp = Arc::new(CountingPersistence::new());
+        let state = make_state_with_counting_persistence(Arc::clone(&cp), "run-1".into());
+
+        assert_eq!(cp.tick_count(), 0);
+        state.tick_heartbeat_throttled().unwrap();
+        assert_eq!(cp.tick_count(), 1, "first call must tick");
+
+        // Immediate second call falls inside the 5 s window.
+        state.tick_heartbeat_throttled().unwrap();
+        assert_eq!(
+            cp.tick_count(),
+            1,
+            "second call within 5s must be throttled, not tick again"
+        );
+    }
+
+    /// When persistence reports the run cancelled, the helper sets
+    /// `state.cancellation` and returns `Err(Cancelled)`.
+    #[test]
+    fn tick_heartbeat_throttled_propagates_external_cancel() {
+        let cp = Arc::new(CountingPersistence::new());
+        cp.set_cancelled(true);
+        let state = make_state_with_counting_persistence(Arc::clone(&cp), "run-1".into());
+
+        assert!(!state.cancellation.is_cancelled());
+        let result = state.tick_heartbeat_throttled();
+        assert!(
+            matches!(result, Err(EngineError::Cancelled(_))),
+            "expected Err(Cancelled), got {result:?}"
+        );
+        assert!(
+            state.cancellation.is_cancelled(),
+            "helper must set state.cancellation on external cancel"
         );
     }
 }

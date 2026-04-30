@@ -249,18 +249,36 @@ pub fn execute_parallel(
     drop(completion_tx);
 
     // Collect results as threads complete, triggering fail_fast cancellation as needed.
+    // The timeout-based recv lets us tick the heartbeat and poll for cross-process
+    // cancellation while waiting on long-running agents — without it the engine
+    // sits silent here for the full duration of the slowest branch and the
+    // watchdog reaper races us after >60 s. #2731.
     let mut results: Vec<ParallelCallResult> = Vec::new();
-    for (step_id, agent_name, agent_step_key, result) in completion_rx {
-        let failed = result.is_err();
-        results.push(ParallelCallResult {
-            agent_name,
-            step_id,
-            agent_step_key,
-            result,
-            attempt: 0,
-        });
-        if failed && node.fail_fast {
-            scope_token.cancel(CancellationReason::FailFast);
+    loop {
+        match completion_rx.recv_timeout(std::time::Duration::from_millis(500)) {
+            Ok((step_id, agent_name, agent_step_key, result)) => {
+                let failed = result.is_err();
+                results.push(ParallelCallResult {
+                    agent_name,
+                    step_id,
+                    agent_step_key,
+                    result,
+                    attempt: 0,
+                });
+                if failed && node.fail_fast {
+                    scope_token.cancel(CancellationReason::FailFast);
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // Tick heartbeat + check for external cancel. Best-effort: on
+                // external cancel, propagate to scope_token so worker threads
+                // see it via their pre-dispatch check; keep draining the rest
+                // of the channel so in-flight workers' results land in `results`.
+                if state.tick_heartbeat_throttled().is_err() {
+                    scope_token.cancel(CancellationReason::UserRequested(None));
+                }
+            }
         }
     }
 
@@ -788,6 +806,129 @@ mod tests {
         assert!(
             !state.all_succeeded,
             "all_succeeded should be false when fail_fast fires"
+        );
+    }
+
+    /// Regression for #2731: the parallel wait loop must keep `tick_heartbeat`
+    /// firing while children are running. Prior to the fix, the wait loop was
+    /// `for ... in completion_rx { ... }` — blocking on the receiver for the
+    /// whole duration of the slowest branch — so `last_heartbeat` went stale
+    /// and the watchdog reaper claimed the run after >60 s, double-running it.
+    #[test]
+    fn parallel_wait_loop_ticks_heartbeat_during_long_branches() {
+        struct SleepingExecutor;
+        impl ActionExecutor for SleepingExecutor {
+            fn name(&self) -> &str {
+                "sleeping_exec"
+            }
+            fn execute(
+                &self,
+                _ectx: &crate::traits::action_executor::ExecutionContext,
+                _params: &ActionParams,
+            ) -> std::result::Result<ActionOutput, EngineError> {
+                // Long enough to trigger several recv_timeout (500 ms) iterations
+                // in the wait loop so the heartbeat tick has a chance to fire.
+                std::thread::sleep(std::time::Duration::from_millis(1300));
+                Ok(ActionOutput {
+                    cost_usd: Some(0.0),
+                    ..Default::default()
+                })
+            }
+        }
+
+        let mut named: HashMap<String, Box<dyn ActionExecutor>> = HashMap::new();
+        named.insert(
+            "sleeping_exec".to_string(),
+            Box::new(SleepingExecutor) as Box<dyn ActionExecutor>,
+        );
+        let registry = crate::traits::action_executor::ActionRegistry::new(named, None);
+
+        let cp = Arc::new(crate::test_helpers::CountingPersistence::new());
+        let run_id = cp
+            .create_run(crate::traits::persistence::NewRun {
+                workflow_name: "wf".to_string(),
+                worktree_id: None,
+                ticket_id: None,
+                repo_id: None,
+                parent_run_id: String::new(),
+                dry_run: false,
+                trigger: "manual".to_string(),
+                definition_snapshot: None,
+                parent_workflow_run_id: None,
+                target_label: None,
+            })
+            .unwrap()
+            .id;
+        let cp_for_state: Arc<dyn WorkflowPersistence> = Arc::clone(&cp) as _;
+
+        let mut state = ExecutionState {
+            persistence: cp_for_state,
+            action_registry: Arc::new(registry),
+            script_env_provider: Arc::new(NoOpScriptEnvProvider),
+            workflow_run_id: run_id,
+            workflow_name: "wf".into(),
+            worktree_ctx: WorktreeContext {
+                worktree_id: None,
+                working_dir: String::new(),
+                repo_path: String::new(),
+                ticket_id: None,
+                repo_id: None,
+                extra_plugin_dirs: vec![],
+            },
+            model: None,
+            exec_config: WorkflowExecConfig::default(),
+            inputs: HashMap::new(),
+            parent_run_id: String::new(),
+            depth: 0,
+            target_label: None,
+            step_results: HashMap::new(),
+            contexts: vec![],
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cache_read_input_tokens: 0,
+            total_cache_creation_input_tokens: 0,
+            last_gate_feedback: None,
+            block_output: None,
+            block_with: vec![],
+            resume_ctx: None,
+            default_bot_name: None,
+            triggered_by_hook: false,
+            schema_resolver: None,
+            child_runner: None,
+            last_heartbeat_at: ExecutionState::new_heartbeat(),
+            registry: Arc::new(ItemProviderRegistry::new()),
+            event_sinks: Arc::from(vec![]),
+            cancellation: crate::cancellation::CancellationToken::new(),
+            current_execution_id: Arc::new(std::sync::Mutex::new(None)),
+        };
+
+        let node = ParallelNode {
+            fail_fast: false,
+            min_success: None,
+            calls: vec![AgentRef::Name("sleeping_exec".to_string())],
+            output: None,
+            call_outputs: HashMap::new(),
+            with: vec![],
+            call_with: HashMap::new(),
+            call_if: HashMap::new(),
+        };
+
+        execute_parallel(&mut state, &node, 0).unwrap();
+
+        // last_heartbeat_at starts at 0 → first recv_timeout iteration's
+        // tick_heartbeat_throttled() fires immediately. With a 1300 ms sleep
+        // and 500 ms recv_timeout, expect at least one Timeout iteration → ≥1 tick.
+        assert!(
+            cp.tick_count() >= 1,
+            "expected ≥1 heartbeat tick during parallel wait loop, got {}; \
+             without #2731 fix this would be 0 because the receiver blocks \
+             for the whole duration of the slowest branch.",
+            cp.tick_count()
         );
     }
 }
