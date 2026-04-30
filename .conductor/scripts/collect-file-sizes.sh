@@ -27,7 +27,7 @@ emit_empty() {
   local output
   output=$(jq -n --arg focus "$focus" \
     '{"markers": [], "context": ("No source files found after applying exclusions and focus filter \"" + $focus + "\".")}')
-  printf '<<<CONDUCTOR_OUTPUT>>>\n%s\n<<<END_CONDUCTOR_OUTPUT>>>\n' "$output"
+  printf '<<<FLOW_OUTPUT>>>\n%s\n<<<END_FLOW_OUTPUT>>>\n' "$output"
 }
 
 if [ -z "$filtered" ]; then
@@ -59,4 +59,4 @@ context=$(printf 'Found %s source files. Threshold: %s lines. Focus filter: "%s"
 
 output=$(jq -n --arg context "$context" '{"markers": ["has_files"], "context": $context}')
 
-printf '<<<CONDUCTOR_OUTPUT>>>\n%s\n<<<END_CONDUCTOR_OUTPUT>>>\n' "$output"
+printf '<<<FLOW_OUTPUT>>>\n%s\n<<<END_FLOW_OUTPUT>>>\n' "$output"

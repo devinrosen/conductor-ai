@@ -1,286 +1,36 @@
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+//! Backwards-compat re-export of the canonical implementation that now lives in
+//! `runkon_flow::persistence_sqlite` (Phase 4 step 4.3).
+//!
+//! Existing call sites import [`SqliteWorkflowPersistence`] from
+//! `crate::workflow` — keeping the path stable here lets the move land without
+//! ripple changes through the engine, CLI, TUI, and web layers. The integration
+//! tests below verify the runkon-flow implementation against conductor's actual
+//! schema (migrations + helper tables) rather than re-testing trait semantics.
 
-use rusqlite::{Connection, OptionalExtension};
-
-use crate::error::ConductorError;
-use crate::workflow::engine_error::EngineError;
-use crate::workflow::manager::FanOutItemRow;
-use crate::workflow::manager::WorkflowManager;
-use crate::workflow::status::WorkflowRunStatus;
-use crate::workflow::types::{WorkflowRun, WorkflowRunStep};
-
-use super::persistence::{
-    gate_approval_state_from_fields, FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun,
-    NewStep, StepUpdate, WorkflowPersistence,
-};
-
-/// SQLite-backed implementation of `WorkflowPersistence`.
-///
-/// Wraps a `rusqlite::Connection` behind `Arc<Mutex<_>>` so it satisfies the
-/// `Send + Sync` requirement of `WorkflowPersistence`. Every method acquires the
-/// lock, instantiates a transient `WorkflowManager`, delegates to it, and maps
-/// `ConductorError` → `EngineError::Persistence`.
-pub struct SqliteWorkflowPersistence {
-    conn: Arc<Mutex<Connection>>,
-}
-
-impl SqliteWorkflowPersistence {
-    /// Open a new SQLite connection at `path`, configured for WAL mode and
-    /// foreign key enforcement. Creates the file if it does not already exist.
-    pub fn open(path: &Path) -> crate::error::Result<Self> {
-        let conn = Connection::open(path).map_err(ConductorError::Database)?;
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(ConductorError::Database)?;
-        conn.pragma_update(None, "foreign_keys", true)
-            .map_err(ConductorError::Database)?;
-        Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
-        })
-    }
-}
-
-fn to_engine_err(e: ConductorError) -> EngineError {
-    EngineError::Persistence(e.to_string())
-}
-
-fn lock_err() -> EngineError {
-    EngineError::Persistence("SqliteWorkflowPersistence: mutex poisoned".into())
-}
-
-impl WorkflowPersistence for SqliteWorkflowPersistence {
-    fn create_run(&self, new_run: NewRun) -> Result<WorkflowRun, EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .create_workflow_run_with_targets(
-                &new_run.workflow_name,
-                new_run.worktree_id.as_deref(),
-                new_run.ticket_id.as_deref(),
-                new_run.repo_id.as_deref(),
-                &new_run.parent_run_id,
-                new_run.dry_run,
-                &new_run.trigger,
-                new_run.definition_snapshot.as_deref(),
-                new_run.parent_workflow_run_id.as_deref(),
-                new_run.target_label.as_deref(),
-            )
-            .map_err(to_engine_err)
-    }
-
-    fn get_run(&self, run_id: &str) -> Result<Option<WorkflowRun>, EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .get_workflow_run(run_id)
-            .map_err(to_engine_err)
-    }
-
-    fn list_active_runs(
-        &self,
-        statuses: &[WorkflowRunStatus],
-    ) -> Result<Vec<WorkflowRun>, EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .list_active_workflow_runs(statuses)
-            .map_err(to_engine_err)
-    }
-
-    fn update_run_status(
-        &self,
-        run_id: &str,
-        status: WorkflowRunStatus,
-        result_summary: Option<&str>,
-        error: Option<&str>,
-    ) -> Result<(), EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .update_workflow_status(run_id, status, result_summary, error)
-            .map_err(to_engine_err)
-    }
-
-    fn insert_step(&self, new_step: NewStep) -> Result<String, EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        let mgr = WorkflowManager::new(&guard);
-        if let Some(retry_count) = new_step.retry_count {
-            mgr.insert_step_running(
-                &new_step.workflow_run_id,
-                &new_step.step_name,
-                &new_step.role,
-                new_step.can_commit,
-                new_step.position,
-                new_step.iteration,
-                retry_count,
-            )
-        } else {
-            mgr.insert_step(
-                &new_step.workflow_run_id,
-                &new_step.step_name,
-                &new_step.role,
-                new_step.can_commit,
-                new_step.position,
-                new_step.iteration,
-            )
-        }
-        .map_err(to_engine_err)
-    }
-
-    fn update_step(&self, step_id: &str, update: StepUpdate) -> Result<(), EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .update_step_status_full(
-                step_id,
-                update.status,
-                update.child_run_id.as_deref(),
-                update.result_text.as_deref(),
-                update.context_out.as_deref(),
-                update.markers_out.as_deref(),
-                update.retry_count,
-                update.structured_output.as_deref(),
-                update.step_error.as_deref(),
-            )
-            .map_err(to_engine_err)
-    }
-
-    fn get_steps(&self, run_id: &str) -> Result<Vec<WorkflowRunStep>, EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .get_workflow_steps(run_id)
-            .map_err(to_engine_err)
-    }
-
-    fn insert_fan_out_item(
-        &self,
-        step_run_id: &str,
-        item_type: &str,
-        item_id: &str,
-        item_ref: &str,
-    ) -> Result<String, EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .insert_fan_out_item(step_run_id, item_type, item_id, item_ref)
-            .map_err(to_engine_err)
-    }
-
-    fn update_fan_out_item(
-        &self,
-        item_id: &str,
-        update: FanOutItemUpdate,
-    ) -> Result<(), EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        let mgr = WorkflowManager::new(&guard);
-        match update {
-            FanOutItemUpdate::Running { child_run_id } => {
-                mgr.update_fan_out_item_running(item_id, &child_run_id)
-            }
-            FanOutItemUpdate::Terminal { status } => {
-                mgr.update_fan_out_item_terminal(item_id, status.as_str())
-            }
-        }
-        .map_err(to_engine_err)
-    }
-
-    fn get_fan_out_items(
-        &self,
-        step_run_id: &str,
-        status_filter: Option<FanOutItemStatus>,
-    ) -> Result<Vec<FanOutItemRow>, EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        let status_str = status_filter.map(|s| s.as_str());
-        WorkflowManager::new(&guard)
-            .get_fan_out_items(step_run_id, status_str)
-            .map_err(to_engine_err)
-    }
-
-    #[allow(clippy::type_complexity)]
-    fn get_gate_approval(&self, step_id: &str) -> Result<GateApprovalState, EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-
-        let row: Option<(Option<String>, String, Option<String>, Option<String>)> = guard
-            .query_row(
-                "SELECT gate_approved_at, status, gate_feedback, gate_selections \
-                 FROM workflow_run_steps WHERE id = ?1",
-                rusqlite::params![step_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .optional()
-            .map_err(|e| EngineError::Persistence(e.to_string()))?;
-
-        let Some((approved_at, status_str, feedback, selections_json)) = row else {
-            return Ok(GateApprovalState::Pending);
-        };
-
-        use crate::workflow::status::WorkflowStepStatus;
-        let status = status_str
-            .parse::<WorkflowStepStatus>()
-            .unwrap_or_else(|_| {
-                tracing::warn!(
-                    "get_gate_approval: unrecognised step status '{status_str}' for step {step_id}, treating as Waiting"
-                );
-                WorkflowStepStatus::Waiting
-            });
-        let selections = selections_json.and_then(|json| {
-            serde_json::from_str::<Vec<String>>(&json)
-                .map_err(|e| {
-                    tracing::warn!(
-                        "get_gate_approval: failed to deserialize gate_selections for step {step_id}: {e}"
-                    );
-                })
-                .ok()
-        });
-
-        Ok(gate_approval_state_from_fields(
-            approved_at.as_deref(),
-            status,
-            feedback,
-            selections,
-        ))
-    }
-
-    fn approve_gate(
-        &self,
-        step_id: &str,
-        approved_by: &str,
-        feedback: Option<&str>,
-        selections: Option<&[String]>,
-    ) -> Result<(), EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .approve_gate(step_id, approved_by, feedback, selections)
-            .map_err(to_engine_err)
-    }
-
-    fn reject_gate(
-        &self,
-        step_id: &str,
-        rejected_by: &str,
-        feedback: Option<&str>,
-    ) -> Result<(), EngineError> {
-        let guard = self.conn.lock().map_err(|_| lock_err())?;
-        WorkflowManager::new(&guard)
-            .reject_gate(step_id, rejected_by, feedback)
-            .map_err(to_engine_err)
-    }
-}
-
-#[cfg(test)]
-impl SqliteWorkflowPersistence {
-    fn from_connection(conn: Connection) -> Self {
-        Self {
-            conn: Arc::new(Mutex::new(conn)),
-        }
-    }
-}
+pub use runkon_flow::persistence_sqlite::SqliteWorkflowPersistence;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    use runkon_flow::traits::persistence::{
+        GateApprovalState, NewRun, NewStep, WorkflowPersistence,
+    };
+
     use crate::agent::AgentManager;
-    use crate::workflow::persistence::{GateApprovalState, NewRun, NewStep};
+    use crate::workflow::WorkflowRunStatus;
+
+    use super::SqliteWorkflowPersistence;
 
     fn make_persistence() -> (SqliteWorkflowPersistence, String) {
         let conn = crate::test_helpers::setup_db();
         let agent_mgr = AgentManager::new(&conn);
         let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-        (SqliteWorkflowPersistence::from_connection(conn), parent.id)
+        let shared = Arc::new(Mutex::new(conn));
+        (
+            SqliteWorkflowPersistence::from_shared_connection(shared),
+            parent.id,
+        )
     }
 
     fn make_new_run(parent_run_id: String) -> NewRun {
@@ -364,5 +114,243 @@ mod tests {
             .unwrap();
         let active = p.list_active_runs(&[WorkflowRunStatus::Running]).unwrap();
         assert!(active.iter().any(|r| r.id == run.id));
+    }
+
+    #[test]
+    fn from_shared_connection_creates_working_persistence() {
+        let conn = crate::test_helpers::setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+
+        let shared = Arc::new(Mutex::new(conn));
+        let p = SqliteWorkflowPersistence::from_shared_connection(Arc::clone(&shared));
+
+        let run = p.create_run(make_new_run(parent.id)).unwrap();
+        assert_eq!(run.workflow_name, "test-wf");
+
+        let fetched = p.get_run(&run.id).unwrap();
+        assert!(
+            fetched.is_some(),
+            "run should be retrievable after creation"
+        );
+    }
+
+    #[test]
+    fn from_shared_connection_shares_state_with_raw_connection() {
+        let conn = crate::test_helpers::setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+
+        let shared = Arc::new(Mutex::new(conn));
+        let p = SqliteWorkflowPersistence::from_shared_connection(Arc::clone(&shared));
+
+        let run = p.create_run(make_new_run(parent.id)).unwrap();
+
+        // Verify state is visible through the shared connection handle too.
+        let guard = shared.lock().unwrap();
+        let mgr = crate::workflow::manager::WorkflowManager::new(&guard);
+        let found = mgr.get_workflow_run(&run.id).unwrap();
+        assert!(
+            found.is_some(),
+            "run written via persistence should be visible through shared conn"
+        );
+    }
+
+    #[test]
+    fn is_run_cancelled_returns_true_for_cancelled_status() {
+        let (p, parent_id) = make_persistence();
+        let run = p.create_run(make_new_run(parent_id)).unwrap();
+        p.update_run_status(&run.id, WorkflowRunStatus::Cancelled, None, None)
+            .unwrap();
+        assert!(p.is_run_cancelled(&run.id).unwrap());
+    }
+
+    #[test]
+    fn is_run_cancelled_returns_true_for_cancelling_status() {
+        let (p, parent_id) = make_persistence();
+        let run = p.create_run(make_new_run(parent_id)).unwrap();
+        p.update_run_status(&run.id, WorkflowRunStatus::Cancelling, None, None)
+            .unwrap();
+        assert!(p.is_run_cancelled(&run.id).unwrap());
+    }
+
+    #[test]
+    fn is_run_cancelled_returns_false_for_running_status() {
+        let (p, parent_id) = make_persistence();
+        let run = p.create_run(make_new_run(parent_id)).unwrap();
+        p.update_run_status(&run.id, WorkflowRunStatus::Running, None, None)
+            .unwrap();
+        assert!(!p.is_run_cancelled(&run.id).unwrap());
+    }
+
+    #[test]
+    fn is_run_cancelled_returns_false_for_nonexistent_run() {
+        let (p, _) = make_persistence();
+        assert!(!p.is_run_cancelled("nonexistent-run-id").unwrap());
+    }
+
+    /// `persist_metrics` must land cost_usd in `total_cost_usd` and num_turns in
+    /// `total_turns`. Guards against future signature drift between trait and SQL.
+    #[test]
+    fn persist_metrics_maps_cost_and_turns_to_correct_columns() {
+        let (p, parent_id) = make_persistence();
+        let run = p.create_run(make_new_run(parent_id)).unwrap();
+
+        let cost_usd = 42.5_f64;
+        let num_turns = 7_i64;
+
+        p.persist_metrics(&run.id, 0, 0, 0, 0, cost_usd, num_turns, 1000)
+            .unwrap();
+
+        let fetched = p.get_run(&run.id).unwrap().expect("run should exist");
+        assert_eq!(
+            fetched.total_cost_usd,
+            Some(cost_usd),
+            "total_cost_usd should match the cost_usd argument"
+        );
+        assert_eq!(
+            fetched.total_turns,
+            Some(num_turns),
+            "total_turns should match the num_turns argument"
+        );
+    }
+
+    /// `approve_gate` with non-empty `selections` must write `context_out` to the step row.
+    #[test]
+    fn approve_gate_with_selections_sets_context_out() {
+        let conn = crate::test_helpers::setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+
+        let shared = Arc::new(Mutex::new(conn));
+        let p = SqliteWorkflowPersistence::from_shared_connection(Arc::clone(&shared));
+
+        let run = p.create_run(make_new_run(parent.id)).unwrap();
+        let step_id = p
+            .insert_step(NewStep {
+                workflow_run_id: run.id.clone(),
+                step_name: "review-gate".to_string(),
+                role: "gate".to_string(),
+                can_commit: false,
+                position: 0,
+                iteration: 0,
+                retry_count: None,
+            })
+            .unwrap();
+
+        // Configure gate_options so validation passes for the selections.
+        // The validation expects an array of objects with a "value" key.
+        {
+            let conn = shared.lock().unwrap();
+            let mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+            mgr.set_step_gate_options(
+                &step_id,
+                r#"[{"value":"item-a"},{"value":"item-b"},{"value":"item-c"}]"#,
+            )
+            .unwrap();
+        }
+
+        let selections = vec!["item-a".to_string(), "item-b".to_string()];
+        p.approve_gate(&step_id, "human", None, Some(&selections))
+            .unwrap();
+
+        let steps = p.get_steps(&run.id).unwrap();
+        let step = steps.iter().find(|s| s.id == step_id).unwrap();
+        let context_out = step
+            .context_out
+            .as_deref()
+            .expect("context_out should be set when selections are provided");
+        assert!(
+            context_out.contains("item-a"),
+            "context_out should contain the first selection; got: {context_out:?}"
+        );
+        assert!(
+            context_out.contains("item-b"),
+            "context_out should contain the second selection; got: {context_out:?}"
+        );
+    }
+
+    /// `approve_gate` with `selections = Some(&[])` (empty slice) must NOT set
+    /// `context_out` — the persistence layer filters empty selections out.
+    #[test]
+    fn approve_gate_with_empty_selections_sets_no_context_out() {
+        let (p, parent_id) = make_persistence();
+        let run = p.create_run(make_new_run(parent_id)).unwrap();
+        let step_id = p
+            .insert_step(NewStep {
+                workflow_run_id: run.id.clone(),
+                step_name: "review-gate".to_string(),
+                role: "gate".to_string(),
+                can_commit: false,
+                position: 0,
+                iteration: 0,
+                retry_count: None,
+            })
+            .unwrap();
+
+        p.approve_gate(&step_id, "human", None, Some(&[])).unwrap();
+
+        let steps = p.get_steps(&run.id).unwrap();
+        let step = steps.iter().find(|s| s.id == step_id).unwrap();
+        assert!(
+            step.context_out.is_none(),
+            "context_out should be None for empty selections; got: {:?}",
+            step.context_out
+        );
+    }
+
+    /// `get_gate_approval` must preserve `feedback` on the `Approved` variant.
+    #[test]
+    fn get_gate_approval_approved_preserves_feedback() {
+        let (p, parent_id) = make_persistence();
+        let run = p.create_run(make_new_run(parent_id)).unwrap();
+        let step_id = p
+            .insert_step(NewStep {
+                workflow_run_id: run.id,
+                step_name: "approval-gate".to_string(),
+                role: "gate".to_string(),
+                can_commit: false,
+                position: 0,
+                iteration: 0,
+                retry_count: None,
+            })
+            .unwrap();
+
+        p.approve_gate(&step_id, "human", Some("lgtm"), None)
+            .unwrap();
+
+        let state = p.get_gate_approval(&step_id).unwrap();
+        match state {
+            GateApprovalState::Approved {
+                feedback,
+                selections,
+            } => {
+                assert_eq!(
+                    feedback,
+                    Some("lgtm".to_string()),
+                    "feedback must survive the approve_gate/get_gate_approval roundtrip"
+                );
+                assert!(
+                    selections.is_none(),
+                    "selections should be None when not provided"
+                );
+            }
+            other => panic!("expected Approved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn open_creates_usable_connection_at_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.db");
+        // Apply conductor migrations so the workflow tables exist.
+        crate::db::open_database(&path).expect("migrations should apply");
+        // open() must succeed and produce a functional persistence instance.
+        let p = SqliteWorkflowPersistence::open(&path).expect("open() should succeed");
+        // A get on a nonexistent run returns Ok(None), proving the connection is live.
+        assert!(
+            p.get_run("nonexistent-run-id").unwrap().is_none(),
+            "get_run on a fresh DB should return None for unknown IDs"
+        );
     }
 }

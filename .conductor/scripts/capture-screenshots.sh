@@ -30,9 +30,9 @@ for i in $(seq 1 30); do
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     echo "ERROR: conductor-web exited unexpectedly"
     cat <<'EOF'
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "Failed: conductor-web server exited before becoming ready"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF
     exit 1
   fi
@@ -42,9 +42,9 @@ done
 if ! curl -sf "http://localhost:$PORT" >/dev/null 2>&1; then
   echo "ERROR: server did not become ready within 30s"
   cat <<'EOF'
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "Failed: conductor-web server did not start within 30s"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF
   exit 1
 fi
@@ -57,9 +57,9 @@ cd ../..
 
 if [ "$PLAYWRIGHT_EXIT" -ne 0 ]; then
   cat <<EOF
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "Playwright screenshot capture failed (exit $PLAYWRIGHT_EXIT). Screenshots dir: $SCREENSHOT_DIR"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF
   exit 1
 fi
@@ -68,7 +68,7 @@ COUNT=$(find "$SCREENSHOT_DIR" -name '*.png' | wc -l | tr -d ' ')
 echo "Captured $COUNT screenshots to $SCREENSHOT_DIR"
 
 cat <<EOF
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": ["screenshots_captured"], "context": "Captured $COUNT mobile screenshots to $SCREENSHOT_DIR"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF

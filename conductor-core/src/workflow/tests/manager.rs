@@ -3716,7 +3716,7 @@ fn test_reset_steps_from_position_clears_step_error() {
 }
 
 // ---------------------------------------------------------------------------
-// reap_heartbeat_stuck_runs tests
+// claim_heartbeat_stuck_runs tests
 // ---------------------------------------------------------------------------
 
 /// Helper: insert a minimal running root workflow_run with explicit started_at
@@ -3769,9 +3769,9 @@ fn test_reap_heartbeat_stuck_stale_heartbeat() {
 
     let mgr = WorkflowManager::new(&conn);
     let config = crate::config::Config::default();
-    let count = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
+    let claimed = mgr.claim_heartbeat_stuck_runs(&config, 60).unwrap();
 
-    assert_eq!(count, 1, "expected 1 run reaped");
+    assert_eq!(claimed.len(), 1, "expected 1 run reaped");
     // Status must be flipped to 'failed' by the CAS.
     assert_eq!(
         get_run_status(&conn, &run_id),
@@ -3790,9 +3790,9 @@ fn test_reap_heartbeat_stuck_fresh_heartbeat() {
 
     let mgr = WorkflowManager::new(&conn);
     let config = crate::config::Config::default();
-    let count = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
+    let claimed = mgr.claim_heartbeat_stuck_runs(&config, 60).unwrap();
 
-    assert_eq!(count, 0, "fresh run must not be reaped");
+    assert_eq!(claimed.len(), 0, "fresh run must not be reaped");
     assert_eq!(
         get_run_status(&conn, &run_id),
         "running",
@@ -3809,9 +3809,13 @@ fn test_reap_heartbeat_stuck_null_heartbeat_stale_started() {
 
     let mgr = WorkflowManager::new(&conn);
     let config = crate::config::Config::default();
-    let count = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
+    let claimed = mgr.claim_heartbeat_stuck_runs(&config, 60).unwrap();
 
-    assert_eq!(count, 1, "stale run with NULL heartbeat must be reaped");
+    assert_eq!(
+        claimed.len(),
+        1,
+        "stale run with NULL heartbeat must be reaped"
+    );
     assert_eq!(get_run_status(&conn, &run_id), "failed");
 }
 
@@ -3824,9 +3828,13 @@ fn test_reap_heartbeat_stuck_null_heartbeat_fresh_started() {
 
     let mgr = WorkflowManager::new(&conn);
     let config = crate::config::Config::default();
-    let count = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
+    let claimed = mgr.claim_heartbeat_stuck_runs(&config, 60).unwrap();
 
-    assert_eq!(count, 0, "fresh run with NULL heartbeat must not be reaped");
+    assert_eq!(
+        claimed.len(),
+        0,
+        "fresh run with NULL heartbeat must not be reaped"
+    );
     assert_eq!(get_run_status(&conn, &run_id), "running");
 }
 
@@ -3849,9 +3857,9 @@ fn test_reap_heartbeat_stuck_active_child_step() {
 
     let mgr = WorkflowManager::new(&conn);
     let config = crate::config::Config::default();
-    let count = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
+    let claimed = mgr.claim_heartbeat_stuck_runs(&config, 60).unwrap();
 
-    assert_eq!(count, 0, "run with active step must not be reaped");
+    assert_eq!(claimed.len(), 0, "run with active step must not be reaped");
     assert_eq!(get_run_status(&conn, &run_id), "running");
 }
 
@@ -3867,12 +3875,12 @@ fn test_reap_heartbeat_stuck_concurrent_race() {
     let config = crate::config::Config::default();
 
     // First call wins the CAS.
-    let count1 = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
-    assert_eq!(count1, 1, "first call should win the CAS");
+    let claimed1 = mgr.claim_heartbeat_stuck_runs(&config, 60).unwrap();
+    assert_eq!(claimed1.len(), 1, "first call should win the CAS");
 
     // Second call sees status='failed' — detection query excludes it, count=0.
-    let count2 = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
-    assert_eq!(count2, 0, "second call must see no orphaned runs");
+    let claimed2 = mgr.claim_heartbeat_stuck_runs(&config, 60).unwrap();
+    assert_eq!(claimed2.len(), 0, "second call must see no orphaned runs");
 }
 
 /// Sub-workflow runs (parent_workflow_run_id IS NOT NULL) must never be reaped.
@@ -3911,9 +3919,9 @@ fn test_reap_heartbeat_stuck_sub_workflow_excluded() {
 
     let mgr = WorkflowManager::new(&conn);
     let config = crate::config::Config::default();
-    // Only the parent root run should be reaped (count=1); the child is excluded.
-    let count = mgr.reap_heartbeat_stuck_runs(&config, 60, None).unwrap();
-    assert_eq!(count, 1, "only root run should be reaped");
+    // Only the parent root run should be reaped; the child is excluded.
+    let claimed = mgr.claim_heartbeat_stuck_runs(&config, 60).unwrap();
+    assert_eq!(claimed.len(), 1, "only root run should be reaped");
 
     assert_eq!(
         get_run_status(&conn, &child_run_id),
@@ -3986,7 +3994,7 @@ fn test_step_error_persisted_on_schema_validation_failure() {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// auto_resume_stuck_workflows
+// claim_stuck_workflows
 // ────────────────────────────────────────────────────────────────────────────
 
 /// A stuck run (running, all steps terminal, old ended_at) should be detected,
@@ -4005,12 +4013,12 @@ fn test_auto_resume_stuck_workflows_detects_and_flips() {
 
     let mgr = WorkflowManager::new(&conn);
     let config = Config::default();
-    // The spawned resume thread will fail (no definition_snapshot etc.) — that's fine;
-    // we're testing detection + CAS flip.
-    let count = mgr
-        .auto_resume_stuck_workflows(&config, None, None)
-        .unwrap();
-    assert_eq!(count, 1, "one stuck run should be detected and flipped");
+    let claimed = mgr.claim_stuck_workflows(&config, None).unwrap();
+    assert_eq!(
+        claimed.len(),
+        1,
+        "one stuck run should be detected and flipped"
+    );
 
     // After CAS flip the run must be in 'failed' status.
     assert_eq!(
@@ -4037,15 +4045,11 @@ fn test_auto_resume_stuck_workflows_concurrent_race() {
     let mgr = WorkflowManager::new(&conn);
     let config = Config::default();
 
-    let count1 = mgr
-        .auto_resume_stuck_workflows(&config, None, None)
-        .unwrap();
-    assert_eq!(count1, 1, "first call should win the CAS");
+    let claimed1 = mgr.claim_stuck_workflows(&config, None).unwrap();
+    assert_eq!(claimed1.len(), 1, "first call should win the CAS");
 
-    let count2 = mgr
-        .auto_resume_stuck_workflows(&config, None, None)
-        .unwrap();
-    assert_eq!(count2, 0, "second call must see no stuck runs");
+    let claimed2 = mgr.claim_stuck_workflows(&config, None).unwrap();
+    assert_eq!(claimed2.len(), 0, "second call must see no stuck runs");
 }
 
 /// Fresh runs (recent heartbeat) must not be detected.
@@ -4059,10 +4063,8 @@ fn test_auto_resume_stuck_workflows_skips_fresh_run() {
 
     let mgr = WorkflowManager::new(&conn);
     let config = Config::default();
-    let count = mgr
-        .auto_resume_stuck_workflows(&config, None, None)
-        .unwrap();
-    assert_eq!(count, 0, "fresh run must not be resumed");
+    let claimed = mgr.claim_stuck_workflows(&config, None).unwrap();
+    assert_eq!(claimed.len(), 0, "fresh run must not be resumed");
 
     // Status must remain running.
     assert_eq!(get_run_status(&conn, &run_id), "running");
@@ -4087,10 +4089,8 @@ fn test_auto_resume_stuck_workflows_uses_min_threshold() {
 
     // Even with a very large configurable threshold, min(60, 9999) = 60 and
     // the 2020 ended_at is well past 60s.
-    let count = mgr
-        .auto_resume_stuck_workflows(&config, Some(9999), None)
-        .unwrap();
-    assert_eq!(count, 1);
+    let claimed = mgr.claim_stuck_workflows(&config, Some(9999)).unwrap();
+    assert_eq!(claimed.len(), 1);
 
     assert_eq!(get_run_status(&conn, "thresh-auto"), "failed");
 }

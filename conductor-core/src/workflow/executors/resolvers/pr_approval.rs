@@ -1,15 +1,26 @@
+use std::sync::Arc;
+
 use crate::error::Result;
-use crate::workflow_dsl::ApprovalMode;
 
-use crate::workflow::executors::gate_resolver::{GateContext, GateParams, GatePoll, GateResolver};
+use crate::workflow::executors::gate_resolver::{
+    ApprovalMode, GateContext, GateParams, GatePoll, GateResolver, GitHubTokenCache,
+};
 
-use super::run_gh_json;
+use super::GhGateCommon;
 
-pub(in crate::workflow::executors) struct PrApprovalGateResolver;
+pub(in crate::workflow) struct PrApprovalGateResolver {
+    common: GhGateCommon,
+}
 
 impl PrApprovalGateResolver {
-    pub(in crate::workflow::executors) fn new() -> Self {
-        Self
+    pub(in crate::workflow) fn new(
+        working_dir: String,
+        default_bot_name: Option<String>,
+        token_cache: Arc<GitHubTokenCache>,
+    ) -> Self {
+        Self {
+            common: GhGateCommon::new(working_dir, default_bot_name, token_cache),
+        }
     }
 }
 
@@ -74,14 +85,11 @@ impl GateResolver for PrApprovalGateResolver {
     }
 
     fn poll(&self, _run_id: &str, params: &GateParams, ctx: &GateContext<'_>) -> Result<GatePoll> {
-        let gate_bot_token = ctx.resolve_token(params);
-        let token_ref = gate_bot_token.as_deref();
-
         let args = match params.approval_mode {
             ApprovalMode::MinApprovals => ["pr", "view", "--json", "reviews,author"].as_slice(),
             ApprovalMode::ReviewDecision => ["pr", "view", "--json", "reviewDecision"].as_slice(),
         };
-        if let Some(val) = run_gh_json(args, ctx.working_dir, token_ref) {
+        if let Some(val) = self.common.run_gh(args, params.bot_name.as_deref(), ctx) {
             return Ok(evaluate_approval(&val, params));
         }
         Ok(GatePoll::Pending)
@@ -91,7 +99,6 @@ impl GateResolver for PrApprovalGateResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow_dsl::ApprovalMode;
     use serde_json::json;
 
     fn make_params(mode: ApprovalMode, min_approvals: u32) -> GateParams {

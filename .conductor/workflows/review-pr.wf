@@ -11,11 +11,24 @@ workflow review-pr {
     scope default = "full"
   }
 
+  // Resolve the PR's base branch once at workflow start. Exposes it to all
+  // downstream steps as {{base_branch}} via the engine's variable map.
+  // Without this, reviewer agents and detect-* scripts each run their own
+  // `gh pr view` and the silent fallback to `main` corrupts the diff. #2736.
+  script resolve-pr-base {
+    run = ".conductor/scripts/resolve-pr-base.sh"
+  }
   script detect-db-migrations {
     run = ".conductor/scripts/detect-db-migrations.sh"
+    env = {
+      BASE_BRANCH = "{{base_branch}}"
+    }
   }
   script detect-file-types {
     run = ".conductor/scripts/detect-file-types.sh"
+    env = {
+      BASE_BRANCH = "{{base_branch}}"
+    }
   }
 
   parallel {

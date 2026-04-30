@@ -2,22 +2,25 @@ use std::sync::Arc;
 
 use crate::error::{ConductorError, Result};
 use crate::workflow::executors::gate_resolver::{GateContext, GateParams, GatePoll, GateResolver};
-use crate::workflow::persistence::{GateApprovalState, WorkflowPersistence};
+use runkon_flow::traits::persistence::{GateApprovalState, WorkflowPersistence};
 
 /// Distinguishes the two human gate types so a single struct can register
 /// under both `"human_approval"` and `"human_review"`.
-pub(in crate::workflow::executors) enum HumanGateKind {
+#[allow(dead_code)]
+pub(in crate::workflow) enum HumanGateKind {
     HumanApproval,
     HumanReview,
 }
 
-pub(in crate::workflow::executors) struct HumanApprovalGateResolver {
+#[allow(dead_code)]
+pub(in crate::workflow) struct HumanApprovalGateResolver {
     persistence: Arc<dyn WorkflowPersistence>,
     kind: HumanGateKind,
 }
 
+#[allow(dead_code)]
 impl HumanApprovalGateResolver {
-    pub(in crate::workflow::executors) fn new(
+    pub(in crate::workflow) fn new(
         persistence: Arc<dyn WorkflowPersistence>,
         kind: HumanGateKind,
     ) -> Self {
@@ -53,10 +56,9 @@ impl GateResolver for HumanApprovalGateResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::executors::gate_resolver::{GateContext, GateParams, GitHubTokenCache};
-    use crate::workflow::persistence::WorkflowPersistence;
+    use crate::workflow::executors::gate_resolver::{ApprovalMode, GateContext, GateParams};
     use crate::workflow::persistence_sqlite::SqliteWorkflowPersistence;
-    use crate::workflow_dsl::ApprovalMode;
+    use runkon_flow::traits::persistence::WorkflowPersistence;
     use rusqlite::Connection;
     use std::sync::Arc;
     use tempfile::NamedTempFile;
@@ -92,13 +94,7 @@ mod tests {
         config: &'a crate::config::Config,
         db_path: &'a std::path::Path,
     ) -> GateContext<'a> {
-        GateContext {
-            working_dir: "/tmp",
-            config,
-            default_bot_name: None,
-            token_cache: Arc::new(GitHubTokenCache::new(None)),
-            db_path,
-        }
+        GateContext { config, db_path }
     }
 
     fn make_persistence(db_path: &std::path::Path) -> Arc<dyn WorkflowPersistence> {

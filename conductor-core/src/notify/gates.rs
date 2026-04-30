@@ -1,6 +1,6 @@
 use crate::config::{HookConfig, NotificationConfig};
 use crate::notification_event::NotificationEvent;
-use crate::workflow_dsl::GateType;
+use crate::workflow::GateType;
 
 use super::{dispatch_notification, notification_body, DispatchParams};
 

@@ -15,14 +15,24 @@ use crate::workflow::constants::{
     REGRESSION_COST_THRESHOLD_PCT, REGRESSION_DURATION_THRESHOLD_PCT,
     REGRESSION_FAILURE_RATE_THRESHOLD_PP, RUN_COLUMNS, STEP_COLUMNS_WITH_PREFIX,
 };
-use crate::workflow::status::WorkflowRunStatus;
+
+/// Pre-expanded SELECT clause for step queries with agent-run token/cost columns.
+/// Computed once to avoid re-allocating the same `String` on every query.
+static STEP_SELECT_EXPANDED: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    WorkflowManager::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
+});
+use crate::workflow::WorkflowRunStatus;
+
+/// SQL fragment that filters to runs whose worktree is active or which have no worktree.
+const ACTIVE_WORKTREE_GUARD: &str =
+    "workflow_runs.worktree_id IS NULL OR worktrees.status = 'active'";
 use crate::workflow::types::{
-    extract_workflow_title, ActiveWorkflowCounts, GateAnalyticsRow, PendingGateAnalyticsRow,
-    PendingGateRow, StepFailureHeatmapRow, StepRetryAnalyticsRow, StepTokenHeatmapRow,
-    TimeGranularity, WorkflowFailureRateTrendRow, WorkflowPercentiles, WorkflowRegressionSignal,
-    WorkflowRun, WorkflowRunContext, WorkflowRunMetricsRow, WorkflowRunStep, WorkflowStepSummary,
-    WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    ActiveWorkflowCounts, GateAnalyticsRow, PendingGateAnalyticsRow, PendingGateRow,
+    StepFailureHeatmapRow, StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity,
+    WorkflowFailureRateTrendRow, WorkflowPercentiles, WorkflowRegressionSignal, WorkflowRunContext,
+    WorkflowRunMetricsRow, WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
+use crate::workflow::{extract_workflow_title, WorkflowRun, WorkflowRunStep, WorkflowStepSummary};
 
 /// Returns `(recent - baseline) / baseline * 100` when both values are present and baseline > 0.
 fn pct_change(recent: Option<f64>, baseline: Option<f64>) -> Option<f64> {
@@ -42,14 +52,10 @@ fn granularity_to_strftime_format(granularity: TimeGranularity) -> &'static str 
 }
 
 impl<'a> WorkflowManager<'a> {
-    /// Token columns from the agent_runs join, used in gate step queries.
-    const AGENT_RUN_TOKEN_COLS: &'static str =
-        "ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens";
-
-    /// Common SELECT clause for step queries with agent run token data.
-    const STEP_SELECT_WITH_TOKENS: &'static str = "SELECT {cols}, ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, ar.cache_creation_input_tokens \
-                 FROM workflow_run_steps s \
-                 LEFT JOIN agent_runs ar ON s.child_run_id = ar.id";
+    /// Common SELECT clause for step queries. Token / cost / duration columns
+    /// live on `workflow_run_steps` directly since migration 081 — no JOIN to
+    /// `agent_runs` required.
+    const STEP_SELECT_WITH_TOKENS: &'static str = "SELECT {cols} FROM workflow_run_steps s";
 
     /// Common subquery to get N most recent completed runs for a workflow.
     const N_RECENT_COMPLETED_RUNS_SUBQUERY: &'static str = "SELECT id FROM workflow_runs \
@@ -92,6 +98,21 @@ impl<'a> WorkflowManager<'a> {
             }
         }
         Ok(map)
+    }
+
+    pub fn is_run_cancelled(&self, run_id: &str) -> Result<bool> {
+        let status: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT status FROM workflow_runs WHERE id = ?1",
+                rusqlite::params![run_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(matches!(
+            status.as_deref(),
+            Some("cancelled") | Some("cancelling")
+        ))
     }
 
     pub fn get_workflow_run(&self, id: &str) -> Result<Option<WorkflowRun>> {
@@ -194,7 +215,7 @@ impl<'a> WorkflowManager<'a> {
                 "{} \
                  WHERE s.workflow_run_id = :workflow_run_id \
                  ORDER BY s.position",
-                Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
+                &*STEP_SELECT_EXPANDED
             ),
             named_params! { ":workflow_run_id": workflow_run_id },
             row_to_workflow_step,
@@ -253,13 +274,13 @@ impl<'a> WorkflowManager<'a> {
             "{} \
              WHERE s.workflow_run_id IN ({placeholders}){status_clause} \
              ORDER BY s.workflow_run_id, s.position",
-            Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
+            &*STEP_SELECT_EXPANDED
         );
         let combined = run_ids
             .iter()
             .copied()
             .chain(status_filter.unwrap_or_default().iter().copied());
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = self.conn.prepare_cached(&sql)?;
         let steps = stmt
             .query_map(rusqlite::params_from_iter(combined), row_to_workflow_step)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -276,7 +297,7 @@ impl<'a> WorkflowManager<'a> {
         let mut stmt = self.conn.prepare_cached(&format!(
             "{} \
              WHERE s.id = :id",
-            Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
+            &*STEP_SELECT_EXPANDED
         ))?;
         let mut rows = stmt.query_map(named_params! { ":id": step_id }, row_to_workflow_step)?;
         match rows.next() {
@@ -305,7 +326,7 @@ impl<'a> WorkflowManager<'a> {
                AND s.status != 'completed' \
              ORDER BY s.id DESC \
              LIMIT 1",
-            Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
+            &*STEP_SELECT_EXPANDED
         ))?;
         let mut rows = stmt.query_map(
             named_params! {
@@ -391,7 +412,7 @@ impl<'a> WorkflowManager<'a> {
                      FROM workflow_runs \
                      LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
                      WHERE workflow_runs.repo_id = :repo_id \
-                       AND (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
+                       AND ({ACTIVE_WORKTREE_GUARD}) \
                        AND workflow_runs.status = :status \
                      ORDER BY workflow_runs.started_at DESC LIMIT {limit} OFFSET {offset}"
                 ),
@@ -434,11 +455,13 @@ impl<'a> WorkflowManager<'a> {
     pub fn list_all_workflow_runs(&self, limit: usize) -> Result<Vec<WorkflowRun>> {
         query_collect(
             self.conn,
-            "SELECT workflow_runs.* \
-             FROM workflow_runs \
-             LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-             WHERE workflow_runs.worktree_id IS NULL OR worktrees.status = 'active' \
-             ORDER BY workflow_runs.started_at DESC LIMIT :limit",
+            &format!(
+                "SELECT workflow_runs.* \
+                 FROM workflow_runs \
+                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                 WHERE {ACTIVE_WORKTREE_GUARD} \
+                 ORDER BY workflow_runs.started_at DESC LIMIT :limit"
+            ),
             named_params! { ":limit": limit as i64 },
             row_to_workflow_run,
         )
@@ -469,7 +492,7 @@ impl<'a> WorkflowManager<'a> {
             "SELECT workflow_runs.* \
              FROM workflow_runs \
              LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-             WHERE (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
+             WHERE ({ACTIVE_WORKTREE_GUARD}) \
                AND workflow_runs.status IN ({placeholders}) \
              ORDER BY workflow_runs.started_at DESC \
              LIMIT 500"
@@ -496,23 +519,27 @@ impl<'a> WorkflowManager<'a> {
             let status_str = s.to_string();
             query_collect(
                 self.conn,
-                "SELECT workflow_runs.* \
-                 FROM workflow_runs \
-                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                 WHERE (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
-                   AND workflow_runs.status = :status \
-                 ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset",
+                &format!(
+                    "SELECT workflow_runs.* \
+                     FROM workflow_runs \
+                     LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                     WHERE ({ACTIVE_WORKTREE_GUARD}) \
+                       AND workflow_runs.status = :status \
+                     ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
+                ),
                 named_params! { ":status": status_str, ":limit": limit as i64, ":offset": offset as i64 },
                 row_to_workflow_run,
             )
         } else {
             query_collect(
                 self.conn,
-                "SELECT workflow_runs.* \
-                 FROM workflow_runs \
-                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                 WHERE workflow_runs.worktree_id IS NULL OR worktrees.status = 'active' \
-                 ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset",
+                &format!(
+                    "SELECT workflow_runs.* \
+                     FROM workflow_runs \
+                     LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                     WHERE {ACTIVE_WORKTREE_GUARD} \
+                     ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
+                ),
                 named_params! { ":limit": limit as i64, ":offset": offset as i64 },
                 row_to_workflow_run,
             )
@@ -531,12 +558,14 @@ impl<'a> WorkflowManager<'a> {
     ) -> Result<Vec<WorkflowRun>> {
         query_collect(
             self.conn,
-            "SELECT workflow_runs.* \
-             FROM workflow_runs \
-             LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-             WHERE workflow_runs.repo_id = :repo_id \
-               AND (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
-             ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset",
+            &format!(
+                "SELECT workflow_runs.* \
+                 FROM workflow_runs \
+                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                 WHERE workflow_runs.repo_id = :repo_id \
+                   AND ({ACTIVE_WORKTREE_GUARD}) \
+                 ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
+            ),
             named_params! { ":repo_id": repo_id, ":limit": limit as i64, ":offset": offset as i64 },
             row_to_workflow_run,
         )
@@ -697,7 +726,7 @@ impl<'a> WorkflowManager<'a> {
              FROM workflow_runs \
              LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
              WHERE (workflow_runs.repo_id = ? OR worktrees.repo_id = ?) \
-               AND (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
+               AND ({ACTIVE_WORKTREE_GUARD}) \
                AND workflow_runs.status IN ({placeholders}) \
              ORDER BY workflow_runs.started_at DESC \
              LIMIT 500"
@@ -754,6 +783,43 @@ impl<'a> WorkflowManager<'a> {
         Ok(map)
     }
 
+    /// Fetch the active waiting gate step for each of the given run IDs in one query.
+    ///
+    /// Returns a map from workflow_run_id → the single `running`/`waiting` gate step for that
+    /// run.  Runs that have no waiting gate are absent from the map.
+    pub fn find_waiting_gates_for_runs(
+        &self,
+        run_ids: &[&str],
+    ) -> Result<HashMap<String, WorkflowRunStep>> {
+        if run_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = sql_placeholders(run_ids.len());
+        let sql = format!(
+            "{} \
+             WHERE s.workflow_run_id IN ({placeholders}) AND s.gate_type IS NOT NULL \
+               AND s.gate_approved_at IS NULL \
+               AND s.status IN ('running', 'waiting') \
+             ORDER BY s.workflow_run_id, s.position DESC",
+            &*STEP_SELECT_EXPANDED
+        );
+        let steps: Vec<WorkflowRunStep> = {
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(
+                rusqlite::params_from_iter(run_ids.iter().copied()),
+                row_to_workflow_step,
+            )?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        // Keep only the highest-position step per run (ORDER BY position DESC means
+        // the first row for each run_id is the one we want).
+        let mut map: HashMap<String, WorkflowRunStep> = HashMap::new();
+        for step in steps {
+            map.entry(step.workflow_run_id.clone()).or_insert(step);
+        }
+        Ok(map)
+    }
+
     /// Find the waiting gate step for a workflow run.
     pub fn find_waiting_gate(&self, workflow_run_id: &str) -> Result<Option<WorkflowRunStep>> {
         Ok(self
@@ -764,7 +830,7 @@ impl<'a> WorkflowManager<'a> {
                      WHERE s.workflow_run_id = :workflow_run_id AND s.gate_type IS NOT NULL AND s.gate_approved_at IS NULL \
                        AND s.status IN ('running', 'waiting') \
                      ORDER BY s.position DESC LIMIT 1",
-                    Self::STEP_SELECT_WITH_TOKENS.replace("{cols}", &STEP_COLUMNS_WITH_PREFIX)
+                    &*STEP_SELECT_EXPANDED
                 ),
                 named_params! { ":workflow_run_id": workflow_run_id },
                 row_to_workflow_step,
@@ -782,15 +848,13 @@ impl<'a> WorkflowManager<'a> {
         let placeholders = sql_placeholders(WorkflowRunStatus::ACTIVE.len());
         let active_strings = WorkflowRunStatus::active_strings();
         let sql = format!(
-            "SELECT {cols}, {token_cols}, r.workflow_name, r.target_label \
+            "SELECT {cols}, r.workflow_name, r.target_label \
              FROM workflow_run_steps s \
-             LEFT JOIN agent_runs ar ON ar.id = s.child_run_id \
              JOIN workflow_runs r ON r.id = s.workflow_run_id \
              WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
              AND r.status IN ({placeholders}) \
              ORDER BY s.started_at",
             cols = &*STEP_COLUMNS_WITH_PREFIX,
-            token_cols = Self::AGENT_RUN_TOKEN_COLS,
         );
         crate::db::query_collect(
             self.conn,
@@ -808,9 +872,8 @@ impl<'a> WorkflowManager<'a> {
         let active_strings = WorkflowRunStatus::active_strings();
         let status_placeholders = sql_placeholders(active_strings.len());
         let sql = format!(
-            "SELECT {cols}, {token_cols}, r.workflow_name, r.target_label, wt.branch, t.source_id AS ticket_ref, r.definition_snapshot \
+            "SELECT {cols}, r.workflow_name, r.target_label, wt.branch, t.source_id AS ticket_ref, r.definition_snapshot \
              FROM workflow_run_steps s \
-             LEFT JOIN agent_runs ar ON ar.id = s.child_run_id \
              JOIN workflow_runs r ON r.id = s.workflow_run_id \
              LEFT JOIN worktrees wt ON wt.id = r.worktree_id \
              LEFT JOIN tickets t ON t.id = r.ticket_id \
@@ -819,7 +882,6 @@ impl<'a> WorkflowManager<'a> {
              AND (r.repo_id = ? OR wt.repo_id = ?) \
              ORDER BY s.started_at",
             cols = &*STEP_COLUMNS_WITH_PREFIX,
-            token_cols = Self::AGENT_RUN_TOKEN_COLS,
         );
         let mut all_params: Vec<rusqlite::types::Value> = active_strings
             .into_iter()
@@ -912,8 +974,14 @@ impl<'a> WorkflowManager<'a> {
             let run_id: String = row.get("workflow_run_id")?;
             // Take only the first (lowest-position) row per run_id.
             map.entry(run_id).or_insert_with(|| {
-                let step_name: String = row.get("step_name").unwrap_or_default();
-                let iteration: i64 = row.get("iteration").unwrap_or(0);
+                let step_name: String = row.get("step_name").unwrap_or_else(|e| {
+                    tracing::warn!("row.get('step_name') failed: {e}");
+                    String::new()
+                });
+                let iteration: i64 = row.get("iteration").unwrap_or_else(|e| {
+                    tracing::warn!("row.get('iteration') failed: {e}");
+                    0
+                });
                 (step_name, iteration)
             });
         }
@@ -1967,11 +2035,13 @@ mod tests {
         assert!(empty.is_empty(), "empty input → empty result");
     }
 
-    /// Verify that token values stored in `agent_runs` are correctly propagated into
-    /// `WorkflowRunStep` when fetched via `find_waiting_gate` (which uses
-    /// `STEP_SELECT_WITH_TOKENS` + `row_to_workflow_step`).
+    /// Verify that token values stored on `workflow_run_steps` (Path X.1) surface
+    /// on `WorkflowRunStep` when fetched via `find_waiting_gate` (which uses
+    /// `STEP_SELECT_WITH_TOKENS` + `row_to_workflow_step`). Tokens used to come
+    /// from a JOIN to `agent_runs`; after migration 081 they live directly on
+    /// the step row.
     #[test]
-    fn find_waiting_gate_propagates_agent_run_tokens() {
+    fn find_waiting_gate_propagates_step_tokens() {
         let conn = setup_db();
 
         conn.execute(
@@ -1983,21 +2053,12 @@ mod tests {
         .unwrap();
 
         conn.execute(
-            "INSERT INTO agent_runs \
-             (id, prompt, status, started_at, input_tokens, output_tokens, \
-              cache_read_input_tokens, cache_creation_input_tokens) \
-             VALUES ('ar-gate-1', 'do something', 'completed', datetime('now'), \
-                     1000, 200, 50, 75)",
-            [],
-        )
-        .unwrap();
-
-        conn.execute(
             "INSERT INTO workflow_run_steps \
              (id, workflow_run_id, step_name, role, status, position, \
-              gate_type, child_run_id) \
+              gate_type, child_run_id, \
+              input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens) \
              VALUES ('step-gate-1', 'run-gate-1', 'review', 'gate', 'waiting', 0, \
-                     'human_approval', 'ar-gate-1')",
+                     'human_approval', NULL, 1000, 200, 50, 75)",
             [],
         )
         .unwrap();
@@ -2012,6 +2073,119 @@ mod tests {
         assert_eq!(step.output_tokens, Some(200));
         assert_eq!(step.cache_read_input_tokens, Some(50));
         assert_eq!(step.cache_creation_input_tokens, Some(75));
+    }
+
+    #[test]
+    fn find_waiting_gates_for_runs_empty_input_returns_empty() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let result = mgr.find_waiting_gates_for_runs(&[]).unwrap();
+        assert!(
+            result.is_empty(),
+            "empty input should return empty map without querying DB"
+        );
+    }
+
+    #[test]
+    fn find_waiting_gates_for_runs_returns_highest_position_gate_per_run() {
+        let conn = setup_db();
+
+        for run_id in &["run-g-1", "run-g-2"] {
+            conn.execute(
+                "INSERT INTO workflow_runs \
+                 (id, workflow_name, worktree_id, parent_run_id, status, started_at) \
+                 VALUES (:id, 'test-wf', NULL, 'dummy-ar', 'running', datetime('now'))",
+                rusqlite::named_params! { ":id": run_id },
+            )
+            .unwrap();
+        }
+
+        // run-g-1: two gate steps at positions 0 and 2 — should return position 2
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position, gate_type) \
+             VALUES ('sg-1a', 'run-g-1', 'approve-a', 'gate', 'waiting', 0, 'human_approval')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position, gate_type) \
+             VALUES ('sg-1b', 'run-g-1', 'approve-b', 'gate', 'running', 2, 'human_approval')",
+            [],
+        )
+        .unwrap();
+
+        // run-g-2: one gate step at position 1
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position, gate_type) \
+             VALUES ('sg-2', 'run-g-2', 'review', 'gate', 'waiting', 1, 'human_review')",
+            [],
+        )
+        .unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let result = mgr
+            .find_waiting_gates_for_runs(&["run-g-1", "run-g-2"])
+            .unwrap();
+
+        assert_eq!(result.len(), 2, "both runs should have an entry");
+        assert_eq!(
+            result["run-g-1"].id, "sg-1b",
+            "run-g-1 should return the highest-position gate (position 2)"
+        );
+        assert_eq!(
+            result["run-g-2"].id, "sg-2",
+            "run-g-2 should return its only gate step"
+        );
+    }
+
+    #[test]
+    fn find_waiting_gates_for_runs_excludes_runs_with_no_waiting_gate() {
+        let conn = setup_db();
+
+        for run_id in &["run-h-1", "run-h-2"] {
+            conn.execute(
+                "INSERT INTO workflow_runs \
+                 (id, workflow_name, worktree_id, parent_run_id, status, started_at) \
+                 VALUES (:id, 'test-wf', NULL, 'dummy-ar', 'running', datetime('now'))",
+                rusqlite::named_params! { ":id": run_id },
+            )
+            .unwrap();
+        }
+
+        // run-h-1: a completed (already approved) gate — should NOT appear
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position, gate_type, gate_approved_at) \
+             VALUES ('sh-1', 'run-h-1', 'approve', 'gate', 'completed', 0, 'human_approval', datetime('now'))",
+            [],
+        )
+        .unwrap();
+
+        // run-h-2: a waiting gate — should appear
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position, gate_type) \
+             VALUES ('sh-2', 'run-h-2', 'review', 'gate', 'waiting', 0, 'human_review')",
+            [],
+        )
+        .unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let result = mgr
+            .find_waiting_gates_for_runs(&["run-h-1", "run-h-2"])
+            .unwrap();
+
+        assert!(
+            !result.contains_key("run-h-1"),
+            "run with no unapproved gate should be absent"
+        );
+        assert!(
+            result.contains_key("run-h-2"),
+            "run with waiting gate should be present"
+        );
     }
 
     /// Verify that `find_waiting_gate` returns `None` for a token-only step that has no

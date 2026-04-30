@@ -10,7 +10,7 @@ emit_output() {
   local output
   output=$(jq -n --argjson markers "$markers" --arg context "$context" \
     '{"markers": $markers, "context": $context}')
-  printf '<<<CONDUCTOR_OUTPUT>>>\n%s\n<<<END_CONDUCTOR_OUTPUT>>>\n' "$output"
+  printf '<<<FLOW_OUTPUT>>>\n%s\n<<<END_FLOW_OUTPUT>>>\n' "$output"
 }
 
 # Parse title from "Draft issue: <title>" line
@@ -24,14 +24,14 @@ fi
 # Parse labels from "Labels: <comma-separated or empty>" line
 LABELS_LINE=$(echo "$PRIOR_OUTPUT" | grep -m1 '^Labels:' | sed 's/^Labels: //')
 
-# Parse body — everything after the "Body:" line, stripping trailing CONDUCTOR_OUTPUT block
+# Parse body — everything after the "Body:" line, stripping trailing FLOW_OUTPUT block
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 
 echo "$PRIOR_OUTPUT" \
   | sed -n '/^Body:$/,$ p' \
   | tail -n +2 \
-  | sed '/^<<<CONDUCTOR_OUTPUT>>>/,$ d' \
+  | sed '/^<<<FLOW_OUTPUT>>>/,$ d' \
   > "$tmp"
 
 # Build label args

@@ -1,11 +1,10 @@
 #![allow(unused_imports)]
 
 use super::*;
-use crate::workflow::types::{
-    BlockedOn, ContextEntry, MetadataEntry, WorkflowExecConfig, WorkflowRunStep,
-    WorkflowStepSummary,
+use crate::workflow::types::MetadataEntry;
+use crate::workflow::{
+    BlockedOn, ContextEntry, GateType, WorkflowExecConfig, WorkflowRunStep, WorkflowStepSummary,
 };
-use crate::workflow_dsl::GateType;
 
 // ---------------------------------------------------------------------------
 // BlockedOn serde roundtrips

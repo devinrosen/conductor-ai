@@ -4,18 +4,31 @@ use rusqlite::Connection;
 
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
-use crate::workflow_dsl::ForeachScope;
 use crate::worktree::{Worktree, WorktreeManager};
+use runkon_flow::dsl::ForeachScope;
 
-use super::{FanOutItem, ItemProvider, ProviderContext};
+use super::{
+    dep_query_err, fetch_dep_item_ids, ids_to_set_and_refs, require_repo_id, FanOutItem,
+    ItemProvider, ProviderContext,
+};
 
-pub struct WorktreesProvider;
+pub struct WorktreesProvider {
+    repo_id: Option<String>,
+    worktree_id: Option<String>,
+    pr_cache: std::sync::Mutex<std::collections::HashMap<String, Vec<crate::github::GithubPr>>>,
+}
+
+impl WorktreesProvider {
+    pub fn new(repo_id: Option<String>, worktree_id: Option<String>) -> Self {
+        Self {
+            repo_id,
+            worktree_id,
+            pr_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+}
 
 impl ItemProvider for WorktreesProvider {
-    fn name(&self) -> &str {
-        "worktrees"
-    }
-
     fn items(
         &self,
         ctx: &ProviderContext<'_>,
@@ -23,11 +36,7 @@ impl ItemProvider for WorktreesProvider {
         _filter: &HashMap<String, String>,
         existing_set: &HashSet<String>,
     ) -> Result<Vec<FanOutItem>> {
-        let repo_id = ctx.repo_id.ok_or_else(|| {
-            ConductorError::Workflow(
-                "foreach over worktrees requires a repo_id in the execution context".to_string(),
-            )
-        })?;
+        let repo_id = require_repo_id(&self.repo_id, "worktrees")?;
 
         let wt_scope_opt = match scope {
             Some(ForeachScope::Worktree(s)) => Some(s),
@@ -38,7 +47,7 @@ impl ItemProvider for WorktreesProvider {
         let base_branch: &str = match wt_scope_opt.and_then(|s| s.base_branch.as_deref()) {
             Some(b) => b,
             None => {
-                let wt_id = ctx.worktree_id.ok_or_else(|| {
+                let wt_id = self.worktree_id.as_deref().ok_or_else(|| {
                     ConductorError::Workflow(
                         "foreach over worktrees requires either scope = { base_branch = \"...\" } \
                          or a worktree_id in the execution context"
@@ -60,9 +69,21 @@ impl ItemProvider for WorktreesProvider {
             .collect();
 
         if let Some(want_open_pr) = wt_scope_opt.and_then(|s| s.has_open_pr) {
-            let repo = crate::repo::RepoManager::new(ctx.conn, ctx.config).get_by_id(repo_id)?;
-            let open_prs = crate::github::list_open_prs(&repo.remote_url)?;
-            candidates = filter_by_open_pr(candidates, want_open_pr, open_prs);
+            if !candidates.is_empty() {
+                let repo =
+                    crate::repo::RepoManager::new(ctx.conn, ctx.config).get_by_id(repo_id)?;
+                let open_prs: Vec<crate::github::GithubPr> = {
+                    let mut cache = self.pr_cache.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(cached) = cache.get(&repo.remote_url) {
+                        cached.clone()
+                    } else {
+                        let prs = crate::github::list_open_prs(&repo.remote_url)?;
+                        cache.insert(repo.remote_url.clone(), prs.clone());
+                        prs
+                    }
+                };
+                candidates = filter_by_open_pr(candidates, want_open_pr, &open_prs);
+            }
         }
 
         Ok(candidates
@@ -92,9 +113,10 @@ impl ItemProvider for WorktreesProvider {
 fn filter_by_open_pr(
     mut candidates: Vec<Worktree>,
     want_open_pr: bool,
-    open_prs: Vec<crate::github::GithubPr>,
+    open_prs: &[crate::github::GithubPr],
 ) -> Vec<Worktree> {
-    let open_branches: HashSet<String> = open_prs.into_iter().map(|pr| pr.head_ref_name).collect();
+    let open_branches: HashSet<String> =
+        open_prs.iter().map(|pr| pr.head_ref_name.clone()).collect();
     candidates.retain(|wt| open_branches.contains(&wt.branch) == want_open_pr);
     candidates
 }
@@ -104,15 +126,11 @@ fn dependencies_impl(
     config: &Config,
     step_id: &str,
 ) -> Result<Vec<(String, String)>> {
-    let mgr = crate::workflow::manager::WorkflowManager::new(conn);
-    let items = mgr.get_fan_out_items(step_id, None)?;
-    let item_ids: Vec<String> = items.iter().map(|i| i.item_id.clone()).collect();
-    if item_ids.is_empty() {
+    let Some(item_ids) = fetch_dep_item_ids(conn, step_id)? else {
         return Ok(vec![]);
-    }
+    };
 
-    let id_set: HashSet<&String> = item_ids.iter().collect();
-    let id_refs: Vec<&str> = item_ids.iter().map(String::as_str).collect();
+    let (id_set, id_refs) = ids_to_set_and_refs(&item_ids);
     let wt_mgr = WorktreeManager::new(conn, config);
     let worktrees = match wt_mgr.get_by_ids(&id_refs) {
         Ok(wts) => wts,
@@ -123,27 +141,24 @@ fn dependencies_impl(
             return Ok(vec![]);
         }
     };
+    // Build both maps in a single pass: wt→ticket and ticket→wt.
     let mut wt_ticket_map: HashMap<String, String> = HashMap::new();
+    let mut ticket_wt_map: HashMap<String, String> = HashMap::new();
     for wt in worktrees {
         if let Some(tid) = wt.ticket_id {
+            ticket_wt_map.insert(tid.clone(), wt.id.clone());
             wt_ticket_map.insert(wt.id, tid);
         }
     }
 
-    let ticket_wt_map: HashMap<String, String> = wt_ticket_map
-        .iter()
-        .map(|(wt_id, tid)| (tid.clone(), wt_id.clone()))
-        .collect();
-
-    let ticket_ids: Vec<String> = wt_ticket_map.values().cloned().collect();
-    if ticket_ids.is_empty() {
+    let ticket_id_refs: Vec<&str> = wt_ticket_map.values().map(String::as_str).collect();
+    if ticket_id_refs.is_empty() {
         return Ok(vec![]);
     }
-    let ticket_id_refs: Vec<&str> = ticket_ids.iter().map(String::as_str).collect();
     let syncer = crate::tickets::TicketSyncer::new(conn);
     let dep_edges = syncer
         .get_blocking_edges_for_tickets(&ticket_id_refs)
-        .map_err(|e| ConductorError::Workflow(format!("foreach: dependency query failed: {e}")))?;
+        .map_err(dep_query_err)?;
 
     let mut edges: HashSet<(String, String)> = HashSet::new();
     for (blocker_ticket_id, dependent_ticket_id) in dep_edges {
@@ -164,14 +179,15 @@ fn dependencies_impl(
 mod tests {
     use super::*;
     use crate::test_helpers;
-    use crate::workflow_dsl::WorktreeScope;
+    use runkon_flow::dsl::WorktreeScope;
 
     #[test]
     fn test_worktrees_items_missing_repo_id_returns_error() {
         let conn = test_helpers::setup_db();
         let config = Config::default();
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, None, None);
-        let result = WorktreesProvider.items(&ctx, None, &HashMap::new(), &HashSet::new());
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let result =
+            WorktreesProvider::new(None, None).items(&ctx, None, &HashMap::new(), &HashSet::new());
         assert!(result.is_err());
         let Err(e) = result else {
             panic!("expected error")
@@ -187,8 +203,13 @@ mod tests {
         let conn = test_helpers::setup_db();
         let config = Config::default();
         // repo_id present but no scope and no worktree_id
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
-        let result = WorktreesProvider.items(&ctx, None, &HashMap::new(), &HashSet::new());
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let result = WorktreesProvider::new(Some("r1".into()), None).items(
+            &ctx,
+            None,
+            &HashMap::new(),
+            &HashSet::new(),
+        );
         assert!(result.is_err());
         let Err(e) = result else {
             panic!("expected error")
@@ -223,8 +244,8 @@ mod tests {
             base_branch: Some("main".to_string()),
             has_open_pr: None,
         });
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
-        let items = WorktreesProvider
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let items = WorktreesProvider::new(Some("r1".into()), None)
             .items(&ctx, Some(&scope), &HashMap::new(), &HashSet::new())
             .unwrap();
         assert_eq!(items.len(), 1);
@@ -243,8 +264,8 @@ mod tests {
         });
         let mut existing = HashSet::new();
         existing.insert("w2".to_string());
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
-        let items = WorktreesProvider
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let items = WorktreesProvider::new(Some("r1".into()), None)
             .items(&ctx, Some(&scope), &HashMap::new(), &existing)
             .unwrap();
         assert!(
@@ -260,8 +281,8 @@ mod tests {
         insert_worktree_with_base_branch(&conn, "w2", "r1", "feat-child", "feat/test");
         let config = Config::default();
         // No scope — should resolve base_branch from w1.branch
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), Some("w1"));
-        let items = WorktreesProvider
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let items = WorktreesProvider::new(Some("r1".into()), Some("w1".into()))
             .items(&ctx, None, &HashMap::new(), &HashSet::new())
             .unwrap();
         assert_eq!(items.len(), 1);
@@ -313,11 +334,11 @@ mod tests {
             ci_status: String::new(),
         }];
 
-        let with_pr = filter_by_open_pr(wts.clone(), true, prs.clone());
+        let with_pr = filter_by_open_pr(wts.clone(), true, &prs);
         assert_eq!(with_pr.len(), 1);
         assert_eq!(with_pr[0].id, "w1");
 
-        let without_pr = filter_by_open_pr(wts, false, prs);
+        let without_pr = filter_by_open_pr(wts, false, &prs);
         assert_eq!(without_pr.len(), 1);
         assert_eq!(without_pr[0].id, "w2");
     }
@@ -326,7 +347,7 @@ mod tests {
     fn test_worktrees_dependencies_empty_when_no_items() {
         let conn = test_helpers::setup_db();
         let config = Config::default();
-        let edges = WorktreesProvider
+        let edges = WorktreesProvider::new(None, None)
             .dependencies(&conn, &config, "nonexistent-step")
             .unwrap();
         assert!(edges.is_empty());
@@ -385,7 +406,7 @@ mod tests {
             .insert_fan_out_item(&step_id, "worktree", "wt2", "wt2-slug")
             .unwrap();
 
-        let edges = WorktreesProvider
+        let edges = WorktreesProvider::new(None, None)
             .dependencies(&conn, &config, &step_id)
             .unwrap();
         assert_eq!(edges.len(), 1, "one blocking edge expected");

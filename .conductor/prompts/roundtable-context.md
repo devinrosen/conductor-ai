@@ -38,7 +38,7 @@ For each finding, self-assess your evidence:
 
 Prefer Verified findings. Only include Inferred/Assumed findings for critical issues.
 
-Your `CONDUCTOR_OUTPUT` `context` field must be a **JSON object** with this structure:
+Your `FLOW_OUTPUT` `context` field must be a **JSON object** with this structure:
 
 ```json
 {
@@ -56,4 +56,4 @@ Your `CONDUCTOR_OUTPUT` `context` field must be a **JSON object** with this stru
 }
 ```
 
-If you find critical or warning findings, set `approved: false` and include `has_review_issues` in your CONDUCTOR_OUTPUT markers.
+If you find critical or warning findings, set `approved: false` and include `has_review_issues` in your FLOW_OUTPUT markers.

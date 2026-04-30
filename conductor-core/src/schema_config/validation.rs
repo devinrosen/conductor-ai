@@ -1,4 +1,5 @@
 use crate::error::{ConductorError, Result};
+use runkon_flow::helpers::{fix_backslash_escapes, strip_trailing_commas};
 
 use super::types::{ArrayItems, FieldDef, FieldType, OutputSchema};
 
@@ -19,7 +20,7 @@ pub struct StructuredOutput {
     pub json_string: String,
 }
 
-/// Find the start position of the real `<<<CONDUCTOR_OUTPUT>>>` block.
+/// Find the start position of the real `<<<FLOW_OUTPUT>>>` block.
 ///
 /// Returns the position of the last occurrence of `marker` where the immediately
 /// following content (after trimming whitespace) starts with `{`, `[`, or a markdown
@@ -27,7 +28,7 @@ pub struct StructuredOutput {
 /// - Occurrences inside sentences or code examples are not followed by JSON
 /// - Occurrences inside a JSON field value appear mid-string, not at a JSON boundary
 /// - The real block start is always immediately followed by JSON or a code-fenced JSON block
-pub fn find_conductor_output_start(text: &str, marker: &str) -> Option<usize> {
+pub fn find_flow_output_start(text: &str, marker: &str) -> Option<usize> {
     let mut last_valid = None;
     let mut search_pos = 0;
     while let Some(rel) = text[search_pos..].find(marker) {
@@ -41,7 +42,7 @@ pub fn find_conductor_output_start(text: &str, marker: &str) -> Option<usize> {
     last_valid
 }
 
-/// Extract and clean the raw JSON string from a `<<<CONDUCTOR_OUTPUT>>>` block.
+/// Extract and clean the raw JSON string from a `<<<FLOW_OUTPUT>>>` block.
 ///
 /// Finds the last valid start marker occurrence, slices to the end marker,
 /// trims whitespace, and strips markdown code fences. Returns `None` if no
@@ -50,10 +51,10 @@ pub fn find_conductor_output_start(text: &str, marker: &str) -> Option<usize> {
 /// Trailing-comma stripping is intentionally omitted here — callers that need
 /// it (e.g. `parse_structured_output`) apply it themselves.
 pub fn extract_output_block(text: &str) -> Option<String> {
-    let start_marker = "<<<CONDUCTOR_OUTPUT>>>";
-    let end_marker = "<<<END_CONDUCTOR_OUTPUT>>>";
+    let start_marker = "<<<FLOW_OUTPUT>>>";
+    let end_marker = "<<<END_FLOW_OUTPUT>>>";
 
-    let start = find_conductor_output_start(text, start_marker)?;
+    let start = find_flow_output_start(text, start_marker)?;
     let json_start = start + start_marker.len();
     let end = text[json_start..].find(end_marker)?;
     let raw = text[json_start..json_start + end].trim();
@@ -61,20 +62,20 @@ pub fn extract_output_block(text: &str) -> Option<String> {
     Some(strip_code_fences(raw))
 }
 
-/// Parse the `<<<CONDUCTOR_OUTPUT>>>` block as structured JSON, validate against
+/// Parse the `<<<FLOW_OUTPUT>>>` block as structured JSON, validate against
 /// the schema, and derive markers.
 pub fn parse_structured_output(text: &str, schema: &OutputSchema) -> Result<StructuredOutput> {
     let cleaned = extract_output_block(text).ok_or_else(|| {
-        ConductorError::Schema("No <<<CONDUCTOR_OUTPUT>>> block found in agent output".to_string())
+        ConductorError::Schema("No <<<FLOW_OUTPUT>>> block found in agent output".to_string())
     })?;
 
     // Strip trailing commas (common LLM artifact)
     let cleaned = strip_trailing_commas(&cleaned);
     // Fix invalid backslash escapes (e.g. Swift key-paths, regex, Windows paths)
-    let cleaned = fix_invalid_backslash_escapes(&cleaned);
+    let cleaned = fix_backslash_escapes(&cleaned);
 
     let value: serde_json::Value = serde_json::from_str(&cleaned)
-        .map_err(|e| ConductorError::Schema(format!("Invalid JSON in CONDUCTOR_OUTPUT: {e}")))?;
+        .map_err(|e| ConductorError::Schema(format!("Invalid JSON in FLOW_OUTPUT: {e}")))?;
 
     // Validate against schema
     validate_value(&value, &schema.fields)?;
@@ -132,7 +133,7 @@ fn derive_context(value: &serde_json::Value, schema: &OutputSchema) -> String {
 ///
 /// This is used by the direct API execution path (see `api_call.rs`) where the
 /// Anthropic API has already enforced schema conformance via `tool_use`. There is
-/// no `<<<CONDUCTOR_OUTPUT>>>` block to extract and no JSON validation step needed —
+/// no `<<<FLOW_OUTPUT>>>` block to extract and no JSON validation step needed —
 /// the value is already a clean, schema-conformant JSON object.
 pub fn derive_output_from_value(
     value: serde_json::Value,
@@ -172,91 +173,14 @@ pub fn strip_code_fences(s: &str) -> String {
     s.to_string()
 }
 
-/// Fix invalid backslash escapes inside JSON string literals.
-///
-/// Walks the input character-by-character, tracking JSON string boundaries.
-/// When inside a string, a `\` followed by an invalid JSON escape character
-/// (`"`, `\`, `/`, `b`, `f`, `n`, `r`, `t`, `u` are the valid ones) is
-/// doubled to `\\`, making it a valid JSON escaped backslash.  Valid escape
-/// sequences (including `\\`, `\"`, `\uXXXX`) are emitted verbatim.
-///
-/// Backslashes outside string literals are passed through unchanged.
-pub(crate) fn fix_invalid_backslash_escapes(s: &str) -> String {
-    const VALID_ESCAPE: &[char] = &['"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'];
-
-    let mut chars = s.chars().peekable();
-    let mut result = String::with_capacity(s.len() + 16);
-    let mut in_string = false;
-
-    while let Some(c) = chars.next() {
-        if !in_string {
-            result.push(c);
-            if c == '"' {
-                in_string = true;
-            }
-        } else {
-            match c {
-                '"' => {
-                    // Closing quote — exit string
-                    result.push(c);
-                    in_string = false;
-                }
-                '\\' => {
-                    if chars.peek().is_some_and(|nc| VALID_ESCAPE.contains(nc)) {
-                        // Valid escape sequence — emit both chars as a unit and advance past them.
-                        // Advancing past the escaped char (e.g. `"` in `\"`) is critical: it
-                        // prevents the escaped `"` from being misinterpreted as a string boundary.
-                        result.push('\\');
-                        result.push(chars.next().unwrap());
-                    } else {
-                        // Invalid escape — double the backslash to make it a literal `\`
-                        result.push('\\');
-                        result.push('\\');
-                    }
-                }
-                _ => {
-                    result.push(c);
-                }
-            }
-        }
-    }
-    result
-}
-
-/// Remove trailing commas before `}` or `]` (common LLM artifact).
-pub(crate) fn strip_trailing_commas(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == ',' {
-            // Collect any whitespace between the comma and the next non-ws char
-            let mut ws_buf = String::new();
-            while chars.peek().is_some_and(|p| p.is_whitespace()) {
-                ws_buf.push(chars.next().unwrap());
-            }
-            // If next non-ws char is a closing bracket, drop the comma but keep whitespace
-            if chars.peek().is_some_and(|p| *p == '}' || *p == ']') {
-                result.push_str(&ws_buf);
-                continue;
-            }
-            // Otherwise keep the comma and the whitespace
-            result.push(c);
-            result.push_str(&ws_buf);
-        } else {
-            result.push(c);
-        }
-    }
-    result
-}
-
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
 
 fn validate_value(value: &serde_json::Value, fields: &[FieldDef]) -> Result<()> {
-    let obj = value.as_object().ok_or_else(|| {
-        ConductorError::Schema("CONDUCTOR_OUTPUT must be a JSON object".to_string())
-    })?;
+    let obj = value
+        .as_object()
+        .ok_or_else(|| ConductorError::Schema("FLOW_OUTPUT must be a JSON object".to_string()))?;
 
     for field in fields {
         match obj.get(&field.name) {

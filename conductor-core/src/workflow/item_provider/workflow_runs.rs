@@ -1,17 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::error::Result;
-use crate::workflow_dsl::ForeachScope;
+use runkon_flow::dsl::ForeachScope;
 
-use super::{FanOutItem, ItemProvider, ProviderContext};
+use super::{collect_fan_out_items, FanOutItem, ItemProvider, ProviderContext};
 
 pub struct WorkflowRunsProvider;
 
 impl ItemProvider for WorkflowRunsProvider {
-    fn name(&self) -> &str {
-        "workflow_runs"
-    }
-
     fn items(
         &self,
         ctx: &ProviderContext<'_>,
@@ -36,15 +32,16 @@ impl ItemProvider for WorkflowRunsProvider {
         let wf_mgr = crate::workflow::manager::WorkflowManager::new(ctx.conn);
         let rows = wf_mgr.list_runs_by_status(&statuses, workflow_name_filter)?;
 
-        Ok(rows
-            .into_iter()
-            .filter(|(id, _)| !existing_set.contains(id))
-            .map(|(id, wf_name)| FanOutItem {
+        Ok(collect_fan_out_items(
+            rows,
+            existing_set,
+            |(id, _)| id.as_str(),
+            |(id, wf_name)| FanOutItem {
                 item_type: "workflow_run".to_string(),
                 item_id: id,
                 item_ref: wf_name,
-            })
-            .collect())
+            },
+        ))
     }
 }
 
@@ -69,7 +66,7 @@ mod tests {
         wf_mgr
             .update_workflow_status(
                 &run1.id,
-                crate::workflow::status::WorkflowRunStatus::Completed,
+                crate::workflow::WorkflowRunStatus::Completed,
                 None,
                 None,
             )
@@ -81,13 +78,13 @@ mod tests {
         wf_mgr
             .update_workflow_status(
                 &run2.id,
-                crate::workflow::status::WorkflowRunStatus::Running,
+                crate::workflow::WorkflowRunStatus::Running,
                 None,
                 None,
             )
             .unwrap();
 
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, None, None);
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let provider = WorkflowRunsProvider;
         let items = provider
             .items(&ctx, None, &HashMap::new(), &HashSet::new())
@@ -119,7 +116,7 @@ mod tests {
         wf_mgr
             .update_workflow_status(
                 &run1.id,
-                crate::workflow::status::WorkflowRunStatus::Failed,
+                crate::workflow::WorkflowRunStatus::Failed,
                 None,
                 None,
             )
@@ -131,7 +128,7 @@ mod tests {
         wf_mgr
             .update_workflow_status(
                 &run2.id,
-                crate::workflow::status::WorkflowRunStatus::Completed,
+                crate::workflow::WorkflowRunStatus::Completed,
                 None,
                 None,
             )
@@ -140,7 +137,7 @@ mod tests {
         let mut filter = HashMap::new();
         filter.insert("status".to_string(), "failed".to_string());
 
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, None, None);
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let provider = WorkflowRunsProvider;
         let items = provider
             .items(&ctx, None, &filter, &HashSet::new())
@@ -171,7 +168,7 @@ mod tests {
         wf_mgr
             .update_workflow_status(
                 &run_a.id,
-                crate::workflow::status::WorkflowRunStatus::Completed,
+                crate::workflow::WorkflowRunStatus::Completed,
                 None,
                 None,
             )
@@ -183,7 +180,7 @@ mod tests {
         wf_mgr
             .update_workflow_status(
                 &run_b.id,
-                crate::workflow::status::WorkflowRunStatus::Completed,
+                crate::workflow::WorkflowRunStatus::Completed,
                 None,
                 None,
             )
@@ -192,7 +189,7 @@ mod tests {
         let mut filter = HashMap::new();
         filter.insert("workflow_name".to_string(), "wf-alpha".to_string());
 
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, None, None);
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = WorkflowRunsProvider
             .items(&ctx, None, &filter, &HashSet::new())
             .unwrap();
@@ -216,7 +213,7 @@ mod tests {
         wf_mgr
             .update_workflow_status(
                 &run1.id,
-                crate::workflow::status::WorkflowRunStatus::Completed,
+                crate::workflow::WorkflowRunStatus::Completed,
                 None,
                 None,
             )
@@ -225,7 +222,7 @@ mod tests {
         let mut existing = HashSet::new();
         existing.insert(run1.id.clone());
 
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, None, None);
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = WorkflowRunsProvider
             .items(&ctx, None, &HashMap::new(), &existing)
             .unwrap();

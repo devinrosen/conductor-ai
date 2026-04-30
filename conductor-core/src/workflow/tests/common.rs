@@ -1,9 +1,10 @@
+#![allow(dead_code)]
+
 use super::*;
 use crate::agent::AgentManager;
 use crate::config::Config;
 use crate::schema_config;
 use crate::schema_config::OutputSchema;
-use crate::workflow_dsl::{ApprovalMode, GateNode, GateType, OnTimeout};
 use rusqlite::{named_params, Connection};
 use std::collections::HashMap;
 
@@ -11,133 +12,29 @@ pub(super) fn setup_db() -> Connection {
     crate::test_helpers::setup_db()
 }
 
+/// Create a temp-file SQLite database pre-populated with repo `r1` and worktree `w1`.
+/// Used by tests that call `execute_workflow_standalone` (which opens its own connection).
+pub(super) fn make_standalone_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
+    let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+    let path = tmp.path().to_path_buf();
+    {
+        let conn = crate::db::open_database(&path).expect("open temp db");
+        crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+        crate::test_helpers::insert_test_worktree(
+            &conn,
+            "w1",
+            "r1",
+            "feat-test",
+            "/tmp/ws/feat-test",
+        );
+    }
+    (tmp, path)
+}
+
 /// Set a step's status without touching any optional fields.
 pub(super) fn set_step_status(mgr: &WorkflowManager, step_id: &str, status: WorkflowStepStatus) {
     mgr.update_step_status(step_id, status, None, None, None, None, None)
         .unwrap();
-}
-
-pub(super) fn make_gate_node(gate_type: GateType, on_timeout: OnTimeout) -> GateNode {
-    GateNode {
-        name: "test_gate".to_string(),
-        gate_type,
-        prompt: None,
-        min_approvals: 1,
-        approval_mode: ApprovalMode::default(),
-        timeout_secs: 1,
-        on_timeout,
-        bot_name: None,
-        quality_gate: None,
-        options: None,
-    }
-}
-
-/// Build an `ExecutionState` with all common defaults filled in.
-/// Callers override only the fields they care about via struct update syntax.
-pub(in crate::workflow) fn base_execution_state<'a>(
-    conn: &'a Connection,
-    config: &'a Config,
-    run_id: String,
-    parent_run_id: String,
-) -> ExecutionState<'a> {
-    ExecutionState {
-        conn,
-        config,
-        workflow_run_id: run_id,
-        workflow_name: "test".to_string(),
-        worktree_ctx: crate::workflow::engine::WorktreeContext {
-            worktree_id: None,
-            working_dir: String::new(),
-            worktree_slug: String::new(),
-            repo_path: String::new(),
-            ticket_id: None,
-            repo_id: None,
-            conductor_bin_dir: None,
-            extra_plugin_dirs: vec![],
-        },
-        model: None,
-        exec_config: WorkflowExecConfig::default(),
-        inputs: HashMap::new(),
-        agent_mgr: AgentManager::new(conn),
-        wf_mgr: WorkflowManager::new(conn),
-        parent_run_id,
-        depth: 0,
-        target_label: None,
-        step_results: HashMap::new(),
-        contexts: Vec::new(),
-        position: 0,
-        all_succeeded: true,
-        total_cost: 0.0,
-        total_turns: 0,
-        total_duration_ms: 0,
-        total_input_tokens: 0,
-        total_output_tokens: 0,
-        total_cache_read_input_tokens: 0,
-        total_cache_creation_input_tokens: 0,
-        last_gate_feedback: None,
-        block_output: None,
-        block_with: Vec::new(),
-        resume_ctx: None,
-        default_bot_name: None,
-        triggered_by_hook: false,
-        last_heartbeat_at: ExecutionState::new_heartbeat(),
-        registry: std::sync::Arc::new(crate::workflow::item_provider::build_default_registry()),
-        action_registry: std::sync::Arc::new(
-            crate::workflow::action_executor::ActionRegistry::new(
-                std::collections::HashMap::new(),
-                None,
-            ),
-        ),
-        event_sinks: std::sync::Arc::from(vec![]),
-        cancel_reason: None,
-    }
-}
-
-pub(super) fn make_state_with_run<'a>(
-    conn: &'a Connection,
-    config: &'static Config,
-) -> (ExecutionState<'a>, String) {
-    let agent_mgr = AgentManager::new(conn);
-    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let wf_mgr = WorkflowManager::new(conn);
-    let run = wf_mgr
-        .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
-    wf_mgr
-        .set_waiting_blocked_on(
-            &run.id,
-            &BlockedOn::HumanApproval {
-                gate_name: "test-gate".to_string(),
-                prompt: None,
-                options: vec![],
-            },
-        )
-        .unwrap();
-    let run_id = run.id.clone();
-    let state = ExecutionState {
-        worktree_ctx: crate::workflow::engine::WorktreeContext {
-            worktree_id: Some("w1".to_string()),
-            working_dir: String::new(),
-            worktree_slug: String::new(),
-            repo_path: String::new(),
-            ticket_id: None,
-            repo_id: None,
-            conductor_bin_dir: None,
-            extra_plugin_dirs: vec![],
-        },
-        ..base_execution_state(conn, config, run_id.clone(), parent.id)
-    };
-    (state, run_id)
-}
-
-/// Helper to create a minimal ExecutionState for testing build_variable_map.
-pub(super) fn make_test_state(conn: &Connection) -> ExecutionState<'_> {
-    // We need a config that lives long enough — use a leaked Box for test simplicity.
-    let config: &'static Config = Box::leak(Box::new(Config::default()));
-    ExecutionState {
-        workflow_name: String::new(),
-        ..base_execution_state(conn, config, String::new(), String::new())
-    }
 }
 
 pub(super) fn make_test_schema() -> OutputSchema {
@@ -158,34 +55,6 @@ pub(super) fn make_step_result(step_name: &str, markers: Vec<&str>) -> StepResul
         child_run_id: None,
         structured_output: None,
         output_file: None,
-    }
-}
-
-/// Helper to build an `ExecutionState` suitable for testing loop functions
-/// (no real agents or worktrees needed).
-pub(in crate::workflow) fn make_loop_test_state<'a>(
-    conn: &'a Connection,
-    config: &'a Config,
-) -> ExecutionState<'a> {
-    let agent_mgr = AgentManager::new(conn);
-    let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let wf_mgr = WorkflowManager::new(conn);
-    let run = wf_mgr
-        .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
-
-    ExecutionState {
-        worktree_ctx: crate::workflow::engine::WorktreeContext {
-            worktree_id: Some("w1".into()),
-            working_dir: "/tmp/test".into(),
-            worktree_slug: "test".into(),
-            repo_path: "/tmp/repo".into(),
-            ticket_id: None,
-            repo_id: None,
-            conductor_bin_dir: None,
-            extra_plugin_dirs: vec![],
-        },
-        ..base_execution_state(conn, config, run.id, parent.id)
     }
 }
 
@@ -307,24 +176,14 @@ pub(super) fn make_test_step(
         output_tokens: None,
         cache_read_input_tokens: None,
         cache_creation_input_tokens: None,
+        cost_usd: None,
+        num_turns: None,
+        duration_ms: None,
         fan_out_total: None,
         fan_out_completed: 0,
         fan_out_failed: 0,
         fan_out_skipped: 0,
         step_error: None,
-    }
-}
-
-/// Helper to build a ResumeContext from a step map.
-pub(super) fn make_resume_ctx(
-    step_map: HashMap<StepKey, WorkflowRunStep>,
-    child_runs: HashMap<String, crate::agent::AgentRun>,
-) -> ResumeContext {
-    let skip_completed = step_map.keys().cloned().collect();
-    ResumeContext {
-        skip_completed,
-        step_map,
-        child_runs,
     }
 }
 
@@ -334,13 +193,13 @@ pub(super) fn make_resume_config() -> &'static Config {
 }
 
 pub(super) fn make_workflow_def_with_inputs(
-    inputs: Vec<crate::workflow_dsl::InputDecl>,
-) -> crate::workflow_dsl::WorkflowDef {
-    crate::workflow_dsl::WorkflowDef {
+    inputs: Vec<runkon_flow::dsl::InputDecl>,
+) -> runkon_flow::dsl::WorkflowDef {
+    runkon_flow::dsl::WorkflowDef {
         name: "test-wf".to_string(),
         title: None,
         description: String::new(),
-        trigger: crate::workflow_dsl::WorkflowTrigger::Manual,
+        trigger: runkon_flow::dsl::WorkflowTrigger::Manual,
         targets: vec![],
         group: None,
         inputs,

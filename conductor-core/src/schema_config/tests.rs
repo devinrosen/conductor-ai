@@ -111,7 +111,7 @@ fields:
 fn test_validate_valid_output() {
     let schema = parse_schema_content(TEST_SCHEMA_YAML, "test").unwrap();
     let json = r#"
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {
   "findings": [
     {
@@ -125,7 +125,7 @@ fn test_validate_valid_output() {
   "approved": false,
   "summary": "Found 1 high severity issue"
 }
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 "#;
     let result = parse_structured_output(json, &schema).unwrap();
     assert_eq!(result.context, "Found 1 high severity issue");
@@ -138,12 +138,12 @@ fn test_validate_valid_output() {
 fn test_validate_missing_required_field() {
     let schema = parse_schema_content(TEST_SCHEMA_YAML, "test").unwrap();
     let json = r#"
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {
   "findings": [],
   "summary": "All good"
 }
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 "#;
     let result = parse_structured_output(json, &schema);
     assert!(result.is_err());
@@ -154,13 +154,13 @@ fn test_validate_missing_required_field() {
 fn test_validate_wrong_type() {
     let schema = parse_schema_content(TEST_SCHEMA_YAML, "test").unwrap();
     let json = r#"
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {
   "findings": [],
   "approved": "yes",
   "summary": "All good"
 }
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 "#;
     let result = parse_structured_output(json, &schema);
     assert!(result.is_err());
@@ -171,7 +171,7 @@ fn test_validate_wrong_type() {
 fn test_validate_invalid_enum() {
     let schema = parse_schema_content(TEST_SCHEMA_YAML, "test").unwrap();
     let json = r#"
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {
   "findings": [
     {
@@ -185,7 +185,7 @@ fn test_validate_invalid_enum() {
   "approved": true,
   "summary": "test"
 }
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 "#;
     let result = parse_structured_output(json, &schema);
     assert!(result.is_err());
@@ -197,14 +197,14 @@ fn test_lenient_parsing_code_fences() {
     let schema =
         parse_schema_content("fields:\n  name: string\n  count: number\n", "test").unwrap();
     let json = r#"
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 ```json
 {
   "name": "hello",
   "count": 42
 }
 ```
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 "#;
     let result = parse_structured_output(json, &schema);
     assert!(result.is_ok());
@@ -215,12 +215,12 @@ fn test_lenient_parsing_trailing_commas() {
     let schema =
         parse_schema_content("fields:\n  name: string\n  count: number\n", "test").unwrap();
     let json = r#"
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {
   "name": "hello",
   "count": 42,
 }
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 "#;
     let result = parse_structured_output(json, &schema);
     assert!(result.is_ok());
@@ -279,8 +279,8 @@ fn test_prompt_generation() {
     let schema =
         parse_schema_content("fields:\n  approved: boolean\n  summary: string\n", "test").unwrap();
     let prompt = generate_prompt_instructions(&schema);
-    assert!(prompt.contains("<<<CONDUCTOR_OUTPUT>>>"));
-    assert!(prompt.contains("<<<END_CONDUCTOR_OUTPUT>>>"));
+    assert!(prompt.contains("<<<FLOW_OUTPUT>>>"));
+    assert!(prompt.contains("<<<END_FLOW_OUTPUT>>>"));
     assert!(prompt.contains("\"approved\""));
     assert!(prompt.contains("\"summary\""));
 }
@@ -541,23 +541,23 @@ fn test_schema_ref_backslash_treated_as_path() {
 #[test]
 fn test_parse_structured_output_no_block() {
     let schema = parse_schema_content("fields:\n  name: string\n", "test").unwrap();
-    let result = parse_structured_output("This output has no CONDUCTOR_OUTPUT block", &schema);
+    let result = parse_structured_output("This output has no FLOW_OUTPUT block", &schema);
     assert!(result.is_err());
     assert!(result
         .unwrap_err()
         .to_string()
-        .contains("No <<<CONDUCTOR_OUTPUT>>>"));
+        .contains("No <<<FLOW_OUTPUT>>>"));
 }
 
 #[test]
 fn test_parse_structured_output_missing_end_marker() {
     let schema = parse_schema_content("fields:\n  name: string\n", "test").unwrap();
     let result = parse_structured_output(
-        "<<<CONDUCTOR_OUTPUT>>>\n{\"name\": \"hello\"}\nno end marker here",
+        "<<<FLOW_OUTPUT>>>\n{\"name\": \"hello\"}\nno end marker here",
         &schema,
     );
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("CONDUCTOR_OUTPUT"));
+    assert!(result.unwrap_err().to_string().contains("FLOW_OUTPUT"));
 }
 
 #[test]
@@ -766,15 +766,15 @@ fn test_parse_structured_output_skips_code_examples() {
 
     let text = r#"Here is how to emit output:
 ```bash
-echo '<<<CONDUCTOR_OUTPUT>>>'
+echo '<<<FLOW_OUTPUT>>>'
 echo '{"summary": "fake"}'
-echo '<<<END_CONDUCTOR_OUTPUT>>>'
+echo '<<<END_FLOW_OUTPUT>>>'
 ```
 
 Actual output:
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"summary": "real result"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 "#;
     let result = parse_structured_output(text, &schema).unwrap();
     assert_eq!(result.context, "real result");
@@ -787,19 +787,19 @@ fn test_parse_structured_output_multiple_complete_blocks() {
     let schema = parse_schema_content(schema_yaml, "test").unwrap();
 
     let text = r#"Example 1:
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"summary": "first example"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 
 Example 2:
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"summary": "second example"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 
 Real output:
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"summary": "the actual result"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 "#;
     let result = parse_structured_output(text, &schema).unwrap();
     assert_eq!(result.context, "the actual result");
@@ -812,11 +812,11 @@ fn test_parse_structured_output_code_fenced() {
     let schema = parse_schema_content(schema_yaml, "test").unwrap();
 
     let text = r#"Here is my output:
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 ```json
 {"summary": "fenced result"}
 ```
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 "#;
     let result = parse_structured_output(text, &schema).unwrap();
     assert_eq!(result.context, "fenced result");
@@ -894,7 +894,7 @@ fn test_parse_scalar_array_enum() {
 fn test_validate_scalar_array() {
     let yaml = "fields:\n  tags:\n    type: array\n    items: string\n";
     let schema = parse_schema_content(yaml, "test").unwrap();
-    let json = "<<<CONDUCTOR_OUTPUT>>>\n{\"tags\": [\"a\", \"b\"]}\n<<<END_CONDUCTOR_OUTPUT>>>";
+    let json = "<<<FLOW_OUTPUT>>>\n{\"tags\": [\"a\", \"b\"]}\n<<<END_FLOW_OUTPUT>>>";
     let result = parse_structured_output(json, &schema);
     assert!(result.is_ok());
 }
@@ -903,7 +903,7 @@ fn test_validate_scalar_array() {
 fn test_validate_scalar_array_rejects_wrong_type() {
     let yaml = "fields:\n  tags:\n    type: array\n    items: string\n";
     let schema = parse_schema_content(yaml, "test").unwrap();
-    let json = "<<<CONDUCTOR_OUTPUT>>>\n{\"tags\": [1, 2]}\n<<<END_CONDUCTOR_OUTPUT>>>";
+    let json = "<<<FLOW_OUTPUT>>>\n{\"tags\": [1, 2]}\n<<<END_FLOW_OUTPUT>>>";
     let result = parse_structured_output(json, &schema);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("expected string"));
@@ -921,7 +921,7 @@ fn test_prompt_scalar_array() {
 fn test_validate_enum_scalar_array_valid() {
     let yaml = "fields:\n  status:\n    type: array\n    items: \"enum(a,b)\"\n";
     let schema = parse_schema_content(yaml, "test").unwrap();
-    let json = "<<<CONDUCTOR_OUTPUT>>>\n{\"status\": [\"a\"]}\n<<<END_CONDUCTOR_OUTPUT>>>";
+    let json = "<<<FLOW_OUTPUT>>>\n{\"status\": [\"a\"]}\n<<<END_FLOW_OUTPUT>>>";
     let result = parse_structured_output(json, &schema);
     assert!(result.is_ok());
 }
@@ -930,7 +930,7 @@ fn test_validate_enum_scalar_array_valid() {
 fn test_validate_enum_scalar_array_rejects_invalid_value() {
     let yaml = "fields:\n  status:\n    type: array\n    items: \"enum(a,b)\"\n";
     let schema = parse_schema_content(yaml, "test").unwrap();
-    let json = "<<<CONDUCTOR_OUTPUT>>>\n{\"status\": [\"c\"]}\n<<<END_CONDUCTOR_OUTPUT>>>";
+    let json = "<<<FLOW_OUTPUT>>>\n{\"status\": [\"c\"]}\n<<<END_FLOW_OUTPUT>>>";
     let result = parse_structured_output(json, &schema);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("is not one of"));
@@ -940,7 +940,7 @@ fn test_validate_enum_scalar_array_rejects_invalid_value() {
 fn test_validate_enum_scalar_array_rejects_wrong_type() {
     let yaml = "fields:\n  status:\n    type: array\n    items: \"enum(a,b)\"\n";
     let schema = parse_schema_content(yaml, "test").unwrap();
-    let json = "<<<CONDUCTOR_OUTPUT>>>\n{\"status\": [123]}\n<<<END_CONDUCTOR_OUTPUT>>>";
+    let json = "<<<FLOW_OUTPUT>>>\n{\"status\": [123]}\n<<<END_FLOW_OUTPUT>>>";
     let result = parse_structured_output(json, &schema);
     assert!(result.is_err());
     assert!(result
@@ -1007,10 +1007,10 @@ fn test_validate_scalar_array_number() {
     let yaml = "fields:\n  scores:\n    type: array\n    items: number\n";
     let schema = parse_schema_content(yaml, "test").unwrap();
 
-    let ok = "<<<CONDUCTOR_OUTPUT>>>\n{\"scores\": [1, 2.5, 3]}\n<<<END_CONDUCTOR_OUTPUT>>>";
+    let ok = "<<<FLOW_OUTPUT>>>\n{\"scores\": [1, 2.5, 3]}\n<<<END_FLOW_OUTPUT>>>";
     assert!(parse_structured_output(ok, &schema).is_ok());
 
-    let bad = "<<<CONDUCTOR_OUTPUT>>>\n{\"scores\": [\"nope\"]}\n<<<END_CONDUCTOR_OUTPUT>>>";
+    let bad = "<<<FLOW_OUTPUT>>>\n{\"scores\": [\"nope\"]}\n<<<END_FLOW_OUTPUT>>>";
     let err = parse_structured_output(bad, &schema)
         .unwrap_err()
         .to_string();
@@ -1022,10 +1022,10 @@ fn test_validate_scalar_array_boolean() {
     let yaml = "fields:\n  flags:\n    type: array\n    items: boolean\n";
     let schema = parse_schema_content(yaml, "test").unwrap();
 
-    let ok = "<<<CONDUCTOR_OUTPUT>>>\n{\"flags\": [true, false]}\n<<<END_CONDUCTOR_OUTPUT>>>";
+    let ok = "<<<FLOW_OUTPUT>>>\n{\"flags\": [true, false]}\n<<<END_FLOW_OUTPUT>>>";
     assert!(parse_structured_output(ok, &schema).is_ok());
 
-    let bad = "<<<CONDUCTOR_OUTPUT>>>\n{\"flags\": [\"yes\"]}\n<<<END_CONDUCTOR_OUTPUT>>>";
+    let bad = "<<<FLOW_OUTPUT>>>\n{\"flags\": [\"yes\"]}\n<<<END_FLOW_OUTPUT>>>";
     let err = parse_structured_output(bad, &schema)
         .unwrap_err()
         .to_string();
@@ -1108,15 +1108,15 @@ fields:
 "#;
     let schema = parse_schema_content(schema_yaml, "test").unwrap();
 
-    // The description field value contains <<<CONDUCTOR_OUTPUT>>> — rfind would
+    // The description field value contains <<<FLOW_OUTPUT>>> — rfind would
     // have selected that inner occurrence as the block start, causing a parse failure.
     let text = r#"Some preamble text.
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {
   "summary": "all good",
-  "description": "output block looks like <<<CONDUCTOR_OUTPUT>>> but is inside JSON"
+  "description": "output block looks like <<<FLOW_OUTPUT>>> but is inside JSON"
 }
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 "#;
     let result = parse_structured_output(text, &schema).unwrap();
     assert_eq!(result.context, "all good");
@@ -1162,14 +1162,14 @@ fn test_example_scalar_array_enum() {
 }
 
 // ---------------------------------------------------------------------------
-// fix_invalid_backslash_escapes unit tests
+// fix_backslash_escapes unit tests
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_fix_escapes_bare_backslash_in_string() {
     // `\.` is not a valid JSON escape; should become `\\.`
     let input = r#"{"key": "foo\.bar"}"#;
-    let output = fix_invalid_backslash_escapes(input);
+    let output = fix_backslash_escapes(input);
     assert_eq!(output, r#"{"key": "foo\\.bar"}"#);
     // The result must parse as valid JSON
     let v: serde_json::Value = serde_json::from_str(&output).unwrap();
@@ -1180,7 +1180,7 @@ fn test_fix_escapes_bare_backslash_in_string() {
 fn test_fix_escapes_valid_sequences_not_doubled() {
     // All valid two-character JSON escape sequences must pass through unchanged.
     let input = r#"{"a": "\"\\\/\b\f\n\r\t\u1234"}"#;
-    let output = fix_invalid_backslash_escapes(input);
+    let output = fix_backslash_escapes(input);
     assert_eq!(output, input, "valid escape sequences must not be modified");
 }
 
@@ -1188,7 +1188,7 @@ fn test_fix_escapes_valid_sequences_not_doubled() {
 fn test_fix_escapes_backslash_outside_string_unchanged() {
     // Outside a JSON string literal the sanitizer must not modify anything.
     let input = r#"\{"key": "value"}"#;
-    let output = fix_invalid_backslash_escapes(input);
+    let output = fix_backslash_escapes(input);
     assert_eq!(output, input);
 }
 
@@ -1196,7 +1196,7 @@ fn test_fix_escapes_backslash_outside_string_unchanged() {
 fn test_fix_escapes_swift_keypath_reproduction() {
     // Exact Swift key-path case from the ticket: `@Environment(\.openURL)`
     let input = r#"{"summary": "Add @Environment(\.openURL) button"}"#;
-    let output = fix_invalid_backslash_escapes(input);
+    let output = fix_backslash_escapes(input);
     let v: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(v["summary"], r"Add @Environment(\.openURL) button");
 }
@@ -1205,7 +1205,7 @@ fn test_fix_escapes_swift_keypath_reproduction() {
 fn test_fix_escapes_mixed_valid_and_invalid() {
     // A string with both a valid `\n` and an invalid `\.` — only `\.` must be fixed.
     let input = "{\"msg\": \"line1\\nfoo\\.bar\"}";
-    let output = fix_invalid_backslash_escapes(input);
+    let output = fix_backslash_escapes(input);
     let v: serde_json::Value = serde_json::from_str(&output).unwrap();
     let msg = v["msg"].as_str().unwrap();
     assert!(msg.contains('\n'), "\\n must remain a newline");
@@ -1220,7 +1220,7 @@ fn test_fix_escapes_double_backslash_at_string_end() {
     // `"\\"` is valid JSON (a string containing a single backslash).
     // The sanitizer must not alter it.
     let input = r#"{"k": "\\"}"#;
-    let output = fix_invalid_backslash_escapes(input);
+    let output = fix_backslash_escapes(input);
     assert_eq!(
         output, input,
         "already-valid double backslash must not be modified"
@@ -1233,7 +1233,7 @@ fn test_fix_escapes_double_backslash_at_string_end() {
 fn test_fix_escapes_escaped_quote_not_treated_as_string_boundary() {
     // `\"` inside a string must not close the string.
     let input = r#"{"k": "say \"hi\" now"}"#;
-    let output = fix_invalid_backslash_escapes(input);
+    let output = fix_backslash_escapes(input);
     assert_eq!(output, input);
     let v: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(v["k"], r#"say "hi" now"#);
@@ -1249,9 +1249,9 @@ fn test_parse_structured_output_swift_keypath() {
     let schema_yaml = "fields:\n  summary:\n    type: string\n";
     let schema = parse_schema_content(schema_yaml, "test").unwrap();
     let text = r#"Done.
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"summary": "Add @Environment(\.openURL) button to the toolbar"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 "#;
     let result = parse_structured_output(text, &schema);
     assert!(

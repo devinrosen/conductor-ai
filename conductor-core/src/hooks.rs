@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::error::Result;
-use crate::workflow::status::WorkflowRunStatus;
+use crate::workflow::WorkflowRunStatus;
 
 /// Per-workflow hook configuration parsed from `.conductor/config.toml`.
 ///

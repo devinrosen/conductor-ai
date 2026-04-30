@@ -27,5 +27,5 @@ Prior step context (ticket summary + affected diagrams): {{prior_context}}
    git diff --cached docs/diagrams/
    ```
 
-6. Emit `<<<CONDUCTOR_OUTPUT>>>` with:
+6. Emit `<<<FLOW_OUTPUT>>>` with:
    - `context`: list of files updated, a one-sentence description of what changed in each, and the full `git diff --cached` output so the reviewer can inspect the exact changes

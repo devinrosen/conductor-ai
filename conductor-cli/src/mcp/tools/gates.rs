@@ -34,7 +34,17 @@ pub(super) fn tool_approve_gate(
         Ok(None) => return tool_err(format!("No waiting gate found for run {run_id}")),
         Err(e) => return tool_err(e),
     };
-    match wf_mgr.approve_gate(&step.id, "mcp", feedback, selections.as_deref()) {
+    let context_out = selections
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(conductor_core::workflow::helpers::format_gate_selection_context);
+    match wf_mgr.approve_gate(
+        &step.id,
+        "mcp",
+        feedback,
+        selections.as_deref(),
+        context_out,
+    ) {
         Ok(()) => tool_ok(format!("Gate approved for run {run_id}.")),
         Err(e) => tool_err(e),
     }

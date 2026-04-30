@@ -23,4 +23,4 @@ Do NOT flag:
 - Code quality in non-test files
 
 Produce structured output with findings, each having file, line, severity (critical/warning), and message.
-If you find critical or warning issues, include `has_review_issues` in your CONDUCTOR_OUTPUT markers.
+If you find critical or warning issues, include `has_review_issues` in your FLOW_OUTPUT markers.

@@ -9,38 +9,23 @@ pub(crate) mod api_call_executor;
 mod batch_validate;
 pub mod channel_event_sink;
 pub use channel_event_sink::ChannelEventSink;
-pub(crate) mod cancellation;
-pub(crate) mod cancellation_reason;
+pub use runkon_flow::events::EventSink;
 pub(crate) mod claude_agent_executor;
 pub(crate) mod constants;
-pub(crate) mod engine;
+pub(crate) mod coordinator;
 pub(crate) mod engine_error;
 pub mod estimation;
 pub(crate) mod executors;
-pub(crate) mod flow_engine;
-pub(crate) mod helpers;
+pub mod helpers;
 pub(crate) mod item_provider;
 pub(crate) mod manager;
 pub(crate) mod output;
-pub mod persistence;
-#[cfg(any(test, feature = "test-helpers"))]
-pub(crate) mod persistence_memory;
-pub mod persistence_sqlite;
+pub(crate) mod persistence_sqlite;
 pub(crate) mod prompt_builder;
-pub(crate) mod run_context;
+pub(crate) mod runkon_bridge;
+pub(crate) mod runkon_gate_bridge;
 pub(crate) mod script_env_provider;
-pub(crate) mod status;
 pub(crate) mod types;
-
-// Re-export DSL types so consumers go through `workflow::` instead of `workflow_dsl::` directly.
-pub use crate::workflow_dsl::{
-    collect_agent_names, collect_workflow_refs, default_skills_dir, detect_workflow_cycles,
-    load_workflow_by_name, make_script_resolver, parse_workflow_str, resolve_script_path,
-    validate_script_steps, validate_workflow_semantics, AgentRef, AlwaysNode, CallNode,
-    CallWorkflowNode, Condition, DoNode, DoWhileNode, GateNode, GateType, IfNode, InputDecl,
-    InputType, OnFail, ParallelNode, UnlessNode, ValidationError, ValidationReport, WhileNode,
-    WorkflowDef, WorkflowNode, WorkflowTrigger, WorkflowWarning, MAX_WORKFLOW_DEPTH,
-};
 
 // Re-export batch validation from the workflow layer (not DSL).
 pub use batch_validate::{
@@ -50,40 +35,61 @@ pub use batch_validate::{
 
 // Re-export all public types and functions to preserve existing import paths.
 pub use constants::{
-    CONDUCTOR_OUTPUT_INSTRUCTION, REGRESSION_COST_THRESHOLD_PCT, REGRESSION_DURATION_THRESHOLD_PCT,
+    REGRESSION_COST_THRESHOLD_PCT, REGRESSION_DURATION_THRESHOLD_PCT,
     REGRESSION_FAILURE_RATE_THRESHOLD_PP, REGRESSION_MIN_RECENT_RUNS, STEP_ROLE_FOREACH,
     STEP_ROLE_WORKFLOW,
 };
+pub use runkon_flow::constants::FLOW_OUTPUT_INSTRUCTION;
 /// Returns the list of variable keys that the workflow engine injects automatically
 /// from run context (ticket and repo metadata, plus `workflow_run_id`).
 ///
 /// Use this instead of importing `ENGINE_INJECTED_KEYS` directly.
 pub fn injected_variable_keys() -> &'static [&'static str] {
-    engine::ENGINE_INJECTED_KEYS
+    coordinator::ENGINE_INJECTED_KEYS
 }
 
-pub use engine::{
-    apply_workflow_input_defaults, execute_workflow, execute_workflow_standalone, resume_workflow,
-    resume_workflow_standalone, validate_resume_preconditions,
+pub use coordinator::{
+    apply_workflow_input_defaults, execute_workflow_standalone, resume_workflow,
+    resume_workflow_standalone, spawn_claimed_runs, spawn_heartbeat_resume, spawn_workflow_resume,
+    validate_resume_preconditions,
 };
 pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
 pub use manager::recovery::{ReapedStaleRun, StaleWorkflowRun};
-pub use manager::{FanOutItemRow, InvalidWorkflowEntry, WorkflowManager};
-pub use output::{parse_conductor_output, ConductorOutput};
-pub use persistence::{
+pub use manager::{InvalidWorkflowEntry, StepMetrics, WorkflowManager};
+pub use output::{parse_flow_output, FlowOutput};
+pub use runkon_flow::traits::persistence::{
     FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,
     WorkflowPersistence,
 };
-pub use persistence_sqlite::SqliteWorkflowPersistence;
-pub use status::{WorkflowRunStatus, WorkflowStepStatus};
+pub use runkon_flow::types::FanOutItemRow;
+pub use types::SpawnHeartbeatResumeParams;
+pub use types::WorkflowRunStepExt;
 pub use types::{
-    resolve_conductor_bin_dir, ActiveWorkflowCounts, BlockedOn, ContextEntry, GateAnalyticsRow,
-    MetadataEntry, PendingGateAnalyticsRow, PendingGateRow, RunIdSlot, SpikeBaseline,
-    StepFailureHeatmapRow, StepResult, StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity,
-    WorkflowExecConfig, WorkflowExecInput, WorkflowExecStandalone, WorkflowFailureRateTrendRow,
-    WorkflowPercentiles, WorkflowRegressionSignal, WorkflowResult, WorkflowResumeInput,
-    WorkflowResumeStandalone, WorkflowRun, WorkflowRunContext, WorkflowRunMetricsRow,
-    WorkflowRunStep, WorkflowStepSummary, WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    resolve_conductor_bin_dir, ActiveWorkflowCounts, GateAnalyticsRow, MetadataEntry,
+    PendingGateAnalyticsRow, PendingGateRow, RunIdSlot, SpikeBaseline, StepFailureHeatmapRow,
+    StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity, WorkflowExecInput,
+    WorkflowExecStandalone, WorkflowFailureRateTrendRow, WorkflowPercentiles,
+    WorkflowRegressionSignal, WorkflowResumeInput, WorkflowResumeStandalone, WorkflowRunContext,
+    WorkflowRunMetricsRow, WorkflowTokenAggregate, WorkflowTokenTrendRow,
+};
+
+// Re-export DSL types and helpers that downstream crates (conductor-web,
+// conductor-cli, etc.) import through `conductor_core::workflow`.
+pub use runkon_flow::dsl::{
+    collect_agent_names, collect_workflow_refs, default_skills_dir, detect_workflow_cycles,
+    load_workflow_by_name, make_script_resolver, parse_workflow_str, resolve_script_path,
+    validate_script_steps, validate_workflow_semantics, AgentRef, AlwaysNode, CallNode,
+    CallWorkflowNode, Condition, DoNode, DoWhileNode, GateNode, GateType, IfNode, InputDecl,
+    InputType, OnFail, ParallelNode, UnlessNode, ValidationError, ValidationReport, WhileNode,
+    WorkflowDef, WorkflowNode, WorkflowTrigger, WorkflowWarning, MAX_WORKFLOW_DEPTH,
+};
+
+// Re-export unified runkon-flow types so downstream crates can import them from
+// `conductor_core::workflow` as before.
+pub use runkon_flow::status::{WorkflowRunStatus, WorkflowStepStatus};
+pub use runkon_flow::types::{
+    extract_workflow_title, BlockedOn, ContextEntry, StepResult, WorkflowExecConfig,
+    WorkflowResult, WorkflowRun, WorkflowRunStep, WorkflowStepSummary,
 };
 
 use crate::agent_config::AgentSpec;

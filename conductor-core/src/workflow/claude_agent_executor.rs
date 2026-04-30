@@ -1,10 +1,13 @@
-use crate::agent::AgentRunStatus;
-use crate::config::Config;
+use std::sync::Arc;
+
+use crate::config::{agent_log_path, Config};
 use crate::error::{ConductorError, Result};
-use crate::runtime::PollError;
+use crate::runtime::adapter::SqliteHostAdapter;
+use crate::runtime::{PollError, RuntimeOptions};
 use crate::workflow::action_executor::{
     ActionExecutor, ActionOutput, ActionParams, ExecutionContext,
 };
+use runkon_runtimes::RunStatus;
 
 /// Wraps `AgentRuntime` dispatch behind the `ActionExecutor` trait.
 ///
@@ -45,7 +48,27 @@ impl ActionExecutor for ClaudeAgentExecutor {
 
         let (agent_def, prompt) = super::helpers::load_agent_and_build_prompt(ectx, params)?;
 
-        let runtime = crate::runtime::resolve_runtime(&agent_def.runtime, &self.config)?;
+        let options = RuntimeOptions {
+            binary_path: crate::agent_runtime::resolve_conductor_bin().into(),
+            log_path_for_run: Arc::new(|run_id| {
+                agent_log_path(run_id)
+                    .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")))
+            }),
+            workspace_root: self.config.general.workspace_root.clone(),
+        };
+
+        let runtime = crate::runtime::resolve_runtime(
+            &agent_def.runtime,
+            self.config
+                .general
+                .agent_permission_mode
+                .to_runtime_permission_mode(),
+            &self.config.runtimes,
+            &options,
+        )?;
+
+        let tracker = Arc::new(SqliteHostAdapter::new(ectx.db_path.clone())?);
+        let event_sink = tracker.clone();
 
         let request = crate::runtime::RuntimeRequest {
             run_id: ectx.run_id.clone(),
@@ -55,17 +78,14 @@ impl ActionExecutor for ClaudeAgentExecutor {
             model: ectx.model.clone(),
             bot_name: ectx.bot_name.clone(),
             plugin_dirs: ectx.plugin_dirs.clone(),
-            db_path: ectx.db_path.clone(),
+            tracker,
+            event_sink,
         };
 
         runtime.spawn_validated(&request)?;
 
-        let completed = match runtime.poll(
-            &ectx.run_id,
-            ectx.shutdown.as_ref(),
-            ectx.step_timeout,
-            &ectx.db_path,
-        ) {
+        let completed = match runtime.poll(&ectx.run_id, ectx.shutdown.as_ref(), ectx.step_timeout)
+        {
             Ok(run) => run,
             Err(PollError::Cancelled) => {
                 return Err(ConductorError::WorkflowCancelled);
@@ -75,7 +95,7 @@ impl ActionExecutor for ClaudeAgentExecutor {
             }
         };
 
-        let succeeded = completed.status == AgentRunStatus::Completed;
+        let succeeded = completed.status == RunStatus::Completed;
 
         let (markers, context, structured_output) =
             crate::workflow::output::interpret_agent_output(

@@ -452,7 +452,7 @@ fn show_confirm_quit_with_running_agents_includes_count() {
             id: "run1".into(),
             worktree_id: Some("wt1".into()),
             repo_id: None,
-            claude_session_id: None,
+            session_id: None,
             prompt: String::new(),
             status: conductor_core::agent::AgentRunStatus::Running,
             result_text: None,

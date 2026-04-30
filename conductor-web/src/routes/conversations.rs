@@ -257,6 +257,7 @@ pub async fn send_message(
     let final_prompt =
         write_attachments_and_augment_prompt(&run.id, &working_dir, &prompt, &raw_attachments)?;
 
+    let runtime_permission = permission_mode.map(|m| m.to_runtime_permission_mode());
     let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
         run_id: &run.id,
         working_dir: &working_dir,
@@ -264,7 +265,7 @@ pub async fn send_message(
         resume_session_id: resume_session_id.as_deref(),
         model: model.as_deref(),
         bot_name: None,
-        permission_mode: permission_mode.as_ref(),
+        permission_mode: runtime_permission.as_ref(),
         plugin_dirs: &[],
     };
     spawn_headless_agent(&state, &spawn_params, None).await?;

@@ -44,7 +44,7 @@ Write a structured assessment with:
 - For READY: a one-paragraph summary of what the agent will implement and why you are confident the ticket is unambiguous
 - For SHOULD CLOSE: a brief explanation of why the ticket is invalid, already resolved, or no longer actionable (this becomes the `close_reason`)
 
-Emit `<<<CONDUCTOR_OUTPUT>>>` with:
+Emit `<<<FLOW_OUTPUT>>>` with:
 - `context`: your full assessment text
 - `markers`: include `ticket_ready` if the ticket is ready, `has_open_questions` if it is not, `should_close` if the ticket is invalid or resolved
 - `close_reason`: (only when `should_close`) a one-sentence human-readable explanation

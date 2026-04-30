@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use axum::http::HeaderValue;
+use axum::http::{header, HeaderValue, Method};
 use conductor_core::agent::AgentManager;
 use conductor_core::config::{conductor_dir, db_path, ensure_dirs, load_config, save_config};
 use conductor_core::db::open_database;
 use tokio::sync::{Mutex, RwLock};
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use conductor_web::assets::static_handler;
@@ -148,12 +148,27 @@ async fn main() -> Result<()> {
         }
         {
             let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-            match wf_mgr.reap_heartbeat_stuck_runs(&config, 60, conductor_bin_dir) {
-                Ok(n) if n > 0 => {
-                    tracing::info!("Auto-resuming {n} stuck workflow run(s) on startup")
+            match wf_mgr.claim_heartbeat_stuck_runs(&config, 60) {
+                Ok(claimed) if !claimed.is_empty() => {
+                    tracing::info!(
+                        "Auto-resuming {} stuck workflow run(s) on startup",
+                        claimed.len()
+                    );
+                    for (run_id, wf_name, label) in claimed {
+                        conductor_core::workflow::spawn_heartbeat_resume(
+                            conductor_core::workflow::SpawnHeartbeatResumeParams {
+                                run_id,
+                                workflow_name: wf_name,
+                                target_label: label,
+                                config: config.clone(),
+                                conductor_bin_dir: conductor_bin_dir.clone(),
+                                db_path: None,
+                            },
+                        );
+                    }
                 }
                 Ok(_) => {}
-                Err(e) => tracing::warn!("reap_heartbeat_stuck_runs failed on startup: {e}"),
+                Err(e) => tracing::warn!("claim_heartbeat_stuck_runs failed on startup: {e}"),
             }
         }
     }
@@ -236,12 +251,24 @@ async fn main() -> Result<()> {
                 }
                 {
                     let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-                    match wf_mgr.reap_heartbeat_stuck_runs(&cfg, 60, conductor_bin_dir.clone()) {
-                        Ok(n) if n > 0 => {
-                            tracing::info!("Auto-resuming {n} stuck workflow run(s)")
+                    match wf_mgr.claim_heartbeat_stuck_runs(&cfg, 60) {
+                        Ok(claimed) if !claimed.is_empty() => {
+                            tracing::info!("Auto-resuming {} stuck workflow run(s)", claimed.len());
+                            for (run_id, wf_name, label) in claimed {
+                                conductor_core::workflow::spawn_heartbeat_resume(
+                                    conductor_core::workflow::SpawnHeartbeatResumeParams {
+                                        run_id,
+                                        workflow_name: wf_name,
+                                        target_label: label,
+                                        config: (*cfg).clone(),
+                                        conductor_bin_dir: conductor_bin_dir.clone(),
+                                        db_path: None,
+                                    },
+                                );
+                            }
                         }
                         Ok(_) => {}
-                        Err(e) => tracing::warn!("reap_heartbeat_stuck_runs failed: {e}"),
+                        Err(e) => tracing::warn!("claim_heartbeat_stuck_runs failed: {e}"),
                     }
                     let auto_resume_limit = cfg.general.auto_resume_limit;
                     if auto_resume_limit > 0 {
@@ -254,10 +281,17 @@ async fn main() -> Result<()> {
                             Ok(_) => {}
                             Err(e) => tracing::warn!("classify_resumable_workflows failed: {e}"),
                         }
-                        if let Err(e) =
-                            wf_mgr.watchdog_needs_resume_workflows(&cfg, conductor_bin_dir)
-                        {
-                            tracing::warn!("watchdog_needs_resume_workflows failed: {e}");
+                        match wf_mgr.claim_needs_resume_runs(&cfg) {
+                            Ok(claimed) => {
+                                for run_id in claimed {
+                                    conductor_core::workflow::spawn_workflow_resume(
+                                        run_id,
+                                        Arc::new((*cfg).clone()),
+                                        conductor_bin_dir.clone(),
+                                    );
+                                }
+                            }
+                            Err(e) => tracing::warn!("claim_needs_resume_runs failed: {e}"),
                         }
                     }
                 }
@@ -737,8 +771,12 @@ async fn main() -> Result<()> {
     }
 
     let mut origins: Vec<HeaderValue> = vec![
-        format!("http://localhost:{port}").parse().unwrap(),
-        format!("http://127.0.0.1:{port}").parse().unwrap(),
+        format!("http://localhost:{port}")
+            .parse()
+            .expect("localhost CORS origin is always valid for a u16 port"),
+        format!("http://127.0.0.1:{port}")
+            .parse()
+            .expect("localhost CORS origin is always valid for a u16 port"),
     ];
     if let Ok(v) = "http://localhost:5173".parse() {
         origins.push(v);
@@ -749,8 +787,14 @@ async fn main() -> Result<()> {
 
     let cors = CorsLayer::new()
         .allow_origin(origins)
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::PATCH,
+        ])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
 
     let app = api_router()
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", ApiDoc::openapi()))
@@ -762,7 +806,11 @@ async fn main() -> Result<()> {
     tracing::info!("Listening on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
@@ -821,7 +869,7 @@ mod tests {
             id: id.to_string(),
             worktree_id: None,
             repo_id: None,
-            claude_session_id: None,
+            session_id: None,
             prompt: String::new(),
             status: AgentRunStatus::Running,
             result_text: None,

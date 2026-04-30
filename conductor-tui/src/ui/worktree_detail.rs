@@ -574,7 +574,7 @@ fn render_agent_status_line(
                 stats,
                 Style::default().fg(theme.label_secondary),
             ));
-            if let Some(ref sid) = run.claude_session_id {
+            if let Some(ref sid) = run.session_id {
                 spans.push(Span::styled(
                     format!("  session: {}", &sid[..13.min(sid.len())]),
                     Style::default().fg(theme.label_secondary),

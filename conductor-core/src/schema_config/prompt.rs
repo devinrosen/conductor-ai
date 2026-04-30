@@ -11,13 +11,13 @@ pub fn generate_prompt_instructions(schema: &OutputSchema) -> String {
         "When you have finished your work, output the following block exactly as the\n\
          last thing in your response. Do not include this block in code examples or\n\
          anywhere else — only as the final output.\n\n\
-         <<<CONDUCTOR_OUTPUT>>>\n",
+         <<<FLOW_OUTPUT>>>\n",
     );
 
     let json_example = generate_json_example(&schema.fields, 0);
     out.push_str(&json_example);
 
-    out.push_str("\n<<<END_CONDUCTOR_OUTPUT>>>\n");
+    out.push_str("\n<<<END_FLOW_OUTPUT>>>\n");
 
     // Add field descriptions as hints
     let hints = generate_field_hints(&schema.fields, "");

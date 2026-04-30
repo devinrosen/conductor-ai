@@ -1,26 +1,11 @@
 use chrono::Utc;
 use rusqlite::{named_params, OptionalExtension};
-use serde::{Deserialize, Serialize};
 
 use crate::db::{query_collect, sql_placeholders, with_in_clause};
 use crate::error::{ConductorError, Result};
+use runkon_flow::types::FanOutItemRow;
 
 use super::WorkflowManager;
-
-/// A single row in the `workflow_run_step_fan_out_items` table.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-pub struct FanOutItemRow {
-    pub id: String,
-    pub step_run_id: String,
-    pub item_type: String,
-    pub item_id: String,
-    pub item_ref: String,
-    pub child_run_id: Option<String>,
-    pub status: String,
-    pub dispatched_at: Option<String>,
-    pub completed_at: Option<String>,
-}
 
 fn fan_out_item_from_row(row: &rusqlite::Row) -> rusqlite::Result<FanOutItemRow> {
     Ok(FanOutItemRow {

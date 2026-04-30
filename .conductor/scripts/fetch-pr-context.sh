@@ -8,12 +8,12 @@ pr_json=$(gh pr view "${PR_NUMBER}" --json title,body,labels,author,milestone,cl
 max_diff_chars=50000
 pr_diff=$(gh pr diff "${PR_NUMBER}" | head -c "$max_diff_chars")
 
-# Build context string and emit CONDUCTOR_OUTPUT with proper JSON escaping
+# Build context string and emit FLOW_OUTPUT with proper JSON escaping
 context=$(printf '## PR Metadata\n```json\n%s\n```\n\n## PR Diff\n```diff\n%s\n```' "$pr_json" "$pr_diff")
 output=$(jq -n --arg context "$context" '{"markers": [], "context": $context}')
 
 cat <<EOF
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 ${output}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF

@@ -11,14 +11,13 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
-use rusqlite::Connection;
 use tempfile::TempDir;
 
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::workflow::{
-    apply_workflow_input_defaults, execute_workflow, WorkflowExecConfig, WorkflowExecInput,
-    WorkflowManager, WorkflowResult,
+    apply_workflow_input_defaults, execute_workflow_standalone, WorkflowExecConfig,
+    WorkflowExecStandalone, WorkflowManager, WorkflowResult,
 };
 
 /// A parsed GitHub PR reference.
@@ -187,7 +186,6 @@ pub fn checkout_pr(pr: &PrRef, dir: &Path) -> Result<String> {
 /// 7. Return the `WorkflowResult`
 #[allow(clippy::too_many_arguments)]
 pub fn run_workflow_on_pr(
-    conn: &Connection,
     config: &Config,
     pr_ref: &PrRef,
     workflow_name: &str,
@@ -237,21 +235,20 @@ pub fn run_workflow_on_pr(
     };
 
     let pr_target_label = format!("{}/{}#{}", pr_ref.owner, pr_ref.repo, pr_ref.number);
-    let input = WorkflowExecInput {
-        conn,
-        config,
-        workflow: &workflow,
+    let input = WorkflowExecStandalone {
+        config: config.clone(),
+        workflow,
         worktree_id: None,
-        working_dir: clone_path_str,
-        repo_path: clone_path_str,
+        working_dir: clone_path_str.to_string(),
+        repo_path: clone_path_str.to_string(),
         ticket_id: None,
         repo_id: None,
-        model,
-        exec_config: &exec_config,
+        model: model.map(String::from),
+        exec_config,
         inputs,
         depth: 0,
         parent_workflow_run_id: None,
-        target_label: Some(&pr_target_label),
+        target_label: Some(pr_target_label),
         default_bot_name: None,
         iteration: 0,
         run_id_notify: None,
@@ -260,10 +257,11 @@ pub fn run_workflow_on_pr(
         force: false,
         extra_plugin_dirs: vec![],
         parent_step_id: None,
+        db_path: None,
     };
 
-    // `temp_dir` is dropped after execute_workflow returns, cleaning up the cloned repo.
-    execute_workflow(&input)
+    // `temp_dir` is dropped after execute_workflow_standalone returns, cleaning up the cloned repo.
+    execute_workflow_standalone(&input)
 }
 
 #[cfg(test)]
@@ -348,10 +346,13 @@ mod tests {
     fn test_resume_ephemeral_workflow_run_rejected() {
         use crate::agent::AgentManager;
         use crate::config::Config;
-        use crate::test_helpers::setup_db;
         use crate::workflow::{resume_workflow, WorkflowManager, WorkflowResumeInput};
 
-        let conn = setup_db();
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let db_path = tmp.path().to_path_buf();
+        let conn = crate::db::open_database(&db_path).unwrap();
+        crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+
         let agent_mgr = AgentManager::new(&conn);
         // Create an ephemeral parent agent run (empty worktree_id → stored as NULL)
         let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
@@ -374,7 +375,6 @@ mod tests {
 
         let config = Config::default();
         let input = WorkflowResumeInput {
-            conn: &conn,
             config: &config,
             workflow_run_id: &run.id,
             restart: false,
@@ -382,6 +382,8 @@ mod tests {
             model: None,
             conductor_bin_dir: None,
             event_sinks: vec![],
+            db_path: Some(db_path.clone()),
+            shutdown: None,
         };
 
         let err = resume_workflow(&input).unwrap_err();

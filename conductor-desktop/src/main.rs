@@ -20,6 +20,8 @@
 mod commands;
 mod state;
 
+use std::sync::Arc;
+
 use axum::http::HeaderValue;
 use conductor_core::agent::AgentManager;
 use conductor_core::config::{conductor_dir, load_config};
@@ -48,7 +50,12 @@ fn main() {
             // Always use the global database — the desktop app manages all
             // repos, so worktree-local DB detection must be bypassed.
             let db_path_val = conductor_dir().join("conductor.db");
-            let conn = open_database(&db_path_val).expect("Failed to open conductor database");
+            let conn = open_database(&db_path_val).unwrap_or_else(|e| {
+                panic!(
+                    "Failed to open conductor database at {}: {e}",
+                    db_path_val.display()
+                )
+            });
             let config = load_config().expect("Failed to load conductor config");
 
             // Reap stale resources on startup.
@@ -74,9 +81,17 @@ fn main() {
                 use conductor_core::workflow::WorkflowManager;
                 let wf_mgr = WorkflowManager::new(&conn);
                 let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-                if let Err(e) = wf_mgr.auto_resume_stuck_workflows(&config, None, conductor_bin_dir)
-                {
-                    tracing::warn!("auto_resume_stuck_workflows failed on startup: {e}");
+                match wf_mgr.claim_stuck_workflows(&config, None) {
+                    Ok(claimed) => {
+                        for run_id in claimed {
+                            conductor_core::workflow::spawn_workflow_resume(
+                                run_id,
+                                Arc::new(config.clone()),
+                                conductor_bin_dir.clone(),
+                            );
+                        }
+                    }
+                    Err(e) => tracing::warn!("claim_stuck_workflows failed on startup: {e}"),
                 }
             }
 
@@ -169,12 +184,19 @@ fn main() {
                                 } else {
                                     None
                                 };
-                                if let Err(e) = wf_mgr.auto_resume_stuck_workflows(
-                                    &cfg,
-                                    configurable_threshold,
-                                    conductor_bin_dir,
-                                ) {
-                                    tracing::warn!("auto_resume_stuck_workflows failed: {e}");
+                                match wf_mgr.claim_stuck_workflows(&cfg, configurable_threshold) {
+                                    Ok(claimed) => {
+                                        for run_id in claimed {
+                                            conductor_core::workflow::spawn_workflow_resume(
+                                                run_id,
+                                                Arc::new(cfg.clone()),
+                                                conductor_bin_dir.clone(),
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("claim_stuck_workflows failed: {e}")
+                                    }
                                 }
                             })
                             .await
@@ -184,7 +206,12 @@ fn main() {
                         }
                     });
 
-                    if let Err(e) = axum::serve(listener, router).await {
+                    if let Err(e) = axum::serve(
+                        listener,
+                        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                    )
+                    .await
+                    {
                         eprintln!(
                             "[conductor-desktop] Embedded API server exited unexpectedly: {e}"
                         );

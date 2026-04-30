@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use crate::agent_config::{self, AgentSpec};
 use crate::prompt_config;
 use crate::schema_config;
-use crate::workflow_dsl::{
+use runkon_flow::dsl::{
     default_skills_dir, detect_workflow_cycles, make_script_resolver, validate_script_steps,
     validate_workflow_semantics, AgentRef, ValidationError, WorkflowDef,
 };
@@ -101,6 +101,7 @@ where
         agents: Vec<AgentRef>,
         snippets: Vec<String>,
         schemas: Vec<String>,
+        bot_names: Vec<String>,
     }
     let per_wf_refs: Vec<WorkflowRefs> = workflows
         .iter()
@@ -108,31 +109,29 @@ where
             agents: wf.collect_all_agent_refs(),
             snippets: wf.collect_all_snippet_refs(),
             schemas: wf.collect_all_schema_refs(),
+            bot_names: wf.collect_all_bot_names(),
         })
         .collect();
 
-    let mut all_agent_refs = Vec::new();
-    let mut all_snippet_names = Vec::new();
-    let mut all_schema_names = Vec::new();
+    let mut all_agent_refs_set: HashSet<AgentRef> = HashSet::new();
+    let mut all_snippet_names_set: HashSet<String> = HashSet::new();
+    let mut all_schema_names_set: HashSet<String> = HashSet::new();
     for refs in &per_wf_refs {
-        all_agent_refs.extend(refs.agents.iter().cloned());
-        all_snippet_names.extend(refs.snippets.iter().cloned());
-        all_schema_names.extend(refs.schemas.iter().cloned());
+        all_agent_refs_set.extend(refs.agents.iter().cloned());
+        all_snippet_names_set.extend(refs.snippets.iter().cloned());
+        all_schema_names_set.extend(refs.schemas.iter().cloned());
     }
-    all_agent_refs.sort();
-    all_agent_refs.dedup();
-    all_snippet_names.sort();
-    all_snippet_names.dedup();
-    all_schema_names.sort();
-    all_schema_names.dedup();
+    let all_agent_refs: Vec<AgentRef> = all_agent_refs_set.into_iter().collect();
+    let all_snippet_names: Vec<String> = all_snippet_names_set.into_iter().collect();
+    let all_schema_names: Vec<String> = all_schema_names_set.into_iter().collect();
 
     // Collect all plugin_dirs from call nodes for agent resolution.
-    let mut all_plugin_dirs: Vec<String> = workflows
+    let all_plugin_dirs: Vec<String> = workflows
         .iter()
         .flat_map(|wf| wf.collect_all_plugin_dirs())
+        .collect::<HashSet<_>>()
+        .into_iter()
         .collect();
-    all_plugin_dirs.sort();
-    all_plugin_dirs.dedup();
 
     let global_agent_specs: Vec<AgentSpec> = all_agent_refs.iter().map(AgentSpec::from).collect();
     let globally_missing_agents: HashSet<String> = agent_config::find_missing_agents(
@@ -165,16 +164,17 @@ where
     // Cache sub-workflow loads so each workflow is parsed from disk at most once
     // across the entire batch (cycle detection + semantic validation both call
     // the loader for the same sub-workflow names).
-    let loader_cache: RefCell<HashMap<String, std::result::Result<WorkflowDef, String>>> =
-        RefCell::new(HashMap::new());
+    let loader_cache: RefCell<
+        HashMap<String, std::sync::Arc<std::result::Result<WorkflowDef, String>>>,
+    > = RefCell::new(HashMap::new());
     let cached_loader = |name: &str| -> std::result::Result<WorkflowDef, String> {
         if let Some(cached) = loader_cache.borrow().get(name) {
-            return cached.clone();
+            return (**cached).clone();
         }
         let result = loader(name);
         loader_cache
             .borrow_mut()
-            .insert(name.to_string(), result.clone());
+            .insert(name.to_string(), std::sync::Arc::new(result.clone()));
         result
     };
 
@@ -218,9 +218,9 @@ where
         }
 
         // --- Bot names (warnings) ---
-        let all_bots = workflow.collect_all_bot_names();
-        let unknown_bots: Vec<String> = all_bots
-            .into_iter()
+        let unknown_bots: Vec<&String> = wf_refs
+            .bot_names
+            .iter()
             .filter(|b| !known_bots.contains(b.as_str()))
             .collect();
 
@@ -266,7 +266,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow_dsl::parse_workflow_str;
+    use runkon_flow::dsl::parse_workflow_str;
 
     /// Build a minimal WorkflowDef by parsing a .wf string.
     fn parse_wf(src: &str) -> WorkflowDef {

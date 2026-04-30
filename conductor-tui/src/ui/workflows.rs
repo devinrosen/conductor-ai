@@ -2285,6 +2285,7 @@ mod tests {
             with: vec![],
             bot_name: None,
             plugin_dirs: vec![],
+            timeout: None,
         })
     }
 
@@ -2537,6 +2538,7 @@ mod tests {
                 with: vec![],
                 call_with: Default::default(),
                 call_if: Default::default(),
+                call_retries: Default::default(),
             }),
             call_wf_node("next"),
         ];

@@ -1,11 +1,10 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use rusqlite::Connection;
 
 use crate::config::Config;
 use crate::error::Result;
-use crate::workflow_dsl::ForeachScope;
+use runkon_flow::dsl::ForeachScope;
 
 pub mod repos;
 pub mod tickets;
@@ -23,14 +22,10 @@ pub struct FanOutItem {
 pub struct ProviderContext<'a> {
     pub conn: &'a Connection,
     pub config: &'a Config,
-    pub repo_id: Option<&'a str>,
-    pub worktree_id: Option<&'a str>,
 }
 
 /// Trait for a foreach item source registered with the engine.
 pub trait ItemProvider: Send + Sync {
-    fn name(&self) -> &str;
-
     fn items(
         &self,
         ctx: &ProviderContext<'_>,
@@ -54,100 +49,64 @@ pub trait ItemProvider: Send + Sync {
     }
 }
 
-/// Registry mapping provider names to implementations.
-pub struct ItemProviderRegistry {
-    providers: HashMap<String, Arc<dyn ItemProvider>>,
+/// Collect `FanOutItem`s from an iterator, skipping ids already in `existing_set`.
+///
+/// Centralises the deduplication loop that every `ItemProvider::items()` needs:
+/// `for item in list { if !existing_set.contains(&item.id) { items.push(...) } }`.
+pub(super) fn collect_fan_out_items<T>(
+    items: impl IntoIterator<Item = T>,
+    existing_set: &HashSet<String>,
+    get_id: impl Fn(&T) -> &str,
+    to_item: impl Fn(T) -> FanOutItem,
+) -> Vec<FanOutItem> {
+    items
+        .into_iter()
+        .filter(|t| !existing_set.contains(get_id(t)))
+        .map(to_item)
+        .collect()
 }
 
-impl ItemProviderRegistry {
-    pub fn new() -> Self {
-        Self {
-            providers: HashMap::new(),
-        }
-    }
-
-    pub fn register<P: ItemProvider + 'static>(&mut self, provider: P) {
-        let name = provider.name().to_string();
-        self.providers.insert(name, Arc::new(provider));
-    }
-
-    pub fn get(&self, name: &str) -> Option<Arc<dyn ItemProvider>> {
-        self.providers.get(name).cloned()
-    }
-}
-
-impl Default for ItemProviderRegistry {
-    fn default() -> Self {
-        Self::new()
+/// Fetch item IDs for a foreach step from the DB and return them, or `None` if the
+/// step has no items yet (caller should return `Ok(vec![])`).
+///
+/// Eliminates the repeated open-connection+query+early-exit boilerplate that appeared
+/// at the top of every `ItemProvider::dependencies()` impl.
+pub(super) fn fetch_dep_item_ids(
+    conn: &rusqlite::Connection,
+    step_id: &str,
+) -> crate::error::Result<Option<Vec<String>>> {
+    let mgr = crate::workflow::manager::WorkflowManager::new(conn);
+    let items = mgr.get_fan_out_items(step_id, None)?;
+    let ids: Vec<String> = items.into_iter().map(|i| i.item_id).collect();
+    if ids.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(ids))
     }
 }
 
-/// Build the default registry with the four built-in providers.
-pub fn build_default_registry() -> ItemProviderRegistry {
-    let mut r = ItemProviderRegistry::new();
-    r.register(tickets::TicketsProvider);
-    r.register(repos::ReposProvider);
-    r.register(workflow_runs::WorkflowRunsProvider);
-    r.register(worktrees::WorktreesProvider);
-    r
+/// Extract a required `repo_id` from an `Option<String>`, returning a typed
+/// `ConductorError::Workflow` when absent.  Used by providers that scope items
+/// to a single repo (tickets, worktrees).
+pub(super) fn require_repo_id<'a>(
+    repo_id: &'a Option<String>,
+    entity: &str,
+) -> crate::error::Result<&'a str> {
+    repo_id.as_deref().ok_or_else(|| {
+        crate::error::ConductorError::Workflow(format!(
+            "foreach over {entity} requires a repo_id in the execution context"
+        ))
+    })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Build the `HashSet<&String>` and `Vec<&str>` pair used for dependency filtering.
+pub(super) fn ids_to_set_and_refs(item_ids: &[String]) -> (HashSet<&String>, Vec<&str>) {
+    let id_set: HashSet<&String> = item_ids.iter().collect();
+    let id_refs: Vec<&str> = item_ids.iter().map(String::as_str).collect();
+    (id_set, id_refs)
+}
 
-    struct DummyProvider;
-    impl ItemProvider for DummyProvider {
-        fn name(&self) -> &str {
-            "dummy"
-        }
-        fn items(
-            &self,
-            _ctx: &ProviderContext<'_>,
-            _scope: Option<&crate::workflow_dsl::ForeachScope>,
-            _filter: &HashMap<String, String>,
-            _existing_set: &HashSet<String>,
-        ) -> Result<Vec<FanOutItem>> {
-            Ok(vec![FanOutItem {
-                item_type: "dummy".to_string(),
-                item_id: "d1".to_string(),
-                item_ref: "ref1".to_string(),
-            }])
-        }
-    }
-
-    #[test]
-    fn test_registry_register_and_get() {
-        let mut registry = ItemProviderRegistry::new();
-        registry.register(DummyProvider);
-        let p = registry.get("dummy");
-        assert!(
-            p.is_some(),
-            "registered provider should be retrievable by name"
-        );
-        let missing = registry.get("nonexistent");
-        assert!(
-            missing.is_none(),
-            "unregistered provider should return None"
-        );
-    }
-
-    #[test]
-    fn test_registry_get_returns_same_name() {
-        let mut registry = ItemProviderRegistry::new();
-        registry.register(DummyProvider);
-        let p = registry.get("dummy").unwrap();
-        assert_eq!(p.name(), "dummy");
-    }
-
-    #[test]
-    fn test_build_default_registry_has_all_four_providers() {
-        let registry = build_default_registry();
-        for name in ["tickets", "repos", "workflow_runs", "worktrees"] {
-            assert!(
-                registry.get(name).is_some(),
-                "build_default_registry should register '{name}'"
-            );
-        }
-    }
+/// Standard error for a failed dependency query in a foreach step.
+pub(super) fn dep_query_err(e: impl std::fmt::Display) -> crate::error::ConductorError {
+    crate::error::ConductorError::Workflow(format!("foreach: dependency query failed: {e}"))
 }

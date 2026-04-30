@@ -5,7 +5,7 @@ git push -u --force-with-lease origin HEAD
 branch=$(git rev-parse --abbrev-ref HEAD)
 
 cat <<EOF
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": ["pulled_new_commits"], "context": "Pushed rebased branch: $branch"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF

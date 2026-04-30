@@ -3,17 +3,24 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::Connection;
 
 use crate::error::{ConductorError, Result};
-use crate::workflow_dsl::{ForeachScope, TicketScope};
+use runkon_flow::dsl::{ForeachScope, TicketScope};
 
-use super::{FanOutItem, ItemProvider, ProviderContext};
+use super::{
+    collect_fan_out_items, dep_query_err, fetch_dep_item_ids, ids_to_set_and_refs, require_repo_id,
+    FanOutItem, ItemProvider, ProviderContext,
+};
 
-pub struct TicketsProvider;
+pub struct TicketsProvider {
+    repo_id: Option<String>,
+}
+
+impl TicketsProvider {
+    pub fn new(repo_id: Option<String>) -> Self {
+        Self { repo_id }
+    }
+}
 
 impl ItemProvider for TicketsProvider {
-    fn name(&self) -> &str {
-        "tickets"
-    }
-
     fn items(
         &self,
         ctx: &ProviderContext<'_>,
@@ -21,28 +28,22 @@ impl ItemProvider for TicketsProvider {
         _filter: &HashMap<String, String>,
         existing_set: &HashSet<String>,
     ) -> Result<Vec<FanOutItem>> {
-        use crate::tickets::{TicketFilter, TicketSyncer};
+        use crate::tickets::TicketSyncer;
 
         let syncer = TicketSyncer::new(ctx.conn);
-        let repo_id = ctx.repo_id.ok_or_else(|| {
-            ConductorError::Workflow(
-                "foreach over tickets requires a repo_id in the execution context".to_string(),
-            )
-        })?;
+        let repo_id = require_repo_id(&self.repo_id, "tickets")?;
 
-        let mut items = Vec::new();
+        let ticket_item = |t: crate::tickets::Ticket| FanOutItem {
+            item_type: "ticket".to_string(),
+            item_id: t.id,
+            item_ref: t.source_id,
+        };
 
-        match scope {
+        let items = match scope {
             Some(ForeachScope::Ticket(ts)) => match ts {
                 TicketScope::TicketId(ticket_id) => match syncer.get_by_id(ticket_id) {
-                    Ok(t) if !existing_set.contains(&t.id) => {
-                        items.push(FanOutItem {
-                            item_type: "ticket".to_string(),
-                            item_id: t.id.clone(),
-                            item_ref: t.source_id.clone(),
-                        });
-                    }
-                    Ok(_) => {}
+                    Ok(t) if !existing_set.contains(&t.id) => vec![ticket_item(t)],
+                    Ok(_) => vec![],
                     Err(ConductorError::TicketNotFound { .. }) => {
                         return Err(ConductorError::Workflow(format!(
                             "foreach: ticket '{}' not found",
@@ -52,40 +53,14 @@ impl ItemProvider for TicketsProvider {
                     Err(e) => return Err(e),
                 },
                 TicketScope::Label(label) => {
-                    let filter = TicketFilter {
-                        labels: vec![label.clone()],
-                        search: None,
-                        include_closed: false,
-                        unlabeled_only: false,
-                    };
-                    let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
-                    for t in tickets {
-                        if !existing_set.contains(&t.id) {
-                            items.push(FanOutItem {
-                                item_type: "ticket".to_string(),
-                                item_id: t.id.clone(),
-                                item_ref: t.source_id.clone(),
-                            });
-                        }
-                    }
+                    let tickets = syncer
+                        .list_filtered(Some(repo_id), &ticket_filter(vec![label.clone()], false))?;
+                    collect_fan_out_items(tickets, existing_set, |t| t.id.as_str(), ticket_item)
                 }
                 TicketScope::Unlabeled => {
-                    let filter = TicketFilter {
-                        labels: vec![],
-                        search: None,
-                        include_closed: false,
-                        unlabeled_only: true,
-                    };
-                    let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
-                    for t in tickets {
-                        if !existing_set.contains(&t.id) {
-                            items.push(FanOutItem {
-                                item_type: "ticket".to_string(),
-                                item_id: t.id.clone(),
-                                item_ref: t.source_id.clone(),
-                            });
-                        }
-                    }
+                    let tickets =
+                        syncer.list_filtered(Some(repo_id), &ticket_filter(vec![], true))?;
+                    collect_fan_out_items(tickets, existing_set, |t| t.id.as_str(), ticket_item)
                 }
             },
             Some(ForeachScope::Worktree(_)) => {
@@ -94,24 +69,10 @@ impl ItemProvider for TicketsProvider {
                 ));
             }
             None => {
-                let filter = TicketFilter {
-                    labels: vec![],
-                    search: None,
-                    include_closed: false,
-                    unlabeled_only: false,
-                };
-                let tickets = syncer.list_filtered(Some(repo_id), &filter)?;
-                for t in tickets {
-                    if !existing_set.contains(&t.id) {
-                        items.push(FanOutItem {
-                            item_type: "ticket".to_string(),
-                            item_id: t.id.clone(),
-                            item_ref: t.source_id.clone(),
-                        });
-                    }
-                }
+                let tickets = syncer.list_filtered(Some(repo_id), &ticket_filter(vec![], false))?;
+                collect_fan_out_items(tickets, existing_set, |t| t.id.as_str(), ticket_item)
             }
-        }
+        };
 
         Ok(items)
     }
@@ -126,23 +87,15 @@ impl ItemProvider for TicketsProvider {
         _config: &crate::config::Config,
         step_id: &str,
     ) -> Result<Vec<(String, String)>> {
-        use std::collections::HashSet;
-
-        let mgr = crate::workflow::manager::WorkflowManager::new(conn);
-        let items = mgr.get_fan_out_items(step_id, None)?;
-        let item_ids: Vec<String> = items.iter().map(|i| i.item_id.clone()).collect();
-        if item_ids.is_empty() {
+        let Some(item_ids) = fetch_dep_item_ids(conn, step_id)? else {
             return Ok(vec![]);
-        }
+        };
 
         let syncer = crate::tickets::TicketSyncer::new(conn);
-        let id_set: HashSet<&String> = item_ids.iter().collect();
-        let ticket_id_refs: Vec<&str> = item_ids.iter().map(String::as_str).collect();
+        let (id_set, ticket_id_refs) = ids_to_set_and_refs(&item_ids);
         let raw_edges = syncer
             .get_blocking_edges_for_tickets(&ticket_id_refs)
-            .map_err(|e| {
-                ConductorError::Workflow(format!("foreach: dependency query failed: {e}"))
-            })?;
+            .map_err(dep_query_err)?;
 
         let edges: Vec<(String, String)> = raw_edges
             .into_iter()
@@ -151,6 +104,15 @@ impl ItemProvider for TicketsProvider {
             })
             .collect();
         Ok(edges)
+    }
+}
+
+fn ticket_filter(labels: Vec<String>, unlabeled_only: bool) -> crate::tickets::TicketFilter {
+    crate::tickets::TicketFilter {
+        labels,
+        search: None,
+        include_closed: false,
+        unlabeled_only,
     }
 }
 
@@ -164,8 +126,8 @@ mod tests {
     fn test_tickets_items_missing_repo_id_returns_error() {
         let conn = test_helpers::setup_db();
         let config = crate::config::Config::default();
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, None, None);
-        let result = TicketsProvider.items(&ctx, None, &HashMap::new(), &HashSet::new());
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let result = TicketsProvider::new(None).items(&ctx, None, &HashMap::new(), &HashSet::new());
         assert!(
             result.is_err(),
             "items() without repo_id should return an error"
@@ -194,8 +156,8 @@ mod tests {
                 ],
             )
             .unwrap();
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
-        let items = TicketsProvider
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let items = TicketsProvider::new(Some("r1".into()))
             .items(&ctx, None, &HashMap::new(), &HashSet::new())
             .unwrap();
         assert_eq!(items.len(), 2);
@@ -226,8 +188,8 @@ mod tests {
         assert_eq!(all.len(), 1);
         let mut existing = HashSet::new();
         existing.insert(all[0].id.clone());
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
-        let items = TicketsProvider
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let items = TicketsProvider::new(Some("r1".into()))
             .items(&ctx, None, &HashMap::new(), &existing)
             .unwrap();
         assert!(
@@ -240,12 +202,17 @@ mod tests {
     fn test_tickets_items_worktree_scope_returns_error() {
         let conn = test_helpers::setup_db();
         let config = crate::config::Config::default();
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
-        let scope = ForeachScope::Worktree(crate::workflow_dsl::WorktreeScope {
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let scope = ForeachScope::Worktree(runkon_flow::dsl::WorktreeScope {
             base_branch: None,
             has_open_pr: None,
         });
-        let result = TicketsProvider.items(&ctx, Some(&scope), &HashMap::new(), &HashSet::new());
+        let result = TicketsProvider::new(Some("r1".into())).items(
+            &ctx,
+            Some(&scope),
+            &HashMap::new(),
+            &HashSet::new(),
+        );
         assert!(result.is_err());
     }
 
@@ -272,8 +239,8 @@ mod tests {
         let internal_id = all[0].id.clone();
 
         let scope = ForeachScope::Ticket(TicketScope::TicketId(internal_id.clone()));
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
-        let items = TicketsProvider
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let items = TicketsProvider::new(Some("r1".into()))
             .items(&ctx, Some(&scope), &HashMap::new(), &HashSet::new())
             .unwrap();
         assert_eq!(items.len(), 1);
@@ -298,8 +265,8 @@ mod tests {
             .unwrap();
 
         let scope = ForeachScope::Ticket(TicketScope::Label("bug".to_string()));
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
-        let items = TicketsProvider
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let items = TicketsProvider::new(Some("r1".into()))
             .items(&ctx, Some(&scope), &HashMap::new(), &HashSet::new())
             .unwrap();
         assert_eq!(items.len(), 1, "only the labeled ticket returned");
@@ -327,8 +294,8 @@ mod tests {
             .unwrap();
 
         let scope = ForeachScope::Ticket(TicketScope::Unlabeled);
-        let ctx = test_helpers::make_provider_ctx(&conn, &config, Some("r1"), None);
-        let items = TicketsProvider
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let items = TicketsProvider::new(Some("r1".into()))
             .items(&ctx, Some(&scope), &HashMap::new(), &HashSet::new())
             .unwrap();
         assert_eq!(items.len(), 1, "only unlabeled ticket returned");
@@ -339,7 +306,7 @@ mod tests {
     fn test_tickets_dependencies_empty_when_no_items() {
         let conn = test_helpers::setup_db();
         let config = crate::config::Config::default();
-        let edges = TicketsProvider
+        let edges = TicketsProvider::new(None)
             .dependencies(&conn, &config, "nonexistent-step")
             .unwrap();
         assert!(edges.is_empty());
@@ -387,7 +354,7 @@ mod tests {
             .insert_fan_out_item(&step_id, "ticket", &id2, "2")
             .unwrap();
 
-        let edges = TicketsProvider
+        let edges = TicketsProvider::new(None)
             .dependencies(&conn, &config, &step_id)
             .unwrap();
         assert_eq!(edges.len(), 1, "one blocking edge expected");

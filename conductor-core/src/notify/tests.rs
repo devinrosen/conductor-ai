@@ -1,8 +1,8 @@
 use super::*;
 use crate::agent::{AgentRun, AgentRunStatus};
 use crate::config::{HookConfig, NotificationConfig, SlackConfig, WorkflowNotificationConfig};
+use crate::workflow::GateType;
 use crate::workflow::{WorkflowRun, WorkflowRunStatus};
-use crate::workflow_dsl::GateType;
 #[allow(unused_imports)]
 use rusqlite::Connection;
 
@@ -1643,7 +1643,7 @@ fn make_agent_run(id: &str, status: AgentRunStatus) -> AgentRun {
         id: id.to_string(),
         worktree_id: None,
         repo_id: None,
-        claude_session_id: None,
+        session_id: None,
         prompt: String::new(),
         status,
         result_text: None,

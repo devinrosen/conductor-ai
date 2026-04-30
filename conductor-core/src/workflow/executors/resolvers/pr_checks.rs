@@ -1,14 +1,26 @@
+use std::sync::Arc;
+
 use crate::error::Result;
 
-use crate::workflow::executors::gate_resolver::{GateContext, GateParams, GatePoll, GateResolver};
+use crate::workflow::executors::gate_resolver::{
+    GateContext, GateParams, GatePoll, GateResolver, GitHubTokenCache,
+};
 
-use super::run_gh_json;
+use super::GhGateCommon;
 
-pub(in crate::workflow::executors) struct PrChecksGateResolver;
+pub(in crate::workflow) struct PrChecksGateResolver {
+    common: GhGateCommon,
+}
 
 impl PrChecksGateResolver {
-    pub(in crate::workflow::executors) fn new() -> Self {
-        Self
+    pub(in crate::workflow) fn new(
+        working_dir: String,
+        default_bot_name: Option<String>,
+        token_cache: Arc<GitHubTokenCache>,
+    ) -> Self {
+        Self {
+            common: GhGateCommon::new(working_dir, default_bot_name, token_cache),
+        }
     }
 }
 
@@ -44,13 +56,10 @@ impl GateResolver for PrChecksGateResolver {
     }
 
     fn poll(&self, _run_id: &str, params: &GateParams, ctx: &GateContext<'_>) -> Result<GatePoll> {
-        let gate_bot_token = ctx.resolve_token(params);
-        let token_ref = gate_bot_token.as_deref();
-
-        if let Some(val) = run_gh_json(
+        if let Some(val) = self.common.run_gh(
             &["pr", "checks", "--json", "state"],
-            ctx.working_dir,
-            token_ref,
+            params.bot_name.as_deref(),
+            ctx,
         ) {
             return Ok(evaluate_checks(&val, &params.gate_name));
         }

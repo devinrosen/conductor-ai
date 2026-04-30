@@ -1,6 +1,10 @@
 #![allow(dead_code)]
 
+use std::sync::Arc;
+
 use conductor_core::agent_config::{AgentDef, AgentRole};
+use conductor_core::runtime::adapter::SqliteHostAdapter;
+use conductor_core::runtime::RuntimeRequest;
 
 pub fn make_agent_def(runtime: &str) -> AgentDef {
     AgentDef {
@@ -25,4 +29,26 @@ pub fn setup_test_db(run_id: &str, runtime: &str) -> tempfile::NamedTempFile {
     .expect("insert run");
 
     tmp
+}
+
+/// Build a [`RuntimeRequest`] with a [`SqliteHostAdapter`] tracker/sink backed by `db_path`.
+pub fn make_request(
+    run_id: &str,
+    prompt: &str,
+    db_path: std::path::PathBuf,
+    runtime: &str,
+) -> RuntimeRequest {
+    let tracker = Arc::new(SqliteHostAdapter::new(db_path.clone()).unwrap());
+    let event_sink = tracker.clone();
+    RuntimeRequest {
+        run_id: run_id.to_string(),
+        agent_def: make_agent_def(runtime),
+        prompt: prompt.to_string(),
+        model: None,
+        working_dir: std::path::PathBuf::from("/tmp"),
+        bot_name: None,
+        plugin_dirs: vec![],
+        tracker,
+        event_sink,
+    }
 }

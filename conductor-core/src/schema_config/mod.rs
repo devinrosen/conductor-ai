@@ -1,7 +1,7 @@
 //! Schema-based structured output for workflow agents.
 //!
 //! Schemas live in `.conductor/schemas/<name>.yaml` and define the JSON shape
-//! that an agent's `CONDUCTOR_OUTPUT` block must conform to. The workflow engine
+//! that an agent's `FLOW_OUTPUT` block must conform to. The workflow engine
 //! uses schemas to:
 //!
 //! 1. Generate schema-specific output instructions in the agent prompt
@@ -30,15 +30,12 @@ pub use tool_definition::schema_to_tool_json;
 pub use types::{ArrayItems, FieldDef, FieldType, OutputSchema, SchemaRef};
 pub use validation::{derive_output_from_value, parse_structured_output, StructuredOutput};
 
-// Items that are pub(crate) in the original file — re-export with same visibility.
-pub(crate) use validation::extract_output_block;
-pub(crate) use validation::fix_invalid_backslash_escapes;
-pub(crate) use validation::strip_trailing_commas;
-
 // Items used by tests that are not otherwise public — re-export under cfg(test).
 #[cfg(test)]
 pub(crate) use loader::load_schema_by_path;
 #[cfg(test)]
 pub(crate) use prompt::generate_field_hints;
+#[cfg(test)]
+pub(crate) use runkon_flow::helpers::{fix_backslash_escapes, strip_trailing_commas};
 #[cfg(test)]
 pub(crate) use validation::{derive_default_markers, evaluate_marker_expr, strip_code_fences};

@@ -8,8 +8,8 @@ use crate::agent::AgentManager;
 use crate::error::{ConductorError, Result};
 
 use super::WorkflowManager;
-use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
-use crate::workflow::types::{extract_workflow_title, WorkflowRun};
+use crate::workflow::{extract_workflow_title, WorkflowRun};
+use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
 
 impl<'a> WorkflowManager<'a> {
     pub fn create_workflow_run(
@@ -197,7 +197,7 @@ impl<'a> WorkflowManager<'a> {
     pub fn set_waiting_blocked_on(
         &self,
         workflow_run_id: &str,
-        blocked_on: &crate::workflow::types::BlockedOn,
+        blocked_on: &crate::workflow::BlockedOn,
     ) -> Result<()> {
         let json = serde_json::to_string(blocked_on).map_err(|e| {
             ConductorError::Workflow(format!("Failed to serialize blocked_on: {e}"))

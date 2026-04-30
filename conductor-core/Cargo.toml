@@ -7,7 +7,8 @@ repository.workspace = true
 description = "Core library for Conductor — multi-repo orchestration"
 
 [dependencies]
-runkon-flow = { path = "../runkon-flow" }
+runkon-flow = { path = "../runkon-flow", features = ["rusqlite"] }
+runkon-runtimes = { path = "../runkon-runtimes" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -28,7 +29,7 @@ utoipa = { version = "5", optional = true }
 
 [features]
 test-helpers = []
-openapi = ["dep:utoipa"]
+openapi = ["dep:utoipa", "runkon-flow/utoipa", "runkon-runtimes/utoipa"]
 
 [[bin]]
 name = "gen-schema-diagram"
@@ -37,3 +38,4 @@ path = "src/bin/gen_schema_diagram.rs"
 [dev-dependencies]
 regex-lite = "0.1"
 tracing-test = "0.2"
+runkon-flow = { path = "../runkon-flow", features = ["test-utils"] }

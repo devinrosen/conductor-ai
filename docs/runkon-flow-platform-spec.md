@@ -1,7 +1,9 @@
 # Workflow Engine Platform Spec
 
-**Status:** Draft  
-**Date:** 2026-04-19
+**Status:** Phases 1–4 complete (shipped in v0.10.0). Phase 5 (second harness + crates.io publish) is next.
+**Date:** 2026-04-30
+
+> Status detail: all six host-implementable traits (`ActionExecutor`, `ItemProvider`, `GateResolver`, `RunContext`, `WorkflowPersistence`, `TriggerSource`) live in `runkon-flow`. Conductor-core's own engine and DSL have been deleted; everything routes through `FlowEngine::run()` / `resume()`. `SqliteWorkflowPersistence` is owned by `runkon-flow` behind an optional `sqlite` feature. `runkon-runtimes` was extracted as a sibling crate carrying the portable agent-runtime layer (RFC 007). What remains for Phase 5: build a comm-harness against the published `runkon-flow 0.1.0-alpha` (#2350), validate the trait shapes against a second real harness, then promote to `0.1.0`.
 
 ---
 
@@ -123,7 +125,7 @@ pub struct ActionOutput {
 ```
 
 **Conductor's implementation:** `ClaudeAgentExecutor` — resolves the agent `.md` file,
-builds the prompt, spawns a headless subprocess (PID-based), polls for `CONDUCTOR_OUTPUT`,
+builds the prompt, spawns a headless subprocess (PID-based), polls for `FLOW_OUTPUT`,
 and maps the result to `ActionOutput`.
 
 **Communication harness implementations:** `SendEmailExecutor`, `PostSlackExecutor`,
@@ -812,7 +814,7 @@ out of scope.
 
 ### `conductor-core` (conductor's harness layer)
 
-- `ClaudeAgentExecutor` — agent `.md` resolution, headless subprocess spawn, `CONDUCTOR_OUTPUT` parsing
+- `ClaudeAgentExecutor` — agent `.md` resolution, headless subprocess spawn, `FLOW_OUTPUT` parsing
 - `TicketsProvider`, `ReposProvider`, `WorkflowRunsProvider`, `WorktreesProvider`
 - `PrApprovalGateResolver`, `PrChecksGateResolver`, `HumanApprovalGateResolver`
 - `WorktreeRunContext` — resolves conductor-specific injected variables
@@ -924,7 +926,7 @@ breakage. Existing behavior is preserved end-to-end; every step should keep the
   `agent_runtime/`, so `ClaudeAgentExecutor` is a thin wrapper around the
   existing `try_spawn_headless_run` entry point plus the direct-API path.
 - Keep `ActionOutput` shape aligned with what `output.rs` already parses from
-  `CONDUCTOR_OUTPUT` blocks (markers + context + metadata) — don't redesign
+  `FLOW_OUTPUT` blocks (markers + context + metadata) — don't redesign
   during extraction.
 - Prerequisite: decide sync vs. async (Open Q #2) before starting this step.
 

@@ -1,3 +1,4 @@
+use conductor_core::workflow::WorkflowRunStepExt;
 use ratatui::widgets::ListState;
 
 use crate::state::{

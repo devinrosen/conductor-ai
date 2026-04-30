@@ -61,7 +61,7 @@ If no files exceed the threshold:
 - Set context to: `No files exceed the threshold of {{threshold_lines}} lines. Repository appears well-structured.`
 
 ```
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": ["has_large_files"], "context": "## Large Files (>= {{threshold_lines}} lines)\n\n| File | Lines | Category | Est. % Tests | Notes |\n..."}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 ```

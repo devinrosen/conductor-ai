@@ -21,6 +21,48 @@ if ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 1b. Filter hallucinated off-diff entries from blocking_findings.
+#
+# Reviewers occasionally emit findings that cite files outside the PR's diff
+# (recognized pattern from training data, not actual code in this PR). The
+# safety net: drop any blocking_findings whose `file` is not in the diff.
+# off_diff_findings are intentionally off-diff and not filtered here.
+# ---------------------------------------------------------------------------
+BASE_BRANCH=$(gh pr view "${PR_NUMBER}" --json baseRefName -q .baseRefName 2>/dev/null)
+if [ -z "${BASE_BRANCH}" ]; then
+  echo "Warning: could not resolve PR base branch for PR #${PR_NUMBER} — skipping off-diff filter."
+  echo "         Findings will pass through unfiltered (not silently filtered against the wrong base)."
+  DIFF_FILE_COUNT=0
+else
+  DIFF_FILES_JSON=$(git diff --name-only "origin/${BASE_BRANCH}...HEAD" 2>/dev/null \
+    | jq -R -s 'split("\n") | map(select(length > 0))' || echo "[]")
+  DIFF_FILE_COUNT=$(echo "${DIFF_FILES_JSON}" | jq 'length')
+fi
+
+if [ "${DIFF_FILE_COUNT}" -eq 0 ]; then
+  echo "Warning: git diff returned no files for origin/${BASE_BRANCH:-<unresolved>}...HEAD — skipping off-diff filter to avoid silently dropping legitimate findings."
+else
+  PRIOR_OUTPUT_FILTERED=$(echo "${PRIOR_OUTPUT}" | jq --argjson diff "${DIFF_FILES_JSON}" '
+    ((.blocking_findings // []) | length) as $before
+    | .blocking_findings = ((.blocking_findings // []) | map(select(.file as $f | $diff | index($f))))
+    | .blocking_findings_dropped = ($before - (.blocking_findings | length))
+  ')
+
+  DROPPED_COUNT=$(echo "${PRIOR_OUTPUT_FILTERED}" | jq -r '.blocking_findings_dropped // 0')
+  if [ "${DROPPED_COUNT}" -gt 0 ]; then
+    echo "Dropped ${DROPPED_COUNT} hallucinated off-diff blocking finding(s) from review:"
+    echo "${PRIOR_OUTPUT}" | jq -c --argjson diff "${DIFF_FILES_JSON}" '
+      .blocking_findings // []
+      | map(select(.file as $f | $diff | index($f) | not))
+      | .[] | {file, line, severity, reviewer, message: (.message // "")}
+    '
+  fi
+
+  # Use the filtered output for everything downstream.
+  PRIOR_OUTPUT="${PRIOR_OUTPUT_FILTERED}"
+fi
+
+# ---------------------------------------------------------------------------
 # 2. No-op on dry run
 # ---------------------------------------------------------------------------
 if [ "${DRY_RUN:-false}" = "true" ]; then
@@ -156,12 +198,18 @@ fi
 # ---------------------------------------------------------------------------
 # 5. Build complete review body programmatically
 # ---------------------------------------------------------------------------
-OVERALL_APPROVED=$(echo "${PRIOR_OUTPUT}" | jq -r 'if .overall_approved == false then "false" else "true" end')
-
-# Safety net: if blocking findings exist, override to not approved regardless of model output
+# Derive approval state purely from the post-filter blocking_findings count.
+#
+# The aggregator's `.overall_approved` is computed on pre-filter data, so it
+# can be stale: if the off-diff filter (step 1b) drops every blocking finding,
+# the aggregator may still report `overall_approved: false`. Re-evaluating
+# here off the filtered count keeps the review body consistent — no
+# "Changes Requested" without an accompanying findings list.
 HAS_BLOCKING_CHECK=$(echo "${PRIOR_OUTPUT}" | jq -r 'if (.blocking_findings // [] | length) > 0 then "true" else "false" end')
 if [ "${HAS_BLOCKING_CHECK}" = "true" ]; then
   OVERALL_APPROVED="false"
+else
+  OVERALL_APPROVED="true"
 fi
 
 if [ "${OVERALL_APPROVED}" = "true" ]; then

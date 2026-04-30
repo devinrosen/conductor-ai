@@ -67,7 +67,7 @@ When the engine builds an agent's final prompt, it assembles:
 
 1. Agent `.md` body (with `{{variable}}` substitution)
 2. `with` snippets, each trimmed and joined with `\n\n` (also variable-substituted)
-3. Schema output instructions / `CONDUCTOR_OUTPUT` block
+3. Schema output instructions / `FLOW_OUTPUT` block
 
 Snippets go through the same `{{variable}}` substitution as the agent body,
 so they can reference workflow inputs and prior context:

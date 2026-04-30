@@ -36,4 +36,4 @@ RECOMMENDATIONS:
 
 Repeat for each dimension. End with top 5 priority visual improvements.
 
-Include `has_review_issues` in CONDUCTOR_OUTPUT markers if any dimension scores below 70.
+Include `has_review_issues` in FLOW_OUTPUT markers if any dimension scores below 70.

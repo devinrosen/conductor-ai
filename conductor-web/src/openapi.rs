@@ -215,7 +215,6 @@ use crate::routes::worktrees::{
             WorkflowRunStep,
             WorkflowStepStatus,
             BlockedOn,
-            GateType,
             WorkflowTokenAggregate,
             WorkflowTokenTrendRow,
             StepTokenHeatmapRow,
