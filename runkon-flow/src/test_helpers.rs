@@ -98,6 +98,69 @@ pub fn call_node(agent: &str) -> WorkflowNode {
     })
 }
 
+/// Build a minimal `ExecutionState` for tests — empty-ish defaults across all
+/// the fields tests don't usually care about. Caller passes the persistence and
+/// a `workflow_run_id` (the two fields nearly every test customizes); other
+/// fields can be overridden after construction since `ExecutionState`'s fields
+/// are `pub`.
+pub fn make_test_execution_state(
+    persistence: Arc<dyn crate::traits::persistence::WorkflowPersistence>,
+    workflow_run_id: String,
+) -> crate::engine::ExecutionState {
+    use crate::cancellation::CancellationToken;
+    use crate::engine::{ExecutionState, WorktreeContext};
+    use crate::traits::action_executor::ActionRegistry;
+    use crate::traits::item_provider::ItemProviderRegistry;
+    use crate::traits::script_env_provider::NoOpScriptEnvProvider;
+    use crate::types::WorkflowExecConfig;
+
+    ExecutionState {
+        persistence,
+        action_registry: Arc::new(ActionRegistry::new(HashMap::new(), None)),
+        script_env_provider: Arc::new(NoOpScriptEnvProvider),
+        workflow_run_id,
+        workflow_name: "wf".into(),
+        worktree_ctx: WorktreeContext {
+            worktree_id: None,
+            working_dir: String::new(),
+            repo_path: String::new(),
+            ticket_id: None,
+            repo_id: None,
+            extra_plugin_dirs: vec![],
+        },
+        model: None,
+        exec_config: WorkflowExecConfig::default(),
+        inputs: HashMap::new(),
+        parent_run_id: String::new(),
+        depth: 0,
+        target_label: None,
+        step_results: HashMap::new(),
+        contexts: vec![],
+        position: 0,
+        all_succeeded: true,
+        total_cost: 0.0,
+        total_turns: 0,
+        total_duration_ms: 0,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        total_cache_read_input_tokens: 0,
+        total_cache_creation_input_tokens: 0,
+        last_gate_feedback: None,
+        block_output: None,
+        block_with: vec![],
+        resume_ctx: None,
+        default_bot_name: None,
+        triggered_by_hook: false,
+        schema_resolver: None,
+        child_runner: None,
+        last_heartbeat_at: ExecutionState::new_heartbeat(),
+        registry: Arc::new(ItemProviderRegistry::new()),
+        event_sinks: Arc::from(vec![]),
+        cancellation: CancellationToken::new(),
+        current_execution_id: Arc::new(Mutex::new(None)),
+    }
+}
+
 /// `WorkflowPersistence` decorator that delegates to `InMemoryWorkflowPersistence`
 /// and counts every call to `tick_heartbeat`. Also lets tests force
 /// `is_run_cancelled` to return true at will.

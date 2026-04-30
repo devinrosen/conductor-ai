@@ -974,23 +974,17 @@ mod tests {
     /// child meant `last_heartbeat` went stale and the watchdog reaped the run.
     #[test]
     fn foreach_wait_loop_ticks_heartbeat_during_long_children() {
-        use std::sync::{Arc, Mutex};
+        use std::sync::Arc;
         use std::time::Duration;
 
-        use crate::cancellation::CancellationToken;
         use crate::dsl::{ForEachNode, OnChildFail, OnCycle};
-        use crate::engine::{
-            ChildWorkflowContext, ChildWorkflowInput, ChildWorkflowRunner, ExecutionState,
-            WorktreeContext,
-        };
+        use crate::engine::{ChildWorkflowContext, ChildWorkflowInput, ChildWorkflowRunner};
         use crate::engine_error::Result;
-        use crate::traits::action_executor::ActionRegistry;
         use crate::traits::item_provider::{
             FanOutItem, ItemProvider, ItemProviderRegistry, ProviderContext,
         };
         use crate::traits::persistence::{NewRun, WorkflowPersistence};
-        use crate::traits::script_env_provider::NoOpScriptEnvProvider;
-        use crate::types::{WorkflowExecConfig, WorkflowResult};
+        use crate::types::WorkflowResult;
 
         struct OneItemProvider;
         impl ItemProvider for OneItemProvider {
@@ -1073,51 +1067,9 @@ mod tests {
         let mut registry = ItemProviderRegistry::new();
         registry.register(OneItemProvider);
 
-        let mut state = ExecutionState {
-            persistence: cp_for_state,
-            action_registry: Arc::new(ActionRegistry::new(HashMap::new(), None)),
-            script_env_provider: Arc::new(NoOpScriptEnvProvider),
-            workflow_run_id: run_id,
-            workflow_name: "wf".into(),
-            worktree_ctx: WorktreeContext {
-                worktree_id: None,
-                working_dir: String::new(),
-                repo_path: String::new(),
-                ticket_id: None,
-                repo_id: None,
-                extra_plugin_dirs: vec![],
-            },
-            model: None,
-            exec_config: WorkflowExecConfig::default(),
-            inputs: HashMap::new(),
-            parent_run_id: String::new(),
-            depth: 0,
-            target_label: None,
-            step_results: HashMap::new(),
-            contexts: vec![],
-            position: 0,
-            all_succeeded: true,
-            total_cost: 0.0,
-            total_turns: 0,
-            total_duration_ms: 0,
-            total_input_tokens: 0,
-            total_output_tokens: 0,
-            total_cache_read_input_tokens: 0,
-            total_cache_creation_input_tokens: 0,
-            last_gate_feedback: None,
-            block_output: None,
-            block_with: vec![],
-            resume_ctx: None,
-            default_bot_name: None,
-            triggered_by_hook: false,
-            schema_resolver: None,
-            child_runner: Some(Arc::new(SleepingChildRunner)),
-            last_heartbeat_at: ExecutionState::new_heartbeat(),
-            registry: Arc::new(registry),
-            event_sinks: Arc::from(vec![]),
-            cancellation: CancellationToken::new(),
-            current_execution_id: Arc::new(Mutex::new(None)),
-        };
+        let mut state = crate::test_helpers::make_test_execution_state(cp_for_state, run_id);
+        state.child_runner = Some(Arc::new(SleepingChildRunner));
+        state.registry = Arc::new(registry);
 
         let node = ForEachNode {
             name: "foreach-test".into(),
