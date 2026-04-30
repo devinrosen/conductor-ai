@@ -5,10 +5,10 @@ use rusqlite::{named_params, OptionalExtension};
 
 use crate::agent::status::AgentRunStatus;
 use crate::config::Config;
-use crate::db::query_collect;
+use crate::db::{query_collect, sql_placeholders};
 use crate::error::Result;
 
-use super::helpers::{purge_where_clause, row_to_workflow_run};
+use super::helpers::row_to_workflow_run;
 
 use super::WorkflowManager;
 use crate::workflow::constants::RUN_COLUMNS;
@@ -1079,19 +1079,32 @@ impl<'a> WorkflowManager<'a> {
         Ok(deleted)
     }
 
-    /// Build the purge where-clause and bind params, then pass them to a caller-provided
-    /// closure.  Deduplicates the empty-check, where-clause build, and `params_ref`
-    /// construction shared by `purge` and `purge_count`.
-    fn with_purge_params<T>(
-        &self,
+    /// Build the WHERE clause and bound parameters shared by [`purge`] and [`purge_count`].
+    ///
+    /// Returns `(where_clause, params)` where `where_clause` is a SQL fragment
+    /// (no leading `WHERE` keyword) suitable for both DELETE and SELECT COUNT(*).
+    /// All values are bound positionally — no string-formatted user data.
+    fn build_purge_params(
         repo_id: Option<&str>,
         statuses: &[&str],
-        f: impl FnOnce(&str, &[&dyn rusqlite::ToSql]) -> Result<T>,
-    ) -> Result<T> {
-        let (where_clause, params) = purge_where_clause(statuses, repo_id);
-        let params_ref: Vec<&dyn rusqlite::ToSql> =
-            params.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-        f(&where_clause, params_ref.as_slice())
+    ) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+        let n = statuses.len();
+        let placeholders = sql_placeholders(n);
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = statuses
+            .iter()
+            .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::ToSql>)
+            .collect();
+        let where_clause = if let Some(rid) = repo_id {
+            params.push(Box::new(rid.to_string()));
+            format!(
+                "status IN ({placeholders}) \
+                 AND worktree_id IN (SELECT id FROM worktrees WHERE repo_id = ?{})",
+                n + 1
+            )
+        } else {
+            format!("status IN ({placeholders})")
+        };
+        (where_clause, params)
     }
 
     /// Delete workflow runs with the given statuses, optionally scoped to a repo.
@@ -1105,10 +1118,11 @@ impl<'a> WorkflowManager<'a> {
         if statuses.is_empty() {
             return Ok(0);
         }
-        self.with_purge_params(repo_id, statuses, |where_clause, params_ref| {
-            let sql = format!("DELETE FROM workflow_runs WHERE {where_clause}");
-            Ok(self.conn.execute(&sql, params_ref)?)
-        })
+        let (where_clause, params) = Self::build_purge_params(repo_id, statuses);
+        let sql = format!("DELETE FROM workflow_runs WHERE {where_clause}");
+        Ok(self
+            .conn
+            .execute(&sql, rusqlite::params_from_iter(params))?)
     }
 
     /// Count workflow runs that *would* be deleted by [`purge`] with the same arguments.
@@ -1118,11 +1132,12 @@ impl<'a> WorkflowManager<'a> {
         if statuses.is_empty() {
             return Ok(0);
         }
-        self.with_purge_params(repo_id, statuses, |where_clause, params_ref| {
-            let sql = format!("SELECT COUNT(*) FROM workflow_runs WHERE {where_clause}");
-            let count: i64 = self.conn.query_row(&sql, params_ref, |row| row.get(0))?;
-            Ok(count as usize)
-        })
+        let (where_clause, params) = Self::build_purge_params(repo_id, statuses);
+        let sql = format!("SELECT COUNT(*) FROM workflow_runs WHERE {where_clause}");
+        let count: i64 = self
+            .conn
+            .query_row(&sql, rusqlite::params_from_iter(params), |row| row.get(0))?;
+        Ok(count as usize)
     }
 
     /// Classify eligible `failed` workflow runs as `needs_resume`.
