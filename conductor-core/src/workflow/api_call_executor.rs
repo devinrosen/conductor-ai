@@ -233,14 +233,38 @@ mod tests {
 
     #[test]
     fn error_body_not_in_returned_error() {
-        use std::io::Write;
+        use std::io::{BufRead, Read, Write};
         use std::net::TcpListener;
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
 
         let handle = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream);
+
+            // Drain request headers and find Content-Length so ureq can finish
+            // sending the request body before we respond — avoids Broken pipe.
+            let mut content_length = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                let lower = line.to_ascii_lowercase();
+                if lower.starts_with("content-length:") {
+                    if let Some(v) = lower.split(':').nth(1) {
+                        content_length = v.trim().parse().unwrap_or(0);
+                    }
+                }
+            }
+            if content_length > 0 {
+                let mut body = vec![0u8; content_length];
+                let _ = reader.read_exact(&mut body);
+            }
+
+            let mut stream = reader.into_inner();
             let response = "HTTP/1.1 422 Unprocessable Entity\r\nContent-Length: 13\r\nContent-Type: text/plain\r\n\r\nSENTINEL_BODY";
             stream.write_all(response.as_bytes()).unwrap();
         });
