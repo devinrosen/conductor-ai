@@ -124,11 +124,17 @@ pub fn build_variable_map(state: &ExecutionState) -> HashMap<String, String> {
 
     // Script-exported variables from prior steps' FLOW_OUTPUT extras (#2736).
     //
-    // Any string-valued top-level field other than `markers` and `context` in
-    // a step's structured_output is exposed as `{{name}}` to subsequent steps.
-    // Used by `resolve-pr-base.sh` to plumb `{{base_branch}}` to all
+    // Any string-valued top-level field other than the FlowOutput-recognized
+    // ones (`markers`, `context`) is exposed as `{{name}}` to subsequent
+    // steps. Used by `resolve-pr-base.sh` to plumb `{{base_branch}}` to all
     // downstream consumers; future scripts can export additional values
     // without engine-side code changes.
+    //
+    // Parse as `FlowOutput` (not raw `serde_json::Value`) so the named fields
+    // are stripped and we iterate only `.extras`. This couples the skip-list
+    // to FlowOutput's serde schema — if FlowOutput gains a new named field,
+    // it lands in named-field land automatically rather than leaking through
+    // a manual `markers`/`context` guard.
     //
     // Shadowing guard: keys present in `ENGINE_INJECTED_KEYS` cannot be
     // overwritten by a script — those are reserved for engine-controlled
@@ -142,38 +148,24 @@ pub fn build_variable_map(state: &ExecutionState) -> HashMap<String, String> {
             Some(j) => j,
             None => continue,
         };
-        let parsed = match serde_json::from_str::<serde_json::Value>(json) {
-            Ok(v) => v,
+        let flow_output = match serde_json::from_str::<crate::helpers::FlowOutput>(json) {
+            Ok(out) => out,
             Err(e) => {
                 // structured_output is always written by script.rs via
                 // serde_json, so a parse failure here is a real bug — but
                 // not fatal to the run. Log and skip so other steps' exports
-                // still flow.
+                // still flow.  Same path catches non-object JSON since
+                // FlowOutput requires the input be a JSON object.
                 tracing::warn!(
                     step = %c.step,
                     error = %e,
-                    "build_variable_map: structured_output is not valid JSON — \
+                    "build_variable_map: structured_output is not a valid FlowOutput JSON — \
                      {{name}} variable exports from this step will be unavailable",
                 );
                 continue;
             }
         };
-        let obj = match parsed.as_object() {
-            Some(o) => o,
-            None => {
-                tracing::warn!(
-                    step = %c.step,
-                    "build_variable_map: structured_output JSON is not an object — \
-                     {{name}} variable exports from this step will be unavailable",
-                );
-                continue;
-            }
-        };
-        for (key, value) in obj {
-            if key == "markers" || key == "context" {
-                // Engine-recognized FlowOutput fields, not exports.
-                continue;
-            }
+        for (key, value) in &flow_output.extras {
             if ENGINE_INJECTED_KEYS.contains(&key.as_str()) {
                 tracing::warn!(
                     step = %c.step,
@@ -457,5 +449,57 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Malformed JSON in a step's structured_output must not abort the loop —
+    /// other steps' exports should still flow. Covers the parse-failure log
+    /// path in `build_variable_map`.
+    #[test]
+    fn build_variable_map_skips_steps_with_invalid_structured_output() {
+        use crate::test_helpers::CountingPersistence;
+        use std::sync::Arc;
+
+        let cp = Arc::new(CountingPersistence::new());
+        let mut state = crate::test_helpers::make_test_execution_state(
+            cp as Arc<dyn crate::traits::persistence::WorkflowPersistence>,
+            "run-1".into(),
+        );
+
+        // Step 1: malformed JSON. Should be skipped with a warning.
+        state.contexts.push(crate::types::ContextEntry {
+            step: "broken-step".into(),
+            iteration: 0,
+            context: String::new(),
+            markers: vec![],
+            structured_output: Some("this is not json".into()),
+            output_file: None,
+        });
+
+        // Step 2: also "not an object" (a JSON array). FlowOutput parse
+        // requires an object, so this should also be skipped — same path.
+        state.contexts.push(crate::types::ContextEntry {
+            step: "array-step".into(),
+            iteration: 0,
+            context: String::new(),
+            markers: vec![],
+            structured_output: Some(r#"["nope", "not an object"]"#.into()),
+            output_file: None,
+        });
+
+        // Step 3: valid extras. Should flow.
+        state.contexts.push(crate::types::ContextEntry {
+            step: "good-step".into(),
+            iteration: 0,
+            context: "ok".into(),
+            markers: vec![],
+            structured_output: Some(r#"{"markers":[],"context":"ok","payload":"survived"}"#.into()),
+            output_file: None,
+        });
+
+        let vars = build_variable_map(&state);
+        // Bad steps contribute nothing.
+        assert!(!vars.contains_key("broken-step"));
+        // Good step's extras still appear — proves the loop continues past failures.
+        assert_eq!(vars.get("payload").map(String::as_str), Some("survived"));
     }
 }
