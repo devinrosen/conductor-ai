@@ -198,12 +198,18 @@ fi
 # ---------------------------------------------------------------------------
 # 5. Build complete review body programmatically
 # ---------------------------------------------------------------------------
-OVERALL_APPROVED=$(echo "${PRIOR_OUTPUT}" | jq -r 'if .overall_approved == false then "false" else "true" end')
-
-# Safety net: if blocking findings exist, override to not approved regardless of model output
+# Derive approval state purely from the post-filter blocking_findings count.
+#
+# The aggregator's `.overall_approved` is computed on pre-filter data, so it
+# can be stale: if the off-diff filter (step 1b) drops every blocking finding,
+# the aggregator may still report `overall_approved: false`. Re-evaluating
+# here off the filtered count keeps the review body consistent — no
+# "Changes Requested" without an accompanying findings list.
 HAS_BLOCKING_CHECK=$(echo "${PRIOR_OUTPUT}" | jq -r 'if (.blocking_findings // [] | length) > 0 then "true" else "false" end')
 if [ "${HAS_BLOCKING_CHECK}" = "true" ]; then
   OVERALL_APPROVED="false"
+else
+  OVERALL_APPROVED="true"
 fi
 
 if [ "${OVERALL_APPROVED}" = "true" ]; then
