@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 82;
+pub const LATEST_SCHEMA_VERSION: u32 = 83;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1270,6 +1270,30 @@ pub fn run(conn: &Connection) -> Result<()> {
             conn.execute_batch(include_str!("migrations/082_rename_claude_session_id.sql"))?;
         }
         bump_version(conn, 82)?;
+    }
+
+    // Migration 083: add workflow_title TEXT column to workflow_runs.
+    // Backfills existing rows from json_extract(definition_snapshot, '$.title').
+    if version < 83 {
+        let has_col: bool = conn
+            .prepare("SELECT workflow_title FROM workflow_runs LIMIT 0")
+            .is_ok();
+        if !has_col {
+            conn.execute_batch("ALTER TABLE workflow_runs ADD COLUMN workflow_title TEXT;")?;
+            // Only backfill if definition_snapshot column exists (some minimal test
+            // schemas omit it; the column was added in migration 021).
+            let has_snapshot: bool = conn
+                .prepare("SELECT definition_snapshot FROM workflow_runs LIMIT 0")
+                .is_ok();
+            if has_snapshot {
+                conn.execute_batch(
+                    "UPDATE workflow_runs \
+                     SET workflow_title = json_extract(definition_snapshot, '$.title') \
+                     WHERE definition_snapshot IS NOT NULL;",
+                )?;
+            }
+        }
+        bump_version(conn, 83)?;
     }
 
     Ok(())

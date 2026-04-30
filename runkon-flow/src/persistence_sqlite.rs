@@ -30,7 +30,7 @@ const RUN_COLUMNS: &str =
      parent_workflow_run_id, target_label, default_bot_name, iteration, blocked_on, \
      total_input_tokens, total_output_tokens, total_cache_read_input_tokens, \
      total_cache_creation_input_tokens, total_turns, total_cost_usd, total_duration_ms, model, \
-     error, dismissed";
+     error, dismissed, workflow_title";
 
 /// Column list for `workflow_run_steps` SELECT queries (used by `row_to_step`).
 const STEP_COLUMNS: &str =
@@ -84,7 +84,7 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
     });
     let dismissed_int: i64 = row.get("dismissed")?;
     let definition_snapshot: Option<String> = row.get("definition_snapshot")?;
-    let workflow_title = extract_workflow_title(definition_snapshot.as_deref());
+    let workflow_title: Option<String> = row.get("workflow_title")?;
     Ok(WorkflowRun {
         id,
         workflow_name: row.get("workflow_name")?,
@@ -273,13 +273,14 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
         let id = new_id();
         let now = Utc::now().to_rfc3339();
 
+        let workflow_title = extract_workflow_title(new_run.definition_snapshot.as_deref());
         conn.execute(
             "INSERT INTO workflow_runs (id, workflow_name, worktree_id, ticket_id, repo_id, \
              parent_run_id, status, dry_run, trigger, started_at, definition_snapshot, \
-             parent_workflow_run_id, target_label) \
+             parent_workflow_run_id, target_label, workflow_title) \
              VALUES (:id, :workflow_name, :worktree_id, :ticket_id, :repo_id, :parent_run_id, \
              :status, :dry_run, :trigger, :started_at, :definition_snapshot, \
-             :parent_workflow_run_id, :target_label)",
+             :parent_workflow_run_id, :target_label, :workflow_title)",
             named_params![
                 ":id": id,
                 ":workflow_name": new_run.workflow_name,
@@ -294,11 +295,10 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
                 ":definition_snapshot": new_run.definition_snapshot,
                 ":parent_workflow_run_id": new_run.parent_workflow_run_id,
                 ":target_label": new_run.target_label,
+                ":workflow_title": workflow_title,
             ],
         )
         .map_err(db_err)?;
-
-        let workflow_title = extract_workflow_title(new_run.definition_snapshot.as_deref());
         Ok(WorkflowRun {
             id,
             workflow_name: new_run.workflow_name,

@@ -4466,3 +4466,41 @@ fn get_gate_approval_state_handles_unrecognised_status_without_panic() {
         "unrecognised status with no approved_at should return Pending, got {state:?}"
     );
 }
+
+#[test]
+fn test_workflow_title_stored_and_read_from_column() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let parent_id = make_parent_id(&conn, "w1");
+    let snapshot = r#"{"title":"My Workflow","steps":[]}"#;
+
+    let run = mgr
+        .create_workflow_run(
+            "wf-title",
+            Some("w1"),
+            &parent_id,
+            false,
+            "manual",
+            Some(snapshot),
+        )
+        .unwrap();
+
+    assert_eq!(run.workflow_title.as_deref(), Some("My Workflow"));
+
+    // Read back through the query layer to confirm the column is persisted.
+    let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert_eq!(fetched.workflow_title.as_deref(), Some("My Workflow"));
+
+    // Null out definition_snapshot to prove workflow_title is read from its own column.
+    conn.execute(
+        "UPDATE workflow_runs SET definition_snapshot = NULL WHERE id = ?1",
+        rusqlite::params![run.id],
+    )
+    .unwrap();
+    let fetched_no_snapshot = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert_eq!(
+        fetched_no_snapshot.workflow_title.as_deref(),
+        Some("My Workflow"),
+        "workflow_title must survive definition_snapshot being nulled out"
+    );
+}

@@ -33,7 +33,7 @@ pub(super) const RUN_COLUMNS: &str =
      parent_workflow_run_id, target_label, default_bot_name, iteration, blocked_on, \
      total_input_tokens, total_output_tokens, total_cache_read_input_tokens, \
      total_cache_creation_input_tokens, total_turns, total_cost_usd, total_duration_ms, model, \
-     error, dismissed";
+     error, dismissed, workflow_title";
 
 #[cfg(test)]
 mod tests {
