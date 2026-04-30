@@ -29,14 +29,14 @@ count=${#code_files[@]}
 if [ "$count" -gt 0 ]; then
   file_list=$(IFS=", "; echo "${code_files[*]}")
   cat <<EOF
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": ["has_code_changes"], "context": "Found ${count} code file(s) in diff: ${file_list}"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF
 else
   cat <<'EOF'
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "No code files in diff"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF
 fi

@@ -66,7 +66,7 @@ if [[ -n "$elapsed" ]]; then
 fi
 
 cat <<EOF
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "${context}"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF

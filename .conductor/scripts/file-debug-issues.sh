@@ -14,9 +14,9 @@ SUMMARY=$(echo "${PRIOR_OUTPUT}" | jq -r '.summary // ""')
 if [ "${ISSUE_COUNT}" -eq 0 ]; then
   echo "No issues to file."
   cat <<EOF
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "No issues to file — diagnosis found no actionable fixes"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF
   exit 0
 fi
@@ -90,7 +90,7 @@ ${DESCRIPTION}
 done < <(echo "${ISSUES}" | jq -c '.[]')
 
 cat <<EOF
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "Filed ${filed} issue(s), skipped ${skipped} duplicate(s). ${filed_urls}"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF

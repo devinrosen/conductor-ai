@@ -30,9 +30,9 @@ git fetch origin "$base" --quiet
 ahead=$(git rev-list --count "origin/$base..HEAD")
 if [ "$ahead" -eq 0 ]; then
   cat <<EOF
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": ["no_changes"], "context": "No commits ahead of $base — nothing to push or PR"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF
   exit 0
 fi
@@ -55,7 +55,7 @@ fi
 rm -f "$pr_create_err"
 
 cat <<EOF
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "PR is open at $pr_url"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF
