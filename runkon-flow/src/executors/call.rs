@@ -155,6 +155,7 @@ fn execute_call_inner(
             let persistence = Arc::clone(&state.persistence);
             let run_id = state.workflow_run_id.clone();
             let last_hb = Arc::clone(&state.last_heartbeat_at);
+            let cancellation = state.cancellation.clone();
             std::thread::spawn(move || {
                 let poll = std::time::Duration::from_millis(500);
                 loop {
@@ -173,6 +174,18 @@ fn execute_call_inner(
                     last_hb.store(now_secs, Ordering::Relaxed);
                     if let Err(e) = persistence.tick_heartbeat(&run_id) {
                         tracing::warn!("heartbeat tick failed for {run_id}: {e}");
+                        continue;
+                    }
+                    match persistence.is_run_cancelled(&run_id) {
+                        Ok(true) => {
+                            tracing::info!("run {run_id} cancelled externally");
+                            cancellation.cancel(CancellationReason::UserRequested(None));
+                            return;
+                        }
+                        Ok(false) => {}
+                        Err(e) => {
+                            tracing::warn!("cancellation check failed for {run_id}: {e}");
+                        }
                     }
                 }
             });
