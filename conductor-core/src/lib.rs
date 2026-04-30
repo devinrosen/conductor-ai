@@ -47,6 +47,7 @@ pub mod notification_event;
 pub mod notification_hooks;
 pub mod notify;
 pub mod process_utils;
+pub mod push;
 pub mod prompt_config;
 pub mod repo;
 pub(crate) mod retry;
