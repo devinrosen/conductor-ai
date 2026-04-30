@@ -23,9 +23,9 @@ impl<'a> StatsManager<'a> {
     }
 
     pub fn theme_unlock_stats(&self) -> Result<ThemeUnlockStats> {
-        let repos_registered: i64 =
-            self.conn
-                .query_row("SELECT COUNT(*) FROM repos", [], |r| r.get(0))?;
+        let repos_registered: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM repos", [], |r| r.get(0))?;
 
         let prs_merged: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM worktrees WHERE status = 'merged'",
