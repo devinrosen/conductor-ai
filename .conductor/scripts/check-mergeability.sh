@@ -21,15 +21,15 @@ done
 
 if [ "$mergeable" = "CONFLICTING" ]; then
   cat <<EOF
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": ["has_conflicts"], "context": "PR is CONFLICTING (mergeStateStatus: $merge_state) — rebase needed"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF
 else
   cat <<EOF
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "PR is mergeable (mergeStateStatus: $merge_state) — no rebase needed"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF
 fi
 

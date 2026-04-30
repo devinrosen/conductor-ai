@@ -19,14 +19,14 @@ count=${#migration_files[@]}
 if [ "$count" -gt 0 ]; then
   file_list=$(IFS=", "; echo "${migration_files[*]}")
   cat <<EOF
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": ["has_db_migrations"], "context": "Found ${count} migration file(s) in diff: ${file_list}"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF
 else
   cat <<'EOF'
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "No migration files in diff"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF
 fi

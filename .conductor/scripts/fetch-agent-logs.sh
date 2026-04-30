@@ -86,7 +86,7 @@ while IFS= read -r line; do
 done <<< "$run_output"
 
 cat <<EOF
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "Fetched ${logs_fetched} agent log(s) for failed steps"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF

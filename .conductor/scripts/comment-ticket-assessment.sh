@@ -25,7 +25,7 @@ emit_output() {
   local output
   output=$(jq -n --argjson markers "$markers" --arg context "$context" \
     '{"markers": $markers, "context": $context}')
-  printf '<<<CONDUCTOR_OUTPUT>>>\n%s\n<<<END_CONDUCTOR_OUTPUT>>>\n' "$output"
+  printf '<<<FLOW_OUTPUT>>>\n%s\n<<<END_FLOW_OUTPUT>>>\n' "$output"
 }
 
 # Detect verdict from markers in {{prior_contexts}} JSON array.

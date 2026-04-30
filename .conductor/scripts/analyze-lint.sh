@@ -44,14 +44,14 @@ done
 
 if [ "$ERRORS" -eq 1 ]; then
   cat <<'EOF'
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": ["has_lint_errors"], "context": "Lint errors found"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF
 else
   cat <<'EOF'
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "All lint checks passed"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF
 fi

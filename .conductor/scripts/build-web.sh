@@ -9,7 +9,7 @@ echo "=== Building conductor-web binary ==="
 cargo build --bin conductor-web
 
 cat <<'EOF'
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": "Built conductor-web frontend and binary successfully"}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF

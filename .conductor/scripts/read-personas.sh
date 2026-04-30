@@ -21,7 +21,7 @@ fi
 json_content=$(printf '%s' "${prefix}${content}" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
 
 cat <<EOF
-<<<CONDUCTOR_OUTPUT>>>
+<<<FLOW_OUTPUT>>>
 {"markers": [], "context": ${json_content}}
-<<<END_CONDUCTOR_OUTPUT>>>
+<<<END_FLOW_OUTPUT>>>
 EOF
