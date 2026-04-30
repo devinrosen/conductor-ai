@@ -1,4 +1,4 @@
-%% Updated 2026-04-24 — Entity-relationship diagram for conductor.db (83 migrations)
+%% Updated 2026-04-30 — Entity-relationship diagram for conductor.db (85 migrations)
 erDiagram
 
     _conductor_meta {
@@ -40,7 +40,7 @@ erDiagram
     agent_runs {
         text id PK
         text worktree_id FK
-        text claude_session_id
+        text session_id
         text prompt
         text status
         text result_text
@@ -196,6 +196,13 @@ erDiagram
         int fan_out_failed
         int fan_out_skipped
         text step_error
+        int input_tokens
+        int output_tokens
+        int cache_read_input_tokens
+        int cache_creation_input_tokens
+        real cost_usd
+        int num_turns
+        int duration_ms
     }
 
     workflow_runs {
