@@ -4512,7 +4512,14 @@ fn test_workflow_title_null_snapshot_at_create_time() {
     let parent_id = make_parent_id(&conn, "w1");
 
     let run = mgr
-        .create_workflow_run("wf-no-snapshot", Some("w1"), &parent_id, false, "manual", None)
+        .create_workflow_run(
+            "wf-no-snapshot",
+            Some("w1"),
+            &parent_id,
+            false,
+            "manual",
+            None,
+        )
         .unwrap();
 
     assert_eq!(
