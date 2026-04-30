@@ -45,6 +45,11 @@ impl ForeachParentCtx {
     fn make_child_state(&self, cancellation: CancellationToken) -> ExecutionState {
         let mut child = self.template.clone();
         child.cancellation = cancellation;
+        // Each foreach item gets its own current_execution_id slot. Cloning the
+        // template would otherwise share one Arc<Mutex<...>> across all parallel
+        // siblings — a bug-in-waiting if anything reads this state per-child
+        // (e.g. cancel_run resolving the in-flight executor).
+        child.current_execution_id = Arc::new(std::sync::Mutex::new(None));
         child
     }
 }
