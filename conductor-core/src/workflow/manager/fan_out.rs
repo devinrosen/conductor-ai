@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rusqlite::{named_params, Connection, OptionalExtension};
+use rusqlite::{named_params, Connection};
 
 use crate::db::{query_collect, sql_placeholders, with_in_clause};
 use crate::error::{ConductorError, Result};
@@ -61,29 +61,25 @@ pub fn get_fan_out_items(
     step_run_id: &str,
     status_filter: Option<&str>,
 ) -> Result<Vec<FanOutItemRow>> {
-    if let Some(status) = status_filter {
-        query_collect(
-            conn,
-            "SELECT id, step_run_id, item_type, item_id, item_ref, child_run_id, \
-                 status, dispatched_at, completed_at \
-                 FROM workflow_run_step_fan_out_items \
-                 WHERE step_run_id = :step_run_id AND status = :status \
-                 ORDER BY id ASC",
-            named_params![":step_run_id": step_run_id, ":status": status],
-            fan_out_item_from_row,
-        )
+    let status_clause = if status_filter.is_some() {
+        " AND status = :status"
     } else {
-        query_collect(
-            conn,
-            "SELECT id, step_run_id, item_type, item_id, item_ref, child_run_id, \
-                 status, dispatched_at, completed_at \
-                 FROM workflow_run_step_fan_out_items \
-                 WHERE step_run_id = :step_run_id \
-                 ORDER BY id ASC",
-            named_params![":step_run_id": step_run_id],
-            fan_out_item_from_row,
-        )
+        ""
+    };
+    let sql = format!(
+        "SELECT id, step_run_id, item_type, item_id, item_ref, child_run_id, \
+             status, dispatched_at, completed_at \
+             FROM workflow_run_step_fan_out_items \
+             WHERE step_run_id = :step_run_id{status_clause} \
+             ORDER BY id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut params: Vec<(&str, &dyn rusqlite::ToSql)> = vec![(":step_run_id", &step_run_id)];
+    if let Some(ref status) = status_filter {
+        params.push((":status", status));
     }
+    let rows = stmt.query_map(params.as_slice(), fan_out_item_from_row)?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
 pub fn get_fan_out_items_for_steps(
@@ -222,16 +218,6 @@ pub fn set_fan_out_total(conn: &Connection, step_run_id: &str, total: i64) -> Re
     Ok(())
 }
 
-pub fn get_workflow_run_status(conn: &Connection, run_id: &str) -> Result<Option<String>> {
-    Ok(conn
-        .query_row(
-            "SELECT status FROM workflow_runs WHERE id = :id",
-            named_params![":id": run_id],
-            |row| row.get("status"),
-        )
-        .optional()?)
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Shim impl: keeps `WorkflowManager::<method>` callable while the free functions
@@ -309,9 +295,5 @@ impl<'a> super::WorkflowManager<'a> {
 
     pub fn set_fan_out_total(&self, step_run_id: &str, total: i64) -> Result<()> {
         set_fan_out_total(self.conn, step_run_id, total)
-    }
-
-    pub fn get_workflow_run_status(&self, run_id: &str) -> Result<Option<String>> {
-        get_workflow_run_status(self.conn, run_id)
     }
 }

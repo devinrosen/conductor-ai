@@ -115,6 +115,17 @@ pub fn is_run_cancelled(conn: &Connection, run_id: &str) -> Result<bool> {
     ))
 }
 
+/// Return the raw `status` string for a workflow run, or `None` if no row exists.
+pub fn get_workflow_run_status(conn: &Connection, run_id: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT status FROM workflow_runs WHERE id = :id",
+            named_params![":id": run_id],
+            |row| row.get("status"),
+        )
+        .optional()?)
+}
+
 pub fn get_workflow_run(conn: &Connection, id: &str) -> Result<Option<WorkflowRun>> {
     Ok(conn
         .query_row(
@@ -1904,6 +1915,9 @@ impl<'a> super::WorkflowManager<'a> {
     }
     pub fn is_run_cancelled(&self, run_id: &str) -> Result<bool> {
         is_run_cancelled(self.conn, run_id)
+    }
+    pub fn get_workflow_run_status(&self, run_id: &str) -> Result<Option<String>> {
+        get_workflow_run_status(self.conn, run_id)
     }
     pub fn get_workflow_run(&self, id: &str) -> Result<Option<WorkflowRun>> {
         get_workflow_run(self.conn, id)
