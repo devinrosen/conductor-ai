@@ -97,6 +97,9 @@ pub(in crate::workflow) fn row_to_workflow_run(
         total_duration_ms,
         model,
         dismissed: dismissed_int != 0,
+        owner_token: row.get("owner_token")?,
+        lease_until: row.get("lease_until")?,
+        generation: row.get("generation")?,
     })
 }
 

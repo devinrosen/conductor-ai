@@ -12,7 +12,7 @@ pub const RUN_COLUMNS: &str =
      parent_workflow_run_id, target_label, default_bot_name, iteration, blocked_on, \
      total_input_tokens, total_output_tokens, total_cache_read_input_tokens, \
      total_cache_creation_input_tokens, total_turns, total_cost_usd, total_duration_ms, model, \
-     error, dismissed, workflow_title";
+     error, dismissed, workflow_title, owner_token, lease_until, generation";
 
 pub const FLOW_OUTPUT_INSTRUCTION: &str = r#"
 When you have finished your work, output the following block exactly as the

@@ -85,6 +85,10 @@ pub struct ExecutionState {
     /// Written by execute_call before dispatch; read by FlowEngine::cancel_run()
     /// to fire-and-forget executor.cancel().
     pub current_execution_id: Arc<Mutex<Option<(String, String)>>>,
+    /// Lease token held by this engine instance after a successful acquire_lease().
+    /// Used by PRs 3–5 for refresh and generation checks.
+    pub owner_token: Option<String>,
+    pub lease_generation: Option<i64>,
 }
 
 /// Input parameters for child workflow execution.
@@ -251,6 +255,8 @@ impl ExecutionState {
         child.last_heartbeat_at = Self::new_heartbeat();
         child.cancellation = cancellation;
         child.current_execution_id = Arc::new(std::sync::Mutex::new(None));
+        child.owner_token = None;
+        child.lease_generation = None;
         child
     }
 
@@ -1111,6 +1117,8 @@ mod tests {
             event_sinks: Arc::from(vec![]),
             cancellation: CancellationToken::new(),
             current_execution_id: Arc::new(std::sync::Mutex::new(None)),
+            owner_token: None,
+            lease_generation: None,
         };
 
         let child_cancellation = CancellationToken::new();
@@ -1236,6 +1244,8 @@ mod tests {
             event_sinks: Arc::clone(&sinks),
             cancellation: CancellationToken::new(),
             current_execution_id: Arc::new(std::sync::Mutex::new(None)),
+            owner_token: None,
+            lease_generation: None,
         };
 
         let ctx = parent.child_workflow_context();

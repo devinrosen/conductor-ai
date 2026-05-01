@@ -304,6 +304,8 @@ mod tests {
             event_sinks: Arc::from(vec![]),
             cancellation: crate::cancellation::CancellationToken::new(),
             current_execution_id: Arc::new(std::sync::Mutex::new(None)),
+            owner_token: None,
+            lease_generation: None,
         }
     }
 

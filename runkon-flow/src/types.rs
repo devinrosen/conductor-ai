@@ -71,6 +71,11 @@ pub struct WorkflowRun {
     pub total_duration_ms: Option<i64>,
     pub model: Option<String>,
     pub dismissed: bool,
+    #[serde(skip)]
+    pub owner_token: Option<String>,
+    #[serde(skip)]
+    pub lease_until: Option<String>,
+    pub generation: i64,
 }
 
 /// Extract the human-readable title from a workflow definition snapshot JSON string.

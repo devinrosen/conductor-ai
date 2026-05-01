@@ -159,6 +159,9 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
             total_duration_ms: None,
             model: None,
             dismissed: false,
+            owner_token: None,
+            lease_until: None,
+            generation: 0,
         };
         let mut store = self.lock()?;
         store.runs.insert(id, run.clone());
@@ -494,6 +497,42 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
                 )
             })
             .unwrap_or(false))
+    }
+
+    fn acquire_lease(
+        &self,
+        run_id: &str,
+        token: &str,
+        ttl_seconds: i64,
+    ) -> Result<Option<i64>, EngineError> {
+        let mut store = self.store.lock().map_err(|_| lock_err())?;
+        let now = chrono::Utc::now();
+
+        // If the run doesn't exist in the store (common in unit tests that only set up
+        // persistence to inject specific failures), treat it as unclaimed and grant the
+        // lease without modifying the store.
+        let Some(run) = store.runs.get_mut(run_id) else {
+            return Ok(Some(1));
+        };
+
+        let can_claim = match &run.owner_token {
+            None => true,
+            Some(t) if t == token => true,
+            Some(_) => run.lease_until.as_deref().is_some_and(|until| {
+                chrono::DateTime::parse_from_rfc3339(until)
+                    .map(|exp| exp < now)
+                    .unwrap_or(false)
+            }),
+        };
+
+        if !can_claim {
+            return Ok(None);
+        }
+
+        run.owner_token = Some(token.to_string());
+        run.lease_until = Some((now + chrono::Duration::seconds(ttl_seconds)).to_rfc3339());
+        run.generation += 1;
+        Ok(Some(run.generation))
     }
 
     fn tick_heartbeat(&self, _run_id: &str) -> Result<(), EngineError> {
