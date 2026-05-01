@@ -108,7 +108,7 @@ pub(super) fn tool_sync_tickets(
                 Ok(t) => t,
                 Err(e) => return tool_err(e.to_string()),
             };
-            let fetch_result = ts.fetch_one(&source_id);
+            let fetch_result = ts.fetch_one(&config, &source_id);
             match fetch_result {
                 Ok(ticket) => {
                     if let Err(e) = syncer.upsert_tickets(&repo.id, &[ticket]) {
@@ -142,7 +142,7 @@ pub(super) fn tool_sync_tickets(
                 continue;
             }
         };
-        let fetch_result = ts.with_repo_slug(&repo.slug).sync(None);
+        let fetch_result = ts.with_repo_slug(&repo.slug).sync(&config, None);
         match fetch_result {
             Ok(tickets) => {
                 let (synced, closed) =

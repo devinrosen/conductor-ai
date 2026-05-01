@@ -1,18 +1,23 @@
 use std::process::Command;
 
+use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::tickets::TicketInput;
 
 /// Talks to Jira through the `acli` CLI, normalizing results into [`TicketInput`].
 ///
-/// Stateless wrapper that aligns this module's API with the rest of the
-/// conductor-core manager pattern (`RepoManager`, `WorktreeManager`,
-/// `IssueSourceManager`, etc.).
-pub struct JiraAcliManager;
+/// Holds `&Config` to align with the conductor-core manager pattern
+/// (`RepoManager`, `WorktreeManager`, etc.) and to give future
+/// configuration-driven behavior (timeouts, alternate `acli` paths) a
+/// natural home without an API change.
+pub struct JiraAcliManager<'a> {
+    #[allow(dead_code)]
+    config: &'a Config,
+}
 
-impl JiraAcliManager {
-    pub fn new() -> Self {
-        Self
+impl<'a> JiraAcliManager<'a> {
+    pub fn new(config: &'a Config) -> Self {
+        Self { config }
     }
 
     /// Sync Jira issues matching `jql` using the `acli` CLI.
@@ -91,12 +96,6 @@ impl JiraAcliManager {
         tickets.pop().ok_or_else(|| ConductorError::TicketNotFound {
             id: issue_key.to_string(),
         })
-    }
-}
-
-impl Default for JiraAcliManager {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -415,7 +414,8 @@ mod tests {
 
     #[test]
     fn test_fetch_issue_rejects_injection_before_acli() {
-        let mgr = JiraAcliManager::new();
+        let config = Config::default();
+        let mgr = JiraAcliManager::new(&config);
         match mgr.fetch_issue("PROJ-1 OR key != PROJ-1", "https://jira.example.com") {
             Err(e) => assert!(
                 e.to_string().contains("invalid issue key format"),
@@ -427,7 +427,8 @@ mod tests {
 
     #[test]
     fn test_fetch_issue_rejects_malformed_key_before_acli() {
-        let mgr = JiraAcliManager::new();
+        let config = Config::default();
+        let mgr = JiraAcliManager::new(&config);
         for bad in &["", "NOHYPHEN", "-123", "PROJ-", "proj-1", "PROJ-abc"] {
             match mgr.fetch_issue(bad, "https://jira.example.com") {
                 Err(e) => assert!(
@@ -463,7 +464,8 @@ mod tests {
     fn test_sync_issues_rejects_bad_jql_before_acli() {
         // Hitting validate_jql means we never spawn acli, so this works
         // without acli on PATH.
-        let mgr = JiraAcliManager::new();
+        let config = Config::default();
+        let mgr = JiraAcliManager::new(&config);
         match mgr.sync_issues("", "https://jira.example.com") {
             Err(e) => assert!(
                 e.to_string().contains("JQL must not be empty"),
