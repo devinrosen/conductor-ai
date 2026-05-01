@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
-use rusqlite::{named_params, OptionalExtension};
+use rusqlite::{named_params, Connection, OptionalExtension};
 
 use crate::agent::status::AgentRunStatus;
 use crate::config::Config;
@@ -10,7 +10,6 @@ use crate::error::Result;
 
 use super::helpers::row_to_workflow_run;
 
-use super::WorkflowManager;
 use crate::workflow::constants::RUN_COLUMNS;
 use crate::workflow::types::StepKey;
 use crate::workflow::WorkflowRun;
@@ -60,164 +59,142 @@ pub struct ReapedStaleRun {
     pub running_minutes: i64,
 }
 
-impl<'a> WorkflowManager<'a> {
-    /// Run `f` inside a named SQLite savepoint, committing on success and rolling
-    /// back on error.  Replaces the repeated SAVEPOINT / match / RELEASE pattern
-    /// across several reaper functions.
-    fn with_savepoint<T>(&self, name: &'static str, f: impl FnOnce() -> Result<T>) -> Result<T> {
-        self.conn.execute_batch(&format!("SAVEPOINT {name}"))?;
-        let result = f();
-        match result {
-            Ok(v) => {
-                self.conn.execute_batch(&format!("RELEASE {name}"))?;
-                Ok(v)
+fn with_savepoint<T>(
+    conn: &Connection,
+    name: &'static str,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    conn.execute_batch(&format!("SAVEPOINT {name}"))?;
+    let result = f();
+    match result {
+        Ok(v) => {
+            conn.execute_batch(&format!("RELEASE {name}"))?;
+            Ok(v)
+        }
+        Err(e) => {
+            if let Err(rb_err) = conn.execute_batch(&format!("ROLLBACK TO SAVEPOINT {name}")) {
+                tracing::warn!("savepoint '{name}' rollback failed: {rb_err}");
             }
-            Err(e) => {
-                if let Err(rb_err) = self
-                    .conn
-                    .execute_batch(&format!("ROLLBACK TO SAVEPOINT {name}"))
-                {
-                    tracing::warn!("savepoint '{name}' rollback failed: {rb_err}");
-                }
-                if let Err(rel_err) = self.conn.execute_batch(&format!("RELEASE {name}")) {
-                    tracing::warn!("savepoint '{name}' release-after-rollback failed: {rel_err}");
-                }
-                Err(e)
+            if let Err(rel_err) = conn.execute_batch(&format!("RELEASE {name}")) {
+                tracing::warn!("savepoint '{name}' release-after-rollback failed: {rel_err}");
             }
+            Err(e)
         }
     }
+}
 
-    /// Reap workflow_run_steps stuck in `running` status whose script subprocess
-    /// has died while conductor was not running.
-    ///
-    /// Only script steps are checked: agent steps always have `child_run_id` set and
-    /// are handled by `recover_stuck_steps()`. Script steps have `child_run_id = NULL`
-    /// and `subprocess_pid` set after the child is spawned.
-    ///
-    /// For each candidate the reaper:
-    /// 1. Checks `pid_is_alive(pid)` — if false, marks the step `failed`.
-    /// 2. If the PID is alive, calls `pid_was_recycled` to detect OS PID reuse. If
-    ///    the PID was recycled, the original process is gone and the step is marked
-    ///    `failed`.
-    ///
-    /// Returns the count of steps that were reaped.
-    pub fn reap_orphaned_script_steps(&self) -> Result<usize> {
-        // Query script steps that are stuck in 'running' and have a subprocess_pid.
-        // child_run_id IS NULL discriminates script steps from agent steps.
-        let candidates: Vec<(String, i64, Option<String>)> = query_collect(
-            self.conn,
-            "SELECT id, subprocess_pid, started_at \
+pub fn reap_orphaned_script_steps(conn: &Connection) -> Result<usize> {
+    // Query script steps that are stuck in 'running' and have a subprocess_pid.
+    // child_run_id IS NULL discriminates script steps from agent steps.
+    let candidates: Vec<(String, i64, Option<String>)> = query_collect(
+        conn,
+        "SELECT id, subprocess_pid, started_at \
              FROM workflow_run_steps \
              WHERE status = 'running' \
                AND child_run_id IS NULL \
                AND subprocess_pid IS NOT NULL",
-            [],
-            |row| {
-                Ok((
-                    row.get("id")?,
-                    row.get("subprocess_pid")?,
-                    row.get("started_at")?,
-                ))
-            },
-        )?;
+        [],
+        |row| {
+            Ok((
+                row.get("id")?,
+                row.get("subprocess_pid")?,
+                row.get("started_at")?,
+            ))
+        },
+    )?;
 
-        if candidates.is_empty() {
-            return Ok(0);
-        }
+    if candidates.is_empty() {
+        return Ok(0);
+    }
 
-        let mut reaped = 0usize;
+    let mut reaped = 0usize;
 
-        for (step_id, raw_pid, started_at) in candidates {
-            let pid = raw_pid as u32;
+    for (step_id, raw_pid, started_at) in candidates {
+        let pid = raw_pid as u32;
 
-            #[cfg(unix)]
-            {
-                if crate::process_utils::pid_is_alive(pid) {
-                    // PID is alive — check for OS PID reuse using the process start
-                    // time recorded at spawn vs. the OS-reported start time now.
-                    let recycled = started_at
-                        .as_deref()
-                        .is_some_and(|at| crate::process_utils::pid_was_recycled(pid, at));
-                    if !recycled {
-                        // Process is genuinely still running — leave it alone.
-                        continue;
-                    }
-                    tracing::warn!(
-                        step_id = %step_id,
-                        pid,
-                        "reap_orphaned_script_steps: PID recycled — original script process is gone"
-                    );
-                    self.fail_step_with_message(
-                        &step_id,
-                        "subprocess PID recycled — original script process is gone",
-                    )?;
-                    reaped += 1;
+        #[cfg(unix)]
+        {
+            if crate::process_utils::pid_is_alive(pid) {
+                // PID is alive — check for OS PID reuse using the process start
+                // time recorded at spawn vs. the OS-reported start time now.
+                let recycled = started_at
+                    .as_deref()
+                    .is_some_and(|at| crate::process_utils::pid_was_recycled(pid, at));
+                if !recycled {
+                    // Process is genuinely still running — leave it alone.
                     continue;
                 }
-
                 tracing::warn!(
                     step_id = %step_id,
                     pid,
-                    "reap_orphaned_script_steps: subprocess lost — script process exited while conductor was not running"
+                    "reap_orphaned_script_steps: PID recycled — original script process is gone"
                 );
-                self.fail_step_with_message(
+                fail_step_with_message(
+                    conn,
                     &step_id,
-                    "subprocess lost — script process exited while conductor was not running",
+                    "subprocess PID recycled — original script process is gone",
                 )?;
                 reaped += 1;
+                continue;
             }
 
-            // On non-Unix platforms (Windows) we cannot check liveness via kill(0).
-            // Skip the step to avoid false-positive reaping.
-            #[cfg(not(unix))]
-            let _ = (step_id, pid, started_at);
+            tracing::warn!(
+                step_id = %step_id,
+                pid,
+                "reap_orphaned_script_steps: subprocess lost — script process exited while conductor was not running"
+            );
+            fail_step_with_message(
+                conn,
+                &step_id,
+                "subprocess lost — script process exited while conductor was not running",
+            )?;
+            reaped += 1;
         }
 
-        if reaped > 0 {
-            tracing::info!("reap_orphaned_script_steps: reaped {reaped} orphaned script step(s)");
-        }
-
-        Ok(reaped)
+        // On non-Unix platforms (Windows) we cannot check liveness via kill(0).
+        // Skip the step to avoid false-positive reaping.
+        #[cfg(not(unix))]
+        let _ = (step_id, pid, started_at);
     }
 
-    /// Helper function to fail a workflow step with a specific error message.
-    /// Sets all optional fields to None.
-    fn fail_step_with_message(&self, step_id: &str, error_message: &str) -> Result<()> {
-        self.update_step_status(
-            step_id,
-            WorkflowStepStatus::Failed,
-            None,
-            Some(error_message),
-            None,
-            None,
-            None,
-        )
+    if reaped > 0 {
+        tracing::info!("reap_orphaned_script_steps: reaped {reaped} orphaned script step(s)");
     }
 
-    /// Bulk-update a set of stuck steps to their terminal states in one SQL
-    /// statement per chunk.  Called exclusively from `recover_stuck_steps`.
-    ///
-    /// Builds a CASE-expression UPDATE instead of N individual statements to
-    /// reduce statement-preparation overhead to O(1).  Chunks at 199 rows to
-    /// stay below SQLite's 999-variable limit (5×199+1 = 996 parameters).
-    fn bulk_recover_steps(
-        &self,
-        items: &[(String, WorkflowStepStatus, Option<String>)],
-        ended_at: &str,
-    ) -> Result<()> {
-        if items.is_empty() {
-            return Ok(());
-        }
+    Ok(reaped)
+}
 
-        for chunk in items.chunks(199) {
-            let n = chunk.len();
-            let case_arms = (0..n)
-                .map(|_| "WHEN ? THEN ?")
-                .collect::<Vec<_>>()
-                .join(" ");
-            let in_placeholders = sql_placeholders(n);
-            let sql = format!(
-                "UPDATE workflow_run_steps \
+fn fail_step_with_message(conn: &Connection, step_id: &str, error_message: &str) -> Result<()> {
+    super::steps::update_step_status(
+        conn,
+        step_id,
+        WorkflowStepStatus::Failed,
+        None,
+        Some(error_message),
+        None,
+        None,
+        None,
+    )
+}
+
+fn bulk_recover_steps(
+    conn: &Connection,
+    items: &[(String, WorkflowStepStatus, Option<String>)],
+    ended_at: &str,
+) -> Result<()> {
+    if items.is_empty() {
+        return Ok(());
+    }
+
+    for chunk in items.chunks(199) {
+        let n = chunk.len();
+        let case_arms = (0..n)
+            .map(|_| "WHEN ? THEN ?")
+            .collect::<Vec<_>>()
+            .join(" ");
+        let in_placeholders = sql_placeholders(n);
+        let sql = format!(
+            "UPDATE workflow_run_steps \
                  SET status      = CASE id {case_arms} END, \
                      ended_at    = ?, \
                      result_text = CASE id {case_arms} END, \
@@ -226,135 +203,115 @@ impl<'a> WorkflowManager<'a> {
                      structured_output = NULL, \
                      step_error  = NULL \
                  WHERE id IN ({in_placeholders})"
-            );
+        );
 
-            let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(5 * n + 1);
-            for (step_id, status, _) in chunk {
-                params.push(Box::new(step_id.clone()));
-                params.push(Box::new(status.to_string()));
-            }
-            params.push(Box::new(ended_at.to_string()));
-            for (step_id, _, result_text) in chunk {
-                params.push(Box::new(step_id.clone()));
-                params.push(Box::new(result_text.clone()));
-            }
-            for (step_id, _, _) in chunk {
-                params.push(Box::new(step_id.clone()));
-            }
-
-            self.conn
-                .execute(&sql, rusqlite::params_from_iter(params))?;
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(5 * n + 1);
+        for (step_id, status, _) in chunk {
+            params.push(Box::new(step_id.clone()));
+            params.push(Box::new(status.to_string()));
+        }
+        params.push(Box::new(ended_at.to_string()));
+        for (step_id, _, result_text) in chunk {
+            params.push(Box::new(step_id.clone()));
+            params.push(Box::new(result_text.clone()));
+        }
+        for (step_id, _, _) in chunk {
+            params.push(Box::new(step_id.clone()));
         }
 
-        Ok(())
+        conn.execute(&sql, rusqlite::params_from_iter(params))?;
     }
 
-    /// Recover steps stuck in `running` status whose child agent run has
-    /// already reached a terminal state (completed, failed, or cancelled).
-    ///
-    /// This handles the case where the executor was killed before the workflow
-    /// thread could write the step's final status back to the DB.
-    /// Returns the number of steps recovered.
-    pub fn recover_stuck_steps(&self) -> Result<usize> {
-        // Step 1: fetch running workflow steps that have a child_run_id.
-        let running_steps: Vec<(String, String)> = query_collect(
-            self.conn,
-            "SELECT id, child_run_id FROM workflow_run_steps \
+    Ok(())
+}
+
+pub fn recover_stuck_steps(conn: &Connection) -> Result<usize> {
+    // Step 1: fetch running workflow steps that have a child_run_id.
+    let running_steps: Vec<(String, String)> = query_collect(
+        conn,
+        "SELECT id, child_run_id FROM workflow_run_steps \
              WHERE status = 'running' AND child_run_id IS NOT NULL",
-            [],
-            |row| Ok((row.get("id")?, row.get("child_run_id")?)),
-        )?;
+        [],
+        |row| Ok((row.get("id")?, row.get("child_run_id")?)),
+    )?;
 
-        if running_steps.is_empty() {
-            return Ok(0);
-        }
-
-        // Step 2: batch-fetch the agent runs via AgentManager.
-        let agent_mgr = crate::agent::AgentManager::new(self.conn);
-        let child_ids: Vec<&str> = running_steps.iter().map(|(_, id)| id.as_str()).collect();
-        let child_runs = agent_mgr.get_runs_by_ids(&child_ids)?;
-
-        // Filter in Rust to those with terminal statuses.
-        let stuck: Vec<(String, WorkflowStepStatus, Option<String>)> = running_steps
-            .into_iter()
-            .filter_map(|(step_id, child_run_id)| {
-                let Some(run) = child_runs.get(&child_run_id) else {
-                    tracing::warn!(
-                        step_id = %step_id,
-                        child_run_id = %child_run_id,
-                        "recover_stuck_steps: running step references a child_run_id not found \
-                         in agent_runs — the agent run may have been purged; \
-                         step will remain in 'running' status"
-                    );
-                    return None;
-                };
-                let step_status = match run.status {
-                    AgentRunStatus::Completed => WorkflowStepStatus::Completed,
-                    AgentRunStatus::Failed | AgentRunStatus::Cancelled => {
-                        WorkflowStepStatus::Failed
-                    }
-                    _ => return None,
-                };
-                Some((step_id, step_status, run.result_text.clone()))
-            })
-            .collect();
-
-        let ended_at = chrono::Utc::now().to_rfc3339();
-        let n = stuck.len();
-        self.with_savepoint("recover_stuck_steps", || {
-            self.bulk_recover_steps(&stuck, &ended_at)?;
-            Ok(n)
-        })
+    if running_steps.is_empty() {
+        return Ok(0);
     }
 
-    /// Reap workflow runs that are stuck in `waiting` status because the executor
-    /// process died while polling a gate.
-    ///
-    /// A root run (`parent_workflow_run_id IS NULL`) is considered orphaned when:
-    /// - Its parent agent run is in a terminal state (`completed`, `failed`, or
-    ///   `cancelled`), meaning the executor loop that owned this run is gone, OR
-    /// - The active gate step's timeout has elapsed based on wall-clock time since
-    ///   `started_at`.
-    ///
-    /// Orphaned runs have their active gate step marked `timed_out` and the run
-    /// itself marked `cancelled` with a descriptive summary.
-    pub fn reap_orphaned_workflow_runs(&self) -> Result<usize> {
-        // Query all root runs in 'waiting' status.
-        let waiting_runs: Vec<(String, String)> = query_collect(
-            self.conn,
-            "SELECT id, parent_run_id FROM workflow_runs \
+    // Step 2: batch-fetch the agent runs via AgentManager.
+    let agent_mgr = crate::agent::AgentManager::new(conn);
+    let child_ids: Vec<&str> = running_steps.iter().map(|(_, id)| id.as_str()).collect();
+    let child_runs = agent_mgr.get_runs_by_ids(&child_ids)?;
+
+    // Filter in Rust to those with terminal statuses.
+    let stuck: Vec<(String, WorkflowStepStatus, Option<String>)> = running_steps
+        .into_iter()
+        .filter_map(|(step_id, child_run_id)| {
+            let Some(run) = child_runs.get(&child_run_id) else {
+                tracing::warn!(
+                    step_id = %step_id,
+                    child_run_id = %child_run_id,
+                    "recover_stuck_steps: running step references a child_run_id not found \
+                     in agent_runs — the agent run may have been purged; \
+                     step will remain in 'running' status"
+                );
+                return None;
+            };
+            let step_status = match run.status {
+                AgentRunStatus::Completed => WorkflowStepStatus::Completed,
+                AgentRunStatus::Failed | AgentRunStatus::Cancelled => WorkflowStepStatus::Failed,
+                _ => return None,
+            };
+            Some((step_id, step_status, run.result_text.clone()))
+        })
+        .collect();
+
+    let ended_at = chrono::Utc::now().to_rfc3339();
+    let n = stuck.len();
+    with_savepoint(conn, "recover_stuck_steps", || {
+        bulk_recover_steps(conn, &stuck, &ended_at)?;
+        Ok(n)
+    })
+}
+
+pub fn reap_orphaned_workflow_runs(conn: &Connection) -> Result<usize> {
+    // Query all root runs in 'waiting' status.
+    let waiting_runs: Vec<(String, String)> = query_collect(
+        conn,
+        "SELECT id, parent_run_id FROM workflow_runs \
              WHERE status = 'waiting' AND parent_workflow_run_id IS NULL",
-            [],
-            |row| Ok((row.get("id")?, row.get("parent_run_id")?)),
-        )?;
+        [],
+        |row| Ok((row.get("id")?, row.get("parent_run_id")?)),
+    )?;
 
-        if waiting_runs.is_empty() {
-            return Ok(0);
-        }
+    if waiting_runs.is_empty() {
+        return Ok(0);
+    }
 
-        // Batch-fetch all parent agent runs via AgentManager to avoid N+1 lookups.
-        let agent_mgr = crate::agent::AgentManager::new(self.conn);
-        let id_refs: Vec<&str> = waiting_runs.iter().map(|(_, id)| id.as_str()).collect();
-        let parent_runs = agent_mgr.get_runs_by_ids(&id_refs)?;
+    // Batch-fetch all parent agent runs via AgentManager to avoid N+1 lookups.
+    let agent_mgr = crate::agent::AgentManager::new(conn);
+    let id_refs: Vec<&str> = waiting_runs.iter().map(|(_, id)| id.as_str()).collect();
+    let parent_runs = agent_mgr.get_runs_by_ids(&id_refs)?;
 
-        // Batch-fetch the active waiting gate step for each run to avoid N+1 queries.
-        let run_id_refs: Vec<&str> = waiting_runs.iter().map(|(id, _)| id.as_str()).collect();
-        let gate_steps = self.find_waiting_gates_for_runs(&run_id_refs)?;
+    // Batch-fetch the active waiting gate step for each run to avoid N+1 queries.
+    let run_id_refs: Vec<&str> = waiting_runs.iter().map(|(id, _)| id.as_str()).collect();
+    let gate_steps = super::queries::find_waiting_gates_for_runs(conn, &run_id_refs)?;
 
-        let mut reaped = 0usize;
-        let now = Utc::now();
+    let mut reaped = 0usize;
+    let now = Utc::now();
 
-        for (run_id, parent_run_id) in waiting_runs {
-            // A missing parent (None) is also treated as dead — if the agent run
-            // has been purged from the DB its executor is certainly gone.
-            let dead_parent = !matches!(
-                parent_runs.get(&parent_run_id).map(|r| &r.status),
-                Some(AgentRunStatus::Running) | Some(AgentRunStatus::WaitingForFeedback)
-            );
+    for (run_id, parent_run_id) in waiting_runs {
+        // A missing parent (None) is also treated as dead — if the agent run
+        // has been purged from the DB its executor is certainly gone.
+        let dead_parent = !matches!(
+            parent_runs.get(&parent_run_id).map(|r| &r.status),
+            Some(AgentRunStatus::Running) | Some(AgentRunStatus::WaitingForFeedback)
+        );
 
-            // Check if the active gate step's timeout has elapsed.
-            let gate_step = gate_steps.get(&run_id);
-            let gate_timed_out = gate_step.is_some_and(|step| {
+        // Check if the active gate step's timeout has elapsed.
+        let gate_step = gate_steps.get(&run_id);
+        let gate_timed_out = gate_step.is_some_and(|step| {
                 let timeout_secs = step.gate_timeout.as_deref().and_then(|s| {
                     let result = crate::workflow::helpers::parse_gate_timeout_secs(s);
                     if result.is_none() {
@@ -385,49 +342,48 @@ impl<'a> WorkflowManager<'a> {
                 }
             });
 
-            if !dead_parent && !gate_timed_out {
-                continue;
-            }
-
-            // Mark the active gate step as timed_out.
-            if let Some(step) = gate_step {
-                self.update_step_status(
-                    &step.id,
-                    WorkflowStepStatus::TimedOut,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                )?;
-            }
-
-            self.update_workflow_status(
-                &run_id,
-                WorkflowRunStatus::Cancelled,
-                Some(
-                    "Orphaned: executor died while waiting for gate \
-                     — run was automatically cancelled",
-                ),
-                None,
-            )?;
-            tracing::info!(run_id = %run_id, "Reaped orphaned workflow run");
-            reaped += 1;
+        if !dead_parent && !gate_timed_out {
+            continue;
         }
 
-        Ok(reaped)
+        // Mark the active gate step as timed_out.
+        if let Some(step) = gate_step {
+            super::steps::update_step_status(
+                conn,
+                &step.id,
+                WorkflowStepStatus::TimedOut,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )?;
+        }
+
+        super::lifecycle::update_workflow_status(
+            conn,
+            &run_id,
+            WorkflowRunStatus::Cancelled,
+            Some(
+                "Orphaned: executor died while waiting for gate \
+                     — run was automatically cancelled",
+            ),
+            None,
+        )?;
+        tracing::info!(run_id = %run_id, "Reaped orphaned workflow run");
+        reaped += 1;
     }
 
-    /// Detect workflow run IDs that are stuck in `running` status because the
-    /// executor process died between steps (all steps terminal, no active work).
-    ///
-    /// This is the detection-only counterpart of [`reap_heartbeat_stuck_runs`],
-    /// useful for diagnostics and tests. Uses the same query (including runs
-    /// with zero steps — the executor may have died before creating any).
-    pub fn detect_stuck_workflow_run_ids(&self, threshold_secs: i64) -> Result<Vec<String>> {
-        query_collect(
-            self.conn,
-            "SELECT id FROM workflow_runs \
+    Ok(reaped)
+}
+
+pub fn detect_stuck_workflow_run_ids(
+    conn: &Connection,
+    threshold_secs: i64,
+) -> Result<Vec<String>> {
+    query_collect(
+        conn,
+        "SELECT id FROM workflow_runs \
              WHERE status = 'running' \
                AND parent_workflow_run_id IS NULL \
                AND NOT EXISTS ( \
@@ -439,31 +395,21 @@ impl<'a> WorkflowManager<'a> {
                  CAST(strftime('%s', 'now') AS INTEGER) - \
                  CAST(strftime('%s', COALESCE(last_heartbeat, started_at)) AS INTEGER) \
                ) > :threshold_secs",
-            named_params![":threshold_secs": threshold_secs],
-            |row| row.get("id"),
-        )
-    }
+        named_params![":threshold_secs": threshold_secs],
+        |row| row.get("id"),
+    )
+}
 
-    /// Detect workflow runs with an active step that has been running longer
-    /// than `threshold_minutes` without completing.
-    ///
-    /// Unlike [`reap_heartbeat_stuck_runs`] (all steps terminal, executor
-    /// crashed between steps), this catches the case where a step's child
-    /// process is alive but hung — no crash, just no progress.
-    ///
-    /// Returns metadata for each stale run including the child agent run's
-    /// subprocess PID, so callers can verify whether the process is still
-    /// alive before taking action.
-    pub fn detect_stale_workflow_runs(
-        &self,
-        threshold_minutes: i64,
-    ) -> Result<Vec<StaleWorkflowRun>> {
-        if threshold_minutes <= 0 {
-            return Ok(vec![]);
-        }
-        query_collect(
-            self.conn,
-            "SELECT wr.id AS run_id, wr.workflow_name, wr.target_label, \
+pub fn detect_stale_workflow_runs(
+    conn: &Connection,
+    threshold_minutes: i64,
+) -> Result<Vec<StaleWorkflowRun>> {
+    if threshold_minutes <= 0 {
+        return Ok(vec![]);
+    }
+    query_collect(
+        conn,
+        "SELECT wr.id AS run_id, wr.workflow_name, wr.target_label, \
                     wrs.step_name, \
                     (CAST(strftime('%s', 'now') AS INTEGER) \
                      - CAST(strftime('%s', wrs.started_at) AS INTEGER)) / 60 AS running_minutes, \
@@ -483,223 +429,182 @@ impl<'a> WorkflowManager<'a> {
                  WHERE child.parent_workflow_run_id = wr.id \
                    AND child.status IN ('running', 'pending', 'waiting') \
                )",
-            named_params![":threshold_minutes": threshold_minutes],
-            |row| {
-                Ok(StaleWorkflowRun {
-                    run_id: row.get("run_id")?,
-                    workflow_name: row.get("workflow_name")?,
-                    target_label: row.get("target_label")?,
-                    step_name: row.get("step_name")?,
-                    running_minutes: row.get("running_minutes")?,
-                    step_id: row.get("step_id")?,
-                    child_run_id: row.get("child_run_id")?,
-                    subprocess_pid: row.get("subprocess_pid")?,
-                })
-            },
-        )
+        named_params![":threshold_minutes": threshold_minutes],
+        |row| {
+            Ok(StaleWorkflowRun {
+                run_id: row.get("run_id")?,
+                workflow_name: row.get("workflow_name")?,
+                target_label: row.get("target_label")?,
+                step_name: row.get("step_name")?,
+                running_minutes: row.get("running_minutes")?,
+                step_id: row.get("step_id")?,
+                child_run_id: row.get("child_run_id")?,
+                subprocess_pid: row.get("subprocess_pid")?,
+            })
+        },
+    )
+}
+
+pub fn reap_stale_workflow_runs(
+    conn: &Connection,
+    threshold_minutes: i64,
+) -> Result<Vec<ReapedStaleRun>> {
+    let stale = detect_stale_workflow_runs(conn, threshold_minutes)?;
+    if stale.is_empty() {
+        return Ok(vec![]);
     }
 
-    /// Reap stale workflow runs whose agent process is confirmed dead.
-    ///
-    /// For each stale run returned by [`detect_stale_workflow_runs`]:
-    /// 1. Check if the child agent's subprocess PID is still alive.
-    /// 2. If the process is gone, mark the child agent run as failed, mark the
-    ///    workflow step as failed, and mark the workflow run as failed.
-    /// 3. If the process is still alive, the agent is running (just slow) — skip.
-    ///
-    /// Returns the list of reaped runs so callers can fire notifications and
-    /// optionally auto-restart them.
-    pub fn reap_stale_workflow_runs(&self, threshold_minutes: i64) -> Result<Vec<ReapedStaleRun>> {
-        let stale = self.detect_stale_workflow_runs(threshold_minutes)?;
-        if stale.is_empty() {
-            return Ok(vec![]);
-        }
+    let agent_mgr = crate::agent::AgentManager::new(conn);
 
-        let agent_mgr = crate::agent::AgentManager::new(self.conn);
+    // Wrap all updates in a savepoint so they commit in one round-trip instead
+    // of N separate auto-commit transactions (mirrors recover_stuck_steps).
+    with_savepoint(conn, "reap_stale_workflow_runs", || {
+        let mut reaped = Vec::new();
 
-        // Wrap all updates in a savepoint so they commit in one round-trip instead
-        // of N separate auto-commit transactions (mirrors recover_stuck_steps).
-        self.with_savepoint("reap_stale_workflow_runs", || {
-            let mut reaped = Vec::new();
-
-            for s in stale {
-                // If the subprocess is still alive, the agent is running — just slow.
-                #[cfg(unix)]
-                if let Some(pid) = s.subprocess_pid {
-                    if crate::process_utils::pid_is_alive(pid as u32) {
-                        continue;
-                    }
+        for s in stale {
+            // If the subprocess is still alive, the agent is running — just slow.
+            #[cfg(unix)]
+            if let Some(pid) = s.subprocess_pid {
+                if crate::process_utils::pid_is_alive(pid as u32) {
+                    continue;
                 }
-
-                // Agent process is dead. Mark child agent run as failed.
-                if let Some(child_run_id) = &s.child_run_id {
-                    if let Err(e) = agent_mgr.update_run_failed(
-                        child_run_id,
-                        "Stale workflow watchdog: agent process died",
-                    ) {
-                        tracing::warn!(
-                            child_run_id = %child_run_id,
-                            error = %e,
-                            "Failed to mark child agent run as failed during stale workflow cleanup"
-                        );
-                    }
-                }
-
-                // Mark the workflow step as failed.
-                self.fail_step_with_message(
-                    &s.step_id,
-                    "Agent process died — marked by stale workflow watchdog",
-                )?;
-
-                // Mark the workflow run as failed.
-                self.update_workflow_status(
-                    &s.run_id,
-                    WorkflowRunStatus::Failed,
-                    Some("Stale workflow watchdog: agent process died, run marked as failed"),
-                    None,
-                )?;
-
-                tracing::info!(
-                    run_id = %s.run_id,
-                    step_name = %s.step_name,
-                    running_minutes = s.running_minutes,
-                    "Reaped stale workflow run — agent process was dead"
-                );
-
-                reaped.push(ReapedStaleRun {
-                    run_id: s.run_id,
-                    workflow_name: s.workflow_name,
-                    target_label: s.target_label,
-                    step_name: s.step_name,
-                    running_minutes: s.running_minutes,
-                });
             }
 
-            Ok(reaped)
-        })
-    }
+            // Agent process is dead. Mark child agent run as failed.
+            if let Some(child_run_id) = &s.child_run_id {
+                if let Err(e) = agent_mgr
+                    .update_run_failed(child_run_id, "Stale workflow watchdog: agent process died")
+                {
+                    tracing::warn!(
+                        child_run_id = %child_run_id,
+                        error = %e,
+                        "Failed to mark child agent run as failed during stale workflow cleanup"
+                    );
+                }
+            }
 
-    /// Detect and auto-resume workflow runs stuck in `running` status.
-    ///
-    /// **Detection** — uses `detect_stuck_workflow_run_ids` with the minimum of the
-    /// fixed 60-second baseline and any caller-supplied configurable threshold. This
-    /// avoids duplicate DB queries and prevents the same run from being resumed twice.
-    ///
-    /// **CAS flip** — before spawning a resume thread, the run is atomically flipped
-    /// to `failed` via `UPDATE ... WHERE id=? AND status='running'`. If `changes() == 0`
-    /// the run was already claimed by a concurrent watchdog and is skipped. This is
-    /// required because `validate_resume_preconditions` rejects resuming a
-    /// `running`-status run.
-    ///
-    /// For each successfully flipped run, fires a notification and spawns a
-    /// background thread to resume it.
-    ///
-    /// Returns the count of runs resumed.
-    /// Atomically flip a workflow run from `from_status` to `failed`.
-    ///
-    /// Returns `true` when the row was updated (this process won the CAS race),
-    /// `false` when another watchdog already claimed the run.
-    fn cas_flip_run_to_failed_from(
-        &self,
-        run_id: &str,
-        from_status: &str,
-        error_msg: &str,
-    ) -> Result<bool> {
-        let changed = self.conn.execute(
-            "UPDATE workflow_runs \
+            // Mark the workflow step as failed.
+            fail_step_with_message(
+                conn,
+                &s.step_id,
+                "Agent process died — marked by stale workflow watchdog",
+            )?;
+
+            // Mark the workflow run as failed.
+            super::lifecycle::update_workflow_status(
+                conn,
+                &s.run_id,
+                WorkflowRunStatus::Failed,
+                Some("Stale workflow watchdog: agent process died, run marked as failed"),
+                None,
+            )?;
+
+            tracing::info!(
+                run_id = %s.run_id,
+                step_name = %s.step_name,
+                running_minutes = s.running_minutes,
+                "Reaped stale workflow run — agent process was dead"
+            );
+
+            reaped.push(ReapedStaleRun {
+                run_id: s.run_id,
+                workflow_name: s.workflow_name,
+                target_label: s.target_label,
+                step_name: s.step_name,
+                running_minutes: s.running_minutes,
+            });
+        }
+
+        Ok(reaped)
+    })
+}
+
+fn cas_flip_run_to_failed_from(
+    conn: &Connection,
+    run_id: &str,
+    from_status: &str,
+    error_msg: &str,
+) -> Result<bool> {
+    let changed = conn.execute(
+        "UPDATE workflow_runs \
              SET status = 'failed', error = :error \
              WHERE id = :id AND status = :from",
-            named_params![":id": run_id, ":from": from_status, ":error": error_msg],
-        )?;
-        Ok(changed == 1)
-    }
+        named_params![":id": run_id, ":from": from_status, ":error": error_msg],
+    )?;
+    Ok(changed == 1)
+}
 
-    /// CAS-flip each candidate run from `from_status` → `failed`, fire the
-    /// orphan-resumed notification for all winners, and return their IDs.
-    ///
-    /// Losers (races where another watchdog already claimed the run) are logged at
-    /// debug level and silently dropped.  This consolidates the repeated
-    /// flip-loop + notification pattern shared across the three claim functions.
-    fn cas_claim_ids_and_notify(
-        &self,
-        config: &Config,
-        candidates: &[String],
-        from_status: &str,
-        error_msg: &str,
-        caller_name: &str,
-    ) -> Result<Vec<String>> {
-        let mut claimed: Vec<String> = Vec::new();
-        for run_id in candidates {
-            if !self.cas_flip_run_to_failed_from(run_id, from_status, error_msg)? {
-                tracing::debug!(
-                    run_id = %run_id,
-                    "{caller_name}: CAS lost race (already claimed)"
-                );
-                continue;
-            }
-            tracing::info!(run_id = %run_id, "{caller_name}: claimed orphaned run for resumption");
-            claimed.push(run_id.clone());
-        }
-        if !claimed.is_empty() {
-            crate::notify::fire_orphan_resumed_notification(
-                self.conn,
-                &config.notifications,
-                &config.notify.hooks,
-                &claimed,
+fn cas_claim_ids_and_notify(
+    conn: &Connection,
+    config: &Config,
+    candidates: &[String],
+    from_status: &str,
+    error_msg: &str,
+    caller_name: &str,
+) -> Result<Vec<String>> {
+    let mut claimed: Vec<String> = Vec::new();
+    for run_id in candidates {
+        if !cas_flip_run_to_failed_from(conn, run_id, from_status, error_msg)? {
+            tracing::debug!(
+                run_id = %run_id,
+                "{caller_name}: CAS lost race (already claimed)"
             );
+            continue;
         }
-        Ok(claimed)
+        tracing::info!(run_id = %run_id, "{caller_name}: claimed orphaned run for resumption");
+        claimed.push(run_id.clone());
+    }
+    if !claimed.is_empty() {
+        crate::notify::fire_orphan_resumed_notification(
+            conn,
+            &config.notifications,
+            &config.notify.hooks,
+            &claimed,
+        );
+    }
+    Ok(claimed)
+}
+
+pub fn claim_stuck_workflows(
+    conn: &Connection,
+    config: &Config,
+    configurable_threshold_secs: Option<i64>,
+) -> Result<Vec<String>> {
+    // Use the smallest threshold so we catch all stuck runs in a single query.
+    let threshold = configurable_threshold_secs.map(|t| t.min(60)).unwrap_or(60);
+
+    let stuck_ids = detect_stuck_workflow_run_ids(conn, threshold)?;
+    if stuck_ids.is_empty() {
+        return Ok(vec![]);
     }
 
-    /// CAS-claim stuck workflow runs and fire the orphan-resumed notification.
-    ///
-    /// Returns the IDs of runs successfully claimed (flipped from `running` to
-    /// `failed`). Callers are responsible for spawning resume threads via
-    /// [`crate::workflow::engine::spawn_workflow_resume`].
-    pub fn claim_stuck_workflows(
-        &self,
-        config: &Config,
-        configurable_threshold_secs: Option<i64>,
-    ) -> Result<Vec<String>> {
-        // Use the smallest threshold so we catch all stuck runs in a single query.
-        let threshold = configurable_threshold_secs.map(|t| t.min(60)).unwrap_or(60);
+    let flipped_ids = cas_claim_ids_and_notify(
+        conn,
+        config,
+        &stuck_ids,
+        "running",
+        ORPHAN_BETWEEN_STEPS_MSG,
+        "claim_stuck_workflows",
+    )?;
 
-        let stuck_ids = self.detect_stuck_workflow_run_ids(threshold)?;
-        if stuck_ids.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let flipped_ids = self.cas_claim_ids_and_notify(
-            config,
-            &stuck_ids,
-            "running",
-            ORPHAN_BETWEEN_STEPS_MSG,
-            "claim_stuck_workflows",
-        )?;
-
-        if !flipped_ids.is_empty() {
-            let n = flipped_ids.len();
-            tracing::info!("Auto-resuming {n} stuck workflow run(s) (threshold={threshold}s)");
-        }
-
-        Ok(flipped_ids)
+    if !flipped_ids.is_empty() {
+        let n = flipped_ids.len();
+        tracing::info!("Auto-resuming {n} stuck workflow run(s) (threshold={threshold}s)");
     }
 
-    /// CAS-claim heartbeat-stuck runs and fire the batch orphan-resumed notification.
-    ///
-    /// Returns `(run_id, workflow_name, target_label)` tuples for claimed runs.
-    /// Callers are responsible for spawning resume threads via
-    /// [`crate::workflow::engine::spawn_heartbeat_resume`].
-    pub fn claim_heartbeat_stuck_runs(
-        &self,
-        config: &Config,
-        threshold_secs: i64,
-    ) -> Result<Vec<(String, String, Option<String>)>> {
-        // Step 1: find orphaned root runs (including zero-step runs — the
-        // executor may have died before creating any steps).
-        let orphaned: Vec<(String, String, Option<String>)> = query_collect(
-            self.conn,
-            "SELECT id, workflow_name, target_label FROM workflow_runs \
+    Ok(flipped_ids)
+}
+
+pub fn claim_heartbeat_stuck_runs(
+    conn: &Connection,
+    config: &Config,
+    threshold_secs: i64,
+) -> Result<Vec<(String, String, Option<String>)>> {
+    // Step 1: find orphaned root runs (including zero-step runs — the
+    // executor may have died before creating any steps).
+    let orphaned: Vec<(String, String, Option<String>)> = query_collect(
+        conn,
+        "SELECT id, workflow_name, target_label FROM workflow_runs \
              WHERE status = 'running' \
                AND parent_workflow_run_id IS NULL \
                AND NOT EXISTS ( \
@@ -711,68 +616,48 @@ impl<'a> WorkflowManager<'a> {
                  CAST(strftime('%s', 'now') AS INTEGER) - \
                  CAST(strftime('%s', COALESCE(last_heartbeat, started_at)) AS INTEGER) \
                ) > :threshold_secs",
-            named_params![":threshold_secs": threshold_secs],
-            |row| {
-                Ok((
-                    row.get("id")?,
-                    row.get("workflow_name")?,
-                    row.get("target_label")?,
-                ))
-            },
-        )?;
+        named_params![":threshold_secs": threshold_secs],
+        |row| {
+            Ok((
+                row.get("id")?,
+                row.get("workflow_name")?,
+                row.get("target_label")?,
+            ))
+        },
+    )?;
 
-        if orphaned.is_empty() {
-            return Ok(vec![]);
-        }
-
-        // CAS-flip each candidate, fire the batch notification, collect winner IDs.
-        let orphaned_ids: Vec<String> = orphaned.iter().map(|(id, _, _)| id.clone()).collect();
-        let claimed_id_set: std::collections::HashSet<String> = self
-            .cas_claim_ids_and_notify(
-                config,
-                &orphaned_ids,
-                "running",
-                ORPHAN_BETWEEN_STEPS_MSG,
-                "claim_heartbeat_stuck_runs",
-            )?
-            .into_iter()
-            .collect();
-
-        Ok(orphaned
-            .into_iter()
-            .filter(|(id, _, _)| claimed_id_set.contains(id))
-            .collect())
+    if orphaned.is_empty() {
+        return Ok(vec![]);
     }
 
-    /// Directly finalize workflow runs that are stuck in `running` status because
-    /// the finalization DB write (`update_workflow_status`) failed after all steps
-    /// already reached terminal states.
-    ///
-    /// A run is eligible when ALL of the following hold:
-    /// 1. `status = 'running'`
-    /// 2. `parent_workflow_run_id IS NULL` (root runs only)
-    /// 3. No step has `status IN ('running', 'pending', 'waiting')`
-    /// 4. The most recent step `ended_at` (or the run's own `started_at` when
-    ///    no steps exist) is older than `threshold_secs`
-    ///
-    /// Unlike `detect_stuck_workflow_run_ids`, this function writes the correct
-    /// terminal status directly without resetting steps or re-running the engine:
-    /// - Any `failed` or `timed_out` step → `Failed`
-    /// - All `completed`/`skipped`/`cancelled` steps → `Completed`
-    ///
-    /// The parent `agent_runs` row is updated best-effort (failures are logged,
-    /// not returned as errors).
-    ///
-    /// Returns the number of runs finalized.
-    pub fn reap_finalization_stuck_workflow_runs(
-        &self,
-        threshold_secs: i64,
-    ) -> crate::error::Result<usize> {
-        // Find root running workflow runs where all steps are terminal and
-        // the last step (or the run itself) ended more than threshold_secs ago.
-        let stuck: Vec<(String, String, bool)> = query_collect(
-            self.conn,
-            "SELECT id, parent_run_id, has_failure FROM ( \
+    // CAS-flip each candidate, fire the batch notification, collect winner IDs.
+    let orphaned_ids: Vec<String> = orphaned.iter().map(|(id, _, _)| id.clone()).collect();
+    let claimed_id_set: std::collections::HashSet<String> = cas_claim_ids_and_notify(
+        conn,
+        config,
+        &orphaned_ids,
+        "running",
+        ORPHAN_BETWEEN_STEPS_MSG,
+        "claim_heartbeat_stuck_runs",
+    )?
+    .into_iter()
+    .collect();
+
+    Ok(orphaned
+        .into_iter()
+        .filter(|(id, _, _)| claimed_id_set.contains(id))
+        .collect())
+}
+
+pub fn reap_finalization_stuck_workflow_runs(
+    conn: &Connection,
+    threshold_secs: i64,
+) -> crate::error::Result<usize> {
+    // Find root running workflow runs where all steps are terminal and
+    // the last step (or the run itself) ended more than threshold_secs ago.
+    let stuck: Vec<(String, String, bool)> = query_collect(
+        conn,
+        "SELECT id, parent_run_id, has_failure FROM ( \
                SELECT wr.id, wr.parent_run_id, \
                  COALESCE( \
                    (SELECT MAX(ended_at) FROM workflow_run_steps wrs2 \
@@ -796,75 +681,74 @@ impl<'a> WorkflowManager<'a> {
              WHERE age_ref IS NOT NULL \
                AND (CAST(strftime('%s', 'now') AS INTEGER) \
                     - CAST(strftime('%s', age_ref) AS INTEGER)) > :threshold_secs",
-            named_params![":threshold_secs": threshold_secs],
-            |row| {
-                Ok((
-                    row.get("id")?,
-                    row.get("parent_run_id")?,
-                    row.get("has_failure")?,
-                ))
-            },
-        )?;
+        named_params![":threshold_secs": threshold_secs],
+        |row| {
+            Ok((
+                row.get("id")?,
+                row.get("parent_run_id")?,
+                row.get("has_failure")?,
+            ))
+        },
+    )?;
 
-        // Wrap all updates in a savepoint so they commit in one round-trip instead
-        // of N separate auto-commit transactions (mirrors recover_stuck_steps).
-        self.with_savepoint("reap_finalization_stuck_workflow_runs", || {
-            let mut finalized = 0usize;
-            // Constructed once here rather than inside the loop — AgentManager is
-            // stateless (wraps &Connection) so rebuilding it per iteration is wasteful.
-            let agent_mgr = crate::agent::AgentManager::new(self.conn);
+    // Wrap all updates in a savepoint so they commit in one round-trip instead
+    // of N separate auto-commit transactions (mirrors recover_stuck_steps).
+    with_savepoint(conn, "reap_finalization_stuck_workflow_runs", || {
+        let mut finalized = 0usize;
+        // Constructed once here rather than inside the loop — AgentManager is
+        // stateless (wraps &Connection) so rebuilding it per iteration is wasteful.
+        let agent_mgr = crate::agent::AgentManager::new(conn);
 
-            const SUMMARY: &str =
-                "Auto-finalized by reaper: all steps terminal, status was stuck in 'running'";
+        const SUMMARY: &str =
+            "Auto-finalized by reaper: all steps terminal, status was stuck in 'running'";
 
-            for (run_id, parent_run_id, has_failure) in stuck {
-                let final_status = if has_failure {
-                    WorkflowRunStatus::Failed
-                } else {
-                    WorkflowRunStatus::Completed
-                };
+        for (run_id, parent_run_id, has_failure) in stuck {
+            let final_status = if has_failure {
+                WorkflowRunStatus::Failed
+            } else {
+                WorkflowRunStatus::Completed
+            };
 
-                self.update_workflow_status(&run_id, final_status.clone(), Some(SUMMARY), None)?;
-                tracing::info!(
+            super::lifecycle::update_workflow_status(
+                conn,
+                &run_id,
+                final_status.clone(),
+                Some(SUMMARY),
+                None,
+            )?;
+            tracing::info!(
+                run_id = %run_id,
+                status = %final_status,
+                "Reaper finalized stuck workflow run"
+            );
+
+            // Best-effort: update the parent agent_runs row if still running.
+            let update_result = if has_failure {
+                agent_mgr.update_run_failed_if_running(&parent_run_id, SUMMARY)
+            } else {
+                agent_mgr.update_run_completed_if_running(&parent_run_id, SUMMARY)
+            };
+            if let Err(e) = update_result {
+                tracing::warn!(
                     run_id = %run_id,
-                    status = %final_status,
-                    "Reaper finalized stuck workflow run"
+                    parent_run_id = %parent_run_id,
+                    "Failed to update parent agent_runs row (best-effort, non-fatal): {e}"
                 );
-
-                // Best-effort: update the parent agent_runs row if still running.
-                let update_result = if has_failure {
-                    agent_mgr.update_run_failed_if_running(&parent_run_id, SUMMARY)
-                } else {
-                    agent_mgr.update_run_completed_if_running(&parent_run_id, SUMMARY)
-                };
-                if let Err(e) = update_result {
-                    tracing::warn!(
-                        run_id = %run_id,
-                        parent_run_id = %parent_run_id,
-                        "Failed to update parent agent_runs row (best-effort, non-fatal): {e}"
-                    );
-                }
-
-                finalized += 1;
             }
 
-            Ok(finalized)
-        })
-    }
+            finalized += 1;
+        }
 
-    /// Find the most-recently-started child workflow run that can be resumed:
-    /// failed, pending, waiting, or timed_out status for the given parent + child
-    /// workflow name. Returns `None` if no such run exists.
-    ///
-    /// `running` is excluded to avoid interfering with a genuinely-active child.
-    /// `completed` and `cancelled` are excluded as they are terminal or irrecoverable.
-    pub fn find_resumable_child_run(
-        &self,
-        parent_workflow_run_id: &str,
-        child_workflow_name: &str,
-    ) -> Result<Option<WorkflowRun>> {
-        Ok(self
-            .conn
+        Ok(finalized)
+    })
+}
+
+pub fn find_resumable_child_run(
+    conn: &Connection,
+    parent_workflow_run_id: &str,
+    child_workflow_name: &str,
+) -> Result<Option<WorkflowRun>> {
+    Ok(conn
             .query_row(
                 &format!(
                     "SELECT {RUN_COLUMNS} FROM workflow_runs \
@@ -878,41 +762,29 @@ impl<'a> WorkflowManager<'a> {
                 row_to_workflow_run,
             )
             .optional()?)
-    }
+}
 
-    const SQL_RESET_FAILED: &'static str = reset_sql!(
-        "WHERE workflow_run_id = :run_id AND status IN ('failed', 'running', 'timed_out')"
-    );
+const SQL_RESET_FAILED: &str =
+    reset_sql!("WHERE workflow_run_id = :run_id AND status IN ('failed', 'running', 'timed_out')");
 
-    const SQL_RESET_COMPLETED: &'static str =
-        reset_sql!("WHERE workflow_run_id = :run_id AND status = 'completed'");
+const SQL_RESET_COMPLETED: &str =
+    reset_sql!("WHERE workflow_run_id = :run_id AND status = 'completed'");
 
-    const SQL_RESET_FROM_POS: &'static str =
-        reset_sql!("WHERE workflow_run_id = :run_id AND position >= :position");
+const SQL_RESET_FROM_POS: &str =
+    reset_sql!("WHERE workflow_run_id = :run_id AND position >= :position");
 
-    /// Signal any `running` steps in the given run whose `subprocess_pid` is
-    /// recorded.  Must be called before the SQL UPDATE zeroes the column so we
-    /// still have the PID to signal.
-    ///
-    /// When `from_position` is `Some(pos)`, only steps at or after `pos` are
-    /// signalled; `None` covers the entire run.  All SIGTERMs are fired
-    /// concurrently so the worst-case stall is one grace period, not N × grace.
-    ///
-    /// Both script-step PIDs (`wrs.subprocess_pid`) and agent-step PIDs
-    /// (`agent_runs.subprocess_pid` via `wrs.child_run_id`) are collected so
-    /// that agent subprocesses are also terminated before their steps are reset.
-    fn terminate_subprocesses(
-        &self,
-        workflow_run_id: &str,
-        from_position: Option<i64>,
-    ) -> Result<()> {
-        #[cfg(unix)]
-        {
-            // Collect all PIDs (script-step direct PIDs + agent-step PIDs via JOIN)
-            // in one round-trip using a UNION query.
-            let all_pids: Vec<i64> = query_collect(
-                self.conn,
-                "SELECT subprocess_pid \
+fn terminate_subprocesses(
+    conn: &Connection,
+    workflow_run_id: &str,
+    from_position: Option<i64>,
+) -> Result<()> {
+    #[cfg(unix)]
+    {
+        // Collect all PIDs (script-step direct PIDs + agent-step PIDs via JOIN)
+        // in one round-trip using a UNION query.
+        let all_pids: Vec<i64> = query_collect(
+            conn,
+            "SELECT subprocess_pid \
                  FROM workflow_run_steps \
                  WHERE workflow_run_id = :run_id AND status = 'running' \
                    AND subprocess_pid IS NOT NULL \
@@ -926,156 +798,125 @@ impl<'a> WorkflowManager<'a> {
                    AND wrs.subprocess_pid IS NULL \
                    AND ar.subprocess_pid IS NOT NULL \
                    AND (:from_pos IS NULL OR wrs.position >= :from_pos)",
-                named_params![":run_id": workflow_run_id, ":from_pos": from_position],
-                |row| row.get("subprocess_pid"),
-            )?;
+            named_params![":run_id": workflow_run_id, ":from_pos": from_position],
+            |row| row.get("subprocess_pid"),
+        )?;
 
-            let handles: Vec<_> = all_pids
-                .into_iter()
-                .filter_map(|pid| u32::try_from(pid).ok())
-                .map(|pid| std::thread::spawn(move || crate::process_utils::cancel_subprocess(pid)))
-                .collect();
-            for h in handles {
-                if let Err(e) = h.join() {
-                    tracing::warn!("subprocess cancel thread panicked: {:?}", e);
-                }
+        let handles: Vec<_> = all_pids
+            .into_iter()
+            .filter_map(|pid| u32::try_from(pid).ok())
+            .map(|pid| std::thread::spawn(move || crate::process_utils::cancel_subprocess(pid)))
+            .collect();
+        for h in handles {
+            if let Err(e) = h.join() {
+                tracing::warn!("subprocess cancel thread panicked: {:?}", e);
             }
         }
-        Ok(())
     }
+    Ok(())
+}
 
-    /// Count running steps for `workflow_run_id` that have a live subprocess,
-    /// checking both `wrs.subprocess_pid` and `agent_runs.subprocess_pid` via
-    /// `child_run_id`.  Used for diagnostic logging in the resume path.
-    pub(crate) fn count_live_subprocess_steps(&self, workflow_run_id: &str) -> Result<usize> {
-        #[cfg(unix)]
-        {
-            let pids: Vec<i64> = query_collect(
-                self.conn,
-                "SELECT COALESCE(wrs.subprocess_pid, ar.subprocess_pid) AS pid \
+pub(crate) fn count_live_subprocess_steps(
+    conn: &Connection,
+    workflow_run_id: &str,
+) -> Result<usize> {
+    #[cfg(unix)]
+    {
+        let pids: Vec<i64> = query_collect(
+            conn,
+            "SELECT COALESCE(wrs.subprocess_pid, ar.subprocess_pid) AS pid \
                  FROM workflow_run_steps wrs \
                  LEFT JOIN agent_runs ar ON ar.id = wrs.child_run_id \
                  WHERE wrs.workflow_run_id = :run_id \
                    AND wrs.status = 'running' \
                    AND COALESCE(wrs.subprocess_pid, ar.subprocess_pid) IS NOT NULL",
-                named_params![":run_id": workflow_run_id],
-                |row| row.get("pid"),
-            )?;
-
-            let count = pids
-                .into_iter()
-                .filter_map(|pid| u32::try_from(pid).ok())
-                .filter(|&pid| crate::process_utils::pid_is_alive(pid))
-                .count();
-
-            Ok(count)
-        }
-        #[cfg(not(unix))]
-        Ok(0)
-    }
-
-    /// Reset all non-completed steps for a workflow run back to `pending`.
-    ///
-    /// Used before resuming so that failed/running/timed_out steps get re-executed.
-    /// Sends SIGTERM to any `running` steps with a recorded subprocess PID before
-    /// the column is nulled, preventing orphaned subprocesses.
-    pub fn reset_failed_steps(&self, workflow_run_id: &str) -> Result<u64> {
-        self.terminate_subprocesses(workflow_run_id, None)?;
-        let count = self.conn.execute(
-            Self::SQL_RESET_FAILED,
             named_params![":run_id": workflow_run_id],
+            |row| row.get("pid"),
         )?;
-        Ok(count as u64)
+
+        let count = pids
+            .into_iter()
+            .filter_map(|pid| u32::try_from(pid).ok())
+            .filter(|&pid| crate::process_utils::pid_is_alive(pid))
+            .count();
+
+        Ok(count)
+    }
+    #[cfg(not(unix))]
+    Ok(0)
+}
+
+pub fn reset_failed_steps(conn: &Connection, workflow_run_id: &str) -> Result<u64> {
+    terminate_subprocesses(conn, workflow_run_id, None)?;
+    let count = conn.execute(SQL_RESET_FAILED, named_params![":run_id": workflow_run_id])?;
+    Ok(count as u64)
+}
+
+pub fn reset_completed_steps(conn: &Connection, workflow_run_id: &str) -> Result<u64> {
+    let count = conn.execute(
+        SQL_RESET_COMPLETED,
+        named_params![":run_id": workflow_run_id],
+    )?;
+    Ok(count as u64)
+}
+
+pub fn reset_steps_from_position(
+    conn: &Connection,
+    workflow_run_id: &str,
+    position: i64,
+) -> Result<u64> {
+    terminate_subprocesses(conn, workflow_run_id, Some(position))?;
+    let count = conn.execute(
+        SQL_RESET_FROM_POS,
+        named_params![":run_id": workflow_run_id, ":position": position],
+    )?;
+    Ok(count as u64)
+}
+
+pub fn get_completed_step_keys(
+    conn: &Connection,
+    workflow_run_id: &str,
+) -> Result<HashSet<StepKey>> {
+    let steps = super::queries::get_workflow_steps(conn, workflow_run_id)?;
+    Ok(steps
+        .iter()
+        .filter(|s| s.status == WorkflowStepStatus::Completed)
+        .map(|s| (s.step_name.clone(), s.iteration as u32))
+        .collect())
+}
+
+pub fn delete_run(conn: &Connection, run_id: &str) -> Result<()> {
+    use crate::error::ConductorError;
+
+    // Validate the run exists and is terminal.
+    let run = conn
+        .query_row(
+            &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE id = :id"),
+            named_params![":id": run_id],
+            row_to_workflow_run,
+        )
+        .optional()?
+        .ok_or_else(|| ConductorError::WorkflowRunNotFound {
+            id: run_id.to_string(),
+        })?;
+
+    if !run.status.is_terminal() {
+        return Err(ConductorError::InvalidInput(format!(
+            "cannot delete run '{run_id}': status is '{}' (must be terminal — cancel it first)",
+            run.status
+        )));
     }
 
-    /// Reset all completed steps for a workflow run back to `pending`.
-    ///
-    /// Used for full restart (--restart) to re-run from scratch.
-    pub fn reset_completed_steps(&self, workflow_run_id: &str) -> Result<u64> {
-        let count = self.conn.execute(
-            Self::SQL_RESET_COMPLETED,
-            named_params![":run_id": workflow_run_id],
-        )?;
-        Ok(count as u64)
-    }
+    delete_run_recursive(conn, run_id)
+}
 
-    /// Reset all steps at or after a given position back to `pending`.
-    ///
-    /// Used for --from-step to re-run from a specific step onwards.
-    /// Sends SIGTERM to any `running` steps with a recorded subprocess PID before
-    /// the column is nulled, preventing orphaned subprocesses.
-    pub fn reset_steps_from_position(&self, workflow_run_id: &str, position: i64) -> Result<u64> {
-        self.terminate_subprocesses(workflow_run_id, Some(position))?;
-        let count = self.conn.execute(
-            Self::SQL_RESET_FROM_POS,
-            named_params![":run_id": workflow_run_id, ":position": position],
-        )?;
-        Ok(count as u64)
-    }
-
-    /// Return the set of completed step keys as `(step_name, iteration)` pairs.
-    ///
-    /// Used by tests to verify which steps were completed before a resume.
-    /// Skip-set construction for the resume execution path is handled internally
-    /// by `FlowEngine::resume()`.
-    pub fn get_completed_step_keys(&self, workflow_run_id: &str) -> Result<HashSet<StepKey>> {
-        let steps = self.get_workflow_steps(workflow_run_id)?;
-        Ok(steps
-            .iter()
-            .filter(|s| s.status == WorkflowStepStatus::Completed)
-            .map(|s| (s.step_name.clone(), s.iteration as u32))
-            .collect())
-    }
-
-    /// Delete a single workflow run by ID, along with all of its descendant runs
-    /// (child runs linked via `parent_workflow_run_id`).
-    ///
-    /// Validates that the run exists and is in a terminal state before deleting.
-    /// Returns `ConductorError::WorkflowRunNotFound` if the run does not exist, and
-    /// `ConductorError::InvalidInput` if the run is not in a terminal state.
-    ///
-    /// `workflow_run_steps` rows are removed automatically via `ON DELETE CASCADE`.
-    /// Child runs are deleted recursively before the parent to satisfy FK constraints
-    /// (the `parent_workflow_run_id` column has no `ON DELETE CASCADE`).
-    pub fn delete_run(&self, run_id: &str) -> Result<()> {
-        use crate::error::ConductorError;
-
-        // Validate the run exists and is terminal.
-        let run = self
-            .conn
-            .query_row(
-                &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE id = :id"),
-                named_params![":id": run_id],
-                row_to_workflow_run,
-            )
-            .optional()?
-            .ok_or_else(|| ConductorError::WorkflowRunNotFound {
-                id: run_id.to_string(),
-            })?;
-
-        if !run.status.is_terminal() {
-            return Err(ConductorError::InvalidInput(format!(
-                "cannot delete run '{run_id}': status is '{}' (must be terminal — cancel it first)",
-                run.status
-            )));
-        }
-
-        self.delete_run_recursive(run_id)
-    }
-
-    /// Delete a workflow run and all of its descendants in a single statement.
-    ///
-    /// A recursive CTE collects all descendants plus the root, then deletes
-    /// them together.  SQLite checks the self-referential FK
-    /// (`parent_workflow_run_id`) at statement end, not row-by-row, so deleting
-    /// parent and children together never produces an intermediate violation.
-    fn delete_run_recursive(&self, run_id: &str) -> Result<()> {
-        // A single recursive CTE collects all descendants plus the root, then
-        // deletes them in one statement.  SQLite checks the self-referential FK
-        // (parent_workflow_run_id) at statement end, not row-by-row, so deleting
-        // parent and children together never produces an intermediate violation.
-        self.conn.execute(
-            "WITH RECURSIVE descendants(id) AS (
+fn delete_run_recursive(conn: &Connection, run_id: &str) -> Result<()> {
+    // A single recursive CTE collects all descendants plus the root, then
+    // deletes them in one statement.  SQLite checks the self-referential FK
+    // (parent_workflow_run_id) at statement end, not row-by-row, so deleting
+    // parent and children together never produces an intermediate violation.
+    conn.execute(
+        "WITH RECURSIVE descendants(id) AS (
                  SELECT id FROM workflow_runs WHERE parent_workflow_run_id = :root
                  UNION ALL
                  SELECT r.id FROM workflow_runs r
@@ -1083,116 +924,75 @@ impl<'a> WorkflowManager<'a> {
              )
              DELETE FROM workflow_runs
               WHERE id IN (SELECT id FROM descendants) OR id = :root",
-            named_params![":root": run_id],
-        )?;
-        Ok(())
-    }
+        named_params![":root": run_id],
+    )?;
+    Ok(())
+}
 
-    /// Delete orphaned `pending` step rows that were registered but never started.
-    ///
-    /// A step row is considered orphaned when `status = 'pending' AND started_at IS NULL`.
-    /// These rows are created by `insert_step` but left behind if the executor crashes
-    /// before the step actually begins. The resume path already handles them correctly
-    /// by re-inserting and re-running, but the phantom rows pollute step history.
-    ///
-    /// This method is called at the top of the resume path, before the skip set is
-    /// built, to remove the noise. Scoped to the given `workflow_run_id` so it cannot
-    /// affect other runs.
-    ///
-    /// Returns the number of deleted rows.
-    pub fn delete_orphaned_pending_steps(&self, workflow_run_id: &str) -> Result<usize> {
-        let deleted = self.conn.execute(
-            "DELETE FROM workflow_run_steps \
+pub fn delete_orphaned_pending_steps(conn: &Connection, workflow_run_id: &str) -> Result<usize> {
+    let deleted = conn.execute(
+        "DELETE FROM workflow_run_steps \
              WHERE workflow_run_id = :run_id \
                AND status = 'pending' \
                AND started_at IS NULL",
-            named_params![":run_id": workflow_run_id],
-        )?;
+        named_params![":run_id": workflow_run_id],
+    )?;
 
-        if deleted > 0 {
-            tracing::info!(
-                workflow_run_id = %workflow_run_id,
-                deleted,
-                "delete_orphaned_pending_steps: removed orphaned never-started step row(s)"
-            );
-        }
-
-        Ok(deleted)
+    if deleted > 0 {
+        tracing::info!(
+            workflow_run_id = %workflow_run_id,
+            deleted,
+            "delete_orphaned_pending_steps: removed orphaned never-started step row(s)"
+        );
     }
 
-    /// Build the WHERE clause and bound parameters shared by [`purge`] and [`purge_count`].
-    ///
-    /// Returns `(where_clause, params)` where `where_clause` is a SQL fragment
-    /// (no leading `WHERE` keyword) suitable for both DELETE and SELECT COUNT(*).
-    /// All values are bound positionally — no string-formatted user data.
-    fn build_purge_params(
-        repo_id: Option<&str>,
-        statuses: &[&str],
-    ) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
-        let n = statuses.len();
-        let placeholders = sql_placeholders(n);
-        let mut params: Vec<Box<dyn rusqlite::ToSql>> = statuses
-            .iter()
-            .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::ToSql>)
-            .collect();
-        let where_clause = if let Some(rid) = repo_id {
-            params.push(Box::new(rid.to_string()));
-            format!(
-                "status IN ({placeholders}) \
+    Ok(deleted)
+}
+
+fn build_purge_params(
+    repo_id: Option<&str>,
+    statuses: &[&str],
+) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+    let n = statuses.len();
+    let placeholders = sql_placeholders(n);
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = statuses
+        .iter()
+        .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::ToSql>)
+        .collect();
+    let where_clause = if let Some(rid) = repo_id {
+        params.push(Box::new(rid.to_string()));
+        format!(
+            "status IN ({placeholders}) \
                  AND worktree_id IN (SELECT id FROM worktrees WHERE repo_id = ?{})",
-                n + 1
-            )
-        } else {
-            format!("status IN ({placeholders})")
-        };
-        (where_clause, params)
-    }
+            n + 1
+        )
+    } else {
+        format!("status IN ({placeholders})")
+    };
+    (where_clause, params)
+}
 
-    /// Delete workflow runs with the given statuses, optionally scoped to a repo.
-    ///
-    /// `statuses` should be a non-empty slice of terminal status strings
-    /// (`"completed"`, `"failed"`, `"cancelled"`). `workflow_run_steps` rows are
-    /// removed automatically via `ON DELETE CASCADE`.
-    ///
-    /// Returns the number of deleted rows.
-    pub fn purge(&self, repo_id: Option<&str>, statuses: &[&str]) -> Result<usize> {
-        if statuses.is_empty() {
-            return Ok(0);
-        }
-        let (where_clause, params) = Self::build_purge_params(repo_id, statuses);
-        let sql = format!("DELETE FROM workflow_runs WHERE {where_clause}");
-        Ok(self
-            .conn
-            .execute(&sql, rusqlite::params_from_iter(params))?)
+pub fn purge(conn: &Connection, repo_id: Option<&str>, statuses: &[&str]) -> Result<usize> {
+    if statuses.is_empty() {
+        return Ok(0);
     }
+    let (where_clause, params) = build_purge_params(repo_id, statuses);
+    let sql = format!("DELETE FROM workflow_runs WHERE {where_clause}");
+    Ok(conn.execute(&sql, rusqlite::params_from_iter(params))?)
+}
 
-    /// Count workflow runs that *would* be deleted by [`purge`] with the same arguments.
-    ///
-    /// Used by `--dry-run` to preview the deletion without modifying the database.
-    pub fn purge_count(&self, repo_id: Option<&str>, statuses: &[&str]) -> Result<usize> {
-        if statuses.is_empty() {
-            return Ok(0);
-        }
-        let (where_clause, params) = Self::build_purge_params(repo_id, statuses);
-        let sql = format!("SELECT COUNT(*) FROM workflow_runs WHERE {where_clause}");
-        let count: i64 = self
-            .conn
-            .query_row(&sql, rusqlite::params_from_iter(params), |row| row.get(0))?;
-        Ok(count as usize)
+pub fn purge_count(conn: &Connection, repo_id: Option<&str>, statuses: &[&str]) -> Result<usize> {
+    if statuses.is_empty() {
+        return Ok(0);
     }
+    let (where_clause, params) = build_purge_params(repo_id, statuses);
+    let sql = format!("SELECT COUNT(*) FROM workflow_runs WHERE {where_clause}");
+    let count: i64 = conn.query_row(&sql, rusqlite::params_from_iter(params), |row| row.get(0))?;
+    Ok(count as usize)
+}
 
-    /// Classify eligible `failed` workflow runs as `needs_resume`.
-    ///
-    /// A run is eligible when all three guards pass:
-    /// 1. `error = 'parent agent run reached terminal state without completing the workflow'`
-    ///    (the exact string set by `reap_workflow_runs_with_dead_parent`).
-    /// 2. No steps with `status IN ('failed', 'timed_out')` — avoids auto-resuming
-    ///    legitimately failed runs where a step itself errored out.
-    /// 3. `iteration < auto_resume_limit` — retry cap prevents infinite loops.
-    ///
-    /// Pure SQL, no threads, no execution. Returns the number of runs transitioned.
-    pub fn classify_resumable_workflows(&self, auto_resume_limit: u32) -> Result<usize> {
-        let count = self.conn.execute(
+pub fn classify_resumable_workflows(conn: &Connection, auto_resume_limit: u32) -> Result<usize> {
+    let count = conn.execute(
             "UPDATE workflow_runs \
              SET status = 'needs_resume' \
              WHERE status = 'failed' \
@@ -1206,112 +1006,206 @@ impl<'a> WorkflowManager<'a> {
             named_params![":limit": auto_resume_limit],
         )?;
 
-        if count > 0 {
-            tracing::info!(
-                "classify_resumable_workflows: flagged {count} workflow run(s) for auto-resume"
-            );
-        }
-
-        Ok(count)
+    if count > 0 {
+        tracing::info!(
+            "classify_resumable_workflows: flagged {count} workflow run(s) for auto-resume"
+        );
     }
 
-    /// Watchdog: consume `needs_resume` runs by CAS-flipping them to `failed` and
-    /// spawning a resume thread for each.
-    ///
-    /// The CAS flip (`WHERE status = 'needs_resume'`) is safe against concurrent
-    /// watchdog calls from TUI and web processes — only the first caller wins the
-    /// race; losers see `changes() == 0` and skip.
-    ///
-    /// Follows the `reap_heartbeat_stuck_runs` pattern exactly:
-    /// 1. Query all `needs_resume` root runs.
-    /// 2. CAS-flip each to `failed` with a watchdog error string.
-    /// 3. Spawn a `resume_workflow_standalone` thread for each successful flip.
-    /// 4. Fire a batch orphan-resumed notification.
-    ///
-    /// Returns the number of runs handed off to resume threads.
-    /// CAS-claim `needs_resume` runs and fire the orphan-resumed notification.
-    ///
-    /// Returns the IDs of runs successfully claimed (flipped from `needs_resume` to
-    /// `failed`). Callers are responsible for spawning resume threads via
-    /// [`crate::workflow::engine::spawn_workflow_resume`].
-    pub fn claim_needs_resume_runs(&self, config: &Config) -> Result<Vec<String>> {
-        // Step 1: find all needs_resume root runs.
-        let candidates: Vec<String> = query_collect(
-            self.conn,
-            "SELECT id FROM workflow_runs \
+    Ok(count)
+}
+
+pub fn claim_needs_resume_runs(conn: &Connection, config: &Config) -> Result<Vec<String>> {
+    // Step 1: find all needs_resume root runs.
+    let candidates: Vec<String> = query_collect(
+        conn,
+        "SELECT id FROM workflow_runs \
              WHERE status = 'needs_resume' \
                AND parent_workflow_run_id IS NULL",
-            [],
-            |row| row.get("id"),
-        )?;
+        [],
+        |row| row.get("id"),
+    )?;
 
-        if candidates.is_empty() {
-            return Ok(vec![]);
-        }
-
-        self.cas_claim_ids_and_notify(
-            config,
-            &candidates,
-            "needs_resume",
-            "Orphaned: parent agent run died — auto-resumed by watchdog",
-            "claim_needs_resume_runs",
-        )
+    if candidates.is_empty() {
+        return Ok(vec![]);
     }
 
-    /// Run all workflow lifecycle maintenance tasks: reap stuck runs, resume
-    /// heartbeat-stuck runs, classify and claim needs-resume runs.
-    ///
-    /// This consolidates the recovery block that was previously duplicated in
-    /// every binary entry point (CLI `handle_workflow`, TUI startup, web startup).
-    /// Callers pass `conductor_bin_dir` so that resume subprocesses can locate
-    /// the conductor binary; pass `None` to let the library resolve it.
+    cas_claim_ids_and_notify(
+        conn,
+        config,
+        &candidates,
+        "needs_resume",
+        "Orphaned: parent agent run died — auto-resumed by watchdog",
+        "claim_needs_resume_runs",
+    )
+}
+
+pub fn run_workflow_maintenance(
+    conn: &Connection,
+    config: &Config,
+    conductor_bin_dir: Option<std::path::PathBuf>,
+) {
+    match reap_finalization_stuck_workflow_runs(conn, 60) {
+        Ok(n) if n > 0 => tracing::info!("reaper finalized {n} stuck workflow run(s)"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("reap_finalization_stuck_workflow_runs failed: {e}"),
+    }
+    match claim_heartbeat_stuck_runs(conn, config, 60) {
+        Ok(claimed) if !claimed.is_empty() => {
+            tracing::info!("auto-resuming {} stuck workflow run(s)", claimed.len());
+            for (run_id, wf_name, label) in claimed {
+                crate::workflow::spawn_heartbeat_resume(
+                    crate::workflow::SpawnHeartbeatResumeParams {
+                        run_id,
+                        workflow_name: wf_name,
+                        target_label: label,
+                        config: config.clone(),
+                        conductor_bin_dir: conductor_bin_dir.clone(),
+                        db_path: None,
+                    },
+                );
+            }
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!("claim_heartbeat_stuck_runs failed: {e}"),
+    }
+    let auto_resume_limit = config.general.auto_resume_limit;
+    if auto_resume_limit > 0 {
+        match classify_resumable_workflows(conn, auto_resume_limit) {
+            Ok(n) if n > 0 => {
+                tracing::info!("classifier flagged {n} workflow run(s) for auto-resume")
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("classify_resumable_workflows failed: {e}"),
+        }
+        match claim_needs_resume_runs(conn, config) {
+            Ok(claimed) => crate::workflow::spawn_claimed_runs(
+                claimed,
+                std::sync::Arc::new(config.clone()),
+                conductor_bin_dir.clone(),
+            ),
+            Err(e) => tracing::warn!("claim_needs_resume_runs failed: {e}"),
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Shim impl: keeps `WorkflowManager::<method>` callable while the free functions
+
+// above are the canonical implementations. Removed in the final cleanup PR.
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+impl<'a> super::WorkflowManager<'a> {
+    pub fn reap_orphaned_script_steps(&self) -> Result<usize> {
+        reap_orphaned_script_steps(self.conn)
+    }
+
+    pub fn recover_stuck_steps(&self) -> Result<usize> {
+        recover_stuck_steps(self.conn)
+    }
+
+    pub fn reap_orphaned_workflow_runs(&self) -> Result<usize> {
+        reap_orphaned_workflow_runs(self.conn)
+    }
+
+    pub fn detect_stuck_workflow_run_ids(&self, threshold_secs: i64) -> Result<Vec<String>> {
+        detect_stuck_workflow_run_ids(self.conn, threshold_secs)
+    }
+
+    pub fn detect_stale_workflow_runs(
+        &self,
+        threshold_minutes: i64,
+    ) -> Result<Vec<StaleWorkflowRun>> {
+        detect_stale_workflow_runs(self.conn, threshold_minutes)
+    }
+
+    pub fn reap_stale_workflow_runs(&self, threshold_minutes: i64) -> Result<Vec<ReapedStaleRun>> {
+        reap_stale_workflow_runs(self.conn, threshold_minutes)
+    }
+
+    pub fn claim_stuck_workflows(
+        &self,
+        config: &Config,
+        configurable_threshold_secs: Option<i64>,
+    ) -> Result<Vec<String>> {
+        claim_stuck_workflows(self.conn, config, configurable_threshold_secs)
+    }
+
+    pub fn claim_heartbeat_stuck_runs(
+        &self,
+        config: &Config,
+        threshold_secs: i64,
+    ) -> Result<Vec<(String, String, Option<String>)>> {
+        claim_heartbeat_stuck_runs(self.conn, config, threshold_secs)
+    }
+
+    pub fn reap_finalization_stuck_workflow_runs(
+        &self,
+        threshold_secs: i64,
+    ) -> crate::error::Result<usize> {
+        reap_finalization_stuck_workflow_runs(self.conn, threshold_secs)
+    }
+
+    pub fn find_resumable_child_run(
+        &self,
+        parent_workflow_run_id: &str,
+        child_workflow_name: &str,
+    ) -> Result<Option<WorkflowRun>> {
+        find_resumable_child_run(self.conn, parent_workflow_run_id, child_workflow_name)
+    }
+
+    pub(crate) fn count_live_subprocess_steps(&self, workflow_run_id: &str) -> Result<usize> {
+        count_live_subprocess_steps(self.conn, workflow_run_id)
+    }
+
+    pub fn reset_failed_steps(&self, workflow_run_id: &str) -> Result<u64> {
+        reset_failed_steps(self.conn, workflow_run_id)
+    }
+
+    pub fn reset_completed_steps(&self, workflow_run_id: &str) -> Result<u64> {
+        reset_completed_steps(self.conn, workflow_run_id)
+    }
+
+    pub fn reset_steps_from_position(&self, workflow_run_id: &str, position: i64) -> Result<u64> {
+        reset_steps_from_position(self.conn, workflow_run_id, position)
+    }
+
+    pub fn get_completed_step_keys(&self, workflow_run_id: &str) -> Result<HashSet<StepKey>> {
+        get_completed_step_keys(self.conn, workflow_run_id)
+    }
+
+    pub fn delete_run(&self, run_id: &str) -> Result<()> {
+        delete_run(self.conn, run_id)
+    }
+
+    pub fn delete_orphaned_pending_steps(&self, workflow_run_id: &str) -> Result<usize> {
+        delete_orphaned_pending_steps(self.conn, workflow_run_id)
+    }
+
+    pub fn purge(&self, repo_id: Option<&str>, statuses: &[&str]) -> Result<usize> {
+        purge(self.conn, repo_id, statuses)
+    }
+
+    pub fn purge_count(&self, repo_id: Option<&str>, statuses: &[&str]) -> Result<usize> {
+        purge_count(self.conn, repo_id, statuses)
+    }
+
+    pub fn classify_resumable_workflows(&self, auto_resume_limit: u32) -> Result<usize> {
+        classify_resumable_workflows(self.conn, auto_resume_limit)
+    }
+
+    pub fn claim_needs_resume_runs(&self, config: &Config) -> Result<Vec<String>> {
+        claim_needs_resume_runs(self.conn, config)
+    }
+
     pub fn run_workflow_maintenance(
         &self,
         config: &Config,
         conductor_bin_dir: Option<std::path::PathBuf>,
     ) {
-        match self.reap_finalization_stuck_workflow_runs(60) {
-            Ok(n) if n > 0 => tracing::info!("reaper finalized {n} stuck workflow run(s)"),
-            Ok(_) => {}
-            Err(e) => tracing::warn!("reap_finalization_stuck_workflow_runs failed: {e}"),
-        }
-        match self.claim_heartbeat_stuck_runs(config, 60) {
-            Ok(claimed) if !claimed.is_empty() => {
-                tracing::info!("auto-resuming {} stuck workflow run(s)", claimed.len());
-                for (run_id, wf_name, label) in claimed {
-                    crate::workflow::spawn_heartbeat_resume(
-                        crate::workflow::SpawnHeartbeatResumeParams {
-                            run_id,
-                            workflow_name: wf_name,
-                            target_label: label,
-                            config: config.clone(),
-                            conductor_bin_dir: conductor_bin_dir.clone(),
-                            db_path: None,
-                        },
-                    );
-                }
-            }
-            Ok(_) => {}
-            Err(e) => tracing::warn!("claim_heartbeat_stuck_runs failed: {e}"),
-        }
-        let auto_resume_limit = config.general.auto_resume_limit;
-        if auto_resume_limit > 0 {
-            match self.classify_resumable_workflows(auto_resume_limit) {
-                Ok(n) if n > 0 => {
-                    tracing::info!("classifier flagged {n} workflow run(s) for auto-resume")
-                }
-                Ok(_) => {}
-                Err(e) => tracing::warn!("classify_resumable_workflows failed: {e}"),
-            }
-            match self.claim_needs_resume_runs(config) {
-                Ok(claimed) => crate::workflow::spawn_claimed_runs(
-                    claimed,
-                    std::sync::Arc::new(config.clone()),
-                    conductor_bin_dir.clone(),
-                ),
-                Err(e) => tracing::warn!("claim_needs_resume_runs failed: {e}"),
-            }
-        }
+        run_workflow_maintenance(self.conn, config, conductor_bin_dir)
     }
 }
 
