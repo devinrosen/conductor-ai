@@ -123,20 +123,15 @@ async fn wire_headless_drain(
         };
         let mgr = AgentManager::new(&conn);
         let (stdout, finish) = handle.into_drain_parts();
-        conductor_core::agent_runtime::drain_stream_json(
-            stdout,
-            &run_id_owned,
-            &log_path,
-            &mgr,
-            |event| {
-                events.emit(ConductorEvent::AgentLiveEvent {
-                    run_id: run_id_owned.clone(),
-                    worktree_id: worktree_id.clone(),
-                    kind: event.kind.clone(),
-                    summary: event.summary.clone(),
-                });
-            },
-        );
+        let sink = conductor_core::agent_runtime::CombinedSink::new(&mgr, |event| {
+            events.emit(ConductorEvent::AgentLiveEvent {
+                run_id: run_id_owned.clone(),
+                worktree_id: worktree_id.clone(),
+                kind: event.kind.clone(),
+                summary: event.summary.clone(),
+            });
+        });
+        conductor_core::agent_runtime::drain_stream_json(stdout, &run_id_owned, &log_path, &sink);
         if let Some(ref pf) = prompt_file {
             let _ = std::fs::remove_file(pf);
         }
@@ -462,7 +457,7 @@ pub async fn start_agent(
         prompt: &prompt,
         resume_session_id: resume_session_id.as_deref(),
         model: model.as_deref(),
-        bot_name: None,
+        extra_cli_args: &[],
         permission_mode: None,
         plugin_dirs: &[],
     };
@@ -1139,13 +1134,23 @@ pub async fn restart_agent(
     // DB and config locks are now dropped.
 
     // Spawn headless subprocess and wire stdout to the SSE event bus.
+    let bot_name_args: Vec<(
+        std::borrow::Cow<'static, str>,
+        std::borrow::Cow<'static, str>,
+    )> = match &new_run.bot_name {
+        Some(name) => vec![(
+            std::borrow::Cow::Borrowed("--bot-name"),
+            std::borrow::Cow::Owned(name.clone()),
+        )],
+        None => vec![],
+    };
     let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
         run_id: &new_run.id,
         working_dir: &wt_path,
         prompt: &new_run.prompt,
         resume_session_id: None,
         model: new_run.model.as_deref(),
-        bot_name: new_run.bot_name.as_deref(),
+        extra_cli_args: &bot_name_args,
         permission_mode: None,
         plugin_dirs: &[],
     };
@@ -1229,7 +1234,7 @@ pub async fn start_repo_agent(
         prompt: &run.prompt,
         resume_session_id: resume_session_id.as_deref(),
         model: model.as_deref(),
-        bot_name: None,
+        extra_cli_args: &[],
         permission_mode: Some(&repo_safe),
         plugin_dirs: &[],
     };

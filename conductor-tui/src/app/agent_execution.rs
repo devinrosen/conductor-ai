@@ -61,13 +61,23 @@ pub(super) fn drive_headless_run(
     let runtime_permission = config
         .permission_mode
         .map(|m| m.to_runtime_permission_mode());
+    let bot_name_args: Vec<(
+        std::borrow::Cow<'static, str>,
+        std::borrow::Cow<'static, str>,
+    )> = match &config.bot_name {
+        Some(name) => vec![(
+            std::borrow::Cow::Borrowed("--bot-name"),
+            std::borrow::Cow::Owned(name.clone()),
+        )],
+        None => vec![],
+    };
     let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
         run_id: &run.id,
         working_dir: &config.working_dir,
         prompt: &config.prompt,
         resume_session_id: config.resume_session_id.as_deref(),
         model: config.model.as_deref(),
-        bot_name: config.bot_name.as_deref(),
+        extra_cli_args: &bot_name_args,
         permission_mode: runtime_permission.as_ref(),
         plugin_dirs: &[],
     };
@@ -97,12 +107,13 @@ pub(super) fn drive_headless_run(
     };
     let tx2 = tx.clone();
     let (stdout, finish) = handle.into_drain_parts();
-    conductor_core::agent_runtime::drain_stream_json(stdout, &run_id, &log_path, mgr, |event| {
+    let sink = conductor_core::agent_runtime::CombinedSink::new(mgr, |event| {
         let _ = tx2.send(Action::AgentEvent {
             run_id: run_id.clone(),
             event: event.clone(),
         });
     });
+    conductor_core::agent_runtime::drain_stream_json(stdout, &run_id, &log_path, &sink);
 
     let _ = std::fs::remove_file(&prompt_file);
     finish();
@@ -475,8 +486,8 @@ impl App {
         let wt_path = worktree_path.clone();
         let rp = repo_path.clone();
         std::thread::spawn(move || {
-            use conductor_core::workflow::{WorkflowManager, WorkflowTrigger};
-            let manual_defs: Vec<_> = match WorkflowManager::list_defs(&wt_path, &rp) {
+            use conductor_core::workflow::WorkflowTrigger;
+            let manual_defs: Vec<_> = match conductor_core::workflow::list_defs(&wt_path, &rp) {
                 Ok((defs, _warnings)) => defs
                     .into_iter()
                     .filter(|d| d.trigger == WorkflowTrigger::Manual)

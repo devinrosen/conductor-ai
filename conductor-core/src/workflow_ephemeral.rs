@@ -17,7 +17,7 @@ use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::workflow::{
     apply_workflow_input_defaults, execute_workflow_standalone, WorkflowExecConfig,
-    WorkflowExecStandalone, WorkflowManager, WorkflowResult,
+    WorkflowExecStandalone, WorkflowResult,
 };
 
 /// A parsed GitHub PR reference.
@@ -207,7 +207,7 @@ pub fn run_workflow_on_pr(
     })?;
 
     // Load the workflow definition from the cloned repo
-    let workflow = WorkflowManager::load_def_by_name(clone_path_str, clone_path_str, workflow_name)
+    let workflow = crate::workflow::load_def_by_name(clone_path_str, clone_path_str, workflow_name)
         .map_err(|e| {
             ConductorError::Workflow(format!(
                 "Workflow '{}' not found in cloned PR repo: {e}",
@@ -346,7 +346,7 @@ mod tests {
     fn test_resume_ephemeral_workflow_run_rejected() {
         use crate::agent::AgentManager;
         use crate::config::Config;
-        use crate::workflow::{resume_workflow, WorkflowManager, WorkflowResumeInput};
+        use crate::workflow::{resume_workflow, WorkflowResumeInput};
 
         let tmp = tempfile::NamedTempFile::new().expect("tempfile");
         let db_path = tmp.path().to_path_buf();
@@ -356,16 +356,22 @@ mod tests {
         let agent_mgr = AgentManager::new(&conn);
         // Create an ephemeral parent agent run (empty worktree_id → stored as NULL)
         let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
-
-        let mgr = WorkflowManager::new(&conn);
         // Create an ephemeral workflow run with worktree_id = None and a definition snapshot
         let snapshot = r#"{"name":"test","description":"t","trigger":"manual","targets":["pr"],"inputs":[],"steps":[]}"#;
-        let run = mgr
-            .create_workflow_run("pr-flow", None, &parent.id, false, "pr", Some(snapshot))
-            .unwrap();
+        let run = crate::workflow::create_workflow_run(
+            &conn,
+            "pr-flow",
+            None,
+            &parent.id,
+            false,
+            "pr",
+            Some(snapshot),
+        )
+        .unwrap();
 
         // Mark the run as failed so resume_workflow passes the status check
-        mgr.update_workflow_status(
+        crate::workflow::update_workflow_status(
+            &conn,
             &run.id,
             crate::workflow::WorkflowRunStatus::Failed,
             Some("error"),
@@ -400,17 +406,15 @@ mod tests {
     fn test_create_workflow_run_nullable_worktree_id() {
         use crate::agent::AgentManager;
         use crate::test_helpers::setup_db;
-        use crate::workflow::WorkflowManager;
 
         let conn = setup_db();
         let agent_mgr = AgentManager::new(&conn);
         // Ephemeral runs pass "" as worktree_id to agent_runs (stored as NULL after migration 027)
         let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
-
-        let mgr = WorkflowManager::new(&conn);
-        let run = mgr
-            .create_workflow_run("pr-flow", None, &parent.id, false, "pr", None)
-            .unwrap();
+        let run = crate::workflow::create_workflow_run(
+            &conn, "pr-flow", None, &parent.id, false, "pr", None,
+        )
+        .unwrap();
 
         assert_eq!(run.workflow_name, "pr-flow");
         assert!(
@@ -419,7 +423,9 @@ mod tests {
         );
 
         // Fetch back from DB and confirm round-trip
-        let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        let fetched = crate::workflow::get_workflow_run(&conn, &run.id)
+            .unwrap()
+            .unwrap();
         assert!(
             fetched.worktree_id.is_none(),
             "worktree_id should remain None after DB round-trip"

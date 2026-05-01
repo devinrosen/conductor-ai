@@ -10,18 +10,16 @@ fn test_create_workflow_run() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run(
-            "test-coverage",
-            Some("w1"),
-            &parent.id,
-            false,
-            "manual",
-            None,
-        )
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test-coverage",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
     assert_eq!(run.workflow_name, "test-coverage");
     assert_eq!(run.status, WorkflowRunStatus::Pending);
@@ -33,20 +31,20 @@ fn test_create_workflow_run_with_snapshot() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        Some(r#"{"name":"test"}"#),
+    )
+    .unwrap();
 
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run(
-            "test",
-            Some("w1"),
-            &parent.id,
-            false,
-            "manual",
-            Some(r#"{"name":"test"}"#),
-        )
+    let fetched = crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
         .unwrap();
-
-    let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
     assert_eq!(
         fetched.definition_snapshot.as_deref(),
         Some(r#"{"name":"test"}"#)
@@ -58,29 +56,29 @@ fn test_create_workflow_run_with_repo_id_round_trip() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run_with_targets(
-            "test-wf",
-            Some("w1"),
-            None,
-            Some("r1"),
-            &parent.id,
-            false,
-            "manual",
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+    let run = crate::workflow::create_workflow_run_with_targets(
+        &conn,
+        "test-wf",
+        Some("w1"),
+        None,
+        Some("r1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     // Verify the struct returned by create reflects the inputs.
     assert_eq!(run.repo_id.as_deref(), Some("r1"));
     assert_eq!(run.ticket_id, None);
 
     // Read back from DB and assert columns are persisted correctly.
-    let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    let fetched = crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(fetched.repo_id.as_deref(), Some("r1"));
     assert_eq!(fetched.ticket_id, None);
 }
@@ -88,8 +86,7 @@ fn test_create_workflow_run_with_repo_id_round_trip() {
 #[test]
 fn test_active_run_counts_by_repo_empty() {
     let conn = setup_db();
-    let mgr = WorkflowManager::new(&conn);
-    let counts = mgr.active_run_counts_by_repo().unwrap();
+    let counts = crate::workflow::active_run_counts_by_repo(&conn).unwrap();
     assert!(
         counts.is_empty(),
         "expected no counts with no workflow runs"
@@ -101,46 +98,45 @@ fn test_active_run_counts_by_repo_with_runs() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let mgr = WorkflowManager::new(&conn);
 
     // Create one pending and one running run for repo r1.
-    let run1 = mgr
-        .create_workflow_run_with_targets(
-            "wf-a",
-            Some("w1"),
-            None,
-            Some("r1"),
-            &parent.id,
-            false,
-            "manual",
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+    let run1 = crate::workflow::create_workflow_run_with_targets(
+        &conn,
+        "wf-a",
+        Some("w1"),
+        None,
+        Some("r1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     // Advance run1 to running.
     conn.execute(
         "UPDATE workflow_runs SET status = 'running' WHERE id = ?1",
         [&run1.id],
     )
     .unwrap();
-    let _run2 = mgr
-        .create_workflow_run_with_targets(
-            "wf-b",
-            Some("w1"),
-            None,
-            Some("r1"),
-            &parent.id,
-            false,
-            "manual",
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+    let _run2 = crate::workflow::create_workflow_run_with_targets(
+        &conn,
+        "wf-b",
+        Some("w1"),
+        None,
+        Some("r1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     // run2 stays at pending (default).
 
-    let counts = mgr.active_run_counts_by_repo().unwrap();
+    let counts = crate::workflow::active_run_counts_by_repo(&conn).unwrap();
     let c = counts.get("r1").expect("r1 should be in map");
     assert_eq!(c.running, 1, "expected 1 running");
     assert_eq!(c.pending, 1, "expected 1 pending");
@@ -152,29 +148,28 @@ fn test_active_run_counts_by_repo_excludes_completed() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let mgr = WorkflowManager::new(&conn);
 
-    let run = mgr
-        .create_workflow_run_with_targets(
-            "wf-done",
-            Some("w1"),
-            None,
-            Some("r1"),
-            &parent.id,
-            false,
-            "manual",
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+    let run = crate::workflow::create_workflow_run_with_targets(
+        &conn,
+        "wf-done",
+        Some("w1"),
+        None,
+        Some("r1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     conn.execute(
         "UPDATE workflow_runs SET status = 'completed' WHERE id = ?1",
         [&run.id],
     )
     .unwrap();
 
-    let counts = mgr.active_run_counts_by_repo().unwrap();
+    let counts = crate::workflow::active_run_counts_by_repo(&conn).unwrap();
     assert!(
         !counts.contains_key("r1"),
         "completed runs must not appear in active counts"
@@ -188,29 +183,29 @@ fn test_create_workflow_run_with_ticket_id_round_trip() {
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
 
     insert_test_ticket(&conn, "tkt-rt-1", "r1");
-
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run_with_targets(
-            "test-wf",
-            None,
-            Some("tkt-rt-1"),
-            None,
-            &parent.id,
-            false,
-            "manual",
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+    let run = crate::workflow::create_workflow_run_with_targets(
+        &conn,
+        "test-wf",
+        None,
+        Some("tkt-rt-1"),
+        None,
+        &parent.id,
+        false,
+        "manual",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     // Verify the struct returned by create reflects the inputs.
     assert_eq!(run.ticket_id.as_deref(), Some("tkt-rt-1"));
     assert_eq!(run.repo_id, None);
 
     // Read back from DB and assert columns are persisted correctly.
-    let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    let fetched = crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(fetched.ticket_id.as_deref(), Some("tkt-rt-1"));
     assert_eq!(fetched.repo_id, None);
 }
@@ -220,17 +215,21 @@ fn test_insert_step_with_iteration() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "review", "reviewer", false, 0, 2).unwrap();
 
-    let step_id = mgr
-        .insert_step(&run.id, "review", "reviewer", false, 0, 2)
-        .unwrap();
-
-    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    let steps = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
     assert_eq!(steps.len(), 1);
     assert_eq!(steps[0].id, step_id);
     assert_eq!(steps[0].step_name, "review");
@@ -242,17 +241,22 @@ fn test_insert_step_running_is_atomic() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
+    let step_id =
+        crate::workflow::insert_step_running(&conn, &run.id, "build", "script", false, 0, 0, 2)
+            .unwrap();
 
-    let step_id = mgr
-        .insert_step_running(&run.id, "build", "script", false, 0, 0, 2)
-        .unwrap();
-
-    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    let steps = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
     assert_eq!(steps.len(), 1);
     assert_eq!(steps[0].id, step_id);
     assert_eq!(steps[0].step_name, "build");
@@ -272,16 +276,21 @@ fn test_update_step_with_markers() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "review", "reviewer", false, 0, 0).unwrap();
 
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
-    let step_id = mgr
-        .insert_step(&run.id, "review", "reviewer", false, 0, 0)
-        .unwrap();
-
-    mgr.update_step_status(
+    crate::workflow::update_step_status(
+        &conn,
         &step_id,
         WorkflowStepStatus::Completed,
         None,
@@ -292,7 +301,7 @@ fn test_update_step_with_markers() {
     )
     .unwrap();
 
-    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    let steps = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
     assert_eq!(steps[0].context_out.as_deref(), Some("2 issues in lib.rs"));
     assert_eq!(
         steps[0].markers_out.as_deref(),
@@ -305,17 +314,22 @@ fn test_update_step_status_full_with_structured_output() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
-    let step_id = mgr
-        .insert_step(&run.id, "review", "reviewer", false, 0, 0)
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "review", "reviewer", false, 0, 0).unwrap();
 
     let structured_json = r#"{"approved":true,"summary":"All good"}"#;
-    mgr.update_step_status_full(
+    crate::workflow::update_step_status_full(
+        &conn,
         &step_id,
         WorkflowStepStatus::Completed,
         None,
@@ -328,7 +342,9 @@ fn test_update_step_status_full_with_structured_output() {
     )
     .unwrap();
 
-    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    let step = crate::workflow::get_step_by_id(&conn, &step_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(step.structured_output.as_deref(), Some(structured_json));
     assert_eq!(step.context_out.as_deref(), Some("All good"));
     assert_eq!(step.result_text.as_deref(), Some("result text"));
@@ -339,16 +355,21 @@ fn test_update_step_status_full_without_structured_output() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "review", "reviewer", false, 0, 0).unwrap();
 
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
-    let step_id = mgr
-        .insert_step(&run.id, "review", "reviewer", false, 0, 0)
-        .unwrap();
-
-    mgr.update_step_status_full(
+    crate::workflow::update_step_status_full(
+        &conn,
         &step_id,
         WorkflowStepStatus::Completed,
         None,
@@ -361,7 +382,9 @@ fn test_update_step_status_full_without_structured_output() {
     )
     .unwrap();
 
-    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    let step = crate::workflow::get_step_by_id(&conn, &step_id)
+        .unwrap()
+        .unwrap();
     assert!(step.structured_output.is_none());
 }
 
@@ -370,17 +393,22 @@ fn test_update_step_status_full_with_step_error() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
-    let step_id = mgr
-        .insert_step(&run.id, "call-step", "reviewer", false, 0, 0)
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "call-step", "reviewer", false, 0, 0).unwrap();
 
     let validation_error = "expected field 'approved' but output was missing required keys";
-    mgr.update_step_status_full(
+    crate::workflow::update_step_status_full(
+        &conn,
         &step_id,
         WorkflowStepStatus::Failed,
         None,
@@ -393,7 +421,9 @@ fn test_update_step_status_full_with_step_error() {
     )
     .unwrap();
 
-    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    let step = crate::workflow::get_step_by_id(&conn, &step_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(step.step_error.as_deref(), Some(validation_error));
     assert_eq!(step.result_text.as_deref(), Some("raw agent output"));
     assert!(step.structured_output.is_none());
@@ -405,14 +435,20 @@ fn test_list_workflow_runs() {
     let agent_mgr = AgentManager::new(&conn);
     let p1 = agent_mgr.create_run(Some("w1"), "wf1", None).unwrap();
     let p2 = agent_mgr.create_run(Some("w1"), "wf2", None).unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    mgr.create_workflow_run("test-a", Some("w1"), &p1.id, false, "manual", None)
+    crate::workflow::create_workflow_run(
+        &conn,
+        "test-a",
+        Some("w1"),
+        &p1.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    crate::workflow::create_workflow_run(&conn, "test-b", Some("w1"), &p2.id, true, "pr", None)
         .unwrap();
-    mgr.create_workflow_run("test-b", Some("w1"), &p2.id, true, "pr", None)
-        .unwrap();
 
-    let runs = mgr.list_workflow_runs("w1").unwrap();
+    let runs = crate::workflow::list_workflow_runs(&conn, "w1").unwrap();
     assert_eq!(runs.len(), 2);
 }
 
@@ -430,15 +466,29 @@ fn test_list_all_workflow_runs_cross_worktree() {
     let agent_mgr = AgentManager::new(&conn);
     let p1 = agent_mgr.create_run(Some("w1"), "wf1", None).unwrap();
     let p2 = agent_mgr.create_run(Some("w2"), "wf2", None).unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    mgr.create_workflow_run("flow-a", Some("w1"), &p1.id, false, "manual", None)
-        .unwrap();
-    mgr.create_workflow_run("flow-b", Some("w2"), &p2.id, false, "manual", None)
-        .unwrap();
+    crate::workflow::create_workflow_run(
+        &conn,
+        "flow-a",
+        Some("w1"),
+        &p1.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    crate::workflow::create_workflow_run(
+        &conn,
+        "flow-b",
+        Some("w2"),
+        &p2.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
     // list_all returns both runs regardless of worktree
-    let all = mgr.list_all_workflow_runs(100).unwrap();
+    let all = crate::workflow::list_all_workflow_runs(&conn, 100).unwrap();
     assert_eq!(all.len(), 2);
     let names: Vec<&str> = all.iter().map(|r| r.workflow_name.as_str()).collect();
     assert!(names.contains(&"flow-a"));
@@ -449,13 +499,12 @@ fn test_list_all_workflow_runs_cross_worktree() {
 fn test_list_all_workflow_runs_respects_limit() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-
-    let mgr = WorkflowManager::new(&conn);
     for i in 0..5 {
         let p = agent_mgr
             .create_run(Some("w1"), &format!("wf{i}"), None)
             .unwrap();
-        mgr.create_workflow_run(
+        crate::workflow::create_workflow_run(
+            &conn,
             &format!("flow-{i}"),
             Some("w1"),
             &p.id,
@@ -466,15 +515,14 @@ fn test_list_all_workflow_runs_respects_limit() {
         .unwrap();
     }
 
-    let limited = mgr.list_all_workflow_runs(3).unwrap();
+    let limited = crate::workflow::list_all_workflow_runs(&conn, 3).unwrap();
     assert_eq!(limited.len(), 3);
 }
 
 #[test]
 fn test_list_all_workflow_runs_empty() {
     let conn = setup_db();
-    let mgr = WorkflowManager::new(&conn);
-    let runs = mgr.list_all_workflow_runs(50).unwrap();
+    let runs = crate::workflow::list_all_workflow_runs(&conn, 50).unwrap();
     assert!(runs.is_empty());
 }
 
@@ -482,22 +530,36 @@ fn test_list_all_workflow_runs_empty() {
 fn test_list_all_workflow_runs_includes_ephemeral() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let mgr = WorkflowManager::new(&conn);
 
     // Create a normal run (with worktree)
     let parent1 = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    mgr.create_workflow_run("normal-wf", Some("w1"), &parent1.id, false, "manual", None)
-        .unwrap();
+    crate::workflow::create_workflow_run(
+        &conn,
+        "normal-wf",
+        Some("w1"),
+        &parent1.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
     // Create an ephemeral run (no worktree)
     let parent2 = agent_mgr
         .create_run(None, "ephemeral workflow", None)
         .unwrap();
-    let ephemeral = mgr
-        .create_workflow_run("ephemeral-wf", None, &parent2.id, false, "manual", None)
-        .unwrap();
+    let ephemeral = crate::workflow::create_workflow_run(
+        &conn,
+        "ephemeral-wf",
+        None,
+        &parent2.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
-    let all = mgr.list_all_workflow_runs(100).unwrap();
+    let all = crate::workflow::list_all_workflow_runs(&conn, 100).unwrap();
     assert_eq!(all.len(), 2);
 
     // Verify the ephemeral run has None worktree_id
@@ -519,14 +581,28 @@ fn test_list_all_workflow_runs_excludes_merged_worktree() {
     let agent_mgr = AgentManager::new(&conn);
     let p1 = agent_mgr.create_run(Some("w1"), "wf1", None).unwrap();
     let p2 = agent_mgr.create_run(Some("w2"), "wf2", None).unwrap();
+    crate::workflow::create_workflow_run(
+        &conn,
+        "active-run",
+        Some("w1"),
+        &p1.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    crate::workflow::create_workflow_run(
+        &conn,
+        "merged-run",
+        Some("w2"),
+        &p2.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
-    let mgr = WorkflowManager::new(&conn);
-    mgr.create_workflow_run("active-run", Some("w1"), &p1.id, false, "manual", None)
-        .unwrap();
-    mgr.create_workflow_run("merged-run", Some("w2"), &p2.id, false, "manual", None)
-        .unwrap();
-
-    let all = mgr.list_all_workflow_runs(100).unwrap();
+    let all = crate::workflow::list_all_workflow_runs(&conn, 100).unwrap();
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].workflow_name, "active-run");
 }
@@ -545,14 +621,28 @@ fn test_list_all_workflow_runs_excludes_abandoned_worktree() {
     let agent_mgr = AgentManager::new(&conn);
     let p1 = agent_mgr.create_run(Some("w1"), "wf1", None).unwrap();
     let p2 = agent_mgr.create_run(Some("w2"), "wf2", None).unwrap();
+    crate::workflow::create_workflow_run(
+        &conn,
+        "active-run",
+        Some("w1"),
+        &p1.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    crate::workflow::create_workflow_run(
+        &conn,
+        "abandoned-run",
+        Some("w2"),
+        &p2.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
-    let mgr = WorkflowManager::new(&conn);
-    mgr.create_workflow_run("active-run", Some("w1"), &p1.id, false, "manual", None)
-        .unwrap();
-    mgr.create_workflow_run("abandoned-run", Some("w2"), &p2.id, false, "manual", None)
-        .unwrap();
-
-    let all = mgr.list_all_workflow_runs(100).unwrap();
+    let all = crate::workflow::list_all_workflow_runs(&conn, 100).unwrap();
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].workflow_name, "active-run");
 }
@@ -561,19 +651,34 @@ fn test_list_all_workflow_runs_excludes_abandoned_worktree() {
 fn test_list_all_workflow_runs_includes_ephemeral_and_active() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let mgr = WorkflowManager::new(&conn);
 
     // Active worktree run
     let p1 = agent_mgr.create_run(Some("w1"), "wf1", None).unwrap();
-    mgr.create_workflow_run("active-run", Some("w1"), &p1.id, false, "manual", None)
-        .unwrap();
+    crate::workflow::create_workflow_run(
+        &conn,
+        "active-run",
+        Some("w1"),
+        &p1.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
     // Ephemeral run (no worktree)
     let p2 = agent_mgr.create_run(None, "wf2", None).unwrap();
-    mgr.create_workflow_run("ephemeral-run", None, &p2.id, false, "manual", None)
-        .unwrap();
+    crate::workflow::create_workflow_run(
+        &conn,
+        "ephemeral-run",
+        None,
+        &p2.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
-    let all = mgr.list_all_workflow_runs(100).unwrap();
+    let all = crate::workflow::list_all_workflow_runs(&conn, 100).unwrap();
     assert_eq!(all.len(), 2);
     let names: Vec<&str> = all.iter().map(|r| r.workflow_name.as_str()).collect();
     assert!(names.contains(&"active-run"));
@@ -584,30 +689,58 @@ fn test_list_all_workflow_runs_includes_ephemeral_and_active() {
 fn test_list_all_workflow_runs_filtered_paginated_status_filter() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let mgr = WorkflowManager::new(&conn);
 
     // Create one run and leave it in Pending state.
     let p1 = agent_mgr.create_run(Some("w1"), "wf1", None).unwrap();
-    mgr.create_workflow_run("pending-run", Some("w1"), &p1.id, false, "manual", None)
-        .unwrap();
+    crate::workflow::create_workflow_run(
+        &conn,
+        "pending-run",
+        Some("w1"),
+        &p1.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
     // Create a second run and advance it to Completed.
     let p2 = agent_mgr.create_run(Some("w1"), "wf2", None).unwrap();
-    let r2 = mgr
-        .create_workflow_run("done-run", Some("w1"), &p2.id, false, "manual", None)
-        .unwrap();
-    mgr.update_workflow_status(&r2.id, WorkflowRunStatus::Completed, None, None)
-        .unwrap();
+    let r2 = crate::workflow::create_workflow_run(
+        &conn,
+        "done-run",
+        Some("w1"),
+        &p2.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &r2.id,
+        WorkflowRunStatus::Completed,
+        None,
+        None,
+    )
+    .unwrap();
 
-    let completed = mgr
-        .list_all_workflow_runs_filtered_paginated(Some(WorkflowRunStatus::Completed), 100, 0)
-        .unwrap();
+    let completed = crate::workflow::list_all_workflow_runs_filtered_paginated(
+        &conn,
+        Some(WorkflowRunStatus::Completed),
+        100,
+        0,
+    )
+    .unwrap();
     assert_eq!(completed.len(), 1);
     assert_eq!(completed[0].workflow_name, "done-run");
 
-    let pending = mgr
-        .list_all_workflow_runs_filtered_paginated(Some(WorkflowRunStatus::Pending), 100, 0)
-        .unwrap();
+    let pending = crate::workflow::list_all_workflow_runs_filtered_paginated(
+        &conn,
+        Some(WorkflowRunStatus::Pending),
+        100,
+        0,
+    )
+    .unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].workflow_name, "pending-run");
 }
@@ -616,13 +749,13 @@ fn test_list_all_workflow_runs_filtered_paginated_status_filter() {
 fn test_list_all_workflow_runs_filtered_paginated_offset() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let mgr = WorkflowManager::new(&conn);
 
     for i in 0..4 {
         let p = agent_mgr
             .create_run(Some("w1"), &format!("wf{i}"), None)
             .unwrap();
-        mgr.create_workflow_run(
+        crate::workflow::create_workflow_run(
+            &conn,
             &format!("flow-{i}"),
             Some("w1"),
             &p.id,
@@ -633,14 +766,12 @@ fn test_list_all_workflow_runs_filtered_paginated_offset() {
         .unwrap();
     }
 
-    let page1 = mgr
-        .list_all_workflow_runs_filtered_paginated(None, 2, 0)
-        .unwrap();
+    let page1 =
+        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 2, 0).unwrap();
     assert_eq!(page1.len(), 2);
 
-    let page2 = mgr
-        .list_all_workflow_runs_filtered_paginated(None, 2, 2)
-        .unwrap();
+    let page2 =
+        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 2, 2).unwrap();
     assert_eq!(page2.len(), 2);
 
     // All 4 unique
@@ -666,10 +797,9 @@ fn test_list_workflow_runs_by_repo_id_excludes_merged_worktree() {
     let agent_mgr = AgentManager::new(&conn);
     let p1 = agent_mgr.create_run(Some("w1"), "wf1", None).unwrap();
     let p2 = agent_mgr.create_run(Some("w2"), "wf2", None).unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
     // Use create_workflow_run_with_targets to set repo_id so the query can filter by it
-    mgr.create_workflow_run_with_targets(
+    crate::workflow::create_workflow_run_with_targets(
+        &conn,
         "active-run",
         Some("w1"),
         None,
@@ -682,7 +812,8 @@ fn test_list_workflow_runs_by_repo_id_excludes_merged_worktree() {
         None,
     )
     .unwrap();
-    mgr.create_workflow_run_with_targets(
+    crate::workflow::create_workflow_run_with_targets(
+        &conn,
         "merged-run",
         Some("w2"),
         None,
@@ -696,7 +827,7 @@ fn test_list_workflow_runs_by_repo_id_excludes_merged_worktree() {
     )
     .unwrap();
 
-    let runs = mgr.list_workflow_runs_by_repo_id("r1", 100, 0).unwrap();
+    let runs = crate::workflow::list_workflow_runs_by_repo_id(&conn, "r1", 100, 0).unwrap();
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].workflow_name, "active-run");
 }
@@ -714,20 +845,34 @@ fn test_list_workflow_runs_for_scope_scoped() {
     let agent_mgr = AgentManager::new(&conn);
     let p1 = agent_mgr.create_run(Some("w1"), "wf1", None).unwrap();
     let p2 = agent_mgr.create_run(Some("w2"), "wf2", None).unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    mgr.create_workflow_run("only-w1", Some("w1"), &p1.id, false, "manual", None)
-        .unwrap();
-    mgr.create_workflow_run("only-w2", Some("w2"), &p2.id, false, "manual", None)
-        .unwrap();
+    crate::workflow::create_workflow_run(
+        &conn,
+        "only-w1",
+        Some("w1"),
+        &p1.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    crate::workflow::create_workflow_run(
+        &conn,
+        "only-w2",
+        Some("w2"),
+        &p2.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
     // Scoped: only w1's run
-    let scoped = mgr.list_workflow_runs_for_scope(Some("w1"), 50).unwrap();
+    let scoped = crate::workflow::list_workflow_runs_for_scope(&conn, Some("w1"), 50).unwrap();
     assert_eq!(scoped.len(), 1);
     assert_eq!(scoped[0].workflow_name, "only-w1");
 
     // Global: both runs
-    let global = mgr.list_workflow_runs_for_scope(None, 50).unwrap();
+    let global = crate::workflow::list_workflow_runs_for_scope(&conn, None, 50).unwrap();
     assert_eq!(global.len(), 2);
 }
 
@@ -735,12 +880,12 @@ fn test_list_workflow_runs_for_scope_scoped() {
 fn test_list_workflow_runs_for_scope_global_limit() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let mgr = WorkflowManager::new(&conn);
     for i in 0..5 {
         let p = agent_mgr
             .create_run(Some("w1"), &format!("wf{i}"), None)
             .unwrap();
-        mgr.create_workflow_run(
+        crate::workflow::create_workflow_run(
+            &conn,
             &format!("flow-{i}"),
             Some("w1"),
             &p.id,
@@ -750,15 +895,14 @@ fn test_list_workflow_runs_for_scope_global_limit() {
         )
         .unwrap();
     }
-    let limited = mgr.list_workflow_runs_for_scope(None, 2).unwrap();
+    let limited = crate::workflow::list_workflow_runs_for_scope(&conn, None, 2).unwrap();
     assert_eq!(limited.len(), 2);
 }
 
 #[test]
 fn test_get_workflow_run_not_found() {
     let conn = setup_db();
-    let mgr = WorkflowManager::new(&conn);
-    let result = mgr.get_workflow_run("nonexistent").unwrap();
+    let result = crate::workflow::get_workflow_run(&conn, "nonexistent").unwrap();
     assert!(result.is_none());
 }
 
@@ -767,24 +911,28 @@ fn test_get_step_by_id() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "build", "actor", false, 0, 0).unwrap();
 
-    let step_id = mgr
-        .insert_step(&run.id, "build", "actor", false, 0, 0)
-        .unwrap();
-
-    let step = mgr.get_step_by_id(&step_id).unwrap();
+    let step = crate::workflow::get_step_by_id(&conn, &step_id).unwrap();
     assert!(step.is_some());
     let step = step.unwrap();
     assert_eq!(step.id, step_id);
     assert_eq!(step.step_name, "build");
     assert_eq!(step.role, "actor");
 
-    let missing = mgr.get_step_by_id("nonexistent").unwrap();
+    let missing = crate::workflow::get_step_by_id(&conn, "nonexistent").unwrap();
     assert!(missing.is_none());
 }
 
@@ -796,41 +944,70 @@ fn test_purge_all_terminal_statuses() {
     let a2 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
     let a3 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
     let a4 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
+    let r_completed =
+        crate::workflow::create_workflow_run(&conn, "t", Some("w1"), &a1.id, false, "manual", None)
+            .unwrap();
+    let r_failed =
+        crate::workflow::create_workflow_run(&conn, "t", Some("w1"), &a2.id, false, "manual", None)
+            .unwrap();
+    let r_cancelled =
+        crate::workflow::create_workflow_run(&conn, "t", Some("w1"), &a3.id, false, "manual", None)
+            .unwrap();
+    let r_running =
+        crate::workflow::create_workflow_run(&conn, "t", Some("w1"), &a4.id, false, "manual", None)
+            .unwrap();
 
-    let mgr = WorkflowManager::new(&conn);
-    let r_completed = mgr
-        .create_workflow_run("t", Some("w1"), &a1.id, false, "manual", None)
-        .unwrap();
-    let r_failed = mgr
-        .create_workflow_run("t", Some("w1"), &a2.id, false, "manual", None)
-        .unwrap();
-    let r_cancelled = mgr
-        .create_workflow_run("t", Some("w1"), &a3.id, false, "manual", None)
-        .unwrap();
-    let r_running = mgr
-        .create_workflow_run("t", Some("w1"), &a4.id, false, "manual", None)
-        .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &r_completed.id,
+        WorkflowRunStatus::Completed,
+        None,
+        None,
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &r_failed.id,
+        WorkflowRunStatus::Failed,
+        None,
+        None,
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &r_cancelled.id,
+        WorkflowRunStatus::Cancelled,
+        None,
+        None,
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &r_running.id,
+        WorkflowRunStatus::Running,
+        None,
+        None,
+    )
+    .unwrap();
 
-    mgr.update_workflow_status(&r_completed.id, WorkflowRunStatus::Completed, None, None)
-        .unwrap();
-    mgr.update_workflow_status(&r_failed.id, WorkflowRunStatus::Failed, None, None)
-        .unwrap();
-    mgr.update_workflow_status(&r_cancelled.id, WorkflowRunStatus::Cancelled, None, None)
-        .unwrap();
-    mgr.update_workflow_status(&r_running.id, WorkflowRunStatus::Running, None, None)
-        .unwrap();
-
-    let deleted = mgr
-        .purge(None, &["completed", "failed", "cancelled"])
-        .unwrap();
+    let deleted =
+        crate::workflow::purge(&conn, None, &["completed", "failed", "cancelled"]).unwrap();
     assert_eq!(deleted, 3);
 
     // running run must still exist
-    assert!(mgr.get_workflow_run(&r_running.id).unwrap().is_some());
+    assert!(crate::workflow::get_workflow_run(&conn, &r_running.id)
+        .unwrap()
+        .is_some());
     // terminal runs must be gone
-    assert!(mgr.get_workflow_run(&r_completed.id).unwrap().is_none());
-    assert!(mgr.get_workflow_run(&r_failed.id).unwrap().is_none());
-    assert!(mgr.get_workflow_run(&r_cancelled.id).unwrap().is_none());
+    assert!(crate::workflow::get_workflow_run(&conn, &r_completed.id)
+        .unwrap()
+        .is_none());
+    assert!(crate::workflow::get_workflow_run(&conn, &r_failed.id)
+        .unwrap()
+        .is_none());
+    assert!(crate::workflow::get_workflow_run(&conn, &r_cancelled.id)
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -839,26 +1016,40 @@ fn test_purge_single_status_filter() {
     let agent_mgr = AgentManager::new(&conn);
     let a1 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
     let a2 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
+    let r_completed =
+        crate::workflow::create_workflow_run(&conn, "t", Some("w1"), &a1.id, false, "manual", None)
+            .unwrap();
+    let r_failed =
+        crate::workflow::create_workflow_run(&conn, "t", Some("w1"), &a2.id, false, "manual", None)
+            .unwrap();
 
-    let mgr = WorkflowManager::new(&conn);
-    let r_completed = mgr
-        .create_workflow_run("t", Some("w1"), &a1.id, false, "manual", None)
-        .unwrap();
-    let r_failed = mgr
-        .create_workflow_run("t", Some("w1"), &a2.id, false, "manual", None)
-        .unwrap();
-
-    mgr.update_workflow_status(&r_completed.id, WorkflowRunStatus::Completed, None, None)
-        .unwrap();
-    mgr.update_workflow_status(&r_failed.id, WorkflowRunStatus::Failed, None, None)
-        .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &r_completed.id,
+        WorkflowRunStatus::Completed,
+        None,
+        None,
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &r_failed.id,
+        WorkflowRunStatus::Failed,
+        None,
+        None,
+    )
+    .unwrap();
 
     // only purge completed
-    let deleted = mgr.purge(None, &["completed"]).unwrap();
+    let deleted = crate::workflow::purge(&conn, None, &["completed"]).unwrap();
     assert_eq!(deleted, 1);
 
-    assert!(mgr.get_workflow_run(&r_completed.id).unwrap().is_none());
-    assert!(mgr.get_workflow_run(&r_failed.id).unwrap().is_some());
+    assert!(crate::workflow::get_workflow_run(&conn, &r_completed.id)
+        .unwrap()
+        .is_none());
+    assert!(crate::workflow::get_workflow_run(&conn, &r_failed.id)
+        .unwrap()
+        .is_some());
 }
 
 #[test]
@@ -881,26 +1072,40 @@ fn test_purge_repo_scoped() {
     let agent_mgr = AgentManager::new(&conn);
     let a1 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
     let a2 = agent_mgr.create_run(Some("w2"), "wf", None).unwrap();
+    let run_r1 =
+        crate::workflow::create_workflow_run(&conn, "t", Some("w1"), &a1.id, false, "manual", None)
+            .unwrap();
+    let run_r2 =
+        crate::workflow::create_workflow_run(&conn, "t", Some("w2"), &a2.id, false, "manual", None)
+            .unwrap();
 
-    let mgr = WorkflowManager::new(&conn);
-    let run_r1 = mgr
-        .create_workflow_run("t", Some("w1"), &a1.id, false, "manual", None)
-        .unwrap();
-    let run_r2 = mgr
-        .create_workflow_run("t", Some("w2"), &a2.id, false, "manual", None)
-        .unwrap();
-
-    mgr.update_workflow_status(&run_r1.id, WorkflowRunStatus::Completed, None, None)
-        .unwrap();
-    mgr.update_workflow_status(&run_r2.id, WorkflowRunStatus::Completed, None, None)
-        .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run_r1.id,
+        WorkflowRunStatus::Completed,
+        None,
+        None,
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run_r2.id,
+        WorkflowRunStatus::Completed,
+        None,
+        None,
+    )
+    .unwrap();
 
     // scope to r1 only
-    let deleted = mgr.purge(Some("r1"), &["completed"]).unwrap();
+    let deleted = crate::workflow::purge(&conn, Some("r1"), &["completed"]).unwrap();
     assert_eq!(deleted, 1);
 
-    assert!(mgr.get_workflow_run(&run_r1.id).unwrap().is_none());
-    assert!(mgr.get_workflow_run(&run_r2.id).unwrap().is_some());
+    assert!(crate::workflow::get_workflow_run(&conn, &run_r1.id)
+        .unwrap()
+        .is_none());
+    assert!(crate::workflow::get_workflow_run(&conn, &run_r2.id)
+        .unwrap()
+        .is_some());
 }
 
 #[test]
@@ -908,21 +1113,24 @@ fn test_purge_cascade_deletes_steps() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let a1 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
+    let run =
+        crate::workflow::create_workflow_run(&conn, "t", Some("w1"), &a1.id, false, "manual", None)
+            .unwrap();
+    crate::workflow::insert_step(&conn, &run.id, "step1", "actor", true, 0, 0).unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run.id,
+        WorkflowRunStatus::Completed,
+        None,
+        None,
+    )
+    .unwrap();
 
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run("t", Some("w1"), &a1.id, false, "manual", None)
-        .unwrap();
-    mgr.insert_step(&run.id, "step1", "actor", true, 0, 0)
-        .unwrap();
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
-        .unwrap();
-
-    let deleted = mgr.purge(None, &["completed"]).unwrap();
+    let deleted = crate::workflow::purge(&conn, None, &["completed"]).unwrap();
     assert_eq!(deleted, 1);
 
     // steps must be gone (cascade)
-    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    let steps = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
     assert!(steps.is_empty());
 }
 
@@ -932,24 +1140,28 @@ fn test_purge_count_matches_purge() {
     let agent_mgr = AgentManager::new(&conn);
     let a1 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
     let a2 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let r1 = mgr
-        .create_workflow_run("t", Some("w1"), &a1.id, false, "manual", None)
-        .unwrap();
-    let r2 = mgr
-        .create_workflow_run("t", Some("w1"), &a2.id, false, "manual", None)
-        .unwrap();
-    mgr.update_workflow_status(&r1.id, WorkflowRunStatus::Completed, None, None)
-        .unwrap();
-    mgr.update_workflow_status(&r2.id, WorkflowRunStatus::Failed, None, None)
+    let r1 =
+        crate::workflow::create_workflow_run(&conn, "t", Some("w1"), &a1.id, false, "manual", None)
+            .unwrap();
+    let r2 =
+        crate::workflow::create_workflow_run(&conn, "t", Some("w1"), &a2.id, false, "manual", None)
+            .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &r1.id,
+        WorkflowRunStatus::Completed,
+        None,
+        None,
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(&conn, &r2.id, WorkflowRunStatus::Failed, None, None)
         .unwrap();
 
     let statuses = &["completed", "failed", "cancelled"];
-    let count = mgr.purge_count(None, statuses).unwrap();
+    let count = crate::workflow::purge_count(&conn, None, statuses).unwrap();
     assert_eq!(count, 2);
 
-    let deleted = mgr.purge(None, statuses).unwrap();
+    let deleted = crate::workflow::purge(&conn, None, statuses).unwrap();
     assert_eq!(deleted, count);
 }
 
@@ -958,33 +1170,30 @@ fn test_purge_noop_when_no_matches() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let a1 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run("t", Some("w1"), &a1.id, false, "manual", None)
-        .unwrap();
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
+    let run =
+        crate::workflow::create_workflow_run(&conn, "t", Some("w1"), &a1.id, false, "manual", None)
+            .unwrap();
+    crate::workflow::update_workflow_status(&conn, &run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
-    let count = mgr
-        .purge_count(None, &["completed", "failed", "cancelled"])
-        .unwrap();
+    let count =
+        crate::workflow::purge_count(&conn, None, &["completed", "failed", "cancelled"]).unwrap();
     assert_eq!(count, 0);
 
-    let deleted = mgr
-        .purge(None, &["completed", "failed", "cancelled"])
-        .unwrap();
+    let deleted =
+        crate::workflow::purge(&conn, None, &["completed", "failed", "cancelled"]).unwrap();
     assert_eq!(deleted, 0);
 
-    assert!(mgr.get_workflow_run(&run.id).unwrap().is_some());
+    assert!(crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .is_some());
 }
 
 #[test]
 fn test_purge_empty_statuses_is_noop() {
     let conn = setup_db();
-    let mgr = WorkflowManager::new(&conn);
-    assert_eq!(mgr.purge(None, &[]).unwrap(), 0);
-    assert_eq!(mgr.purge_count(None, &[]).unwrap(), 0);
+    assert_eq!(crate::workflow::purge(&conn, None, &[]).unwrap(), 0);
+    assert_eq!(crate::workflow::purge_count(&conn, None, &[]).unwrap(), 0);
 }
 
 /// Repo-scoped purge must NOT delete global workflow runs (worktree_id IS NULL).
@@ -997,28 +1206,53 @@ fn test_purge_repo_scoped_does_not_delete_global_runs() {
     let a_global = agent_mgr.create_run(None, "wf", None).unwrap();
     let a_w1 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
 
-    let mgr = WorkflowManager::new(&conn);
-    let run_global = mgr
-        .create_workflow_run("t", None, &a_global.id, false, "manual", None)
-        .unwrap();
-    let run_w1 = mgr
-        .create_workflow_run("t", Some("w1"), &a_w1.id, false, "manual", None)
-        .unwrap();
+    let run_global =
+        crate::workflow::create_workflow_run(&conn, "t", None, &a_global.id, false, "manual", None)
+            .unwrap();
+    let run_w1 = crate::workflow::create_workflow_run(
+        &conn,
+        "t",
+        Some("w1"),
+        &a_w1.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
-    mgr.update_workflow_status(&run_global.id, WorkflowRunStatus::Completed, None, None)
-        .unwrap();
-    mgr.update_workflow_status(&run_w1.id, WorkflowRunStatus::Completed, None, None)
-        .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run_global.id,
+        WorkflowRunStatus::Completed,
+        None,
+        None,
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run_w1.id,
+        WorkflowRunStatus::Completed,
+        None,
+        None,
+    )
+    .unwrap();
 
     // Scope purge to r1 — must only delete the worktree-bound run.
-    assert_eq!(mgr.purge_count(Some("r1"), &["completed"]).unwrap(), 1);
-    let deleted = mgr.purge(Some("r1"), &["completed"]).unwrap();
+    assert_eq!(
+        crate::workflow::purge_count(&conn, Some("r1"), &["completed"]).unwrap(),
+        1
+    );
+    let deleted = crate::workflow::purge(&conn, Some("r1"), &["completed"]).unwrap();
     assert_eq!(deleted, 1);
 
     // Global run must survive.
-    assert!(mgr.get_workflow_run(&run_global.id).unwrap().is_some());
+    assert!(crate::workflow::get_workflow_run(&conn, &run_global.id)
+        .unwrap()
+        .is_some());
     // w1 run must be gone.
-    assert!(mgr.get_workflow_run(&run_w1.id).unwrap().is_none());
+    assert!(crate::workflow::get_workflow_run(&conn, &run_w1.id)
+        .unwrap()
+        .is_none());
 }
 
 // ---------- delete_run tests ----------
@@ -1026,51 +1260,74 @@ fn test_purge_repo_scoped_does_not_delete_global_runs() {
 #[test]
 fn test_delete_run_removes_completed_run() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
-        .unwrap();
+    let (_parent, run) = make_workflow_run(&conn);
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run.id,
+        WorkflowRunStatus::Completed,
+        None,
+        None,
+    )
+    .unwrap();
 
-    mgr.delete_run(&run.id).unwrap();
+    crate::workflow::delete_run(&conn, &run.id).unwrap();
 
-    assert!(mgr.get_workflow_run(&run.id).unwrap().is_none());
+    assert!(crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .is_none());
 }
 
 #[test]
 fn test_delete_run_removes_failed_run() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Failed, None, None)
+    let (_parent, run) = make_workflow_run(&conn);
+    crate::workflow::update_workflow_status(&conn, &run.id, WorkflowRunStatus::Failed, None, None)
         .unwrap();
 
-    mgr.delete_run(&run.id).unwrap();
+    crate::workflow::delete_run(&conn, &run.id).unwrap();
 
-    assert!(mgr.get_workflow_run(&run.id).unwrap().is_none());
+    assert!(crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .is_none());
 }
 
 #[test]
 fn test_delete_run_removes_cancelled_run() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Cancelled, None, None)
-        .unwrap();
+    let (_parent, run) = make_workflow_run(&conn);
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run.id,
+        WorkflowRunStatus::Cancelled,
+        None,
+        None,
+    )
+    .unwrap();
 
-    mgr.delete_run(&run.id).unwrap();
+    crate::workflow::delete_run(&conn, &run.id).unwrap();
 
-    assert!(mgr.get_workflow_run(&run.id).unwrap().is_none());
+    assert!(crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .is_none());
 }
 
 #[test]
 fn test_delete_run_cascade_deletes_steps() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
-    mgr.insert_step(&run.id, "step1", "actor", false, 0, 0)
-        .unwrap();
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
-        .unwrap();
+    let (_parent, run) = make_workflow_run(&conn);
+    crate::workflow::insert_step(&conn, &run.id, "step1", "actor", false, 0, 0).unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run.id,
+        WorkflowRunStatus::Completed,
+        None,
+        None,
+    )
+    .unwrap();
 
-    mgr.delete_run(&run.id).unwrap();
+    crate::workflow::delete_run(&conn, &run.id).unwrap();
 
-    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    let steps = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
     assert!(
         steps.is_empty(),
         "steps should be cascade-deleted with the run"
@@ -1080,9 +1337,7 @@ fn test_delete_run_cascade_deletes_steps() {
 #[test]
 fn test_delete_run_not_found_returns_error() {
     let conn = setup_db();
-    let mgr = WorkflowManager::new(&conn);
-
-    let result = mgr.delete_run("nonexistent-id");
+    let result = crate::workflow::delete_run(&conn, "nonexistent-id");
     assert!(
         result.is_err(),
         "deleting a nonexistent run should return an error"
@@ -1097,31 +1352,35 @@ fn test_delete_run_not_found_returns_error() {
 #[test]
 fn test_delete_run_rejects_running_run() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
+    let (_parent, run) = make_workflow_run(&conn);
+    crate::workflow::update_workflow_status(&conn, &run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
-    let result = mgr.delete_run(&run.id);
+    let result = crate::workflow::delete_run(&conn, &run.id);
     assert!(
         result.is_err(),
         "deleting a running run should return an error"
     );
     // Run must still exist
-    assert!(mgr.get_workflow_run(&run.id).unwrap().is_some());
+    assert!(crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .is_some());
 }
 
 #[test]
 fn test_delete_run_rejects_pending_run() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
     // run starts as Pending
 
-    let result = mgr.delete_run(&run.id);
+    let result = crate::workflow::delete_run(&conn, &run.id);
     assert!(
         result.is_err(),
         "deleting a pending run should return an error"
     );
-    assert!(mgr.get_workflow_run(&run.id).unwrap().is_some());
+    assert!(crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .is_some());
 }
 
 #[test]
@@ -1130,46 +1389,61 @@ fn test_delete_run_recursive_removes_child_runs() {
     // Create parent run
     let agent_mgr = crate::agent::AgentManager::new(&conn);
     let parent_agent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let mgr = WorkflowManager::new(&conn);
-    let parent_run = mgr
-        .create_workflow_run(
-            "parent-wf",
-            Some("w1"),
-            &parent_agent.id,
-            false,
-            "manual",
-            None,
-        )
-        .unwrap();
+    let parent_run = crate::workflow::create_workflow_run(
+        &conn,
+        "parent-wf",
+        Some("w1"),
+        &parent_agent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
     // Create a child run (parent_workflow_run_id points to parent_run)
     let child_agent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let child_run = mgr
-        .create_workflow_run_with_targets(
-            "child-wf",
-            Some("w1"),
-            None,
-            None,
-            &child_agent.id,
-            false,
-            "manual",
-            None,
-            Some(&parent_run.id),
-            None,
-        )
-        .unwrap();
+    let child_run = crate::workflow::create_workflow_run_with_targets(
+        &conn,
+        "child-wf",
+        Some("w1"),
+        None,
+        None,
+        &child_agent.id,
+        false,
+        "manual",
+        None,
+        Some(&parent_run.id),
+        None,
+    )
+    .unwrap();
 
     // Mark both terminal
-    mgr.update_workflow_status(&child_run.id, WorkflowRunStatus::Completed, None, None)
-        .unwrap();
-    mgr.update_workflow_status(&parent_run.id, WorkflowRunStatus::Completed, None, None)
-        .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &child_run.id,
+        WorkflowRunStatus::Completed,
+        None,
+        None,
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &parent_run.id,
+        WorkflowRunStatus::Completed,
+        None,
+        None,
+    )
+    .unwrap();
 
-    mgr.delete_run(&parent_run.id).unwrap();
+    crate::workflow::delete_run(&conn, &parent_run.id).unwrap();
 
     // Both parent and child should be gone
-    assert!(mgr.get_workflow_run(&parent_run.id).unwrap().is_none());
-    assert!(mgr.get_workflow_run(&child_run.id).unwrap().is_none());
+    assert!(crate::workflow::get_workflow_run(&conn, &parent_run.id)
+        .unwrap()
+        .is_none());
+    assert!(crate::workflow::get_workflow_run(&conn, &child_run.id)
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -1179,24 +1453,53 @@ fn test_delete_run_does_not_affect_sibling_runs() {
     let a1 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
     let a2 = agent_mgr.create_run(Some("w1"), "wf", None).unwrap();
 
-    let mgr = WorkflowManager::new(&conn);
-    let run1 = mgr
-        .create_workflow_run("wf", Some("w1"), &a1.id, false, "manual", None)
-        .unwrap();
-    let run2 = mgr
-        .create_workflow_run("wf", Some("w1"), &a2.id, false, "manual", None)
-        .unwrap();
+    let run1 = crate::workflow::create_workflow_run(
+        &conn,
+        "wf",
+        Some("w1"),
+        &a1.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    let run2 = crate::workflow::create_workflow_run(
+        &conn,
+        "wf",
+        Some("w1"),
+        &a2.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
-    mgr.update_workflow_status(&run1.id, WorkflowRunStatus::Completed, None, None)
-        .unwrap();
-    mgr.update_workflow_status(&run2.id, WorkflowRunStatus::Completed, None, None)
-        .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run1.id,
+        WorkflowRunStatus::Completed,
+        None,
+        None,
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run2.id,
+        WorkflowRunStatus::Completed,
+        None,
+        None,
+    )
+    .unwrap();
 
-    mgr.delete_run(&run1.id).unwrap();
+    crate::workflow::delete_run(&conn, &run1.id).unwrap();
 
-    assert!(mgr.get_workflow_run(&run1.id).unwrap().is_none());
+    assert!(crate::workflow::get_workflow_run(&conn, &run1.id)
+        .unwrap()
+        .is_none());
     assert!(
-        mgr.get_workflow_run(&run2.id).unwrap().is_some(),
+        crate::workflow::get_workflow_run(&conn, &run2.id)
+            .unwrap()
+            .is_some(),
         "sibling run should not be deleted"
     );
 }
@@ -1204,22 +1507,24 @@ fn test_delete_run_does_not_affect_sibling_runs() {
 #[test]
 fn test_cancel_run_pending() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
     assert_eq!(run.status, WorkflowRunStatus::Pending);
 
-    mgr.cancel_run(&run.id, "user requested").unwrap();
+    crate::workflow::cancel_run(&conn, &run.id, "user requested").unwrap();
 
-    let updated = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    let updated = crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(updated.status, WorkflowRunStatus::Cancelled);
 }
 
 #[test]
 fn test_cancel_run_running_with_active_steps() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
 
     // Advance run to Running
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
+    crate::workflow::update_workflow_status(&conn, &run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     // Insert a Running step with a child agent run
@@ -1228,10 +1533,10 @@ fn test_cancel_run_running_with_active_steps() {
         .create_run(Some("w1"), "child-step", None)
         .unwrap();
 
-    let step_id = mgr
-        .insert_step(&run.id, "do-work", "actor", false, 0, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "do-work", "actor", false, 0, 0).unwrap();
+    crate::workflow::update_step_status(
+        &conn,
         &step_id,
         WorkflowStepStatus::Running,
         Some(&child.id),
@@ -1243,12 +1548,14 @@ fn test_cancel_run_running_with_active_steps() {
     .unwrap();
 
     // Cancel the run — should cancel step and child agent run
-    mgr.cancel_run(&run.id, "abort").unwrap();
+    crate::workflow::cancel_run(&conn, &run.id, "abort").unwrap();
 
-    let updated_run = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    let updated_run = crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(updated_run.status, WorkflowRunStatus::Cancelled);
 
-    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    let steps = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
     assert_eq!(steps[0].status, WorkflowStepStatus::Failed);
 
     let agent_run: String = conn
@@ -1264,10 +1571,11 @@ fn test_cancel_run_running_with_active_steps() {
 #[test]
 fn test_cancel_run_waiting_status() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
 
     // Advance run to Waiting (e.g. at a gate)
-    mgr.set_waiting_blocked_on(
+    crate::workflow::set_waiting_blocked_on(
+        &conn,
         &run.id,
         &BlockedOn::HumanApproval {
             gate_name: "human-gate".to_string(),
@@ -1278,33 +1586,34 @@ fn test_cancel_run_waiting_status() {
     .unwrap();
 
     // Insert a Waiting step (no child run)
-    let step_id = mgr
-        .insert_step(&run.id, "human-gate", "gate", false, 0, 0)
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "human-gate", "gate", false, 0, 0).unwrap();
+    set_step_status(&conn, &step_id, WorkflowStepStatus::Waiting);
+
+    crate::workflow::cancel_run(&conn, &run.id, "timed out").unwrap();
+
+    let updated = crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
         .unwrap();
-    set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
-
-    mgr.cancel_run(&run.id, "timed out").unwrap();
-
-    let updated = mgr.get_workflow_run(&run.id).unwrap().unwrap();
     assert_eq!(updated.status, WorkflowRunStatus::Cancelled);
 
-    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    let steps = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
     assert_eq!(steps[0].status, WorkflowStepStatus::Failed);
 }
 
 #[test]
 fn test_cancel_run_skips_terminal_steps() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
 
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
+    crate::workflow::update_workflow_status(&conn, &run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     // A completed step — must not be touched
-    let done_step = mgr
-        .insert_step(&run.id, "already-done", "actor", false, 0, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let done_step =
+        crate::workflow::insert_step(&conn, &run.id, "already-done", "actor", false, 0, 0).unwrap();
+    crate::workflow::update_step_status(
+        &conn,
         &done_step,
         WorkflowStepStatus::Completed,
         None,
@@ -1316,14 +1625,13 @@ fn test_cancel_run_skips_terminal_steps() {
     .unwrap();
 
     // An active step — must be cancelled
-    let active_step = mgr
-        .insert_step(&run.id, "in-progress", "actor", false, 1, 0)
-        .unwrap();
-    set_step_status(&mgr, &active_step, WorkflowStepStatus::Running);
+    let active_step =
+        crate::workflow::insert_step(&conn, &run.id, "in-progress", "actor", false, 1, 0).unwrap();
+    set_step_status(&conn, &active_step, WorkflowStepStatus::Running);
 
-    mgr.cancel_run(&run.id, "stop").unwrap();
+    crate::workflow::cancel_run(&conn, &run.id, "stop").unwrap();
 
-    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    let steps = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
     let done = steps.iter().find(|s| s.id == done_step).unwrap();
     let active = steps.iter().find(|s| s.id == active_step).unwrap();
 
@@ -1342,12 +1650,18 @@ fn test_cancel_run_skips_terminal_steps() {
 #[test]
 fn test_cancel_run_already_terminal_returns_error() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
 
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None, None)
-        .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run.id,
+        WorkflowRunStatus::Completed,
+        None,
+        None,
+    )
+    .unwrap();
 
-    let err = mgr.cancel_run(&run.id, "too late").unwrap_err();
+    let err = crate::workflow::cancel_run(&conn, &run.id, "too late").unwrap_err();
     assert!(
         err.to_string().contains("terminal state"),
         "expected terminal state error, got: {err}"
@@ -1357,9 +1671,8 @@ fn test_cancel_run_already_terminal_returns_error() {
 #[test]
 fn test_cancel_run_not_found_returns_error() {
     let conn = setup_db();
-    let mgr = WorkflowManager::new(&conn);
 
-    let err = mgr.cancel_run("nonexistent-id", "reason").unwrap_err();
+    let err = crate::workflow::cancel_run(&conn, "nonexistent-id", "reason").unwrap_err();
     assert!(
         err.to_string().contains("not found"),
         "expected not-found error, got: {err}"
@@ -1371,9 +1684,7 @@ fn test_find_resumable_child_run_returns_failed() {
     let conn = setup_db();
     insert_workflow_run(&conn, "parent1", "parent-wf", "failed", None);
     insert_workflow_run(&conn, "child1", "child-wf", "failed", Some("parent1"));
-
-    let mgr = WorkflowManager::new(&conn);
-    let result = mgr.find_resumable_child_run("parent1", "child-wf").unwrap();
+    let result = crate::workflow::find_resumable_child_run(&conn, "parent1", "child-wf").unwrap();
     assert!(result.is_some(), "failed child run should be found");
     assert_eq!(result.unwrap().id, "child1");
 }
@@ -1383,9 +1694,7 @@ fn test_find_resumable_child_run_ignores_completed() {
     let conn = setup_db();
     insert_workflow_run(&conn, "parent1", "parent-wf", "failed", None);
     insert_workflow_run(&conn, "child1", "child-wf", "completed", Some("parent1"));
-
-    let mgr = WorkflowManager::new(&conn);
-    let result = mgr.find_resumable_child_run("parent1", "child-wf").unwrap();
+    let result = crate::workflow::find_resumable_child_run(&conn, "parent1", "child-wf").unwrap();
     assert!(result.is_none(), "completed child run must not be returned");
 }
 
@@ -1394,9 +1703,7 @@ fn test_find_resumable_child_run_ignores_running() {
     let conn = setup_db();
     insert_workflow_run(&conn, "parent1", "parent-wf", "running", None);
     insert_workflow_run(&conn, "child1", "child-wf", "running", Some("parent1"));
-
-    let mgr = WorkflowManager::new(&conn);
-    let result = mgr.find_resumable_child_run("parent1", "child-wf").unwrap();
+    let result = crate::workflow::find_resumable_child_run(&conn, "parent1", "child-wf").unwrap();
     assert!(result.is_none(), "running child run must not be returned");
 }
 
@@ -1405,9 +1712,7 @@ fn test_find_resumable_child_run_ignores_cancelled() {
     let conn = setup_db();
     insert_workflow_run(&conn, "parent1", "parent-wf", "failed", None);
     insert_workflow_run(&conn, "child1", "child-wf", "cancelled", Some("parent1"));
-
-    let mgr = WorkflowManager::new(&conn);
-    let result = mgr.find_resumable_child_run("parent1", "child-wf").unwrap();
+    let result = crate::workflow::find_resumable_child_run(&conn, "parent1", "child-wf").unwrap();
     assert!(result.is_none(), "cancelled child run must not be returned");
 }
 
@@ -1438,9 +1743,7 @@ fn test_find_resumable_child_run_picks_most_recent() {
         named_params! { ":parent_run_id": p2.id },
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let result = mgr.find_resumable_child_run("parent1", "child-wf").unwrap();
+    let result = crate::workflow::find_resumable_child_run(&conn, "parent1", "child-wf").unwrap();
     assert!(result.is_some());
     assert_eq!(
         result.unwrap().id,
@@ -1454,9 +1757,7 @@ fn test_reap_orphaned_workflow_runs_dead_parent() {
     let conn = setup_db();
     let run_id = "run-dead-parent";
     let step_id = insert_waiting_run_with_gate(&conn, run_id, "failed", Some("86400s"), None);
-
-    let mgr = WorkflowManager::new(&conn);
-    let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
+    let reaped = crate::workflow::reap_orphaned_workflow_runs(&conn).unwrap();
     assert_eq!(reaped, 1);
 
     // Run should be cancelled.
@@ -1478,9 +1779,7 @@ fn test_reap_orphaned_workflow_runs_gate_timeout_elapsed() {
         Some("1s"),
         Some("2020-01-01T00:00:00Z"), // well in the past
     );
-
-    let mgr = WorkflowManager::new(&conn);
-    let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
+    let reaped = crate::workflow::reap_orphaned_workflow_runs(&conn).unwrap();
     assert_eq!(reaped, 1);
 
     assert_eq!(get_run_status(&conn, run_id), "cancelled");
@@ -1499,9 +1798,7 @@ fn test_reap_orphaned_workflow_runs_skips_active_parent() {
         Some("999999999s"),
         Some("2099-01-01T00:00:00Z"),
     );
-
-    let mgr = WorkflowManager::new(&conn);
-    let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
+    let reaped = crate::workflow::reap_orphaned_workflow_runs(&conn).unwrap();
     assert_eq!(reaped, 0);
 
     assert_eq!(
@@ -1518,9 +1815,7 @@ fn test_reap_orphaned_workflow_runs_skips_terminal() {
     insert_workflow_run(&conn, "run-completed", "test-wf", "completed", None);
     // Insert a cancelled run — must not be touched.
     insert_workflow_run(&conn, "run-cancelled", "test-wf", "cancelled", None);
-
-    let mgr = WorkflowManager::new(&conn);
-    let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
+    let reaped = crate::workflow::reap_orphaned_workflow_runs(&conn).unwrap();
     assert_eq!(reaped, 0);
 }
 
@@ -1558,9 +1853,7 @@ fn test_reap_orphaned_workflow_runs_purged_parent() {
     .unwrap();
 
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
+    let reaped = crate::workflow::reap_orphaned_workflow_runs(&conn).unwrap();
     assert_eq!(
         reaped, 1,
         "purged parent should cause the workflow run to be reaped"
@@ -1585,9 +1878,7 @@ fn test_reap_orphaned_workflow_runs_multiple_dead_parents() {
         Some("999999999s"),
         Some("2099-01-01T00:00:00Z"),
     );
-
-    let mgr = WorkflowManager::new(&conn);
-    let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
+    let reaped = crate::workflow::reap_orphaned_workflow_runs(&conn).unwrap();
     assert_eq!(reaped, 3, "exactly the 3 dead-parent runs should be reaped");
 
     for dead_id in &["run-dead-1", "run-dead-2", "run-dead-3"] {
@@ -1635,10 +1926,16 @@ fn insert_running_script_step_with_pid(
 fn make_workflow_run_id(conn: &Connection) -> String {
     let agent_mgr = AgentManager::new(conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let mgr = WorkflowManager::new(conn);
-    let run = mgr
-        .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        conn,
+        "test-wf",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
     run.id
 }
 
@@ -1663,9 +1960,7 @@ fn test_reap_orphaned_script_steps_dead_pid() {
         Some(dead_pid as i64),
         None,
     );
-
-    let mgr = WorkflowManager::new(&conn);
-    let reaped = mgr.reap_orphaned_script_steps().unwrap();
+    let reaped = crate::workflow::reap_orphaned_script_steps(&conn).unwrap();
     assert_eq!(reaped, 1);
 
     assert_eq!(get_step_status(&conn, &step_id), "failed");
@@ -1689,9 +1984,7 @@ fn test_reap_orphaned_script_steps_no_pid() {
     let conn = setup_db();
     let run_id = make_workflow_run_id(&conn);
     insert_running_script_step_with_pid(&conn, &run_id, "script-step", None, None);
-
-    let mgr = WorkflowManager::new(&conn);
-    let reaped = mgr.reap_orphaned_script_steps().unwrap();
+    let reaped = crate::workflow::reap_orphaned_script_steps(&conn).unwrap();
     assert_eq!(reaped, 0);
 }
 
@@ -1710,9 +2003,7 @@ fn test_reap_orphaned_script_steps_skips_completed() {
         named_params! { ":step_id": step_id, ":run_id": run_id },
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let reaped = mgr.reap_orphaned_script_steps().unwrap();
+    let reaped = crate::workflow::reap_orphaned_script_steps(&conn).unwrap();
     assert_eq!(reaped, 0);
 
     assert_eq!(get_step_status(&conn, &step_id), "completed");
@@ -1736,9 +2027,7 @@ fn test_reap_orphaned_script_steps_skips_agent_step() {
         named_params! { ":step_id": step_id, ":run_id": run_id, ":child_run_id": child_run.id },
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let reaped = mgr.reap_orphaned_script_steps().unwrap();
+    let reaped = crate::workflow::reap_orphaned_script_steps(&conn).unwrap();
     assert_eq!(reaped, 0);
 }
 
@@ -1778,9 +2067,7 @@ fn test_reap_orphaned_script_steps_multiple() {
         Some(live_pid as i64),
         live_started_at.as_deref(),
     );
-
-    let mgr = WorkflowManager::new(&conn);
-    let reaped = mgr.reap_orphaned_script_steps().unwrap();
+    let reaped = crate::workflow::reap_orphaned_script_steps(&conn).unwrap();
     assert_eq!(reaped, 2, "only the 2 dead-PID steps should be reaped");
 
     for dead_step in &[s1, s2] {
@@ -1802,14 +2089,14 @@ fn test_reap_orphaned_script_steps_multiple() {
 fn test_list_workflow_runs_paginated_limit_and_offset() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let mgr = WorkflowManager::new(&conn);
 
     // Create 5 runs for worktree w1
     for i in 0..5 {
         let p = agent_mgr
             .create_run(Some("w1"), &format!("wf-paginated-{i}"), None)
             .unwrap();
-        mgr.create_workflow_run(
+        crate::workflow::create_workflow_run(
+            &conn,
             &format!("paginated-flow-{i}"),
             Some("w1"),
             &p.id,
@@ -1821,15 +2108,15 @@ fn test_list_workflow_runs_paginated_limit_and_offset() {
     }
 
     // First page: limit=2, offset=0
-    let page1 = mgr.list_workflow_runs_paginated("w1", 2, 0).unwrap();
+    let page1 = crate::workflow::list_workflow_runs_paginated(&conn, "w1", 2, 0).unwrap();
     assert_eq!(page1.len(), 2);
 
     // Second page: limit=2, offset=2
-    let page2 = mgr.list_workflow_runs_paginated("w1", 2, 2).unwrap();
+    let page2 = crate::workflow::list_workflow_runs_paginated(&conn, "w1", 2, 2).unwrap();
     assert_eq!(page2.len(), 2);
 
     // Third page: limit=2, offset=4 — only 1 remaining
-    let page3 = mgr.list_workflow_runs_paginated("w1", 2, 4).unwrap();
+    let page3 = crate::workflow::list_workflow_runs_paginated(&conn, "w1", 2, 4).unwrap();
     assert_eq!(page3.len(), 1);
 
     // Pages must not overlap
@@ -1841,7 +2128,7 @@ fn test_list_workflow_runs_paginated_limit_and_offset() {
     );
 
     // All 5 runs returned when limit exceeds count
-    let all = mgr.list_workflow_runs_paginated("w1", 100, 0).unwrap();
+    let all = crate::workflow::list_workflow_runs_paginated(&conn, "w1", 100, 0).unwrap();
     assert_eq!(all.len(), 5);
 }
 
@@ -1856,20 +2143,35 @@ fn test_list_workflow_runs_paginated_filters_by_worktree() {
     .unwrap();
 
     let agent_mgr = AgentManager::new(&conn);
-    let mgr = WorkflowManager::new(&conn);
 
     let p1 = agent_mgr.create_run(Some("w1"), "wf-w1", None).unwrap();
     let p2 = agent_mgr.create_run(Some("w2"), "wf-w2", None).unwrap();
-    mgr.create_workflow_run("run-w1", Some("w1"), &p1.id, false, "manual", None)
-        .unwrap();
-    mgr.create_workflow_run("run-w2", Some("w2"), &p2.id, false, "manual", None)
-        .unwrap();
+    crate::workflow::create_workflow_run(
+        &conn,
+        "run-w1",
+        Some("w1"),
+        &p1.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    crate::workflow::create_workflow_run(
+        &conn,
+        "run-w2",
+        Some("w2"),
+        &p2.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
-    let w1_runs = mgr.list_workflow_runs_paginated("w1", 100, 0).unwrap();
+    let w1_runs = crate::workflow::list_workflow_runs_paginated(&conn, "w1", 100, 0).unwrap();
     assert_eq!(w1_runs.len(), 1);
     assert_eq!(w1_runs[0].workflow_name, "run-w1");
 
-    let w2_runs = mgr.list_workflow_runs_paginated("w2", 100, 0).unwrap();
+    let w2_runs = crate::workflow::list_workflow_runs_paginated(&conn, "w2", 100, 0).unwrap();
     assert_eq!(w2_runs.len(), 1);
     assert_eq!(w2_runs[0].workflow_name, "run-w2");
 }
@@ -1878,14 +2180,14 @@ fn test_list_workflow_runs_paginated_filters_by_worktree() {
 fn test_list_workflow_runs_by_repo_id_offset_pagination() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
-    let mgr = WorkflowManager::new(&conn);
 
     // Create 4 runs for repo r1 (all on active worktree w1)
     for i in 0..4 {
         let p = agent_mgr
             .create_run(Some("w1"), &format!("wf-repo-{i}"), None)
             .unwrap();
-        mgr.create_workflow_run_with_targets(
+        crate::workflow::create_workflow_run_with_targets(
+            &conn,
             &format!("repo-flow-{i}"),
             Some("w1"),
             None,
@@ -1901,11 +2203,11 @@ fn test_list_workflow_runs_by_repo_id_offset_pagination() {
     }
 
     // First page
-    let page1 = mgr.list_workflow_runs_by_repo_id("r1", 2, 0).unwrap();
+    let page1 = crate::workflow::list_workflow_runs_by_repo_id(&conn, "r1", 2, 0).unwrap();
     assert_eq!(page1.len(), 2);
 
     // Second page
-    let page2 = mgr.list_workflow_runs_by_repo_id("r1", 2, 2).unwrap();
+    let page2 = crate::workflow::list_workflow_runs_by_repo_id(&conn, "r1", 2, 2).unwrap();
     assert_eq!(page2.len(), 2);
 
     // Pages must not overlap
@@ -1917,7 +2219,7 @@ fn test_list_workflow_runs_by_repo_id_offset_pagination() {
     );
 
     // Beyond end returns empty
-    let beyond = mgr.list_workflow_runs_by_repo_id("r1", 2, 10).unwrap();
+    let beyond = crate::workflow::list_workflow_runs_by_repo_id(&conn, "r1", 2, 10).unwrap();
     assert!(beyond.is_empty());
 }
 
@@ -1926,9 +2228,7 @@ fn test_list_root_workflow_runs_excludes_children() {
     let conn = setup_db();
     insert_workflow_run(&conn, "root1", "root-wf", "running", None);
     insert_workflow_run(&conn, "child1", "child-wf", "running", Some("root1"));
-
-    let mgr = WorkflowManager::new(&conn);
-    let roots = mgr.list_root_workflow_runs(100).unwrap();
+    let roots = crate::workflow::list_root_workflow_runs(&conn, 100).unwrap();
     let ids: Vec<&str> = roots.iter().map(|r| r.id.as_str()).collect();
     assert!(ids.contains(&"root1"), "root run should appear");
     assert!(!ids.contains(&"child1"), "child run must not appear");
@@ -1937,8 +2237,7 @@ fn test_list_root_workflow_runs_excludes_children() {
 #[test]
 fn test_list_root_workflow_runs_empty() {
     let conn = setup_db();
-    let mgr = WorkflowManager::new(&conn);
-    let roots = mgr.list_root_workflow_runs(100).unwrap();
+    let roots = crate::workflow::list_root_workflow_runs(&conn, 100).unwrap();
     assert!(roots.is_empty());
 }
 
@@ -1946,9 +2245,7 @@ fn test_list_root_workflow_runs_empty() {
 fn test_get_active_chain_no_children() {
     let conn = setup_db();
     insert_workflow_run(&conn, "root1", "root-wf", "running", None);
-
-    let mgr = WorkflowManager::new(&conn);
-    let chain = mgr.get_active_chain_for_run("root1").unwrap();
+    let chain = crate::workflow::get_active_chain_for_run(&conn, "root1").unwrap();
     assert!(chain.is_empty(), "no children → empty chain");
 }
 
@@ -1957,9 +2254,7 @@ fn test_get_active_chain_single_child() {
     let conn = setup_db();
     insert_workflow_run(&conn, "root1", "root-wf", "running", None);
     insert_workflow_run(&conn, "child1", "child-wf", "running", Some("root1"));
-
-    let mgr = WorkflowManager::new(&conn);
-    let chain = mgr.get_active_chain_for_run("root1").unwrap();
+    let chain = crate::workflow::get_active_chain_for_run(&conn, "root1").unwrap();
     assert_eq!(chain.len(), 1);
     assert_eq!(chain[0].0, "child1");
     assert_eq!(chain[0].1, "child-wf");
@@ -1971,9 +2266,7 @@ fn test_get_active_chain_two_deep() {
     insert_workflow_run(&conn, "root1", "root-wf", "running", None);
     insert_workflow_run(&conn, "child1", "child-wf", "running", Some("root1"));
     insert_workflow_run(&conn, "grand1", "grand-wf", "running", Some("child1"));
-
-    let mgr = WorkflowManager::new(&conn);
-    let chain = mgr.get_active_chain_for_run("root1").unwrap();
+    let chain = crate::workflow::get_active_chain_for_run(&conn, "root1").unwrap();
     assert_eq!(chain.len(), 2);
     assert_eq!(chain[0], ("child1".to_string(), "child-wf".to_string()));
     assert_eq!(chain[1], ("grand1".to_string(), "grand-wf".to_string()));
@@ -1985,9 +2278,7 @@ fn test_get_active_chain_ignores_terminal_children() {
     insert_workflow_run(&conn, "root1", "root-wf", "running", None);
     // completed child — must not appear in active chain
     insert_workflow_run(&conn, "child1", "child-wf", "completed", Some("root1"));
-
-    let mgr = WorkflowManager::new(&conn);
-    let chain = mgr.get_active_chain_for_run("root1").unwrap();
+    let chain = crate::workflow::get_active_chain_for_run(&conn, "root1").unwrap();
     assert!(chain.is_empty(), "completed child must not appear in chain");
 }
 
@@ -1996,9 +2287,7 @@ fn test_get_step_summaries_no_children() {
     let conn = setup_db();
     insert_workflow_run(&conn, "root1", "root-wf", "running", None);
     insert_running_step(&conn, "step1", "root1", "my-step");
-
-    let mgr = WorkflowManager::new(&conn);
-    let summaries = mgr.get_step_summaries_for_runs(&["root1"]).unwrap();
+    let summaries = crate::workflow::get_step_summaries_for_runs(&conn, &["root1"]).unwrap();
     let s = summaries.get("root1").expect("summary should exist");
     assert_eq!(s.step_name, "my-step");
     assert_eq!(s.iteration, 1);
@@ -2013,9 +2302,7 @@ fn test_get_step_summaries_with_child_chain() {
     insert_workflow_run(&conn, "child1", "child-wf", "running", Some("root1"));
     // running step is on the child (leaf)
     insert_running_step(&conn, "step1", "child1", "leaf-step");
-
-    let mgr = WorkflowManager::new(&conn);
-    let summaries = mgr.get_step_summaries_for_runs(&["root1"]).unwrap();
+    let summaries = crate::workflow::get_step_summaries_for_runs(&conn, &["root1"]).unwrap();
     let s = summaries.get("root1").expect("summary should exist");
     assert_eq!(s.step_name, "leaf-step");
     // workflow_chain is [root_name] because child is the leaf (excluded)
@@ -2029,9 +2316,7 @@ fn test_get_step_summaries_two_deep_chain() {
     insert_workflow_run(&conn, "child1", "child-wf", "running", Some("root1"));
     insert_workflow_run(&conn, "grand1", "grand-wf", "running", Some("child1"));
     insert_running_step(&conn, "step1", "grand1", "grand-step");
-
-    let mgr = WorkflowManager::new(&conn);
-    let summaries = mgr.get_step_summaries_for_runs(&["root1"]).unwrap();
+    let summaries = crate::workflow::get_step_summaries_for_runs(&conn, &["root1"]).unwrap();
     let s = summaries.get("root1").expect("summary should exist");
     assert_eq!(s.step_name, "grand-step");
     // root + first child (grand is leaf, excluded)
@@ -2041,8 +2326,7 @@ fn test_get_step_summaries_two_deep_chain() {
 #[test]
 fn test_get_step_summaries_empty_run_ids() {
     let conn = setup_db();
-    let mgr = WorkflowManager::new(&conn);
-    let summaries = mgr.get_step_summaries_for_runs(&[]).unwrap();
+    let summaries = crate::workflow::get_step_summaries_for_runs(&conn, &[]).unwrap();
     assert!(summaries.is_empty());
 }
 
@@ -2051,9 +2335,7 @@ fn test_get_step_summaries_no_running_step() {
     let conn = setup_db();
     insert_workflow_run(&conn, "root1", "root-wf", "running", None);
     // no steps inserted
-
-    let mgr = WorkflowManager::new(&conn);
-    let summaries = mgr.get_step_summaries_for_runs(&["root1"]).unwrap();
+    let summaries = crate::workflow::get_step_summaries_for_runs(&conn, &["root1"]).unwrap();
     assert!(
         !summaries.contains_key("root1"),
         "no running step → no entry in map"
@@ -2064,10 +2346,7 @@ fn test_get_step_summaries_no_running_step() {
 fn test_resolve_run_context_run_not_found() {
     let conn = setup_db();
     let config = crate::config::Config::default();
-    let mgr = WorkflowManager::new(&conn);
-    let err = mgr
-        .resolve_run_context("nonexistent-id", &config)
-        .unwrap_err();
+    let err = crate::workflow::resolve_run_context(&conn, "nonexistent-id", &config).unwrap_err();
     assert!(
         err.to_string().contains("not found"),
         "expected 'not found' error, got: {err}"
@@ -2093,8 +2372,7 @@ fn test_resolve_run_context_worktree_path_exists() {
     .unwrap();
 
     let run_id = insert_workflow_run_with_targets(&conn, Some("wt-exists"), None);
-    let mgr = WorkflowManager::new(&conn);
-    let ctx = mgr.resolve_run_context(&run_id, &config).unwrap();
+    let ctx = crate::workflow::resolve_run_context(&conn, &run_id, &config).unwrap();
 
     assert_eq!(ctx.working_dir, wt_path);
     assert_eq!(ctx.repo_path, "/tmp/repo"); // repo r1 from setup_db
@@ -2112,8 +2390,7 @@ fn test_resolve_run_context_worktree_path_missing() {
     // setup_db inserts worktree w1 at /tmp/ws/feat-test which does not exist.
     // Verify the guard rejects it.
     let run_id = insert_workflow_run_with_targets(&conn, Some("w1"), None);
-    let mgr = WorkflowManager::new(&conn);
-    let err = mgr.resolve_run_context(&run_id, &config).unwrap_err();
+    let err = crate::workflow::resolve_run_context(&conn, &run_id, &config).unwrap_err();
     assert!(
         err.to_string().contains("no longer exists on disk"),
         "expected disk-existence error, got: {err}"
@@ -2127,8 +2404,7 @@ fn test_resolve_run_context_repo_only() {
 
     // Run with only repo_id (no worktree).
     let run_id = insert_workflow_run_with_targets(&conn, None, Some("r1"));
-    let mgr = WorkflowManager::new(&conn);
-    let ctx = mgr.resolve_run_context(&run_id, &config).unwrap();
+    let ctx = crate::workflow::resolve_run_context(&conn, &run_id, &config).unwrap();
 
     assert_eq!(ctx.working_dir, "/tmp/repo");
     assert_eq!(ctx.repo_path, "/tmp/repo");
@@ -2143,8 +2419,7 @@ fn test_resolve_run_context_no_worktree_no_repo() {
 
     // Run with neither worktree nor repo.
     let run_id = insert_workflow_run_with_targets(&conn, None, None);
-    let mgr = WorkflowManager::new(&conn);
-    let err = mgr.resolve_run_context(&run_id, &config).unwrap_err();
+    let err = crate::workflow::resolve_run_context(&conn, &run_id, &config).unwrap_err();
     assert!(
         err.to_string()
             .contains("has no associated worktree or repo"),
@@ -2155,10 +2430,10 @@ fn test_resolve_run_context_no_worktree_no_repo() {
 #[test]
 fn test_set_waiting_blocked_on_atomically_sets_status_and_blocked_on() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
 
     // Start from Running
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
+    crate::workflow::update_workflow_status(&conn, &run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     let blocked = BlockedOn::HumanApproval {
@@ -2167,9 +2442,11 @@ fn test_set_waiting_blocked_on_atomically_sets_status_and_blocked_on() {
         options: vec![],
     };
 
-    mgr.set_waiting_blocked_on(&run.id, &blocked).unwrap();
+    crate::workflow::set_waiting_blocked_on(&conn, &run.id, &blocked).unwrap();
 
-    let updated = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    let updated = crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(updated.status, WorkflowRunStatus::Waiting);
     assert!(updated.blocked_on.is_some());
     match updated.blocked_on.unwrap() {
@@ -2186,23 +2463,27 @@ fn test_set_waiting_blocked_on_atomically_sets_status_and_blocked_on() {
 #[test]
 fn test_blocked_on_cleared_when_transitioning_away_from_waiting() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
 
     // Set waiting with blocked_on
     let blocked = BlockedOn::PrChecks {
         gate_name: "ci-gate".to_string(),
     };
-    mgr.set_waiting_blocked_on(&run.id, &blocked).unwrap();
+    crate::workflow::set_waiting_blocked_on(&conn, &run.id, &blocked).unwrap();
 
-    let waiting = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    let waiting = crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(waiting.status, WorkflowRunStatus::Waiting);
     assert!(waiting.blocked_on.is_some());
 
     // Transition to Running — blocked_on must be auto-cleared
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
+    crate::workflow::update_workflow_status(&conn, &run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
-    let running = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    let running = crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(running.status, WorkflowRunStatus::Running);
     assert!(
         running.blocked_on.is_none(),
@@ -2213,7 +2494,7 @@ fn test_blocked_on_cleared_when_transitioning_away_from_waiting() {
 #[test]
 fn test_malformed_blocked_on_json_is_silently_dropped() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
 
     // Directly inject malformed JSON into the blocked_on column
     conn.execute(
@@ -2223,7 +2504,9 @@ fn test_malformed_blocked_on_json_is_silently_dropped() {
     .unwrap();
 
     // Reading the run should succeed with blocked_on = None
-    let loaded = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    let loaded = crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .unwrap();
     assert!(
         loaded.blocked_on.is_none(),
         "malformed blocked_on should deserialize as None"
@@ -2233,13 +2516,18 @@ fn test_malformed_blocked_on_json_is_silently_dropped() {
 #[test]
 fn test_update_workflow_status_rejects_waiting() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
 
     // Calling update_workflow_status with Waiting must return an error — callers
     // should use set_waiting_blocked_on() to enforce the blocked_on invariant.
-    let err = mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Waiting, None, None)
-        .unwrap_err();
+    let err = crate::workflow::update_workflow_status(
+        &conn,
+        &run.id,
+        WorkflowRunStatus::Waiting,
+        None,
+        None,
+    )
+    .unwrap_err();
     assert!(
         err.to_string().contains("set_waiting_blocked_on()"),
         "Expected InvalidInput error, got: {err}"
@@ -2383,15 +2671,15 @@ fn test_backfill_migration_leaves_null_when_worktree_deleted() {
 #[test]
 fn test_set_step_output_file() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
-    let step_id = mgr
-        .insert_step(&run.id, "script-step", "actor", false, 0, 0)
-        .unwrap();
+    let (_parent, run) = make_workflow_run(&conn);
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "script-step", "actor", false, 0, 0).unwrap();
 
-    mgr.set_step_output_file(&step_id, "/tmp/output.txt")
-        .unwrap();
+    crate::workflow::set_step_output_file(&conn, &step_id, "/tmp/output.txt").unwrap();
 
-    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    let step = crate::workflow::get_step_by_id(&conn, &step_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(step.output_file.as_deref(), Some("/tmp/output.txt"));
 }
 
@@ -2402,12 +2690,12 @@ fn test_set_step_output_file() {
 #[test]
 fn test_set_step_gate_info_with_prompt() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
-    let step_id = mgr
-        .insert_step(&run.id, "gate-step", "gate", false, 0, 0)
-        .unwrap();
+    let (_parent, run) = make_workflow_run(&conn);
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "gate-step", "gate", false, 0, 0).unwrap();
 
-    mgr.set_step_gate_info(
+    crate::workflow::set_step_gate_info(
+        &conn,
         &step_id,
         GateType::PrApproval,
         Some("Need 2 approvals"),
@@ -2415,7 +2703,9 @@ fn test_set_step_gate_info_with_prompt() {
     )
     .unwrap();
 
-    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    let step = crate::workflow::get_step_by_id(&conn, &step_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(step.gate_type, Some(GateType::PrApproval));
     assert_eq!(step.gate_prompt.as_deref(), Some("Need 2 approvals"));
     assert_eq!(step.gate_timeout.as_deref(), Some("24h"));
@@ -2424,15 +2714,15 @@ fn test_set_step_gate_info_with_prompt() {
 #[test]
 fn test_set_step_gate_info_no_prompt() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
-    let step_id = mgr
-        .insert_step(&run.id, "gate-step", "gate", false, 0, 0)
-        .unwrap();
+    let (_parent, run) = make_workflow_run(&conn);
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "gate-step", "gate", false, 0, 0).unwrap();
 
-    mgr.set_step_gate_info(&step_id, GateType::PrChecks, None, "1h")
-        .unwrap();
+    crate::workflow::set_step_gate_info(&conn, &step_id, GateType::PrChecks, None, "1h").unwrap();
 
-    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    let step = crate::workflow::get_step_by_id(&conn, &step_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(step.gate_type, Some(GateType::PrChecks));
     assert!(step.gate_prompt.is_none());
     assert_eq!(step.gate_timeout.as_deref(), Some("1h"));
@@ -2445,14 +2735,16 @@ fn test_set_step_gate_info_no_prompt() {
 #[test]
 fn test_set_step_parallel_group() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
-    let step_id = mgr
-        .insert_step(&run.id, "parallel-step", "actor", false, 0, 0)
+    let (_parent, run) = make_workflow_run(&conn);
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "parallel-step", "actor", false, 0, 0)
+            .unwrap();
+
+    crate::workflow::set_step_parallel_group(&conn, &step_id, "group-abc").unwrap();
+
+    let step = crate::workflow::get_step_by_id(&conn, &step_id)
+        .unwrap()
         .unwrap();
-
-    mgr.set_step_parallel_group(&step_id, "group-abc").unwrap();
-
-    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
     assert_eq!(step.parallel_group_id.as_deref(), Some("group-abc"));
 }
 
@@ -2463,31 +2755,34 @@ fn test_set_step_parallel_group() {
 #[test]
 fn test_get_steps_for_runs_empty_ids() {
     let conn = setup_db();
-    let mgr = WorkflowManager::new(&conn);
-    let result = mgr.get_steps_for_runs(&[]).unwrap();
+    let result = crate::workflow::get_steps_for_runs(&conn, &[]).unwrap();
     assert!(result.is_empty());
 }
 
 #[test]
 fn test_get_steps_for_runs_multiple_runs() {
     let conn = setup_db();
-    let (mgr, _p1, run1) = make_workflow_run(&conn);
+    let (_p1, run1) = make_workflow_run(&conn);
 
     let agent_mgr = AgentManager::new(&conn);
     let p2 = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let run2 = mgr
-        .create_workflow_run("wf2", Some("w1"), &p2.id, false, "manual", None)
-        .unwrap();
+    let run2 = crate::workflow::create_workflow_run(
+        &conn,
+        "wf2",
+        Some("w1"),
+        &p2.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
     // Add steps to each run
-    mgr.insert_step(&run1.id, "s1", "actor", false, 0, 0)
-        .unwrap();
-    mgr.insert_step(&run1.id, "s2", "actor", false, 1, 0)
-        .unwrap();
-    mgr.insert_step(&run2.id, "s3", "actor", false, 0, 0)
-        .unwrap();
+    crate::workflow::insert_step(&conn, &run1.id, "s1", "actor", false, 0, 0).unwrap();
+    crate::workflow::insert_step(&conn, &run1.id, "s2", "actor", false, 1, 0).unwrap();
+    crate::workflow::insert_step(&conn, &run2.id, "s3", "actor", false, 0, 0).unwrap();
 
-    let result = mgr.get_steps_for_runs(&[&run1.id, &run2.id]).unwrap();
+    let result = crate::workflow::get_steps_for_runs(&conn, &[&run1.id, &run2.id]).unwrap();
     assert_eq!(result.get(&run1.id).unwrap().len(), 2);
     assert_eq!(result.get(&run2.id).unwrap().len(), 1);
 }
@@ -2499,29 +2794,25 @@ fn test_get_steps_for_runs_multiple_runs() {
 #[test]
 fn test_get_active_steps_for_runs_filters_by_status() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
 
-    let s1 = mgr
-        .insert_step(&run.id, "completed-step", "actor", false, 0, 0)
+    let s1 = crate::workflow::insert_step(&conn, &run.id, "completed-step", "actor", false, 0, 0)
         .unwrap();
-    set_step_status(&mgr, &s1, WorkflowStepStatus::Completed);
+    set_step_status(&conn, &s1, WorkflowStepStatus::Completed);
 
-    let s2 = mgr
-        .insert_step(&run.id, "running-step", "actor", false, 1, 0)
-        .unwrap();
-    set_step_status(&mgr, &s2, WorkflowStepStatus::Running);
+    let s2 =
+        crate::workflow::insert_step(&conn, &run.id, "running-step", "actor", false, 1, 0).unwrap();
+    set_step_status(&conn, &s2, WorkflowStepStatus::Running);
 
-    let s3 = mgr
-        .insert_step(&run.id, "waiting-step", "gate", false, 2, 0)
-        .unwrap();
-    set_step_status(&mgr, &s3, WorkflowStepStatus::Waiting);
+    let s3 =
+        crate::workflow::insert_step(&conn, &run.id, "waiting-step", "gate", false, 2, 0).unwrap();
+    set_step_status(&conn, &s3, WorkflowStepStatus::Waiting);
 
-    let s4 = mgr
-        .insert_step(&run.id, "failed-step", "actor", false, 3, 0)
-        .unwrap();
-    set_step_status(&mgr, &s4, WorkflowStepStatus::Failed);
+    let s4 =
+        crate::workflow::insert_step(&conn, &run.id, "failed-step", "actor", false, 3, 0).unwrap();
+    set_step_status(&conn, &s4, WorkflowStepStatus::Failed);
 
-    let result = mgr.get_active_steps_for_runs(&[&run.id]).unwrap();
+    let result = crate::workflow::get_active_steps_for_runs(&conn, &[&run.id]).unwrap();
     let steps = result.get(&run.id).unwrap();
     // Only running and waiting should be returned
     assert_eq!(steps.len(), 2);
@@ -2532,8 +2823,7 @@ fn test_get_active_steps_for_runs_filters_by_status() {
 #[test]
 fn test_get_active_steps_for_runs_empty_ids() {
     let conn = setup_db();
-    let mgr = WorkflowManager::new(&conn);
-    let result = mgr.get_active_steps_for_runs(&[]).unwrap();
+    let result = crate::workflow::get_active_steps_for_runs(&conn, &[]).unwrap();
     assert!(result.is_empty());
 }
 
@@ -2579,10 +2869,8 @@ fn test_reap_stuck_workflow_runs_detects_stale_run() {
         "completed",
         "2020-01-01T00:00:00Z",
     );
-
-    let mgr = WorkflowManager::new(&conn);
     // threshold_secs = 60: elapsed >> 60 → detected
-    let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();
+    let ids = crate::workflow::detect_stuck_workflow_run_ids(&conn, 60).unwrap();
     assert_eq!(ids.len(), 1, "stale run should be detected");
 }
 
@@ -2606,10 +2894,8 @@ fn test_reap_stuck_workflow_runs_skips_fresh_run() {
         [],
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
     // Very large threshold — a run with recent heartbeat should not be detected.
-    let ids = mgr.detect_stuck_workflow_run_ids(999_999).unwrap();
+    let ids = crate::workflow::detect_stuck_workflow_run_ids(&conn, 999_999).unwrap();
     assert_eq!(ids.len(), 0, "fresh run must not be detected");
 }
 
@@ -2632,10 +2918,8 @@ fn test_detect_stuck_workflow_run_ids_detects_stale_heartbeat() {
         named_params! { ":ts": stale_str },
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
     // threshold_secs = 60: heartbeat 200s ago >> 60 → detected
-    let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();
+    let ids = crate::workflow::detect_stuck_workflow_run_ids(&conn, 60).unwrap();
     assert_eq!(ids.len(), 1, "stale heartbeat run should be detected");
     assert_eq!(ids[0], "stale-heartbeat-run");
 }
@@ -2645,9 +2929,7 @@ fn test_reap_stuck_workflow_runs_skips_pending_step() {
     let conn = setup_db();
     insert_running_root_run(&conn, "pending-run");
     insert_non_terminal_step(&conn, "s1", "pending-run", "pending");
-
-    let mgr = WorkflowManager::new(&conn);
-    let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
+    let ids = crate::workflow::detect_stuck_workflow_run_ids(&conn, 0).unwrap();
     assert_eq!(ids.len(), 0, "run with pending step must not be detected");
 }
 
@@ -2656,9 +2938,7 @@ fn test_reap_stuck_workflow_runs_skips_running_step() {
     let conn = setup_db();
     insert_running_root_run(&conn, "running-step-run");
     insert_non_terminal_step(&conn, "s1", "running-step-run", "running");
-
-    let mgr = WorkflowManager::new(&conn);
-    let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
+    let ids = crate::workflow::detect_stuck_workflow_run_ids(&conn, 0).unwrap();
     assert_eq!(ids.len(), 0, "run with running step must not be detected");
 }
 
@@ -2667,9 +2947,7 @@ fn test_reap_stuck_workflow_runs_skips_waiting_step() {
     let conn = setup_db();
     insert_running_root_run(&conn, "waiting-step-run");
     insert_non_terminal_step(&conn, "s1", "waiting-step-run", "waiting");
-
-    let mgr = WorkflowManager::new(&conn);
-    let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
+    let ids = crate::workflow::detect_stuck_workflow_run_ids(&conn, 0).unwrap();
     assert_eq!(ids.len(), 0, "run with waiting step must not be detected");
 }
 
@@ -2699,11 +2977,9 @@ fn test_reap_stuck_workflow_runs_skips_sub_workflow() {
     )
     .unwrap();
     insert_terminal_step_with_id(&conn, "s1", "sub-run", "completed", "2020-01-01T00:00:00Z");
-
-    let mgr = WorkflowManager::new(&conn);
     // Sub-workflows (parent_workflow_run_id IS NOT NULL) are excluded from
     // stuck detection — only root runs are checked.
-    let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
+    let ids = crate::workflow::detect_stuck_workflow_run_ids(&conn, 0).unwrap();
     assert_eq!(ids.len(), 0, "sub-workflow must not be detected as stuck");
 }
 
@@ -2734,9 +3010,7 @@ fn test_reap_stuck_workflow_runs_skips_non_running_status() {
         "completed",
         "2020-01-01T00:00:00Z",
     );
-
-    let mgr = WorkflowManager::new(&conn);
-    let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
+    let ids = crate::workflow::detect_stuck_workflow_run_ids(&conn, 0).unwrap();
     assert_eq!(ids.len(), 0, "non-running status runs must not be detected");
 }
 
@@ -2747,9 +3021,7 @@ fn test_reap_stuck_workflow_runs_detects_zero_step_runs() {
     // No steps inserted — the executor may have died before creating any steps.
     // detect_stuck_workflow_run_ids now matches reap_heartbeat_stuck_runs behavior:
     // zero-step runs ARE detected as stuck.
-
-    let mgr = WorkflowManager::new(&conn);
-    let ids = mgr.detect_stuck_workflow_run_ids(0).unwrap();
+    let ids = crate::workflow::detect_stuck_workflow_run_ids(&conn, 0).unwrap();
     assert_eq!(
         ids.len(),
         1,
@@ -2767,9 +3039,7 @@ fn test_reap_stuck_workflow_runs_multiple_stuck_runs() {
     insert_terminal_step_with_id(&conn, "s1", "stuck-1", "completed", "2020-01-01T00:00:00Z");
     insert_terminal_step_with_id(&conn, "s2", "stuck-2", "failed", "2020-01-01T00:00:00Z");
     insert_terminal_step_with_id(&conn, "s3", "stuck-3", "completed", "2020-01-01T00:00:00Z");
-
-    let mgr = WorkflowManager::new(&conn);
-    let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();
+    let ids = crate::workflow::detect_stuck_workflow_run_ids(&conn, 60).unwrap();
     assert_eq!(ids.len(), 3, "all 3 stuck runs should be detected");
 }
 
@@ -2826,9 +3096,7 @@ fn test_detect_stale_workflow_runs_finds_old_running_step() {
         "code-review",
         "2020-01-01T00:00:00Z",
     );
-
-    let mgr = WorkflowManager::new(&conn);
-    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    let stale = crate::workflow::detect_stale_workflow_runs(&conn, 60).unwrap();
     assert_eq!(stale.len(), 1);
     assert_eq!(stale[0].run_id, "stale-run");
     assert_eq!(stale[0].workflow_name, "deploy");
@@ -2850,9 +3118,7 @@ fn test_detect_stale_workflow_runs_skips_fresh_step() {
         [],
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    let stale = crate::workflow::detect_stale_workflow_runs(&conn, 60).unwrap();
     assert!(stale.is_empty(), "fresh running step should not be stale");
 }
 
@@ -2862,9 +3128,7 @@ fn test_detect_stale_workflow_runs_skips_completed_step() {
     insert_running_root_run_with_label(&conn, "done-run", "deploy", None);
     // Step is completed, not running — should not be detected.
     insert_terminal_step(&conn, "done-run", WorkflowStepStatus::Completed, 0);
-
-    let mgr = WorkflowManager::new(&conn);
-    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    let stale = crate::workflow::detect_stale_workflow_runs(&conn, 60).unwrap();
     assert!(stale.is_empty(), "completed step should not trigger stale");
 }
 
@@ -2885,9 +3149,7 @@ fn test_detect_stale_workflow_runs_skips_sub_workflows() {
     )
     .unwrap();
     insert_running_step_with_started_at(&conn, "s1", "sub-run", "step-a", "2020-01-01T00:00:00Z");
-
-    let mgr = WorkflowManager::new(&conn);
-    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    let stale = crate::workflow::detect_stale_workflow_runs(&conn, 60).unwrap();
     assert!(
         stale.is_empty(),
         "sub-workflow steps should not trigger stale"
@@ -2899,9 +3161,7 @@ fn test_detect_stale_workflow_runs_disabled_when_zero() {
     let conn = setup_db();
     insert_running_root_run_with_label(&conn, "stale-run", "deploy", None);
     insert_running_step_with_started_at(&conn, "s1", "stale-run", "step-a", "2020-01-01T00:00:00Z");
-
-    let mgr = WorkflowManager::new(&conn);
-    let stale = mgr.detect_stale_workflow_runs(0).unwrap();
+    let stale = crate::workflow::detect_stale_workflow_runs(&conn, 0).unwrap();
     assert!(stale.is_empty(), "threshold 0 should disable detection");
 }
 
@@ -2942,9 +3202,7 @@ fn test_detect_stale_skips_parent_with_running_child() {
         "2020-01-01T00:00:00Z",
     );
     insert_child_workflow_run(&conn, "child-run-1", "parent-run", "running");
-
-    let mgr = WorkflowManager::new(&conn);
-    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    let stale = crate::workflow::detect_stale_workflow_runs(&conn, 60).unwrap();
     assert!(
         stale.is_empty(),
         "parent with a running child should not be detected as stale"
@@ -2963,9 +3221,7 @@ fn test_detect_stale_skips_parent_with_pending_child() {
         "2020-01-01T00:00:00Z",
     );
     insert_child_workflow_run(&conn, "child-run-1", "parent-run", "pending");
-
-    let mgr = WorkflowManager::new(&conn);
-    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    let stale = crate::workflow::detect_stale_workflow_runs(&conn, 60).unwrap();
     assert!(
         stale.is_empty(),
         "parent with a pending child should not be detected as stale"
@@ -2984,9 +3240,7 @@ fn test_detect_stale_skips_parent_with_waiting_child() {
         "2020-01-01T00:00:00Z",
     );
     insert_child_workflow_run(&conn, "child-run-1", "parent-run", "waiting");
-
-    let mgr = WorkflowManager::new(&conn);
-    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    let stale = crate::workflow::detect_stale_workflow_runs(&conn, 60).unwrap();
     assert!(
         stale.is_empty(),
         "parent with a waiting child should not be detected as stale"
@@ -3007,9 +3261,7 @@ fn test_detect_stale_skips_parent_with_mixed_children() {
     );
     insert_child_workflow_run(&conn, "child-run-done", "parent-run", "completed");
     insert_child_workflow_run(&conn, "child-run-active", "parent-run", "running");
-
-    let mgr = WorkflowManager::new(&conn);
-    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    let stale = crate::workflow::detect_stale_workflow_runs(&conn, 60).unwrap();
     assert!(
         stale.is_empty(),
         "parent with one completed and one running child should not be detected as stale"
@@ -3028,9 +3280,7 @@ fn test_detect_stale_includes_parent_when_children_completed() {
         "2020-01-01T00:00:00Z",
     );
     insert_child_workflow_run(&conn, "child-run-1", "parent-run", "completed");
-
-    let mgr = WorkflowManager::new(&conn);
-    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    let stale = crate::workflow::detect_stale_workflow_runs(&conn, 60).unwrap();
     assert_eq!(
         stale.len(),
         1,
@@ -3051,9 +3301,7 @@ fn test_detect_stale_includes_parent_when_children_failed() {
         "2020-01-01T00:00:00Z",
     );
     insert_child_workflow_run(&conn, "child-run-1", "parent-run", "failed");
-
-    let mgr = WorkflowManager::new(&conn);
-    let stale = mgr.detect_stale_workflow_runs(60).unwrap();
+    let stale = crate::workflow::detect_stale_workflow_runs(&conn, 60).unwrap();
     assert_eq!(
         stale.len(),
         1,
@@ -3083,15 +3331,15 @@ fn test_reap_stale_reaps_dead_agent() {
         named_params! { ":child_run_id": child.id },
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let reaped = mgr.reap_stale_workflow_runs(60).unwrap();
+    let reaped = crate::workflow::reap_stale_workflow_runs(&conn, 60).unwrap();
     assert_eq!(reaped.len(), 1);
     assert_eq!(reaped[0].run_id, "stale-run");
     assert_eq!(reaped[0].step_name, "code-review");
 
     // Verify the workflow run is now failed.
-    let run = mgr.get_workflow_run("stale-run").unwrap().unwrap();
+    let run = crate::workflow::get_workflow_run(&conn, "stale-run")
+        .unwrap()
+        .unwrap();
     assert_eq!(run.status, WorkflowRunStatus::Failed);
 
     // Verify the child agent run is now failed.
@@ -3117,13 +3365,13 @@ fn test_reap_stale_skips_live_agent() {
         named_params! { ":child_run_id": child.id, ":live_pid": live_pid },
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let reaped = mgr.reap_stale_workflow_runs(60).unwrap();
+    let reaped = crate::workflow::reap_stale_workflow_runs(&conn, 60).unwrap();
     assert!(reaped.is_empty(), "live agent should not be reaped");
 
     // Verify the workflow run is still running.
-    let run = mgr.get_workflow_run("alive-run").unwrap().unwrap();
+    let run = crate::workflow::get_workflow_run(&conn, "alive-run")
+        .unwrap()
+        .unwrap();
     assert_eq!(run.status, WorkflowRunStatus::Running);
 }
 
@@ -3143,9 +3391,7 @@ fn test_reap_stale_reaps_step_with_no_pid() {
         named_params! { ":child_run_id": child.id },
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let reaped = mgr.reap_stale_workflow_runs(60).unwrap();
+    let reaped = crate::workflow::reap_stale_workflow_runs(&conn, 60).unwrap();
     assert_eq!(
         reaped.len(),
         1,
@@ -3180,9 +3426,7 @@ fn test_detect_stuck_finds_run_with_only_terminal_steps() {
         "completed",
         "2020-01-01T00:00:00Z",
     );
-
-    let mgr = WorkflowManager::new(&conn);
-    let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();
+    let ids = crate::workflow::detect_stuck_workflow_run_ids(&conn, 60).unwrap();
     assert_eq!(ids.len(), 1);
     assert_eq!(ids[0], "stuck-run");
 }
@@ -3209,9 +3453,7 @@ fn test_detect_stuck_skips_run_with_active_steps() {
         [],
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let ids = mgr.detect_stuck_workflow_run_ids(60).unwrap();
+    let ids = crate::workflow::detect_stuck_workflow_run_ids(&conn, 60).unwrap();
     assert!(ids.is_empty(), "run with active steps should not be stuck");
 }
 
@@ -3252,9 +3494,7 @@ fn test_recover_stuck_steps_fixes_step_with_terminal_child() {
         named_params! { ":child_run_id": child.id },
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let recovered = mgr.recover_stuck_steps().unwrap();
+    let recovered = crate::workflow::recover_stuck_steps(&conn).unwrap();
     assert_eq!(recovered, 1, "should recover the stuck step");
 }
 
@@ -3278,9 +3518,7 @@ fn test_reset_failed_steps_clears_subprocess_pid() {
         named_params! { ":step_id": step_id, ":run_id": run_id },
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    mgr.reset_failed_steps(&run_id).unwrap();
+    crate::workflow::reset_failed_steps(&conn, &run_id).unwrap();
 
     let pid: Option<i64> = conn
         .query_row(
@@ -3309,9 +3547,7 @@ fn test_reset_completed_steps_clears_subprocess_pid() {
         named_params! { ":step_id": step_id, ":run_id": run_id },
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    mgr.reset_completed_steps(&run_id).unwrap();
+    crate::workflow::reset_completed_steps(&conn, &run_id).unwrap();
 
     let pid: Option<i64> = conn
         .query_row(
@@ -3340,9 +3576,7 @@ fn test_reset_steps_from_position_clears_subprocess_pid() {
         named_params! { ":step_id": step_id, ":run_id": run_id },
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    mgr.reset_steps_from_position(&run_id, 2).unwrap();
+    crate::workflow::reset_steps_from_position(&conn, &run_id, 2).unwrap();
 
     let pid: Option<i64> = conn
         .query_row(
@@ -3382,10 +3616,8 @@ fn test_reset_failed_steps_kills_running_subprocesses() {
         named_params! { ":step_id": step_id_b, ":run_id": run_id },
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
     // Must not error even though the PIDs do not exist.
-    mgr.reset_failed_steps(&run_id).unwrap();
+    crate::workflow::reset_failed_steps(&conn, &run_id).unwrap();
 
     for (id, label) in [
         (&step_id_a, "step-running-a"),
@@ -3442,9 +3674,7 @@ fn test_reset_steps_from_position_kills_running_subprocesses() {
         named_params! { ":step_id": step_id_after, ":run_id": run_id },
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    mgr.reset_steps_from_position(&run_id, 2).unwrap();
+    crate::workflow::reset_steps_from_position(&conn, &run_id, 2).unwrap();
 
     // Step at boundary must have subprocess_pid nulled.
     let pid_at: Option<i64> = conn
@@ -3551,10 +3781,8 @@ fn test_reset_steps_from_position_kills_agent_subprocesses() {
 
     // Agent run after the boundary — its subprocess must also be signalled.
     let (_, step_after) = create_agent_step(&conn, &run_id, "agent-after", 3, 4294967292);
-
-    let mgr = WorkflowManager::new(&conn);
     // Must not error even if the PIDs are not real processes.
-    mgr.reset_steps_from_position(&run_id, 2).unwrap();
+    crate::workflow::reset_steps_from_position(&conn, &run_id, 2).unwrap();
 
     // Steps at and after the boundary must be reset to pending.
     let status_at: String = conn
@@ -3601,10 +3829,8 @@ fn test_reset_failed_steps_kills_agent_subprocesses() {
 
     // Agent run in running state — its subprocess must be signalled by reset_failed_steps.
     let (_, step_id) = create_agent_step(&conn, &run_id, "agent-step", 1, 4294967290);
-
-    let mgr = WorkflowManager::new(&conn);
     // Must not error even if the PID is not a real process.
-    mgr.reset_failed_steps(&run_id).unwrap();
+    crate::workflow::reset_failed_steps(&conn, &run_id).unwrap();
 
     // Step must be reset to pending.
     let status: String = conn
@@ -3636,9 +3862,7 @@ fn test_reset_failed_steps_clears_step_error() {
         named_params! { ":step_id": step_id, ":run_id": run_id },
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    mgr.reset_failed_steps(&run_id).unwrap();
+    crate::workflow::reset_failed_steps(&conn, &run_id).unwrap();
 
     let err: Option<String> = conn
         .query_row(
@@ -3667,9 +3891,7 @@ fn test_reset_completed_steps_clears_step_error() {
         named_params! { ":step_id": step_id, ":run_id": run_id },
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    mgr.reset_completed_steps(&run_id).unwrap();
+    crate::workflow::reset_completed_steps(&conn, &run_id).unwrap();
 
     let err: Option<String> = conn
         .query_row(
@@ -3698,9 +3920,7 @@ fn test_reset_steps_from_position_clears_step_error() {
         named_params! { ":step_id": step_id, ":run_id": run_id },
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    mgr.reset_steps_from_position(&run_id, 2).unwrap();
+    crate::workflow::reset_steps_from_position(&conn, &run_id, 2).unwrap();
 
     let err: Option<String> = conn
         .query_row(
@@ -3766,10 +3986,8 @@ fn test_reap_heartbeat_stuck_stale_heartbeat() {
     let stale = chrono::Utc::now() - chrono::Duration::seconds(200);
     let stale_str = stale.to_rfc3339();
     let run_id = insert_orphaned_root_run(&conn, &stale_str, Some(&stale_str));
-
-    let mgr = WorkflowManager::new(&conn);
     let config = crate::config::Config::default();
-    let claimed = mgr.claim_heartbeat_stuck_runs(&config, 60).unwrap();
+    let claimed = crate::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60).unwrap();
 
     assert_eq!(claimed.len(), 1, "expected 1 run reaped");
     // Status must be flipped to 'failed' by the CAS.
@@ -3787,10 +4005,8 @@ fn test_reap_heartbeat_stuck_fresh_heartbeat() {
     let fresh = chrono::Utc::now() - chrono::Duration::seconds(10);
     let fresh_str = fresh.to_rfc3339();
     let run_id = insert_orphaned_root_run(&conn, &fresh_str, Some(&fresh_str));
-
-    let mgr = WorkflowManager::new(&conn);
     let config = crate::config::Config::default();
-    let claimed = mgr.claim_heartbeat_stuck_runs(&config, 60).unwrap();
+    let claimed = crate::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60).unwrap();
 
     assert_eq!(claimed.len(), 0, "fresh run must not be reaped");
     assert_eq!(
@@ -3806,10 +4022,8 @@ fn test_reap_heartbeat_stuck_null_heartbeat_stale_started() {
     let conn = setup_db();
     let stale = chrono::Utc::now() - chrono::Duration::seconds(200);
     let run_id = insert_orphaned_root_run(&conn, &stale.to_rfc3339(), None);
-
-    let mgr = WorkflowManager::new(&conn);
     let config = crate::config::Config::default();
-    let claimed = mgr.claim_heartbeat_stuck_runs(&config, 60).unwrap();
+    let claimed = crate::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60).unwrap();
 
     assert_eq!(
         claimed.len(),
@@ -3825,10 +4039,8 @@ fn test_reap_heartbeat_stuck_null_heartbeat_fresh_started() {
     let conn = setup_db();
     let fresh = chrono::Utc::now() - chrono::Duration::seconds(10);
     let run_id = insert_orphaned_root_run(&conn, &fresh.to_rfc3339(), None);
-
-    let mgr = WorkflowManager::new(&conn);
     let config = crate::config::Config::default();
-    let claimed = mgr.claim_heartbeat_stuck_runs(&config, 60).unwrap();
+    let claimed = crate::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60).unwrap();
 
     assert_eq!(
         claimed.len(),
@@ -3854,10 +4066,8 @@ fn test_reap_heartbeat_stuck_active_child_step() {
         named_params! { ":run_id": run_id },
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
     let config = crate::config::Config::default();
-    let claimed = mgr.claim_heartbeat_stuck_runs(&config, 60).unwrap();
+    let claimed = crate::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60).unwrap();
 
     assert_eq!(claimed.len(), 0, "run with active step must not be reaped");
     assert_eq!(get_run_status(&conn, &run_id), "running");
@@ -3870,16 +4080,14 @@ fn test_reap_heartbeat_stuck_concurrent_race() {
     let conn = setup_db();
     let stale = chrono::Utc::now() - chrono::Duration::seconds(200);
     let _run_id = insert_orphaned_root_run(&conn, &stale.to_rfc3339(), None);
-
-    let mgr = WorkflowManager::new(&conn);
     let config = crate::config::Config::default();
 
     // First call wins the CAS.
-    let claimed1 = mgr.claim_heartbeat_stuck_runs(&config, 60).unwrap();
+    let claimed1 = crate::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60).unwrap();
     assert_eq!(claimed1.len(), 1, "first call should win the CAS");
 
     // Second call sees status='failed' — detection query excludes it, count=0.
-    let claimed2 = mgr.claim_heartbeat_stuck_runs(&config, 60).unwrap();
+    let claimed2 = crate::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60).unwrap();
     assert_eq!(claimed2.len(), 0, "second call must see no orphaned runs");
 }
 
@@ -3916,11 +4124,9 @@ fn test_reap_heartbeat_stuck_sub_workflow_excluded() {
         named_params! { ":child_run_id": child_run_id, ":child_agent_id": child_agent.id, ":stale_ts": stale.to_rfc3339(), ":parent_run_id": parent_run_id },
     )
     .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
     let config = crate::config::Config::default();
     // Only the parent root run should be reaped; the child is excluded.
-    let claimed = mgr.claim_heartbeat_stuck_runs(&config, 60).unwrap();
+    let claimed = crate::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60).unwrap();
     assert_eq!(claimed.len(), 1, "only root run should be reaped");
 
     assert_eq!(
@@ -3943,21 +4149,26 @@ fn test_step_error_persisted_on_schema_validation_failure() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test-wf",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
     // Insert a step that simulates being mid-execution.
-    let step_id = mgr
-        .insert_step(&run.id, "call-step", "reviewer", false, 0, 0)
-        .unwrap();
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "call-step", "reviewer", false, 0, 0).unwrap();
 
     // Simulate what call.rs does when `interpret_agent_output` returns an Err:
     // mark the step Failed and record the validation error message.
     let validation_err = "structured output validation failed: missing required field 'approved'";
-    mgr.update_step_status_full(
+    crate::workflow::update_step_status_full(
+        &conn,
         &step_id,
         WorkflowStepStatus::Failed,
         Some("child-run-id"),
@@ -3971,7 +4182,7 @@ fn test_step_error_persisted_on_schema_validation_failure() {
     .unwrap();
 
     // Read the step back and assert step_error is set correctly.
-    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    let steps = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
     assert_eq!(steps.len(), 1, "expected exactly one step");
     let step = &steps[0];
     assert_eq!(step.status, WorkflowStepStatus::Failed);
@@ -4010,10 +4221,8 @@ fn test_auto_resume_stuck_workflows_detects_and_flips() {
         "completed",
         "2020-01-01T00:00:00Z",
     );
-
-    let mgr = WorkflowManager::new(&conn);
     let config = Config::default();
-    let claimed = mgr.claim_stuck_workflows(&config, None).unwrap();
+    let claimed = crate::workflow::claim_stuck_workflows(&conn, &config, None).unwrap();
     assert_eq!(
         claimed.len(),
         1,
@@ -4041,14 +4250,12 @@ fn test_auto_resume_stuck_workflows_concurrent_race() {
         "completed",
         "2020-01-01T00:00:00Z",
     );
-
-    let mgr = WorkflowManager::new(&conn);
     let config = Config::default();
 
-    let claimed1 = mgr.claim_stuck_workflows(&config, None).unwrap();
+    let claimed1 = crate::workflow::claim_stuck_workflows(&conn, &config, None).unwrap();
     assert_eq!(claimed1.len(), 1, "first call should win the CAS");
 
-    let claimed2 = mgr.claim_stuck_workflows(&config, None).unwrap();
+    let claimed2 = crate::workflow::claim_stuck_workflows(&conn, &config, None).unwrap();
     assert_eq!(claimed2.len(), 0, "second call must see no stuck runs");
 }
 
@@ -4060,10 +4267,8 @@ fn test_auto_resume_stuck_workflows_skips_fresh_run() {
     // query (COALESCE(last_heartbeat, started_at)) sees a recent timestamp.
     let now = chrono::Utc::now().to_rfc3339();
     let run_id = insert_orphaned_root_run(&conn, &now, Some(&now));
-
-    let mgr = WorkflowManager::new(&conn);
     let config = Config::default();
-    let claimed = mgr.claim_stuck_workflows(&config, None).unwrap();
+    let claimed = crate::workflow::claim_stuck_workflows(&conn, &config, None).unwrap();
     assert_eq!(claimed.len(), 0, "fresh run must not be resumed");
 
     // Status must remain running.
@@ -4084,12 +4289,11 @@ fn test_auto_resume_stuck_workflows_uses_min_threshold() {
         "2020-01-01T00:00:00Z",
     );
 
-    let mgr = WorkflowManager::new(&conn);
     let config = Config::default();
 
     // Even with a very large configurable threshold, min(60, 9999) = 60 and
     // the 2020 ended_at is well past 60s.
-    let claimed = mgr.claim_stuck_workflows(&config, Some(9999)).unwrap();
+    let claimed = crate::workflow::claim_stuck_workflows(&conn, &config, Some(9999)).unwrap();
     assert_eq!(claimed.len(), 1);
 
     assert_eq!(get_run_status(&conn, "thresh-auto"), "failed");
@@ -4104,23 +4308,22 @@ fn test_auto_resume_stuck_workflows_uses_min_threshold() {
 #[test]
 fn test_delete_orphaned_pending_steps_removes_never_started() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
 
     // Insert an orphaned pending step (no started_at).
-    let orphan_id = mgr
-        .insert_step(&run.id, "orphan-step", "actor", false, 0, 0)
-        .unwrap();
+    let orphan_id =
+        crate::workflow::insert_step(&conn, &run.id, "orphan-step", "actor", false, 0, 0).unwrap();
     // Confirm insert_step leaves started_at NULL and status = 'pending'.
-    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    let steps = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
     assert_eq!(steps.len(), 1);
     assert_eq!(steps[0].status, WorkflowStepStatus::Pending);
     assert!(steps[0].started_at.is_none());
 
     // Insert a completed step that must survive.
-    let completed_id = mgr
-        .insert_step(&run.id, "done-step", "actor", false, 1, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let completed_id =
+        crate::workflow::insert_step(&conn, &run.id, "done-step", "actor", false, 1, 0).unwrap();
+    crate::workflow::update_step_status(
+        &conn,
         &completed_id,
         WorkflowStepStatus::Completed,
         None,
@@ -4131,10 +4334,10 @@ fn test_delete_orphaned_pending_steps_removes_never_started() {
     )
     .unwrap();
 
-    let deleted = mgr.delete_orphaned_pending_steps(&run.id).unwrap();
+    let deleted = crate::workflow::delete_orphaned_pending_steps(&conn, &run.id).unwrap();
     assert_eq!(deleted, 1, "exactly one orphaned row should be deleted");
 
-    let remaining = mgr.get_workflow_steps(&run.id).unwrap();
+    let remaining = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].id, completed_id, "completed step must survive");
     assert!(
@@ -4147,13 +4350,12 @@ fn test_delete_orphaned_pending_steps_removes_never_started() {
 #[test]
 fn test_delete_orphaned_pending_steps_ignores_started_pending() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
 
     // Insert a step and then manually set it to pending WITH a started_at value
     // (simulates a step that was reset after having started once).
-    let step_id = mgr
-        .insert_step(&run.id, "reset-step", "actor", false, 0, 0)
-        .unwrap();
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "reset-step", "actor", false, 0, 0).unwrap();
     conn.execute(
         "UPDATE workflow_run_steps \
          SET status = 'pending', started_at = '2025-01-01T00:00:00Z' \
@@ -4162,13 +4364,13 @@ fn test_delete_orphaned_pending_steps_ignores_started_pending() {
     )
     .unwrap();
 
-    let deleted = mgr.delete_orphaned_pending_steps(&run.id).unwrap();
+    let deleted = crate::workflow::delete_orphaned_pending_steps(&conn, &run.id).unwrap();
     assert_eq!(
         deleted, 0,
         "pending step with started_at must not be deleted"
     );
 
-    let remaining = mgr.get_workflow_steps(&run.id).unwrap();
+    let remaining = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].id, step_id);
 }
@@ -4177,7 +4379,7 @@ fn test_delete_orphaned_pending_steps_ignores_started_pending() {
 #[test]
 fn test_delete_orphaned_pending_steps_only_targets_pending() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
 
     // Insert steps with various non-pending statuses and no started_at.
     for (name, status) in &[
@@ -4194,10 +4396,10 @@ fn test_delete_orphaned_pending_steps_only_targets_pending() {
         .unwrap();
     }
 
-    let deleted = mgr.delete_orphaned_pending_steps(&run.id).unwrap();
+    let deleted = crate::workflow::delete_orphaned_pending_steps(&conn, &run.id).unwrap();
     assert_eq!(deleted, 0, "non-pending rows must not be deleted");
 
-    let remaining = mgr.get_workflow_steps(&run.id).unwrap();
+    let remaining = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
     assert_eq!(remaining.len(), 3, "all three rows must survive");
 }
 
@@ -4205,9 +4407,9 @@ fn test_delete_orphaned_pending_steps_only_targets_pending() {
 #[test]
 fn test_delete_orphaned_pending_steps_noop_when_none() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
 
-    let deleted = mgr.delete_orphaned_pending_steps(&run.id).unwrap();
+    let deleted = crate::workflow::delete_orphaned_pending_steps(&conn, &run.id).unwrap();
     assert_eq!(deleted, 0);
 }
 
@@ -4220,18 +4422,15 @@ fn test_delete_orphaned_pending_steps_noop_when_none() {
 #[test]
 fn test_update_step_child_run_id() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
 
-    let step_id = mgr
-        .insert_step(&run.id, "call-child", "actor", false, 0, 0)
-        .unwrap();
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "call-child", "actor", false, 0, 0).unwrap();
 
     let child_run_id = crate::new_id();
-    mgr.update_step_child_run_id(&step_id, &child_run_id)
-        .unwrap();
+    crate::workflow::update_step_child_run_id(&conn, &step_id, &child_run_id).unwrap();
 
-    let step = mgr
-        .get_step_by_id(&step_id)
+    let step = crate::workflow::get_step_by_id(&conn, &step_id)
         .unwrap()
         .expect("step must exist");
     assert_eq!(
@@ -4245,9 +4444,8 @@ fn test_update_step_child_run_id() {
 #[test]
 fn test_update_step_child_run_id_nonexistent_step() {
     let conn = setup_db();
-    let mgr = WorkflowManager::new(&conn);
     // SQLite UPDATE on a missing row succeeds with 0 rows affected — no error expected.
-    mgr.update_step_child_run_id("nonexistent-step-id", "any-child-run-id")
+    crate::workflow::update_step_child_run_id(&conn, "nonexistent-step-id", "any-child-run-id")
         .unwrap();
 }
 
@@ -4258,19 +4456,19 @@ fn test_update_step_child_run_id_nonexistent_step() {
 #[test]
 fn test_predecessor_completed_pos_zero_always_true() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
     // No rows at all — pos 0 should always return true.
-    assert!(mgr.predecessor_completed(&run.id, 0).unwrap());
+    assert!(crate::workflow::predecessor_completed(&conn, &run.id, 0).unwrap());
 }
 
 #[test]
 fn test_predecessor_completed_true_when_prev_completed() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
-    let step_id = mgr
-        .insert_step(&run.id, "step-a", "actor", false, 0, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let (_parent, run) = make_workflow_run(&conn);
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "step-a", "actor", false, 0, 0).unwrap();
+    crate::workflow::update_step_status(
+        &conn,
         &step_id,
         WorkflowStepStatus::Completed,
         None,
@@ -4281,17 +4479,17 @@ fn test_predecessor_completed_true_when_prev_completed() {
     )
     .unwrap();
     // Predecessor at pos 0 is completed → pos 1 check should return true.
-    assert!(mgr.predecessor_completed(&run.id, 1).unwrap());
+    assert!(crate::workflow::predecessor_completed(&conn, &run.id, 1).unwrap());
 }
 
 #[test]
 fn test_predecessor_completed_false_when_prev_running() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
-    let step_id = mgr
-        .insert_step(&run.id, "step-a", "actor", false, 0, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let (_parent, run) = make_workflow_run(&conn);
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "step-a", "actor", false, 0, 0).unwrap();
+    crate::workflow::update_step_status(
+        &conn,
         &step_id,
         WorkflowStepStatus::Running,
         None,
@@ -4301,15 +4499,15 @@ fn test_predecessor_completed_false_when_prev_running() {
         None,
     )
     .unwrap();
-    assert!(!mgr.predecessor_completed(&run.id, 1).unwrap());
+    assert!(!crate::workflow::predecessor_completed(&conn, &run.id, 1).unwrap());
 }
 
 #[test]
 fn test_predecessor_completed_false_when_no_prev_row() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
     // No step at position 0, iteration 0 → pos 1 predecessor check returns false.
-    assert!(!mgr.predecessor_completed(&run.id, 1).unwrap());
+    assert!(!crate::workflow::predecessor_completed(&conn, &run.id, 1).unwrap());
 }
 
 #[test]
@@ -4320,14 +4518,14 @@ fn test_regression_2448_predecessor_completed_cross_iteration() {
     // position 5 (iteration=0) to be invisible when checking from position 6
     // (iteration=1), silently skipping every sub-workflow step in the loop.
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
     // Simulate do-while iteration 0: insert and complete steps at positions 0–5
     // all with iteration=0.
     for pos in 0..6i64 {
-        let step_id = mgr
-            .insert_step(&run.id, "step-a", "actor", false, pos, 0)
-            .unwrap();
-        mgr.update_step_status(
+        let step_id =
+            crate::workflow::insert_step(&conn, &run.id, "step-a", "actor", false, pos, 0).unwrap();
+        crate::workflow::update_step_status(
+            &conn,
             &step_id,
             WorkflowStepStatus::Completed,
             None,
@@ -4341,7 +4539,7 @@ fn test_regression_2448_predecessor_completed_cross_iteration() {
     // Iteration 1 starts at position 6. Guard A checks whether position 5
     // (stored with iteration=0) is completed. Must return true.
     assert!(
-        mgr.predecessor_completed(&run.id, 6).unwrap(),
+        crate::workflow::predecessor_completed(&conn, &run.id, 6).unwrap(),
         "predecessor_completed must find a step from iteration 0 when checking position 6 in iteration 1"
     );
 }
@@ -4353,11 +4551,12 @@ fn test_regression_2448_predecessor_completed_cross_iteration() {
 #[test]
 fn test_active_step_exists_true_for_running() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
-    let step_id = mgr
-        .insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let (_parent, run) = make_workflow_run(&conn);
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "workflow:lint-fix", "workflow", false, 2, 0)
+            .unwrap();
+    crate::workflow::update_step_status(
+        &conn,
         &step_id,
         WorkflowStepStatus::Running,
         None,
@@ -4367,19 +4566,20 @@ fn test_active_step_exists_true_for_running() {
         Some(0),
     )
     .unwrap();
-    assert!(mgr
-        .active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
-        .unwrap());
+    assert!(
+        crate::workflow::active_step_exists(&conn, &run.id, 2, 0, "workflow:lint-fix").unwrap()
+    );
 }
 
 #[test]
 fn test_active_step_exists_false_for_failed() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
-    let step_id = mgr
-        .insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let (_parent, run) = make_workflow_run(&conn);
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "workflow:lint-fix", "workflow", false, 2, 0)
+            .unwrap();
+    crate::workflow::update_step_status(
+        &conn,
         &step_id,
         WorkflowStepStatus::Failed,
         None,
@@ -4390,20 +4590,28 @@ fn test_active_step_exists_false_for_failed() {
     )
     .unwrap();
     // Failed is terminal — retries are allowed, so active_step_exists returns false.
-    assert!(!mgr
-        .active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
-        .unwrap());
+    assert!(
+        !crate::workflow::active_step_exists(&conn, &run.id, 2, 0, "workflow:lint-fix").unwrap()
+    );
 }
 
 #[test]
 fn test_active_step_exists_false_different_step_name() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
     // An active row exists at pos 2 but for a different step name (parallel step).
-    let step_id = mgr
-        .insert_step(&run.id, "workflow:other-step", "workflow", false, 2, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let step_id = crate::workflow::insert_step(
+        &conn,
+        &run.id,
+        "workflow:other-step",
+        "workflow",
+        false,
+        2,
+        0,
+    )
+    .unwrap();
+    crate::workflow::update_step_status(
+        &conn,
         &step_id,
         WorkflowStepStatus::Running,
         None,
@@ -4413,31 +4621,32 @@ fn test_active_step_exists_false_different_step_name() {
         Some(0),
     )
     .unwrap();
-    assert!(!mgr
-        .active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
-        .unwrap());
+    assert!(
+        !crate::workflow::active_step_exists(&conn, &run.id, 2, 0, "workflow:lint-fix").unwrap()
+    );
 }
 
 #[test]
 fn test_active_step_exists_true_for_pending() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
     // insert_step creates a row in pending status by default.
-    mgr.insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0)
+    crate::workflow::insert_step(&conn, &run.id, "workflow:lint-fix", "workflow", false, 2, 0)
         .unwrap();
-    assert!(mgr
-        .active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
-        .unwrap());
+    assert!(
+        crate::workflow::active_step_exists(&conn, &run.id, 2, 0, "workflow:lint-fix").unwrap()
+    );
 }
 
 #[test]
 fn test_active_step_exists_true_for_waiting() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
-    let step_id = mgr
-        .insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let (_parent, run) = make_workflow_run(&conn);
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "workflow:lint-fix", "workflow", false, 2, 0)
+            .unwrap();
+    crate::workflow::update_step_status(
+        &conn,
         &step_id,
         WorkflowStepStatus::Waiting,
         None,
@@ -4447,19 +4656,20 @@ fn test_active_step_exists_true_for_waiting() {
         Some(0),
     )
     .unwrap();
-    assert!(mgr
-        .active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
-        .unwrap());
+    assert!(
+        crate::workflow::active_step_exists(&conn, &run.id, 2, 0, "workflow:lint-fix").unwrap()
+    );
 }
 
 #[test]
 fn test_active_step_exists_true_for_completed() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
-    let step_id = mgr
-        .insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let (_parent, run) = make_workflow_run(&conn);
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "workflow:lint-fix", "workflow", false, 2, 0)
+            .unwrap();
+    crate::workflow::update_step_status(
+        &conn,
         &step_id,
         WorkflowStepStatus::Completed,
         None,
@@ -4470,9 +4680,9 @@ fn test_active_step_exists_true_for_completed() {
     )
     .unwrap();
     // completed rows block re-insertion so retries don't re-run a succeeded step.
-    assert!(mgr
-        .active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
-        .unwrap());
+    assert!(
+        crate::workflow::active_step_exists(&conn, &run.id, 2, 0, "workflow:lint-fix").unwrap()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -4490,13 +4700,13 @@ fn test_active_step_exists_true_for_completed() {
 #[test]
 fn test_regression_2406_guards_prevent_duplicate_call_workflow_step() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let (_parent, run) = make_workflow_run(&conn);
 
     // Simulate the "implement" step at position 1 still running (not completed).
-    let implement_id = mgr
-        .insert_step(&run.id, "implement", "actor", false, 1, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let implement_id =
+        crate::workflow::insert_step(&conn, &run.id, "implement", "actor", false, 1, 0).unwrap();
+    crate::workflow::update_step_status(
+        &conn,
         &implement_id,
         WorkflowStepStatus::Running,
         None,
@@ -4509,15 +4719,16 @@ fn test_regression_2406_guards_prevent_duplicate_call_workflow_step() {
 
     // Guard A: predecessor at pos 1 is running → pos 2 predecessor check is false.
     assert!(
-        !mgr.predecessor_completed(&run.id, 2).unwrap(),
+        !crate::workflow::predecessor_completed(&conn, &run.id, 2).unwrap(),
         "Guard A: predecessor_completed must be false while implement is running"
     );
 
     // Now simulate the premature duplicate row that the bug caused.
-    let premature_id = mgr
-        .insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let premature_id =
+        crate::workflow::insert_step(&conn, &run.id, "workflow:lint-fix", "workflow", false, 2, 0)
+            .unwrap();
+    crate::workflow::update_step_status(
+        &conn,
         &premature_id,
         WorkflowStepStatus::Running,
         None,
@@ -4531,14 +4742,14 @@ fn test_regression_2406_guards_prevent_duplicate_call_workflow_step() {
     // Guard B: lint-fix row already exists → active_step_exists must be true,
     // preventing the legitimate poll from inserting a second row.
     assert!(
-        mgr.active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
-            .unwrap(),
+        crate::workflow::active_step_exists(&conn, &run.id, 2, 0, "workflow:lint-fix").unwrap(),
         "Guard B: active_step_exists must be true for the already-inserted duplicate"
     );
 
     // After implement completes, Guard A is satisfied but Guard B still blocks
     // re-insertion because a row is already present (running).
-    mgr.update_step_status(
+    crate::workflow::update_step_status(
+        &conn,
         &implement_id,
         WorkflowStepStatus::Completed,
         None,
@@ -4549,12 +4760,11 @@ fn test_regression_2406_guards_prevent_duplicate_call_workflow_step() {
     )
     .unwrap();
     assert!(
-        mgr.predecessor_completed(&run.id, 2).unwrap(),
+        crate::workflow::predecessor_completed(&conn, &run.id, 2).unwrap(),
         "predecessor_completed must be true once implement is completed"
     );
     assert!(
-        mgr.active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
-            .unwrap(),
+        crate::workflow::active_step_exists(&conn, &run.id, 2, 0, "workflow:lint-fix").unwrap(),
         "Guard B still blocks a second insertion while the first row is running"
     );
 }
@@ -4562,11 +4772,12 @@ fn test_regression_2406_guards_prevent_duplicate_call_workflow_step() {
 #[test]
 fn test_active_step_exists_false_for_skipped() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
-    let step_id = mgr
-        .insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let (_parent, run) = make_workflow_run(&conn);
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "workflow:lint-fix", "workflow", false, 2, 0)
+            .unwrap();
+    crate::workflow::update_step_status(
+        &conn,
         &step_id,
         WorkflowStepStatus::Skipped,
         None,
@@ -4577,19 +4788,20 @@ fn test_active_step_exists_false_for_skipped() {
     )
     .unwrap();
     // Skipped is terminal — retries are allowed, so active_step_exists returns false.
-    assert!(!mgr
-        .active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
-        .unwrap());
+    assert!(
+        !crate::workflow::active_step_exists(&conn, &run.id, 2, 0, "workflow:lint-fix").unwrap()
+    );
 }
 
 #[test]
 fn test_active_step_exists_false_for_timed_out() {
     let conn = setup_db();
-    let (mgr, _parent, run) = make_workflow_run(&conn);
-    let step_id = mgr
-        .insert_step(&run.id, "workflow:lint-fix", "workflow", false, 2, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let (_parent, run) = make_workflow_run(&conn);
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "workflow:lint-fix", "workflow", false, 2, 0)
+            .unwrap();
+    crate::workflow::update_step_status(
+        &conn,
         &step_id,
         WorkflowStepStatus::TimedOut,
         None,
@@ -4600,7 +4812,104 @@ fn test_active_step_exists_false_for_timed_out() {
     )
     .unwrap();
     // TimedOut is terminal — retries are allowed, so active_step_exists returns false.
-    assert!(!mgr
-        .active_step_exists(&run.id, 2, 0, "workflow:lint-fix")
-        .unwrap());
+    assert!(
+        !crate::workflow::active_step_exists(&conn, &run.id, 2, 0, "workflow:lint-fix").unwrap()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// reap_finalization_stuck_workflow_runs — false-positive guard for in-flight
+// actor cleanup (issue #2787)
+// ---------------------------------------------------------------------------
+
+/// Insert a workflow run in 'running' status with an actor step whose record
+/// is already terminal but whose linked agent_run is in `agent_status`. The
+/// step's ended_at is stamped at `step_ended_at` so callers can put it well
+/// past the reaper threshold.
+fn insert_root_run_with_actor_step(
+    conn: &Connection,
+    run_id: &str,
+    step_id: &str,
+    agent_status: &str,
+    step_ended_at: &str,
+) {
+    insert_running_root_run(conn, run_id);
+
+    let agent_mgr = AgentManager::new(conn);
+    let agent_run = agent_mgr.create_run(None, "actor", None).unwrap();
+
+    // Override the agent_run status (create_run defaults to 'running').
+    conn.execute(
+        "UPDATE agent_runs SET status = :status WHERE id = :id",
+        named_params! { ":status": agent_status, ":id": agent_run.id },
+    )
+    .unwrap();
+
+    // Insert a terminal step record that links to the agent_run.
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, \
+          ended_at, child_run_id) \
+         VALUES (:step_id, :run_id, 'implement', 'actor', 0, 'completed', 0, \
+                 :ended_at, :child_run_id)",
+        named_params! {
+            ":step_id": step_id,
+            ":run_id": run_id,
+            ":ended_at": step_ended_at,
+            ":child_run_id": agent_run.id,
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_reap_finalization_skips_run_with_in_flight_actor_cleanup() {
+    // The scenario from issue #2787: an actor step's record is already
+    // terminal but the agent subprocess is still cleaning up. The reaper
+    // must not finalize the parent in this window.
+    let conn = setup_db();
+    insert_root_run_with_actor_step(
+        &conn,
+        "run-actor-cleanup",
+        "step-impl",
+        "running",              // agent process not yet exited
+        "2020-01-01T00:00:00Z", // step "ended" well past any threshold
+    );
+
+    let reaped = crate::workflow::reap_finalization_stuck_workflow_runs(&conn, 60).unwrap();
+    assert_eq!(
+        reaped, 0,
+        "must not finalize a run whose actor agent is still running"
+    );
+    assert_eq!(
+        get_run_status(&conn, "run-actor-cleanup"),
+        "running",
+        "parent must remain running while actor cleanup is in flight"
+    );
+}
+
+#[test]
+fn test_reap_finalization_finalizes_run_after_actor_completes() {
+    // Regression for the legitimate case from #1777: all steps did finish
+    // (agent_run flipped to 'completed') but the parent's status update
+    // failed. The reaper must still finalize this case.
+    let conn = setup_db();
+    insert_root_run_with_actor_step(
+        &conn,
+        "run-finalization-failed",
+        "step-impl",
+        "completed",            // agent fully done
+        "2020-01-01T00:00:00Z", // step "ended" well past any threshold
+    );
+
+    let reaped = crate::workflow::reap_finalization_stuck_workflow_runs(&conn, 60).unwrap();
+    assert_eq!(
+        reaped, 1,
+        "must finalize a run whose actor agent is fully done"
+    );
+    assert_eq!(
+        get_run_status(&conn, "run-finalization-failed"),
+        "completed",
+        "parent must transition to completed"
+    );
 }

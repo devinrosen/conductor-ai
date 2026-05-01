@@ -629,7 +629,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-cli"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -650,7 +650,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-core"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -667,17 +667,19 @@ dependencies = [
  "serde_yml",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "toml 0.8.23",
  "tracing",
  "tracing-test",
  "ulid",
  "ureq",
  "utoipa",
+ "web-push",
 ]
 
 [[package]]
 name = "conductor-desktop"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -695,7 +697,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-tui"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -704,6 +706,7 @@ dependencies = [
  "dirs",
  "insta",
  "ratatui",
+ "runkon-runtimes",
  "rusqlite",
  "serde_json",
  "serde_yml",
@@ -715,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-web"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -731,6 +734,7 @@ dependencies = [
  "p256",
  "rand_core 0.6.4",
  "reqwest 0.12.28",
+ "runkon-runtimes",
  "rusqlite",
  "rust-embed",
  "serde",
@@ -746,7 +750,6 @@ dependencies = [
  "tracing-subscriber",
  "utoipa",
  "utoipa-swagger-ui",
- "web-push",
 ]
 
 [[package]]
@@ -4534,7 +4537,7 @@ dependencies = [
 
 [[package]]
 name = "runkon-flow"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -4552,7 +4555,7 @@ dependencies = [
 
 [[package]]
 name = "runkon-runtimes"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "libc",
  "serde",

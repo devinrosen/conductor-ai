@@ -1,5 +1,20 @@
+use crate::error::Result;
 use crate::workflow::types::PendingGateRow;
 use crate::workflow::{BlockedOn, WorkflowRun, WorkflowRunStep};
+
+/// Execute a single SQL `UPDATE` and map the rusqlite error to [`crate::error::ConductorError`].
+///
+/// Used by sibling manager modules (`steps.rs`, `fan_out.rs`) so each call site
+/// stays focused on its SQL string instead of repeating the
+/// `conn.execute(sql, params)?; Ok(())` pattern.
+pub(super) fn execute_sql(
+    conn: &rusqlite::Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+) -> Result<()> {
+    conn.execute(sql, params)?;
+    Ok(())
+}
 
 /// Deserialize `json` as `T`, returning `T::default()` on missing or malformed input.
 ///

@@ -346,13 +346,8 @@ mod tests {
         let id2 = by_src["2"].to_string();
 
         let step_id = test_helpers::make_foreach_step(&conn);
-        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
-        wf_mgr
-            .insert_fan_out_item(&step_id, "ticket", &id1, "1")
-            .unwrap();
-        wf_mgr
-            .insert_fan_out_item(&step_id, "ticket", &id2, "2")
-            .unwrap();
+        crate::workflow::insert_fan_out_item(&conn, &step_id, "ticket", &id1, "1").unwrap();
+        crate::workflow::insert_fan_out_item(&conn, &step_id, "ticket", &id2, "2").unwrap();
 
         let edges = TicketsProvider::new(None)
             .dependencies(&conn, &config, &step_id)

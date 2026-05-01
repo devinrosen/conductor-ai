@@ -8,7 +8,6 @@ use crate::mcp::helpers::{get_arg, open_db_and_config, tool_err, tool_ok};
 pub(super) fn tool_list_repos(db_path: &Path) -> CallToolResult {
     use conductor_core::agent::AgentManager;
     use conductor_core::repo::RepoManager;
-    use conductor_core::workflow::WorkflowManager;
 
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
@@ -25,7 +24,7 @@ pub(super) fn tool_list_repos(db_path: &Path) -> CallToolResult {
         Ok(m) => m,
         Err(e) => return tool_err(e),
     };
-    let workflow_counts = match WorkflowManager::new(&conn).active_run_counts_by_repo() {
+    let workflow_counts = match conductor_core::workflow::active_run_counts_by_repo(&conn) {
         Ok(m) => m,
         Err(e) => return tool_err(e),
     };

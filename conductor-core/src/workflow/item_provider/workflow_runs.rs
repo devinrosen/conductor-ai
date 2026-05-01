@@ -28,9 +28,7 @@ impl ItemProvider for WorkflowRunsProvider {
                 .filter(|s| !s.is_empty())
                 .collect()
         };
-
-        let wf_mgr = crate::workflow::manager::WorkflowManager::new(ctx.conn);
-        let rows = wf_mgr.list_runs_by_status(&statuses, workflow_name_filter)?;
+        let rows = crate::workflow::list_runs_by_status(ctx.conn, &statuses, workflow_name_filter)?;
 
         Ok(collect_fan_out_items(
             rows,
@@ -58,31 +56,44 @@ mod tests {
 
         // Insert a completed run and a running run.
         let parent_id = test_helpers::make_agent_parent_id(&conn);
-        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
 
-        let run1 = wf_mgr
-            .create_workflow_run("wf-a", Some("w1"), &parent_id, false, "manual", None)
-            .unwrap();
-        wf_mgr
-            .update_workflow_status(
-                &run1.id,
-                crate::workflow::WorkflowRunStatus::Completed,
-                None,
-                None,
-            )
-            .unwrap();
+        let run1 = crate::workflow::create_workflow_run(
+            &conn,
+            "wf-a",
+            Some("w1"),
+            &parent_id,
+            false,
+            "manual",
+            None,
+        )
+        .unwrap();
+        crate::workflow::update_workflow_status(
+            &conn,
+            &run1.id,
+            crate::workflow::WorkflowRunStatus::Completed,
+            None,
+            None,
+        )
+        .unwrap();
 
-        let run2 = wf_mgr
-            .create_workflow_run("wf-b", Some("w1"), &parent_id, false, "manual", None)
-            .unwrap();
-        wf_mgr
-            .update_workflow_status(
-                &run2.id,
-                crate::workflow::WorkflowRunStatus::Running,
-                None,
-                None,
-            )
-            .unwrap();
+        let run2 = crate::workflow::create_workflow_run(
+            &conn,
+            "wf-b",
+            Some("w1"),
+            &parent_id,
+            false,
+            "manual",
+            None,
+        )
+        .unwrap();
+        crate::workflow::update_workflow_status(
+            &conn,
+            &run2.id,
+            crate::workflow::WorkflowRunStatus::Running,
+            None,
+            None,
+        )
+        .unwrap();
 
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let provider = WorkflowRunsProvider;
@@ -108,31 +119,44 @@ mod tests {
         let config = Config::default();
 
         let parent_id = test_helpers::make_agent_parent_id(&conn);
-        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
 
-        let run1 = wf_mgr
-            .create_workflow_run("wf-fail", Some("w1"), &parent_id, false, "manual", None)
-            .unwrap();
-        wf_mgr
-            .update_workflow_status(
-                &run1.id,
-                crate::workflow::WorkflowRunStatus::Failed,
-                None,
-                None,
-            )
-            .unwrap();
+        let run1 = crate::workflow::create_workflow_run(
+            &conn,
+            "wf-fail",
+            Some("w1"),
+            &parent_id,
+            false,
+            "manual",
+            None,
+        )
+        .unwrap();
+        crate::workflow::update_workflow_status(
+            &conn,
+            &run1.id,
+            crate::workflow::WorkflowRunStatus::Failed,
+            None,
+            None,
+        )
+        .unwrap();
 
-        let run2 = wf_mgr
-            .create_workflow_run("wf-ok", Some("w1"), &parent_id, false, "manual", None)
-            .unwrap();
-        wf_mgr
-            .update_workflow_status(
-                &run2.id,
-                crate::workflow::WorkflowRunStatus::Completed,
-                None,
-                None,
-            )
-            .unwrap();
+        let run2 = crate::workflow::create_workflow_run(
+            &conn,
+            "wf-ok",
+            Some("w1"),
+            &parent_id,
+            false,
+            "manual",
+            None,
+        )
+        .unwrap();
+        crate::workflow::update_workflow_status(
+            &conn,
+            &run2.id,
+            crate::workflow::WorkflowRunStatus::Completed,
+            None,
+            None,
+        )
+        .unwrap();
 
         let mut filter = HashMap::new();
         filter.insert("status".to_string(), "failed".to_string());
@@ -160,31 +184,44 @@ mod tests {
         let config = Config::default();
 
         let parent_id = test_helpers::make_agent_parent_id(&conn);
-        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
 
-        let run_a = wf_mgr
-            .create_workflow_run("wf-alpha", Some("w1"), &parent_id, false, "manual", None)
-            .unwrap();
-        wf_mgr
-            .update_workflow_status(
-                &run_a.id,
-                crate::workflow::WorkflowRunStatus::Completed,
-                None,
-                None,
-            )
-            .unwrap();
+        let run_a = crate::workflow::create_workflow_run(
+            &conn,
+            "wf-alpha",
+            Some("w1"),
+            &parent_id,
+            false,
+            "manual",
+            None,
+        )
+        .unwrap();
+        crate::workflow::update_workflow_status(
+            &conn,
+            &run_a.id,
+            crate::workflow::WorkflowRunStatus::Completed,
+            None,
+            None,
+        )
+        .unwrap();
 
-        let run_b = wf_mgr
-            .create_workflow_run("wf-beta", Some("w1"), &parent_id, false, "manual", None)
-            .unwrap();
-        wf_mgr
-            .update_workflow_status(
-                &run_b.id,
-                crate::workflow::WorkflowRunStatus::Completed,
-                None,
-                None,
-            )
-            .unwrap();
+        let run_b = crate::workflow::create_workflow_run(
+            &conn,
+            "wf-beta",
+            Some("w1"),
+            &parent_id,
+            false,
+            "manual",
+            None,
+        )
+        .unwrap();
+        crate::workflow::update_workflow_status(
+            &conn,
+            &run_b.id,
+            crate::workflow::WorkflowRunStatus::Completed,
+            None,
+            None,
+        )
+        .unwrap();
 
         let mut filter = HashMap::new();
         filter.insert("workflow_name".to_string(), "wf-alpha".to_string());
@@ -205,19 +242,25 @@ mod tests {
         let config = Config::default();
 
         let parent_id = test_helpers::make_agent_parent_id(&conn);
-        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
 
-        let run1 = wf_mgr
-            .create_workflow_run("wf-x", Some("w1"), &parent_id, false, "manual", None)
-            .unwrap();
-        wf_mgr
-            .update_workflow_status(
-                &run1.id,
-                crate::workflow::WorkflowRunStatus::Completed,
-                None,
-                None,
-            )
-            .unwrap();
+        let run1 = crate::workflow::create_workflow_run(
+            &conn,
+            "wf-x",
+            Some("w1"),
+            &parent_id,
+            false,
+            "manual",
+            None,
+        )
+        .unwrap();
+        crate::workflow::update_workflow_status(
+            &conn,
+            &run1.id,
+            crate::workflow::WorkflowRunStatus::Completed,
+            None,
+            None,
+        )
+        .unwrap();
 
         let mut existing = HashSet::new();
         existing.insert(run1.id.clone());

@@ -95,31 +95,13 @@ impl<'a> ConversationManager<'a> {
     /// Check whether the conversation has any currently active (running or
     /// waiting_for_feedback) agent run.
     pub fn has_active_run(&self, conversation_id: &str) -> Result<bool> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) AS cnt FROM agent_runs \
-             WHERE conversation_id = :conversation_id \
-               AND status IN ('running', 'waiting_for_feedback')",
-            named_params! { ":conversation_id": conversation_id },
-            |row| row.get("cnt"),
-        )?;
-        Ok(count > 0)
+        AgentManager::new(self.conn).has_active_run_for_conversation(conversation_id)
     }
 
     /// Return the `session_id` of the most recent *completed* run in the
     /// conversation, or `None` if no such run exists (fresh session).
     pub fn last_completed_session_id(&self, conversation_id: &str) -> Result<Option<String>> {
-        let result: rusqlite::Result<Option<String>> = self.conn.query_row(
-            "SELECT session_id FROM agent_runs \
-             WHERE conversation_id = :conversation_id AND status = 'completed' \
-             ORDER BY started_at DESC LIMIT 1",
-            named_params! { ":conversation_id": conversation_id },
-            |row| row.get("session_id"),
-        );
-        match result {
-            Ok(v) => Ok(v),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        AgentManager::new(self.conn).latest_completed_session_id_for_conversation(conversation_id)
     }
 
     /// Update the `last_active_at` timestamp to now.

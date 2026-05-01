@@ -22,6 +22,7 @@ ureq = { version = "2", features = ["json"] }
 serde_yml = "0.0"
 notify = "6"
 tracing = "0.1"
+web-push = "0.10"
 libc = "0.2"
 tempfile = "3"
 rust-embed = { version = "8", features = ["include-exclude"] }
@@ -31,11 +32,8 @@ utoipa = { version = "5", optional = true }
 test-helpers = []
 openapi = ["dep:utoipa", "runkon-flow/utoipa", "runkon-runtimes/utoipa"]
 
-[[bin]]
-name = "gen-schema-diagram"
-path = "src/bin/gen_schema_diagram.rs"
-
 [dev-dependencies]
 regex-lite = "0.1"
+tokio = { version = "1", features = ["rt", "macros"] }
 tracing-test = "0.2"
 runkon-flow = { path = "../runkon-flow", features = ["test-utils"] }

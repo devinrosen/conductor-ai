@@ -32,8 +32,8 @@ pub(super) fn make_standalone_db() -> (tempfile::NamedTempFile, std::path::PathB
 }
 
 /// Set a step's status without touching any optional fields.
-pub(super) fn set_step_status(mgr: &WorkflowManager, step_id: &str, status: WorkflowStepStatus) {
-    mgr.update_step_status(step_id, status, None, None, None, None, None)
+pub(super) fn set_step_status(conn: &Connection, step_id: &str, status: WorkflowStepStatus) {
+    crate::workflow::update_step_status(conn, step_id, status, None, None, None, None, None)
         .unwrap();
 }
 
@@ -75,30 +75,41 @@ pub(super) fn make_empty_workflow() -> WorkflowDef {
     }
 }
 
-pub(super) fn create_child_run(conn: &Connection) -> (WorkflowManager<'_>, String) {
+pub(super) fn create_child_run(conn: &Connection) -> String {
     let agent_mgr = AgentManager::new(conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let wf_mgr = WorkflowManager::new(conn);
-    let run = wf_mgr
-        .create_workflow_run("child-wf", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
-    (wf_mgr, run.id)
+    let run = crate::workflow::create_workflow_run(
+        conn,
+        "child-wf",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    run.id
 }
 
 /// Helper: create a workflow run with steps in various statuses.
-pub(super) fn setup_run_with_steps(conn: &Connection) -> (String, WorkflowManager<'_>) {
+pub(super) fn setup_run_with_steps(conn: &Connection) -> String {
     let agent_mgr = AgentManager::new(conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let mgr = WorkflowManager::new(conn);
-    let run = mgr
-        .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        conn,
+        "test-wf",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
     // Step 0: completed
-    let s0 = mgr
-        .insert_step(&run.id, "step-a", "actor", false, 0, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let s0 = crate::workflow::insert_step(conn, &run.id, "step-a", "actor", false, 0, 0).unwrap();
+    crate::workflow::update_step_status(
+        conn,
         &s0,
         WorkflowStepStatus::Completed,
         None,
@@ -110,10 +121,9 @@ pub(super) fn setup_run_with_steps(conn: &Connection) -> (String, WorkflowManage
     .unwrap();
 
     // Step 1: failed
-    let s1 = mgr
-        .insert_step(&run.id, "step-b", "actor", false, 1, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let s1 = crate::workflow::insert_step(conn, &run.id, "step-b", "actor", false, 1, 0).unwrap();
+    crate::workflow::update_step_status(
+        conn,
         &s1,
         WorkflowStepStatus::Failed,
         None,
@@ -125,12 +135,10 @@ pub(super) fn setup_run_with_steps(conn: &Connection) -> (String, WorkflowManage
     .unwrap();
 
     // Step 2: running (stalled)
-    let s2 = mgr
-        .insert_step(&run.id, "step-c", "actor", false, 2, 0)
-        .unwrap();
-    set_step_status(&mgr, &s2, WorkflowStepStatus::Running);
+    let s2 = crate::workflow::insert_step(conn, &run.id, "step-c", "actor", false, 2, 0).unwrap();
+    set_step_status(conn, &s2, WorkflowStepStatus::Running);
 
-    (run.id, mgr)
+    run.id
 }
 
 /// Helper to build a WorkflowRunStep for testing without listing every field.
@@ -262,21 +270,20 @@ pub(super) fn insert_workflow_run_with_targets(
 ) -> String {
     let agent_mgr = AgentManager::new(conn);
     let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
-    let mgr = WorkflowManager::new(conn);
-    let run = mgr
-        .create_workflow_run_with_targets(
-            "test-wf",
-            worktree_id,
-            None,
-            repo_id,
-            &parent.id,
-            false,
-            "manual",
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+    let run = crate::workflow::create_workflow_run_with_targets(
+        conn,
+        "test-wf",
+        worktree_id,
+        None,
+        repo_id,
+        &parent.id,
+        false,
+        "manual",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     run.id
 }
 
@@ -327,16 +334,20 @@ pub(super) fn insert_waiting_run_with_gate(
     step_id
 }
 
-pub(super) fn make_workflow_run(
-    conn: &Connection,
-) -> (WorkflowManager<'_>, crate::agent::AgentRun, WorkflowRun) {
+pub(super) fn make_workflow_run(conn: &Connection) -> (crate::agent::AgentRun, WorkflowRun) {
     let agent_mgr = AgentManager::new(conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let mgr = WorkflowManager::new(conn);
-    let run = mgr
-        .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
-    (mgr, parent, run)
+    let run = crate::workflow::create_workflow_run(
+        conn,
+        "test-wf",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    (parent, run)
 }
 
 /// Helper: set up a temp dir with `.conductor/config.toml` and optional workflow files.
@@ -354,13 +365,18 @@ pub(super) fn setup_hooks_dir(config_toml: &str, workflows: &[(&str, &str)]) -> 
 /// Helper: create a running workflow run with a parent agent run.
 pub(super) fn make_running_wf(conn: &Connection, name: &str) -> (String, String) {
     let agent_mgr = AgentManager::new(conn);
-    let wf_mgr = WorkflowManager::new(conn);
     let parent = agent_mgr.create_run(Some("w1"), name, None).unwrap();
-    let run = wf_mgr
-        .create_workflow_run(name, Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
-    wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
+    let run = crate::workflow::create_workflow_run(
+        conn,
+        name,
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(conn, &run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
     (run.id, parent.id)
 }
@@ -372,12 +388,9 @@ pub(super) fn insert_terminal_step(
     status: WorkflowStepStatus,
     position: i64,
 ) {
-    let wf_mgr = WorkflowManager::new(conn);
-    let step_id = wf_mgr
-        .insert_step(wf_run_id, "step", "actor", false, position, 0)
-        .unwrap();
-    wf_mgr
-        .update_step_status(&step_id, status, None, None, None, None, None)
+    let step_id =
+        crate::workflow::insert_step(conn, wf_run_id, "step", "actor", false, position, 0).unwrap();
+    crate::workflow::update_step_status(conn, &step_id, status, None, None, None, None, None)
         .unwrap();
 }
 

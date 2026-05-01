@@ -17,7 +17,6 @@ use crate::schema_config::SchemaIssue;
 use crate::worktree::WorktreeManager;
 use runkon_flow::dsl::WorkflowDef;
 
-use super::manager::WorkflowManager;
 use super::types::{
     SpawnHeartbeatResumeParams, WorkflowExecStandalone, WorkflowResumeInput,
     WorkflowResumeStandalone,
@@ -206,17 +205,17 @@ fn lock_shared(
 /// Extracted to a standalone function so it can be tested in isolation against an
 /// in-memory database without setting up a full engine.
 pub(crate) fn guard_active_run(
-    wf_mgr: &WorkflowManager<'_>,
+    conn: &rusqlite::Connection,
     worktree_id: &str,
     force: bool,
 ) -> Result<()> {
-    if let Some(active) = wf_mgr.get_active_run_for_worktree(worktree_id)? {
+    if let Some(active) = crate::workflow::get_active_run_for_worktree(conn, worktree_id)? {
         if force {
             tracing::info!(
                 "Force override: cancelling active run {} to start new run",
                 active.id
             );
-            wf_mgr.cancel_run(&active.id, "force override: new run requested")?;
+            crate::workflow::cancel_run(conn, &active.id, "force override: new run requested")?;
         } else {
             return Err(ConductorError::WorkflowRunAlreadyActive {
                 name: active.workflow_name,
@@ -430,7 +429,6 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         let conn: &Connection = &guard;
 
         let agent_mgr = AgentManager::new(conn);
-        let wf_mgr = WorkflowManager::new(conn);
 
         // Validate agents, snippets, and schemas referenced by this workflow.
         validate_workflow_resources(
@@ -449,7 +447,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         // concurrently with their parent and must not trigger this check.
         if params.depth == 0 {
             if let Some(ref wt_id) = params.worktree_id {
-                guard_active_run(&wf_mgr, wt_id, params.force)?;
+                guard_active_run(conn, wt_id, params.force)?;
             }
         }
 
@@ -490,7 +488,8 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
             workflow.trigger.to_string()
         };
 
-        let wf_run = wf_mgr.create_workflow_run_with_targets(
+        let wf_run = crate::workflow::create_workflow_run_with_targets(
+            conn,
             &workflow.name,
             params.worktree_id.as_deref(),
             params.ticket_id.as_deref(),
@@ -505,7 +504,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
 
         // Write child run ID back to parent step immediately so TUI can drill in while running.
         if let Some(ref step_id) = params.parent_step_id {
-            wf_mgr.update_step_child_run_id(step_id, &wf_run.id)?;
+            crate::workflow::update_step_child_run_id(conn, step_id, &wf_run.id)?;
         }
 
         // Notify any waiting caller of the freshly-created run ID.
@@ -517,12 +516,12 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
 
         // Persist default_bot_name so it can be restored on resume.
         if let Some(ref bot_name) = params.default_bot_name {
-            wf_mgr.set_workflow_run_default_bot_name(&wf_run.id, bot_name)?;
+            crate::workflow::set_workflow_run_default_bot_name(conn, &wf_run.id, bot_name)?;
         }
 
         // Persist loop iteration number for sub-workflow runs.
         if params.iteration > 0 {
-            wf_mgr.set_workflow_run_iteration(&wf_run.id, params.iteration as i64)?;
+            crate::workflow::set_workflow_run_iteration(conn, &wf_run.id, params.iteration as i64)?;
         }
 
         // Build merged inputs, injecting ticket/repo/worktree variables.
@@ -557,11 +556,17 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
 
         // Persist inputs.
         if !merged_inputs.is_empty() {
-            wf_mgr.set_workflow_run_inputs(&wf_run.id, &merged_inputs)?;
+            crate::workflow::set_workflow_run_inputs(conn, &wf_run.id, &merged_inputs)?;
         }
 
         // Mark as running.
-        wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Running, None, None)?;
+        crate::workflow::update_workflow_status(
+            conn,
+            &wf_run.id,
+            WorkflowRunStatus::Running,
+            None,
+            None,
+        )?;
 
         (
             wf_run.id,
@@ -851,13 +856,11 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     let (wf_run, worktree_path, repo_path, snapshot_string) = {
         let guard = lock_shared(&shared_conn)?;
         let conn: &Connection = &guard;
-        let wf_mgr = WorkflowManager::new(conn);
         let wt_mgr = WorktreeManager::new(conn, config);
 
         // Load and validate the workflow run
-        let wf_run = wf_mgr
-            .get_workflow_run(input.workflow_run_id)?
-            .ok_or_else(|| {
+        let wf_run =
+            crate::workflow::get_workflow_run(conn, input.workflow_run_id)?.ok_or_else(|| {
                 ConductorError::Workflow(format!(
                     "Workflow run not found: {}",
                     input.workflow_run_id
@@ -869,7 +872,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         // Load steps for --from-step validation and skip-count logging.
         // Note: FlowEngine::resume() issues a second get_steps() query after all
         // DB resets complete, so it reads the accurate post-reset state.
-        let all_steps = wf_mgr.get_workflow_steps(&wf_run.id)?;
+        let all_steps = crate::workflow::get_workflow_steps(conn, &wf_run.id)?;
 
         // Validate --from-step early (fail-fast before heavier worktree/snapshot operations)
         if let Some(from_step) = input.from_step {
@@ -952,7 +955,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         // Warn if any running steps have live subprocesses — terminate_subprocesses
         // (called inside reset_failed_steps below) will kill them, but the warning
         // helps diagnose concurrent executor races (see issue #2221).
-        let live_count = wf_mgr.count_live_subprocess_steps(&wf_run.id)?;
+        let live_count = crate::workflow::count_live_subprocess_steps(conn, &wf_run.id)?;
         if live_count > 0 {
             tracing::warn!(
                 run_id = %wf_run.id,
@@ -964,13 +967,13 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
 
         // Remove orphaned pending steps (registered but never started) before building the
         // skip set. These rows carry no useful state and would otherwise pollute step history.
-        wf_mgr.delete_orphaned_pending_steps(&wf_run.id)?;
+        crate::workflow::delete_orphaned_pending_steps(conn, &wf_run.id)?;
 
         // Perform DB resets and count how many completed steps will be skipped (for logging).
         let skip_count: usize = if input.restart {
             // Restart: clear all step results — skip nothing
-            wf_mgr.reset_failed_steps(&wf_run.id)?;
-            wf_mgr.reset_completed_steps(&wf_run.id)?;
+            crate::workflow::reset_failed_steps(conn, &wf_run.id)?;
+            crate::workflow::reset_completed_steps(conn, &wf_run.id)?;
             0
         } else {
             let completed_count = all_steps
@@ -995,19 +998,25 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
                     .filter(|s| s.position >= pos && s.status == WorkflowStepStatus::Completed)
                     .count();
                 // Reset those steps in DB
-                wf_mgr.reset_steps_from_position(&wf_run.id, pos)?;
+                crate::workflow::reset_steps_from_position(conn, &wf_run.id, pos)?;
                 completed_count - reset_count
             } else {
                 completed_count
             };
 
             // Reset non-completed steps
-            wf_mgr.reset_failed_steps(&wf_run.id)?;
+            crate::workflow::reset_failed_steps(conn, &wf_run.id)?;
             skip_count
         };
 
         // Reset run status to Running
-        wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Running, None, None)?;
+        crate::workflow::update_workflow_status(
+            conn,
+            &wf_run.id,
+            WorkflowRunStatus::Running,
+            None,
+            None,
+        )?;
 
         tracing::info!(
             "Resuming workflow '{}' (run {}), {} completed steps to skip",
@@ -1098,7 +1107,6 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::manager::WorkflowManager;
     use runkon_flow::dsl::{InputDecl, InputType, WorkflowDef, WorkflowTrigger};
     use std::collections::HashMap;
 
@@ -1395,10 +1403,16 @@ mod tests {
     ) -> String {
         let agent_mgr = crate::agent::AgentManager::new(conn);
         let parent = agent_mgr.create_run(Some(wt_id), "workflow", None).unwrap();
-        let wf_mgr = WorkflowManager::new(conn);
-        let run = wf_mgr
-            .create_workflow_run(wf_name, Some(wt_id), &parent.id, false, "manual", None)
-            .unwrap();
+        let run = crate::workflow::create_workflow_run(
+            conn,
+            wf_name,
+            Some(wt_id),
+            &parent.id,
+            false,
+            "manual",
+            None,
+        )
+        .unwrap();
         // Transition to Running so it counts as an active run.
         conn.execute(
             "UPDATE workflow_runs SET status = 'running' WHERE id = ?1",
@@ -1413,9 +1427,7 @@ mod tests {
         let conn = setup_guard_db();
         let wf_name = "my-workflow";
         make_running_workflow_run(&conn, "w1", wf_name);
-
-        let wf_mgr = WorkflowManager::new(&conn);
-        let err = guard_active_run(&wf_mgr, "w1", false).unwrap_err();
+        let err = guard_active_run(&conn, "w1", false).unwrap_err();
         assert!(
             matches!(err, crate::error::ConductorError::WorkflowRunAlreadyActive { ref name } if name == wf_name),
             "expected WorkflowRunAlreadyActive, got: {err}"
@@ -1425,18 +1437,15 @@ mod tests {
     #[test]
     fn guard_active_run_ok_when_no_active_run() {
         let conn = setup_guard_db();
-        let wf_mgr = WorkflowManager::new(&conn);
         // No workflow runs exist — guard should pass.
-        guard_active_run(&wf_mgr, "w1", false).expect("no active run should return Ok");
+        guard_active_run(&conn, "w1", false).expect("no active run should return Ok");
     }
 
     #[test]
     fn guard_active_run_force_cancels_active_run() {
         let conn = setup_guard_db();
         let run_id = make_running_workflow_run(&conn, "w1", "my-wf");
-
-        let wf_mgr = WorkflowManager::new(&conn);
-        guard_active_run(&wf_mgr, "w1", true).expect("force should cancel and return Ok");
+        guard_active_run(&conn, "w1", true).expect("force should cancel and return Ok");
 
         // The previously active run must now be cancelled.
         let row: String = conn
@@ -1457,10 +1466,16 @@ mod tests {
         let conn = setup_guard_db();
         let agent_mgr = crate::agent::AgentManager::new(&conn);
         let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-        let wf_mgr = WorkflowManager::new(&conn);
-        let run = wf_mgr
-            .create_workflow_run("wf", Some("w1"), &parent.id, false, "manual", None)
-            .unwrap();
+        let run = crate::workflow::create_workflow_run(
+            &conn,
+            "wf",
+            Some("w1"),
+            &parent.id,
+            false,
+            "manual",
+            None,
+        )
+        .unwrap();
         conn.execute(
             "UPDATE workflow_runs SET status = 'completed' WHERE id = ?1",
             rusqlite::params![run.id],
@@ -1468,7 +1483,7 @@ mod tests {
         .unwrap();
 
         // Completed run is not "active" — guard should pass.
-        guard_active_run(&wf_mgr, "w1", false).expect("completed run should not block new run");
+        guard_active_run(&conn, "w1", false).expect("completed run should not block new run");
     }
 
     // -------------------------------------------------------------------------
@@ -1653,10 +1668,16 @@ mod tests {
             let parent = crate::agent::AgentManager::new(&conn)
                 .create_run(Some("w1"), "workflow", None)
                 .unwrap();
-            let wf_mgr = WorkflowManager::new(&conn);
-            let run = wf_mgr
-                .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
-                .unwrap();
+            let run = crate::workflow::create_workflow_run(
+                &conn,
+                "test-wf",
+                Some("w1"),
+                &parent.id,
+                false,
+                "manual",
+                None,
+            )
+            .unwrap();
             conn.execute(
                 "UPDATE workflow_runs SET status = 'failed' WHERE id = ?1",
                 rusqlite::params![run.id],
@@ -1689,15 +1710,13 @@ mod tests {
             let parent = crate::agent::AgentManager::new(&conn)
                 .create_run(None, "workflow", None)
                 .unwrap();
-            let wf_mgr = WorkflowManager::new(&conn);
-            let run = wf_mgr
-                .create_workflow_run_with_targets(
-                    "test-wf", None, // worktree_id
-                    None, // ticket_id
-                    None, // repo_id
-                    &parent.id, false, "manual", None, None, None,
-                )
-                .unwrap();
+            let run = crate::workflow::create_workflow_run_with_targets(
+                &conn, "test-wf", None, // worktree_id
+                None, // ticket_id
+                None, // repo_id
+                &parent.id, false, "manual", None, None, None,
+            )
+            .unwrap();
             conn.execute(
                 "UPDATE workflow_runs SET status = 'failed' WHERE id = ?1",
                 rusqlite::params![run.id],
@@ -1828,21 +1847,20 @@ mod tests {
         let parent = crate::agent::AgentManager::new(conn)
             .create_run(None, "workflow", None)
             .unwrap();
-        let wf_mgr = WorkflowManager::new(conn);
-        let run = wf_mgr
-            .create_workflow_run_with_targets(
-                "test-wf",
-                None,
-                None,
-                Some("r1"),
-                &parent.id,
-                false,
-                "manual",
-                snapshot_json,
-                None,
-                None,
-            )
-            .unwrap();
+        let run = crate::workflow::create_workflow_run_with_targets(
+            conn,
+            "test-wf",
+            None,
+            None,
+            Some("r1"),
+            &parent.id,
+            false,
+            "manual",
+            snapshot_json,
+            None,
+            None,
+        )
+        .unwrap();
         conn.execute(
             "UPDATE workflow_runs SET status = 'failed' WHERE id = ?1",
             rusqlite::params![run.id],
@@ -1973,17 +1991,16 @@ mod tests {
             let parent = crate::agent::AgentManager::new(&conn)
                 .create_run(Some("w1"), "workflow", None)
                 .unwrap();
-            let wf_mgr = WorkflowManager::new(&conn);
-            let run = wf_mgr
-                .create_workflow_run(
-                    "test-wf",
-                    Some("w1"),
-                    &parent.id,
-                    false,
-                    "manual",
-                    Some(&snapshot),
-                )
-                .unwrap();
+            let run = crate::workflow::create_workflow_run(
+                &conn,
+                "test-wf",
+                Some("w1"),
+                &parent.id,
+                false,
+                "manual",
+                Some(&snapshot),
+            )
+            .unwrap();
             conn.execute(
                 "UPDATE workflow_runs SET status = 'failed' WHERE id = ?1",
                 rusqlite::params![run.id],
