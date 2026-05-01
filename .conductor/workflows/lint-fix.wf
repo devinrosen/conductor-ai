@@ -13,6 +13,7 @@ workflow lint-fix {
 
     script analyze-lint {
       run = ".conductor/scripts/analyze-lint.sh"
+      env = { FEATURE_BASE_BRANCH = "{{feature_base_branch}}" }
     }
 
     if analyze-lint.has_lint_errors {
