@@ -87,6 +87,11 @@ pub(super) struct SpawnWorkflowParams {
     pub extra_plugin_dirs: Vec<String>,
 }
 
+fn open_bg_db() -> Result<rusqlite::Connection, String> {
+    let db_path = conductor_core::config::db_path();
+    conductor_core::db::open_database(&db_path).map_err(|e| e.to_string())
+}
+
 impl App {
     /// Dispatch workflow data loading to a background thread. The result
     /// arrives as a `WorkflowDataRefreshed` action, avoiding synchronous
@@ -1591,10 +1596,11 @@ impl App {
             ..
         } = self.state.modal
         {
-            let fb = if feedback.is_empty() {
+            let step_id = step_id.clone();
+            let fb: Option<String> = if feedback.is_empty() {
                 None
             } else {
-                Some(feedback.as_str())
+                Some(feedback.clone())
             };
             // Collect checked selections (only when options are present).
             let selections: Option<Vec<String>> = if options.is_empty() {
@@ -1614,23 +1620,29 @@ impl App {
                 .as_deref()
                 .filter(|s| !s.is_empty())
                 .map(conductor_core::workflow::helpers::format_gate_selection_context);
-            match conductor_core::workflow::approve_gate(
-                &self.conn,
-                step_id,
-                "tui-user",
-                fb,
-                selections.as_deref(),
-                context_out,
-            ) {
-                Ok(()) => {
-                    self.state.status_message = Some("Gate approved".to_string());
-                }
-                Err(e) => {
-                    self.state.status_message = Some(format!("Gate approval failed: {e}"));
-                }
-            }
-            self.state.modal = Modal::None;
-            self.reload_workflow_steps();
+
+            self.state.modal = Modal::Progress {
+                message: "Approving gate…".into(),
+            };
+
+            let Some(ref tx) = self.bg_tx else { return };
+            let tx = tx.clone();
+
+            std::thread::spawn(move || {
+                let result = (|| {
+                    let conn = open_bg_db()?;
+                    conductor_core::workflow::approve_gate(
+                        &conn,
+                        &step_id,
+                        "tui-user",
+                        fb.as_deref(),
+                        selections.as_deref(),
+                        context_out,
+                    )
+                    .map_err(|e| e.to_string())
+                })();
+                let _ = tx.send(Action::GateApproveComplete { result });
+            });
             return;
         }
 
@@ -1662,16 +1674,23 @@ impl App {
 
     pub(super) fn handle_reject_gate(&mut self) {
         if let Modal::GateAction { ref step_id, .. } = self.state.modal {
-            match conductor_core::workflow::reject_gate(&self.conn, step_id, "tui-user", None) {
-                Ok(()) => {
-                    self.state.status_message = Some("Gate rejected".to_string());
-                }
-                Err(e) => {
-                    self.state.status_message = Some(format!("Gate rejection failed: {e}"));
-                }
-            }
-            self.state.modal = Modal::None;
-            self.reload_workflow_steps();
+            let step_id = step_id.clone();
+
+            self.state.modal = Modal::Progress {
+                message: "Rejecting gate…".into(),
+            };
+
+            let Some(ref tx) = self.bg_tx else { return };
+            let tx = tx.clone();
+
+            std::thread::spawn(move || {
+                let result = (|| {
+                    let conn = open_bg_db()?;
+                    conductor_core::workflow::reject_gate(&conn, &step_id, "tui-user", None)
+                        .map_err(|e| e.to_string())
+                })();
+                let _ = tx.send(Action::GateRejectComplete { result });
+            });
         }
     }
 
