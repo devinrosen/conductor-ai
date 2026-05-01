@@ -4816,3 +4816,100 @@ fn test_active_step_exists_false_for_timed_out() {
         !crate::workflow::active_step_exists(&conn, &run.id, 2, 0, "workflow:lint-fix").unwrap()
     );
 }
+
+// ---------------------------------------------------------------------------
+// reap_finalization_stuck_workflow_runs — false-positive guard for in-flight
+// actor cleanup (issue #2787)
+// ---------------------------------------------------------------------------
+
+/// Insert a workflow run in 'running' status with an actor step whose record
+/// is already terminal but whose linked agent_run is in `agent_status`. The
+/// step's ended_at is stamped at `step_ended_at` so callers can put it well
+/// past the reaper threshold.
+fn insert_root_run_with_actor_step(
+    conn: &Connection,
+    run_id: &str,
+    step_id: &str,
+    agent_status: &str,
+    step_ended_at: &str,
+) {
+    insert_running_root_run(conn, run_id);
+
+    let agent_mgr = AgentManager::new(conn);
+    let agent_run = agent_mgr.create_run(None, "actor", None).unwrap();
+
+    // Override the agent_run status (create_run defaults to 'running').
+    conn.execute(
+        "UPDATE agent_runs SET status = :status WHERE id = :id",
+        named_params! { ":status": agent_status, ":id": agent_run.id },
+    )
+    .unwrap();
+
+    // Insert a terminal step record that links to the agent_run.
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, \
+          ended_at, child_run_id) \
+         VALUES (:step_id, :run_id, 'implement', 'actor', 0, 'completed', 0, \
+                 :ended_at, :child_run_id)",
+        named_params! {
+            ":step_id": step_id,
+            ":run_id": run_id,
+            ":ended_at": step_ended_at,
+            ":child_run_id": agent_run.id,
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_reap_finalization_skips_run_with_in_flight_actor_cleanup() {
+    // The scenario from issue #2787: an actor step's record is already
+    // terminal but the agent subprocess is still cleaning up. The reaper
+    // must not finalize the parent in this window.
+    let conn = setup_db();
+    insert_root_run_with_actor_step(
+        &conn,
+        "run-actor-cleanup",
+        "step-impl",
+        "running",              // agent process not yet exited
+        "2020-01-01T00:00:00Z", // step "ended" well past any threshold
+    );
+
+    let reaped = crate::workflow::reap_finalization_stuck_workflow_runs(&conn, 60).unwrap();
+    assert_eq!(
+        reaped, 0,
+        "must not finalize a run whose actor agent is still running"
+    );
+    assert_eq!(
+        get_run_status(&conn, "run-actor-cleanup"),
+        "running",
+        "parent must remain running while actor cleanup is in flight"
+    );
+}
+
+#[test]
+fn test_reap_finalization_finalizes_run_after_actor_completes() {
+    // Regression for the legitimate case from #1777: all steps did finish
+    // (agent_run flipped to 'completed') but the parent's status update
+    // failed. The reaper must still finalize this case.
+    let conn = setup_db();
+    insert_root_run_with_actor_step(
+        &conn,
+        "run-finalization-failed",
+        "step-impl",
+        "completed",            // agent fully done
+        "2020-01-01T00:00:00Z", // step "ended" well past any threshold
+    );
+
+    let reaped = crate::workflow::reap_finalization_stuck_workflow_runs(&conn, 60).unwrap();
+    assert_eq!(
+        reaped, 1,
+        "must finalize a run whose actor agent is fully done"
+    );
+    assert_eq!(
+        get_run_status(&conn, "run-finalization-failed"),
+        "completed",
+        "parent must transition to completed"
+    );
+}
