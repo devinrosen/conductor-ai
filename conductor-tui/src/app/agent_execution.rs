@@ -113,7 +113,7 @@ pub(super) fn drive_headless_run(
             event: event.clone(),
         });
     });
-    runkon_runtimes::headless::drain_stream_json(stdout, &run_id, &log_path, &sink);
+    conductor_core::agent_runtime::drain_stream_json(stdout, &run_id, &log_path, &sink);
 
     let _ = std::fs::remove_file(&prompt_file);
     finish();

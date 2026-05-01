@@ -131,7 +131,7 @@ async fn wire_headless_drain(
                 summary: event.summary.clone(),
             });
         });
-        runkon_runtimes::headless::drain_stream_json(stdout, &run_id_owned, &log_path, &sink);
+        conductor_core::agent_runtime::drain_stream_json(stdout, &run_id_owned, &log_path, &sink);
         if let Some(ref pf) = prompt_file {
             let _ = std::fs::remove_file(pf);
         }

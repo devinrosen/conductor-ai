@@ -42,6 +42,20 @@ pub fn try_spawn_headless_run(
     runkon_runtimes::headless::try_spawn_headless_run(params, &binary_path)
 }
 
+/// Drain a streaming JSON output from a headless agent subprocess.
+///
+/// Thin wrapper over `runkon_runtimes::headless::drain_stream_json` so that
+/// callers in conductor-tui and conductor-web stay within the conductor-core
+/// abstraction layer rather than reaching into runkon-runtimes directly.
+pub fn drain_stream_json(
+    reader: impl std::io::Read,
+    run_id: &str,
+    log_path: &std::path::Path,
+    sink: &impl runkon_runtimes::tracker::EventSink,
+) -> DrainOutcome {
+    runkon_runtimes::headless::drain_stream_json(reader, run_id, log_path, sink)
+}
+
 /// `EventSink` that persists runtime events into [`AgentManager`] (model/session,
 /// token deltas, completion/failure) and fans `AgentEvent`s out to a UI callback.
 ///
