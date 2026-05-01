@@ -3900,6 +3900,90 @@ fn test_skip_fan_out_items_by_item_ids_empty_list_is_noop() {
     assert_eq!(items[0].status, "pending");
 }
 
+/// Covers the `Some(status)` branch of [`fan_out::get_fan_out_items`].
+/// Most existing call sites pass `None`, so the dynamic-SQL branch that
+/// adds `AND status = :status` to the WHERE clause was previously
+/// uncovered.
+#[test]
+fn test_get_fan_out_items_with_status_filter() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_worktree_run(&conn, "w1");
+    let step_id = mgr
+        .insert_step(&run.id, "fan-step", "actor", false, 0, 0)
+        .unwrap();
+    mgr.insert_fan_out_item(&step_id, "ticket", "t1", "TICKET-1")
+        .unwrap();
+    let id2 = mgr
+        .insert_fan_out_item(&step_id, "ticket", "t2", "TICKET-2")
+        .unwrap();
+    mgr.insert_fan_out_item(&step_id, "ticket", "t3", "TICKET-3")
+        .unwrap();
+    mgr.update_fan_out_item_running(&id2, "child-run-2")
+        .unwrap();
+
+    // None → all items
+    let all = mgr.get_fan_out_items(&step_id, None).unwrap();
+    assert_eq!(all.len(), 3);
+
+    // Some("pending") → only the 2 still-pending items
+    let pending = mgr.get_fan_out_items(&step_id, Some("pending")).unwrap();
+    assert_eq!(pending.len(), 2);
+    assert!(pending.iter().all(|it| it.status == "pending"));
+
+    // Some("running") → only the 1 dispatched item
+    let running = mgr.get_fan_out_items(&step_id, Some("running")).unwrap();
+    assert_eq!(running.len(), 1);
+    assert_eq!(running[0].item_id, "t2");
+
+    // Some("nonexistent-status") → empty result
+    let none_match = mgr.get_fan_out_items(&step_id, Some("completed")).unwrap();
+    assert!(none_match.is_empty());
+}
+
+/// Covers [`fan_out::get_fan_out_items_for_steps`] — empty input shortcut and
+/// the multi-step IN-clause / grouping path.
+#[test]
+fn test_get_fan_out_items_for_steps_groups_by_step_run_id() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_worktree_run(&conn, "w1");
+    let step_a = mgr
+        .insert_step(&run.id, "fan-a", "actor", false, 0, 0)
+        .unwrap();
+    let step_b = mgr
+        .insert_step(&run.id, "fan-b", "actor", false, 1, 0)
+        .unwrap();
+    let step_c = mgr
+        .insert_step(&run.id, "fan-c", "actor", false, 2, 0)
+        .unwrap();
+    mgr.insert_fan_out_item(&step_a, "ticket", "a1", "TICKET-A1")
+        .unwrap();
+    mgr.insert_fan_out_item(&step_a, "ticket", "a2", "TICKET-A2")
+        .unwrap();
+    mgr.insert_fan_out_item(&step_b, "ticket", "b1", "TICKET-B1")
+        .unwrap();
+
+    // Empty input shortcut — no DB query, empty map.
+    let empty = mgr.get_fan_out_items_for_steps(&[]).unwrap();
+    assert!(empty.is_empty());
+
+    // Multi-step query: items grouped by step_run_id; step_c (no items) is absent.
+    let map = mgr
+        .get_fan_out_items_for_steps(&[&step_a, &step_b, &step_c])
+        .unwrap();
+    assert_eq!(map.len(), 2);
+    assert_eq!(map[&step_a].len(), 2);
+    assert_eq!(map[&step_b].len(), 1);
+    assert!(!map.contains_key(&step_c));
+
+    // Items inside each group preserve insert order (ORDER BY step_run_id, id ASC).
+    assert_eq!(map[&step_a][0].item_id, "a1");
+    assert_eq!(map[&step_a][1].item_id, "a2");
+}
+
 // ── get_workflow_spike_baseline ────────────────────────────────────────────
 
 #[test]

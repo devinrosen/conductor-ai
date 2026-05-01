@@ -1,10 +1,10 @@
 pub(crate) mod definitions;
-mod fan_out;
+pub(crate) mod fan_out;
 mod helpers;
 mod lifecycle;
 pub(crate) mod queries;
 pub(crate) mod recovery;
-mod steps;
+pub(crate) mod steps;
 
 #[cfg(test)]
 mod tests;
