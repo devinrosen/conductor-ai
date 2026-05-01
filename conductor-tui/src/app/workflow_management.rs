@@ -87,6 +87,11 @@ pub(super) struct SpawnWorkflowParams {
     pub extra_plugin_dirs: Vec<String>,
 }
 
+fn open_bg_db() -> Result<rusqlite::Connection, String> {
+    let db_path = conductor_core::config::db_path();
+    conductor_core::db::open_database(&db_path).map_err(|e| e.to_string())
+}
+
 impl App {
     /// Dispatch workflow data loading to a background thread. The result
     /// arrives as a `WorkflowDataRefreshed` action, avoiding synchronous
@@ -1625,9 +1630,7 @@ impl App {
 
             std::thread::spawn(move || {
                 let result = (|| {
-                    let db_path = conductor_core::config::db_path();
-                    let conn =
-                        conductor_core::db::open_database(&db_path).map_err(|e| e.to_string())?;
+                    let conn = open_bg_db()?;
                     conductor_core::workflow::approve_gate(
                         &conn,
                         &step_id,
@@ -1682,9 +1685,7 @@ impl App {
 
             std::thread::spawn(move || {
                 let result = (|| {
-                    let db_path = conductor_core::config::db_path();
-                    let conn =
-                        conductor_core::db::open_database(&db_path).map_err(|e| e.to_string())?;
+                    let conn = open_bg_db()?;
                     conductor_core::workflow::reject_gate(&conn, &step_id, "tui-user", None)
                         .map_err(|e| e.to_string())
                 })();
