@@ -87,6 +87,46 @@ impl<'a> AgentManager<'a> {
         Ok(runs)
     }
 
+    /// Returns true if the conversation has any currently active (running or
+    /// waiting_for_feedback) agent run.
+    pub fn has_active_run_for_conversation(&self, conversation_id: &str) -> Result<bool> {
+        let running = AgentRunStatus::Running.to_string();
+        let waiting = AgentRunStatus::WaitingForFeedback.to_string();
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) AS cnt FROM agent_runs \
+             WHERE conversation_id = :conversation_id \
+               AND status IN (:running, :waiting)",
+            named_params! {
+                ":conversation_id": conversation_id,
+                ":running": running,
+                ":waiting": waiting,
+            },
+            |row| row.get("cnt"),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Returns the `session_id` of the most recent completed run in the
+    /// conversation, or `None` if no such run exists.
+    pub fn latest_completed_session_id_for_conversation(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<String>> {
+        let completed = AgentRunStatus::Completed.to_string();
+        let result: rusqlite::Result<Option<String>> = self.conn.query_row(
+            "SELECT session_id FROM agent_runs \
+             WHERE conversation_id = :conversation_id AND status = :completed \
+             ORDER BY started_at DESC LIMIT 1",
+            named_params! { ":conversation_id": conversation_id, ":completed": completed },
+            |row| row.get("session_id"),
+        );
+        match result {
+            Ok(v) => Ok(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// List all agent runs for a repo (across all its worktrees), newest first.
     pub fn list_for_repo(&self, repo_id: &str) -> Result<Vec<AgentRun>> {
         // Cannot use AGENT_RUN_SELECT here: the JOIN requires the `a.` alias.
@@ -1067,6 +1107,190 @@ mod tests {
             any_latest.id, top_level_latest.id,
             "the two functions must diverge when newest run is a child"
         );
+    }
+
+    fn insert_conversation(conn: &rusqlite::Connection, id: &str, scope_id: &str) {
+        conn.execute(
+            "INSERT INTO conversations (id, scope, scope_id, created_at, last_active_at) \
+             VALUES (:id, 'repo', :scope_id, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')",
+            rusqlite::named_params! { ":id": id, ":scope_id": scope_id },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_has_active_run_for_conversation_no_runs() {
+        let conn = setup_db();
+        insert_conversation(&conn, "conv1", "r1");
+        let mgr = AgentManager::new(&conn);
+        assert!(!mgr.has_active_run_for_conversation("conv1").unwrap());
+    }
+
+    #[test]
+    fn test_has_active_run_for_conversation_running() {
+        let conn = setup_db();
+        insert_conversation(&conn, "conv1", "r1");
+        let mgr = AgentManager::new(&conn);
+        mgr.create_run_for_conversation("w1", "task", None, "conv1")
+            .unwrap();
+        assert!(mgr.has_active_run_for_conversation("conv1").unwrap());
+    }
+
+    #[test]
+    fn test_has_active_run_for_conversation_waiting_for_feedback() {
+        let conn = setup_db();
+        insert_conversation(&conn, "conv1", "r1");
+        let mgr = AgentManager::new(&conn);
+        let run = mgr
+            .create_run_for_conversation("w1", "task", None, "conv1")
+            .unwrap();
+        mgr.request_feedback(&run.id, "Continue?", None).unwrap();
+        assert!(mgr.has_active_run_for_conversation("conv1").unwrap());
+    }
+
+    #[test]
+    fn test_has_active_run_for_conversation_completed_is_false() {
+        let conn = setup_db();
+        insert_conversation(&conn, "conv1", "r1");
+        let mgr = AgentManager::new(&conn);
+        let run = mgr
+            .create_run_for_conversation("w1", "task", None, "conv1")
+            .unwrap();
+        mgr.update_run_completed(
+            &run.id,
+            None,
+            Some("done"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(!mgr.has_active_run_for_conversation("conv1").unwrap());
+    }
+
+    #[test]
+    fn test_has_active_run_for_conversation_mixed_returns_true() {
+        let conn = setup_db();
+        insert_conversation(&conn, "conv1", "r1");
+        let mgr = AgentManager::new(&conn);
+        let completed = mgr
+            .create_run_for_conversation("w1", "task1", None, "conv1")
+            .unwrap();
+        mgr.update_run_completed(
+            &completed.id,
+            None,
+            Some("done"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        // A second run is still running
+        mgr.create_run_for_conversation("w2", "task2", None, "conv1")
+            .unwrap();
+        assert!(mgr.has_active_run_for_conversation("conv1").unwrap());
+    }
+
+    #[test]
+    fn test_latest_completed_session_id_no_runs() {
+        let conn = setup_db();
+        insert_conversation(&conn, "conv1", "r1");
+        let mgr = AgentManager::new(&conn);
+        let result = mgr
+            .latest_completed_session_id_for_conversation("conv1")
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_latest_completed_session_id_only_running() {
+        let conn = setup_db();
+        insert_conversation(&conn, "conv1", "r1");
+        let mgr = AgentManager::new(&conn);
+        mgr.create_run_for_conversation("w1", "task", None, "conv1")
+            .unwrap();
+        let result = mgr
+            .latest_completed_session_id_for_conversation("conv1")
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_latest_completed_session_id_single_completed() {
+        let conn = setup_db();
+        insert_conversation(&conn, "conv1", "r1");
+        let mgr = AgentManager::new(&conn);
+        let run = mgr
+            .create_run_for_conversation("w1", "task", None, "conv1")
+            .unwrap();
+        mgr.update_run_completed(
+            &run.id,
+            Some("sess-abc"),
+            Some("done"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let result = mgr
+            .latest_completed_session_id_for_conversation("conv1")
+            .unwrap();
+        assert_eq!(result.as_deref(), Some("sess-abc"));
+    }
+
+    #[test]
+    fn test_latest_completed_session_id_returns_newest() {
+        let conn = setup_db();
+        insert_conversation(&conn, "conv1", "r1");
+        let mgr = AgentManager::new(&conn);
+        let run1 = mgr
+            .create_run_for_conversation("w1", "q1", None, "conv1")
+            .unwrap();
+        mgr.update_run_completed(
+            &run1.id,
+            Some("sess-old"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let run2 = mgr
+            .create_run_for_conversation("w2", "q2", None, "conv1")
+            .unwrap();
+        mgr.update_run_completed(
+            &run2.id,
+            Some("sess-new"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let result = mgr
+            .latest_completed_session_id_for_conversation("conv1")
+            .unwrap();
+        assert_eq!(result.as_deref(), Some("sess-new"));
     }
 
     #[test]
