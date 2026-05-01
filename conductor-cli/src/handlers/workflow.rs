@@ -26,7 +26,7 @@ pub fn handle_workflow(
     match command {
         WorkflowCommands::Active => {
             let wf_mgr = WorkflowManager::new(conn);
-            let runs = wf_mgr.list_active_workflow_runs(&[])?;
+            let runs = conductor_core::workflow::list_active_workflow_runs(wf_mgr.conn(), &[])?;
 
             if runs.is_empty() {
                 println!("No active workflow runs.");
@@ -249,7 +249,8 @@ pub fn handle_workflow(
             } else if let Some(run_id) = workflow_run {
                 // Workflow-run targeted run (e.g. postmortem workflows)
                 let wf_mgr = WorkflowManager::new(conn);
-                let ctx = wf_mgr.resolve_run_context(&run_id, config)?;
+                let ctx =
+                    conductor_core::workflow::resolve_run_context(wf_mgr.conn(), &run_id, config)?;
 
                 // Auto-inject the workflow_run_id input (user --input flags merge after)
                 input_map
@@ -429,7 +430,7 @@ pub fn handle_workflow(
         }
         WorkflowCommands::RunShow { id } => {
             let wf_mgr = WorkflowManager::new(conn);
-            match wf_mgr.get_workflow_run(&id)? {
+            match conductor_core::workflow::get_workflow_run(wf_mgr.conn(), &id)? {
                 Some(run) => {
                     println!("Workflow Run: {}", run.id);
                     println!("  Name:    {}", run.workflow_name);
@@ -458,7 +459,8 @@ pub fn handle_workflow(
                         println!("\n{summary}");
                     }
 
-                    let steps = wf_mgr.get_workflow_steps(&run.id)?;
+                    let steps =
+                        conductor_core::workflow::get_workflow_steps(wf_mgr.conn(), &run.id)?;
                     if !steps.is_empty() {
                         println!("\nSteps:");
                         for step in &steps {
@@ -980,7 +982,7 @@ fn with_waiting_gate(
     ) -> Result<()>,
 ) -> Result<()> {
     let wf_mgr = WorkflowManager::new(conn);
-    match wf_mgr.find_waiting_gate(run_id)? {
+    match conductor_core::workflow::find_waiting_gate(wf_mgr.conn(), run_id)? {
         Some(step) => {
             let user = std::env::var("USER").unwrap_or_else(|_| "cli".to_string());
             action(&wf_mgr, &step, &user)

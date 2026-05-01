@@ -210,7 +210,9 @@ pub(crate) fn guard_active_run(
     worktree_id: &str,
     force: bool,
 ) -> Result<()> {
-    if let Some(active) = wf_mgr.get_active_run_for_worktree(worktree_id)? {
+    if let Some(active) =
+        crate::workflow::manager::queries::get_active_run_for_worktree(wf_mgr.conn(), worktree_id)?
+    {
         if force {
             tracing::info!(
                 "Force override: cancelling active run {} to start new run",
@@ -855,21 +857,21 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         let wt_mgr = WorktreeManager::new(conn, config);
 
         // Load and validate the workflow run
-        let wf_run = wf_mgr
-            .get_workflow_run(input.workflow_run_id)?
-            .ok_or_else(|| {
-                ConductorError::Workflow(format!(
-                    "Workflow run not found: {}",
-                    input.workflow_run_id
-                ))
-            })?;
+        let wf_run =
+            crate::workflow::manager::queries::get_workflow_run(conn, input.workflow_run_id)?
+                .ok_or_else(|| {
+                    ConductorError::Workflow(format!(
+                        "Workflow run not found: {}",
+                        input.workflow_run_id
+                    ))
+                })?;
 
         validate_resume_preconditions(&wf_run.status, input.restart, input.from_step)?;
 
         // Load steps for --from-step validation and skip-count logging.
         // Note: FlowEngine::resume() issues a second get_steps() query after all
         // DB resets complete, so it reads the accurate post-reset state.
-        let all_steps = wf_mgr.get_workflow_steps(&wf_run.id)?;
+        let all_steps = crate::workflow::manager::queries::get_workflow_steps(conn, &wf_run.id)?;
 
         // Validate --from-step early (fail-fast before heavier worktree/snapshot operations)
         if let Some(from_step) = input.from_step {

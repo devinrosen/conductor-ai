@@ -101,7 +101,10 @@ pub(super) fn tool_list_agent_runs(
     // Batch-load workflow run IDs for all agent run IDs
     let run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
     let wf_mgr = WorkflowManager::new(&conn);
-    let workflow_id_map = match wf_mgr.get_workflow_run_ids_for_agent_runs(&run_ids) {
+    let workflow_id_map = match conductor_core::workflow::get_workflow_run_ids_for_agent_runs(
+        wf_mgr.conn(),
+        &run_ids,
+    ) {
         Ok(m) => m,
         Err(e) => return tool_err(e),
     };

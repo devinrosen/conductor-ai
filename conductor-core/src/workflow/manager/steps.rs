@@ -568,7 +568,9 @@ mod tests {
         mgr.mark_step_running(&step_id, WorkflowStepStatus::Running, Some("child-run-1"))
             .unwrap();
 
-        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(step.status, WorkflowStepStatus::Running);
         assert_eq!(step.child_run_id.as_deref(), Some("child-run-1"));
         assert!(step.started_at.is_some(), "started_at should be set");
@@ -583,7 +585,9 @@ mod tests {
         mgr.mark_step_running(&step_id, WorkflowStepStatus::Waiting, None)
             .unwrap();
 
-        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(step.status, WorkflowStepStatus::Waiting);
         assert!(step.child_run_id.is_none());
     }
@@ -607,7 +611,9 @@ mod tests {
         )
         .unwrap();
 
-        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(step.status, WorkflowStepStatus::Completed);
         assert_eq!(step.child_run_id.as_deref(), Some("child-run-2"));
         assert_eq!(step.result_text.as_deref(), Some("result text"));
@@ -631,7 +637,9 @@ mod tests {
         mgr.mark_step_pending(&step_id, WorkflowStepStatus::Pending)
             .unwrap();
 
-        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(step.status, WorkflowStepStatus::Pending);
         // started_at and child_run_id must be left as-is (mark_step_pending touches status only).
         assert!(step.started_at.is_some(), "started_at should be preserved");
@@ -663,7 +671,9 @@ mod tests {
         )
         .unwrap();
 
-        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(step.status, WorkflowStepStatus::Failed);
         // COALESCE in SQL keeps the existing child_run_id when None is passed.
         assert_eq!(step.child_run_id.as_deref(), Some("child-run-3"));
@@ -693,7 +703,9 @@ mod tests {
         )
         .unwrap();
 
-        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(step.cost_usd, Some(1.23));
         assert_eq!(step.num_turns, Some(5));
         assert_eq!(step.duration_ms, Some(1000));
@@ -734,7 +746,9 @@ mod tests {
         )
         .unwrap();
 
-        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(step.cost_usd, Some(9.99), "cost_usd must be preserved");
         assert_eq!(step.num_turns, Some(3), "num_turns must be preserved");
         assert_eq!(step.input_tokens, Some(42));
@@ -759,7 +773,9 @@ mod tests {
         .unwrap();
 
         // Original step untouched.
-        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+            .unwrap()
+            .unwrap();
         assert!(step.cost_usd.is_none());
     }
 }

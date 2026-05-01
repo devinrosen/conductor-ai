@@ -57,6 +57,7 @@ pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
 pub use manager::definitions::{
     list_defs, list_defs_with_validation, load_def_by_name, validate_single,
 };
+pub use manager::queries::*;
 pub use manager::recovery::{ReapedStaleRun, StaleWorkflowRun};
 pub use manager::{InvalidWorkflowEntry, StepMetrics, WorkflowManager};
 pub use output::{parse_flow_output, FlowOutput};

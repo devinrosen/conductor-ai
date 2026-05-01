@@ -21,7 +21,7 @@ fn test_gate_approve() {
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
     // Find waiting gate
-    let waiting = mgr.find_waiting_gate(&run.id).unwrap();
+    let waiting = crate::workflow::find_waiting_gate(mgr.conn(), &run.id).unwrap();
     assert!(waiting.is_some());
     assert_eq!(waiting.unwrap().id, step_id);
 
@@ -30,7 +30,7 @@ fn test_gate_approve() {
         .unwrap();
 
     // Verify
-    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    let steps = crate::workflow::get_workflow_steps(mgr.conn(), &run.id).unwrap();
     assert_eq!(steps[0].status, WorkflowStepStatus::Completed);
     assert!(steps[0].gate_approved_at.is_some());
     assert_eq!(steps[0].gate_approved_by.as_deref(), Some("user"));
@@ -56,7 +56,7 @@ fn test_gate_reject() {
 
     mgr.reject_gate(&step_id, "user", None).unwrap();
 
-    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    let steps = crate::workflow::get_workflow_steps(mgr.conn(), &run.id).unwrap();
     assert_eq!(steps[0].status, WorkflowStepStatus::Failed);
 }
 
@@ -84,7 +84,9 @@ fn test_gate_pr_approval_approve() {
     mgr.approve_gate(&step_id, "reviewer-bot", Some("PR approved"), None, None)
         .unwrap();
 
-    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(step.status, WorkflowStepStatus::Completed);
     assert_eq!(step.gate_type, Some(GateType::PrApproval));
     assert_eq!(step.gate_approved_by.as_deref(), Some("reviewer-bot"));
@@ -110,7 +112,9 @@ fn test_gate_pr_approval_reject() {
     mgr.reject_gate(&step_id, "reviewer", Some("Changes requested"))
         .unwrap();
 
-    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(step.status, WorkflowStepStatus::Failed);
     assert_eq!(step.gate_feedback.as_deref(), Some("Changes requested"));
 }
@@ -139,7 +143,9 @@ fn test_gate_pr_checks_approve() {
     mgr.approve_gate(&step_id, "ci-bot", Some("All checks passed"), None, None)
         .unwrap();
 
-    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(step.status, WorkflowStepStatus::Completed);
     assert_eq!(step.gate_type, Some(GateType::PrChecks));
 }
@@ -170,7 +176,9 @@ fn test_gate_multiselect_options_and_approval() {
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
     // Verify gate_options are stored and step is waiting
-    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(step.status, WorkflowStepStatus::Waiting);
     assert!(step.gate_options.is_some(), "gate_options should be set");
 
@@ -181,7 +189,9 @@ fn test_gate_multiselect_options_and_approval() {
         .unwrap();
 
     // Verify post-approval state
-    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(step.status, WorkflowStepStatus::Completed);
     assert!(step.gate_approved_at.is_some());
     assert_eq!(step.gate_approved_by.as_deref(), Some("user"));
@@ -231,7 +241,9 @@ fn test_gate_approve_empty_selections() {
     mgr.approve_gate(&step_id, "user", None, Some(&[]), None)
         .unwrap();
 
-    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(step.status, WorkflowStepStatus::Completed);
     // Empty selections → no context_out injected
     assert!(

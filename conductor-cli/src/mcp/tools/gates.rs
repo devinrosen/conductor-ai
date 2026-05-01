@@ -29,7 +29,7 @@ pub(super) fn tool_approve_gate(
         Err(e) => return tool_err(e),
     };
     let wf_mgr = WorkflowManager::new(&conn);
-    let step = match wf_mgr.find_waiting_gate(run_id) {
+    let step = match conductor_core::workflow::find_waiting_gate(wf_mgr.conn(), run_id) {
         Ok(Some(s)) => s,
         Ok(None) => return tool_err(format!("No waiting gate found for run {run_id}")),
         Err(e) => return tool_err(e),
@@ -63,7 +63,7 @@ pub(super) fn tool_reject_gate(
     };
     let wf_mgr = WorkflowManager::new(&conn);
     let feedback = get_arg(args, "feedback");
-    let step = match wf_mgr.find_waiting_gate(run_id) {
+    let step = match conductor_core::workflow::find_waiting_gate(wf_mgr.conn(), run_id) {
         Ok(Some(s)) => s,
         Ok(None) => return tool_err(format!("No waiting gate found for run {run_id}")),
         Err(e) => return tool_err(e),
@@ -246,7 +246,8 @@ mod tests {
         use conductor_core::workflow::WorkflowManager;
         let conn = open_database(&db).expect("open db");
         let mgr = WorkflowManager::new(&conn);
-        let steps = mgr.get_workflow_steps(&run_id).expect("get steps");
+        let steps =
+            conductor_core::workflow::get_workflow_steps(mgr.conn(), &run_id).expect("get steps");
         assert_eq!(steps[0].gate_feedback.as_deref(), Some("LGTM"));
         assert_eq!(steps[0].gate_approved_by.as_deref(), Some("mcp"));
     }
@@ -270,7 +271,8 @@ mod tests {
         use conductor_core::workflow::WorkflowManager;
         let conn = open_database(&db).expect("open db");
         let mgr = WorkflowManager::new(&conn);
-        let steps = mgr.get_workflow_steps(&run_id).expect("get steps");
+        let steps =
+            conductor_core::workflow::get_workflow_steps(mgr.conn(), &run_id).expect("get steps");
         assert_eq!(steps[0].gate_feedback.as_deref(), Some("Needs more work"));
         assert_eq!(steps[0].gate_approved_by.as_deref(), Some("mcp"));
     }

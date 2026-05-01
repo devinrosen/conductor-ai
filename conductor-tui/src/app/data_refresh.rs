@@ -46,12 +46,12 @@ impl App {
         use conductor_core::workflow::WorkflowManager;
         if let Some(ref repo_id) = self.state.selected_repo_id.clone() {
             let wf_mgr = WorkflowManager::new(&self.conn);
-            self.state.detail_gates = wf_mgr
-                .list_waiting_gate_steps_for_repo(repo_id)
-                .unwrap_or_else(|e| {
-                    tracing::warn!("failed to load pending gates for repo {repo_id}: {e}");
-                    Vec::new()
-                });
+            self.state.detail_gates =
+                conductor_core::workflow::list_waiting_gate_steps_for_repo(wf_mgr.conn(), repo_id)
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("failed to load pending gates for repo {repo_id}: {e}");
+                        Vec::new()
+                    });
         } else {
             self.state.detail_gates = Vec::new();
         }

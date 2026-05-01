@@ -419,7 +419,9 @@ mod tests {
         );
 
         // Fetch back from DB and confirm round-trip
-        let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        let fetched = crate::workflow::get_workflow_run(mgr.conn(), &run.id)
+            .unwrap()
+            .unwrap();
         assert!(
             fetched.worktree_id.is_none(),
             "worktree_id should remain None after DB round-trip"

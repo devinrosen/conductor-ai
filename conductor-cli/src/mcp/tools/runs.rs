@@ -60,12 +60,24 @@ pub(super) fn tool_list_runs(
                 Ok(w) => w,
                 Err(e) => return tool_err(e),
             };
-            match wf_mgr.list_workflow_runs_filtered_paginated(&wt.id, status, limit, offset) {
+            match conductor_core::workflow::list_workflow_runs_filtered_paginated(
+                wf_mgr.conn(),
+                &wt.id,
+                status,
+                limit,
+                offset,
+            ) {
                 Ok(r) => r,
                 Err(e) => return tool_err(e),
             }
         } else {
-            match wf_mgr.list_workflow_runs_by_repo_id_filtered(&repo.id, limit, offset, status) {
+            match conductor_core::workflow::list_workflow_runs_by_repo_id_filtered(
+                wf_mgr.conn(),
+                &repo.id,
+                limit,
+                offset,
+                status,
+            ) {
                 Ok(r) => r,
                 Err(e) => return tool_err(e),
             }
@@ -110,7 +122,12 @@ pub(super) fn tool_list_runs(
         let repo_map: std::collections::HashMap<String, String> =
             repos.into_iter().map(|r| (r.id, r.slug)).collect();
 
-        let runs = match wf_mgr.list_all_workflow_runs_filtered_paginated(status, limit, offset) {
+        let runs = match conductor_core::workflow::list_all_workflow_runs_filtered_paginated(
+            wf_mgr.conn(),
+            status,
+            limit,
+            offset,
+        ) {
             Ok(r) => r,
             Err(e) => return tool_err(e),
         };
@@ -145,12 +162,12 @@ pub(super) fn tool_get_run(
         Err(e) => return tool_err(e),
     };
     let wf_mgr = WorkflowManager::new(&conn);
-    let run = match wf_mgr.get_workflow_run(run_id) {
+    let run = match conductor_core::workflow::get_workflow_run(wf_mgr.conn(), run_id) {
         Ok(Some(r)) => r,
         Ok(None) => return tool_err(format!("Workflow run {run_id} not found")),
         Err(e) => return tool_err(e),
     };
-    let steps = match wf_mgr.get_workflow_steps(run_id) {
+    let steps = match conductor_core::workflow::get_workflow_steps(wf_mgr.conn(), run_id) {
         Ok(s) => s,
         Err(e) => return tool_err(e),
     };
@@ -175,7 +192,7 @@ pub(super) fn tool_cancel_run(
         Err(e) => return tool_err(e),
     };
     let wf_mgr = WorkflowManager::new(&conn);
-    let run = match wf_mgr.get_workflow_run(run_id) {
+    let run = match conductor_core::workflow::get_workflow_run(wf_mgr.conn(), run_id) {
         Ok(Some(r)) => r,
         Ok(None) => return tool_err(format!("Workflow run not found: {run_id}")),
         Err(e) => return tool_err(e),
@@ -208,7 +225,7 @@ pub(super) fn tool_resume_run(
         Err(e) => return tool_err(e),
     };
     let wf_mgr = WorkflowManager::new(&conn);
-    let run = match wf_mgr.get_workflow_run(run_id) {
+    let run = match conductor_core::workflow::get_workflow_run(wf_mgr.conn(), run_id) {
         Ok(Some(r)) => r,
         Ok(None) => return tool_err(format!("Workflow run not found: {run_id}")),
         Err(e) => return tool_err(e),
@@ -286,14 +303,14 @@ pub(super) fn tool_get_step_log(
     let wf_mgr = WorkflowManager::new(&conn);
 
     // Verify the workflow run exists.
-    match wf_mgr.get_workflow_run(run_id) {
+    match conductor_core::workflow::get_workflow_run(wf_mgr.conn(), run_id) {
         Ok(Some(_)) => {}
         Ok(None) => return tool_err(format!("Workflow run {run_id} not found")),
         Err(e) => return tool_err(e),
     }
 
     // Find all steps for this run and pick the last matching step_name.
-    let steps = match wf_mgr.get_workflow_steps(run_id) {
+    let steps = match conductor_core::workflow::get_workflow_steps(wf_mgr.conn(), run_id) {
         Ok(s) => s,
         Err(e) => return tool_err(e),
     };
@@ -579,9 +596,13 @@ mod tests {
         let (_f, db) = make_test_db();
         let conn = open_database(&db).expect("open db");
         let mgr = WorkflowManager::new(&conn);
-        let runs = mgr
-            .list_workflow_runs_by_repo_id("nonexistent-repo-id", 50, 0)
-            .expect("query should succeed");
+        let runs = conductor_core::workflow::list_workflow_runs_by_repo_id(
+            mgr.conn(),
+            "nonexistent-repo-id",
+            50,
+            0,
+        )
+        .expect("query should succeed");
         assert!(runs.is_empty(), "expected no runs for unknown repo");
     }
 
@@ -641,12 +662,12 @@ mod tests {
             )
             .expect("create run B");
 
-        let runs_a = mgr
-            .list_workflow_runs_by_repo_id(&repo_a.id, 50, 0)
-            .expect("query A");
-        let runs_b = mgr
-            .list_workflow_runs_by_repo_id(&repo_b.id, 50, 0)
-            .expect("query B");
+        let runs_a =
+            conductor_core::workflow::list_workflow_runs_by_repo_id(mgr.conn(), &repo_a.id, 50, 0)
+                .expect("query A");
+        let runs_b =
+            conductor_core::workflow::list_workflow_runs_by_repo_id(mgr.conn(), &repo_b.id, 50, 0)
+                .expect("query B");
 
         assert_eq!(runs_a.len(), 1, "expected 1 run for repo-a");
         assert_eq!(runs_a[0].workflow_name, "wf-a");
@@ -741,8 +762,7 @@ mod tests {
         // Verify the run status was updated in the DB.
         let conn = open_database(&db).expect("open db");
         let mgr = WorkflowManager::new(&conn);
-        let run = mgr
-            .get_workflow_run(&run_id)
+        let run = conductor_core::workflow::get_workflow_run(mgr.conn(), &run_id)
             .expect("query")
             .expect("run exists");
         assert_eq!(run.status, WorkflowRunStatus::Cancelled);

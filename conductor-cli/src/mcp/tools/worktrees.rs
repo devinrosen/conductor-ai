@@ -138,7 +138,7 @@ pub(super) fn tool_get_worktree(
 
     // Latest workflow run
     let wf_mgr = WorkflowManager::new(&conn);
-    match wf_mgr.list_workflow_runs(&wt.id) {
+    match conductor_core::workflow::list_workflow_runs(wf_mgr.conn(), &wt.id) {
         Ok(runs) => {
             if let Some(run) = runs.first() {
                 out.push_str(&format!(

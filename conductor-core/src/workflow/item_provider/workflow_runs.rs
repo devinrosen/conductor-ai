@@ -29,8 +29,11 @@ impl ItemProvider for WorkflowRunsProvider {
                 .collect()
         };
 
-        let wf_mgr = crate::workflow::manager::WorkflowManager::new(ctx.conn);
-        let rows = wf_mgr.list_runs_by_status(&statuses, workflow_name_filter)?;
+        let rows = crate::workflow::manager::queries::list_runs_by_status(
+            ctx.conn,
+            &statuses,
+            workflow_name_filter,
+        )?;
 
         Ok(collect_fan_out_items(
             rows,

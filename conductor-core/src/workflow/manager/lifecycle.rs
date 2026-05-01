@@ -218,8 +218,7 @@ impl<'a> WorkflowManager<'a> {
     /// no-op).  Step and child-run cancellation failures are silently ignored
     /// (best-effort).
     pub fn cancel_run(&self, run_id: &str, reason: &str) -> Result<()> {
-        let run = self
-            .get_workflow_run(run_id)?
+        let run = super::queries::get_workflow_run(self.conn, run_id)?
             .ok_or_else(|| ConductorError::Workflow(format!("Workflow run not found: {run_id}")))?;
 
         if matches!(
@@ -240,7 +239,7 @@ impl<'a> WorkflowManager<'a> {
         }
 
         let agent_mgr = AgentManager::new(self.conn);
-        if let Ok(steps) = self.get_workflow_steps(run_id) {
+        if let Ok(steps) = super::queries::get_workflow_steps(self.conn, run_id) {
             for step in steps {
                 if matches!(
                     step.status,
@@ -283,7 +282,7 @@ impl<'a> WorkflowManager<'a> {
         }
 
         // Recursively cancel child workflow runs (sub-workflows spawned by call_workflow steps)
-        if let Ok(children) = self.list_child_workflow_runs(run_id) {
+        if let Ok(children) = super::queries::list_child_workflow_runs(self.conn, run_id) {
             for child in children {
                 if matches!(
                     child.status,
@@ -389,7 +388,7 @@ impl<'a> WorkflowManager<'a> {
             Some(error_msg),
             Some(error_msg),
         )?;
-        if let Ok(Some(run)) = self.get_workflow_run(workflow_run_id) {
+        if let Ok(Some(run)) = super::queries::get_workflow_run(self.conn, workflow_run_id) {
             Ok(run.parent_run_id)
         } else {
             Err(ConductorError::InvalidInput(format!(

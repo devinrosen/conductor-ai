@@ -339,7 +339,7 @@ impl<'a> WorkflowManager<'a> {
 
         // Batch-fetch the active waiting gate step for each run to avoid N+1 queries.
         let run_id_refs: Vec<&str> = waiting_runs.iter().map(|(id, _)| id.as_str()).collect();
-        let gate_steps = self.find_waiting_gates_for_runs(&run_id_refs)?;
+        let gate_steps = super::queries::find_waiting_gates_for_runs(self.conn, &run_id_refs)?;
 
         let mut reaped = 0usize;
         let now = Utc::now();
@@ -1019,7 +1019,7 @@ impl<'a> WorkflowManager<'a> {
     /// Skip-set construction for the resume execution path is handled internally
     /// by `FlowEngine::resume()`.
     pub fn get_completed_step_keys(&self, workflow_run_id: &str) -> Result<HashSet<StepKey>> {
-        let steps = self.get_workflow_steps(workflow_run_id)?;
+        let steps = super::queries::get_workflow_steps(self.conn, workflow_run_id)?;
         Ok(steps
             .iter()
             .filter(|s| s.status == WorkflowStepStatus::Completed)
