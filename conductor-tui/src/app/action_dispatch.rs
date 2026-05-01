@@ -1243,6 +1243,30 @@ impl App {
                     };
                 }
             },
+            Action::GateApproveComplete { result } => match result {
+                Ok(()) => {
+                    self.state.modal = Modal::None;
+                    self.state.status_message = Some("Gate approved".to_string());
+                    self.reload_workflow_steps();
+                }
+                Err(e) => {
+                    self.state.modal = Modal::Error {
+                        message: format!("Gate approval failed: {e}"),
+                    };
+                }
+            },
+            Action::GateRejectComplete { result } => match result {
+                Ok(()) => {
+                    self.state.modal = Modal::None;
+                    self.state.status_message = Some("Gate rejected".to_string());
+                    self.reload_workflow_steps();
+                }
+                Err(e) => {
+                    self.state.modal = Modal::Error {
+                        message: format!("Gate rejection failed: {e}"),
+                    };
+                }
+            },
             Action::ClearConversationComplete {
                 repo_slug,
                 wt_slug,

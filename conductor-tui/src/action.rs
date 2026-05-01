@@ -432,6 +432,14 @@ pub enum Action {
     WorkflowDeleteComplete {
         result: Result<(), String>,
     },
+    /// Background result: gate approve completed.
+    GateApproveComplete {
+        result: Result<(), String>,
+    },
+    /// Background result: gate reject completed.
+    GateRejectComplete {
+        result: Result<(), String>,
+    },
     ApproveGate,
     RejectGate,
     /// View the selected workflow definition's YAML source in a scrollable modal.
