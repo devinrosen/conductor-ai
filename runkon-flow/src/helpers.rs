@@ -298,12 +298,14 @@ pub fn find_max_completed_while_iteration(state: &ExecutionState, node: &WhileNo
     // keys only — non-body steps from other parts of the workflow are irrelevant here.
     let mut completed_by_iter: std::collections::HashMap<u32, std::collections::HashSet<&str>> =
         std::collections::HashMap::new();
-    for (name, iter) in step_map.keys() {
+    for (name, inner) in step_map {
         if body_key_set.contains(name.as_str()) {
-            completed_by_iter
-                .entry(*iter)
-                .or_default()
-                .insert(name.as_str());
+            for iter in inner.keys() {
+                completed_by_iter
+                    .entry(*iter)
+                    .or_default()
+                    .insert(name.as_str());
+            }
         }
     }
 

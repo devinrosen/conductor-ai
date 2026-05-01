@@ -15,7 +15,7 @@ use crate::traits::item_provider::{ItemProvider, ItemProviderRegistry};
 use crate::traits::persistence::WorkflowPersistence;
 use crate::traits::script_env_provider::{NoOpScriptEnvProvider, ScriptEnvProvider};
 use crate::traits::workflow_resolver::WorkflowResolver;
-use crate::types::WorkflowResult;
+use crate::types::{WorkflowResult, WorkflowRunStep};
 use crate::workflow_resolver_directory::DirectoryWorkflowResolver;
 
 // ---------------------------------------------------------------------------
@@ -170,11 +170,16 @@ impl FlowEngine {
                     state.workflow_run_id
                 ))
             })?;
-        let step_map: HashMap<_, _> = steps
+        let mut step_map: HashMap<String, HashMap<u32, WorkflowRunStep>> = HashMap::new();
+        for s in steps
             .into_iter()
             .filter(|s| s.status == crate::status::WorkflowStepStatus::Completed)
-            .map(|s| ((s.step_name.clone(), s.iteration as u32), s))
-            .collect();
+        {
+            step_map
+                .entry(s.step_name.clone())
+                .or_default()
+                .insert(s.iteration as u32, s);
+        }
         if !step_map.is_empty() {
             state.resume_ctx = Some(crate::engine::ResumeContext { step_map });
         }
