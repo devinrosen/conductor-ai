@@ -75,6 +75,51 @@ impl InMemoryWorkflowPersistence {
             .store(fail, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Test helper: insert a minimal `WorkflowRun` with the given `id` so that
+    /// `acquire_lease` can find it. Use this in tests that call `FlowEngine::run`
+    /// or `FlowEngine::resume` against an `InMemoryWorkflowPersistence` without
+    /// going through `create_run` (which generates its own id).
+    #[cfg(test)]
+    pub fn seed_run(&self, id: &str) {
+        let now = chrono::Utc::now().to_rfc3339();
+        let run = crate::types::WorkflowRun {
+            id: id.to_string(),
+            workflow_name: String::new(),
+            worktree_id: None,
+            parent_run_id: String::new(),
+            status: crate::status::WorkflowRunStatus::Pending,
+            dry_run: false,
+            trigger: "test".to_string(),
+            started_at: now,
+            ended_at: None,
+            result_summary: None,
+            error: None,
+            definition_snapshot: None,
+            inputs: std::collections::HashMap::new(),
+            ticket_id: None,
+            repo_id: None,
+            parent_workflow_run_id: None,
+            target_label: None,
+            default_bot_name: None,
+            iteration: 0,
+            blocked_on: None,
+            workflow_title: None,
+            total_input_tokens: None,
+            total_output_tokens: None,
+            total_cache_read_input_tokens: None,
+            total_cache_creation_input_tokens: None,
+            total_turns: None,
+            total_cost_usd: None,
+            total_duration_ms: None,
+            model: None,
+            dismissed: false,
+            owner_token: None,
+            lease_until: None,
+            generation: 0,
+        };
+        self.store.lock().unwrap().runs.insert(id.to_string(), run);
+    }
+
     /// Test helper: directly set the metric fields on a step so that
     /// `restore_completed_step` can be tested with non-None metric values.
     #[cfg(test)]
@@ -508,11 +553,10 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         let mut store = self.store.lock().map_err(|_| lock_err())?;
         let now = chrono::Utc::now();
 
-        // If the run doesn't exist in the store (common in unit tests that only set up
-        // persistence to inject specific failures), treat it as unclaimed and grant the
-        // lease without modifying the store.
+        // If the run doesn't exist, return None (no rows updated) — consistent with the SQLite
+        // implementation which returns None when the UPDATE matches 0 rows.
         let Some(run) = store.runs.get_mut(run_id) else {
-            return Ok(Some(1));
+            return Ok(None);
         };
 
         let can_claim = match &run.owner_token {

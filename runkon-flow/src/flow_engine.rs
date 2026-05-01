@@ -117,10 +117,10 @@ impl FlowEngine {
         let token = state
             .owner_token
             .get_or_insert_with(|| ulid::Ulid::new().to_string())
-            .clone();
+            .as_str();
         match state
             .persistence
-            .acquire_lease(&state.workflow_run_id, &token, LEASE_TTL_SECONDS)
+            .acquire_lease(&state.workflow_run_id, token, LEASE_TTL_SECONDS)
         {
             Ok(Some(gen)) => {
                 state.lease_generation = Some(gen);
@@ -1130,8 +1130,10 @@ mod tests {
         use crate::persistence_memory::InMemoryWorkflowPersistence;
         use crate::traits::script_env_provider::NoOpScriptEnvProvider;
         use crate::types::WorkflowExecConfig;
+        let persistence = InMemoryWorkflowPersistence::new();
+        persistence.seed_run("test-run");
         ExecutionState {
-            persistence: Arc::new(InMemoryWorkflowPersistence::new()),
+            persistence: Arc::new(persistence),
             action_registry: Arc::new(ActionRegistry::new(HashMap::new(), None)),
             script_env_provider: Arc::new(NoOpScriptEnvProvider),
             workflow_run_id: "test-run".to_string(),
@@ -2045,6 +2047,7 @@ mod tests {
         use crate::persistence_memory::InMemoryWorkflowPersistence;
 
         let persistence = Arc::new(InMemoryWorkflowPersistence::new());
+        persistence.seed_run("run-123");
         persistence.set_fail_get_steps(true);
 
         let engine = FlowEngineBuilder::new().build().unwrap();

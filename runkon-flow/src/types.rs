@@ -75,6 +75,7 @@ pub struct WorkflowRun {
     pub owner_token: Option<String>,
     #[serde(skip)]
     pub lease_until: Option<String>,
+    #[serde(skip)]
     pub generation: i64,
 }
 

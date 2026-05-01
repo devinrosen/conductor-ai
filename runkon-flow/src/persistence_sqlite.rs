@@ -766,7 +766,7 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
                     OR owner_token = :token)",
             named_params! { ":token": token, ":ttl": ttl_seconds, ":run_id": run_id },
         )
-        .map_err(|e| EngineError::Persistence(e.to_string()))?;
+        .map_err(|e| EngineError::Persistence(format!("acquire_lease UPDATE: {e}")))?;
 
         if conn.changes() == 0u64 {
             return Ok(None);
@@ -777,7 +777,7 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
                 [run_id],
                 |r| r.get(0),
             )
-            .map_err(|e| EngineError::Persistence(e.to_string()))?;
+            .map_err(|e| EngineError::Persistence(format!("acquire_lease read generation: {e}")))?;
         Ok(Some(gen))
     }
 
