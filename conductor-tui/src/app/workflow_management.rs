@@ -969,22 +969,23 @@ impl App {
                             .map(|r| (Some(format!("{}/{}", r.slug, w.slug)), w.ticket_id.clone()))
                     })
                     .unwrap_or_else(|| {
-                        // Cache miss — query DB directly to avoid storing "".
-                        use conductor_core::config::db_path;
+                        // Cache miss — go through the managed layer rather than raw SQL.
+                        use conductor_core::config::{db_path, load_config};
                         use conductor_core::db::open_database;
+                        use conductor_core::repo::RepoManager;
                         let label = (|| -> Option<WorktreeLabelParts> {
                             let conn = open_database(&db_path()).ok()?;
-                            let (repo_slug, wt_slug, ticket_id): (String, String, Option<String>) =
-                                conn.query_row(
-                                    "SELECT r.slug, w.slug, w.ticket_id \
-                                     FROM worktrees w \
-                                     JOIN repos r ON r.id = w.repo_id \
-                                     WHERE w.id = ?1",
-                                    rusqlite::params![worktree_id],
-                                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                                )
+                            let config = load_config().ok()?;
+                            let wt = WorktreeManager::new(&conn, &config)
+                                .get_by_id_enriched(&worktree_id)
                                 .ok()?;
-                            Some((Some(format!("{repo_slug}/{wt_slug}")), ticket_id))
+                            let repo = RepoManager::new(&conn, &config)
+                                .get_by_id(&wt.worktree.repo_id)
+                                .ok()?;
+                            Some((
+                                Some(format!("{}/{}", repo.slug, wt.worktree.slug)),
+                                wt.worktree.ticket_id,
+                            ))
                         })();
                         label.unwrap_or((None, None))
                     });
