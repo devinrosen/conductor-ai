@@ -280,7 +280,7 @@ fn build_workflow_summaries(
     known_bots: &std::collections::HashSet<String>,
 ) -> Result<Vec<WorkflowDefSummary>, ApiError> {
     let (defs, invalid_entries) =
-        WorkflowManager::list_defs_with_validation(wt_path, repo_path, known_bots)
+        conductor_core::workflow::list_defs_with_validation(wt_path, repo_path, known_bots)
             .map_err(ApiError::Core)?;
 
     let mut summaries: Vec<WorkflowDefSummary> = Vec::new();
@@ -411,7 +411,7 @@ pub async fn get_workflow_def(
     let repo = RepoManager::new(&db, &config).get_by_id(&wt.repo_id)?;
 
     let (defs, _warnings) =
-        WorkflowManager::list_defs(&wt.path, &repo.local_path).map_err(ApiError::Core)?;
+        conductor_core::workflow::list_defs(&wt.path, &repo.local_path).map_err(ApiError::Core)?;
 
     let def = defs
         .into_iter()
@@ -456,7 +456,8 @@ pub async fn run_workflow(
         let repo = repo_mgr.get_by_id(&wt.repo_id)?;
 
         // Validate workflow exists and load definition
-        let def = WorkflowManager::load_def_by_name(&wt.path, &repo.local_path, &req.name)?;
+        let def =
+            conductor_core::workflow::load_def_by_name(&wt.path, &repo.local_path, &req.name)?;
 
         // Reject if a top-level workflow run is already active on this worktree
         let wf_mgr = WorkflowManager::new(&db);
@@ -726,7 +727,8 @@ pub async fn post_workflow_run(
             };
 
         // Validate workflow exists (def is reused by the spawn below — no double load)
-        let def = WorkflowManager::load_def_by_name(&wt_path, &repo.local_path, &req.workflow)?;
+        let def =
+            conductor_core::workflow::load_def_by_name(&wt_path, &repo.local_path, &req.workflow)?;
         let model = req
             .model
             .clone()

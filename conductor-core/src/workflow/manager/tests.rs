@@ -1148,7 +1148,7 @@ fn test_validate_single_returns_entry_for_valid_workflow() {
     let known_bots = std::collections::HashSet::new();
     let path = tmp.path().to_str().unwrap();
 
-    let entry = WorkflowManager::validate_single(path, path, &wf, &known_bots);
+    let entry = crate::workflow::validate_single(path, path, &wf, &known_bots);
 
     assert_eq!(entry.name, "good-wf");
     assert!(
@@ -1181,7 +1181,7 @@ fn test_validate_single_surfaces_warnings_for_unknown_bot() {
     let known_bots = std::collections::HashSet::new();
     let path = tmp.path().to_str().unwrap();
 
-    let entry = WorkflowManager::validate_single(path, path, &wf, &known_bots);
+    let entry = crate::workflow::validate_single(path, path, &wf, &known_bots);
 
     assert_eq!(entry.name, "bot-wf");
     assert!(
@@ -1217,7 +1217,7 @@ fn test_validate_single_reports_errors_for_missing_agent() {
     let known_bots = std::collections::HashSet::new();
     let path = tmp.path().to_str().unwrap();
 
-    let entry = WorkflowManager::validate_single(path, path, &wf, &known_bots);
+    let entry = crate::workflow::validate_single(path, path, &wf, &known_bots);
 
     assert_eq!(entry.name, "bad-wf");
     assert!(
@@ -4016,7 +4016,7 @@ fn test_list_defs_with_validation_parse_failures_are_captured() {
     std::fs::write(wf_dir.join("bad.wf"), "this is invalid !!!").unwrap();
 
     let wt_path_str = tmp.path().to_str().unwrap();
-    let (_defs, invalid) = WorkflowManager::list_defs_with_validation(
+    let (_defs, invalid) = crate::workflow::list_defs_with_validation(
         wt_path_str,
         "/nonexistent",
         &std::collections::HashSet::new(),
@@ -4047,7 +4047,7 @@ fn test_list_defs_with_validation_filename_stem_extraction() {
     // Just a parse failure with a specific filename
     std::fs::write(wf_dir.join("my-workflow.wf"), "invalid syntax here !!!").unwrap();
 
-    let (defs, invalid) = WorkflowManager::list_defs_with_validation(
+    let (defs, invalid) = crate::workflow::list_defs_with_validation(
         tmp.path().to_str().unwrap(),
         "/nonexistent",
         &std::collections::HashSet::new(),
@@ -4068,7 +4068,7 @@ fn test_list_defs_with_validation_empty_directory() {
     let wf_dir = tmp.path().join(".conductor").join("workflows");
     std::fs::create_dir_all(&wf_dir).unwrap();
 
-    let (defs, invalid) = WorkflowManager::list_defs_with_validation(
+    let (defs, invalid) = crate::workflow::list_defs_with_validation(
         tmp.path().to_str().unwrap(),
         "/nonexistent",
         &std::collections::HashSet::new(),
@@ -4095,7 +4095,7 @@ fn test_list_defs_with_validation_happy_path() {
     )
     .unwrap();
 
-    let (defs, invalid) = WorkflowManager::list_defs_with_validation(
+    let (defs, invalid) = crate::workflow::list_defs_with_validation(
         tmp.path().to_str().unwrap(),
         "/nonexistent",
         &std::collections::HashSet::new(),
@@ -4145,7 +4145,7 @@ fn test_list_defs_with_validation_propagates_io_error() {
     // Remove all permissions so fs::read_dir fails.
     std::fs::set_permissions(&wf_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
 
-    let result = WorkflowManager::list_defs_with_validation(
+    let result = crate::workflow::list_defs_with_validation(
         tmp.path().to_str().unwrap(),
         "/nonexistent",
         &std::collections::HashSet::new(),

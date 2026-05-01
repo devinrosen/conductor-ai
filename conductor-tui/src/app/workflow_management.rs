@@ -150,13 +150,14 @@ impl App {
                 if let Some(ref tx) = self.bg_tx {
                     let tx = tx.clone();
                     std::thread::spawn(move || {
-                        let (defs, warnings) = match WorkflowManager::list_defs(&wt_path, &rp) {
-                            Ok(result) => result,
-                            Err(e) => {
-                                tracing::warn!("Failed to load workflow definitions: {e}");
-                                (vec![], vec![])
-                            }
-                        };
+                        let (defs, warnings) =
+                            match conductor_core::workflow::list_defs(&wt_path, &rp) {
+                                Ok(result) => result,
+                                Err(e) => {
+                                    tracing::warn!("Failed to load workflow definitions: {e}");
+                                    (vec![], vec![])
+                                }
+                            };
                         let _ = tx.send(Action::WorkflowDefsReloaded { defs, warnings });
                     });
                 }
@@ -519,7 +520,7 @@ impl App {
 
                 for wt_path in &worktree_paths {
                     let (defs, _warnings) =
-                        conductor_core::workflow::WorkflowManager::list_defs(wt_path, &repo_path)?;
+                        conductor_core::workflow::list_defs(wt_path, &repo_path)?;
                     for def in defs {
                         if seen.insert(def.name.clone()) {
                             all_defs.push(def);
@@ -529,8 +530,7 @@ impl App {
 
                 // Fallback: no worktrees provided (or none had defs) → repo-only load.
                 if all_defs.is_empty() {
-                    let (defs, _warnings) =
-                        conductor_core::workflow::WorkflowManager::list_defs("", &repo_path)?;
+                    let (defs, _warnings) = conductor_core::workflow::list_defs("", &repo_path)?;
                     all_defs = defs;
                 }
 

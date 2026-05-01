@@ -1,4 +1,4 @@
-mod definitions;
+pub(crate) mod definitions;
 mod fan_out;
 mod helpers;
 mod lifecycle;

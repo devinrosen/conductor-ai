@@ -96,7 +96,7 @@ pub fn handle_workflow(
             };
 
             // Try new .wf files first, fall back to legacy .md
-            let (wf_defs, wf_warnings) = WorkflowManager::list_defs(&wt_path, &repo_path)?;
+            let (wf_defs, wf_warnings) = conductor_core::workflow::list_defs(&wt_path, &repo_path)?;
             for w in &wf_warnings {
                 eprintln!("warning: Failed to parse {}: {}", w.file, w.message);
             }
@@ -201,8 +201,11 @@ pub fn handle_workflow(
                 let repo_mgr = RepoManager::new(conn, config);
                 let r = repo_mgr.get_by_slug(&repo_slug)?;
 
-                let workflow =
-                    WorkflowManager::load_def_by_name(&r.local_path, &r.local_path, &name)?;
+                let workflow = conductor_core::workflow::load_def_by_name(
+                    &r.local_path,
+                    &r.local_path,
+                    &name,
+                )?;
 
                 if !workflow.targets.contains(&"repo".to_string()) {
                     eprintln!(
@@ -253,8 +256,11 @@ pub fn handle_workflow(
                     .entry("workflow_run_id".to_string())
                     .or_insert_with(|| run_id.clone());
 
-                let workflow =
-                    WorkflowManager::load_def_by_name(&ctx.working_dir, &ctx.repo_path, &name)?;
+                let workflow = conductor_core::workflow::load_def_by_name(
+                    &ctx.working_dir,
+                    &ctx.repo_path,
+                    &name,
+                )?;
 
                 conductor_core::workflow::apply_workflow_input_defaults(&workflow, &mut input_map)?;
 
@@ -294,8 +300,11 @@ pub fn handle_workflow(
                 let repo_mgr = RepoManager::new(conn, config);
                 let repo = repo_mgr.get_by_id(&ticket.repo_id)?;
 
-                let workflow =
-                    WorkflowManager::load_def_by_name(&repo.local_path, &repo.local_path, &name)?;
+                let workflow = conductor_core::workflow::load_def_by_name(
+                    &repo.local_path,
+                    &repo.local_path,
+                    &name,
+                )?;
 
                 conductor_core::workflow::apply_workflow_input_defaults(&workflow, &mut input_map)?;
 
@@ -343,7 +352,8 @@ pub fn handle_workflow(
                 let wt_mgr = WorktreeManager::new(conn, config);
                 let wt = wt_mgr.get_by_slug(&r.id, &worktree_slug)?;
 
-                let workflow = WorkflowManager::load_def_by_name(&wt.path, &r.local_path, &name)?;
+                let workflow =
+                    conductor_core::workflow::load_def_by_name(&wt.path, &r.local_path, &name)?;
 
                 // Validate required inputs and apply defaults
                 conductor_core::workflow::apply_workflow_input_defaults(&workflow, &mut input_map)?;
@@ -581,7 +591,7 @@ pub fn handle_workflow(
             let mut parse_errors: Vec<String> = Vec::new();
 
             if all {
-                let (defs, warnings) = WorkflowManager::list_defs(&wt_path, &repo_path)?;
+                let (defs, warnings) = conductor_core::workflow::list_defs(&wt_path, &repo_path)?;
                 for w in &warnings {
                     parse_errors.push(format!("{}: {}", w.file, w.message));
                 }
@@ -595,7 +605,7 @@ pub fn handle_workflow(
                 let wf_name = name
                     .as_deref()
                     .expect("name must be Some when --all is not set");
-                workflows = vec![WorkflowManager::load_def_by_name(
+                workflows = vec![conductor_core::workflow::load_def_by_name(
                     &wt_path, &repo_path, wf_name,
                 )?];
             };

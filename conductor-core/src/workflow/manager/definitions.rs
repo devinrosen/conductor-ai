@@ -3,12 +3,24 @@ use std::collections::HashSet;
 use crate::error::Result;
 use runkon_flow::dsl as workflow_dsl;
 
-use super::WorkflowManager;
+/// Build a workflow-by-name loader closure for batch validation.
+///
+/// Captures owned copies of `wt_path` / `repo_path` so the returned closure can
+/// outlive the borrows. Used by both `validate_single` and
+/// `list_defs_with_validation` to drive `validate_workflows_batch`.
+fn make_workflow_loader(
+    wt_path: &str,
+    repo_path: &str,
+) -> impl Fn(&str) -> std::result::Result<runkon_flow::dsl::WorkflowDef, String> {
+    let wt = wt_path.to_string();
+    let rp = repo_path.to_string();
+    move |name: &str| workflow_dsl::load_workflow_by_name(&wt, &rp, name).map_err(|e| e.to_string())
+}
 
 /// Represents a workflow that failed to parse or failed post-parse validation.
 ///
-/// Used by [`WorkflowManager::list_defs_with_validation`] to communicate
-/// invalid workflows with semantic field names.
+/// Used by [`list_defs_with_validation`] to communicate invalid workflows with
+/// semantic field names.
 #[derive(Clone, Debug)]
 pub struct InvalidWorkflowEntry {
     /// The workflow name (or filename stem for parse failures).
@@ -17,155 +29,145 @@ pub struct InvalidWorkflowEntry {
     pub error: String,
 }
 
-impl WorkflowManager<'_> {
-    /// Load workflow definitions from the filesystem for a worktree.
-    ///
-    /// Returns `(defs, warnings)` — warnings contain one entry per `.wf` file
-    /// that failed to parse. Successfully-parsed definitions are always returned
-    /// even when some files are broken.
-    pub fn list_defs(
-        worktree_path: &str,
-        repo_path: &str,
-    ) -> Result<(
-        Vec<runkon_flow::dsl::WorkflowDef>,
-        Vec<runkon_flow::dsl::WorkflowWarning>,
-    )> {
-        workflow_dsl::load_workflow_defs(worktree_path, repo_path)
-            .map_err(crate::error::ConductorError::Workflow)
-    }
+/// Load workflow definitions from the filesystem for a worktree.
+///
+/// Returns `(defs, warnings)` — warnings contain one entry per `.wf` file
+/// that failed to parse. Successfully-parsed definitions are always returned
+/// even when some files are broken.
+pub fn list_defs(
+    worktree_path: &str,
+    repo_path: &str,
+) -> Result<(
+    Vec<runkon_flow::dsl::WorkflowDef>,
+    Vec<runkon_flow::dsl::WorkflowWarning>,
+)> {
+    workflow_dsl::load_workflow_defs(worktree_path, repo_path)
+        .map_err(crate::error::ConductorError::Workflow)
+}
 
-    /// Load a single workflow definition by name.
-    pub fn load_def_by_name(
-        worktree_path: &str,
-        repo_path: &str,
-        name: &str,
-    ) -> Result<runkon_flow::dsl::WorkflowDef> {
-        workflow_dsl::load_workflow_by_name(worktree_path, repo_path, name)
-            .map_err(crate::error::ConductorError::Workflow)
-    }
+/// Load a single workflow definition by name.
+pub fn load_def_by_name(
+    worktree_path: &str,
+    repo_path: &str,
+    name: &str,
+) -> Result<runkon_flow::dsl::WorkflowDef> {
+    workflow_dsl::load_workflow_by_name(worktree_path, repo_path, name)
+        .map_err(crate::error::ConductorError::Workflow)
+}
 
-    /// Validate a single workflow definition using the full batch validation
-    /// pipeline (agents, snippets, schemas, cycles, semantics, scripts, bot names).
-    ///
-    /// This is a convenience wrapper around [`validate_workflows_batch`] for callers
-    /// that already have a loaded `WorkflowDef` — e.g. the MCP tool.
-    pub fn validate_single(
-        wt_path: &str,
-        repo_path: &str,
-        workflow: &runkon_flow::dsl::WorkflowDef,
-        known_bots: &HashSet<String>,
-    ) -> crate::workflow::batch_validate::WorkflowValidationEntry {
-        let wt = wt_path.to_string();
-        let rp = repo_path.to_string();
-        let loader = |name: &str| -> std::result::Result<runkon_flow::dsl::WorkflowDef, String> {
-            workflow_dsl::load_workflow_by_name(&wt, &rp, name).map_err(|e| e.to_string())
-        };
-        let result = crate::workflow::batch_validate::validate_workflows_batch(
-            std::slice::from_ref(workflow),
-            &[],
-            wt_path,
-            repo_path,
-            known_bots,
-            &loader,
-        );
-        // validate_workflows_batch produces exactly one entry per input workflow,
-        // so with a single-item slice this always yields one element.
-        // Use unwrap_or_else to avoid a bare expect() in library code.
-        result.entries.into_iter().next().unwrap_or_else(|| {
-            crate::workflow::batch_validate::WorkflowValidationEntry {
-                name: workflow.name.clone(),
-                errors: vec![runkon_flow::dsl::ValidationError {
-                    message: "internal error: batch validation returned no entries".to_string(),
-                    hint: None,
-                }],
-                warnings: vec![],
+/// Validate a single workflow definition using the full batch validation
+/// pipeline (agents, snippets, schemas, cycles, semantics, scripts, bot names).
+///
+/// This is a convenience wrapper around [`validate_workflows_batch`] for callers
+/// that already have a loaded `WorkflowDef` — e.g. the MCP tool.
+pub fn validate_single(
+    wt_path: &str,
+    repo_path: &str,
+    workflow: &runkon_flow::dsl::WorkflowDef,
+    known_bots: &HashSet<String>,
+) -> crate::workflow::batch_validate::WorkflowValidationEntry {
+    let loader = make_workflow_loader(wt_path, repo_path);
+    let result = crate::workflow::batch_validate::validate_workflows_batch(
+        std::slice::from_ref(workflow),
+        &[],
+        wt_path,
+        repo_path,
+        known_bots,
+        &loader,
+    );
+    // validate_workflows_batch produces exactly one entry per input workflow,
+    // so with a single-item slice this always yields one element.
+    // Use unwrap_or_else to avoid a bare expect() in library code.
+    result.entries.into_iter().next().unwrap_or_else(|| {
+        crate::workflow::batch_validate::WorkflowValidationEntry {
+            name: workflow.name.clone(),
+            errors: vec![runkon_flow::dsl::ValidationError {
+                message: "internal error: batch validation returned no entries".to_string(),
+                hint: None,
+            }],
+            warnings: vec![],
+        }
+    })
+}
+
+/// Load workflow definitions and run full validation (parse + post-parse).
+///
+/// Returns `(valid_defs, invalid_entries)` where:
+/// - `valid_defs` are successfully-parsed and validated definitions
+/// - `invalid_entries` are invalid workflows with their error messages
+///
+/// Invalid entries include both parse failures (from `WorkflowWarning`) and
+/// validation errors from the batch validation pipeline.
+///
+/// This is the authoritative method for loading and validating workflows
+/// for UI display — it handles both parse and post-parse validation in one call.
+pub fn list_defs_with_validation(
+    wt_path: &str,
+    repo_path: &str,
+    known_bots: &HashSet<String>,
+) -> Result<(
+    Vec<runkon_flow::dsl::WorkflowDef>,
+    Vec<InvalidWorkflowEntry>,
+)> {
+    let (defs, warnings) = list_defs(wt_path, repo_path)?;
+
+    // Convert parse failures to invalid entries.
+    let mut invalid_entries: Vec<InvalidWorkflowEntry> = warnings
+        .iter()
+        .map(|w| {
+            let name = std::path::Path::new(&w.file)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&w.file)
+                .to_string();
+            InvalidWorkflowEntry {
+                name,
+                error: w.message.clone(),
             }
         })
-    }
+        .collect();
 
-    /// Load workflow definitions and run full validation (parse + post-parse).
-    ///
-    /// Returns `(valid_defs, invalid_entries)` where:
-    /// - `valid_defs` are successfully-parsed and validated definitions
-    /// - `invalid_entries` are invalid workflows with their error messages
-    ///
-    /// Invalid entries include both parse failures (from `WorkflowWarning`) and
-    /// validation errors from the batch validation pipeline.
-    ///
-    /// This is the authoritative method for loading and validating workflows
-    /// for UI display — it handles both parse and post-parse validation in one call.
-    pub fn list_defs_with_validation(
-        wt_path: &str,
-        repo_path: &str,
-        known_bots: &HashSet<String>,
-    ) -> Result<(
-        Vec<runkon_flow::dsl::WorkflowDef>,
-        Vec<InvalidWorkflowEntry>,
-    )> {
-        let (defs, warnings) = Self::list_defs(wt_path, repo_path)?;
+    // Run post-parse validation on successfully-parsed defs.
+    let loader = make_workflow_loader(wt_path, repo_path);
 
-        // Convert parse failures to invalid entries.
-        let mut invalid_entries: Vec<InvalidWorkflowEntry> = warnings
-            .iter()
-            .map(|w| {
-                let name = std::path::Path::new(&w.file)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(&w.file)
-                    .to_string();
-                InvalidWorkflowEntry {
-                    name,
-                    error: w.message.clone(),
-                }
-            })
-            .collect();
+    let validation = crate::workflow::batch_validate::validate_workflows_batch(
+        &defs,
+        &[],
+        wt_path,
+        repo_path,
+        known_bots,
+        &loader,
+    );
 
-        // Run post-parse validation on successfully-parsed defs.
-        let wt = wt_path.to_string();
-        let rp = repo_path.to_string();
-        let loader = |name: &str| -> std::result::Result<runkon_flow::dsl::WorkflowDef, String> {
-            workflow_dsl::load_workflow_by_name(&wt, &rp, name).map_err(|e| e.to_string())
-        };
-
-        let validation = crate::workflow::batch_validate::validate_workflows_batch(
-            &defs,
-            &[],
-            wt_path,
-            repo_path,
-            known_bots,
-            &loader,
-        );
-
-        // Add validation errors to invalid_entries.
-        for entry in &validation.entries {
-            if !entry.errors.is_empty() {
-                let msg = entry
-                    .errors
-                    .iter()
-                    .map(|v| v.message.as_str())
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                invalid_entries.push(InvalidWorkflowEntry {
-                    name: entry.name.clone(),
-                    error: msg,
-                });
-            }
+    // Add validation errors to invalid_entries.
+    for entry in &validation.entries {
+        if !entry.errors.is_empty() {
+            let msg = entry
+                .errors
+                .iter()
+                .map(|v| v.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            invalid_entries.push(InvalidWorkflowEntry {
+                name: entry.name.clone(),
+                error: msg,
+            });
         }
-
-        // Build a set of invalid workflow names for efficient O(N) lookup.
-        let invalid_names: HashSet<String> = validation
-            .entries
-            .iter()
-            .filter(|e| !e.errors.is_empty())
-            .map(|e| e.name.clone())
-            .collect();
-
-        // Filter out defs that failed validation.
-        let valid_defs: Vec<_> = defs
-            .into_iter()
-            .filter(|d| !invalid_names.contains(&d.name))
-            .collect();
-
-        Ok((valid_defs, invalid_entries))
     }
+
+    // Build a set of invalid workflow names for efficient O(N) lookup.
+    let invalid_names: HashSet<String> = validation
+        .entries
+        .iter()
+        .filter(|e| !e.errors.is_empty())
+        .map(|e| e.name.clone())
+        .collect();
+
+    // Filter out defs that failed validation.
+    let valid_defs: Vec<_> = defs
+        .into_iter()
+        .filter(|d| !invalid_names.contains(&d.name))
+        .collect();
+
+    Ok((valid_defs, invalid_entries))
 }

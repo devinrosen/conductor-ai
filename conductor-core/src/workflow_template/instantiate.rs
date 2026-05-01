@@ -1,5 +1,3 @@
-use crate::workflow::WorkflowManager;
-
 use super::types::WorkflowTemplate;
 
 /// Normalize a template name into a filesystem-safe slug.
@@ -9,10 +7,10 @@ pub fn template_slug(name: &str) -> String {
 
 /// Collect existing workflow definition names for a given working directory.
 ///
-/// Errors from `WorkflowManager::list_defs` are logged as warnings and treated
+/// Errors from `workflow::list_defs` are logged as warnings and treated
 /// as an empty list so callers always get a usable result.
 pub fn collect_existing_workflow_names(working_dir: &str, repo_path: &str) -> Vec<String> {
-    match WorkflowManager::list_defs(working_dir, repo_path) {
+    match crate::workflow::list_defs(working_dir, repo_path) {
         Ok((defs, _)) => defs.into_iter().map(|d| d.name).collect(),
         Err(e) => {
             tracing::warn!("Failed to list workflow definitions: {e}");
@@ -298,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_collect_existing_workflow_names_invalid_dir_returns_empty() {
-        // An invalid working_dir causes WorkflowManager::list_defs to error.
+        // An invalid working_dir causes workflow::list_defs to error.
         // collect_existing_workflow_names should return an empty Vec, not panic.
         let result = collect_existing_workflow_names("/nonexistent/path/xyz", "/nonexistent/repo");
         assert!(result.is_empty());
