@@ -955,8 +955,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         // Warn if any running steps have live subprocesses — terminate_subprocesses
         // (called inside reset_failed_steps below) will kill them, but the warning
         // helps diagnose concurrent executor races (see issue #2221).
-        let live_count =
-            crate::workflow::manager::recovery::count_live_subprocess_steps(conn, &wf_run.id)?;
+        let live_count = crate::workflow::count_live_subprocess_steps(conn, &wf_run.id)?;
         if live_count > 0 {
             tracing::warn!(
                 run_id = %wf_run.id,

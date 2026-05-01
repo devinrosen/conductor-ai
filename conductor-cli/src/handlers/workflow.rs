@@ -714,14 +714,14 @@ pub fn handle_workflow(
             }
         }
         WorkflowCommands::GateApprove { run_id } => {
-            with_waiting_gate(conn, &run_id, |wf_mgr, step, user| {
+            with_waiting_gate(conn, &run_id, |_conn, step, user| {
                 conductor_core::workflow::approve_gate(conn, &step.id, user, None, None, None)?;
                 println!("Gate '{}' approved by {user}.", step.step_name);
                 Ok(())
             })?;
         }
         WorkflowCommands::GateReject { run_id } => {
-            with_waiting_gate(conn, &run_id, |wf_mgr, step, user| {
+            with_waiting_gate(conn, &run_id, |_conn, step, user| {
                 conductor_core::workflow::reject_gate(conn, &step.id, user, None)?;
                 let reject_msg = format!("Gate '{}' rejected by {user}", step.step_name);
                 conductor_core::workflow::update_workflow_status(
@@ -736,7 +736,7 @@ pub fn handle_workflow(
             })?;
         }
         WorkflowCommands::GateFeedback { run_id, feedback } => {
-            with_waiting_gate(conn, &run_id, |wf_mgr, step, user| {
+            with_waiting_gate(conn, &run_id, |_conn, step, user| {
                 conductor_core::workflow::approve_gate(
                     conn,
                     &step.id,

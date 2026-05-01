@@ -98,6 +98,11 @@ pub use manager::recovery::{
     recover_stuck_steps, reset_completed_steps, reset_failed_steps, reset_steps_from_position,
     run_workflow_maintenance, ReapedStaleRun, StaleWorkflowRun,
 };
+// `count_live_subprocess_steps` is `pub(crate)` (internal-only), so it isn't
+// part of the public re-export above. Re-export it at crate-internal visibility
+// so internal callers (coordinator, etc.) can address it via the standard
+// `crate::workflow::` path instead of reaching into `manager::recovery::`.
+pub(crate) use manager::recovery::count_live_subprocess_steps;
 pub use manager::steps::{
     active_step_exists, approve_gate, get_gate_approval_state, insert_step, insert_step_running,
     mark_step_pending, mark_step_running, mark_step_terminal, mirror_step_metrics_from_run,
