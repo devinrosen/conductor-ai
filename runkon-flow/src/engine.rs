@@ -32,8 +32,8 @@ pub struct WorktreeContext {
 /// Pre-loaded context for resuming a workflow run.
 #[derive(Clone)]
 pub struct ResumeContext {
-    /// Completed step records keyed by step key, for O(1) skip check and restore.
-    pub step_map: HashMap<StepKey, WorkflowRunStep>,
+    /// Completed step records keyed by (step_name, iteration), for O(1) zero-alloc lookup.
+    pub step_map: HashMap<String, HashMap<u32, WorkflowRunStep>>,
 }
 
 /// Mutable runtime state for a workflow execution — no conductor-core deps.
@@ -752,7 +752,8 @@ pub fn handle_on_fail(
 pub fn should_skip(state: &ExecutionState, step_name: &str, iteration: u32) -> bool {
     state.resume_ctx.as_ref().is_some_and(|ctx| {
         ctx.step_map
-            .contains_key(&(step_name.to_owned(), iteration))
+            .get(step_name)
+            .is_some_and(|m| m.contains_key(&iteration))
     })
 }
 
@@ -786,7 +787,7 @@ pub fn restore_completed_step(
     step_key: &str,
     iteration: u32,
 ) {
-    let completed_step = ctx.step_map.get(&(step_key.to_owned(), iteration));
+    let completed_step = ctx.step_map.get(step_key).and_then(|m| m.get(&iteration));
 
     let Some(step) = completed_step else {
         tracing::warn!(
