@@ -3,6 +3,20 @@ use std::collections::HashSet;
 use crate::error::Result;
 use runkon_flow::dsl as workflow_dsl;
 
+/// Build a workflow-by-name loader closure for batch validation.
+///
+/// Captures owned copies of `wt_path` / `repo_path` so the returned closure can
+/// outlive the borrows. Used by both `validate_single` and
+/// `list_defs_with_validation` to drive `validate_workflows_batch`.
+fn make_workflow_loader(
+    wt_path: &str,
+    repo_path: &str,
+) -> impl Fn(&str) -> std::result::Result<runkon_flow::dsl::WorkflowDef, String> {
+    let wt = wt_path.to_string();
+    let rp = repo_path.to_string();
+    move |name: &str| workflow_dsl::load_workflow_by_name(&wt, &rp, name).map_err(|e| e.to_string())
+}
+
 /// Represents a workflow that failed to parse or failed post-parse validation.
 ///
 /// Used by [`list_defs_with_validation`] to communicate invalid workflows with
@@ -52,11 +66,7 @@ pub fn validate_single(
     workflow: &runkon_flow::dsl::WorkflowDef,
     known_bots: &HashSet<String>,
 ) -> crate::workflow::batch_validate::WorkflowValidationEntry {
-    let wt = wt_path.to_string();
-    let rp = repo_path.to_string();
-    let loader = |name: &str| -> std::result::Result<runkon_flow::dsl::WorkflowDef, String> {
-        workflow_dsl::load_workflow_by_name(&wt, &rp, name).map_err(|e| e.to_string())
-    };
+    let loader = make_workflow_loader(wt_path, repo_path);
     let result = crate::workflow::batch_validate::validate_workflows_batch(
         std::slice::from_ref(workflow),
         &[],
@@ -118,11 +128,7 @@ pub fn list_defs_with_validation(
         .collect();
 
     // Run post-parse validation on successfully-parsed defs.
-    let wt = wt_path.to_string();
-    let rp = repo_path.to_string();
-    let loader = |name: &str| -> std::result::Result<runkon_flow::dsl::WorkflowDef, String> {
-        workflow_dsl::load_workflow_by_name(&wt, &rp, name).map_err(|e| e.to_string())
-    };
+    let loader = make_workflow_loader(wt_path, repo_path);
 
     let validation = crate::workflow::batch_validate::validate_workflows_batch(
         &defs,
