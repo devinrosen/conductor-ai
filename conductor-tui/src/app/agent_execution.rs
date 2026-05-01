@@ -485,8 +485,8 @@ impl App {
         let wt_path = worktree_path.clone();
         let rp = repo_path.clone();
         std::thread::spawn(move || {
-            use conductor_core::workflow::{WorkflowManager, WorkflowTrigger};
-            let manual_defs: Vec<_> = match WorkflowManager::list_defs(&wt_path, &rp) {
+            use conductor_core::workflow::WorkflowTrigger;
+            let manual_defs: Vec<_> = match conductor_core::workflow::list_defs(&wt_path, &rp) {
                 Ok((defs, _warnings)) => defs
                     .into_iter()
                     .filter(|d| d.trigger == WorkflowTrigger::Manual)

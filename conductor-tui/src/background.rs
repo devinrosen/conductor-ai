@@ -1024,7 +1024,8 @@ fn poll_workflow_data(
     } else if let Some(wt_path) = worktree_path {
         // Worktree-scoped: load defs from this worktree's filesystem path.
         let (mut defs, warnings) =
-            WorkflowManager::list_defs(wt_path, repo_path.unwrap_or("")).unwrap_or_default();
+            conductor_core::workflow::list_defs(wt_path, repo_path.unwrap_or(""))
+                .unwrap_or_default();
         defs.sort_by(|a, b| {
             let ka = (
                 if a.group.is_none() { 1u8 } else { 0u8 },
@@ -1059,7 +1060,7 @@ fn poll_workflow_data(
                     continue;
                 }
                 let (mut wt_defs, warnings) =
-                    WorkflowManager::list_defs(&wt.path, &rp).unwrap_or_default();
+                    conductor_core::workflow::list_defs(&wt.path, &rp).unwrap_or_default();
                 all_warnings.extend(warnings);
                 wt_defs.retain(|d| seen.insert(d.name.clone()));
                 all_defs.extend(wt_defs);
@@ -1067,7 +1068,7 @@ fn poll_workflow_data(
             // Fallback: no active worktrees → load from repo root
             if all_defs.is_empty() && !rp.is_empty() {
                 let (repo_defs, warnings) =
-                    WorkflowManager::list_defs(&rp, &rp).unwrap_or_default();
+                    conductor_core::workflow::list_defs(&rp, &rp).unwrap_or_default();
                 all_warnings.extend(warnings);
                 all_defs.extend(repo_defs);
             }
@@ -1110,7 +1111,7 @@ fn poll_workflow_data(
                     .map(|(s, p)| (s.as_str(), p.as_str()))
                     .unwrap_or(("?", ""));
                 let (mut wt_defs, warnings) =
-                    WorkflowManager::list_defs(&wt.path, rp).unwrap_or_default();
+                    conductor_core::workflow::list_defs(&wt.path, rp).unwrap_or_default();
                 all_warnings.extend(warnings);
                 // Deduplicate by (repo_id, workflow_name): each worktree has its own
                 // filesystem copy of .conductor/workflows/, so source_path differs per
@@ -1129,7 +1130,7 @@ fn poll_workflow_data(
                     continue;
                 }
                 let (mut repo_defs, warnings) =
-                    WorkflowManager::list_defs(repo_path, repo_path).unwrap_or_default();
+                    conductor_core::workflow::list_defs(repo_path, repo_path).unwrap_or_default();
                 all_warnings.extend(warnings);
                 repo_defs.retain(|d| seen.insert((repo_id.clone(), d.name.clone())));
                 for d in repo_defs {

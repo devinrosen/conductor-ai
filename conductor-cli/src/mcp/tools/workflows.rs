@@ -35,7 +35,6 @@ pub(super) fn tool_list_workflows(
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::repo::RepoManager;
-    use conductor_core::workflow::WorkflowManager;
 
     let repo_slug = require_arg!(args, "repo");
     let (conn, config) = match open_db_and_config(db_path) {
@@ -51,7 +50,7 @@ pub(super) fn tool_list_workflows(
         Ok(p) => p,
         Err(e) => return e,
     };
-    let (defs, warnings) = match WorkflowManager::list_defs(&wt_path, &repo.local_path) {
+    let (defs, warnings) = match conductor_core::workflow::list_defs(&wt_path, &repo.local_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
     };
@@ -77,7 +76,6 @@ pub(super) fn tool_validate_workflow(
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::repo::RepoManager;
-    use conductor_core::workflow::WorkflowManager;
 
     let repo_slug = require_arg!(args, "repo");
     let workflow_name = require_arg!(args, "workflow");
@@ -97,15 +95,17 @@ pub(super) fn tool_validate_workflow(
     };
     let repo_path = repo.local_path.clone();
 
-    let workflow = match WorkflowManager::load_def_by_name(&wt_path, &repo_path, workflow_name) {
-        Ok(w) => w,
-        Err(e) => return tool_err(e),
-    };
+    let workflow =
+        match conductor_core::workflow::load_def_by_name(&wt_path, &repo_path, workflow_name) {
+            Ok(w) => w,
+            Err(e) => return tool_err(e),
+        };
 
     let known_bots: std::collections::HashSet<String> =
         config.github.apps.keys().cloned().collect();
 
-    let entry = WorkflowManager::validate_single(&wt_path, &repo_path, &workflow, &known_bots);
+    let entry =
+        conductor_core::workflow::validate_single(&wt_path, &repo_path, &workflow, &known_bots);
 
     format_validation_result(workflow_name, &entry)
 }
@@ -162,7 +162,6 @@ pub(super) fn tool_run_workflow(
     use conductor_core::repo::RepoManager;
     use conductor_core::workflow::{
         execute_workflow_standalone, RunIdSlot, WorkflowExecConfig, WorkflowExecStandalone,
-        WorkflowManager,
     };
     use conductor_core::worktree::WorktreeManager;
     use std::sync::{Arc, Mutex};
@@ -223,7 +222,7 @@ pub(super) fn tool_run_workflow(
     };
 
     // Load the workflow definition
-    let workflow = match WorkflowManager::load_def_by_name(
+    let workflow = match conductor_core::workflow::load_def_by_name(
         &repo.local_path,
         &repo.local_path,
         workflow_name,

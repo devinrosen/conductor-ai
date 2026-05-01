@@ -298,7 +298,8 @@ pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<
     if let Some(repo_slug) = uri.strip_prefix("conductor://workflows/") {
         let repo_mgr = RepoManager::new(&conn, &config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
-        let (defs, warnings) = WorkflowManager::list_defs(&repo.local_path, &repo.local_path)?;
+        let (defs, warnings) =
+            conductor_core::workflow::list_defs(&repo.local_path, &repo.local_path)?;
         let mut out = String::new();
         for w in &warnings {
             out.push_str(&format!(

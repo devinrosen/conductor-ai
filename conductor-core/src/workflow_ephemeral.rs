@@ -17,7 +17,7 @@ use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::workflow::{
     apply_workflow_input_defaults, execute_workflow_standalone, WorkflowExecConfig,
-    WorkflowExecStandalone, WorkflowManager, WorkflowResult,
+    WorkflowExecStandalone, WorkflowResult,
 };
 
 /// A parsed GitHub PR reference.
@@ -207,7 +207,7 @@ pub fn run_workflow_on_pr(
     })?;
 
     // Load the workflow definition from the cloned repo
-    let workflow = WorkflowManager::load_def_by_name(clone_path_str, clone_path_str, workflow_name)
+    let workflow = crate::workflow::load_def_by_name(clone_path_str, clone_path_str, workflow_name)
         .map_err(|e| {
             ConductorError::Workflow(format!(
                 "Workflow '{}' not found in cloned PR repo: {e}",
