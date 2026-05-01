@@ -68,20 +68,16 @@ fn main() {
                 WorktreeManager::new(&conn, &config).reap_stale_worktrees()
             });
             log_reap("orphaned workflow run", {
-                use conductor_core::workflow::WorkflowManager;
-                WorkflowManager::new(&conn).reap_orphaned_workflow_runs()
+                conductor_core::workflow::reap_orphaned_workflow_runs(&conn)
             });
             log_reap("orphaned script step", {
-                use conductor_core::workflow::WorkflowManager;
-                WorkflowManager::new(&conn).reap_orphaned_script_steps()
+                conductor_core::workflow::reap_orphaned_script_steps(&conn)
             });
 
             // Auto-resume stuck workflow runs on startup.
             {
-                use conductor_core::workflow::WorkflowManager;
-                let wf_mgr = WorkflowManager::new(&conn);
                 let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-                match wf_mgr.claim_stuck_workflows(&config, None) {
+                match conductor_core::workflow::claim_stuck_workflows(&conn, &config, None) {
                     Ok(claimed) => {
                         for run_id in claimed {
                             conductor_core::workflow::spawn_workflow_resume(
@@ -171,8 +167,9 @@ fn main() {
                                     tracing::warn!("reap_stale_worktrees failed: {e}");
                                 }
                                 // Workflow orphan recovery + stale watchdog
-                                let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
-                                if let Err(e) = wf_mgr.reap_orphaned_workflow_runs() {
+                                if let Err(e) =
+                                    conductor_core::workflow::reap_orphaned_workflow_runs(&conn)
+                                {
                                     tracing::warn!("reap_orphaned_workflow_runs failed: {e}");
                                 }
                                 // Auto-resume stuck workflow runs using both fixed and configurable thresholds
@@ -184,7 +181,11 @@ fn main() {
                                 } else {
                                     None
                                 };
-                                match wf_mgr.claim_stuck_workflows(&cfg, configurable_threshold) {
+                                match conductor_core::workflow::claim_stuck_workflows(
+                                    &conn,
+                                    &cfg,
+                                    configurable_threshold,
+                                ) {
                                     Ok(claimed) => {
                                         for run_id in claimed {
                                             conductor_core::workflow::spawn_workflow_resume(

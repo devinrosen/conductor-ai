@@ -509,247 +509,26 @@ fn validate_gate_selections(conn: &Connection, step_id: &str, selections: &[Stri
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Shim impl: keeps `WorkflowManager::<method>` callable while the free functions
-
-// above are the canonical implementations. Removed in the final cleanup PR.
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-impl<'a> super::WorkflowManager<'a> {
-    pub fn insert_step(
-        &self,
-        workflow_run_id: &str,
-        step_name: &str,
-        role: &str,
-        can_commit: bool,
-        position: i64,
-        iteration: i64,
-    ) -> Result<String> {
-        insert_step(
-            self.conn,
-            workflow_run_id,
-            step_name,
-            role,
-            can_commit,
-            position,
-            iteration,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn insert_step_running(
-        &self,
-        workflow_run_id: &str,
-        step_name: &str,
-        role: &str,
-        can_commit: bool,
-        position: i64,
-        iteration: i64,
-        retry_count: i64,
-    ) -> Result<String> {
-        insert_step_running(
-            self.conn,
-            workflow_run_id,
-            step_name,
-            role,
-            can_commit,
-            position,
-            iteration,
-            retry_count,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn update_step_status(
-        &self,
-        step_id: &str,
-        status: WorkflowStepStatus,
-        child_run_id: Option<&str>,
-        result_text: Option<&str>,
-        context_out: Option<&str>,
-        markers_out: Option<&str>,
-        retry_count: Option<i64>,
-    ) -> Result<()> {
-        update_step_status(
-            self.conn,
-            step_id,
-            status,
-            child_run_id,
-            result_text,
-            context_out,
-            markers_out,
-            retry_count,
-        )
-    }
-
-    pub fn mark_step_running(
-        &self,
-        step_id: &str,
-        status: WorkflowStepStatus,
-        child_run_id: Option<&str>,
-    ) -> Result<()> {
-        mark_step_running(self.conn, step_id, status, child_run_id)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn mark_step_terminal(
-        &self,
-        step_id: &str,
-        status: WorkflowStepStatus,
-        child_run_id: Option<&str>,
-        result_text: Option<&str>,
-        context_out: Option<&str>,
-        markers_out: Option<&str>,
-        retry_count: Option<i64>,
-        structured_output: Option<&str>,
-        step_error: Option<&str>,
-    ) -> Result<()> {
-        mark_step_terminal(
-            self.conn,
-            step_id,
-            status,
-            child_run_id,
-            result_text,
-            context_out,
-            markers_out,
-            retry_count,
-            structured_output,
-            step_error,
-        )
-    }
-
-    pub fn mark_step_pending(&self, step_id: &str, status: WorkflowStepStatus) -> Result<()> {
-        mark_step_pending(self.conn, step_id, status)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn update_step_status_full(
-        &self,
-        step_id: &str,
-        status: WorkflowStepStatus,
-        child_run_id: Option<&str>,
-        result_text: Option<&str>,
-        context_out: Option<&str>,
-        markers_out: Option<&str>,
-        retry_count: Option<i64>,
-        structured_output: Option<&str>,
-        step_error: Option<&str>,
-    ) -> Result<()> {
-        update_step_status_full(
-            self.conn,
-            step_id,
-            status,
-            child_run_id,
-            result_text,
-            context_out,
-            markers_out,
-            retry_count,
-            structured_output,
-            step_error,
-        )
-    }
-
-    pub fn update_step_child_run_id(&self, step_id: &str, child_run_id: &str) -> Result<()> {
-        update_step_child_run_id(self.conn, step_id, child_run_id)
-    }
-
-    pub fn set_step_subprocess_pid(&self, step_id: &str, pid: Option<u32>) -> Result<()> {
-        set_step_subprocess_pid(self.conn, step_id, pid)
-    }
-
-    pub fn set_step_output_file(&self, step_id: &str, output_file: &str) -> Result<()> {
-        set_step_output_file(self.conn, step_id, output_file)
-    }
-
-    pub fn set_step_gate_info(
-        &self,
-        step_id: &str,
-        gate_type: GateType,
-        gate_prompt: Option<&str>,
-        gate_timeout: &str,
-    ) -> Result<()> {
-        set_step_gate_info(self.conn, step_id, gate_type, gate_prompt, gate_timeout)
-    }
-
-    pub fn set_step_parallel_group(&self, step_id: &str, group_id: &str) -> Result<()> {
-        set_step_parallel_group(self.conn, step_id, group_id)
-    }
-
-    pub fn set_step_gate_options(&self, step_id: &str, options_json: &str) -> Result<()> {
-        set_step_gate_options(self.conn, step_id, options_json)
-    }
-
-    pub fn mirror_step_metrics_from_run(&self, run_id: &str, metrics: StepMetrics) -> Result<()> {
-        mirror_step_metrics_from_run(self.conn, run_id, metrics)
-    }
-
-    pub fn approve_gate(
-        &self,
-        step_id: &str,
-        approved_by: &str,
-        feedback: Option<&str>,
-        selections: Option<&[String]>,
-        context_out: Option<String>,
-    ) -> Result<()> {
-        approve_gate(
-            self.conn,
-            step_id,
-            approved_by,
-            feedback,
-            selections,
-            context_out,
-        )
-    }
-
-    pub fn reject_gate(
-        &self,
-        step_id: &str,
-        rejected_by: &str,
-        feedback: Option<&str>,
-    ) -> Result<()> {
-        reject_gate(self.conn, step_id, rejected_by, feedback)
-    }
-
-    pub fn predecessor_completed(&self, workflow_run_id: &str, position: i64) -> Result<bool> {
-        predecessor_completed(self.conn, workflow_run_id, position)
-    }
-
-    pub fn active_step_exists(
-        &self,
-        workflow_run_id: &str,
-        position: i64,
-        iteration: i64,
-        step_name: &str,
-    ) -> Result<bool> {
-        active_step_exists(self.conn, workflow_run_id, position, iteration, step_name)
-    }
-
-    pub fn get_gate_approval_state(
-        &self,
-        step_id: &str,
-    ) -> Result<runkon_flow::traits::persistence::GateApprovalState> {
-        get_gate_approval_state(self.conn, step_id)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::super::WorkflowManager;
     use super::*;
     use crate::test_helpers;
     use crate::workflow::WorkflowStepStatus;
 
     fn setup(conn: &rusqlite::Connection) -> (String, String) {
         let parent_id = test_helpers::make_agent_parent_id(conn);
-        let mgr = WorkflowManager::new(conn);
-        let run = mgr
-            .create_workflow_run("wf-test", Some("w1"), &parent_id, false, "manual", None)
-            .unwrap();
-        let step_id = mgr
-            .insert_step(&run.id, "step-a", "actor", false, 0, 0)
-            .unwrap();
+        let run = crate::workflow::create_workflow_run(
+            conn,
+            "wf-test",
+            Some("w1"),
+            &parent_id,
+            false,
+            "manual",
+            None,
+        )
+        .unwrap();
+        let step_id =
+            crate::workflow::insert_step(conn, &run.id, "step-a", "actor", false, 0, 0).unwrap();
         (run.id, step_id)
     }
 
@@ -757,12 +536,18 @@ mod tests {
     fn mark_step_running_sets_status_and_child_run_id() {
         let conn = test_helpers::setup_db();
         let (_run_id, step_id) = setup(&conn);
-        let mgr = WorkflowManager::new(&conn);
 
-        mgr.mark_step_running(&step_id, WorkflowStepStatus::Running, Some("child-run-1"))
+        crate::workflow::mark_step_running(
+            &conn,
+            &step_id,
+            WorkflowStepStatus::Running,
+            Some("child-run-1"),
+        )
+        .unwrap();
+
+        let step = crate::workflow::get_step_by_id(&conn, &step_id)
+            .unwrap()
             .unwrap();
-
-        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
         assert_eq!(step.status, WorkflowStepStatus::Running);
         assert_eq!(step.child_run_id.as_deref(), Some("child-run-1"));
         assert!(step.started_at.is_some(), "started_at should be set");
@@ -772,12 +557,13 @@ mod tests {
     fn mark_step_running_without_child_run_id() {
         let conn = test_helpers::setup_db();
         let (_run_id, step_id) = setup(&conn);
-        let mgr = WorkflowManager::new(&conn);
 
-        mgr.mark_step_running(&step_id, WorkflowStepStatus::Waiting, None)
+        crate::workflow::mark_step_running(&conn, &step_id, WorkflowStepStatus::Waiting, None)
             .unwrap();
 
-        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        let step = crate::workflow::get_step_by_id(&conn, &step_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(step.status, WorkflowStepStatus::Waiting);
         assert!(step.child_run_id.is_none());
     }
@@ -786,9 +572,9 @@ mod tests {
     fn mark_step_terminal_sets_all_output_fields() {
         let conn = test_helpers::setup_db();
         let (_run_id, step_id) = setup(&conn);
-        let mgr = WorkflowManager::new(&conn);
 
-        mgr.mark_step_terminal(
+        crate::workflow::mark_step_terminal(
+            &conn,
             &step_id,
             WorkflowStepStatus::Completed,
             Some("child-run-2"),
@@ -801,7 +587,9 @@ mod tests {
         )
         .unwrap();
 
-        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        let step = crate::workflow::get_step_by_id(&conn, &step_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(step.status, WorkflowStepStatus::Completed);
         assert_eq!(step.child_run_id.as_deref(), Some("child-run-2"));
         assert_eq!(step.result_text.as_deref(), Some("result text"));
@@ -816,16 +604,21 @@ mod tests {
     fn mark_step_pending_updates_status_only() {
         let conn = test_helpers::setup_db();
         let (_run_id, step_id) = setup(&conn);
-        let mgr = WorkflowManager::new(&conn);
 
         // Advance to Running first so we can observe the rollback to Pending.
-        mgr.mark_step_running(&step_id, WorkflowStepStatus::Running, Some("child-x"))
-            .unwrap();
+        crate::workflow::mark_step_running(
+            &conn,
+            &step_id,
+            WorkflowStepStatus::Running,
+            Some("child-x"),
+        )
+        .unwrap();
         // Now reset to Pending — only status should change.
-        mgr.mark_step_pending(&step_id, WorkflowStepStatus::Pending)
-            .unwrap();
+        crate::workflow::mark_step_pending(&conn, &step_id, WorkflowStepStatus::Pending).unwrap();
 
-        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        let step = crate::workflow::get_step_by_id(&conn, &step_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(step.status, WorkflowStepStatus::Pending);
         // started_at and child_run_id must be left as-is (mark_step_pending touches status only).
         assert!(step.started_at.is_some(), "started_at should be preserved");
@@ -840,11 +633,16 @@ mod tests {
     fn mark_step_terminal_preserves_existing_child_run_id_when_none_passed() {
         let conn = test_helpers::setup_db();
         let (_run_id, step_id) = setup(&conn);
-        let mgr = WorkflowManager::new(&conn);
 
-        mgr.mark_step_running(&step_id, WorkflowStepStatus::Running, Some("child-run-3"))
-            .unwrap();
-        mgr.mark_step_terminal(
+        crate::workflow::mark_step_running(
+            &conn,
+            &step_id,
+            WorkflowStepStatus::Running,
+            Some("child-run-3"),
+        )
+        .unwrap();
+        crate::workflow::mark_step_terminal(
+            &conn,
             &step_id,
             WorkflowStepStatus::Failed,
             None,
@@ -857,7 +655,9 @@ mod tests {
         )
         .unwrap();
 
-        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        let step = crate::workflow::get_step_by_id(&conn, &step_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(step.status, WorkflowStepStatus::Failed);
         // COALESCE in SQL keeps the existing child_run_id when None is passed.
         assert_eq!(step.child_run_id.as_deref(), Some("child-run-3"));
@@ -868,12 +668,17 @@ mod tests {
     fn mirror_step_metrics_writes_all_fields() {
         let conn = test_helpers::setup_db();
         let (_run_id, step_id) = setup(&conn);
-        let mgr = WorkflowManager::new(&conn);
 
-        mgr.mark_step_running(&step_id, WorkflowStepStatus::Running, Some("run-mirror-1"))
-            .unwrap();
+        crate::workflow::mark_step_running(
+            &conn,
+            &step_id,
+            WorkflowStepStatus::Running,
+            Some("run-mirror-1"),
+        )
+        .unwrap();
 
-        mgr.mirror_step_metrics_from_run(
+        crate::workflow::mirror_step_metrics_from_run(
+            &conn,
             "run-mirror-1",
             StepMetrics {
                 cost_usd: Some(1.23),
@@ -887,7 +692,9 @@ mod tests {
         )
         .unwrap();
 
-        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        let step = crate::workflow::get_step_by_id(&conn, &step_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(step.cost_usd, Some(1.23));
         assert_eq!(step.num_turns, Some(5));
         assert_eq!(step.duration_ms, Some(1000));
@@ -901,13 +708,18 @@ mod tests {
     fn mirror_step_metrics_coalesce_preserves_existing_when_none() {
         let conn = test_helpers::setup_db();
         let (_run_id, step_id) = setup(&conn);
-        let mgr = WorkflowManager::new(&conn);
 
-        mgr.mark_step_running(&step_id, WorkflowStepStatus::Running, Some("run-mirror-2"))
-            .unwrap();
+        crate::workflow::mark_step_running(
+            &conn,
+            &step_id,
+            WorkflowStepStatus::Running,
+            Some("run-mirror-2"),
+        )
+        .unwrap();
 
         // Write full metrics first.
-        mgr.mirror_step_metrics_from_run(
+        crate::workflow::mirror_step_metrics_from_run(
+            &conn,
             "run-mirror-2",
             StepMetrics {
                 cost_usd: Some(9.99),
@@ -918,7 +730,8 @@ mod tests {
         .unwrap();
 
         // Second call — only token fields, cost_usd/num_turns must be preserved.
-        mgr.mirror_step_metrics_from_run(
+        crate::workflow::mirror_step_metrics_from_run(
+            &conn,
             "run-mirror-2",
             StepMetrics {
                 input_tokens: Some(42),
@@ -928,7 +741,9 @@ mod tests {
         )
         .unwrap();
 
-        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        let step = crate::workflow::get_step_by_id(&conn, &step_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(step.cost_usd, Some(9.99), "cost_usd must be preserved");
         assert_eq!(step.num_turns, Some(3), "num_turns must be preserved");
         assert_eq!(step.input_tokens, Some(42));
@@ -939,11 +754,11 @@ mod tests {
     fn mirror_step_metrics_no_op_for_unknown_run_id() {
         let conn = test_helpers::setup_db();
         let (_run_id, step_id) = setup(&conn);
-        let mgr = WorkflowManager::new(&conn);
 
         // No step has child_run_id = "does-not-exist", so the UPDATE affects 0 rows.
         // The method must succeed (not error) in this case.
-        mgr.mirror_step_metrics_from_run(
+        crate::workflow::mirror_step_metrics_from_run(
+            &conn,
             "does-not-exist",
             StepMetrics {
                 cost_usd: Some(1.0),
@@ -953,7 +768,9 @@ mod tests {
         .unwrap();
 
         // Original step untouched.
-        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        let step = crate::workflow::get_step_by_id(&conn, &step_id)
+            .unwrap()
+            .unwrap();
         assert!(step.cost_usd.is_none());
     }
 }

@@ -75,8 +75,7 @@ pub(super) fn fetch_dep_item_ids(
     conn: &rusqlite::Connection,
     step_id: &str,
 ) -> crate::error::Result<Option<Vec<String>>> {
-    let mgr = crate::workflow::manager::WorkflowManager::new(conn);
-    let items = mgr.get_fan_out_items(step_id, None)?;
+    let items = crate::workflow::get_fan_out_items(conn, step_id, None)?;
     let ids: Vec<String> = items.into_iter().map(|i| i.item_id).collect();
     if ids.is_empty() {
         Ok(None)

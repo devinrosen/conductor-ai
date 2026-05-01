@@ -298,7 +298,8 @@ impl<'a> AgentManager<'a> {
         // Unlike the agent_runs UPDATE above, this is unconditional w.r.t. the
         // step's status — workflow steps transition independently and the
         // engine relies on these values being readable after the run terminates.
-        crate::workflow::WorkflowManager::new(self.conn).mirror_step_metrics_from_run(
+        crate::workflow::mirror_step_metrics_from_run(
+            self.conn,
             run_id,
             crate::workflow::StepMetrics {
                 cost_usd: log_result.cost_usd,
@@ -391,7 +392,8 @@ impl<'a> AgentManager<'a> {
                 ":id": run_id,
             },
         )?;
-        crate::workflow::WorkflowManager::new(self.conn).mirror_step_metrics_from_run(
+        crate::workflow::mirror_step_metrics_from_run(
+            self.conn,
             run_id,
             crate::workflow::StepMetrics {
                 input_tokens: Some(input_tokens),

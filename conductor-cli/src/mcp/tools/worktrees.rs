@@ -65,7 +65,6 @@ pub(super) fn tool_get_worktree(
     use conductor_core::github::get_pr_detail;
     use conductor_core::repo::RepoManager;
     use conductor_core::tickets::TicketSyncer;
-    use conductor_core::workflow::WorkflowManager;
     use conductor_core::worktree::WorktreeManager;
 
     let repo_slug = require_arg!(args, "repo");
@@ -137,8 +136,7 @@ pub(super) fn tool_get_worktree(
     }
 
     // Latest workflow run
-    let wf_mgr = WorkflowManager::new(&conn);
-    match wf_mgr.list_workflow_runs(&wt.id) {
+    match conductor_core::workflow::list_workflow_runs(&conn, &wt.id) {
         Ok(runs) => {
             if let Some(run) = runs.first() {
                 out.push_str(&format!(

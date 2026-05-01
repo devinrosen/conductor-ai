@@ -8,8 +8,7 @@ use crate::agent::AgentManager;
 #[test]
 fn test_get_active_run_for_worktree_none_when_empty() {
     let conn = setup_db();
-    let mgr = WorkflowManager::new(&conn);
-    let active = mgr.get_active_run_for_worktree("w1").unwrap();
+    let active = crate::workflow::get_active_run_for_worktree(&conn, "w1").unwrap();
     assert!(active.is_none());
 }
 
@@ -18,16 +17,21 @@ fn test_get_active_run_for_worktree_returns_active() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run("my-flow", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "my-flow",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
     // Set status to running
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
+    crate::workflow::update_workflow_status(&conn, &run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
-    let active = mgr.get_active_run_for_worktree("w1").unwrap();
+    let active = crate::workflow::get_active_run_for_worktree(&conn, "w1").unwrap();
     assert!(active.is_some());
     assert_eq!(active.unwrap().workflow_name, "my-flow");
 }
@@ -37,15 +41,26 @@ fn test_get_active_run_for_worktree_none_after_completion() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "my-flow",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run.id,
+        WorkflowRunStatus::Completed,
+        Some("done"),
+        None,
+    )
+    .unwrap();
 
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run("my-flow", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"), None)
-        .unwrap();
-
-    let active = mgr.get_active_run_for_worktree("w1").unwrap();
+    let active = crate::workflow::get_active_run_for_worktree(&conn, "w1").unwrap();
     assert!(active.is_none());
 }
 
@@ -62,28 +77,34 @@ fn test_get_active_run_for_worktree_ignores_other_worktree() {
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w2"), "workflow", None).unwrap();
 
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run("other-flow", Some("w2"), &parent.id, false, "manual", None)
-        .unwrap();
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None, None)
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "other-flow",
+        Some("w2"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(&conn, &run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
 
     // w1 should see no active runs
-    let active = mgr.get_active_run_for_worktree("w1").unwrap();
+    let active = crate::workflow::get_active_run_for_worktree(&conn, "w1").unwrap();
     assert!(active.is_none());
 }
 
 #[test]
 fn test_reset_failed_steps() {
     let conn = setup_db();
-    let (run_id, mgr) = setup_run_with_steps(&conn);
+    let run_id = setup_run_with_steps(&conn);
 
-    let count = mgr.reset_failed_steps(&run_id).unwrap();
+    let count = crate::workflow::reset_failed_steps(&conn, &run_id).unwrap();
     // Should reset both 'failed' and 'running' steps
     assert_eq!(count, 2);
 
-    let steps = mgr.get_workflow_steps(&run_id).unwrap();
+    let steps = crate::workflow::get_workflow_steps(&conn, &run_id).unwrap();
     assert_eq!(steps[0].status, WorkflowStepStatus::Completed); // unchanged
     assert_eq!(steps[1].status, WorkflowStepStatus::Pending); // was failed
     assert!(steps[1].result_text.is_none()); // cleared
@@ -93,12 +114,12 @@ fn test_reset_failed_steps() {
 #[test]
 fn test_reset_completed_steps() {
     let conn = setup_db();
-    let (run_id, mgr) = setup_run_with_steps(&conn);
+    let run_id = setup_run_with_steps(&conn);
 
-    let count = mgr.reset_completed_steps(&run_id).unwrap();
+    let count = crate::workflow::reset_completed_steps(&conn, &run_id).unwrap();
     assert_eq!(count, 1);
 
-    let steps = mgr.get_workflow_steps(&run_id).unwrap();
+    let steps = crate::workflow::get_workflow_steps(&conn, &run_id).unwrap();
     assert_eq!(steps[0].status, WorkflowStepStatus::Pending); // was completed
     assert!(steps[0].result_text.is_none()); // cleared
     assert!(steps[0].context_out.is_none()); // cleared
@@ -107,13 +128,13 @@ fn test_reset_completed_steps() {
 #[test]
 fn test_reset_steps_from_position() {
     let conn = setup_db();
-    let (run_id, mgr) = setup_run_with_steps(&conn);
+    let run_id = setup_run_with_steps(&conn);
 
     // Reset from position 1 onwards
-    let count = mgr.reset_steps_from_position(&run_id, 1).unwrap();
+    let count = crate::workflow::reset_steps_from_position(&conn, &run_id, 1).unwrap();
     assert_eq!(count, 2); // positions 1 and 2
 
-    let steps = mgr.get_workflow_steps(&run_id).unwrap();
+    let steps = crate::workflow::get_workflow_steps(&conn, &run_id).unwrap();
     assert_eq!(steps[0].status, WorkflowStepStatus::Completed); // position 0 unchanged
     assert_eq!(steps[1].status, WorkflowStepStatus::Pending);
     assert_eq!(steps[2].status, WorkflowStepStatus::Pending);
@@ -135,13 +156,17 @@ fn setup_standalone_run(
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let wf_mgr = WorkflowManager::new(&conn);
-    let run = wf_mgr
-        .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", snapshot)
-        .unwrap();
-    wf_mgr
-        .update_workflow_status(&run.id, status, None, None)
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test-wf",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        snapshot,
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(&conn, &run.id, status, None, None).unwrap();
     (_tmp, db_path, run.id, config)
 }
 
@@ -241,23 +266,20 @@ fn test_resume_rejects_nonexistent_from_step() {
     let (_tmp, db_path, run_id, config) =
         setup_standalone_run(WorkflowRunStatus::Failed, Some("{}"));
     let conn = crate::db::open_database(&db_path).unwrap();
-    let wf_mgr = WorkflowManager::new(&conn);
 
     // Add a step so the run has steps to search through
-    let s0 = wf_mgr
-        .insert_step(&run_id, "step-a", "actor", false, 0, 0)
-        .unwrap();
-    wf_mgr
-        .update_step_status(
-            &s0,
-            WorkflowStepStatus::Completed,
-            None,
-            Some("ok"),
-            None,
-            None,
-            Some(0),
-        )
-        .unwrap();
+    let s0 = crate::workflow::insert_step(&conn, &run_id, "step-a", "actor", false, 0, 0).unwrap();
+    crate::workflow::update_step_status(
+        &conn,
+        &s0,
+        WorkflowStepStatus::Completed,
+        None,
+        Some("ok"),
+        None,
+        None,
+        Some(0),
+    )
+    .unwrap();
 
     let input = make_resume_input(config, &run_id, &db_path, Some("nonexistent-step"), false);
     let err = resume_workflow(&input).unwrap_err();
@@ -277,28 +299,27 @@ fn test_resume_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let wf_mgr = WorkflowManager::new(&conn);
 
     // Serialize a valid empty WorkflowDef as the snapshot so resume can deserialize it.
     let snapshot = serde_json::to_string(&make_empty_workflow()).unwrap();
-    let run = wf_mgr
-        .create_workflow_run(
-            "test-wf",
-            Some("w1"),
-            &parent.id,
-            false,
-            "manual",
-            Some(&snapshot),
-        )
-        .unwrap();
-    wf_mgr
-        .update_workflow_status(
-            &run.id,
-            WorkflowRunStatus::Failed,
-            Some("prior error"),
-            None,
-        )
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test-wf",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        Some(&snapshot),
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run.id,
+        WorkflowRunStatus::Failed,
+        Some("prior error"),
+        None,
+    )
+    .unwrap();
 
     let input = make_resume_input(config, &run.id, &db_path, None, false);
     let result = resume_workflow(&input).expect(
@@ -315,29 +336,32 @@ fn test_set_workflow_run_inputs_round_trip() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let wf_mgr = WorkflowManager::new(&conn);
-    let run = wf_mgr
-        .create_workflow_run(
-            "test-wf",
-            Some("w1"),
-            &parent.id,
-            false,
-            "manual",
-            Some("{}"),
-        )
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test-wf",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        Some("{}"),
+    )
+    .unwrap();
 
     // Initially inputs should be empty (no inputs set yet)
-    let fetched = wf_mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    let fetched = crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .unwrap();
     assert!(fetched.inputs.is_empty(), "Expected no inputs initially");
 
     // Write inputs and read back
     let mut inputs = HashMap::new();
     inputs.insert("key1".to_string(), "value1".to_string());
     inputs.insert("key2".to_string(), "value2".to_string());
-    wf_mgr.set_workflow_run_inputs(&run.id, &inputs).unwrap();
+    crate::workflow::set_workflow_run_inputs(&conn, &run.id, &inputs).unwrap();
 
-    let fetched = wf_mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    let fetched = crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         fetched.inputs.get("key1").map(String::as_str),
         Some("value1")
@@ -354,31 +378,32 @@ fn test_set_workflow_run_default_bot_name_round_trip() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let wf_mgr = WorkflowManager::new(&conn);
-    let run = wf_mgr
-        .create_workflow_run(
-            "test-wf",
-            Some("w1"),
-            &parent.id,
-            false,
-            "manual",
-            Some("{}"),
-        )
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test-wf",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        Some("{}"),
+    )
+    .unwrap();
 
     // Initially default_bot_name should be None
-    let fetched = wf_mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    let fetched = crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .unwrap();
     assert!(
         fetched.default_bot_name.is_none(),
         "Expected no default_bot_name initially"
     );
 
     // Write a bot name and read it back
-    wf_mgr
-        .set_workflow_run_default_bot_name(&run.id, "reviewer-bot")
-        .unwrap();
+    crate::workflow::set_workflow_run_default_bot_name(&conn, &run.id, "reviewer-bot").unwrap();
 
-    let fetched = wf_mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    let fetched = crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         fetched.default_bot_name.as_deref(),
         Some("reviewer-bot"),
@@ -394,37 +419,36 @@ fn test_default_bot_name_persists_through_suspend_and_resume() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let wf_mgr = WorkflowManager::new(&conn);
-    let run = wf_mgr
-        .create_workflow_run(
-            "test-wf",
-            Some("w1"),
-            &parent.id,
-            false,
-            "manual",
-            Some("{}"),
-        )
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test-wf",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        Some("{}"),
+    )
+    .unwrap();
 
     // Simulate what execute_workflow does when a default_bot_name is set
-    wf_mgr
-        .set_workflow_run_default_bot_name(&run.id, "deploy-bot")
-        .unwrap();
+    crate::workflow::set_workflow_run_default_bot_name(&conn, &run.id, "deploy-bot").unwrap();
 
     // Simulate a suspend by marking the run as waiting
-    wf_mgr
-        .set_waiting_blocked_on(
-            &run.id,
-            &BlockedOn::HumanApproval {
-                gate_name: "deploy-gate".to_string(),
-                prompt: None,
-                options: vec![],
-            },
-        )
-        .unwrap();
+    crate::workflow::set_waiting_blocked_on(
+        &conn,
+        &run.id,
+        &BlockedOn::HumanApproval {
+            gate_name: "deploy-gate".to_string(),
+            prompt: None,
+            options: vec![],
+        },
+    )
+    .unwrap();
 
     // Load the run as resume_workflow would — the bot name must survive the round-trip
-    let restored = wf_mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    let restored = crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         restored.default_bot_name.as_deref(),
         Some("deploy-bot"),
@@ -438,17 +462,16 @@ fn test_row_to_workflow_run_malformed_inputs_json_returns_empty() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let wf_mgr = WorkflowManager::new(&conn);
-    let run = wf_mgr
-        .create_workflow_run(
-            "test-wf",
-            Some("w1"),
-            &parent.id,
-            false,
-            "manual",
-            Some("{}"),
-        )
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test-wf",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        Some("{}"),
+    )
+    .unwrap();
 
     // Directly write invalid JSON into the inputs column to simulate corruption
     conn.execute(
@@ -459,7 +482,9 @@ fn test_row_to_workflow_run_malformed_inputs_json_returns_empty() {
 
     // Reading back should return an empty HashMap (not panic), matching the
     // unwrap_or_else + warn fallback in row_to_workflow_run.
-    let fetched = wf_mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    let fetched = crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .unwrap();
     assert!(
         fetched.inputs.is_empty(),
         "Expected empty inputs on malformed JSON, got: {:?}",
@@ -470,19 +495,19 @@ fn test_row_to_workflow_run_malformed_inputs_json_returns_empty() {
 #[test]
 fn test_restart_resets_all_steps() {
     let conn = setup_db();
-    let (run_id, mgr) = setup_run_with_steps(&conn);
+    let run_id = setup_run_with_steps(&conn);
 
     // Verify initial state: 1 completed, 1 failed, 1 running
-    let steps = mgr.get_workflow_steps(&run_id).unwrap();
+    let steps = crate::workflow::get_workflow_steps(&conn, &run_id).unwrap();
     assert_eq!(steps[0].status, WorkflowStepStatus::Completed);
     assert_eq!(steps[1].status, WorkflowStepStatus::Failed);
     assert_eq!(steps[2].status, WorkflowStepStatus::Running);
 
     // Restart resets both failed+running and completed steps
-    mgr.reset_failed_steps(&run_id).unwrap();
-    mgr.reset_completed_steps(&run_id).unwrap();
+    crate::workflow::reset_failed_steps(&conn, &run_id).unwrap();
+    crate::workflow::reset_completed_steps(&conn, &run_id).unwrap();
 
-    let steps = mgr.get_workflow_steps(&run_id).unwrap();
+    let steps = crate::workflow::get_workflow_steps(&conn, &run_id).unwrap();
     assert_eq!(
         steps[0].status,
         WorkflowStepStatus::Pending,
@@ -503,7 +528,7 @@ fn test_restart_resets_all_steps() {
     );
 
     // skip set should be empty after restart
-    let keys = mgr.get_completed_step_keys(&run_id).unwrap();
+    let keys = crate::workflow::get_completed_step_keys(&conn, &run_id).unwrap();
     assert!(
         keys.is_empty(),
         "no completed steps should remain after restart"
@@ -520,16 +545,21 @@ fn test_from_step_skip_set_and_step_map() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test-wf",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
 
     // Insert 3 completed steps at positions 0, 1, 2
-    let s0 = mgr
-        .insert_step(&run.id, "step-a", "actor", false, 0, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let s0 = crate::workflow::insert_step(&conn, &run.id, "step-a", "actor", false, 0, 0).unwrap();
+    crate::workflow::update_step_status(
+        &conn,
         &s0,
         WorkflowStepStatus::Completed,
         None,
@@ -540,10 +570,9 @@ fn test_from_step_skip_set_and_step_map() {
     )
     .unwrap();
 
-    let s1 = mgr
-        .insert_step(&run.id, "step-b", "actor", false, 1, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let s1 = crate::workflow::insert_step(&conn, &run.id, "step-b", "actor", false, 1, 0).unwrap();
+    crate::workflow::update_step_status(
+        &conn,
         &s1,
         WorkflowStepStatus::Completed,
         None,
@@ -554,10 +583,9 @@ fn test_from_step_skip_set_and_step_map() {
     )
     .unwrap();
 
-    let s2 = mgr
-        .insert_step(&run.id, "step-c", "actor", false, 2, 0)
-        .unwrap();
-    mgr.update_step_status(
+    let s2 = crate::workflow::insert_step(&conn, &run.id, "step-c", "actor", false, 2, 0).unwrap();
+    crate::workflow::update_step_status(
+        &conn,
         &s2,
         WorkflowStepStatus::Completed,
         None,
@@ -569,7 +597,7 @@ fn test_from_step_skip_set_and_step_map() {
     .unwrap();
 
     // Snapshot all_steps before any resets (mirrors resume_workflow: load once upfront)
-    let all_steps = mgr.get_workflow_steps(&run.id).unwrap();
+    let all_steps = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
 
     // Simulate the --from-step "step-b" (position 1) branch of resume_workflow
     let mut keys = completed_keys_from_steps(&all_steps);
@@ -597,8 +625,8 @@ fn test_from_step_skip_set_and_step_map() {
     }
 
     // Reset DB state for steps at/after pos, then reset any failed/running steps
-    mgr.reset_steps_from_position(&run.id, pos).unwrap();
-    mgr.reset_failed_steps(&run.id).unwrap();
+    crate::workflow::reset_steps_from_position(&conn, &run.id, pos).unwrap();
+    crate::workflow::reset_failed_steps(&conn, &run.id).unwrap();
 
     // skip_completed should contain only ("step-a", 0)
     assert_eq!(keys.len(), 1, "only step-a:0 should survive pruning");
@@ -616,7 +644,7 @@ fn test_from_step_skip_set_and_step_map() {
     );
 
     // DB state: step-a stays Completed, step-b and step-c are reset to Pending
-    let updated = mgr.get_workflow_steps(&run.id).unwrap();
+    let updated = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
     assert_eq!(
         updated[0].status,
         WorkflowStepStatus::Completed,
@@ -666,20 +694,24 @@ fn test_resume_allows_restart_on_completed_run() {
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let wf_mgr = WorkflowManager::new(&conn);
-    let run = wf_mgr
-        .create_workflow_run(
-            "test-wf",
-            Some("w1"),
-            &parent.id,
-            false,
-            "manual",
-            Some("{}"),
-        )
-        .unwrap();
-    wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"), None)
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test-wf",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        Some("{}"),
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run.id,
+        WorkflowRunStatus::Completed,
+        Some("done"),
+        None,
+    )
+    .unwrap();
 
     // Without restart, completed run should be rejected
     let input = WorkflowResumeInput {
@@ -784,26 +816,25 @@ fn test_resume_workflow_ephemeral_run_rejected() {
     let config = Config::default();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
-    let wf_mgr = WorkflowManager::new(&conn);
     let snapshot = serde_json::to_string(&make_empty_workflow()).unwrap();
-    let run = wf_mgr
-        .create_workflow_run(
-            "ephemeral-wf",
-            None,
-            &parent.id,
-            false,
-            "manual",
-            Some(&snapshot),
-        )
-        .unwrap();
-    wf_mgr
-        .update_workflow_status(
-            &run.id,
-            WorkflowRunStatus::Failed,
-            Some("step failed"),
-            None,
-        )
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "ephemeral-wf",
+        None,
+        &parent.id,
+        false,
+        "manual",
+        Some(&snapshot),
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run.id,
+        WorkflowRunStatus::Failed,
+        Some("step failed"),
+        None,
+    )
+    .unwrap();
 
     let result = resume_workflow(&WorkflowResumeInput {
         config: &config,
@@ -832,30 +863,29 @@ fn test_resume_workflow_repo_target() {
 
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
-    let wf_mgr = WorkflowManager::new(&conn);
     let snapshot = serde_json::to_string(&make_empty_workflow()).unwrap();
-    let run = wf_mgr
-        .create_workflow_run_with_targets(
-            "test-wf",
-            None,
-            None,
-            Some("r1"),
-            &parent.id,
-            false,
-            "manual",
-            Some(&snapshot),
-            None,
-            None,
-        )
-        .unwrap();
-    wf_mgr
-        .update_workflow_status(
-            &run.id,
-            WorkflowRunStatus::Failed,
-            Some("step failed"),
-            None,
-        )
-        .unwrap();
+    let run = crate::workflow::create_workflow_run_with_targets(
+        &conn,
+        "test-wf",
+        None,
+        None,
+        Some("r1"),
+        &parent.id,
+        false,
+        "manual",
+        Some(&snapshot),
+        None,
+        None,
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run.id,
+        WorkflowRunStatus::Failed,
+        Some("step failed"),
+        None,
+    )
+    .unwrap();
 
     let resume_result = resume_workflow(&WorkflowResumeInput {
         config: &config,
@@ -885,30 +915,29 @@ fn test_resume_workflow_ticket_target() {
 
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
-    let wf_mgr = WorkflowManager::new(&conn);
     let snapshot = serde_json::to_string(&make_empty_workflow()).unwrap();
-    let run = wf_mgr
-        .create_workflow_run_with_targets(
-            "test-wf",
-            None,
-            Some("tkt-1"),
-            None,
-            &parent.id,
-            false,
-            "manual",
-            Some(&snapshot),
-            None,
-            None,
-        )
-        .unwrap();
-    wf_mgr
-        .update_workflow_status(
-            &run.id,
-            WorkflowRunStatus::Failed,
-            Some("step failed"),
-            None,
-        )
-        .unwrap();
+    let run = crate::workflow::create_workflow_run_with_targets(
+        &conn,
+        "test-wf",
+        None,
+        Some("tkt-1"),
+        None,
+        &parent.id,
+        false,
+        "manual",
+        Some(&snapshot),
+        None,
+        None,
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run.id,
+        WorkflowRunStatus::Failed,
+        Some("step failed"),
+        None,
+    )
+    .unwrap();
 
     let resume_result = resume_workflow(&WorkflowResumeInput {
         config: &config,
@@ -941,45 +970,42 @@ fn test_resume_deletes_orphaned_pending_steps() {
     let config = make_resume_config();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let wf_mgr = WorkflowManager::new(&conn);
 
     let snapshot = serde_json::to_string(&make_empty_workflow()).unwrap();
-    let run = wf_mgr
-        .create_workflow_run(
-            "test-wf",
-            Some("w1"),
-            &parent.id,
-            false,
-            "manual",
-            Some(&snapshot),
-        )
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test-wf",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        Some(&snapshot),
+    )
+    .unwrap();
 
     // Insert a completed step — must survive the orphan-deletion pass.
-    let s_completed = wf_mgr
-        .insert_step(&run.id, "step-done", "actor", false, 0, 0)
-        .unwrap();
-    wf_mgr
-        .update_step_status(
-            &s_completed,
-            WorkflowStepStatus::Completed,
-            None,
-            Some("ok"),
-            None,
-            None,
-            Some(0),
-        )
-        .unwrap();
+    let s_completed =
+        crate::workflow::insert_step(&conn, &run.id, "step-done", "actor", false, 0, 0).unwrap();
+    crate::workflow::update_step_status(
+        &conn,
+        &s_completed,
+        WorkflowStepStatus::Completed,
+        None,
+        Some("ok"),
+        None,
+        None,
+        Some(0),
+    )
+    .unwrap();
 
     // Insert an orphaned pending step: status = 'pending', started_at = NULL.
     // `insert_step` inserts with status='pending' and no started_at, so this
     // is the real scenario from #2186.
-    let _s_orphan = wf_mgr
-        .insert_step(&run.id, "step-orphan", "actor", false, 1, 0)
-        .unwrap();
+    let _s_orphan =
+        crate::workflow::insert_step(&conn, &run.id, "step-orphan", "actor", false, 1, 0).unwrap();
 
     // Confirm both rows are present before resume.
-    let steps_before = wf_mgr.get_workflow_steps(&run.id).unwrap();
+    let steps_before = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
     assert_eq!(
         steps_before.len(),
         2,
@@ -987,9 +1013,14 @@ fn test_resume_deletes_orphaned_pending_steps() {
     );
 
     // Mark the run as failed so resume is accepted.
-    wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("crash"), None)
-        .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run.id,
+        WorkflowRunStatus::Failed,
+        Some("crash"),
+        None,
+    )
+    .unwrap();
 
     // resume_workflow calls delete_orphaned_pending_steps before building the
     // skip set, so the orphaned row must be gone by the time execution starts.
@@ -1011,7 +1042,7 @@ fn test_resume_deletes_orphaned_pending_steps() {
     );
 
     // Only the completed step should remain — the orphaned pending row is gone.
-    let steps_after = wf_mgr.get_workflow_steps(&run.id).unwrap();
+    let steps_after = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
     assert_eq!(
         steps_after.len(),
         1,
@@ -1041,45 +1072,43 @@ fn test_resume_workflow_skips_completed_steps_via_flow_engine() {
     let config = Config::default();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let wf_mgr = WorkflowManager::new(&conn);
 
     let snapshot = serde_json::to_string(&make_empty_workflow()).unwrap();
-    let run = wf_mgr
-        .create_workflow_run(
-            "test-wf",
-            Some("w1"),
-            &parent.id,
-            false,
-            "manual",
-            Some(&snapshot),
-        )
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test-wf",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        Some(&snapshot),
+    )
+    .unwrap();
 
     // Pre-insert a completed step to simulate a partial run.
-    let step_id = wf_mgr
-        .insert_step(&run.id, "step-alpha", "actor", false, 0, 0)
-        .unwrap();
-    wf_mgr
-        .update_step_status(
-            &step_id,
-            WorkflowStepStatus::Completed,
-            None,
-            Some("prior result"),
-            Some("prior context"),
-            Some(r#"["marker"]"#),
-            Some(0),
-        )
-        .unwrap();
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "step-alpha", "actor", false, 0, 0).unwrap();
+    crate::workflow::update_step_status(
+        &conn,
+        &step_id,
+        WorkflowStepStatus::Completed,
+        None,
+        Some("prior result"),
+        Some("prior context"),
+        Some(r#"["marker"]"#),
+        Some(0),
+    )
+    .unwrap();
 
     // Mark the run as failed so resume_workflow accepts it.
-    wf_mgr
-        .update_workflow_status(
-            &run.id,
-            WorkflowRunStatus::Failed,
-            Some("step-b failed"),
-            None,
-        )
-        .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run.id,
+        WorkflowRunStatus::Failed,
+        Some("step-b failed"),
+        None,
+    )
+    .unwrap();
 
     // Pass the temp DB path so FlowEngine opens the same on-disk DB.
     let result = resume_workflow(&WorkflowResumeInput {
@@ -1102,7 +1131,9 @@ fn test_resume_workflow_skips_completed_steps_via_flow_engine() {
 
     // The pre-completed step must still be Completed — FlowEngine::resume() reads
     // DB post-reset and must not disturb already-completed steps.
-    let step = wf_mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    let step = crate::workflow::get_step_by_id(&conn, &step_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         step.status,
         WorkflowStepStatus::Completed,
@@ -1118,14 +1149,25 @@ fn test_spawn_workflow_resume_handles_failed_resume_gracefully() {
     let conn = crate::db::open_database(&db_path).unwrap();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let wf_mgr = WorkflowManager::new(&conn);
     // No definition_snapshot → resume will fail with "no definition snapshot"
-    let run = wf_mgr
-        .create_workflow_run("test-flow", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
-    wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("seed error"), None)
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test-flow",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run.id,
+        WorkflowRunStatus::Failed,
+        Some("seed error"),
+        None,
+    )
+    .unwrap();
 
     // spawn_workflow_resume uses default db_path, so pass db_path via a
     // WorkflowResumeStandalone directly — exercise via the standalone path
@@ -1147,14 +1189,25 @@ fn test_spawn_heartbeat_resume_handles_failed_resume_gracefully() {
     let conn = crate::db::open_database(&db_path).unwrap();
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let wf_mgr = WorkflowManager::new(&conn);
     // No definition_snapshot → resume will fail with "no definition snapshot"
-    let run = wf_mgr
-        .create_workflow_run("test-flow", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
-    wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("seed error"), None)
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test-flow",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run.id,
+        WorkflowRunStatus::Failed,
+        Some("seed error"),
+        None,
+    )
+    .unwrap();
 
     let handle = spawn_heartbeat_resume(SpawnHeartbeatResumeParams {
         run_id: run.id.clone(),
@@ -1169,7 +1222,9 @@ fn test_spawn_heartbeat_resume_handles_failed_resume_gracefully() {
         .expect("spawn_heartbeat_resume thread panicked");
 
     // Resume failed before touching run status, so it must remain Failed.
-    let updated = wf_mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    let updated = crate::workflow::get_workflow_run(&conn, &run.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         updated.status,
         WorkflowRunStatus::Failed,

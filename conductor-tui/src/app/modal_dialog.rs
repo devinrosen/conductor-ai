@@ -92,9 +92,7 @@ impl App {
                     let result = (|| -> anyhow::Result<()> {
                         let db = conductor_core::config::db_path();
                         let conn = conductor_core::db::open_database(&db)?;
-                        use conductor_core::workflow::WorkflowManager;
-                        let mgr = WorkflowManager::new(&conn);
-                        mgr.cancel_run(&run_id, "Cancelled by user")
+                        conductor_core::workflow::cancel_run(&conn, &run_id, "Cancelled by user")
                             .map_err(anyhow::Error::from)
                     })();
                     let _ = bg_tx.send(Action::WorkflowCancelComplete {
