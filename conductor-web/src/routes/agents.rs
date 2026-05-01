@@ -123,20 +123,15 @@ async fn wire_headless_drain(
         };
         let mgr = AgentManager::new(&conn);
         let (stdout, finish) = handle.into_drain_parts();
-        conductor_core::agent_runtime::drain_stream_json(
-            stdout,
-            &run_id_owned,
-            &log_path,
-            &mgr,
-            |event| {
-                events.emit(ConductorEvent::AgentLiveEvent {
-                    run_id: run_id_owned.clone(),
-                    worktree_id: worktree_id.clone(),
-                    kind: event.kind.clone(),
-                    summary: event.summary.clone(),
-                });
-            },
-        );
+        let sink = conductor_core::agent_runtime::CombinedSink::new(&mgr, |event| {
+            events.emit(ConductorEvent::AgentLiveEvent {
+                run_id: run_id_owned.clone(),
+                worktree_id: worktree_id.clone(),
+                kind: event.kind.clone(),
+                summary: event.summary.clone(),
+            });
+        });
+        conductor_core::agent_runtime::drain_stream_json(stdout, &run_id_owned, &log_path, &sink);
         if let Some(ref pf) = prompt_file {
             let _ = std::fs::remove_file(pf);
         }
