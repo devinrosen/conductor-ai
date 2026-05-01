@@ -211,7 +211,7 @@ pub(crate) fn guard_active_run(
     force: bool,
 ) -> Result<()> {
     if let Some(active) =
-        crate::workflow::manager::queries::get_active_run_for_worktree(wf_mgr.conn(), worktree_id)?
+        crate::workflow::manager::queries::get_active_run_for_worktree(wf_mgr.conn, worktree_id)?
     {
         if force {
             tracing::info!(
@@ -1397,7 +1397,7 @@ mod tests {
     ) -> String {
         let agent_mgr = crate::agent::AgentManager::new(conn);
         let parent = agent_mgr.create_run(Some(wt_id), "workflow", None).unwrap();
-        let wf_mgr = WorkflowManager::new(conn);
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(conn);
         let run = wf_mgr
             .create_workflow_run(wf_name, Some(wt_id), &parent.id, false, "manual", None)
             .unwrap();
@@ -1413,10 +1413,9 @@ mod tests {
     #[test]
     fn guard_active_run_returns_already_active_when_run_exists() {
         let conn = setup_guard_db();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let wf_name = "my-workflow";
         make_running_workflow_run(&conn, "w1", wf_name);
-
-        let wf_mgr = WorkflowManager::new(&conn);
         let err = guard_active_run(&wf_mgr, "w1", false).unwrap_err();
         assert!(
             matches!(err, crate::error::ConductorError::WorkflowRunAlreadyActive { ref name } if name == wf_name),
@@ -1427,7 +1426,7 @@ mod tests {
     #[test]
     fn guard_active_run_ok_when_no_active_run() {
         let conn = setup_guard_db();
-        let wf_mgr = WorkflowManager::new(&conn);
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         // No workflow runs exist — guard should pass.
         guard_active_run(&wf_mgr, "w1", false).expect("no active run should return Ok");
     }
@@ -1435,9 +1434,8 @@ mod tests {
     #[test]
     fn guard_active_run_force_cancels_active_run() {
         let conn = setup_guard_db();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let run_id = make_running_workflow_run(&conn, "w1", "my-wf");
-
-        let wf_mgr = WorkflowManager::new(&conn);
         guard_active_run(&wf_mgr, "w1", true).expect("force should cancel and return Ok");
 
         // The previously active run must now be cancelled.
@@ -1457,9 +1455,9 @@ mod tests {
     #[test]
     fn guard_active_run_ok_when_only_completed_runs_exist() {
         let conn = setup_guard_db();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let agent_mgr = crate::agent::AgentManager::new(&conn);
         let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-        let wf_mgr = WorkflowManager::new(&conn);
         let run = wf_mgr
             .create_workflow_run("wf", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
@@ -1595,6 +1593,7 @@ mod tests {
         let db_file = tempfile::NamedTempFile::new().unwrap();
         {
             let conn = crate::db::open_database(db_file.path()).unwrap();
+            let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
             crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
             crate::test_helpers::insert_test_worktree(&conn, "w1", "r1", "feat-test", "/tmp");
         }
@@ -1650,12 +1649,12 @@ mod tests {
         let db_file = NamedTempFile::new().unwrap();
         let run_id = {
             let conn = crate::db::open_database(db_file.path()).unwrap();
+            let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
             crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
             crate::test_helpers::insert_test_worktree(&conn, "w1", "r1", "feat-test", "/tmp");
             let parent = crate::agent::AgentManager::new(&conn)
                 .create_run(Some("w1"), "workflow", None)
                 .unwrap();
-            let wf_mgr = WorkflowManager::new(&conn);
             let run = wf_mgr
                 .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
                 .unwrap();
@@ -1687,11 +1686,11 @@ mod tests {
         let db_file = NamedTempFile::new().unwrap();
         let run_id = {
             let conn = crate::db::open_database(db_file.path()).unwrap();
+            let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
             // Ephemeral runs have no worktree/repo/ticket — only an agent parent.
             let parent = crate::agent::AgentManager::new(&conn)
                 .create_run(None, "workflow", None)
                 .unwrap();
-            let wf_mgr = WorkflowManager::new(&conn);
             let run = wf_mgr
                 .create_workflow_run_with_targets(
                     "test-wf", None, // worktree_id
@@ -1763,6 +1762,7 @@ mod tests {
         );
 
         let conn = crate::db::open_database(db_file.path()).unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let status: String = conn
             .query_row("SELECT status FROM workflow_runs LIMIT 1", [], |r| r.get(0))
             .expect("workflow run must be persisted in the database");
@@ -1789,6 +1789,7 @@ mod tests {
         execute_workflow_standalone(&params).expect("empty workflow should succeed");
 
         let conn = crate::db::open_database(db_file.path()).unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let inputs_json: String = conn
             .query_row("SELECT inputs FROM workflow_runs LIMIT 1", [], |r| r.get(0))
             .expect("workflow run must be persisted");
@@ -1826,11 +1827,11 @@ mod tests {
         conn: &rusqlite::Connection,
         snapshot_json: Option<&str>,
     ) -> String {
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(conn);
         crate::test_helpers::insert_test_repo(conn, "r1", "test-repo", "/tmp");
         let parent = crate::agent::AgentManager::new(conn)
             .create_run(None, "workflow", None)
             .unwrap();
-        let wf_mgr = WorkflowManager::new(conn);
         let run = wf_mgr
             .create_workflow_run_with_targets(
                 "test-wf",
@@ -1872,6 +1873,7 @@ mod tests {
         let db_file = tempfile::NamedTempFile::new().unwrap();
         let run_id = {
             let conn = crate::db::open_database(db_file.path()).unwrap();
+            let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
             insert_failed_run_with_repo(&conn, None) // no definition_snapshot
         };
 
@@ -1892,6 +1894,7 @@ mod tests {
         let snapshot = serde_json::to_string(&make_wf(vec![])).unwrap();
         let run_id = {
             let conn = crate::db::open_database(db_file.path()).unwrap();
+            let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
             insert_failed_run_with_repo(&conn, Some(&snapshot))
         };
 
@@ -1910,6 +1913,7 @@ mod tests {
         let snapshot = serde_json::to_string(&make_wf(vec![])).unwrap();
         let run_id = {
             let conn = crate::db::open_database(db_file.path()).unwrap();
+            let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
             insert_failed_run_with_repo(&conn, Some(&snapshot))
         };
 
@@ -1935,6 +1939,7 @@ mod tests {
         let snapshot = serde_json::to_string(&make_wf(vec![])).unwrap();
         let run_id = {
             let conn = crate::db::open_database(db_file.path()).unwrap();
+            let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
             insert_failed_run_with_repo(&conn, Some(&snapshot))
         };
 
@@ -1947,6 +1952,7 @@ mod tests {
         );
 
         let conn = crate::db::open_database(db_file.path()).unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let status: String = conn
             .query_row(
                 "SELECT status FROM workflow_runs WHERE id = ?1",
@@ -1969,13 +1975,13 @@ mod tests {
         let snapshot = serde_json::to_string(&make_wf(vec![])).unwrap();
         let run_id = {
             let conn = crate::db::open_database(db_file.path()).unwrap();
+            let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
             // insert_test_repo / insert_test_worktree use "/tmp" paths that exist.
             crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp");
             crate::test_helpers::insert_test_worktree(&conn, "w1", "r1", "feat-test", "/tmp");
             let parent = crate::agent::AgentManager::new(&conn)
                 .create_run(Some("w1"), "workflow", None)
                 .unwrap();
-            let wf_mgr = WorkflowManager::new(&conn);
             let run = wf_mgr
                 .create_workflow_run(
                     "test-wf",
@@ -2012,6 +2018,7 @@ mod tests {
         let snapshot = serde_json::to_string(&make_wf(vec![])).unwrap();
         let run_id = {
             let conn = crate::db::open_database(db_file.path()).unwrap();
+            let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
             insert_failed_run_with_repo(&conn, Some(&snapshot))
         };
 

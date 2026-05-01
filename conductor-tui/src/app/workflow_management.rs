@@ -140,10 +140,6 @@ impl App {
     }
 
     pub(super) fn reload_workflow_data(&mut self) {
-        use conductor_core::workflow::WorkflowManager;
-
-        let wf_mgr = WorkflowManager::new(&self.conn);
-
         if let Some(ref wt_id) = self.state.selected_worktree_id.clone() {
             // Worktree-scoped: load defs from FS in a background thread
             if let Some((wt_path, rp)) = self.resolve_worktree_paths(wt_id) {
@@ -174,24 +170,22 @@ impl App {
         self.state.data.workflow_runs = if let Some(ref wt_id) =
             self.state.selected_worktree_id.clone()
         {
-            conductor_core::workflow::list_workflow_runs(wf_mgr.conn(), wt_id).unwrap_or_else(|e| {
+            conductor_core::workflow::list_workflow_runs(&self.conn, wt_id).unwrap_or_else(|e| {
                 tracing::warn!("Failed to list workflow runs for worktree '{wt_id}': {e}");
                 Default::default()
             })
         } else if self.state.view == View::RepoDetail {
             let repo_id = self.state.selected_repo_id.as_deref().unwrap_or("");
-            conductor_core::workflow::list_workflow_runs_for_repo(wf_mgr.conn(), repo_id, 50)
+            conductor_core::workflow::list_workflow_runs_for_repo(&self.conn, repo_id, 50)
                 .unwrap_or_else(|e| {
                     tracing::warn!("Failed to list workflow runs for repo '{repo_id}': {e}");
                     Default::default()
                 })
         } else {
-            conductor_core::workflow::list_all_workflow_runs(wf_mgr.conn(), 50).unwrap_or_else(
-                |e| {
-                    tracing::warn!("Failed to list all workflow runs: {e}");
-                    Default::default()
-                },
-            )
+            conductor_core::workflow::list_all_workflow_runs(&self.conn, 50).unwrap_or_else(|e| {
+                tracing::warn!("Failed to list all workflow runs: {e}");
+                Default::default()
+            })
         };
 
         // Load steps for the currently selected run
@@ -201,12 +195,9 @@ impl App {
     }
 
     pub(super) fn reload_workflow_steps(&mut self) {
-        use conductor_core::workflow::WorkflowManager;
-
         if let Some(ref run_id) = self.state.selected_workflow_run_id {
-            let wf_mgr = WorkflowManager::new(&self.conn);
             self.state.data.workflow_steps = collapse_loop_iterations(
-                conductor_core::workflow::get_workflow_steps(wf_mgr.conn(), run_id).unwrap_or_else(
+                conductor_core::workflow::get_workflow_steps(&self.conn, run_id).unwrap_or_else(
                     |e| {
                         tracing::warn!("Failed to load steps for run '{run_id}': {e}");
                         Default::default()
@@ -785,10 +776,7 @@ impl App {
             ref worktree_id, ..
         } = target
         {
-            use conductor_core::workflow::WorkflowManager;
-            let wf_mgr = WorkflowManager::new(&self.conn);
-            match conductor_core::workflow::get_active_run_for_worktree(wf_mgr.conn(), worktree_id)
-            {
+            match conductor_core::workflow::get_active_run_for_worktree(&self.conn, worktree_id) {
                 Ok(Some(active)) => {
                     self.state.status_message = Some(format!(
                         "Workflow '{}' is already running — cancel it before starting another",
@@ -1593,8 +1581,6 @@ impl App {
     }
 
     pub(super) fn handle_approve_gate(&mut self) {
-        use conductor_core::workflow::WorkflowManager;
-
         // If we're in GateAction modal, use its data
         if let Modal::GateAction {
             ref step_id,
@@ -1604,7 +1590,7 @@ impl App {
             ..
         } = self.state.modal
         {
-            let wf_mgr = WorkflowManager::new(&self.conn);
+            let wf_mgr = conductor_core::workflow::WorkflowManager::new(&self.conn);
             let fb = if feedback.is_empty() {
                 None
             } else {
@@ -1643,9 +1629,7 @@ impl App {
 
         // Otherwise, find the waiting gate and show the GateAction modal
         if let Some(ref run_id) = self.state.selected_workflow_run_id {
-            let wf_mgr = WorkflowManager::new(&self.conn);
-            if let Ok(Some(step)) =
-                conductor_core::workflow::find_waiting_gate(wf_mgr.conn(), run_id)
+            if let Ok(Some(step)) = conductor_core::workflow::find_waiting_gate(&self.conn, run_id)
             {
                 // Deserialize gate_options if present.
                 let options: Vec<String> = step
@@ -1670,10 +1654,8 @@ impl App {
     }
 
     pub(super) fn handle_reject_gate(&mut self) {
-        use conductor_core::workflow::WorkflowManager;
-
         if let Modal::GateAction { ref step_id, .. } = self.state.modal {
-            let wf_mgr = WorkflowManager::new(&self.conn);
+            let wf_mgr = conductor_core::workflow::WorkflowManager::new(&self.conn);
             match wf_mgr.reject_gate(step_id, "tui-user", None) {
                 Ok(()) => {
                     self.state.status_message = Some("Gate rejected".to_string());
@@ -1881,9 +1863,7 @@ impl App {
     /// an active run (or fails), signalling the caller to abort the dispatch.
     /// Returns `false` when no active run is found and dispatch may proceed.
     fn active_run_blocks_dispatch(&mut self, worktree_id: &str) -> bool {
-        use conductor_core::workflow::WorkflowManager;
-        let wf_mgr = WorkflowManager::new(&self.conn);
-        match conductor_core::workflow::get_active_run_for_worktree(wf_mgr.conn(), worktree_id) {
+        match conductor_core::workflow::get_active_run_for_worktree(&self.conn, worktree_id) {
             Ok(Some(active)) => {
                 self.state.status_message = Some(format!(
                     "Workflow '{}' is already running — cancel it before starting another",
@@ -2032,8 +2012,6 @@ impl App {
 
     /// Handle the `ToggleWorkflowRunDismissed` action.
     pub(super) fn handle_toggle_workflow_run_dismissed(&mut self) {
-        use conductor_core::workflow::WorkflowManager;
-
         let Some(run_id) = self.state.selected_workflow_run_id.clone() else {
             self.state.status_message = Some("No workflow run selected".to_string());
             return;
@@ -2069,7 +2047,7 @@ impl App {
                 let db_path = conductor_core::config::db_path();
                 let conn =
                     conductor_core::db::open_database(&db_path).map_err(|e| e.to_string())?;
-                WorkflowManager::new(&conn)
+                conductor_core::workflow::WorkflowManager::new(&conn)
                     .set_dismissed(&run_id_clone, new_dismissed)
                     .map_err(|e| e.to_string())
             })();
@@ -2087,8 +2065,6 @@ impl App {
     /// guards against deleting non-terminal runs, then spawns a background thread
     /// to call `WorkflowManager::delete_run`. Sends `WorkflowDeleteComplete` when done.
     pub(super) fn handle_delete_workflow_run(&mut self) {
-        use conductor_core::workflow::WorkflowManager;
-
         // Resolve the run ID: in the detail view use the selected run; in the list
         // view use the currently highlighted row.
         let run_id = if self.state.view == View::WorkflowRunDetail {
@@ -2140,7 +2116,7 @@ impl App {
                 let db_path = conductor_core::config::db_path();
                 let conn =
                     conductor_core::db::open_database(&db_path).map_err(|e| e.to_string())?;
-                WorkflowManager::new(&conn)
+                conductor_core::workflow::WorkflowManager::new(&conn)
                     .delete_run(&run_id)
                     .map_err(|e| e.to_string())
             })();

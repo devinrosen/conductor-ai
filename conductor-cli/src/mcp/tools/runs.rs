@@ -13,7 +13,7 @@ pub(super) fn tool_list_runs(
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::repo::RepoManager;
-    use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
+    use conductor_core::workflow::WorkflowRunStatus;
     use conductor_core::worktree::WorktreeManager;
 
     let repo_slug = get_arg(args, "repo");
@@ -44,7 +44,6 @@ pub(super) fn tool_list_runs(
         Ok(v) => v,
         Err(e) => return tool_err(e),
     };
-    let wf_mgr = WorkflowManager::new(&conn);
 
     if let Some(slug) = repo_slug {
         // Per-repo path (existing behaviour)
@@ -61,22 +60,14 @@ pub(super) fn tool_list_runs(
                 Err(e) => return tool_err(e),
             };
             match conductor_core::workflow::list_workflow_runs_filtered_paginated(
-                wf_mgr.conn(),
-                &wt.id,
-                status,
-                limit,
-                offset,
+                &conn, &wt.id, status, limit, offset,
             ) {
                 Ok(r) => r,
                 Err(e) => return tool_err(e),
             }
         } else {
             match conductor_core::workflow::list_workflow_runs_by_repo_id_filtered(
-                wf_mgr.conn(),
-                &repo.id,
-                limit,
-                offset,
-                status,
+                &conn, &repo.id, limit, offset, status,
             ) {
                 Ok(r) => r,
                 Err(e) => return tool_err(e),
@@ -123,10 +114,7 @@ pub(super) fn tool_list_runs(
             repos.into_iter().map(|r| (r.id, r.slug)).collect();
 
         let runs = match conductor_core::workflow::list_all_workflow_runs_filtered_paginated(
-            wf_mgr.conn(),
-            status,
-            limit,
-            offset,
+            &conn, status, limit, offset,
         ) {
             Ok(r) => r,
             Err(e) => return tool_err(e),
@@ -154,20 +142,17 @@ pub(super) fn tool_get_run(
     db_path: &Path,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
-    use conductor_core::workflow::WorkflowManager;
-
     let run_id = require_arg!(args, "run_id");
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
     };
-    let wf_mgr = WorkflowManager::new(&conn);
-    let run = match conductor_core::workflow::get_workflow_run(wf_mgr.conn(), run_id) {
+    let run = match conductor_core::workflow::get_workflow_run(&conn, run_id) {
         Ok(Some(r)) => r,
         Ok(None) => return tool_err(format!("Workflow run {run_id} not found")),
         Err(e) => return tool_err(e),
     };
-    let steps = match conductor_core::workflow::get_workflow_steps(wf_mgr.conn(), run_id) {
+    let steps = match conductor_core::workflow::get_workflow_steps(&conn, run_id) {
         Ok(s) => s,
         Err(e) => return tool_err(e),
     };
@@ -184,15 +169,13 @@ pub(super) fn tool_cancel_run(
     db_path: &Path,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
-    use conductor_core::workflow::WorkflowManager;
-
     let run_id = require_arg!(args, "run_id");
     let (conn, _config) = match open_db_and_config(db_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
     };
-    let wf_mgr = WorkflowManager::new(&conn);
-    let run = match conductor_core::workflow::get_workflow_run(wf_mgr.conn(), run_id) {
+    let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
+    let run = match conductor_core::workflow::get_workflow_run(&conn, run_id) {
         Ok(Some(r)) => r,
         Ok(None) => return tool_err(format!("Workflow run not found: {run_id}")),
         Err(e) => return tool_err(e),
@@ -211,8 +194,7 @@ pub(super) fn tool_resume_run(
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::workflow::{
-        resume_workflow_standalone, validate_resume_preconditions, WorkflowManager,
-        WorkflowResumeStandalone,
+        resume_workflow_standalone, validate_resume_preconditions, WorkflowResumeStandalone,
     };
     use std::sync::{Arc, Mutex};
 
@@ -224,8 +206,7 @@ pub(super) fn tool_resume_run(
         Ok(v) => v,
         Err(e) => return tool_err(e),
     };
-    let wf_mgr = WorkflowManager::new(&conn);
-    let run = match conductor_core::workflow::get_workflow_run(wf_mgr.conn(), run_id) {
+    let run = match conductor_core::workflow::get_workflow_run(&conn, run_id) {
         Ok(Some(r)) => r,
         Ok(None) => return tool_err(format!("Workflow run not found: {run_id}")),
         Err(e) => return tool_err(e),
@@ -290,7 +271,6 @@ pub(super) fn tool_get_step_log(
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::agent::AgentManager;
-    use conductor_core::workflow::WorkflowManager;
 
     let run_id = require_arg!(args, "run_id");
     let step_name = require_arg!(args, "step_name");
@@ -299,18 +279,15 @@ pub(super) fn tool_get_step_log(
         Ok(v) => v,
         Err(e) => return tool_err(e),
     };
-
-    let wf_mgr = WorkflowManager::new(&conn);
-
     // Verify the workflow run exists.
-    match conductor_core::workflow::get_workflow_run(wf_mgr.conn(), run_id) {
+    match conductor_core::workflow::get_workflow_run(&conn, run_id) {
         Ok(Some(_)) => {}
         Ok(None) => return tool_err(format!("Workflow run {run_id} not found")),
         Err(e) => return tool_err(e),
     }
 
     // Find all steps for this run and pick the last matching step_name.
-    let steps = match conductor_core::workflow::get_workflow_steps(wf_mgr.conn(), run_id) {
+    let steps = match conductor_core::workflow::get_workflow_steps(&conn, run_id) {
         Ok(s) => s,
         Err(e) => return tool_err(e),
     };
@@ -388,14 +365,13 @@ mod tests {
     ) -> String {
         use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;
-        use conductor_core::workflow::WorkflowManager;
 
         let conn = open_database(db_path).expect("open db");
         let agent_mgr = AgentManager::new(&conn);
         let parent = agent_mgr
             .create_run(None, "workflow", None)
             .expect("create agent run");
-        let mgr = WorkflowManager::new(&conn);
+        let mgr = conductor_core::workflow::WorkflowManager::new(&conn);
         let run = mgr
             .create_workflow_run("test-wf", None, &parent.id, false, "manual", None)
             .expect("create workflow run");
@@ -422,14 +398,13 @@ mod tests {
     fn make_run_with_step(db_path: &std::path::Path, step_name: &str) -> (String, String) {
         use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;
-        use conductor_core::workflow::WorkflowManager;
 
         let conn = open_database(db_path).expect("open db");
         let agent_mgr = AgentManager::new(&conn);
         let parent = agent_mgr
             .create_run(None, "workflow", None)
             .expect("create parent run");
-        let mgr = WorkflowManager::new(&conn);
+        let mgr = conductor_core::workflow::WorkflowManager::new(&conn);
         let run = mgr
             .create_workflow_run("test-wf", None, &parent.id, false, "manual", None)
             .expect("create workflow run");
@@ -491,7 +466,6 @@ mod tests {
     fn test_dispatch_list_runs_cross_repo() {
         use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;
-        use conductor_core::workflow::WorkflowManager;
 
         let (_f, db) = make_test_db();
         {
@@ -523,8 +497,7 @@ mod tests {
             let agent_mgr = AgentManager::new(&conn);
             let p1 = agent_mgr.create_run(Some("w1"), "wf-a", None).unwrap();
             let p2 = agent_mgr.create_run(Some("w2"), "wf-b", None).unwrap();
-
-            let wf_mgr = WorkflowManager::new(&conn);
+            let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
             wf_mgr
                 .create_workflow_run_with_targets(
                     "flow-a",
@@ -591,13 +564,12 @@ mod tests {
     #[test]
     fn test_list_workflow_runs_by_repo_id_empty() {
         use conductor_core::db::open_database;
-        use conductor_core::workflow::WorkflowManager;
 
         let (_f, db) = make_test_db();
         let conn = open_database(&db).expect("open db");
-        let mgr = WorkflowManager::new(&conn);
+        let mgr = conductor_core::workflow::WorkflowManager::new(&conn);
         let runs = conductor_core::workflow::list_workflow_runs_by_repo_id(
-            mgr.conn(),
+            &conn,
             "nonexistent-repo-id",
             50,
             0,
@@ -612,7 +584,6 @@ mod tests {
         use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
-        use conductor_core::workflow::WorkflowManager;
 
         let (_f, db) = make_test_db();
         let conn = open_database(&db).expect("open db");
@@ -626,7 +597,7 @@ mod tests {
             .expect("register repo-b");
 
         let agent_mgr = AgentManager::new(&conn);
-        let mgr = WorkflowManager::new(&conn);
+        let mgr = conductor_core::workflow::WorkflowManager::new(&conn);
 
         let parent = agent_mgr
             .create_run(None, "workflow", None)
@@ -663,10 +634,10 @@ mod tests {
             .expect("create run B");
 
         let runs_a =
-            conductor_core::workflow::list_workflow_runs_by_repo_id(mgr.conn(), &repo_a.id, 50, 0)
+            conductor_core::workflow::list_workflow_runs_by_repo_id(&conn, &repo_a.id, 50, 0)
                 .expect("query A");
         let runs_b =
-            conductor_core::workflow::list_workflow_runs_by_repo_id(mgr.conn(), &repo_b.id, 50, 0)
+            conductor_core::workflow::list_workflow_runs_by_repo_id(&conn, &repo_b.id, 50, 0)
                 .expect("query B");
 
         assert_eq!(runs_a.len(), 1, "expected 1 run for repo-a");
@@ -738,7 +709,7 @@ mod tests {
     #[test]
     fn test_dispatch_cancel_run_running() {
         use conductor_core::db::open_database;
-        use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
+        use conductor_core::workflow::WorkflowRunStatus;
         let (_f, db) = make_test_db();
         let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Running);
         let args = args_with("run_id", &run_id);
@@ -761,8 +732,8 @@ mod tests {
 
         // Verify the run status was updated in the DB.
         let conn = open_database(&db).expect("open db");
-        let mgr = WorkflowManager::new(&conn);
-        let run = conductor_core::workflow::get_workflow_run(mgr.conn(), &run_id)
+        let mgr = conductor_core::workflow::WorkflowManager::new(&conn);
+        let run = conductor_core::workflow::get_workflow_run(&conn, &run_id)
             .expect("query")
             .expect("run exists");
         assert_eq!(run.status, WorkflowRunStatus::Cancelled);
@@ -875,7 +846,6 @@ mod tests {
         use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
-        use conductor_core::workflow::WorkflowManager;
 
         let (_f, db) = make_test_db();
         let conn = open_database(&db).expect("open db");
@@ -911,7 +881,7 @@ mod tests {
         let parent = agent_mgr
             .create_run(None, "workflow", None)
             .expect("create agent run");
-        WorkflowManager::new(&conn)
+        conductor_core::workflow::WorkflowManager::new(&conn)
             .create_workflow_run_with_targets(
                 "my-wf",
                 Some(wt_id),
@@ -1039,7 +1009,7 @@ mod tests {
         // Step has a child_run_id but no log file exists on disk.
         use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;
-        use conductor_core::workflow::{WorkflowManager, WorkflowStepStatus};
+        use conductor_core::workflow::WorkflowStepStatus;
 
         let (_f, db) = make_test_db();
         let (run_id, step_id) = make_run_with_step(&db, "build");
@@ -1059,7 +1029,7 @@ mod tests {
             rusqlite::params![nonexistent_str, child_run.id],
         )
         .expect("set log_file");
-        let mgr = WorkflowManager::new(&conn);
+        let mgr = conductor_core::workflow::WorkflowManager::new(&conn);
         mgr.update_step_status(
             &step_id,
             WorkflowStepStatus::Completed,
@@ -1099,7 +1069,7 @@ mod tests {
     fn test_dispatch_get_step_log_success() {
         // Happy path: step has child_run linked to an agent run with a log file.
         use conductor_core::db::open_database;
-        use conductor_core::workflow::{WorkflowManager, WorkflowStepStatus};
+        use conductor_core::workflow::WorkflowStepStatus;
         use std::io::Write as _;
 
         let (_f, db) = make_test_db();
@@ -1117,7 +1087,7 @@ mod tests {
         let conn = open_database(&db).expect("open db");
         let child_run_id = create_run_with_log(&conn, &log_path);
 
-        let mgr = WorkflowManager::new(&conn);
+        let mgr = conductor_core::workflow::WorkflowManager::new(&conn);
         mgr.update_step_status(
             &step_id,
             WorkflowStepStatus::Completed,
@@ -1157,7 +1127,7 @@ mod tests {
     #[test]
     fn test_dispatch_get_step_log_multi_iteration_returns_last() {
         use conductor_core::db::open_database;
-        use conductor_core::workflow::{WorkflowManager, WorkflowStepStatus};
+        use conductor_core::workflow::WorkflowStepStatus;
         use std::io::Write as _;
 
         let (_f, db) = make_test_db();
@@ -1179,7 +1149,7 @@ mod tests {
         let conn = open_database(&db).expect("open db");
         let child0_id = create_run_with_log(&conn, &path0);
 
-        let mgr = WorkflowManager::new(&conn);
+        let mgr = conductor_core::workflow::WorkflowManager::new(&conn);
         mgr.update_step_status(
             &step0_id,
             WorkflowStepStatus::Completed,
@@ -1238,7 +1208,7 @@ mod tests {
     #[test]
     fn test_dispatch_get_step_log_multi_step_name_isolation() {
         use conductor_core::db::open_database;
-        use conductor_core::workflow::{WorkflowManager, WorkflowStepStatus};
+        use conductor_core::workflow::WorkflowStepStatus;
         use std::io::Write as _;
 
         let (_f, db) = make_test_db();
@@ -1263,7 +1233,7 @@ mod tests {
         let path_test1 = log_test1.path().to_str().unwrap().to_string();
 
         let conn = open_database(&db).expect("open db");
-        let mgr = WorkflowManager::new(&conn);
+        let mgr = conductor_core::workflow::WorkflowManager::new(&conn);
 
         // Link build step to its agent run.
         let child_build_id = create_run_with_log(&conn, &path_build);

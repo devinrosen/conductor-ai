@@ -356,6 +356,7 @@ mod tests {
     #[test]
     fn test_worktrees_dependencies_returns_edges_via_tickets() {
         let conn = test_helpers::setup_db();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let config = Config::default();
 
         // Insert tickets: t2 blocked by t1.
@@ -398,7 +399,6 @@ mod tests {
         ).unwrap();
 
         let step_id = test_helpers::make_foreach_step(&conn);
-        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         wf_mgr
             .insert_fan_out_item(&step_id, "worktree", "wt1", "wt1-slug")
             .unwrap();

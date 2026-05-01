@@ -499,7 +499,6 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         workflow_name: &str,
     ) -> runkon_flow::engine_error::Result<Option<runkon_flow::types::WorkflowRun>> {
         let conn = self.conn.lock().map_err(bridge_lock_err)?;
-
         let mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let core_run = mgr
             .find_resumable_child_run(parent_run_id, workflow_name)

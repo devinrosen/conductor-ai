@@ -162,9 +162,7 @@ pub async fn handle_slash_command(
 
 async fn handle_active(state: &AppState) -> SlackResponse {
     let db = state.db.lock().await;
-    let wf_mgr = WorkflowManager::new(&db);
-
-    let runs = match conductor_core::workflow::list_active_workflow_runs(wf_mgr.conn(), &[]) {
+    let runs = match conductor_core::workflow::list_active_workflow_runs(&db, &[]) {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(error = %e, "Failed to list active workflow runs for Slack command");

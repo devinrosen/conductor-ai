@@ -568,7 +568,7 @@ mod tests {
         mgr.mark_step_running(&step_id, WorkflowStepStatus::Running, Some("child-run-1"))
             .unwrap();
 
-        let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+        let step = crate::workflow::get_step_by_id(&conn, &step_id)
             .unwrap()
             .unwrap();
         assert_eq!(step.status, WorkflowStepStatus::Running);
@@ -585,7 +585,7 @@ mod tests {
         mgr.mark_step_running(&step_id, WorkflowStepStatus::Waiting, None)
             .unwrap();
 
-        let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+        let step = crate::workflow::get_step_by_id(&conn, &step_id)
             .unwrap()
             .unwrap();
         assert_eq!(step.status, WorkflowStepStatus::Waiting);
@@ -611,7 +611,7 @@ mod tests {
         )
         .unwrap();
 
-        let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+        let step = crate::workflow::get_step_by_id(&conn, &step_id)
             .unwrap()
             .unwrap();
         assert_eq!(step.status, WorkflowStepStatus::Completed);
@@ -637,7 +637,7 @@ mod tests {
         mgr.mark_step_pending(&step_id, WorkflowStepStatus::Pending)
             .unwrap();
 
-        let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+        let step = crate::workflow::get_step_by_id(&conn, &step_id)
             .unwrap()
             .unwrap();
         assert_eq!(step.status, WorkflowStepStatus::Pending);
@@ -671,7 +671,7 @@ mod tests {
         )
         .unwrap();
 
-        let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+        let step = crate::workflow::get_step_by_id(&conn, &step_id)
             .unwrap()
             .unwrap();
         assert_eq!(step.status, WorkflowStepStatus::Failed);
@@ -703,7 +703,7 @@ mod tests {
         )
         .unwrap();
 
-        let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+        let step = crate::workflow::get_step_by_id(&conn, &step_id)
             .unwrap()
             .unwrap();
         assert_eq!(step.cost_usd, Some(1.23));
@@ -746,7 +746,7 @@ mod tests {
         )
         .unwrap();
 
-        let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+        let step = crate::workflow::get_step_by_id(&conn, &step_id)
             .unwrap()
             .unwrap();
         assert_eq!(step.cost_usd, Some(9.99), "cost_usd must be preserved");
@@ -773,7 +773,7 @@ mod tests {
         .unwrap();
 
         // Original step untouched.
-        let step = crate::workflow::get_step_by_id(mgr.conn(), &step_id)
+        let step = crate::workflow::get_step_by_id(&conn, &step_id)
             .unwrap()
             .unwrap();
         assert!(step.cost_usd.is_none());

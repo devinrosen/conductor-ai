@@ -11,7 +11,6 @@ pub(super) fn tool_list_agent_runs(
 ) -> CallToolResult {
     use conductor_core::agent::{AgentManager, AgentRunStatus};
     use conductor_core::repo::RepoManager;
-    use conductor_core::workflow::WorkflowManager;
     use conductor_core::worktree::WorktreeManager;
 
     let repo_slug = get_arg(args, "repo");
@@ -100,14 +99,11 @@ pub(super) fn tool_list_agent_runs(
 
     // Batch-load workflow run IDs for all agent run IDs
     let run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
-    let wf_mgr = WorkflowManager::new(&conn);
-    let workflow_id_map = match conductor_core::workflow::get_workflow_run_ids_for_agent_runs(
-        wf_mgr.conn(),
-        &run_ids,
-    ) {
-        Ok(m) => m,
-        Err(e) => return tool_err(e),
-    };
+    let workflow_id_map =
+        match conductor_core::workflow::get_workflow_run_ids_for_agent_runs(&conn, &run_ids) {
+            Ok(m) => m,
+            Err(e) => return tool_err(e),
+        };
 
     // Batch-load pending feedback for all waiting runs (avoids N+1 queries)
     let waiting_run_ids: Vec<&str> = runs

@@ -460,9 +460,8 @@ pub async fn run_workflow(
             conductor_core::workflow::load_def_by_name(&wt.path, &repo.local_path, &req.name)?;
 
         // Reject if a top-level workflow run is already active on this worktree
-        let wf_mgr = WorkflowManager::new(&db);
         if let Some(active) =
-            conductor_core::workflow::get_active_run_for_worktree(wf_mgr.conn(), &worktree_id)?
+            conductor_core::workflow::get_active_run_for_worktree(&db, &worktree_id)?
         {
             return Err(ApiError::Core(ConductorError::WorkflowRunAlreadyActive {
                 name: active.workflow_name,
@@ -645,9 +644,7 @@ pub async fn run_workflow(
 }
 
 fn check_no_active_run(wf_mgr: &WorkflowManager<'_>, wt_id: &str) -> Result<(), ApiError> {
-    if let Some(active) =
-        conductor_core::workflow::get_active_run_for_worktree(wf_mgr.conn(), wt_id)?
-    {
+    if let Some(active) = conductor_core::workflow::get_active_run_for_worktree(&db, wt_id)? {
         return Err(ApiError::Core(ConductorError::WorkflowRunAlreadyActive {
             name: active.workflow_name,
         }));
@@ -687,7 +684,6 @@ pub async fn post_workflow_run(
         };
 
         // Route based on which target fields are present
-        let wf_mgr = WorkflowManager::new(&db);
         let (wt_path, wt_slug, wt_ticket_id, resolved_wt_id, wt_model) =
             if let Some(ref wt_id) = req.worktree {
                 // Worktree path: validate ownership
@@ -980,19 +976,14 @@ pub async fn list_all_workflow_runs_handler(
     let mgr = WorkflowManager::new(&db);
     let runs = if let Some(ref repo_id) = params.repo {
         let repo = RepoManager::new(&db, &config).get_by_id(repo_id)?;
-        conductor_core::workflow::list_active_workflow_runs_for_repo(
-            mgr.conn(),
-            &repo.id,
-            &statuses,
-        )?
+        conductor_core::workflow::list_active_workflow_runs_for_repo(&db, &repo.id, &statuses)?
     } else {
-        conductor_core::workflow::list_active_workflow_runs(mgr.conn(), &statuses)?
+        conductor_core::workflow::list_active_workflow_runs(&db, &statuses)?
     };
 
     // Batch-fetch only running/waiting steps for all runs (filter pushed to SQL)
     let run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
-    let mut steps_by_run =
-        conductor_core::workflow::get_active_steps_for_runs(mgr.conn(), &run_ids)?;
+    let mut steps_by_run = conductor_core::workflow::get_active_steps_for_runs(&db, &run_ids)?;
 
     // Build slug lookup maps for repo_slug / worktree_slug enrichment
     let repo_slug_map: HashMap<String, String> = RepoManager::new(&db, &config)
@@ -1022,7 +1013,7 @@ pub async fn list_all_workflow_runs_handler(
         .map(|r| r.id.as_str())
         .collect();
     let plan_estimates =
-        conductor_core::workflow::get_plan_estimates_for_runs(mgr.conn(), &active_run_ids)?;
+        conductor_core::workflow::get_plan_estimates_for_runs(&db, &active_run_ids)?;
 
     // Collect unique workflow names for active runs
     let active_workflow_names: std::collections::HashSet<&str> = runs
@@ -1040,7 +1031,7 @@ pub async fn list_all_workflow_runs_handler(
     let historical_durations: HashMap<String, Vec<i64>> = active_workflow_names
         .iter()
         .filter_map(|name| {
-            match conductor_core::workflow::get_completed_run_durations(mgr.conn(), name, 15) {
+            match conductor_core::workflow::get_completed_run_durations(&db, name, 15) {
                 Ok(d) => Some((name.to_string(), d)),
                 Err(e) => {
                     tracing::warn!(workflow = %name, "get_completed_run_durations failed: {e}");
@@ -1052,7 +1043,7 @@ pub async fn list_all_workflow_runs_handler(
     let step_histories: HashMap<String, HashMap<String, Vec<i64>>> = active_workflow_names
         .into_iter()
         .filter_map(|name| {
-            match conductor_core::workflow::get_completed_step_durations(mgr.conn(), name, 20) {
+            match conductor_core::workflow::get_completed_step_durations(&db, name, 20) {
                 Ok(d) => Some((name.to_string(), d)),
                 Err(e) => {
                     tracing::warn!(workflow = %name, "get_completed_step_durations failed: {e}");
@@ -1064,7 +1055,7 @@ pub async fn list_all_workflow_runs_handler(
 
     // Batch-fetch all steps for active runs (for live remaining estimation)
     let mut all_active_run_steps: HashMap<String, Vec<WorkflowRunStep>> =
-        conductor_core::workflow::get_steps_for_runs(mgr.conn(), &active_run_ids)?;
+        conductor_core::workflow::get_steps_for_runs(&db, &active_run_ids)?;
     let responses: Vec<WorkflowRunResponse> = runs
         .into_iter()
         .map(|run| {
@@ -1210,7 +1201,7 @@ pub async fn list_workflow_runs(
 ) -> Result<Json<Vec<WorkflowRun>>, ApiError> {
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
-    let runs = conductor_core::workflow::list_workflow_runs(mgr.conn(), &worktree_id)?;
+    let runs = conductor_core::workflow::list_workflow_runs(&db, &worktree_id)?;
     Ok(Json(runs))
 }
 
@@ -1233,7 +1224,7 @@ pub async fn get_workflow_run(
 ) -> Result<Json<WorkflowRun>, ApiError> {
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
-    let run = conductor_core::workflow::get_workflow_run(mgr.conn(), &id)?
+    let run = conductor_core::workflow::get_workflow_run(&db, &id)?
         .ok_or_else(|| ApiError::Core(ConductorError::WorkflowRunNotFound { id: id.clone() }))?;
     Ok(Json(run))
 }
@@ -1257,7 +1248,7 @@ pub async fn get_workflow_steps(
 ) -> Result<Json<Vec<WorkflowRunStep>>, ApiError> {
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
-    let steps = conductor_core::workflow::get_workflow_steps(mgr.conn(), &id)?;
+    let steps = conductor_core::workflow::get_workflow_steps(&db, &id)?;
     Ok(Json(steps))
 }
 
@@ -1305,8 +1296,7 @@ pub async fn get_token_aggregates(
 ) -> Result<Json<Vec<WorkflowTokenAggregate>>, ApiError> {
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
-    let rows =
-        conductor_core::workflow::get_workflow_token_aggregates(mgr.conn(), q.repo_id.as_deref())?;
+    let rows = conductor_core::workflow::get_workflow_token_aggregates(&db, q.repo_id.as_deref())?;
     Ok(Json(rows))
 }
 
@@ -1333,11 +1323,8 @@ pub async fn get_token_trend(
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
     let granularity = parse_granularity(q.granularity)?;
-    let rows = conductor_core::workflow::get_workflow_token_trend(
-        mgr.conn(),
-        &q.workflow_name,
-        granularity,
-    )?;
+    let rows =
+        conductor_core::workflow::get_workflow_token_trend(&db, &q.workflow_name, granularity)?;
     Ok(Json(rows))
 }
 
@@ -1364,8 +1351,7 @@ pub async fn get_step_heatmap(
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
     let limit = q.runs.unwrap_or(20);
-    let rows =
-        conductor_core::workflow::get_step_token_heatmap(mgr.conn(), &q.workflow_name, limit)?;
+    let rows = conductor_core::workflow::get_step_token_heatmap(&db, &q.workflow_name, limit)?;
     Ok(Json(rows))
 }
 
@@ -1392,7 +1378,7 @@ pub async fn get_run_metrics(
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
     let days = q.days.unwrap_or(30);
-    let rows = conductor_core::workflow::get_run_metrics(mgr.conn(), &q.workflow_name, days)?;
+    let rows = conductor_core::workflow::get_run_metrics(&db, &q.workflow_name, days)?;
     Ok(Json(rows))
 }
 
@@ -1414,7 +1400,7 @@ pub async fn get_failure_trend(
     let mgr = WorkflowManager::new(&db);
     let granularity = parse_granularity(q.granularity)?;
     let rows = conductor_core::workflow::get_workflow_failure_rate_trend(
-        mgr.conn(),
+        &db,
         &q.workflow_name,
         granularity,
     )?;
@@ -1438,8 +1424,7 @@ pub async fn get_failure_heatmap(
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
     let limit = q.runs.unwrap_or(20);
-    let rows =
-        conductor_core::workflow::get_step_failure_heatmap(mgr.conn(), &q.workflow_name, limit)?;
+    let rows = conductor_core::workflow::get_step_failure_heatmap(&db, &q.workflow_name, limit)?;
     Ok(Json(rows))
 }
 
@@ -1460,8 +1445,7 @@ pub async fn get_step_retry_analytics(
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
     let limit = q.runs.unwrap_or(20);
-    let rows =
-        conductor_core::workflow::get_step_retry_analytics(mgr.conn(), &q.workflow_name, limit)?;
+    let rows = conductor_core::workflow::get_step_retry_analytics(&db, &q.workflow_name, limit)?;
     Ok(Json(rows))
 }
 
@@ -1488,8 +1472,7 @@ pub async fn get_workflow_percentiles(
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
     let days = q.days.unwrap_or(30);
-    let result =
-        conductor_core::workflow::get_workflow_percentiles(mgr.conn(), &q.workflow_name, days)?;
+    let result = conductor_core::workflow::get_workflow_percentiles(&db, &q.workflow_name, days)?;
     Ok(Json(result))
 }
 
@@ -1520,7 +1503,7 @@ pub async fn get_workflow_regressions(
     let baseline_days = q.baseline_days.unwrap_or(30);
     let min_runs = q.min_runs.unwrap_or(REGRESSION_MIN_RECENT_RUNS);
     let signals = conductor_core::workflow::get_workflow_regression_signals(
-        mgr.conn(),
+        &db,
         min_runs,
         recent_days,
         baseline_days,
@@ -1551,7 +1534,7 @@ pub async fn get_gate_analytics(
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
     let days = q.days.unwrap_or(30);
-    let rows = conductor_core::workflow::get_gate_analytics(mgr.conn(), &q.workflow_name, days)?;
+    let rows = conductor_core::workflow::get_gate_analytics(&db, &q.workflow_name, days)?;
     Ok(Json(rows))
 }
 
@@ -1569,7 +1552,7 @@ pub async fn get_pending_gates(
 ) -> Result<Json<Vec<PendingGateAnalyticsRow>>, ApiError> {
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
-    let rows = conductor_core::workflow::get_all_pending_gates(mgr.conn())?;
+    let rows = conductor_core::workflow::get_all_pending_gates(&db)?;
     Ok(Json(rows))
 }
 
@@ -1596,15 +1579,13 @@ pub async fn get_workflow_step_log(
     // Hold the DB lock only for the DB queries, then drop it before the file read.
     let log_path = {
         let db = state.db.lock().await;
-        let wf_mgr = WorkflowManager::new(&db);
-
         // Verify run exists
-        conductor_core::workflow::get_workflow_run(wf_mgr.conn(), &run_id)?.ok_or_else(|| {
+        conductor_core::workflow::get_workflow_run(&db, &run_id)?.ok_or_else(|| {
             ApiError::Core(ConductorError::WorkflowRunNotFound { id: run_id.clone() })
         })?;
 
         // Find matching step — last iteration wins
-        let steps = conductor_core::workflow::get_workflow_steps(wf_mgr.conn(), &run_id)?;
+        let steps = conductor_core::workflow::get_workflow_steps(&db, &run_id)?;
         let step = steps
             .into_iter()
             .filter(|s| s.step_name == step_name)
@@ -1658,7 +1639,7 @@ pub async fn get_child_workflow_runs(
 ) -> Result<Json<Vec<WorkflowRun>>, ApiError> {
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
-    let children = conductor_core::workflow::list_child_workflow_runs(mgr.conn(), &id)?;
+    let children = conductor_core::workflow::list_child_workflow_runs(&db, &id)?;
     Ok(Json(children))
 }
 
@@ -1683,7 +1664,7 @@ pub async fn cancel_workflow(
     let mgr = WorkflowManager::new(&db);
 
     // Verify run exists
-    let run = conductor_core::workflow::get_workflow_run(mgr.conn(), &id)?
+    let run = conductor_core::workflow::get_workflow_run(&db, &id)?
         .ok_or_else(|| ApiError::Core(ConductorError::WorkflowRunNotFound { id: id.clone() }))?;
 
     mgr.cancel_run(&id, "Cancelled by user")?;
@@ -1728,10 +1709,9 @@ pub async fn resume_workflow_endpoint(
     let (workflow_name, target_label, run_repo_id, run_worktree_id) = {
         let db = state.db.lock().await;
         let mgr = WorkflowManager::new(&db);
-        let run =
-            conductor_core::workflow::get_workflow_run(mgr.conn(), &id)?.ok_or_else(|| {
-                ApiError::Core(ConductorError::WorkflowRunNotFound { id: id.clone() })
-            })?;
+        let run = conductor_core::workflow::get_workflow_run(&db, &id)?.ok_or_else(|| {
+            ApiError::Core(ConductorError::WorkflowRunNotFound { id: id.clone() })
+        })?;
         validate_resume_preconditions(&run.status, restart, from_step.as_deref())
             .map_err(ApiError::Core)?;
         (
@@ -1844,7 +1824,7 @@ fn find_waiting_gate_or_err(
     mgr: &WorkflowManager<'_>,
     run_id: &str,
 ) -> Result<WorkflowRunStep, ApiError> {
-    conductor_core::workflow::find_waiting_gate(mgr.conn(), run_id)?.ok_or_else(|| {
+    conductor_core::workflow::find_waiting_gate(&db, run_id)?.ok_or_else(|| {
         ApiError::Core(ConductorError::Workflow(
             "No waiting gate found for this workflow run".to_string(),
         ))

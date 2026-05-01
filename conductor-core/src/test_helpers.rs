@@ -163,8 +163,8 @@ pub fn make_agent_parent_id(conn: &Connection) -> String {
 ///
 /// Suitable for tests that need a fan-out step to attach items to (e.g. dependency edge tests).
 pub fn make_foreach_step(conn: &Connection) -> String {
-    let parent_id = make_agent_parent_id(conn);
     let wf_mgr = crate::workflow::manager::WorkflowManager::new(conn);
+    let parent_id = make_agent_parent_id(conn);
     let run = wf_mgr
         .create_workflow_run("test-wf", Some("w1"), &parent_id, false, "manual", None)
         .unwrap();

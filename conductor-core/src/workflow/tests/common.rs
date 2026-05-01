@@ -76,9 +76,9 @@ pub(super) fn make_empty_workflow() -> WorkflowDef {
 }
 
 pub(super) fn create_child_run(conn: &Connection) -> (WorkflowManager<'_>, String) {
+    let wf_mgr = crate::workflow::manager::WorkflowManager::new(conn);
     let agent_mgr = AgentManager::new(conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let wf_mgr = WorkflowManager::new(conn);
     let run = wf_mgr
         .create_workflow_run("child-wf", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
@@ -260,9 +260,9 @@ pub(super) fn insert_workflow_run_with_targets(
     worktree_id: Option<&str>,
     repo_id: Option<&str>,
 ) -> String {
+    let mgr = crate::workflow::manager::WorkflowManager::new(conn);
     let agent_mgr = AgentManager::new(conn);
     let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
-    let mgr = WorkflowManager::new(conn);
     let run = mgr
         .create_workflow_run_with_targets(
             "test-wf",
@@ -330,9 +330,9 @@ pub(super) fn insert_waiting_run_with_gate(
 pub(super) fn make_workflow_run(
     conn: &Connection,
 ) -> (WorkflowManager<'_>, crate::agent::AgentRun, WorkflowRun) {
+    let mgr = crate::workflow::manager::WorkflowManager::new(conn);
     let agent_mgr = AgentManager::new(conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let mgr = WorkflowManager::new(conn);
     let run = mgr
         .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
@@ -353,8 +353,8 @@ pub(super) fn setup_hooks_dir(config_toml: &str, workflows: &[(&str, &str)]) -> 
 
 /// Helper: create a running workflow run with a parent agent run.
 pub(super) fn make_running_wf(conn: &Connection, name: &str) -> (String, String) {
+    let wf_mgr = crate::workflow::manager::WorkflowManager::new(conn);
     let agent_mgr = AgentManager::new(conn);
-    let wf_mgr = WorkflowManager::new(conn);
     let parent = agent_mgr.create_run(Some("w1"), name, None).unwrap();
     let run = wf_mgr
         .create_workflow_run(name, Some("w1"), &parent.id, false, "manual", None)
@@ -372,7 +372,7 @@ pub(super) fn insert_terminal_step(
     status: WorkflowStepStatus,
     position: i64,
 ) {
-    let wf_mgr = WorkflowManager::new(conn);
+    let wf_mgr = crate::workflow::manager::WorkflowManager::new(conn);
     let step_id = wf_mgr
         .insert_step(wf_run_id, "step", "actor", false, position, 0)
         .unwrap();

@@ -57,12 +57,11 @@ mod tests {
     #[test]
     fn test_default_terminal_statuses_when_no_filter() {
         let conn = test_helpers::setup_db();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let config = Config::default();
 
         // Insert a completed run and a running run.
         let parent_id = test_helpers::make_agent_parent_id(&conn);
-        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
-
         let run1 = wf_mgr
             .create_workflow_run("wf-a", Some("w1"), &parent_id, false, "manual", None)
             .unwrap();
@@ -108,11 +107,10 @@ mod tests {
     #[test]
     fn test_status_filter_respected() {
         let conn = test_helpers::setup_db();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let config = Config::default();
 
         let parent_id = test_helpers::make_agent_parent_id(&conn);
-        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
-
         let run1 = wf_mgr
             .create_workflow_run("wf-fail", Some("w1"), &parent_id, false, "manual", None)
             .unwrap();
@@ -160,11 +158,10 @@ mod tests {
     #[test]
     fn test_workflow_name_filter_respected() {
         let conn = test_helpers::setup_db();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let config = Config::default();
 
         let parent_id = test_helpers::make_agent_parent_id(&conn);
-        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
-
         let run_a = wf_mgr
             .create_workflow_run("wf-alpha", Some("w1"), &parent_id, false, "manual", None)
             .unwrap();
@@ -205,11 +202,10 @@ mod tests {
     #[test]
     fn test_existing_set_deduplication() {
         let conn = test_helpers::setup_db();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let config = Config::default();
 
         let parent_id = test_helpers::make_agent_parent_id(&conn);
-        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
-
         let run1 = wf_mgr
             .create_workflow_run("wf-x", Some("w1"), &parent_id, false, "manual", None)
             .unwrap();

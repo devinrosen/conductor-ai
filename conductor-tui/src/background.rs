@@ -142,10 +142,9 @@ pub fn spawn_db_poller(
 
                             // Fire cost/duration spike notifications for completed root runs.
                             if t.succeeded && t.parent_workflow_run_id.is_none() {
-                                let wf_mgr = conductor_core::workflow::WorkflowManager::new(conn);
                                 if let Ok(Some(baseline)) =
                                     conductor_core::workflow::get_workflow_spike_baseline(
-                                        wf_mgr.conn(),
+                                        conn,
                                         &t.workflow_name,
                                         30,
                                         5,
@@ -603,16 +602,13 @@ pub fn poll_data(
         (Vec::new(), None)
     };
 
-    use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
-    let wf_mgr = WorkflowManager::new(&conn);
+    use conductor_core::workflow::WorkflowRunStatus;
     // Build a per-worktree map of the most recent *root* run for inline indicators.
     // Using list_root_workflow_runs ensures the parent run wins the per-worktree slot
     // rather than a concurrently-active child sub-workflow run.
     // Fetch recent runs sorted DESC; the first entry per worktree_id wins.
     let mut latest_workflow_runs_by_worktree = std::collections::HashMap::new();
-    for run in
-        conductor_core::workflow::list_root_workflow_runs(wf_mgr.conn(), 100).unwrap_or_default()
-    {
+    for run in conductor_core::workflow::list_root_workflow_runs(&conn, 100).unwrap_or_default() {
         // Skip ephemeral runs (no registered worktree) — they have no worktree
         // entry to display inline indicators for.
         if let Some(ref wt_id) = run.worktree_id {
@@ -624,7 +620,7 @@ pub fn poll_data(
 
     // Fetch active non-worktree workflow runs (repo/ticket-targeted).
     let active_non_worktree_workflow_runs =
-        conductor_core::workflow::list_active_non_worktree_workflow_runs(wf_mgr.conn(), 50)
+        conductor_core::workflow::list_active_non_worktree_workflow_runs(&conn, 50)
             .unwrap_or_default();
 
     // Collect IDs of active runs to fetch current step summaries in a single batch query.
@@ -645,7 +641,7 @@ pub fn poll_data(
         .collect();
     let active_run_id_refs: Vec<&str> = active_run_ids.iter().map(|s| s.as_str()).collect();
     let workflow_step_summaries =
-        conductor_core::workflow::get_step_summaries_for_runs(wf_mgr.conn(), &active_run_id_refs)
+        conductor_core::workflow::get_step_summaries_for_runs(&conn, &active_run_id_refs)
             .unwrap_or_default();
 
     // ── Time estimation for active workflow runs ──
@@ -670,7 +666,7 @@ pub fn poll_data(
         let active_est_run_id_refs: Vec<&str> =
             active_est_run_ids.iter().map(|s| s.as_str()).collect();
         let all_steps_by_run =
-            conductor_core::workflow::get_steps_for_runs(wf_mgr.conn(), &active_est_run_id_refs)
+            conductor_core::workflow::get_steps_for_runs(&conn, &active_est_run_id_refs)
                 .unwrap_or_default();
 
         // Cache step histories per workflow name to avoid redundant queries
@@ -684,7 +680,7 @@ pub fn poll_data(
                 .entry(run.workflow_name.clone())
                 .or_insert_with(|| {
                     conductor_core::workflow::get_completed_step_durations(
-                        wf_mgr.conn(),
+                        &conn,
                         &run.workflow_name,
                         20,
                     )
@@ -694,7 +690,7 @@ pub fn poll_data(
             if step_histories.is_empty() {
                 // Fall back to workflow-level estimate
                 let hist = conductor_core::workflow::get_completed_run_durations(
-                    wf_mgr.conn(),
+                    &conn,
                     &run.workflow_name,
                     20,
                 )
@@ -739,7 +735,7 @@ pub fn poll_data(
             })
     });
     let waiting_gate_steps = query_if_enabled(config.notifications.enabled, || {
-        conductor_core::workflow::list_all_waiting_gate_steps(wf_mgr.conn()).unwrap_or_else(|e| {
+        conductor_core::workflow::list_all_waiting_gate_steps(&conn).unwrap_or_else(|e| {
             tracing::warn!("list_all_waiting_gate_steps failed: {e}");
             vec![]
         })
@@ -1022,7 +1018,7 @@ fn poll_workflow_data(
     selected_run_id: Option<&str>,
     selected_step_child_run_id: Option<&str>,
 ) -> Option<Action> {
-    use conductor_core::workflow::{WorkflowDef, WorkflowManager, WorkflowWarning};
+    use conductor_core::workflow::{WorkflowDef, WorkflowWarning};
 
     let db = db_path();
     let conn = open_database(&db).ok()?;
@@ -1169,17 +1165,16 @@ fn poll_workflow_data(
         }
         (Some(all_defs), Some(all_slugs), all_warnings)
     };
-    let wf_mgr = WorkflowManager::new(&conn);
+    let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
     let runs = if let Some(wt_id) = worktree_id {
-        conductor_core::workflow::list_workflow_runs(wf_mgr.conn(), wt_id).unwrap_or_default()
+        conductor_core::workflow::list_workflow_runs(&conn, wt_id).unwrap_or_default()
     } else if let Some(rid) = repo_id {
-        conductor_core::workflow::list_workflow_runs_for_repo(wf_mgr.conn(), rid, 50)
-            .unwrap_or_default()
+        conductor_core::workflow::list_workflow_runs_for_repo(&conn, rid, 50).unwrap_or_default()
     } else {
-        conductor_core::workflow::list_all_workflow_runs(wf_mgr.conn(), 50).unwrap_or_default()
+        conductor_core::workflow::list_all_workflow_runs(&conn, 50).unwrap_or_default()
     };
     let steps = if let Some(run_id) = selected_run_id {
-        conductor_core::workflow::get_workflow_steps(wf_mgr.conn(), run_id).unwrap_or_default()
+        conductor_core::workflow::get_workflow_steps(&conn, run_id).unwrap_or_default()
     } else {
         Vec::new()
     };
@@ -1188,14 +1183,14 @@ fn poll_workflow_data(
     // 1. Direct-call steps on non-leaf parents are available for interleaving
     // 2. Step detail panel works for non-leaf parents
     let all_run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
-    let mut all_run_steps =
-        match conductor_core::workflow::get_steps_for_runs(wf_mgr.conn(), &all_run_ids) {
-            Ok(steps) => steps,
-            Err(e) => {
-                tracing::warn!("get_steps_for_runs failed for runs {:?}: {e}", all_run_ids);
-                Default::default()
-            }
-        };
+    let mut all_run_steps = match conductor_core::workflow::get_steps_for_runs(&conn, &all_run_ids)
+    {
+        Ok(steps) => steps,
+        Err(e) => {
+            tracing::warn!("get_steps_for_runs failed for runs {:?}: {e}", all_run_ids);
+            Default::default()
+        }
+    };
 
     // Ancestor fetch: collect parent_workflow_run_id values that aren't in the
     // current run set and fetch their steps too. This covers global/repo 50-run-limit
@@ -1211,7 +1206,7 @@ fn poll_workflow_data(
         .collect();
     if !ancestor_ids.is_empty() {
         let ancestor_refs: Vec<&str> = ancestor_ids.iter().map(|s| s.as_str()).collect();
-        match conductor_core::workflow::get_steps_for_runs(wf_mgr.conn(), &ancestor_refs) {
+        match conductor_core::workflow::get_steps_for_runs(&conn, &ancestor_refs) {
             Ok(ancestor_steps) => all_run_steps.extend(ancestor_steps),
             Err(e) => {
                 tracing::warn!(

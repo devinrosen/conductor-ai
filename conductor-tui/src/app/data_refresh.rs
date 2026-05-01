@@ -43,11 +43,9 @@ impl App {
     }
 
     pub(super) fn rebuild_detail_gates(&mut self) {
-        use conductor_core::workflow::WorkflowManager;
         if let Some(ref repo_id) = self.state.selected_repo_id.clone() {
-            let wf_mgr = WorkflowManager::new(&self.conn);
             self.state.detail_gates =
-                conductor_core::workflow::list_waiting_gate_steps_for_repo(wf_mgr.conn(), repo_id)
+                conductor_core::workflow::list_waiting_gate_steps_for_repo(&self.conn, repo_id)
                     .unwrap_or_else(|e| {
                         tracing::warn!("failed to load pending gates for repo {repo_id}: {e}");
                         Vec::new()

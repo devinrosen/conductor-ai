@@ -315,6 +315,7 @@ mod tests {
     #[test]
     fn test_tickets_dependencies_returns_edges_within_set() {
         let conn = test_helpers::setup_db();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let config = crate::config::Config::default();
         let syncer = TicketSyncer::new(&conn);
 
@@ -346,7 +347,6 @@ mod tests {
         let id2 = by_src["2"].to_string();
 
         let step_id = test_helpers::make_foreach_step(&conn);
-        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         wf_mgr
             .insert_fan_out_item(&step_id, "ticket", &id1, "1")
             .unwrap();

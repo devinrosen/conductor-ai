@@ -351,6 +351,7 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().expect("tempfile");
         let db_path = tmp.path().to_path_buf();
         let conn = crate::db::open_database(&db_path).unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
 
         let agent_mgr = AgentManager::new(&conn);
@@ -406,7 +407,6 @@ mod tests {
         let agent_mgr = AgentManager::new(&conn);
         // Ephemeral runs pass "" as worktree_id to agent_runs (stored as NULL after migration 027)
         let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
-
         let mgr = WorkflowManager::new(&conn);
         let run = mgr
             .create_workflow_run("pr-flow", None, &parent.id, false, "pr", None)
@@ -419,7 +419,7 @@ mod tests {
         );
 
         // Fetch back from DB and confirm round-trip
-        let fetched = crate::workflow::get_workflow_run(mgr.conn(), &run.id)
+        let fetched = crate::workflow::get_workflow_run(&conn, &run.id)
             .unwrap()
             .unwrap();
         assert!(

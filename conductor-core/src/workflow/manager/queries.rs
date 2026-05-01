@@ -525,35 +525,30 @@ pub fn list_all_workflow_runs_filtered_paginated(
     limit: usize,
     offset: usize,
 ) -> Result<Vec<WorkflowRun>> {
-    if let Some(s) = status {
-        let status_str = s.to_string();
-        query_collect(
-            conn,
-            &format!(
-                "SELECT workflow_runs.* \
-                     FROM workflow_runs \
-                     LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                     WHERE ({ACTIVE_WORKTREE_GUARD}) \
-                       AND workflow_runs.status = :status \
-                     ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
-            ),
-            named_params! { ":status": status_str, ":limit": limit as i64, ":offset": offset as i64 },
-            row_to_workflow_run,
-        )
+    let status_str = status.map(|s| s.to_string());
+    let status_clause = if status_str.is_some() {
+        " AND workflow_runs.status = :status"
     } else {
-        query_collect(
-            conn,
-            &format!(
-                "SELECT workflow_runs.* \
-                     FROM workflow_runs \
-                     LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                     WHERE {ACTIVE_WORKTREE_GUARD} \
-                     ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
-            ),
-            named_params! { ":limit": limit as i64, ":offset": offset as i64 },
-            row_to_workflow_run,
-        )
+        ""
+    };
+    let sql = format!(
+        "SELECT workflow_runs.* \
+                 FROM workflow_runs \
+                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                 WHERE ({ACTIVE_WORKTREE_GUARD}){status_clause} \
+                 ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
+    );
+
+    let limit_i64 = limit as i64;
+    let offset_i64 = offset as i64;
+    let mut stmt = conn.prepare(&sql)?;
+    let mut params: Vec<(&str, &dyn rusqlite::ToSql)> =
+        vec![(":limit", &limit_i64), (":offset", &offset_i64)];
+    if let Some(ref s) = status_str {
+        params.push((":status", s));
     }
+    let rows = stmt.query_map(params.as_slice(), row_to_workflow_run)?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
 /// List recent workflow runs for a specific repo, ordered by started_at DESC.

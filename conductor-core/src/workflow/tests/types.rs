@@ -218,9 +218,9 @@ fn test_workflow_step_summary_empty_chain() {
 #[test]
 fn test_is_triggered_by_hook_true() {
     let conn = setup_db();
+    let mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let agent_mgr = crate::agent::AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let mgr = WorkflowManager::new(&conn);
     let mut run = mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "hook", None)
         .unwrap();
@@ -231,9 +231,9 @@ fn test_is_triggered_by_hook_true() {
 #[test]
 fn test_is_triggered_by_hook_false() {
     let conn = setup_db();
+    let mgr = crate::workflow::manager::WorkflowManager::new(&conn);
     let agent_mgr = crate::agent::AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let mgr = WorkflowManager::new(&conn);
     let run = mgr
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();

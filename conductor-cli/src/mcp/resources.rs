@@ -14,7 +14,6 @@ use rmcp::model::Resource;
 pub(super) fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource>> {
     use conductor_core::repo::RepoManager;
     use conductor_core::tickets::TicketSyncer;
-    use conductor_core::workflow::WorkflowManager;
     use conductor_core::worktree::WorktreeManager;
 
     let (conn, config) = super::helpers::open_db_and_config(db_path)?;
@@ -37,9 +36,6 @@ pub(super) fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource
 
     let wt_mgr = WorktreeManager::new(&conn, &config);
     let all_worktrees = wt_mgr.list(None, false)?;
-
-    let wf_mgr = WorkflowManager::new(&conn);
-
     for repo in &repos {
         resources.push(make_resource(
             format!("conductor://repo/{}", repo.slug),
@@ -91,12 +87,8 @@ pub(super) fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource
 
         // Per-repo workflow runs: query directly by repo_id to avoid the global
         // cap silently dropping older runs when many repos are registered.
-        let repo_runs = conductor_core::workflow::list_workflow_runs_by_repo_id(
-            wf_mgr.conn(),
-            &repo.id,
-            50,
-            0,
-        )?;
+        let repo_runs =
+            conductor_core::workflow::list_workflow_runs_by_repo_id(&conn, &repo.id, 50, 0)?;
         for run in &repo_runs {
             resources.push(make_resource(
                 format!("conductor://run/{}", run.id),
@@ -116,7 +108,6 @@ pub(super) fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource
 pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<String> {
     use conductor_core::repo::RepoManager;
     use conductor_core::tickets::TicketSyncer;
-    use conductor_core::workflow::WorkflowManager;
     use conductor_core::worktree::WorktreeManager;
     use std::collections::HashMap;
 
@@ -250,13 +241,8 @@ pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<
     if let Some(repo_slug) = uri.strip_prefix("conductor://runs/") {
         let repo_mgr = RepoManager::new(&conn, &config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
-        let wf_mgr = WorkflowManager::new(&conn);
-        let repo_runs = conductor_core::workflow::list_workflow_runs_by_repo_id(
-            wf_mgr.conn(),
-            &repo.id,
-            50,
-            0,
-        )?;
+        let repo_runs =
+            conductor_core::workflow::list_workflow_runs_by_repo_id(&conn, &repo.id, 50, 0)?;
         if repo_runs.is_empty() {
             return Ok(format!("No workflow runs for {repo_slug}."));
         }
@@ -291,10 +277,9 @@ pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<
     }
 
     if let Some(run_id) = uri.strip_prefix("conductor://run/") {
-        let wf_mgr = WorkflowManager::new(&conn);
-        let run = conductor_core::workflow::get_workflow_run(wf_mgr.conn(), run_id)?
+        let run = conductor_core::workflow::get_workflow_run(&conn, run_id)?
             .ok_or_else(|| anyhow::anyhow!("Workflow run {run_id} not found"))?;
-        let steps = conductor_core::workflow::get_workflow_steps(wf_mgr.conn(), run_id)?;
+        let steps = conductor_core::workflow::get_workflow_steps(&conn, run_id)?;
         let claude_dir = config.general.resolve_optional_claude_dir();
         return Ok(format_run_detail_with_log(
             &conn,

@@ -376,8 +376,7 @@ async fn main() -> Result<()> {
                 }
 
                 // Detect workflow run terminal transitions and fire notifications.
-                let workflow_runs =
-                    conductor_core::workflow::list_all_workflow_runs(wf_mgr.conn(), 200)?;
+                let workflow_runs = conductor_core::workflow::list_all_workflow_runs(&conn, 200)?;
                 let wf_transitions = conductor_web::notify::detect_workflow_terminal_transitions(
                     workflow_runs.iter(),
                     &mut wf_seen,
@@ -459,7 +458,7 @@ async fn main() -> Result<()> {
                         if t.succeeded && t.parent_workflow_run_id.is_none() {
                             if let Ok(Some(baseline)) =
                                 conductor_core::workflow::get_workflow_spike_baseline(
-                                    wf_mgr.conn(),
+                                    &conn,
                                     &t.workflow_name,
                                     30,
                                     5,
@@ -524,7 +523,7 @@ async fn main() -> Result<()> {
                 // Fire gate-pending-too-long notifications.
                 {
                     let waiting_steps =
-                        conductor_core::workflow::list_all_waiting_gate_steps(wf_mgr.conn())?;
+                        conductor_core::workflow::list_all_waiting_gate_steps(&conn)?;
                     let now_ms = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()

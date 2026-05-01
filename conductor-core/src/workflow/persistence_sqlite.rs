@@ -149,7 +149,7 @@ mod tests {
         // Verify state is visible through the shared connection handle too.
         let guard = shared.lock().unwrap();
         let mgr = crate::workflow::manager::WorkflowManager::new(&guard);
-        let found = crate::workflow::get_workflow_run(mgr.conn(), &run.id).unwrap();
+        let found = crate::workflow::get_workflow_run(&guard, &run.id).unwrap();
         assert!(
             found.is_some(),
             "run written via persistence should be visible through shared conn"
