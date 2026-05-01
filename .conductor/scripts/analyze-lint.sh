@@ -10,8 +10,21 @@ if [ ! -d conductor-web/frontend/dist ]; then
   fi
 fi
 
-# Detect which conductor-* crates have changed files
-CHANGED_CRATES=$(git diff --name-only HEAD | grep '^conductor-' | cut -d/ -f1 | sort -u)
+# Detect which conductor-* crates have changed files.
+# If FEATURE_BASE_BRANCH is set (passed by the workflow), diff against the
+# merge-base with that branch so committed changes within the worktree are
+# included. Falling back to HEAD only sees uncommitted edits, which means
+# scope shrinks the moment the worktree commits — see issue #2777.
+BASE="${FEATURE_BASE_BRANCH:-}"
+if [ -n "$BASE" ]; then
+  DIFF_TARGET=$(git merge-base HEAD "origin/$BASE" 2>/dev/null \
+              || git merge-base HEAD "$BASE" 2>/dev/null \
+              || echo HEAD)
+else
+  DIFF_TARGET=HEAD
+fi
+
+CHANGED_CRATES=$(git diff --name-only "$DIFF_TARGET" | grep '^conductor-' | cut -d/ -f1 | sort -u)
 
 if [ -z "$CHANGED_CRATES" ]; then
   # No crate-level changes detected — fall back to full workspace (matches CI)
@@ -34,7 +47,7 @@ fi
 cargo fmt --all --check 2>&1 || ERRORS=1
 
 # Validate changed or new .wf files
-for f in $(git diff --name-only HEAD -- '*.wf') $(git ls-files --others --exclude-standard -- '*.wf'); do
+for f in $(git diff --name-only "$DIFF_TARGET" -- '*.wf') $(git ls-files --others --exclude-standard -- '*.wf'); do
   [ -f "$f" ] || continue
   name=$(basename "$f" .wf)
   conductor workflow validate "$name" --path . 2>&1 \
