@@ -2,7 +2,7 @@ pub(crate) mod definitions;
 mod fan_out;
 mod helpers;
 mod lifecycle;
-mod queries;
+pub(crate) mod queries;
 pub(crate) mod recovery;
 mod steps;
 

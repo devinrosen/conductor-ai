@@ -57,6 +57,15 @@ pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
 pub use manager::definitions::{
     list_defs, list_defs_with_validation, load_def_by_name, validate_single,
 };
+// NOTE: the 50 free functions in `manager::queries` are intentionally NOT
+// re-exported here. They take `conn: &rusqlite::Connection` as their first
+// argument; re-exporting them publicly would expose `rusqlite::Connection`
+// in conductor-core's external API and create a parallel unencapsulated
+// path alongside `WorkflowManager`. While the migration is in progress the
+// canonical external API for these queries remains the methods on
+// `WorkflowManager` (which delegate to the free functions via thin shims).
+// The public re-exports are added in the final cleanup PR (after PRs 3-5)
+// at the same time `WorkflowManager` itself is removed.
 pub use manager::recovery::{ReapedStaleRun, StaleWorkflowRun};
 pub use manager::{InvalidWorkflowEntry, StepMetrics, WorkflowManager};
 pub use output::{parse_flow_output, FlowOutput};
