@@ -89,22 +89,6 @@ async fn wait_for_run_id(slot: RunIdSlot) -> Option<String> {
     })
 }
 
-/// Fire a workflow completion notification.
-///
-/// # Calling context
-///
-/// **Must only be called from a synchronous/blocking context** — i.e. inside
-/// `tokio::task::spawn_blocking` or a plain OS thread — because
-/// `open_database` is a synchronous call.
-fn notify_workflow(
-    conn: &rusqlite::Connection,
-    notifications: &conductor_core::config::NotificationConfig,
-    notify_hooks: &[conductor_core::config::HookConfig],
-    params: &WorkflowNotificationArgs<'_>,
-) {
-    fire_workflow_notification(conn, notifications, notify_hooks, params);
-}
-
 // ── Response types ────────────────────────────────────────────────────
 
 /// Web-layer wrapper that attaches active steps to a `WorkflowRun` for the list endpoint.
@@ -555,7 +539,7 @@ pub async fn run_workflow(
 
                 // Send notification if DB connection is available
                 if let Ok(conn) = &notification_conn {
-                    notify_workflow(
+                    fire_workflow_notification(
                         conn,
                         &notifications,
                         &notify_hooks,
@@ -593,7 +577,7 @@ pub async fn run_workflow(
 
                 // Send notification if DB connection is available
                 if let Ok(conn) = &notification_conn {
-                    notify_workflow(
+                    fire_workflow_notification(
                         conn,
                         &notifications,
                         &notify_hooks,
@@ -847,7 +831,7 @@ pub async fn post_workflow_run(
 
                 let (notify_repo_slug, notify_branch) =
                     conductor_core::notify::parse_target_label(Some(&target_label));
-                notify_workflow(
+                fire_workflow_notification(
                     &conn,
                     &notifications,
                     &notify_hooks,
@@ -882,7 +866,7 @@ pub async fn post_workflow_run(
                 let error_run_id = emit_failed(&run_id_slot, wt_id_clone.clone());
                 let (notify_repo_slug, notify_branch) =
                     conductor_core::notify::parse_target_label(Some(&target_label));
-                notify_workflow(
+                fire_workflow_notification(
                     &conn,
                     &notifications,
                     &notify_hooks,
@@ -1740,7 +1724,7 @@ pub async fn resume_workflow_endpoint(
                 let succeeded = res.all_succeeded;
                 let status = if succeeded { "completed" } else { "failed" };
 
-                notify_workflow(
+                fire_workflow_notification(
                     &conn,
                     &notifications,
                     &notify_hooks,
@@ -1770,7 +1754,7 @@ pub async fn resume_workflow_endpoint(
             }
             Err(e) => {
                 tracing::error!("Workflow resume failed: {e}");
-                notify_workflow(
+                fire_workflow_notification(
                     &conn,
                     &notifications,
                     &notify_hooks,
@@ -2320,12 +2304,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn notify_workflow_completes_without_panic() {
+    async fn fire_workflow_notification_completes_without_panic() {
         let conn = conductor_core::test_helpers::create_test_conn();
         let notifications = conductor_core::config::NotificationConfig::default(); // enabled=false
 
         tokio::task::spawn_blocking(move || {
-            notify_workflow(
+            fire_workflow_notification(
                 &conn,
                 &notifications,
                 &[],
@@ -2384,7 +2368,7 @@ mod tests {
         let key1 = key.clone();
         tokio::task::spawn_blocking(move || {
             let conn = db1.blocking_lock();
-            notify_workflow(
+            fire_workflow_notification(
                 &conn,
                 &notifications1,
                 &[],
@@ -2412,7 +2396,7 @@ mod tests {
         let key2 = key.clone();
         tokio::task::spawn_blocking(move || {
             let conn = db2.blocking_lock();
-            notify_workflow(
+            fire_workflow_notification(
                 &conn,
                 &notifications,
                 &[],
@@ -2451,13 +2435,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn notify_workflow_with_notifications_enabled_claims_log_row() {
+    async fn fire_workflow_notification_with_notifications_enabled_claims_log_row() {
         let conn = conductor_core::test_helpers::create_test_conn();
 
         let notifications = test_notification_config();
 
         tokio::task::spawn_blocking(move || {
-            notify_workflow(&conn, &notifications, &[], &WorkflowNotificationArgs { run_id: "run-notify-1", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None, repo_slug: "", branch: "", duration_ms: None, ticket_url: None, error: None, repo_id: None, worktree_id: None });
+            fire_workflow_notification(&conn, &notifications, &[], &WorkflowNotificationArgs { run_id: "run-notify-1", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None, repo_slug: "", branch: "", duration_ms: None, ticket_url: None, error: None, repo_id: None, worktree_id: None });
 
             // Verify the dedup row was inserted into notification_log
             let count: i64 = conn
