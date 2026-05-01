@@ -947,4 +947,37 @@ mod tests {
             .persist_metrics(&run.id, 100, 200, 50, 25, 0.01, 3, 5000)
             .is_ok());
     }
+
+    #[test]
+    fn test_acquire_lease_nonexistent_run_returns_none() {
+        let p = InMemoryWorkflowPersistence::new();
+        let result = p.acquire_lease("does-not-exist", "token-abc", 30);
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn test_acquire_lease_existing_run_returns_generation() {
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        let result = p.acquire_lease(&run.id, "token-abc", 30).unwrap();
+        assert_eq!(result, Some(1));
+    }
+
+    #[test]
+    fn test_acquire_lease_same_token_is_idempotent() {
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        p.acquire_lease(&run.id, "token-abc", 30).unwrap();
+        let result = p.acquire_lease(&run.id, "token-abc", 30).unwrap();
+        assert_eq!(result, Some(2));
+    }
+
+    #[test]
+    fn test_acquire_lease_conflict_returns_none() {
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        p.acquire_lease(&run.id, "token-first", 3600).unwrap();
+        let result = p.acquire_lease(&run.id, "token-second", 30).unwrap();
+        assert_eq!(result, None);
+    }
 }
