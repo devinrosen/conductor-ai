@@ -1,4 +1,3 @@
-use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::github;
 use crate::issue_source::{GitHubConfig, IssueSource, JiraConfig, VantageConfig};
@@ -60,17 +59,12 @@ impl TicketSource {
 
     /// Sync all tickets for this source.
     ///
-    /// `config` is forwarded to source-specific managers (currently consumed
-    /// only by [`jira_acli::JiraAcliManager`]; GitHub and Vantage paths still
-    /// use free functions). `token` is an optional auth token passed to
-    /// GitHub syncs; Jira/Vantage ignore it. For Vantage sources, call
-    /// [`Self::with_repo_slug`] first to set the codebase filter.
-    pub fn sync(&self, config: &Config, token: Option<&str>) -> Result<Vec<TicketInput>> {
+    /// `token` is an optional auth token passed to GitHub syncs; Jira/Vantage ignore it.
+    /// For Vantage sources, call [`Self::with_repo_slug`] first to set the codebase filter.
+    pub fn sync(&self, token: Option<&str>) -> Result<Vec<TicketInput>> {
         match self {
             Self::GitHub(cfg) => github::sync_github_issues(&cfg.owner, &cfg.repo, token),
-            Self::Jira(cfg) => {
-                jira_acli::JiraAcliManager::new(config).sync_issues(&cfg.jql, &cfg.url)
-            }
+            Self::Jira(cfg) => jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url),
             Self::Vantage(cfg, repo_slug) => {
                 let slug = repo_slug.as_deref().ok_or_else(|| {
                     ConductorError::InvalidInput(
@@ -86,8 +80,7 @@ impl TicketSource {
     /// Fetch a single ticket by its source-specific ID string.
     ///
     /// For GitHub the `source_id` is an issue number; for Jira it is an issue key.
-    /// `config` is forwarded to source-specific managers (Jira only today).
-    pub fn fetch_one(&self, config: &Config, source_id: &str) -> Result<TicketInput> {
+    pub fn fetch_one(&self, source_id: &str) -> Result<TicketInput> {
         match self {
             Self::GitHub(cfg) => {
                 let issue_number: i64 = source_id.parse().map_err(|_| {
@@ -97,9 +90,7 @@ impl TicketSource {
                 })?;
                 github::fetch_github_issue(&cfg.owner, &cfg.repo, issue_number, None)
             }
-            Self::Jira(cfg) => {
-                jira_acli::JiraAcliManager::new(config).fetch_issue(source_id, &cfg.url)
-            }
+            Self::Jira(cfg) => jira_acli::fetch_jira_issue(source_id, &cfg.url),
             Self::Vantage(cfg, _) => vantage::fetch_vantage_deliverable(source_id, &cfg.sdlc_root),
         }
     }
@@ -251,8 +242,7 @@ mod tests {
             r#"{"project_id":"PROJ-001","sdlc_root":"/path"}"#,
         );
         let ts = TicketSource::from_issue_source(&src).unwrap();
-        let cfg = Config::default();
-        let err = ts.sync(&cfg, None).err().expect("expected error");
+        let err = ts.sync(None).err().expect("expected error");
         match err {
             ConductorError::InvalidInput(msg) => {
                 assert!(msg.contains("repo_slug"), "unexpected msg: {msg}");

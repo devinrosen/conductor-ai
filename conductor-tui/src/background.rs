@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use conductor_core::agent::AgentManager;
-use conductor_core::config::{db_path, load_config, Config};
+use conductor_core::config::{db_path, load_config};
 use conductor_core::db::open_database;
 use conductor_core::error::ConductorError;
 use conductor_core::github;
@@ -818,7 +818,6 @@ fn sync_all_tickets(tx: &BackgroundSender) {
             tx,
             &syncer,
             &source_mgr,
-            &config,
             &repo.id,
             &repo.slug,
             &repo.remote_url,
@@ -874,12 +873,10 @@ pub const TICKET_SYNC_STALE_SECS: i64 = 300; // 5 minutes
 
 /// Sync sources for a single repo, sending per-source actions to `tx`.
 /// Returns `false` if the channel is closed (caller should stop).
-#[allow(clippy::too_many_arguments)]
 fn sync_sources_for_repo(
     tx: &BackgroundSender,
     syncer: &TicketSyncer,
     source_mgr: &IssueSourceManager,
-    config: &Config,
     repo_id: &str,
     repo_slug: &str,
     remote_url: &str,
@@ -903,9 +900,7 @@ fn sync_sources_for_repo(
                 Ok(ts) => {
                     let ts = ts.with_repo_slug(repo_slug);
                     let source_type = ts.source_type_str();
-                    sync_repo(syncer, repo_id, repo_slug, source_type, || {
-                        ts.sync(config, token)
-                    })
+                    sync_repo(syncer, repo_id, repo_slug, source_type, || ts.sync(token))
                 }
                 Err(e) => Action::TicketSyncFailed {
                     repo_slug: repo_slug.to_string(),
@@ -981,7 +976,6 @@ pub fn spawn_ticket_sync_for_repo(
             &tx,
             &syncer,
             &source_mgr,
-            &config,
             &repo_id,
             &repo_slug,
             &remote_url,

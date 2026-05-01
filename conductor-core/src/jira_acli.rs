@@ -1,120 +1,84 @@
 use std::process::Command;
 
-use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::tickets::TicketInput;
 
-/// Talks to Jira through the `acli` CLI, normalizing results into [`TicketInput`].
+/// Sync Jira issues matching `jql` using the `acli` CLI.
+/// Returns a list of normalized TicketInputs ready for upsert.
 ///
-/// Holds `&Config` to align with the conductor-core manager pattern
-/// (`RepoManager`, `WorktreeManager`, etc.) and to give future
-/// configuration-driven behavior (timeouts, alternate `acli` paths) a
-/// natural home without an API change.
-pub struct JiraAcliManager<'a> {
-    #[allow(dead_code)]
-    config: &'a Config,
+/// # Trust model
+///
+/// `jql` is passed verbatim to `acli` as a single argv argument. Shell-level
+/// injection isn't possible (no shell parses it), but JQL-level injection is:
+/// a malicious query can return data the caller didn't intend (e.g. broaden
+/// scope across projects). **Callers must source `jql` from trusted
+/// configuration only**, never from end-user input. The only validation
+/// rejects structurally-broken input (empty, NUL, line breaks); JQL is not
+/// parsed semantically.
+pub fn sync_jira_issues_acli(jql: &str, base_url: &str) -> Result<Vec<TicketInput>> {
+    validate_jql(jql)?;
+    let json_str = run_acli_search(jql, "200")?;
+    parse_jira_issues(&json_str, base_url)
 }
 
-impl<'a> JiraAcliManager<'a> {
-    pub fn new(config: &'a Config) -> Self {
-        Self { config }
-    }
-
-    /// Sync Jira issues matching `jql` using the `acli` CLI.
-    /// Returns a list of normalized TicketInputs ready for upsert.
-    ///
-    /// # Trust model
-    ///
-    /// `jql` is passed verbatim to `acli` as a single argv argument. Shell-level
-    /// injection isn't possible (no shell parses it), but JQL-level injection is:
-    /// a malicious query can return data the caller didn't intend (e.g. broaden
-    /// scope across projects). **Callers must source `jql` from trusted
-    /// configuration only**, never from end-user input. This method's only
-    /// validation rejects structurally-broken input (empty, NUL, line breaks);
-    /// it does not parse JQL semantically.
-    pub fn sync_issues(&self, jql: &str, base_url: &str) -> Result<Vec<TicketInput>> {
-        validate_jql(jql)?;
-        let output = Command::new("acli")
-            .args([
-                "jira",
-                "workitem",
-                "search",
-                "--jql",
-                jql,
-                "--json",
-                "--limit",
-                "200",
-                "--fields",
-                "key,summary,status,priority,assignee,labels,description",
-            ])
-            .output()
-            .map_err(acli_spawn_error)?;
-
-        if !output.status.success() {
-            return Err(ConductorError::TicketSync(
-                String::from_utf8_lossy(&output.stderr).to_string(),
-            ));
-        }
-
-        let json_str = String::from_utf8_lossy(&output.stdout);
-        parse_jira_issues(&json_str, base_url)
-    }
-
-    /// Fetch a single Jira issue by key and return its current state.
-    ///
-    /// Uses JQL `key = <issue_key>` with a limit of 1; the issue key is
-    /// validated against the canonical `PROJECT-123` format before being
-    /// interpolated, so this entry point is not subject to the JQL trust
-    /// caveat on [`Self::sync_issues`].
-    pub fn fetch_issue(&self, issue_key: &str, base_url: &str) -> Result<TicketInput> {
-        validate_issue_key(issue_key)?;
-        let jql = format!("key = {issue_key}");
-        let output = Command::new("acli")
-            .args([
-                "jira",
-                "workitem",
-                "search",
-                "--jql",
-                &jql,
-                "--json",
-                "--limit",
-                "1",
-                "--fields",
-                "key,summary,status,priority,assignee,labels,description",
-            ])
-            .output()
-            .map_err(acli_spawn_error)?;
-
-        if !output.status.success() {
-            return Err(ConductorError::TicketSync(
-                String::from_utf8_lossy(&output.stderr).to_string(),
-            ));
-        }
-
-        let json_str = String::from_utf8_lossy(&output.stdout);
-        let mut tickets = parse_jira_issues(&json_str, base_url)?;
-        tickets.pop().ok_or_else(|| ConductorError::TicketNotFound {
-            id: issue_key.to_string(),
-        })
-    }
+/// Fetch a single Jira issue by key and return its current state.
+///
+/// Uses JQL `key = <issue_key>` with a limit of 1; the issue key is
+/// validated against the canonical `PROJECT-123` format before being
+/// interpolated, so this entry point is not subject to the JQL trust
+/// caveat on [`sync_jira_issues_acli`].
+pub fn fetch_jira_issue(issue_key: &str, base_url: &str) -> Result<TicketInput> {
+    validate_issue_key(issue_key)?;
+    let jql = format!("key = {issue_key}");
+    let json_str = run_acli_search(&jql, "1")?;
+    let mut tickets = parse_jira_issues(&json_str, base_url)?;
+    tickets.pop().ok_or_else(|| ConductorError::TicketNotFound {
+        id: issue_key.to_string(),
+    })
 }
 
-fn acli_spawn_error(e: std::io::Error) -> ConductorError {
-    if e.kind() == std::io::ErrorKind::NotFound {
-        ConductorError::TicketSync(
-            "acli not found. Install the Atlassian CLI (acli) and ensure it is on your PATH."
-                .to_string(),
-        )
-    } else {
-        ConductorError::TicketSync(format!("failed to run acli: {e}"))
+/// Run `acli jira workitem search` with a JQL query and return its stdout as
+/// a UTF-8-lossy `String`. Shared between [`sync_jira_issues_acli`] and
+/// [`fetch_jira_issue`].
+fn run_acli_search(jql: &str, limit: &str) -> Result<String> {
+    let output = Command::new("acli")
+        .args([
+            "jira",
+            "workitem",
+            "search",
+            "--jql",
+            jql,
+            "--json",
+            "--limit",
+            limit,
+            "--fields",
+            "key,summary,status,priority,assignee,labels,description",
+        ])
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                ConductorError::TicketSync(
+                    "acli not found. Install the Atlassian CLI (acli) and ensure it is on your PATH.".to_string(),
+                )
+            } else {
+                ConductorError::TicketSync(format!("failed to run acli: {e}"))
+            }
+        })?;
+
+    if !output.status.success() {
+        return Err(ConductorError::TicketSync(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
     }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 /// Reject obviously-broken JQL input before handing it to acli.
 ///
-/// This is a defense-in-depth check; see `JiraAcliManager::sync_issues` for the
-/// trust model. We reject empty input and any control characters that suggest
-/// an accidental newline-separated paste or NUL-terminated buffer.
+/// This is a defense-in-depth check; see [`sync_jira_issues_acli`] for the
+/// trust model. We reject empty input and any control characters that
+/// suggest an accidental newline-separated paste or NUL-terminated buffer.
 fn validate_jql(jql: &str) -> Result<()> {
     if jql.is_empty() {
         return Err(ConductorError::TicketSync(
@@ -408,15 +372,13 @@ mod tests {
         assert_eq!(tickets[0].assignee, Some("bob".to_string()));
     }
 
-    // fetch_issue / sync_issues reject malformed input before ever invoking
-    // acli, so these tests exercise the validation gate without requiring
-    // acli on PATH.
+    // fetch_jira_issue / sync_jira_issues_acli reject malformed input before
+    // ever invoking acli, so these tests exercise the validation gate without
+    // requiring acli on PATH.
 
     #[test]
-    fn test_fetch_issue_rejects_injection_before_acli() {
-        let config = Config::default();
-        let mgr = JiraAcliManager::new(&config);
-        match mgr.fetch_issue("PROJ-1 OR key != PROJ-1", "https://jira.example.com") {
+    fn test_fetch_jira_issue_rejects_injection_before_acli() {
+        match fetch_jira_issue("PROJ-1 OR key != PROJ-1", "https://jira.example.com") {
             Err(e) => assert!(
                 e.to_string().contains("invalid issue key format"),
                 "expected validation error, got: {e}"
@@ -426,11 +388,9 @@ mod tests {
     }
 
     #[test]
-    fn test_fetch_issue_rejects_malformed_key_before_acli() {
-        let config = Config::default();
-        let mgr = JiraAcliManager::new(&config);
+    fn test_fetch_jira_issue_rejects_malformed_key_before_acli() {
         for bad in &["", "NOHYPHEN", "-123", "PROJ-", "proj-1", "PROJ-abc"] {
-            match mgr.fetch_issue(bad, "https://jira.example.com") {
+            match fetch_jira_issue(bad, "https://jira.example.com") {
                 Err(e) => assert!(
                     e.to_string().contains("invalid issue key format"),
                     "key {bad:?}: expected validation error, got: {e}"
@@ -461,19 +421,17 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_issues_rejects_bad_jql_before_acli() {
+    fn test_sync_jira_issues_acli_rejects_bad_jql_before_acli() {
         // Hitting validate_jql means we never spawn acli, so this works
         // without acli on PATH.
-        let config = Config::default();
-        let mgr = JiraAcliManager::new(&config);
-        match mgr.sync_issues("", "https://jira.example.com") {
+        match sync_jira_issues_acli("", "https://jira.example.com") {
             Err(e) => assert!(
                 e.to_string().contains("JQL must not be empty"),
                 "expected validation error, got: {e}"
             ),
             Ok(_) => panic!("expected empty JQL to be rejected"),
         }
-        match mgr.sync_issues("project = FOO\n", "https://jira.example.com") {
+        match sync_jira_issues_acli("project = FOO\n", "https://jira.example.com") {
             Err(e) => assert!(
                 e.to_string().contains("must not contain NUL or line-break"),
                 "expected validation error, got: {e}"
