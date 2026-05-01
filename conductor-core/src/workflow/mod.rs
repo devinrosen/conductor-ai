@@ -118,14 +118,13 @@ pub use runkon_flow::traits::persistence::{
 };
 pub use runkon_flow::types::FanOutItemRow;
 pub use types::SpawnHeartbeatResumeParams;
-pub use types::WorkflowRunStepExt;
 pub use types::{
-    resolve_conductor_bin_dir, ActiveWorkflowCounts, GateAnalyticsRow, MetadataEntry,
-    PendingGateAnalyticsRow, PendingGateRow, RunIdSlot, SpikeBaseline, StepFailureHeatmapRow,
-    StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity, WorkflowExecInput,
-    WorkflowExecStandalone, WorkflowFailureRateTrendRow, WorkflowPercentiles,
-    WorkflowRegressionSignal, WorkflowResumeInput, WorkflowResumeStandalone, WorkflowRunContext,
-    WorkflowRunMetricsRow, WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    resolve_conductor_bin_dir, ActiveWorkflowCounts, GateAnalyticsRow, PendingGateAnalyticsRow,
+    PendingGateRow, RunIdSlot, SpikeBaseline, StepFailureHeatmapRow, StepRetryAnalyticsRow,
+    StepTokenHeatmapRow, TimeGranularity, WorkflowExecInput, WorkflowExecStandalone,
+    WorkflowFailureRateTrendRow, WorkflowPercentiles, WorkflowRegressionSignal,
+    WorkflowResumeInput, WorkflowResumeStandalone, WorkflowRunContext, WorkflowRunMetricsRow,
+    WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
 
 // Re-export DSL types and helpers that downstream crates (conductor-web,

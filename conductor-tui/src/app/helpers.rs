@@ -1,4 +1,4 @@
-use conductor_core::workflow::{MetadataEntry, WorkflowWarning};
+use conductor_core::workflow::WorkflowWarning;
 
 use crate::action::Action;
 use crate::state::{FormField, FormFieldType};
@@ -85,6 +85,87 @@ pub(super) fn workflow_parse_warning_message(warnings: &[WorkflowWarning]) -> Op
     Some(format!(
         "⚠ {count} workflow file(s) failed to parse: {label}"
     ))
+}
+
+/// A single entry in a step's metadata, either a key-value field or a
+/// multi-line section with a heading and body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum MetadataEntry {
+    Field { label: &'static str, value: String },
+    Section { heading: &'static str, body: String },
+}
+
+/// Build structured metadata entries for a workflow run step.
+pub(super) fn step_metadata_entries(
+    step: &conductor_core::workflow::WorkflowRunStep,
+) -> Vec<MetadataEntry> {
+    let mut entries = vec![
+        MetadataEntry::Field {
+            label: "Status",
+            value: step.status.to_string(),
+        },
+        MetadataEntry::Field {
+            label: "Role",
+            value: step.role.clone(),
+        },
+        MetadataEntry::Field {
+            label: "Can commit",
+            value: step.can_commit.to_string(),
+        },
+        MetadataEntry::Field {
+            label: "Iteration",
+            value: step.iteration.to_string(),
+        },
+    ];
+    if let Some(ref started) = step.started_at {
+        entries.push(MetadataEntry::Field {
+            label: "Started",
+            value: started.clone(),
+        });
+    }
+    if let Some(ref ended) = step.ended_at {
+        entries.push(MetadataEntry::Field {
+            label: "Ended",
+            value: ended.clone(),
+        });
+    }
+    if let Some(ref gt) = step.gate_type {
+        entries.push(MetadataEntry::Field {
+            label: "Gate type",
+            value: gt.to_string(),
+        });
+    }
+    if let Some(ref gp) = step.gate_prompt {
+        entries.push(MetadataEntry::Section {
+            heading: "Gate Prompt",
+            body: gp.clone(),
+        });
+    }
+    if let Some(ref gf) = step.gate_feedback {
+        entries.push(MetadataEntry::Section {
+            heading: "Gate Feedback",
+            body: gf.clone(),
+        });
+    }
+    if let Some(ref rt) = step.result_text {
+        entries.push(MetadataEntry::Section {
+            heading: "Result",
+            body: rt.clone(),
+        });
+    }
+    if let Some(ref ctx) = step.context_out {
+        entries.push(MetadataEntry::Section {
+            heading: "Context Out",
+            body: ctx.clone(),
+        });
+    }
+    if let Some(ref mk) = step.markers_out {
+        entries.push(MetadataEntry::Section {
+            heading: "Markers Out",
+            body: mk.clone(),
+        });
+    }
+    entries
 }
 
 /// Format structured [`MetadataEntry`] values into a fixed-width text block
@@ -244,7 +325,9 @@ pub(super) fn collapse_loop_iterations(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conductor_core::workflow::{InputDecl, InputType, MetadataEntry, WorkflowWarning};
+    use conductor_core::workflow::{
+        InputDecl, InputType, WorkflowRunStep, WorkflowStepStatus, WorkflowWarning,
+    };
 
     // ── max_scroll ──────────────────────────────────────────────────────────
 
@@ -482,5 +565,98 @@ mod tests {
         let fields = build_form_fields(&inputs);
         assert_eq!(fields[0].value, "main");
         assert!(fields[0].placeholder.is_empty());
+    }
+
+    // ── step_metadata_entries ───────────────────────────────────────────────
+
+    #[test]
+    fn step_metadata_entries_always_includes_base_fields() {
+        let step = WorkflowRunStep {
+            status: WorkflowStepStatus::Completed,
+            role: "agent".into(),
+            can_commit: true,
+            iteration: 2,
+            ..Default::default()
+        };
+        let fields = step_metadata_entries(&step);
+        assert_eq!(fields.len(), 4);
+        assert!(
+            matches!(&fields[0], MetadataEntry::Field { label, value } if *label == "Status" && value == "completed")
+        );
+        assert!(
+            matches!(&fields[1], MetadataEntry::Field { label, value } if *label == "Role" && value == "agent")
+        );
+        assert!(
+            matches!(&fields[2], MetadataEntry::Field { label, value } if *label == "Can commit" && value == "true")
+        );
+        assert!(
+            matches!(&fields[3], MetadataEntry::Field { label, value } if *label == "Iteration" && value == "2")
+        );
+    }
+
+    #[test]
+    fn step_metadata_entries_includes_optional_fields_when_present() {
+        use conductor_core::workflow::GateType;
+
+        let step = WorkflowRunStep {
+            status: WorkflowStepStatus::Failed,
+            role: "gate".into(),
+            can_commit: false,
+            iteration: 0,
+            started_at: Some("2024-01-01T00:00:00Z".into()),
+            ended_at: Some("2024-01-01T01:00:00Z".into()),
+            gate_type: Some(GateType::HumanApproval),
+            gate_prompt: Some("Approve?".into()),
+            gate_feedback: Some("lgtm".into()),
+            result_text: Some("result".into()),
+            context_out: Some("ctx".into()),
+            markers_out: Some("markers".into()),
+            ..Default::default()
+        };
+        let fields = step_metadata_entries(&step);
+        let labels: Vec<&str> = fields
+            .iter()
+            .map(|e| match e {
+                MetadataEntry::Field { label, .. } => *label,
+                MetadataEntry::Section { heading, .. } => *heading,
+            })
+            .collect();
+
+        assert_eq!(
+            labels,
+            vec![
+                "Status",
+                "Role",
+                "Can commit",
+                "Iteration",
+                "Started",
+                "Ended",
+                "Gate type",
+                "Gate Prompt",
+                "Gate Feedback",
+                "Result",
+                "Context Out",
+                "Markers Out",
+            ]
+        );
+    }
+
+    #[test]
+    fn step_metadata_entries_omits_optional_fields_when_absent() {
+        let step = WorkflowRunStep {
+            status: WorkflowStepStatus::Pending,
+            role: "agent".into(),
+            can_commit: false,
+            iteration: 0,
+            ..Default::default()
+        };
+        let fields = step_metadata_entries(&step);
+        assert_eq!(fields.len(), 4);
+        assert!(
+            fields
+                .iter()
+                .all(|e| matches!(e, MetadataEntry::Field { .. })),
+            "expected only Field entries when no optional fields are set"
+        );
     }
 }

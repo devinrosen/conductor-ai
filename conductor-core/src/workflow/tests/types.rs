@@ -1,7 +1,6 @@
 #![allow(unused_imports)]
 
 use super::*;
-use crate::workflow::types::MetadataEntry;
 use crate::workflow::{
     BlockedOn, ContextEntry, GateType, WorkflowExecConfig, WorkflowRunStep, WorkflowStepSummary,
 };
@@ -250,102 +249,6 @@ fn test_is_triggered_by_hook_false() {
     )
     .unwrap();
     assert!(!run.is_triggered_by_hook());
-}
-
-// ---------------------------------------------------------------------------
-// WorkflowRunStep::metadata_fields()
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_metadata_fields_minimal() {
-    let step = make_test_step(
-        "step-a",
-        WorkflowStepStatus::Pending,
-        None,
-        None,
-        None,
-        None,
-        None,
-    );
-    let entries = step.metadata_fields();
-    // Should have exactly the 4 always-present fields
-    assert_eq!(entries.len(), 4);
-    assert_eq!(
-        entries[0],
-        MetadataEntry::Field {
-            label: "Status",
-            value: "pending".into()
-        }
-    );
-    assert_eq!(
-        entries[1],
-        MetadataEntry::Field {
-            label: "Role",
-            value: "actor".into()
-        }
-    );
-    assert_eq!(
-        entries[2],
-        MetadataEntry::Field {
-            label: "Can commit",
-            value: "false".into()
-        }
-    );
-    assert_eq!(
-        entries[3],
-        MetadataEntry::Field {
-            label: "Iteration",
-            value: "0".into()
-        }
-    );
-}
-
-#[test]
-fn test_metadata_fields_all_optional_fields() {
-    let mut step = make_test_step(
-        "step-b",
-        WorkflowStepStatus::Completed,
-        Some("done"),
-        Some("ctx-out"),
-        Some(r#"["m1"]"#),
-        None,
-        None,
-    );
-    step.started_at = Some("2025-01-01T00:00:00Z".into());
-    step.ended_at = Some("2025-01-01T00:01:00Z".into());
-    step.gate_type = Some(GateType::HumanApproval);
-    step.gate_prompt = Some("Approve?".into());
-    step.gate_feedback = Some("LGTM".into());
-
-    let entries = step.metadata_fields();
-    // 4 base + started + ended + gate_type + gate_prompt + gate_feedback + result + context_out + markers_out = 12
-    assert_eq!(entries.len(), 12);
-
-    // Check gate-related entries
-    assert!(entries.contains(&MetadataEntry::Field {
-        label: "Gate type",
-        value: "human_approval".into()
-    }));
-    assert!(entries.contains(&MetadataEntry::Section {
-        heading: "Gate Prompt",
-        body: "Approve?".into()
-    }));
-    assert!(entries.contains(&MetadataEntry::Section {
-        heading: "Gate Feedback",
-        body: "LGTM".into()
-    }));
-    assert!(entries.contains(&MetadataEntry::Section {
-        heading: "Result",
-        body: "done".into()
-    }));
-    assert!(entries.contains(&MetadataEntry::Section {
-        heading: "Context Out",
-        body: "ctx-out".into()
-    }));
-    assert!(entries.contains(&MetadataEntry::Section {
-        heading: "Markers Out",
-        body: r#"["m1"]"#.into()
-    }));
 }
 
 // ---------------------------------------------------------------------------
