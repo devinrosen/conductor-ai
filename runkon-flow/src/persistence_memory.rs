@@ -980,4 +980,16 @@ mod tests {
         let result = p.acquire_lease(&run.id, "token-second", 30).unwrap();
         assert_eq!(result, None);
     }
+
+    #[test]
+    fn test_acquire_lease_expired_lease_allows_new_token() {
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        // Acquire with a negative TTL so the lease is already in the past.
+        let gen1 = p.acquire_lease(&run.id, "token-first", -1).unwrap();
+        assert_eq!(gen1, Some(1));
+        // A different token should be able to claim the expired lease.
+        let gen2 = p.acquire_lease(&run.id, "token-second", 30).unwrap();
+        assert_eq!(gen2, Some(2));
+    }
 }
