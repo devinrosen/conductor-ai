@@ -3942,6 +3942,48 @@ fn test_get_fan_out_items_with_status_filter() {
     assert!(none_match.is_empty());
 }
 
+/// Covers [`fan_out::get_fan_out_items_for_steps`] — empty input shortcut and
+/// the multi-step IN-clause / grouping path.
+#[test]
+fn test_get_fan_out_items_for_steps_groups_by_step_run_id() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_worktree_run(&conn, "w1");
+    let step_a = mgr
+        .insert_step(&run.id, "fan-a", "actor", false, 0, 0)
+        .unwrap();
+    let step_b = mgr
+        .insert_step(&run.id, "fan-b", "actor", false, 1, 0)
+        .unwrap();
+    let step_c = mgr
+        .insert_step(&run.id, "fan-c", "actor", false, 2, 0)
+        .unwrap();
+    mgr.insert_fan_out_item(&step_a, "ticket", "a1", "TICKET-A1")
+        .unwrap();
+    mgr.insert_fan_out_item(&step_a, "ticket", "a2", "TICKET-A2")
+        .unwrap();
+    mgr.insert_fan_out_item(&step_b, "ticket", "b1", "TICKET-B1")
+        .unwrap();
+
+    // Empty input shortcut — no DB query, empty map.
+    let empty = mgr.get_fan_out_items_for_steps(&[]).unwrap();
+    assert!(empty.is_empty());
+
+    // Multi-step query: items grouped by step_run_id; step_c (no items) is absent.
+    let map = mgr
+        .get_fan_out_items_for_steps(&[&step_a, &step_b, &step_c])
+        .unwrap();
+    assert_eq!(map.len(), 2);
+    assert_eq!(map[&step_a].len(), 2);
+    assert_eq!(map[&step_b].len(), 1);
+    assert!(!map.contains_key(&step_c));
+
+    // Items inside each group preserve insert order (ORDER BY step_run_id, id ASC).
+    assert_eq!(map[&step_a][0].item_id, "a1");
+    assert_eq!(map[&step_a][1].item_id, "a2");
+}
+
 // ── get_workflow_spike_baseline ────────────────────────────────────────────
 
 #[test]
