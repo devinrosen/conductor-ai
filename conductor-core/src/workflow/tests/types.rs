@@ -220,10 +220,16 @@ fn test_is_triggered_by_hook_true() {
     let conn = setup_db();
     let agent_mgr = crate::agent::AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let mgr = WorkflowManager::new(&conn);
-    let mut run = mgr
-        .create_workflow_run("test", Some("w1"), &parent.id, false, "hook", None)
-        .unwrap();
+    let mut run = crate::workflow::create_workflow_run(
+        &conn,
+        "test",
+        Some("w1"),
+        &parent.id,
+        false,
+        "hook",
+        None,
+    )
+    .unwrap();
     run.trigger = "hook".into();
     assert!(run.is_triggered_by_hook());
 }
@@ -233,10 +239,16 @@ fn test_is_triggered_by_hook_false() {
     let conn = setup_db();
     let agent_mgr = crate::agent::AgentManager::new(&conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "test",
+        Some("w1"),
+        &parent.id,
+        false,
+        "manual",
+        None,
+    )
+    .unwrap();
     assert!(!run.is_triggered_by_hook());
 }
 

@@ -1089,126 +1089,6 @@ pub fn run_workflow_maintenance(
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Shim impl: keeps `WorkflowManager::<method>` callable while the free functions
-
-// above are the canonical implementations. Removed in the final cleanup PR.
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-impl<'a> super::WorkflowManager<'a> {
-    pub fn reap_orphaned_script_steps(&self) -> Result<usize> {
-        reap_orphaned_script_steps(self.conn)
-    }
-
-    pub fn recover_stuck_steps(&self) -> Result<usize> {
-        recover_stuck_steps(self.conn)
-    }
-
-    pub fn reap_orphaned_workflow_runs(&self) -> Result<usize> {
-        reap_orphaned_workflow_runs(self.conn)
-    }
-
-    pub fn detect_stuck_workflow_run_ids(&self, threshold_secs: i64) -> Result<Vec<String>> {
-        detect_stuck_workflow_run_ids(self.conn, threshold_secs)
-    }
-
-    pub fn detect_stale_workflow_runs(
-        &self,
-        threshold_minutes: i64,
-    ) -> Result<Vec<StaleWorkflowRun>> {
-        detect_stale_workflow_runs(self.conn, threshold_minutes)
-    }
-
-    pub fn reap_stale_workflow_runs(&self, threshold_minutes: i64) -> Result<Vec<ReapedStaleRun>> {
-        reap_stale_workflow_runs(self.conn, threshold_minutes)
-    }
-
-    pub fn claim_stuck_workflows(
-        &self,
-        config: &Config,
-        configurable_threshold_secs: Option<i64>,
-    ) -> Result<Vec<String>> {
-        claim_stuck_workflows(self.conn, config, configurable_threshold_secs)
-    }
-
-    pub fn claim_heartbeat_stuck_runs(
-        &self,
-        config: &Config,
-        threshold_secs: i64,
-    ) -> Result<Vec<(String, String, Option<String>)>> {
-        claim_heartbeat_stuck_runs(self.conn, config, threshold_secs)
-    }
-
-    pub fn reap_finalization_stuck_workflow_runs(
-        &self,
-        threshold_secs: i64,
-    ) -> crate::error::Result<usize> {
-        reap_finalization_stuck_workflow_runs(self.conn, threshold_secs)
-    }
-
-    pub fn find_resumable_child_run(
-        &self,
-        parent_workflow_run_id: &str,
-        child_workflow_name: &str,
-    ) -> Result<Option<WorkflowRun>> {
-        find_resumable_child_run(self.conn, parent_workflow_run_id, child_workflow_name)
-    }
-
-    pub(crate) fn count_live_subprocess_steps(&self, workflow_run_id: &str) -> Result<usize> {
-        count_live_subprocess_steps(self.conn, workflow_run_id)
-    }
-
-    pub fn reset_failed_steps(&self, workflow_run_id: &str) -> Result<u64> {
-        reset_failed_steps(self.conn, workflow_run_id)
-    }
-
-    pub fn reset_completed_steps(&self, workflow_run_id: &str) -> Result<u64> {
-        reset_completed_steps(self.conn, workflow_run_id)
-    }
-
-    pub fn reset_steps_from_position(&self, workflow_run_id: &str, position: i64) -> Result<u64> {
-        reset_steps_from_position(self.conn, workflow_run_id, position)
-    }
-
-    pub fn get_completed_step_keys(&self, workflow_run_id: &str) -> Result<HashSet<StepKey>> {
-        get_completed_step_keys(self.conn, workflow_run_id)
-    }
-
-    pub fn delete_run(&self, run_id: &str) -> Result<()> {
-        delete_run(self.conn, run_id)
-    }
-
-    pub fn delete_orphaned_pending_steps(&self, workflow_run_id: &str) -> Result<usize> {
-        delete_orphaned_pending_steps(self.conn, workflow_run_id)
-    }
-
-    pub fn purge(&self, repo_id: Option<&str>, statuses: &[&str]) -> Result<usize> {
-        purge(self.conn, repo_id, statuses)
-    }
-
-    pub fn purge_count(&self, repo_id: Option<&str>, statuses: &[&str]) -> Result<usize> {
-        purge_count(self.conn, repo_id, statuses)
-    }
-
-    pub fn classify_resumable_workflows(&self, auto_resume_limit: u32) -> Result<usize> {
-        classify_resumable_workflows(self.conn, auto_resume_limit)
-    }
-
-    pub fn claim_needs_resume_runs(&self, config: &Config) -> Result<Vec<String>> {
-        claim_needs_resume_runs(self.conn, config)
-    }
-
-    pub fn run_workflow_maintenance(
-        &self,
-        config: &Config,
-        conductor_bin_dir: Option<std::path::PathBuf>,
-    ) {
-        run_workflow_maintenance(self.conn, config, conductor_bin_dir)
-    }
-}
-
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1216,7 +1096,6 @@ mod tests {
     use rusqlite::named_params;
 
     use crate::config::Config;
-    use crate::workflow::manager::WorkflowManager;
 
     /// Constant error string produced by the reaper — must match the classifier SQL.
     const ORPHAN_ERROR: &str =
@@ -1328,9 +1207,7 @@ mod tests {
         insert_run(&conn, "run1", &parent_id, "failed", Some(ORPHAN_ERROR), 0);
         // Add a completed step (not failed/timed_out) — should not block classifier.
         insert_step(&conn, "run1", "step1", "completed");
-
-        let mgr = WorkflowManager::new(&conn);
-        let count = mgr.classify_resumable_workflows(3).unwrap();
+        let count = crate::workflow::classify_resumable_workflows(&conn, 3).unwrap();
 
         assert_eq!(count, 1, "eligible run should be classified");
         assert_eq!(
@@ -1345,9 +1222,7 @@ mod tests {
         let (conn, parent_id) = setup();
         insert_run(&conn, "run1", &parent_id, "failed", Some(ORPHAN_ERROR), 0);
         insert_step(&conn, "run1", "step1", "failed");
-
-        let mgr = WorkflowManager::new(&conn);
-        let count = mgr.classify_resumable_workflows(3).unwrap();
+        let count = crate::workflow::classify_resumable_workflows(&conn, 3).unwrap();
 
         assert_eq!(count, 0, "run with failed step must not be classified");
         assert_eq!(
@@ -1362,9 +1237,7 @@ mod tests {
         let (conn, parent_id) = setup();
         insert_run(&conn, "run1", &parent_id, "failed", Some(ORPHAN_ERROR), 0);
         insert_step(&conn, "run1", "step1", "timed_out");
-
-        let mgr = WorkflowManager::new(&conn);
-        let count = mgr.classify_resumable_workflows(3).unwrap();
+        let count = crate::workflow::classify_resumable_workflows(&conn, 3).unwrap();
 
         assert_eq!(count, 0, "run with timed_out step must not be classified");
         assert_eq!(run_status(&conn, "run1"), "failed");
@@ -1375,9 +1248,7 @@ mod tests {
         let (conn, parent_id) = setup();
         // iteration == limit → should NOT be classified.
         insert_run(&conn, "run1", &parent_id, "failed", Some(ORPHAN_ERROR), 3);
-
-        let mgr = WorkflowManager::new(&conn);
-        let count = mgr.classify_resumable_workflows(3).unwrap();
+        let count = crate::workflow::classify_resumable_workflows(&conn, 3).unwrap();
 
         assert_eq!(count, 0, "run at retry cap must not be classified");
         assert_eq!(run_status(&conn, "run1"), "failed");
@@ -1394,9 +1265,7 @@ mod tests {
             Some("some other error"),
             0,
         );
-
-        let mgr = WorkflowManager::new(&conn);
-        let count = mgr.classify_resumable_workflows(3).unwrap();
+        let count = crate::workflow::classify_resumable_workflows(&conn, 3).unwrap();
 
         assert_eq!(
             count, 0,
@@ -1410,9 +1279,7 @@ mod tests {
         let (conn, parent_id) = setup();
         // A running run should not be touched even if the error string matches somehow.
         insert_run(&conn, "run1", &parent_id, "running", Some(ORPHAN_ERROR), 0);
-
-        let mgr = WorkflowManager::new(&conn);
-        let count = mgr.classify_resumable_workflows(3).unwrap();
+        let count = crate::workflow::classify_resumable_workflows(&conn, 3).unwrap();
 
         assert_eq!(count, 0);
         assert_eq!(run_status(&conn, "run1"), "running");
@@ -1432,10 +1299,8 @@ mod tests {
             Some(ORPHAN_ERROR),
             0,
         );
-
-        let mgr = WorkflowManager::new(&conn);
         let config = Config::default();
-        let claimed = mgr.claim_needs_resume_runs(&config).unwrap();
+        let claimed = crate::workflow::claim_needs_resume_runs(&conn, &config).unwrap();
 
         // Watchdog should have claimed the run (CAS flip to failed).
         assert_eq!(
@@ -1455,10 +1320,8 @@ mod tests {
     fn test_watchdog_ignores_non_needs_resume_runs() {
         let (conn, parent_id) = setup();
         insert_run(&conn, "run1", &parent_id, "failed", Some(ORPHAN_ERROR), 0);
-
-        let mgr = WorkflowManager::new(&conn);
         let config = Config::default();
-        let claimed = mgr.claim_needs_resume_runs(&config).unwrap();
+        let claimed = crate::workflow::claim_needs_resume_runs(&conn, &config).unwrap();
 
         assert!(
             claimed.is_empty(),
@@ -1473,17 +1336,15 @@ mod tests {
         insert_run(&conn, "run1", &parent_id, "failed", Some(ORPHAN_ERROR), 0);
         // Add only a completed step (no failed/timed_out).
         insert_step(&conn, "run1", "s1", "completed");
-
-        let mgr = WorkflowManager::new(&conn);
         let config = Config::default();
 
         // Phase 1: classifier transitions to needs_resume.
-        let classified = mgr.classify_resumable_workflows(3).unwrap();
+        let classified = crate::workflow::classify_resumable_workflows(&conn, 3).unwrap();
         assert_eq!(classified, 1);
         assert_eq!(run_status(&conn, "run1"), "needs_resume");
 
         // Phase 2: watchdog CAS-flips to failed.
-        let claimed = mgr.claim_needs_resume_runs(&config).unwrap();
+        let claimed = crate::workflow::claim_needs_resume_runs(&conn, &config).unwrap();
         assert_eq!(claimed.len(), 1);
         assert_eq!(run_status(&conn, "run1"), "failed");
     }
@@ -1492,10 +1353,8 @@ mod tests {
     fn test_classifier_zero_limit_disables_classification() {
         let (conn, parent_id) = setup();
         insert_run(&conn, "run1", &parent_id, "failed", Some(ORPHAN_ERROR), 0);
-
-        let mgr = WorkflowManager::new(&conn);
         // limit=0 means no run passes the `iteration < 0` guard.
-        let count = mgr.classify_resumable_workflows(0).unwrap();
+        let count = crate::workflow::classify_resumable_workflows(&conn, 0).unwrap();
         assert_eq!(count, 0, "limit=0 should classify nothing");
         assert_eq!(run_status(&conn, "run1"), "failed");
     }
@@ -1505,9 +1364,7 @@ mod tests {
         let (conn, parent_id) = setup();
         // iteration=2, limit=3 → 2 < 3 → eligible.
         insert_run(&conn, "run1", &parent_id, "failed", Some(ORPHAN_ERROR), 2);
-
-        let mgr = WorkflowManager::new(&conn);
-        let count = mgr.classify_resumable_workflows(3).unwrap();
+        let count = crate::workflow::classify_resumable_workflows(&conn, 3).unwrap();
         assert_eq!(count, 1, "run with iteration below limit should qualify");
         assert_eq!(run_status(&conn, "run1"), "needs_resume");
     }
@@ -1530,13 +1387,11 @@ mod tests {
         let (conn, parent_id) = setup();
         // Seed a run that *would* qualify for auto-resume if the limit were > 0.
         insert_run(&conn, "run1", &parent_id, "failed", Some(ORPHAN_ERROR), 0);
-
-        let mgr = WorkflowManager::new(&conn);
         let mut config = Config::default();
         config.general.auto_resume_limit = 0;
 
         // Must not panic or error.
-        mgr.run_workflow_maintenance(&config, None);
+        crate::workflow::run_workflow_maintenance(&conn, &config, None);
 
         // The run must remain `failed` — no classification occurred.
         assert_eq!(
@@ -1552,11 +1407,10 @@ mod tests {
     fn test_run_workflow_maintenance_completes_without_error_no_stuck_runs() {
         // Use a fresh database with no workflow runs at all.
         let conn = crate::test_helpers::setup_db_with_agent_run();
-        let mgr = WorkflowManager::new(&conn);
         let config = Config::default(); // auto_resume_limit = 3
 
         // Must not panic — there are no stuck/stale/needs_resume runs to process.
-        mgr.run_workflow_maintenance(&config, None);
+        crate::workflow::run_workflow_maintenance(&conn, &config, None);
     }
 
     // ── delete_run_recursive: multi-level CTE deletion ────────────────────────
@@ -1599,9 +1453,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 3, "all three runs should exist before delete");
-
-        let mgr = WorkflowManager::new(&conn);
-        mgr.delete_run("root").unwrap();
+        crate::workflow::delete_run(&conn, "root").unwrap();
 
         // All three rows must be gone after delete_run_recursive.
         let remaining: i64 = conn
@@ -1680,8 +1532,7 @@ mod tests {
         // Verify the agent PID query returns the row by checking count_live_subprocess_steps
         // returns a non-error (the count itself depends on whether PID 99999 is alive,
         // but the function must not panic or error).
-        let mgr = WorkflowManager::new(&conn);
-        let result = mgr.count_live_subprocess_steps("wfrun1");
+        let result = super::count_live_subprocess_steps(&conn, "wfrun1");
         assert!(
             result.is_ok(),
             "count_live_subprocess_steps should not error: {:?}",
@@ -1689,7 +1540,7 @@ mod tests {
         );
 
         // Verify terminate_subprocesses itself completes without error.
-        let term_result = mgr.reset_failed_steps("wfrun1");
+        let term_result = crate::workflow::reset_failed_steps(&conn, "wfrun1");
         assert!(
             term_result.is_ok(),
             "reset_failed_steps should not error: {:?}",
@@ -1731,9 +1582,8 @@ mod tests {
         // count_live_subprocess_steps uses COALESCE so wrs.subprocess_pid wins.
         // The agent PID query (wrs.subprocess_pid IS NULL) must NOT return this step.
         // Both terminate_subprocesses and count_live_subprocess_steps must complete cleanly.
-        let mgr = WorkflowManager::new(&conn);
-        assert!(mgr.count_live_subprocess_steps("wfrun2").is_ok());
-        assert!(mgr.reset_failed_steps("wfrun2").is_ok());
+        assert!(super::count_live_subprocess_steps(&conn, "wfrun2").is_ok());
+        assert!(crate::workflow::reset_failed_steps(&conn, "wfrun2").is_ok());
 
         let status: String = conn
             .query_row(
@@ -1774,9 +1624,7 @@ mod tests {
         // Insert two running steps pointing to those agent runs.
         insert_running_agent_step(&conn, "wfrun-bulk", "step-c", &run_completed.id, 0);
         insert_running_agent_step(&conn, "wfrun-bulk", "step-f", &run_failed.id, 1);
-
-        let mgr = WorkflowManager::new(&conn);
-        let recovered = mgr.recover_stuck_steps().unwrap();
+        let recovered = crate::workflow::recover_stuck_steps(&conn).unwrap();
         assert_eq!(recovered, 2, "both stuck steps must be recovered");
 
         let (status_c, result_text_c, ended_at_c): (String, Option<String>, Option<String>) = conn
@@ -1832,11 +1680,9 @@ mod tests {
             [],
         )
         .unwrap();
-
-        let mgr = WorkflowManager::new(&conn);
         // reset_failed_steps calls terminate_subprocesses which spawns a cancel thread
         // for PID 99999 and joins it. The `if let Err` guard must not propagate any error.
-        let result = mgr.reset_failed_steps("wfrun-cancel");
+        let result = crate::workflow::reset_failed_steps(&conn, "wfrun-cancel");
         assert!(
             result.is_ok(),
             "terminate_subprocesses cancel threads must not propagate errors: {:?}",

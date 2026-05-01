@@ -398,12 +398,9 @@ mod tests {
         ).unwrap();
 
         let step_id = test_helpers::make_foreach_step(&conn);
-        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
-        wf_mgr
-            .insert_fan_out_item(&step_id, "worktree", "wt1", "wt1-slug")
+        crate::workflow::insert_fan_out_item(&conn, &step_id, "worktree", "wt1", "wt1-slug")
             .unwrap();
-        wf_mgr
-            .insert_fan_out_item(&step_id, "worktree", "wt2", "wt2-slug")
+        crate::workflow::insert_fan_out_item(&conn, &step_id, "worktree", "wt2", "wt2-slug")
             .unwrap();
 
         let edges = WorktreesProvider::new(None, None)

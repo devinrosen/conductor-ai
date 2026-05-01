@@ -11,7 +11,6 @@ use conductor_core::config::{load_config, Config};
 use conductor_core::github;
 use conductor_core::github_app;
 use conductor_core::repo::RepoManager;
-use conductor_core::workflow::WorkflowManager;
 use conductor_core::worktree::WorktreeManager;
 
 use crate::commands::{AgentCommands, CONDUCTOR_RUN_ID_ENV};
@@ -27,11 +26,10 @@ pub fn handle_agent(command: AgentCommands, conn: &Connection, config: &Config) 
         if let Err(e) = agent_mgr.dismiss_expired_feedback_requests() {
             eprintln!("Warning: dismiss_expired_feedback_requests failed: {e}");
         }
-        let wf_mgr = WorkflowManager::new(conn);
-        if let Err(e) = wf_mgr.reap_orphaned_workflow_runs() {
+        if let Err(e) = conductor_core::workflow::reap_orphaned_workflow_runs(conn) {
             eprintln!("Warning: reap_orphaned_workflow_runs failed: {e}");
         }
-        if let Err(e) = wf_mgr.reap_orphaned_script_steps() {
+        if let Err(e) = conductor_core::workflow::reap_orphaned_script_steps(conn) {
             eprintln!("Warning: reap_orphaned_script_steps failed: {e}");
         }
     }

@@ -9,8 +9,6 @@ pub(super) fn tool_approve_gate(
     db_path: &Path,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
-    use conductor_core::workflow::WorkflowManager;
-
     let run_id = require_arg!(args, "run_id");
     let feedback = get_arg(args, "feedback");
 
@@ -28,8 +26,7 @@ pub(super) fn tool_approve_gate(
         Ok(v) => v,
         Err(e) => return tool_err(e),
     };
-    let wf_mgr = WorkflowManager::new(&conn);
-    let step = match wf_mgr.find_waiting_gate(run_id) {
+    let step = match conductor_core::workflow::find_waiting_gate(&conn, run_id) {
         Ok(Some(s)) => s,
         Ok(None) => return tool_err(format!("No waiting gate found for run {run_id}")),
         Err(e) => return tool_err(e),
@@ -38,7 +35,8 @@ pub(super) fn tool_approve_gate(
         .as_deref()
         .filter(|s| !s.is_empty())
         .map(conductor_core::workflow::helpers::format_gate_selection_context);
-    match wf_mgr.approve_gate(
+    match conductor_core::workflow::approve_gate(
+        &conn,
         &step.id,
         "mcp",
         feedback,
@@ -54,21 +52,18 @@ pub(super) fn tool_reject_gate(
     db_path: &Path,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
-    use conductor_core::workflow::WorkflowManager;
-
     let run_id = require_arg!(args, "run_id");
     let (conn, _config) = match open_db_and_config(db_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
     };
-    let wf_mgr = WorkflowManager::new(&conn);
     let feedback = get_arg(args, "feedback");
-    let step = match wf_mgr.find_waiting_gate(run_id) {
+    let step = match conductor_core::workflow::find_waiting_gate(&conn, run_id) {
         Ok(Some(s)) => s,
         Ok(None) => return tool_err(format!("No waiting gate found for run {run_id}")),
         Err(e) => return tool_err(e),
     };
-    match wf_mgr.reject_gate(&step.id, "mcp", feedback) {
+    match conductor_core::workflow::reject_gate(&conn, &step.id, "mcp", feedback) {
         Ok(()) => tool_ok(format!("Gate rejected for run {run_id}.")),
         Err(e) => tool_err(e),
     }
@@ -105,7 +100,7 @@ mod tests {
     fn make_waiting_gate(db_path: &std::path::Path) -> (String, String) {
         use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;
-        use conductor_core::workflow::{GateType, WorkflowManager, WorkflowStepStatus};
+        use conductor_core::workflow::{GateType, WorkflowStepStatus};
 
         let conn = open_database(db_path).expect("open db");
 
@@ -115,20 +110,33 @@ mod tests {
             .create_run(None, "workflow", None)
             .expect("create agent run");
 
-        let mgr = WorkflowManager::new(&conn);
+        let run = conductor_core::workflow::create_workflow_run(
+            &conn, "test-wf", None, &parent.id, false, "manual", None,
+        )
+        .expect("create run");
 
-        let run = mgr
-            .create_workflow_run("test-wf", None, &parent.id, false, "manual", None)
-            .expect("create run");
+        let step_id = conductor_core::workflow::insert_step(
+            &conn,
+            &run.id,
+            "human_review",
+            "reviewer",
+            false,
+            0,
+            0,
+        )
+        .expect("insert step");
 
-        let step_id = mgr
-            .insert_step(&run.id, "human_review", "reviewer", false, 0, 0)
-            .expect("insert step");
+        conductor_core::workflow::set_step_gate_info(
+            &conn,
+            &step_id,
+            GateType::HumanApproval,
+            Some("Approve?"),
+            "24h",
+        )
+        .expect("set gate info");
 
-        mgr.set_step_gate_info(&step_id, GateType::HumanApproval, Some("Approve?"), "24h")
-            .expect("set gate info");
-
-        mgr.update_step_status(
+        conductor_core::workflow::update_step_status(
+            &conn,
             &step_id,
             WorkflowStepStatus::Waiting,
             None,
@@ -243,10 +251,9 @@ mod tests {
 
         // Verify the feedback was persisted
         use conductor_core::db::open_database;
-        use conductor_core::workflow::WorkflowManager;
         let conn = open_database(&db).expect("open db");
-        let mgr = WorkflowManager::new(&conn);
-        let steps = mgr.get_workflow_steps(&run_id).expect("get steps");
+        let steps =
+            conductor_core::workflow::get_workflow_steps(&conn, &run_id).expect("get steps");
         assert_eq!(steps[0].gate_feedback.as_deref(), Some("LGTM"));
         assert_eq!(steps[0].gate_approved_by.as_deref(), Some("mcp"));
     }
@@ -267,10 +274,9 @@ mod tests {
 
         // Verify the feedback was persisted
         use conductor_core::db::open_database;
-        use conductor_core::workflow::WorkflowManager;
         let conn = open_database(&db).expect("open db");
-        let mgr = WorkflowManager::new(&conn);
-        let steps = mgr.get_workflow_steps(&run_id).expect("get steps");
+        let steps =
+            conductor_core::workflow::get_workflow_steps(&conn, &run_id).expect("get steps");
         assert_eq!(steps[0].gate_feedback.as_deref(), Some("Needs more work"));
         assert_eq!(steps[0].gate_approved_by.as_deref(), Some("mcp"));
     }

@@ -148,8 +148,7 @@ mod tests {
 
         // Verify state is visible through the shared connection handle too.
         let guard = shared.lock().unwrap();
-        let mgr = crate::workflow::manager::WorkflowManager::new(&guard);
-        let found = mgr.get_workflow_run(&run.id).unwrap();
+        let found = crate::workflow::get_workflow_run(&guard, &run.id).unwrap();
         assert!(
             found.is_some(),
             "run written via persistence should be visible through shared conn"
@@ -242,8 +241,8 @@ mod tests {
         // The validation expects an array of objects with a "value" key.
         {
             let conn = shared.lock().unwrap();
-            let mgr = crate::workflow::manager::WorkflowManager::new(&conn);
-            mgr.set_step_gate_options(
+            crate::workflow::set_step_gate_options(
+                &conn,
                 &step_id,
                 r#"[{"value":"item-a"},{"value":"item-b"},{"value":"item-c"}]"#,
             )

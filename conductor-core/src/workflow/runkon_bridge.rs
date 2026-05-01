@@ -139,11 +139,12 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                 })?;
 
             if !ectx.step_id.is_empty() {
-                let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
                 // Best-effort pre-execution link so the TUI can show live agent output
                 // while the step is running. The ActionOutput written by the executor
                 // after execution completes is the authoritative source of child_run_id.
-                if let Err(e) = wf_mgr.update_step_child_run_id(&ectx.step_id, &child_run.id) {
+                if let Err(e) =
+                    crate::workflow::update_step_child_run_id(&conn, &ectx.step_id, &child_run.id)
+                {
                     tracing::warn!(
                         "step '{}' (step_id={}): failed to link child_run_id {}: {e}",
                         params.name,
@@ -499,10 +500,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         workflow_name: &str,
     ) -> runkon_flow::engine_error::Result<Option<runkon_flow::types::WorkflowRun>> {
         let conn = self.conn.lock().map_err(bridge_lock_err)?;
-
-        let mgr = crate::workflow::manager::WorkflowManager::new(&conn);
-        let core_run = mgr
-            .find_resumable_child_run(parent_run_id, workflow_name)
+        let core_run = crate::workflow::find_resumable_child_run(&conn, parent_run_id, workflow_name)
             .map_err(|e| EngineError::Workflow(format!(
                 "failed to find resumable child run for parent='{parent_run_id}' workflow='{workflow_name}': {e}"
             )))?;

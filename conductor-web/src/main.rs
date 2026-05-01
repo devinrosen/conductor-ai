@@ -114,21 +114,19 @@ async fn main() -> Result<()> {
 
     // Reap orphaned workflow runs on startup.
     {
-        use conductor_core::workflow::WorkflowManager;
-        let wf_mgr = WorkflowManager::new(&conn);
-        match wf_mgr.reap_orphaned_workflow_runs() {
+        match conductor_core::workflow::reap_orphaned_workflow_runs(&conn) {
             Ok(n) if n > 0 => tracing::info!("Reaped {n} orphaned workflow run(s) on startup"),
             Ok(_) => {}
             Err(e) => tracing::warn!("reap_orphaned_workflow_runs failed on startup: {e}"),
         }
-        match wf_mgr.reap_orphaned_script_steps() {
+        match conductor_core::workflow::reap_orphaned_script_steps(&conn) {
             Ok(n) if n > 0 => {
                 tracing::info!("Reaped {n} orphaned script step(s) on startup")
             }
             Ok(_) => {}
             Err(e) => tracing::warn!("reap_orphaned_script_steps failed on startup: {e}"),
         }
-        match wf_mgr.reap_finalization_stuck_workflow_runs(60) {
+        match conductor_core::workflow::reap_finalization_stuck_workflow_runs(&conn, 60) {
             Ok(n) if n > 0 => {
                 tracing::info!("Reaper finalized {n} stuck workflow run(s) on startup")
             }
@@ -138,7 +136,10 @@ async fn main() -> Result<()> {
             }
         }
         if config.general.stale_workflow_minutes > 0 {
-            match wf_mgr.reap_stale_workflow_runs(config.general.stale_workflow_minutes as i64) {
+            match conductor_core::workflow::reap_stale_workflow_runs(
+                &conn,
+                config.general.stale_workflow_minutes as i64,
+            ) {
                 Ok(reaped) if !reaped.is_empty() => {
                     tracing::info!("Reaped {} stale workflow run(s) on startup", reaped.len());
                 }
@@ -148,7 +149,7 @@ async fn main() -> Result<()> {
         }
         {
             let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-            match wf_mgr.claim_heartbeat_stuck_runs(&config, 60) {
+            match conductor_core::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60) {
                 Ok(claimed) if !claimed.is_empty() => {
                     tracing::info!(
                         "Auto-resuming {} stuck workflow run(s) on startup",
@@ -227,10 +228,9 @@ async fn main() -> Result<()> {
                         Err(e) => tracing::warn!("cleanup_merged_worktrees failed: {e}"),
                     }
                 }
-                let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
-                wf_mgr.reap_orphaned_workflow_runs()?;
-                wf_mgr.reap_orphaned_script_steps()?;
-                match wf_mgr.reap_finalization_stuck_workflow_runs(60) {
+                conductor_core::workflow::reap_orphaned_workflow_runs(&conn)?;
+                conductor_core::workflow::reap_orphaned_script_steps(&conn)?;
+                match conductor_core::workflow::reap_finalization_stuck_workflow_runs(&conn, 60) {
                     Ok(n) if n > 0 => {
                         tracing::info!("Reaper finalized {n} stuck workflow run(s)")
                     }
@@ -240,8 +240,10 @@ async fn main() -> Result<()> {
                     }
                 }
                 if cfg.general.stale_workflow_minutes > 0 {
-                    match wf_mgr.reap_stale_workflow_runs(cfg.general.stale_workflow_minutes as i64)
-                    {
+                    match conductor_core::workflow::reap_stale_workflow_runs(
+                        &conn,
+                        cfg.general.stale_workflow_minutes as i64,
+                    ) {
                         Ok(reaped) if !reaped.is_empty() => {
                             tracing::info!("Reaped {} stale workflow run(s)", reaped.len());
                         }
@@ -251,7 +253,7 @@ async fn main() -> Result<()> {
                 }
                 {
                     let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-                    match wf_mgr.claim_heartbeat_stuck_runs(&cfg, 60) {
+                    match conductor_core::workflow::claim_heartbeat_stuck_runs(&conn, &cfg, 60) {
                         Ok(claimed) if !claimed.is_empty() => {
                             tracing::info!("Auto-resuming {} stuck workflow run(s)", claimed.len());
                             for (run_id, wf_name, label) in claimed {
@@ -272,7 +274,10 @@ async fn main() -> Result<()> {
                     }
                     let auto_resume_limit = cfg.general.auto_resume_limit;
                     if auto_resume_limit > 0 {
-                        match wf_mgr.classify_resumable_workflows(auto_resume_limit) {
+                        match conductor_core::workflow::classify_resumable_workflows(
+                            &conn,
+                            auto_resume_limit,
+                        ) {
                             Ok(n) if n > 0 => {
                                 tracing::info!(
                                     "Classifier flagged {n} workflow run(s) for auto-resume"
@@ -281,7 +286,7 @@ async fn main() -> Result<()> {
                             Ok(_) => {}
                             Err(e) => tracing::warn!("classify_resumable_workflows failed: {e}"),
                         }
-                        match wf_mgr.claim_needs_resume_runs(&cfg) {
+                        match conductor_core::workflow::claim_needs_resume_runs(&conn, &cfg) {
                             Ok(claimed) => {
                                 for run_id in claimed {
                                     conductor_core::workflow::spawn_workflow_resume(
@@ -376,7 +381,7 @@ async fn main() -> Result<()> {
                 }
 
                 // Detect workflow run terminal transitions and fire notifications.
-                let workflow_runs = wf_mgr.list_all_workflow_runs(200)?;
+                let workflow_runs = conductor_core::workflow::list_all_workflow_runs(&conn, 200)?;
                 let wf_transitions = conductor_web::notify::detect_workflow_terminal_transitions(
                     workflow_runs.iter(),
                     &mut wf_seen,
@@ -457,7 +462,12 @@ async fn main() -> Result<()> {
                     for t in &wf_transitions {
                         if t.succeeded && t.parent_workflow_run_id.is_none() {
                             if let Ok(Some(baseline)) =
-                                wf_mgr.get_workflow_spike_baseline(&t.workflow_name, 30, 5)
+                                conductor_core::workflow::get_workflow_spike_baseline(
+                                    &conn,
+                                    &t.workflow_name,
+                                    30,
+                                    5,
+                                )
                             {
                                 if let Some(run) = run_by_id.get(t.run_id.as_str()) {
                                     if let Some(cost_usd) = run.total_cost_usd {
@@ -517,7 +527,8 @@ async fn main() -> Result<()> {
 
                 // Fire gate-pending-too-long notifications.
                 {
-                    let waiting_steps = wf_mgr.list_all_waiting_gate_steps()?;
+                    let waiting_steps =
+                        conductor_core::workflow::list_all_waiting_gate_steps(&conn)?;
                     let now_ms = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()

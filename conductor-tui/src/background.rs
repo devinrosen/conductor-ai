@@ -142,9 +142,13 @@ pub fn spawn_db_poller(
 
                             // Fire cost/duration spike notifications for completed root runs.
                             if t.succeeded && t.parent_workflow_run_id.is_none() {
-                                let wf_mgr = conductor_core::workflow::WorkflowManager::new(conn);
                                 if let Ok(Some(baseline)) =
-                                    wf_mgr.get_workflow_spike_baseline(&t.workflow_name, 30, 5)
+                                    conductor_core::workflow::get_workflow_spike_baseline(
+                                        conn,
+                                        &t.workflow_name,
+                                        30,
+                                        5,
+                                    )
                                 {
                                     // Cost spike detection
                                     if let Some(run) = run_by_id.get(t.run_id.as_str()) {
@@ -497,23 +501,22 @@ pub fn poll_data(
                     Err(e) => tracing::warn!("cleanup_merged_worktrees failed: {e}"),
                 }
             }
-            let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
-            match wf_mgr.recover_stuck_steps() {
+            match conductor_core::workflow::recover_stuck_steps(&conn) {
                 Ok(n) if n > 0 => tracing::debug!("Recovered {n} stuck workflow step(s)"),
                 Ok(_) => {}
                 Err(e) => tracing::warn!("recover_stuck_steps failed: {e}"),
             }
-            match wf_mgr.reap_orphaned_workflow_runs() {
+            match conductor_core::workflow::reap_orphaned_workflow_runs(&conn) {
                 Ok(n) if n > 0 => tracing::debug!("Reaped {n} orphaned workflow run(s)"),
                 Ok(_) => {}
                 Err(e) => tracing::warn!("reap_orphaned_workflow_runs failed: {e}"),
             }
-            match wf_mgr.reap_orphaned_script_steps() {
+            match conductor_core::workflow::reap_orphaned_script_steps(&conn) {
                 Ok(n) if n > 0 => tracing::debug!("Reaped {n} orphaned script step(s)"),
                 Ok(_) => {}
                 Err(e) => tracing::warn!("reap_orphaned_script_steps failed: {e}"),
             }
-            match wf_mgr.reap_finalization_stuck_workflow_runs(60) {
+            match conductor_core::workflow::reap_finalization_stuck_workflow_runs(&conn, 60) {
                 Ok(n) if n > 0 => {
                     tracing::info!("Reaper finalized {n} stuck workflow run(s)")
                 }
@@ -528,7 +531,11 @@ pub fn poll_data(
                 } else {
                     None
                 };
-                match wf_mgr.claim_stuck_workflows(&config, configurable_threshold) {
+                match conductor_core::workflow::claim_stuck_workflows(
+                    &conn,
+                    &config,
+                    configurable_threshold,
+                ) {
                     Ok(claimed) => conductor_core::workflow::spawn_claimed_runs(
                         claimed,
                         Arc::new(config.clone()),
@@ -538,14 +545,17 @@ pub fn poll_data(
                 }
                 let auto_resume_limit = config.general.auto_resume_limit;
                 if auto_resume_limit > 0 {
-                    match wf_mgr.classify_resumable_workflows(auto_resume_limit) {
+                    match conductor_core::workflow::classify_resumable_workflows(
+                        &conn,
+                        auto_resume_limit,
+                    ) {
                         Ok(n) if n > 0 => {
                             tracing::info!("Classifier flagged {n} workflow run(s) for auto-resume")
                         }
                         Ok(_) => {}
                         Err(e) => tracing::warn!("classify_resumable_workflows failed: {e}"),
                     }
-                    match wf_mgr.claim_needs_resume_runs(&config) {
+                    match conductor_core::workflow::claim_needs_resume_runs(&conn, &config) {
                         Ok(claimed) => conductor_core::workflow::spawn_claimed_runs(
                             claimed,
                             Arc::new(config.clone()),
@@ -598,14 +608,13 @@ pub fn poll_data(
         (Vec::new(), None)
     };
 
-    use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
-    let wf_mgr = WorkflowManager::new(&conn);
+    use conductor_core::workflow::WorkflowRunStatus;
     // Build a per-worktree map of the most recent *root* run for inline indicators.
     // Using list_root_workflow_runs ensures the parent run wins the per-worktree slot
     // rather than a concurrently-active child sub-workflow run.
     // Fetch recent runs sorted DESC; the first entry per worktree_id wins.
     let mut latest_workflow_runs_by_worktree = std::collections::HashMap::new();
-    for run in wf_mgr.list_root_workflow_runs(100).unwrap_or_default() {
+    for run in conductor_core::workflow::list_root_workflow_runs(&conn, 100).unwrap_or_default() {
         // Skip ephemeral runs (no registered worktree) — they have no worktree
         // entry to display inline indicators for.
         if let Some(ref wt_id) = run.worktree_id {
@@ -616,9 +625,9 @@ pub fn poll_data(
     }
 
     // Fetch active non-worktree workflow runs (repo/ticket-targeted).
-    let active_non_worktree_workflow_runs = wf_mgr
-        .list_active_non_worktree_workflow_runs(50)
-        .unwrap_or_default();
+    let active_non_worktree_workflow_runs =
+        conductor_core::workflow::list_active_non_worktree_workflow_runs(&conn, 50)
+            .unwrap_or_default();
 
     // Collect IDs of active runs to fetch current step summaries in a single batch query.
     let active_run_ids: Vec<String> = latest_workflow_runs_by_worktree
@@ -637,9 +646,9 @@ pub fn poll_data(
         )
         .collect();
     let active_run_id_refs: Vec<&str> = active_run_ids.iter().map(|s| s.as_str()).collect();
-    let workflow_step_summaries = wf_mgr
-        .get_step_summaries_for_runs(&active_run_id_refs)
-        .unwrap_or_default();
+    let workflow_step_summaries =
+        conductor_core::workflow::get_step_summaries_for_runs(&conn, &active_run_id_refs)
+            .unwrap_or_default();
 
     // ── Time estimation for active workflow runs ──
     let workflow_run_estimates = {
@@ -662,9 +671,9 @@ pub fn poll_data(
         let active_est_run_ids: Vec<String> = active_runs.iter().map(|r| r.id.clone()).collect();
         let active_est_run_id_refs: Vec<&str> =
             active_est_run_ids.iter().map(|s| s.as_str()).collect();
-        let all_steps_by_run = wf_mgr
-            .get_steps_for_runs(&active_est_run_id_refs)
-            .unwrap_or_default();
+        let all_steps_by_run =
+            conductor_core::workflow::get_steps_for_runs(&conn, &active_est_run_id_refs)
+                .unwrap_or_default();
 
         // Cache step histories per workflow name to avoid redundant queries
         let mut step_history_cache: std::collections::HashMap<
@@ -676,16 +685,22 @@ pub fn poll_data(
             let step_histories = step_history_cache
                 .entry(run.workflow_name.clone())
                 .or_insert_with(|| {
-                    wf_mgr
-                        .get_completed_step_durations(&run.workflow_name, 20)
-                        .unwrap_or_default()
+                    conductor_core::workflow::get_completed_step_durations(
+                        &conn,
+                        &run.workflow_name,
+                        20,
+                    )
+                    .unwrap_or_default()
                 });
 
             if step_histories.is_empty() {
                 // Fall back to workflow-level estimate
-                let hist = wf_mgr
-                    .get_completed_run_durations(&run.workflow_name, 20)
-                    .unwrap_or_default();
+                let hist = conductor_core::workflow::get_completed_run_durations(
+                    &conn,
+                    &run.workflow_name,
+                    20,
+                )
+                .unwrap_or_default();
                 if let Some(est) = estimation::estimate_with_confidence(None, &hist) {
                     let remaining =
                         estimation::estimated_remaining_ms(est.point_ms, &run.started_at);
@@ -726,7 +741,7 @@ pub fn poll_data(
             })
     });
     let waiting_gate_steps = query_if_enabled(config.notifications.enabled, || {
-        wf_mgr.list_all_waiting_gate_steps().unwrap_or_else(|e| {
+        conductor_core::workflow::list_all_waiting_gate_steps(&conn).unwrap_or_else(|e| {
             tracing::warn!("list_all_waiting_gate_steps failed: {e}");
             vec![]
         })
@@ -1009,7 +1024,7 @@ fn poll_workflow_data(
     selected_run_id: Option<&str>,
     selected_step_child_run_id: Option<&str>,
 ) -> Option<Action> {
-    use conductor_core::workflow::{WorkflowDef, WorkflowManager, WorkflowWarning};
+    use conductor_core::workflow::{WorkflowDef, WorkflowWarning};
 
     let db = db_path();
     let conn = open_database(&db).ok()?;
@@ -1156,18 +1171,15 @@ fn poll_workflow_data(
         }
         (Some(all_defs), Some(all_slugs), all_warnings)
     };
-    let wf_mgr = WorkflowManager::new(&conn);
     let runs = if let Some(wt_id) = worktree_id {
-        wf_mgr.list_workflow_runs(wt_id).unwrap_or_default()
+        conductor_core::workflow::list_workflow_runs(&conn, wt_id).unwrap_or_default()
     } else if let Some(rid) = repo_id {
-        wf_mgr
-            .list_workflow_runs_for_repo(rid, 50)
-            .unwrap_or_default()
+        conductor_core::workflow::list_workflow_runs_for_repo(&conn, rid, 50).unwrap_or_default()
     } else {
-        wf_mgr.list_all_workflow_runs(50).unwrap_or_default()
+        conductor_core::workflow::list_all_workflow_runs(&conn, 50).unwrap_or_default()
     };
     let steps = if let Some(run_id) = selected_run_id {
-        wf_mgr.get_workflow_steps(run_id).unwrap_or_default()
+        conductor_core::workflow::get_workflow_steps(&conn, run_id).unwrap_or_default()
     } else {
         Vec::new()
     };
@@ -1176,7 +1188,8 @@ fn poll_workflow_data(
     // 1. Direct-call steps on non-leaf parents are available for interleaving
     // 2. Step detail panel works for non-leaf parents
     let all_run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
-    let mut all_run_steps = match wf_mgr.get_steps_for_runs(&all_run_ids) {
+    let mut all_run_steps = match conductor_core::workflow::get_steps_for_runs(&conn, &all_run_ids)
+    {
         Ok(steps) => steps,
         Err(e) => {
             tracing::warn!("get_steps_for_runs failed for runs {:?}: {e}", all_run_ids);
@@ -1198,7 +1211,7 @@ fn poll_workflow_data(
         .collect();
     if !ancestor_ids.is_empty() {
         let ancestor_refs: Vec<&str> = ancestor_ids.iter().map(|s| s.as_str()).collect();
-        match wf_mgr.get_steps_for_runs(&ancestor_refs) {
+        match conductor_core::workflow::get_steps_for_runs(&conn, &ancestor_refs) {
             Ok(ancestor_steps) => all_run_steps.extend(ancestor_steps),
             Err(e) => {
                 tracing::warn!(
@@ -1215,13 +1228,14 @@ fn poll_workflow_data(
         .filter(|s| s.role == conductor_core::workflow::STEP_ROLE_FOREACH)
         .map(|s| s.id.as_str())
         .collect();
-    let fan_out_items = match wf_mgr.get_fan_out_items_for_steps(&foreach_step_ids) {
-        Ok(items) => items,
-        Err(e) => {
-            tracing::warn!("get_fan_out_items_for_steps failed: {e}");
-            std::collections::HashMap::new()
-        }
-    };
+    let fan_out_items =
+        match conductor_core::workflow::get_fan_out_items_for_steps(&conn, &foreach_step_ids) {
+            Ok(items) => items,
+            Err(e) => {
+                tracing::warn!("get_fan_out_items_for_steps failed: {e}");
+                std::collections::HashMap::new()
+            }
+        };
 
     // Load agent events for the selected step's child run
     let agent_mgr = AgentManager::new(&conn);
