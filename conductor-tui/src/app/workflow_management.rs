@@ -981,6 +981,12 @@ impl App {
                                 .ok()?;
                             Some((Some(format!("{}/{}", repo.slug, wt.slug)), wt.ticket_id))
                         })();
+                        if label.is_none() {
+                            tracing::warn!(
+                                worktree_id = %worktree_id,
+                                "label resolution fell through on cache-miss DB lookup; dispatching workflow with empty target_label"
+                            );
+                        }
                         label.unwrap_or((None, None))
                     });
                 // Fall back to inputs["ticket_id"] when the worktree's in-memory state
