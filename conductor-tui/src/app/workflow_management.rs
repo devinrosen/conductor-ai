@@ -969,17 +969,14 @@ impl App {
                             .map(|r| (Some(format!("{}/{}", r.slug, w.slug)), w.ticket_id.clone()))
                     })
                     .unwrap_or_else(|| {
-                        // Cache miss — go through the managed layer rather than raw SQL.
-                        use conductor_core::config::{db_path, load_config};
-                        use conductor_core::db::open_database;
+                        // Cache miss — go through the managed layer rather than raw SQL,
+                        // reusing the App's existing `conn` and `config` rather than reopening.
                         use conductor_core::repo::RepoManager;
                         let label = (|| -> Option<WorktreeLabelParts> {
-                            let conn = open_database(&db_path()).ok()?;
-                            let config = load_config().ok()?;
-                            let wt = WorktreeManager::new(&conn, &config)
+                            let wt = WorktreeManager::new(&self.conn, &self.config)
                                 .get_by_id(&worktree_id)
                                 .ok()?;
-                            let repo = RepoManager::new(&conn, &config)
+                            let repo = RepoManager::new(&self.conn, &self.config)
                                 .get_by_id(&wt.repo_id)
                                 .ok()?;
                             Some((Some(format!("{}/{}", repo.slug, wt.slug)), wt.ticket_id))
