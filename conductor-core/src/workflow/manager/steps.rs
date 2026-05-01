@@ -2,11 +2,11 @@ use std::collections::HashSet;
 
 use chrono::Utc;
 use rusqlite::named_params;
+use rusqlite::Connection;
 
 use crate::error::{ConductorError, Result};
 use crate::workflow::GateType;
 
-use super::WorkflowManager;
 use crate::workflow::WorkflowStepStatus;
 
 /// Agent-run metrics to mirror onto a linked `workflow_run_steps` row (Path X.1).
@@ -24,28 +24,22 @@ pub struct StepMetrics {
     pub cache_creation_input_tokens: Option<i64>,
 }
 
-impl<'a> WorkflowManager<'a> {
-    /// Execute a single SQL UPDATE and map the rusqlite error to [`ConductorError`].
-    ///
-    /// All `mark_step_*` and `set_step_*` methods share this one-liner to avoid
-    /// repeating the `execute(...)?; Ok(())` pattern.
-    fn execute_step_sql(&self, sql: &str, params: impl rusqlite::Params) -> Result<()> {
-        self.conn.execute(sql, params)?;
-        Ok(())
-    }
+fn execute_step_sql(conn: &Connection, sql: &str, params: impl rusqlite::Params) -> Result<()> {
+    conn.execute(sql, params)?;
+    Ok(())
+}
 
-    /// Insert a workflow step record.
-    pub fn insert_step(
-        &self,
-        workflow_run_id: &str,
-        step_name: &str,
-        role: &str,
-        can_commit: bool,
-        position: i64,
-        iteration: i64,
-    ) -> Result<String> {
-        let id = crate::new_id();
-        self.conn.execute(
+pub fn insert_step(
+    conn: &Connection,
+    workflow_run_id: &str,
+    step_name: &str,
+    role: &str,
+    can_commit: bool,
+    position: i64,
+    iteration: i64,
+) -> Result<String> {
+    let id = crate::new_id();
+    conn.execute(
             "INSERT INTO workflow_run_steps \
              (id, workflow_run_id, step_name, role, can_commit, status, position, iteration) \
              VALUES (:id, :workflow_run_id, :step_name, :role, :can_commit, :status, :position, :iteration)",
@@ -60,29 +54,23 @@ impl<'a> WorkflowManager<'a> {
                 ":iteration": iteration,
             ],
         )?;
-        Ok(id)
-    }
+    Ok(id)
+}
 
-    /// Insert a workflow step record already in `running` state.
-    ///
-    /// Combines what would otherwise be two separate calls (`insert_step` +
-    /// `update_step_status(Running)`) into a single atomic `INSERT`, eliminating
-    /// the window where a crash between the two statements leaves a row stuck in
-    /// `pending` forever.
-    #[allow(clippy::too_many_arguments)]
-    pub fn insert_step_running(
-        &self,
-        workflow_run_id: &str,
-        step_name: &str,
-        role: &str,
-        can_commit: bool,
-        position: i64,
-        iteration: i64,
-        retry_count: i64,
-    ) -> Result<String> {
-        let id = crate::new_id();
-        let now = Utc::now().to_rfc3339();
-        self.conn.execute(
+#[allow(clippy::too_many_arguments)]
+pub fn insert_step_running(
+    conn: &Connection,
+    workflow_run_id: &str,
+    step_name: &str,
+    role: &str,
+    can_commit: bool,
+    position: i64,
+    iteration: i64,
+    retry_count: i64,
+) -> Result<String> {
+    let id = crate::new_id();
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
             "INSERT INTO workflow_run_steps \
              (id, workflow_run_id, step_name, role, can_commit, status, position, iteration, \
               started_at, retry_count) \
@@ -99,22 +87,120 @@ impl<'a> WorkflowManager<'a> {
                 ":retry_count": retry_count,
             ],
         )?;
-        Ok(id)
-    }
+    Ok(id)
+}
 
-    /// Update a step's status and associated fields.
-    #[allow(clippy::too_many_arguments)]
-    pub fn update_step_status(
-        &self,
-        step_id: &str,
-        status: WorkflowStepStatus,
-        child_run_id: Option<&str>,
-        result_text: Option<&str>,
-        context_out: Option<&str>,
-        markers_out: Option<&str>,
-        retry_count: Option<i64>,
-    ) -> Result<()> {
-        self.update_step_status_full(
+#[allow(clippy::too_many_arguments)]
+pub fn update_step_status(
+    conn: &Connection,
+    step_id: &str,
+    status: WorkflowStepStatus,
+    child_run_id: Option<&str>,
+    result_text: Option<&str>,
+    context_out: Option<&str>,
+    markers_out: Option<&str>,
+    retry_count: Option<i64>,
+) -> Result<()> {
+    update_step_status_full(
+        conn,
+        step_id,
+        status,
+        child_run_id,
+        result_text,
+        context_out,
+        markers_out,
+        retry_count,
+        None,
+        None,
+    )
+}
+
+pub fn mark_step_running(
+    conn: &Connection,
+    step_id: &str,
+    status: WorkflowStepStatus,
+    child_run_id: Option<&str>,
+) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    execute_step_sql(
+        conn,
+        "UPDATE workflow_run_steps SET status = :status, child_run_id = :child_run_id, \
+             started_at = :started_at WHERE id = :id",
+        named_params![":status": status, ":child_run_id": child_run_id, ":started_at": now, ":id": step_id],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn mark_step_terminal(
+    conn: &Connection,
+    step_id: &str,
+    status: WorkflowStepStatus,
+    child_run_id: Option<&str>,
+    result_text: Option<&str>,
+    context_out: Option<&str>,
+    markers_out: Option<&str>,
+    retry_count: Option<i64>,
+    structured_output: Option<&str>,
+    step_error: Option<&str>,
+) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    execute_step_sql(
+        conn,
+        "UPDATE workflow_run_steps SET status = :status, \
+             child_run_id = COALESCE(:child_run_id, child_run_id), \
+             ended_at = :ended_at, result_text = :result_text, context_out = :context_out, \
+             markers_out = :markers_out, \
+             retry_count = COALESCE(:retry_count, retry_count), \
+             structured_output = :structured_output, step_error = :step_error \
+             WHERE id = :id",
+        named_params![
+            ":status": status,
+            ":child_run_id": child_run_id,
+            ":ended_at": now,
+            ":result_text": result_text,
+            ":context_out": context_out,
+            ":markers_out": markers_out,
+            ":retry_count": retry_count,
+            ":structured_output": structured_output,
+            ":step_error": step_error,
+            ":id": step_id,
+        ],
+    )
+}
+
+pub fn mark_step_pending(
+    conn: &Connection,
+    step_id: &str,
+    status: WorkflowStepStatus,
+) -> Result<()> {
+    execute_step_sql(
+        conn,
+        "UPDATE workflow_run_steps SET status = :status WHERE id = :id",
+        named_params![":status": status, ":id": step_id],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn update_step_status_full(
+    conn: &Connection,
+    step_id: &str,
+    status: WorkflowStepStatus,
+    child_run_id: Option<&str>,
+    result_text: Option<&str>,
+    context_out: Option<&str>,
+    markers_out: Option<&str>,
+    retry_count: Option<i64>,
+    structured_output: Option<&str>,
+    step_error: Option<&str>,
+) -> Result<()> {
+    let is_starting = status.is_starting();
+    let is_terminal = status.is_terminal();
+
+    if is_starting {
+        mark_step_running(conn, step_id, status, child_run_id)
+    } else if is_terminal {
+        mark_step_terminal(
+            conn,
             step_id,
             status,
             child_run_id,
@@ -122,179 +208,79 @@ impl<'a> WorkflowManager<'a> {
             context_out,
             markers_out,
             retry_count,
-            None,
-            None,
+            structured_output,
+            step_error,
         )
+    } else {
+        mark_step_pending(conn, step_id, status)
     }
+}
 
-    /// Mark a step as starting (Running or Waiting), recording `started_at` and the child run.
-    pub fn mark_step_running(
-        &self,
-        step_id: &str,
-        status: WorkflowStepStatus,
-        child_run_id: Option<&str>,
-    ) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
-        self.execute_step_sql(
-            "UPDATE workflow_run_steps SET status = :status, child_run_id = :child_run_id, \
-             started_at = :started_at WHERE id = :id",
-            named_params![":status": status, ":child_run_id": child_run_id, ":started_at": now, ":id": step_id],
-        )
-    }
+pub fn update_step_child_run_id(
+    conn: &Connection,
+    step_id: &str,
+    child_run_id: &str,
+) -> Result<()> {
+    execute_step_sql(
+        conn,
+        "UPDATE workflow_run_steps SET child_run_id = :child_run_id WHERE id = :id",
+        named_params![":child_run_id": child_run_id, ":id": step_id],
+    )
+}
 
-    /// Mark a step as terminal (Completed, Failed, Skipped, TimedOut), recording all output fields.
-    #[allow(clippy::too_many_arguments)]
-    pub fn mark_step_terminal(
-        &self,
-        step_id: &str,
-        status: WorkflowStepStatus,
-        child_run_id: Option<&str>,
-        result_text: Option<&str>,
-        context_out: Option<&str>,
-        markers_out: Option<&str>,
-        retry_count: Option<i64>,
-        structured_output: Option<&str>,
-        step_error: Option<&str>,
-    ) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
-        self.execute_step_sql(
-            "UPDATE workflow_run_steps SET status = :status, \
-             child_run_id = COALESCE(:child_run_id, child_run_id), \
-             ended_at = :ended_at, result_text = :result_text, context_out = :context_out, \
-             markers_out = :markers_out, \
-             retry_count = COALESCE(:retry_count, retry_count), \
-             structured_output = :structured_output, step_error = :step_error \
-             WHERE id = :id",
-            named_params![
-                ":status": status,
-                ":child_run_id": child_run_id,
-                ":ended_at": now,
-                ":result_text": result_text,
-                ":context_out": context_out,
-                ":markers_out": markers_out,
-                ":retry_count": retry_count,
-                ":structured_output": structured_output,
-                ":step_error": step_error,
-                ":id": step_id,
-            ],
-        )
-    }
+pub fn set_step_subprocess_pid(conn: &Connection, step_id: &str, pid: Option<u32>) -> Result<()> {
+    execute_step_sql(
+        conn,
+        "UPDATE workflow_run_steps SET subprocess_pid = :pid WHERE id = :id",
+        named_params![":pid": pid.map(|p| p as i64), ":id": step_id],
+    )
+}
 
-    /// Mark a step with a non-starting, non-terminal status (e.g. Pending), updating only `status`.
-    pub fn mark_step_pending(&self, step_id: &str, status: WorkflowStepStatus) -> Result<()> {
-        self.execute_step_sql(
-            "UPDATE workflow_run_steps SET status = :status WHERE id = :id",
-            named_params![":status": status, ":id": step_id],
-        )
-    }
+pub fn set_step_output_file(conn: &Connection, step_id: &str, output_file: &str) -> Result<()> {
+    execute_step_sql(
+        conn,
+        "UPDATE workflow_run_steps SET output_file = :output_file WHERE id = :id",
+        named_params![":output_file": output_file, ":id": step_id],
+    )
+}
 
-    /// Update a step's status with all fields including structured_output and step_error.
-    ///
-    /// Dispatches to [`mark_step_running`], [`mark_step_terminal`], or [`mark_step_pending`]
-    /// based on the status. Prefer calling those named methods directly when the caller knows
-    /// which branch applies.
-    #[allow(clippy::too_many_arguments)]
-    pub fn update_step_status_full(
-        &self,
-        step_id: &str,
-        status: WorkflowStepStatus,
-        child_run_id: Option<&str>,
-        result_text: Option<&str>,
-        context_out: Option<&str>,
-        markers_out: Option<&str>,
-        retry_count: Option<i64>,
-        structured_output: Option<&str>,
-        step_error: Option<&str>,
-    ) -> Result<()> {
-        let is_starting = status.is_starting();
-        let is_terminal = status.is_terminal();
-
-        if is_starting {
-            self.mark_step_running(step_id, status, child_run_id)
-        } else if is_terminal {
-            self.mark_step_terminal(
-                step_id,
-                status,
-                child_run_id,
-                result_text,
-                context_out,
-                markers_out,
-                retry_count,
-                structured_output,
-                step_error,
-            )
-        } else {
-            self.mark_step_pending(step_id, status)
-        }
-    }
-
-    /// Write the child run ID back to a parent step immediately after the child run is created.
-    pub fn update_step_child_run_id(&self, step_id: &str, child_run_id: &str) -> Result<()> {
-        self.execute_step_sql(
-            "UPDATE workflow_run_steps SET child_run_id = :child_run_id WHERE id = :id",
-            named_params![":child_run_id": child_run_id, ":id": step_id],
-        )
-    }
-
-    /// Persist or clear the subprocess PID for a script step.
-    ///
-    /// Pass `Some(pid)` after a successful `cmd.spawn()` to record the child PID.
-    /// Pass `None` after the step reaches any terminal state to clear the PID
-    /// and prevent OS PID reuse from tripping the orphan reaper.
-    pub fn set_step_subprocess_pid(&self, step_id: &str, pid: Option<u32>) -> Result<()> {
-        self.execute_step_sql(
-            "UPDATE workflow_run_steps SET subprocess_pid = :pid WHERE id = :id",
-            named_params![":pid": pid.map(|p| p as i64), ":id": step_id],
-        )
-    }
-
-    /// Persist the stdout capture file path for a script step.
-    pub fn set_step_output_file(&self, step_id: &str, output_file: &str) -> Result<()> {
-        self.execute_step_sql(
-            "UPDATE workflow_run_steps SET output_file = :output_file WHERE id = :id",
-            named_params![":output_file": output_file, ":id": step_id],
-        )
-    }
-
-    /// Update gate-specific columns on a step.
-    pub fn set_step_gate_info(
-        &self,
-        step_id: &str,
-        gate_type: GateType,
-        gate_prompt: Option<&str>,
-        gate_timeout: &str,
-    ) -> Result<()> {
-        self.execute_step_sql(
-            "UPDATE workflow_run_steps SET gate_type = :gate_type, gate_prompt = :gate_prompt, \
+pub fn set_step_gate_info(
+    conn: &Connection,
+    step_id: &str,
+    gate_type: GateType,
+    gate_prompt: Option<&str>,
+    gate_timeout: &str,
+) -> Result<()> {
+    execute_step_sql(
+        conn,
+        "UPDATE workflow_run_steps SET gate_type = :gate_type, gate_prompt = :gate_prompt, \
              gate_timeout = :gate_timeout WHERE id = :id",
-            named_params![":gate_type": gate_type.to_string(), ":gate_prompt": gate_prompt, ":gate_timeout": gate_timeout, ":id": step_id],
-        )
-    }
+        named_params![":gate_type": gate_type.to_string(), ":gate_prompt": gate_prompt, ":gate_timeout": gate_timeout, ":id": step_id],
+    )
+}
 
-    /// Set parallel_group_id on a step.
-    pub fn set_step_parallel_group(&self, step_id: &str, group_id: &str) -> Result<()> {
-        self.execute_step_sql(
-            "UPDATE workflow_run_steps SET parallel_group_id = :group_id WHERE id = :id",
-            named_params![":group_id": group_id, ":id": step_id],
-        )
-    }
+pub fn set_step_parallel_group(conn: &Connection, step_id: &str, group_id: &str) -> Result<()> {
+    execute_step_sql(
+        conn,
+        "UPDATE workflow_run_steps SET parallel_group_id = :group_id WHERE id = :id",
+        named_params![":group_id": group_id, ":id": step_id],
+    )
+}
 
-    /// Store the resolved gate options JSON on a step (called at gate start).
-    pub fn set_step_gate_options(&self, step_id: &str, options_json: &str) -> Result<()> {
-        self.execute_step_sql(
-            "UPDATE workflow_run_steps SET gate_options = :options_json WHERE id = :id",
-            named_params![":options_json": options_json, ":id": step_id],
-        )
-    }
+pub fn set_step_gate_options(conn: &Connection, step_id: &str, options_json: &str) -> Result<()> {
+    execute_step_sql(
+        conn,
+        "UPDATE workflow_run_steps SET gate_options = :options_json WHERE id = :id",
+        named_params![":options_json": options_json, ":id": step_id],
+    )
+}
 
-    /// Mirror agent-run metrics onto the linked workflow step row (Path X.1).
-    ///
-    /// Keyed by `child_run_id` so callers need not know the step's own id.
-    /// Uses COALESCE so a `None` field in [`StepMetrics`] leaves the existing column untouched.
-    /// Called by `AgentManager` after writing the same values to `agent_runs`,
-    /// keeping `workflow_run_steps` readable without a JOIN.
-    pub fn mirror_step_metrics_from_run(&self, run_id: &str, metrics: StepMetrics) -> Result<()> {
-        self.execute_step_sql(
+pub fn mirror_step_metrics_from_run(
+    conn: &Connection,
+    run_id: &str,
+    metrics: StepMetrics,
+) -> Result<()> {
+    execute_step_sql(conn,
             "UPDATE workflow_run_steps \
              SET cost_usd = COALESCE(:cost_usd, cost_usd), \
                  num_turns = COALESCE(:num_turns, num_turns), \
@@ -315,9 +301,394 @@ impl<'a> WorkflowManager<'a> {
                 ":run_id": run_id,
             ],
         )
+}
+
+pub fn approve_gate(
+    conn: &Connection,
+    step_id: &str,
+    approved_by: &str,
+    feedback: Option<&str>,
+    selections: Option<&[String]>,
+    context_out: Option<String>,
+) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+
+    // Validate selections against stored gate options if provided
+    if let Some(selections) = selections {
+        validate_gate_selections(conn, step_id, selections)?;
     }
 
-    /// Approve a gate: set gate_approved_at, gate_approved_by, optional feedback, and optional selections.
+    let selections_json = crate::workflow::helpers::serialize_gate_selections(selections)?;
+
+    execute_step_sql(
+        conn,
+        "UPDATE workflow_run_steps SET gate_approved_at = :now, gate_approved_by = :approved_by, \
+             gate_feedback = :feedback, gate_selections = :selections_json, \
+             context_out = COALESCE(:context_out, context_out), \
+             status = 'completed', ended_at = :now WHERE id = :id",
+        named_params![
+            ":now": now,
+            ":approved_by": approved_by,
+            ":feedback": feedback,
+            ":selections_json": selections_json,
+            ":context_out": context_out,
+            ":id": step_id,
+        ],
+    )
+}
+
+pub fn reject_gate(
+    conn: &Connection,
+    step_id: &str,
+    rejected_by: &str,
+    feedback: Option<&str>,
+) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    execute_step_sql(conn,
+            "UPDATE workflow_run_steps SET gate_approved_by = :rejected_by, gate_feedback = :feedback, \
+             status = 'failed', ended_at = :ended_at WHERE id = :id",
+            named_params![":rejected_by": rejected_by, ":feedback": feedback, ":ended_at": now, ":id": step_id],
+        )
+}
+
+pub fn predecessor_completed(
+    conn: &Connection,
+    workflow_run_id: &str,
+    position: i64,
+) -> Result<bool> {
+    if position == 0 {
+        return Ok(true);
+    }
+    let mut stmt = conn.prepare_cached(
+        "SELECT 1 FROM workflow_run_steps \
+             WHERE workflow_run_id = :wrid AND position = :pos \
+             AND status = 'completed' LIMIT 1",
+    )?;
+    let exists = stmt
+        .exists(named_params![
+            ":wrid": workflow_run_id,
+            ":pos": position - 1,
+        ])
+        .map_err(ConductorError::Database)?;
+    Ok(exists)
+}
+
+pub fn active_step_exists(
+    conn: &Connection,
+    workflow_run_id: &str,
+    position: i64,
+    iteration: i64,
+    step_name: &str,
+) -> Result<bool> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT 1 FROM workflow_run_steps \
+             WHERE workflow_run_id = :wrid AND position = :pos AND iteration = :iter \
+             AND step_name = :name \
+             AND status IN ('pending', 'running', 'waiting', 'completed') LIMIT 1",
+    )?;
+    let exists = stmt
+        .exists(named_params![
+            ":wrid": workflow_run_id,
+            ":pos": position,
+            ":iter": iteration,
+            ":name": step_name,
+        ])
+        .map_err(ConductorError::Database)?;
+    Ok(exists)
+}
+
+pub fn get_gate_approval_state(
+    conn: &Connection,
+    step_id: &str,
+) -> Result<runkon_flow::traits::persistence::GateApprovalState> {
+    use rusqlite::OptionalExtension;
+    #[allow(clippy::type_complexity)]
+    let row: Option<(Option<String>, String, Option<String>, Option<String>)> = conn
+        .query_row(
+            "SELECT gate_approved_at, status, gate_feedback, gate_selections \
+                 FROM workflow_run_steps WHERE id = ?1",
+            rusqlite::params![step_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(ConductorError::Database)?;
+
+    let Some((approved_at, status_str, feedback, selections_json)) = row else {
+        return Ok(runkon_flow::traits::persistence::GateApprovalState::Pending);
+    };
+
+    let status = status_str
+        .parse::<WorkflowStepStatus>()
+        .unwrap_or_else(|_| {
+            tracing::warn!(
+                step_id = %step_id,
+                status = %status_str,
+                "get_gate_approval_state: unrecognised step status; treating as Waiting",
+            );
+            WorkflowStepStatus::Waiting
+        });
+    let selections = selections_json.and_then(|json| {
+        serde_json::from_str::<Vec<String>>(&json)
+            .map_err(|e| {
+                tracing::warn!(
+                    step_id = %step_id,
+                    "get_gate_approval_state: failed to deserialize gate_selections: {e}",
+                );
+            })
+            .ok()
+    });
+
+    Ok(
+        runkon_flow::traits::persistence::gate_approval_state_from_fields(
+            approved_at.as_deref(),
+            status,
+            feedback,
+            selections,
+        ),
+    )
+}
+
+fn validate_gate_selections(conn: &Connection, step_id: &str, selections: &[String]) -> Result<()> {
+    // Get the stored gate options for this step
+    let mut stmt =
+        conn.prepare_cached("SELECT gate_options FROM workflow_run_steps WHERE id = :id")?;
+    let gate_options: Option<String> = stmt
+        .query_row(named_params![":id": step_id], |row| {
+            row.get::<_, Option<String>>("gate_options")
+        })
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => {
+                ConductorError::InvalidInput(format!("Step not found: {}", step_id))
+            }
+            other => ConductorError::Database(other),
+        })?;
+
+    // If no options are stored, reject any selections
+    let options_json = match gate_options {
+        Some(json) => json,
+        None => {
+            if !selections.is_empty() {
+                return Err(ConductorError::InvalidInput(
+                    "Gate selections provided but no options configured for this gate".to_string(),
+                ));
+            }
+            return Ok(());
+        }
+    };
+
+    // Parse the stored options
+    let allowed_options: Vec<serde_json::Value> =
+        serde_json::from_str(&options_json).map_err(|e| {
+            ConductorError::InvalidInput(format!("Invalid gate options JSON in database: {}", e))
+        })?;
+
+    // Extract allowed values from the options (assuming format [{"value": "...", "label": "..."}, ...])
+    let allowed_set: HashSet<String> = allowed_options
+        .iter()
+        .filter_map(|opt: &serde_json::Value| {
+            opt.get("value")
+                .and_then(|v: &serde_json::Value| v.as_str().map(|s: &str| s.to_string()))
+        })
+        .collect();
+
+    if allowed_set.is_empty() {
+        return Err(ConductorError::InvalidInput(
+            "No valid options found in gate configuration".to_string(),
+        ));
+    }
+
+    // Validate that all selections are in the allowed values
+    for selection in selections {
+        if !allowed_set.contains(selection.as_str()) {
+            let mut sorted: Vec<&str> = allowed_set.iter().map(|s| s.as_str()).collect();
+            sorted.sort_unstable();
+            return Err(ConductorError::InvalidInput(format!(
+                "Invalid gate selection '{}' - not in allowed options: [{}]",
+                selection,
+                sorted.join(", ")
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Shim impl: keeps `WorkflowManager::<method>` callable while the free functions
+
+// above are the canonical implementations. Removed in the final cleanup PR.
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+impl<'a> super::WorkflowManager<'a> {
+    pub fn insert_step(
+        &self,
+        workflow_run_id: &str,
+        step_name: &str,
+        role: &str,
+        can_commit: bool,
+        position: i64,
+        iteration: i64,
+    ) -> Result<String> {
+        insert_step(
+            self.conn,
+            workflow_run_id,
+            step_name,
+            role,
+            can_commit,
+            position,
+            iteration,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_step_running(
+        &self,
+        workflow_run_id: &str,
+        step_name: &str,
+        role: &str,
+        can_commit: bool,
+        position: i64,
+        iteration: i64,
+        retry_count: i64,
+    ) -> Result<String> {
+        insert_step_running(
+            self.conn,
+            workflow_run_id,
+            step_name,
+            role,
+            can_commit,
+            position,
+            iteration,
+            retry_count,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_step_status(
+        &self,
+        step_id: &str,
+        status: WorkflowStepStatus,
+        child_run_id: Option<&str>,
+        result_text: Option<&str>,
+        context_out: Option<&str>,
+        markers_out: Option<&str>,
+        retry_count: Option<i64>,
+    ) -> Result<()> {
+        update_step_status(
+            self.conn,
+            step_id,
+            status,
+            child_run_id,
+            result_text,
+            context_out,
+            markers_out,
+            retry_count,
+        )
+    }
+
+    pub fn mark_step_running(
+        &self,
+        step_id: &str,
+        status: WorkflowStepStatus,
+        child_run_id: Option<&str>,
+    ) -> Result<()> {
+        mark_step_running(self.conn, step_id, status, child_run_id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn mark_step_terminal(
+        &self,
+        step_id: &str,
+        status: WorkflowStepStatus,
+        child_run_id: Option<&str>,
+        result_text: Option<&str>,
+        context_out: Option<&str>,
+        markers_out: Option<&str>,
+        retry_count: Option<i64>,
+        structured_output: Option<&str>,
+        step_error: Option<&str>,
+    ) -> Result<()> {
+        mark_step_terminal(
+            self.conn,
+            step_id,
+            status,
+            child_run_id,
+            result_text,
+            context_out,
+            markers_out,
+            retry_count,
+            structured_output,
+            step_error,
+        )
+    }
+
+    pub fn mark_step_pending(&self, step_id: &str, status: WorkflowStepStatus) -> Result<()> {
+        mark_step_pending(self.conn, step_id, status)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_step_status_full(
+        &self,
+        step_id: &str,
+        status: WorkflowStepStatus,
+        child_run_id: Option<&str>,
+        result_text: Option<&str>,
+        context_out: Option<&str>,
+        markers_out: Option<&str>,
+        retry_count: Option<i64>,
+        structured_output: Option<&str>,
+        step_error: Option<&str>,
+    ) -> Result<()> {
+        update_step_status_full(
+            self.conn,
+            step_id,
+            status,
+            child_run_id,
+            result_text,
+            context_out,
+            markers_out,
+            retry_count,
+            structured_output,
+            step_error,
+        )
+    }
+
+    pub fn update_step_child_run_id(&self, step_id: &str, child_run_id: &str) -> Result<()> {
+        update_step_child_run_id(self.conn, step_id, child_run_id)
+    }
+
+    pub fn set_step_subprocess_pid(&self, step_id: &str, pid: Option<u32>) -> Result<()> {
+        set_step_subprocess_pid(self.conn, step_id, pid)
+    }
+
+    pub fn set_step_output_file(&self, step_id: &str, output_file: &str) -> Result<()> {
+        set_step_output_file(self.conn, step_id, output_file)
+    }
+
+    pub fn set_step_gate_info(
+        &self,
+        step_id: &str,
+        gate_type: GateType,
+        gate_prompt: Option<&str>,
+        gate_timeout: &str,
+    ) -> Result<()> {
+        set_step_gate_info(self.conn, step_id, gate_type, gate_prompt, gate_timeout)
+    }
+
+    pub fn set_step_parallel_group(&self, step_id: &str, group_id: &str) -> Result<()> {
+        set_step_parallel_group(self.conn, step_id, group_id)
+    }
+
+    pub fn set_step_gate_options(&self, step_id: &str, options_json: &str) -> Result<()> {
+        set_step_gate_options(self.conn, step_id, options_json)
+    }
+
+    pub fn mirror_step_metrics_from_run(&self, run_id: &str, metrics: StepMetrics) -> Result<()> {
+        mirror_step_metrics_from_run(self.conn, run_id, metrics)
+    }
+
     pub fn approve_gate(
         &self,
         step_id: &str,
@@ -326,72 +697,29 @@ impl<'a> WorkflowManager<'a> {
         selections: Option<&[String]>,
         context_out: Option<String>,
     ) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
-
-        // Validate selections against stored gate options if provided
-        if let Some(selections) = selections {
-            self.validate_gate_selections(step_id, selections)?;
-        }
-
-        let selections_json = crate::workflow::helpers::serialize_gate_selections(selections)?;
-
-        self.execute_step_sql(
-            "UPDATE workflow_run_steps SET gate_approved_at = :now, gate_approved_by = :approved_by, \
-             gate_feedback = :feedback, gate_selections = :selections_json, \
-             context_out = COALESCE(:context_out, context_out), \
-             status = 'completed', ended_at = :now WHERE id = :id",
-            named_params![
-                ":now": now,
-                ":approved_by": approved_by,
-                ":feedback": feedback,
-                ":selections_json": selections_json,
-                ":context_out": context_out,
-                ":id": step_id,
-            ],
+        approve_gate(
+            self.conn,
+            step_id,
+            approved_by,
+            feedback,
+            selections,
+            context_out,
         )
     }
 
-    /// Reject a gate: set step to failed.
     pub fn reject_gate(
         &self,
         step_id: &str,
         rejected_by: &str,
         feedback: Option<&str>,
     ) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
-        self.execute_step_sql(
-            "UPDATE workflow_run_steps SET gate_approved_by = :rejected_by, gate_feedback = :feedback, \
-             status = 'failed', ended_at = :ended_at WHERE id = :id",
-            named_params![":rejected_by": rejected_by, ":feedback": feedback, ":ended_at": now, ":id": step_id],
-        )
+        reject_gate(self.conn, step_id, rejected_by, feedback)
     }
 
-    /// Returns true if the predecessor step (position - 1) has status 'completed'.
-    /// Always returns true when position == 0 (no predecessor).
     pub fn predecessor_completed(&self, workflow_run_id: &str, position: i64) -> Result<bool> {
-        if position == 0 {
-            return Ok(true);
-        }
-        let mut stmt = self.conn.prepare_cached(
-            "SELECT 1 FROM workflow_run_steps \
-             WHERE workflow_run_id = :wrid AND position = :pos \
-             AND status = 'completed' LIMIT 1",
-        )?;
-        let exists = stmt
-            .exists(named_params![
-                ":wrid": workflow_run_id,
-                ":pos": position - 1,
-            ])
-            .map_err(ConductorError::Database)?;
-        Ok(exists)
+        predecessor_completed(self.conn, workflow_run_id, position)
     }
 
-    /// Returns true if a step row that should block re-insertion already exists
-    /// at the given position/iteration/step_name combination: statuses
-    /// `pending`, `running`, `waiting`, and `completed` all return true.
-    /// `failed`, `skipped`, and `timed_out` return false so retries are permitted.
-    /// Including step_name ensures parallel steps at the same position
-    /// (different names) are not blocked.
     pub fn active_step_exists(
         &self,
         workflow_run_id: &str,
@@ -399,150 +727,20 @@ impl<'a> WorkflowManager<'a> {
         iteration: i64,
         step_name: &str,
     ) -> Result<bool> {
-        let mut stmt = self.conn.prepare_cached(
-            "SELECT 1 FROM workflow_run_steps \
-             WHERE workflow_run_id = :wrid AND position = :pos AND iteration = :iter \
-             AND step_name = :name \
-             AND status IN ('pending', 'running', 'waiting', 'completed') LIMIT 1",
-        )?;
-        let exists = stmt
-            .exists(named_params![
-                ":wrid": workflow_run_id,
-                ":pos": position,
-                ":iter": iteration,
-                ":name": step_name,
-            ])
-            .map_err(ConductorError::Database)?;
-        Ok(exists)
+        active_step_exists(self.conn, workflow_run_id, position, iteration, step_name)
     }
 
-    /// Query a step's gate approval state from the DB.
     pub fn get_gate_approval_state(
         &self,
         step_id: &str,
     ) -> Result<runkon_flow::traits::persistence::GateApprovalState> {
-        use rusqlite::OptionalExtension;
-        #[allow(clippy::type_complexity)]
-        let row: Option<(Option<String>, String, Option<String>, Option<String>)> = self
-            .conn
-            .query_row(
-                "SELECT gate_approved_at, status, gate_feedback, gate_selections \
-                 FROM workflow_run_steps WHERE id = ?1",
-                rusqlite::params![step_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .optional()
-            .map_err(ConductorError::Database)?;
-
-        let Some((approved_at, status_str, feedback, selections_json)) = row else {
-            return Ok(runkon_flow::traits::persistence::GateApprovalState::Pending);
-        };
-
-        let status = status_str
-            .parse::<WorkflowStepStatus>()
-            .unwrap_or_else(|_| {
-                tracing::warn!(
-                    step_id = %step_id,
-                    status = %status_str,
-                    "get_gate_approval_state: unrecognised step status; treating as Waiting",
-                );
-                WorkflowStepStatus::Waiting
-            });
-        let selections = selections_json.and_then(|json| {
-            serde_json::from_str::<Vec<String>>(&json)
-                .map_err(|e| {
-                    tracing::warn!(
-                        step_id = %step_id,
-                        "get_gate_approval_state: failed to deserialize gate_selections: {e}",
-                    );
-                })
-                .ok()
-        });
-
-        Ok(
-            runkon_flow::traits::persistence::gate_approval_state_from_fields(
-                approved_at.as_deref(),
-                status,
-                feedback,
-                selections,
-            ),
-        )
-    }
-
-    /// Validate that gate selections are within the allowed options for this step.
-    fn validate_gate_selections(&self, step_id: &str, selections: &[String]) -> Result<()> {
-        // Get the stored gate options for this step
-        let mut stmt = self
-            .conn
-            .prepare_cached("SELECT gate_options FROM workflow_run_steps WHERE id = :id")?;
-        let gate_options: Option<String> = stmt
-            .query_row(named_params![":id": step_id], |row| {
-                row.get::<_, Option<String>>("gate_options")
-            })
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => {
-                    ConductorError::InvalidInput(format!("Step not found: {}", step_id))
-                }
-                other => ConductorError::Database(other),
-            })?;
-
-        // If no options are stored, reject any selections
-        let options_json = match gate_options {
-            Some(json) => json,
-            None => {
-                if !selections.is_empty() {
-                    return Err(ConductorError::InvalidInput(
-                        "Gate selections provided but no options configured for this gate"
-                            .to_string(),
-                    ));
-                }
-                return Ok(());
-            }
-        };
-
-        // Parse the stored options
-        let allowed_options: Vec<serde_json::Value> =
-            serde_json::from_str(&options_json).map_err(|e| {
-                ConductorError::InvalidInput(format!(
-                    "Invalid gate options JSON in database: {}",
-                    e
-                ))
-            })?;
-
-        // Extract allowed values from the options (assuming format [{"value": "...", "label": "..."}, ...])
-        let allowed_set: HashSet<String> = allowed_options
-            .iter()
-            .filter_map(|opt: &serde_json::Value| {
-                opt.get("value")
-                    .and_then(|v: &serde_json::Value| v.as_str().map(|s: &str| s.to_string()))
-            })
-            .collect();
-
-        if allowed_set.is_empty() {
-            return Err(ConductorError::InvalidInput(
-                "No valid options found in gate configuration".to_string(),
-            ));
-        }
-
-        // Validate that all selections are in the allowed values
-        for selection in selections {
-            if !allowed_set.contains(selection.as_str()) {
-                let mut sorted: Vec<&str> = allowed_set.iter().map(|s| s.as_str()).collect();
-                sorted.sort_unstable();
-                return Err(ConductorError::InvalidInput(format!(
-                    "Invalid gate selection '{}' - not in allowed options: [{}]",
-                    selection,
-                    sorted.join(", ")
-                )));
-            }
-        }
-
-        Ok(())
+        get_gate_approval_state(self.conn, step_id)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::WorkflowManager;
     use super::*;
     use crate::test_helpers;
     use crate::workflow::WorkflowStepStatus;
