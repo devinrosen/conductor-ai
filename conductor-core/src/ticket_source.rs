@@ -64,7 +64,7 @@ impl TicketSource {
     pub fn sync(&self, token: Option<&str>) -> Result<Vec<TicketInput>> {
         match self {
             Self::GitHub(cfg) => github::sync_github_issues(&cfg.owner, &cfg.repo, token),
-            Self::Jira(cfg) => jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url),
+            Self::Jira(cfg) => jira_acli::JiraAcliManager::new().sync_issues(&cfg.jql, &cfg.url),
             Self::Vantage(cfg, repo_slug) => {
                 let slug = repo_slug.as_deref().ok_or_else(|| {
                     ConductorError::InvalidInput(
@@ -90,7 +90,7 @@ impl TicketSource {
                 })?;
                 github::fetch_github_issue(&cfg.owner, &cfg.repo, issue_number, None)
             }
-            Self::Jira(cfg) => jira_acli::fetch_jira_issue(source_id, &cfg.url),
+            Self::Jira(cfg) => jira_acli::JiraAcliManager::new().fetch_issue(source_id, &cfg.url),
             Self::Vantage(cfg, _) => vantage::fetch_vantage_deliverable(source_id, &cfg.sdlc_root),
         }
     }
