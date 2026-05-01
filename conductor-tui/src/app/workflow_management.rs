@@ -977,15 +977,12 @@ impl App {
                             let conn = open_database(&db_path()).ok()?;
                             let config = load_config().ok()?;
                             let wt = WorktreeManager::new(&conn, &config)
-                                .get_by_id_enriched(&worktree_id)
+                                .get_by_id(&worktree_id)
                                 .ok()?;
                             let repo = RepoManager::new(&conn, &config)
-                                .get_by_id(&wt.worktree.repo_id)
+                                .get_by_id(&wt.repo_id)
                                 .ok()?;
-                            Some((
-                                Some(format!("{}/{}", repo.slug, wt.worktree.slug)),
-                                wt.worktree.ticket_id,
-                            ))
+                            Some((Some(format!("{}/{}", repo.slug, wt.slug)), wt.ticket_id))
                         })();
                         label.unwrap_or((None, None))
                     });
