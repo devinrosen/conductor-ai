@@ -206,19 +206,20 @@ fn lock_shared(
 /// Extracted to a standalone function so it can be tested in isolation against an
 /// in-memory database without setting up a full engine.
 pub(crate) fn guard_active_run(
-    wf_mgr: &WorkflowManager<'_>,
+    conn: &rusqlite::Connection,
     worktree_id: &str,
     force: bool,
 ) -> Result<()> {
     if let Some(active) =
-        crate::workflow::manager::queries::get_active_run_for_worktree(wf_mgr.conn, worktree_id)?
+        crate::workflow::manager::queries::get_active_run_for_worktree(conn, worktree_id)?
     {
         if force {
             tracing::info!(
                 "Force override: cancelling active run {} to start new run",
                 active.id
             );
-            wf_mgr.cancel_run(&active.id, "force override: new run requested")?;
+            WorkflowManager::new(conn)
+                .cancel_run(&active.id, "force override: new run requested")?;
         } else {
             return Err(ConductorError::WorkflowRunAlreadyActive {
                 name: active.workflow_name,
@@ -451,7 +452,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         // concurrently with their parent and must not trigger this check.
         if params.depth == 0 {
             if let Some(ref wt_id) = params.worktree_id {
-                guard_active_run(&wf_mgr, wt_id, params.force)?;
+                guard_active_run(conn, wt_id, params.force)?;
             }
         }
 
@@ -1416,7 +1417,7 @@ mod tests {
         let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let wf_name = "my-workflow";
         make_running_workflow_run(&conn, "w1", wf_name);
-        let err = guard_active_run(&wf_mgr, "w1", false).unwrap_err();
+        let err = guard_active_run(&conn, "w1", false).unwrap_err();
         assert!(
             matches!(err, crate::error::ConductorError::WorkflowRunAlreadyActive { ref name } if name == wf_name),
             "expected WorkflowRunAlreadyActive, got: {err}"
@@ -1428,7 +1429,7 @@ mod tests {
         let conn = setup_guard_db();
         let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         // No workflow runs exist — guard should pass.
-        guard_active_run(&wf_mgr, "w1", false).expect("no active run should return Ok");
+        guard_active_run(&conn, "w1", false).expect("no active run should return Ok");
     }
 
     #[test]
@@ -1436,7 +1437,7 @@ mod tests {
         let conn = setup_guard_db();
         let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
         let run_id = make_running_workflow_run(&conn, "w1", "my-wf");
-        guard_active_run(&wf_mgr, "w1", true).expect("force should cancel and return Ok");
+        guard_active_run(&conn, "w1", true).expect("force should cancel and return Ok");
 
         // The previously active run must now be cancelled.
         let row: String = conn
@@ -1468,7 +1469,7 @@ mod tests {
         .unwrap();
 
         // Completed run is not "active" — guard should pass.
-        guard_active_run(&wf_mgr, "w1", false).expect("completed run should not block new run");
+        guard_active_run(&conn, "w1", false).expect("completed run should not block new run");
     }
 
     // -------------------------------------------------------------------------

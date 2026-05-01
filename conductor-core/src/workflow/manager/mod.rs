@@ -19,7 +19,7 @@ use rusqlite::Connection;
 
 /// Manages workflow definitions, execution, and persistence.
 pub struct WorkflowManager<'a> {
-    pub(crate) conn: &'a Connection,
+    pub(super) conn: &'a Connection,
 }
 
 impl<'a> WorkflowManager<'a> {
