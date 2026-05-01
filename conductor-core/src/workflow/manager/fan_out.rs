@@ -120,30 +120,40 @@ pub fn get_existing_fan_out_item_ids(conn: &Connection, step_run_id: &str) -> Re
     )
 }
 
+/// Execute a single SQL `UPDATE` and map the rusqlite error to [`ConductorError`].
+///
+/// All `update_fan_out_item_*`, `cancel_fan_out_items`, `refresh_fan_out_counters`,
+/// and `set_fan_out_total` functions share this one-liner so each call site
+/// stays focused on its SQL string. Mirrors `steps::execute_step_sql`.
+fn execute_fan_out_sql(conn: &Connection, sql: &str, params: impl rusqlite::Params) -> Result<()> {
+    conn.execute(sql, params)?;
+    Ok(())
+}
+
 pub fn update_fan_out_item_running(
     conn: &Connection,
     item_id: &str,
     child_run_id: &str,
 ) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    conn.execute(
+    execute_fan_out_sql(
+        conn,
         "UPDATE workflow_run_step_fan_out_items \
              SET status = 'running', child_run_id = :child_run_id, dispatched_at = :now \
              WHERE id = :id",
         named_params![":child_run_id": child_run_id, ":now": now, ":id": item_id],
-    )?;
-    Ok(())
+    )
 }
 
 pub fn update_fan_out_item_terminal(conn: &Connection, item_id: &str, status: &str) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    conn.execute(
+    execute_fan_out_sql(
+        conn,
         "UPDATE workflow_run_step_fan_out_items \
              SET status = :status, completed_at = :now \
              WHERE id = :id",
         named_params![":status": status, ":now": now, ":id": item_id],
-    )?;
-    Ok(())
+    )
 }
 
 pub fn reset_running_items_without_child_run(conn: &Connection, step_run_id: &str) -> Result<u64> {
@@ -160,13 +170,13 @@ pub fn reset_running_items_without_child_run(conn: &Connection, step_run_id: &st
 
 pub fn cancel_fan_out_items(conn: &Connection, step_run_id: &str) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    conn.execute(
+    execute_fan_out_sql(
+        conn,
         "UPDATE workflow_run_step_fan_out_items \
              SET status = 'skipped', completed_at = :now \
              WHERE step_run_id = :step_run_id AND status IN ('pending', 'running')",
         named_params![":now": now, ":step_run_id": step_run_id],
-    )?;
-    Ok(())
+    )
 }
 
 pub fn skip_fan_out_items_by_item_ids(
@@ -196,7 +206,8 @@ pub fn skip_fan_out_items_by_item_ids(
 }
 
 pub fn refresh_fan_out_counters(conn: &Connection, step_run_id: &str) -> Result<()> {
-    conn.execute(
+    execute_fan_out_sql(
+        conn,
         "UPDATE workflow_run_steps SET \
              fan_out_completed = (SELECT COUNT(*) FROM workflow_run_step_fan_out_items \
                                   WHERE step_run_id = :step_run_id AND status = 'completed'), \
@@ -206,16 +217,15 @@ pub fn refresh_fan_out_counters(conn: &Connection, step_run_id: &str) -> Result<
                                 WHERE step_run_id = :step_run_id AND status = 'skipped') \
              WHERE id = :step_run_id",
         named_params![":step_run_id": step_run_id],
-    )?;
-    Ok(())
+    )
 }
 
 pub fn set_fan_out_total(conn: &Connection, step_run_id: &str, total: i64) -> Result<()> {
-    conn.execute(
+    execute_fan_out_sql(
+        conn,
         "UPDATE workflow_run_steps SET fan_out_total = :total WHERE id = :id",
         named_params![":total": total, ":id": step_run_id],
-    )?;
-    Ok(())
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

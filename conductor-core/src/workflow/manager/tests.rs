@@ -3900,6 +3900,48 @@ fn test_skip_fan_out_items_by_item_ids_empty_list_is_noop() {
     assert_eq!(items[0].status, "pending");
 }
 
+/// Covers the `Some(status)` branch of [`fan_out::get_fan_out_items`].
+/// Most existing call sites pass `None`, so the dynamic-SQL branch that
+/// adds `AND status = :status` to the WHERE clause was previously
+/// uncovered.
+#[test]
+fn test_get_fan_out_items_with_status_filter() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_worktree_run(&conn, "w1");
+    let step_id = mgr
+        .insert_step(&run.id, "fan-step", "actor", false, 0, 0)
+        .unwrap();
+    mgr.insert_fan_out_item(&step_id, "ticket", "t1", "TICKET-1")
+        .unwrap();
+    let id2 = mgr
+        .insert_fan_out_item(&step_id, "ticket", "t2", "TICKET-2")
+        .unwrap();
+    mgr.insert_fan_out_item(&step_id, "ticket", "t3", "TICKET-3")
+        .unwrap();
+    mgr.update_fan_out_item_running(&id2, "child-run-2")
+        .unwrap();
+
+    // None → all items
+    let all = mgr.get_fan_out_items(&step_id, None).unwrap();
+    assert_eq!(all.len(), 3);
+
+    // Some("pending") → only the 2 still-pending items
+    let pending = mgr.get_fan_out_items(&step_id, Some("pending")).unwrap();
+    assert_eq!(pending.len(), 2);
+    assert!(pending.iter().all(|it| it.status == "pending"));
+
+    // Some("running") → only the 1 dispatched item
+    let running = mgr.get_fan_out_items(&step_id, Some("running")).unwrap();
+    assert_eq!(running.len(), 1);
+    assert_eq!(running[0].item_id, "t2");
+
+    // Some("nonexistent-status") → empty result
+    let none_match = mgr.get_fan_out_items(&step_id, Some("completed")).unwrap();
+    assert!(none_match.is_empty());
+}
+
 // ── get_workflow_spike_baseline ────────────────────────────────────────────
 
 #[test]
