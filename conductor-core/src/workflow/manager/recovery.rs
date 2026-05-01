@@ -655,6 +655,15 @@ pub fn reap_finalization_stuck_workflow_runs(
 ) -> crate::error::Result<usize> {
     // Find root running workflow runs where all steps are terminal and
     // the last step (or the run itself) ended more than threshold_secs ago.
+    //
+    // Actor steps mark their step record terminal as soon as the agent
+    // emits FLOW_OUTPUT, but the agent subprocess continues for cleanup
+    // (final SDK message, log flush, prompt-file removal, child wait) and
+    // the workflow engine waits for the actual process exit before
+    // scheduling the next step. For long actors, that gap can exceed
+    // `threshold_secs` and trip the false-positive branch of this reaper.
+    // Skip parents whose latest actor step still has a `running`
+    // `agent_run` — see issue #2787.
     let stuck: Vec<(String, String, bool)> = query_collect(
         conn,
         "SELECT id, parent_run_id, has_failure FROM ( \
@@ -676,6 +685,12 @@ pub fn reap_finalization_stuck_workflow_runs(
                    SELECT 1 FROM workflow_run_steps wrs \
                    WHERE wrs.workflow_run_id = wr.id \
                      AND wrs.status IN ('running', 'pending', 'waiting') \
+                 ) \
+                 AND NOT EXISTS ( \
+                   SELECT 1 FROM workflow_run_steps wrs_act \
+                   JOIN agent_runs ar ON ar.id = wrs_act.child_run_id \
+                   WHERE wrs_act.workflow_run_id = wr.id \
+                     AND ar.status = 'running' \
                  ) \
              ) \
              WHERE age_ref IS NOT NULL \
