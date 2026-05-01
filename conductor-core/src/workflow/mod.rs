@@ -57,7 +57,26 @@ pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
 pub use manager::definitions::{
     list_defs, list_defs_with_validation, load_def_by_name, validate_single,
 };
-pub use manager::queries::*;
+pub use manager::queries::{
+    active_run_counts_by_repo, find_step_by_name_and_iteration, find_waiting_gate,
+    find_waiting_gates_for_runs, get_active_chain_for_run, get_active_run_for_worktree,
+    get_active_steps_for_runs, get_all_pending_gates, get_completed_run_durations,
+    get_completed_step_durations, get_gate_analytics, get_plan_estimates_for_runs,
+    get_progress_steps_for_runs, get_run_metrics, get_step_by_id, get_step_failure_heatmap,
+    get_step_retry_analytics, get_step_summaries_for_runs, get_step_token_heatmap,
+    get_steps_for_runs, get_workflow_failure_rate_trend, get_workflow_percentiles,
+    get_workflow_regression_signals, get_workflow_run, get_workflow_run_ids_for_agent_runs,
+    get_workflow_spike_baseline, get_workflow_steps, get_workflow_token_aggregates,
+    get_workflow_token_trend, is_run_cancelled, is_workflow_cancelled,
+    list_active_non_worktree_workflow_runs, list_active_workflow_runs,
+    list_active_workflow_runs_for_repo, list_all_waiting_gate_steps, list_all_workflow_runs,
+    list_all_workflow_runs_filtered_paginated, list_child_workflow_runs, list_root_workflow_runs,
+    list_runs_by_status, list_waiting_gate_steps_for_repo, list_workflow_runs,
+    list_workflow_runs_by_repo_id, list_workflow_runs_by_repo_id_filtered,
+    list_workflow_runs_filtered, list_workflow_runs_filtered_paginated,
+    list_workflow_runs_for_repo, list_workflow_runs_for_scope, list_workflow_runs_paginated,
+    resolve_run_context,
+};
 pub use manager::recovery::{ReapedStaleRun, StaleWorkflowRun};
 pub use manager::{InvalidWorkflowEntry, StepMetrics, WorkflowManager};
 pub use output::{parse_flow_output, FlowOutput};
