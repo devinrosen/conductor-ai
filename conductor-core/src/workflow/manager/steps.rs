@@ -4,6 +4,7 @@ use chrono::Utc;
 use rusqlite::named_params;
 use rusqlite::Connection;
 
+use super::helpers::execute_sql;
 use crate::error::{ConductorError, Result};
 use crate::workflow::GateType;
 
@@ -22,11 +23,6 @@ pub struct StepMetrics {
     pub output_tokens: Option<i64>,
     pub cache_read_input_tokens: Option<i64>,
     pub cache_creation_input_tokens: Option<i64>,
-}
-
-fn execute_step_sql(conn: &Connection, sql: &str, params: impl rusqlite::Params) -> Result<()> {
-    conn.execute(sql, params)?;
-    Ok(())
 }
 
 pub fn insert_step(
@@ -122,7 +118,7 @@ pub fn mark_step_running(
     child_run_id: Option<&str>,
 ) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    execute_step_sql(
+    execute_sql(
         conn,
         "UPDATE workflow_run_steps SET status = :status, child_run_id = :child_run_id, \
              started_at = :started_at WHERE id = :id",
@@ -144,7 +140,7 @@ pub fn mark_step_terminal(
     step_error: Option<&str>,
 ) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    execute_step_sql(
+    execute_sql(
         conn,
         "UPDATE workflow_run_steps SET status = :status, \
              child_run_id = COALESCE(:child_run_id, child_run_id), \
@@ -173,7 +169,7 @@ pub fn mark_step_pending(
     step_id: &str,
     status: WorkflowStepStatus,
 ) -> Result<()> {
-    execute_step_sql(
+    execute_sql(
         conn,
         "UPDATE workflow_run_steps SET status = :status WHERE id = :id",
         named_params![":status": status, ":id": step_id],
@@ -221,7 +217,7 @@ pub fn update_step_child_run_id(
     step_id: &str,
     child_run_id: &str,
 ) -> Result<()> {
-    execute_step_sql(
+    execute_sql(
         conn,
         "UPDATE workflow_run_steps SET child_run_id = :child_run_id WHERE id = :id",
         named_params![":child_run_id": child_run_id, ":id": step_id],
@@ -229,7 +225,7 @@ pub fn update_step_child_run_id(
 }
 
 pub fn set_step_subprocess_pid(conn: &Connection, step_id: &str, pid: Option<u32>) -> Result<()> {
-    execute_step_sql(
+    execute_sql(
         conn,
         "UPDATE workflow_run_steps SET subprocess_pid = :pid WHERE id = :id",
         named_params![":pid": pid.map(|p| p as i64), ":id": step_id],
@@ -237,7 +233,7 @@ pub fn set_step_subprocess_pid(conn: &Connection, step_id: &str, pid: Option<u32
 }
 
 pub fn set_step_output_file(conn: &Connection, step_id: &str, output_file: &str) -> Result<()> {
-    execute_step_sql(
+    execute_sql(
         conn,
         "UPDATE workflow_run_steps SET output_file = :output_file WHERE id = :id",
         named_params![":output_file": output_file, ":id": step_id],
@@ -251,7 +247,7 @@ pub fn set_step_gate_info(
     gate_prompt: Option<&str>,
     gate_timeout: &str,
 ) -> Result<()> {
-    execute_step_sql(
+    execute_sql(
         conn,
         "UPDATE workflow_run_steps SET gate_type = :gate_type, gate_prompt = :gate_prompt, \
              gate_timeout = :gate_timeout WHERE id = :id",
@@ -260,7 +256,7 @@ pub fn set_step_gate_info(
 }
 
 pub fn set_step_parallel_group(conn: &Connection, step_id: &str, group_id: &str) -> Result<()> {
-    execute_step_sql(
+    execute_sql(
         conn,
         "UPDATE workflow_run_steps SET parallel_group_id = :group_id WHERE id = :id",
         named_params![":group_id": group_id, ":id": step_id],
@@ -268,7 +264,7 @@ pub fn set_step_parallel_group(conn: &Connection, step_id: &str, group_id: &str)
 }
 
 pub fn set_step_gate_options(conn: &Connection, step_id: &str, options_json: &str) -> Result<()> {
-    execute_step_sql(
+    execute_sql(
         conn,
         "UPDATE workflow_run_steps SET gate_options = :options_json WHERE id = :id",
         named_params![":options_json": options_json, ":id": step_id],
@@ -280,7 +276,7 @@ pub fn mirror_step_metrics_from_run(
     run_id: &str,
     metrics: StepMetrics,
 ) -> Result<()> {
-    execute_step_sql(conn,
+    execute_sql(conn,
             "UPDATE workflow_run_steps \
              SET cost_usd = COALESCE(:cost_usd, cost_usd), \
                  num_turns = COALESCE(:num_turns, num_turns), \
@@ -320,7 +316,7 @@ pub fn approve_gate(
 
     let selections_json = crate::workflow::helpers::serialize_gate_selections(selections)?;
 
-    execute_step_sql(
+    execute_sql(
         conn,
         "UPDATE workflow_run_steps SET gate_approved_at = :now, gate_approved_by = :approved_by, \
              gate_feedback = :feedback, gate_selections = :selections_json, \
@@ -344,7 +340,7 @@ pub fn reject_gate(
     feedback: Option<&str>,
 ) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    execute_step_sql(conn,
+    execute_sql(conn,
             "UPDATE workflow_run_steps SET gate_approved_by = :rejected_by, gate_feedback = :feedback, \
              status = 'failed', ended_at = :ended_at WHERE id = :id",
             named_params![":rejected_by": rejected_by, ":feedback": feedback, ":ended_at": now, ":id": step_id],
