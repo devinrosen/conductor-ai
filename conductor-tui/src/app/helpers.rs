@@ -325,7 +325,9 @@ pub(super) fn collapse_loop_iterations(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conductor_core::workflow::{InputDecl, InputType, WorkflowRunStep, WorkflowStepStatus, WorkflowWarning};
+    use conductor_core::workflow::{
+        InputDecl, InputType, WorkflowRunStep, WorkflowStepStatus, WorkflowWarning,
+    };
 
     // ── max_scroll ──────────────────────────────────────────────────────────
 

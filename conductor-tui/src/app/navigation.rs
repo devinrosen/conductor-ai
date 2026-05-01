@@ -1029,7 +1029,9 @@ impl App {
                     } else {
                         // No agent run — show step metadata modal
                         let title = format!("Step: {} ({})", step.step_name, step.status);
-                        let body = super::helpers::format_metadata_entries(&super::helpers::step_metadata_entries(step));
+                        let body = super::helpers::format_metadata_entries(
+                            &super::helpers::step_metadata_entries(step),
+                        );
                         let line_count = body.lines().count();
                         Some(Modal::EventDetail {
                             title,

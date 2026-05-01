@@ -463,5 +463,4 @@ mod tests {
             "Invalid granularity: invalid. Must be 'daily' or 'weekly'"
         );
     }
-
 }
