@@ -16,6 +16,7 @@ pub use runkon_runtimes::headless::{
     build_headless_agent_args, resolve_conductor_bin, DrainOutcome, HeadlessHandle,
     SpawnHeadlessParams,
 };
+pub use runkon_runtimes::tracker::EventSink;
 
 /// Spawn a headless conductor subprocess.
 ///
