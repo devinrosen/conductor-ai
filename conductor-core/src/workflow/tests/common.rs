@@ -136,7 +136,7 @@ pub(super) fn setup_run_with_steps(conn: &Connection) -> String {
 
     // Step 2: running (stalled)
     let s2 = crate::workflow::insert_step(conn, &run.id, "step-c", "actor", false, 2, 0).unwrap();
-    set_step_status(&conn, &s2, WorkflowStepStatus::Running);
+    set_step_status(conn, &s2, WorkflowStepStatus::Running);
 
     run.id
 }
