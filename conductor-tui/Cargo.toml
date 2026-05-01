@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 conductor-core = { path = "../conductor-core" }
+runkon-runtimes = { path = "../runkon-runtimes" }
 ratatui = "0.29"
 crossterm = "0.28"
 anyhow = "1"

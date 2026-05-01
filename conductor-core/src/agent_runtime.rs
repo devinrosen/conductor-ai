@@ -1,8 +1,13 @@
-//! Shared runtime helpers for spawning and polling agent runs.
+//! Shared runtime helpers for spawning agent runs and bridging
+//! `runkon-runtimes` events into `AgentManager` DB writes.
 //!
-//! Backward-compatible wrappers around `runkon-runtimes` headless primitives
-//! that preserve the old conductor-core-specific signatures (e.g.
-//! `drain_stream_json` with `AgentManager` + callback).
+//! - [`spawn_headless`] / [`try_spawn_headless_run`]: thin wrappers that resolve the
+//!   conductor binary internally and delegate to `runkon_runtimes::headless`.
+//! - [`CombinedSink`]: the [`runkon_runtimes::tracker::EventSink`] used by callers
+//!   to persist runtime events into `AgentManager` while also forwarding parsed
+//!   `AgentEvent`s to a UI/WebSocket callback. Construct it via
+//!   [`CombinedSink::new`] and pass it to
+//!   [`runkon_runtimes::headless::drain_stream_json`].
 
 use std::borrow::Cow;
 
@@ -37,9 +42,29 @@ pub fn try_spawn_headless_run(
     runkon_runtimes::headless::try_spawn_headless_run(params, &binary_path)
 }
 
-struct CombinedSink<'a, F> {
+/// `EventSink` that persists runtime events into [`AgentManager`] (model/session,
+/// token deltas, completion/failure) and fans `AgentEvent`s out to a UI callback.
+///
+/// Construct with [`CombinedSink::new`] and pass to
+/// [`runkon_runtimes::headless::drain_stream_json`]:
+///
+/// ```ignore
+/// let sink = CombinedSink::new(&mgr, |event| { /* forward to UI */ });
+/// runkon_runtimes::headless::drain_stream_json(stdout, run_id, &log_path, &sink);
+/// ```
+///
+/// [`AgentManager`]: crate::agent::AgentManager
+pub struct CombinedSink<'a, F> {
     mgr: &'a crate::agent::AgentManager<'a>,
     on_event_cb: F,
+}
+
+impl<'a, F: Fn(&crate::agent::types::AgentEvent)> CombinedSink<'a, F> {
+    /// Build a sink that updates `mgr` from runtime events and forwards
+    /// parsed display events to `on_event_cb`.
+    pub fn new(mgr: &'a crate::agent::AgentManager<'a>, on_event_cb: F) -> Self {
+        Self { mgr, on_event_cb }
+    }
 }
 
 impl<'a, F: Fn(&crate::agent::types::AgentEvent)> runkon_runtimes::tracker::EventSink
@@ -122,34 +147,6 @@ impl<'a, F: Fn(&crate::agent::types::AgentEvent)> runkon_runtimes::tracker::Even
     }
 }
 
-/// Drain the stdout of a headless subprocess, persisting events to the DB.
-///
-/// Reads `stdout` line-by-line via `BufReader`, writes each line to `log_file`,
-/// calls `parse_events_from_value()` to produce `AgentEvent` values for the
-/// `on_event` callback, and makes eager DB writes:
-/// - `system/init` → `update_run_model_and_session`
-/// - `assistant` with usage → `update_run_tokens_partial`
-/// - `result` → `update_run_completed_if_running` or `update_run_failed_with_session`
-///   and returns [`DrainOutcome::Completed`]
-///
-/// Returns [`DrainOutcome::NoResult`] on EOF without a `result` event (e.g. SIGTERM).
-///
-/// **Blocking** — must not be called from the TUI main thread or an async context.
-/// Use `std::thread::spawn` to run this in a background thread.
-pub fn drain_stream_json(
-    stdout: impl std::io::Read,
-    run_id: &str,
-    log_file: &std::path::Path,
-    mgr: &crate::agent::AgentManager<'_>,
-    on_event: impl Fn(&crate::agent::types::AgentEvent),
-) -> DrainOutcome {
-    let sink = CombinedSink {
-        mgr,
-        on_event_cb: on_event,
-    };
-    runkon_runtimes::headless::drain_stream_json(stdout, run_id, log_file, &sink)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,9 +174,11 @@ mod tests {
         let log = temp_log();
         let mgr = crate::agent::AgentManager::new(conn);
         let captured = std::cell::RefCell::new(Vec::new());
-        let outcome = drain_stream_json(input.as_bytes(), run_id, &log, &mgr, |ev| {
+        let sink = CombinedSink::new(&mgr, |ev| {
             captured.borrow_mut().push(ev.clone());
         });
+        let outcome =
+            runkon_runtimes::headless::drain_stream_json(input.as_bytes(), run_id, &log, &sink);
         let _ = std::fs::remove_file(&log);
         (outcome, captured.into_inner())
     }
