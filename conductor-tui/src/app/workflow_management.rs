@@ -969,22 +969,17 @@ impl App {
                             .map(|r| (Some(format!("{}/{}", r.slug, w.slug)), w.ticket_id.clone()))
                     })
                     .unwrap_or_else(|| {
-                        // Cache miss — query DB directly to avoid storing "".
-                        use conductor_core::config::db_path;
-                        use conductor_core::db::open_database;
+                        // Cache miss — go through the managed layer rather than raw SQL,
+                        // reusing the App's existing `conn` and `config` rather than reopening.
+                        use conductor_core::repo::RepoManager;
                         let label = (|| -> Option<WorktreeLabelParts> {
-                            let conn = open_database(&db_path()).ok()?;
-                            let (repo_slug, wt_slug, ticket_id): (String, String, Option<String>) =
-                                conn.query_row(
-                                    "SELECT r.slug, w.slug, w.ticket_id \
-                                     FROM worktrees w \
-                                     JOIN repos r ON r.id = w.repo_id \
-                                     WHERE w.id = ?1",
-                                    rusqlite::params![worktree_id],
-                                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                                )
+                            let wt = WorktreeManager::new(&self.conn, &self.config)
+                                .get_by_id(&worktree_id)
                                 .ok()?;
-                            Some((Some(format!("{repo_slug}/{wt_slug}")), ticket_id))
+                            let repo = RepoManager::new(&self.conn, &self.config)
+                                .get_by_id(&wt.repo_id)
+                                .ok()?;
+                            Some((Some(format!("{}/{}", repo.slug, wt.slug)), wt.ticket_id))
                         })();
                         label.unwrap_or((None, None))
                     });
