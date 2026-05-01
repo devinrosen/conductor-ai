@@ -104,6 +104,9 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
         total_duration_ms: row.get("total_duration_ms")?,
         model: row.get("model")?,
         dismissed: dismissed_int != 0,
+        owner_token: row.get("owner_token")?,
+        lease_until: row.get("lease_until")?,
+        generation: row.get("generation")?,
     })
 }
 
@@ -318,6 +321,9 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
             total_duration_ms: None,
             model: None,
             dismissed: false,
+            owner_token: None,
+            lease_until: None,
+            generation: 0,
         })
     }
 
@@ -742,6 +748,39 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn acquire_lease(
+        &self,
+        run_id: &str,
+        token: &str,
+        ttl_seconds: i64,
+    ) -> Result<Option<i64>, EngineError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE workflow_runs \
+             SET owner_token = :token, \
+                 lease_until = datetime('now', '+' || :ttl || ' seconds'), \
+                 generation  = generation + 1 \
+             WHERE id = :run_id \
+               AND (owner_token IS NULL \
+                    OR lease_until < datetime('now') \
+                    OR owner_token = :token)",
+            named_params! { ":token": token, ":ttl": ttl_seconds, ":run_id": run_id },
+        )
+        .map_err(|e| EngineError::Persistence(format!("acquire_lease UPDATE: {e}")))?;
+
+        if conn.changes() == 0u64 {
+            return Ok(None);
+        }
+        let gen: i64 = conn
+            .query_row(
+                "SELECT generation FROM workflow_runs WHERE id = ?1",
+                [run_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| EngineError::Persistence(format!("acquire_lease read generation: {e}")))?;
+        Ok(Some(gen))
+    }
+
     fn persist_metrics(
         &self,
         run_id: &str,
@@ -848,4 +887,85 @@ fn validate_gate_selections(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::SqliteWorkflowPersistence;
+    use crate::traits::persistence::WorkflowPersistence;
+
+    /// Create an in-memory SQLite DB with the minimal schema for acquire_lease tests.
+    fn make_lease_db() -> (SqliteWorkflowPersistence, String) {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE workflow_runs (
+                id TEXT PRIMARY KEY,
+                owner_token TEXT,
+                lease_until TEXT,
+                generation INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO workflow_runs (id) VALUES ('run-1');",
+        )
+        .unwrap();
+        let p = SqliteWorkflowPersistence::from_shared_connection(Arc::new(Mutex::new(conn)));
+        (p, "run-1".to_string())
+    }
+
+    #[test]
+    fn acquire_lease_increments_generation() {
+        let (p, run_id) = make_lease_db();
+
+        let gen1 = p.acquire_lease(&run_id, "tok", 60).unwrap();
+        assert_eq!(gen1, Some(1), "first acquire should return generation 1");
+
+        let gen2 = p.acquire_lease(&run_id, "tok", 60).unwrap();
+        assert_eq!(gen2, Some(2), "same-token re-acquire should increment to 2");
+    }
+
+    #[test]
+    fn acquire_lease_returns_none_when_held_by_other() {
+        let (p, run_id) = make_lease_db();
+
+        // Acquire with token 'x' and a 1-hour TTL.
+        let gen = p.acquire_lease(&run_id, "x", 3600).unwrap();
+        assert_eq!(gen, Some(1));
+
+        // Attempt to acquire with a different token 'y' — lease is still held.
+        let result = p.acquire_lease(&run_id, "y", 3600).unwrap();
+        assert_eq!(
+            result, None,
+            "different-token acquire on held lease should return None"
+        );
+    }
+
+    #[test]
+    fn acquire_lease_succeeds_when_expired() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE workflow_runs (
+                id TEXT PRIMARY KEY,
+                owner_token TEXT,
+                lease_until TEXT,
+                generation INTEGER NOT NULL DEFAULT 0
+            );
+            -- Insert a row with an already-expired lease held by 'old-engine'.
+            INSERT INTO workflow_runs (id, owner_token, lease_until, generation)
+            VALUES ('run-exp', 'old-engine', datetime('now', '-1 second'), 5);",
+        )
+        .unwrap();
+        let p = SqliteWorkflowPersistence::from_shared_connection(Arc::new(Mutex::new(conn)));
+
+        let result = p.acquire_lease("run-exp", "new-engine", 60).unwrap();
+        assert!(
+            result.is_some(),
+            "acquire on expired lease should succeed; got None"
+        );
+        assert_eq!(
+            result,
+            Some(6),
+            "generation should be incremented from 5 to 6"
+        );
+    }
 }

@@ -1132,6 +1132,9 @@ mod tests {
             total_duration_ms: None,
             model: None,
             dismissed,
+            owner_token: None,
+            lease_until: None,
+            generation: 0,
         }
     }
 

@@ -75,6 +75,51 @@ impl InMemoryWorkflowPersistence {
             .store(fail, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Test helper: insert a minimal `WorkflowRun` with the given `id` so that
+    /// `acquire_lease` can find it. Use this in tests that call `FlowEngine::run`
+    /// or `FlowEngine::resume` against an `InMemoryWorkflowPersistence` without
+    /// going through `create_run` (which generates its own id).
+    #[cfg(test)]
+    pub fn seed_run(&self, id: &str) {
+        let now = chrono::Utc::now().to_rfc3339();
+        let run = crate::types::WorkflowRun {
+            id: id.to_string(),
+            workflow_name: String::new(),
+            worktree_id: None,
+            parent_run_id: String::new(),
+            status: crate::status::WorkflowRunStatus::Pending,
+            dry_run: false,
+            trigger: "test".to_string(),
+            started_at: now,
+            ended_at: None,
+            result_summary: None,
+            error: None,
+            definition_snapshot: None,
+            inputs: std::collections::HashMap::new(),
+            ticket_id: None,
+            repo_id: None,
+            parent_workflow_run_id: None,
+            target_label: None,
+            default_bot_name: None,
+            iteration: 0,
+            blocked_on: None,
+            workflow_title: None,
+            total_input_tokens: None,
+            total_output_tokens: None,
+            total_cache_read_input_tokens: None,
+            total_cache_creation_input_tokens: None,
+            total_turns: None,
+            total_cost_usd: None,
+            total_duration_ms: None,
+            model: None,
+            dismissed: false,
+            owner_token: None,
+            lease_until: None,
+            generation: 0,
+        };
+        self.store.lock().unwrap().runs.insert(id.to_string(), run);
+    }
+
     /// Test helper: directly set the metric fields on a step so that
     /// `restore_completed_step` can be tested with non-None metric values.
     #[cfg(test)]
@@ -159,6 +204,9 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
             total_duration_ms: None,
             model: None,
             dismissed: false,
+            owner_token: None,
+            lease_until: None,
+            generation: 0,
         };
         let mut store = self.lock()?;
         store.runs.insert(id, run.clone());
@@ -494,6 +542,41 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
                 )
             })
             .unwrap_or(false))
+    }
+
+    fn acquire_lease(
+        &self,
+        run_id: &str,
+        token: &str,
+        ttl_seconds: i64,
+    ) -> Result<Option<i64>, EngineError> {
+        let mut store = self.store.lock().map_err(|_| lock_err())?;
+        let now = chrono::Utc::now();
+
+        // If the run doesn't exist, return None (no rows updated) — consistent with the SQLite
+        // implementation which returns None when the UPDATE matches 0 rows.
+        let Some(run) = store.runs.get_mut(run_id) else {
+            return Ok(None);
+        };
+
+        let can_claim = match &run.owner_token {
+            None => true,
+            Some(t) if t == token => true,
+            Some(_) => run.lease_until.as_deref().is_some_and(|until| {
+                chrono::DateTime::parse_from_rfc3339(until)
+                    .map(|exp| exp < now)
+                    .unwrap_or(false)
+            }),
+        };
+
+        if !can_claim {
+            return Ok(None);
+        }
+
+        run.owner_token = Some(token.to_string());
+        run.lease_until = Some((now + chrono::Duration::seconds(ttl_seconds)).to_rfc3339());
+        run.generation += 1;
+        Ok(Some(run.generation))
     }
 
     fn tick_heartbeat(&self, _run_id: &str) -> Result<(), EngineError> {
@@ -863,5 +946,50 @@ mod tests {
         assert!(p
             .persist_metrics(&run.id, 100, 200, 50, 25, 0.01, 3, 5000)
             .is_ok());
+    }
+
+    #[test]
+    fn test_acquire_lease_nonexistent_run_returns_none() {
+        let p = InMemoryWorkflowPersistence::new();
+        let result = p.acquire_lease("does-not-exist", "token-abc", 30);
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn test_acquire_lease_existing_run_returns_generation() {
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        let result = p.acquire_lease(&run.id, "token-abc", 30).unwrap();
+        assert_eq!(result, Some(1));
+    }
+
+    #[test]
+    fn test_acquire_lease_same_token_is_idempotent() {
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        p.acquire_lease(&run.id, "token-abc", 30).unwrap();
+        let result = p.acquire_lease(&run.id, "token-abc", 30).unwrap();
+        assert_eq!(result, Some(2));
+    }
+
+    #[test]
+    fn test_acquire_lease_conflict_returns_none() {
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        p.acquire_lease(&run.id, "token-first", 3600).unwrap();
+        let result = p.acquire_lease(&run.id, "token-second", 30).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_acquire_lease_expired_lease_allows_new_token() {
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        // Acquire with a negative TTL so the lease is already in the past.
+        let gen1 = p.acquire_lease(&run.id, "token-first", -1).unwrap();
+        assert_eq!(gen1, Some(1));
+        // A different token should be able to claim the expired lease.
+        let gen2 = p.acquire_lease(&run.id, "token-second", 30).unwrap();
+        assert_eq!(gen2, Some(2));
     }
 }

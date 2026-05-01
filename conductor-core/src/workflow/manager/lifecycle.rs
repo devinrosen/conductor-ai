@@ -107,6 +107,9 @@ pub fn create_workflow_run_with_targets(
         total_duration_ms: None,
         model: None,
         dismissed: false,
+        owner_token: None,
+        lease_until: None,
+        generation: 0,
     })
 }
 

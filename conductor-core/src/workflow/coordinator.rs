@@ -310,6 +310,8 @@ fn build_rk_execution_state(args: RkStateArgs) -> runkon_flow::engine::Execution
         event_sinks: args.event_sinks,
         cancellation: runkon_flow::CancellationToken::new(),
         current_execution_id: Arc::new(std::sync::Mutex::new(None)),
+        owner_token: None,
+        lease_generation: None,
     }
 }
 

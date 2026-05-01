@@ -236,6 +236,15 @@ pub trait WorkflowPersistence: Send + Sync {
 
     // --- Engine lifecycle hooks ---
 
+    /// Atomically claim ownership of a workflow run. Returns the new generation on
+    /// success, or `None` if another engine already holds the lease.
+    fn acquire_lease(
+        &self,
+        run_id: &str,
+        token: &str,
+        ttl_seconds: i64,
+    ) -> Result<Option<i64>, EngineError>;
+
     /// Returns true if the run has been cancelled (e.g. via external request).
     fn is_run_cancelled(&self, run_id: &str) -> Result<bool, EngineError>;
 
