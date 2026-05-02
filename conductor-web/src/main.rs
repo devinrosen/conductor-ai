@@ -149,28 +149,11 @@ async fn main() -> Result<()> {
         }
         {
             let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-            match conductor_core::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60) {
-                Ok(claimed) if !claimed.is_empty() => {
-                    tracing::info!(
-                        "Auto-resuming {} stuck workflow run(s) on startup",
-                        claimed.len()
-                    );
-                    for (run_id, wf_name, label) in claimed {
-                        conductor_core::workflow::spawn_heartbeat_resume(
-                            conductor_core::workflow::SpawnHeartbeatResumeParams {
-                                run_id,
-                                workflow_name: wf_name,
-                                target_label: label,
-                                config: config.clone(),
-                                conductor_bin_dir: conductor_bin_dir.clone(),
-                                db_path: None,
-                            },
-                        );
-                    }
-                }
-                Ok(_) => {}
-                Err(e) => tracing::warn!("claim_heartbeat_stuck_runs failed on startup: {e}"),
-            }
+            conductor_core::workflow::claim_and_resume_expired_leases(
+                &conn,
+                &config,
+                conductor_bin_dir,
+            );
         }
     }
 
@@ -253,25 +236,11 @@ async fn main() -> Result<()> {
                 }
                 {
                     let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-                    match conductor_core::workflow::claim_heartbeat_stuck_runs(&conn, &cfg, 60) {
-                        Ok(claimed) if !claimed.is_empty() => {
-                            tracing::info!("Auto-resuming {} stuck workflow run(s)", claimed.len());
-                            for (run_id, wf_name, label) in claimed {
-                                conductor_core::workflow::spawn_heartbeat_resume(
-                                    conductor_core::workflow::SpawnHeartbeatResumeParams {
-                                        run_id,
-                                        workflow_name: wf_name,
-                                        target_label: label,
-                                        config: (*cfg).clone(),
-                                        conductor_bin_dir: conductor_bin_dir.clone(),
-                                        db_path: None,
-                                    },
-                                );
-                            }
-                        }
-                        Ok(_) => {}
-                        Err(e) => tracing::warn!("claim_heartbeat_stuck_runs failed: {e}"),
-                    }
+                    conductor_core::workflow::claim_and_resume_expired_leases(
+                        &conn,
+                        &cfg,
+                        conductor_bin_dir.clone(),
+                    );
                     let auto_resume_limit = cfg.general.auto_resume_limit;
                     if auto_resume_limit > 0 {
                         match conductor_core::workflow::classify_resumable_workflows(

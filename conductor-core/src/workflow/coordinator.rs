@@ -196,6 +196,24 @@ fn lock_shared(
         .map_err(|e| ConductorError::Workflow(format!("db mutex poisoned: {e}")))
 }
 
+/// Kill any subprocess PIDs belonging to `run_id` after a LeaseLost cancellation.
+///
+/// Both `execute_workflow_standalone` and `resume_workflow` share this path.
+fn terminate_subprocesses_on_lease_lost(
+    shared_conn: &Arc<std::sync::Mutex<Connection>>,
+    run_id: &str,
+    context: &str,
+) {
+    match lock_shared(shared_conn) {
+        Ok(guard) => {
+            if let Err(te) = crate::workflow::terminate_subprocesses(&guard, run_id, None) {
+                tracing::warn!("terminate_subprocesses on LeaseLost ({context}): {te}");
+            }
+        }
+        Err(e) => tracing::warn!("lock_shared on LeaseLost ({context}): {e}"),
+    }
+}
+
 /// Guard for active runs at depth 0.
 ///
 /// Returns `Ok(())` when no active run is found, or when the active run is cancelled
@@ -615,7 +633,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         persistence: Arc::clone(&persistence),
         action_registry,
         script_env_provider,
-        workflow_run_id: wf_run_id,
+        workflow_run_id: wf_run_id.clone(),
         workflow_name: workflow.name.clone(),
         worktree_ctx: runkon_flow::engine::WorktreeContext {
             worktree_id: params.worktree_id.clone(),
@@ -649,9 +667,23 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         &workflow.name,
     )?;
 
-    let rk_result = engine
-        .run(&rk_def, &mut rk_state)
-        .map_err(|e| map_engine_error(e, &workflow.name, "run"))?;
+    let rk_result = match engine.run(&rk_def, &mut rk_state) {
+        Ok(r) => r,
+        Err(e) => {
+            if matches!(
+                &e,
+                runkon_flow::engine_error::EngineError::Cancelled(
+                    runkon_flow::cancellation_reason::CancellationReason::LeaseLost
+                )
+            ) {
+                // Belt-and-braces: kill any subprocess PIDs the dead engine left
+                // behind. signal_lease_abort fires registry.cancel, but this
+                // ensures termination even if the cancel path had no PID.
+                terminate_subprocesses_on_lease_lost(&shared_conn, &wf_run_id, "run");
+            }
+            return Err(map_engine_error(e, &workflow.name, "run"));
+        }
+    };
 
     // Close the parent agent run. It was created without a subprocess_pid (workflow
     // parent runs never spawn a subprocess), so the orphan reaper would sweep it the
@@ -1099,9 +1131,23 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         &wf_run.workflow_name,
     )?;
 
-    let rk_result = engine
-        .resume(&rk_def, &mut rk_state)
-        .map_err(|e| map_engine_error(e, &wf_run.workflow_name, "resume"))?;
+    let rk_result = match engine.resume(&rk_def, &mut rk_state) {
+        Ok(r) => r,
+        Err(e) => {
+            if matches!(
+                &e,
+                runkon_flow::engine_error::EngineError::Cancelled(
+                    runkon_flow::cancellation_reason::CancellationReason::LeaseLost
+                )
+            ) {
+                // Belt-and-braces: kill any subprocess PIDs the dead engine left
+                // behind. signal_lease_abort fires registry.cancel, but this
+                // ensures termination even if the cancel path had no PID.
+                terminate_subprocesses_on_lease_lost(&shared_conn, &wf_run.id, "resume");
+            }
+            return Err(map_engine_error(e, &wf_run.workflow_name, "resume"));
+        }
+    };
 
     Ok(rk_result)
 }
@@ -2044,6 +2090,77 @@ mod tests {
         assert!(
             result.all_succeeded,
             "restarted empty workflow must complete with all_succeeded=true"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // LeaseLost subprocess cleanup path
+    // -------------------------------------------------------------------------
+
+    /// The LeaseLost handlers in execute_workflow_standalone and resume_workflow
+    /// call lock_shared() + terminate_subprocesses(). Test that this cleanup
+    /// sequence completes without error using the same pattern as the handler.
+    #[cfg(unix)]
+    #[test]
+    fn lease_lost_cleanup_terminate_subprocesses_tolerate_esrch() {
+        use std::sync::{Arc, Mutex};
+
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        let wf_run_id = {
+            let conn = crate::db::open_database(db_file.path()).unwrap();
+            let agent_mgr = crate::agent::AgentManager::new(&conn);
+            let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
+            let run = crate::workflow::create_workflow_run(
+                &conn, "test-wf", None, &parent.id, false, "manual", None,
+            )
+            .unwrap();
+            // Seed a running step with a dead PID — terminate_subprocesses must
+            // tolerate ESRCH without propagating an error.
+            conn.execute(
+                "INSERT INTO workflow_run_steps \
+                 (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
+                 VALUES ('step-ll', ?1, 'script', 'script', 0, 'running', 0, 99999)",
+                rusqlite::params![run.id],
+            )
+            .unwrap();
+            run.id
+        };
+
+        // Reopen via a shared_conn (as the coordinator does) and run the same
+        // lock_shared() + terminate_subprocesses() sequence as the LeaseLost handler.
+        let conn2 = crate::db::open_database(db_file.path()).unwrap();
+        let shared = Arc::new(Mutex::new(conn2));
+        let guard = lock_shared(&shared).expect("mutex must not be poisoned");
+        let result = crate::workflow::terminate_subprocesses(&guard, &wf_run_id, None);
+        assert!(
+            result.is_ok(),
+            "LeaseLost cleanup path must tolerate ESRCH: {result:?}"
+        );
+    }
+
+    /// lock_shared returns Err on a poisoned mutex. The fixed LeaseLost handler
+    /// uses a match so the Err arm logs a warning without panicking.
+    #[test]
+    fn lease_lost_cleanup_poisoned_mutex_returns_err() {
+        use std::sync::{Arc, Mutex};
+
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        let conn = crate::db::open_database(db_file.path()).unwrap();
+        let shared: Arc<Mutex<rusqlite::Connection>> = Arc::new(Mutex::new(conn));
+
+        // Poison the mutex by panicking while holding the lock.
+        let shared_clone = Arc::clone(&shared);
+        let _ = std::panic::catch_unwind(move || {
+            let _guard = shared_clone.lock().unwrap();
+            panic!("poison the mutex");
+        });
+
+        // lock_shared on a poisoned mutex must return Err (not panic) so that
+        // the LeaseLost Err arm can log and proceed.
+        let result = lock_shared(&shared);
+        assert!(
+            result.is_err(),
+            "lock_shared on poisoned mutex must return Err"
         );
     }
 }

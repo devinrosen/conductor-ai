@@ -595,13 +595,13 @@ pub fn claim_stuck_workflows(
     Ok(flipped_ids)
 }
 
-pub fn claim_heartbeat_stuck_runs(
+pub fn claim_expired_lease_runs(
     conn: &Connection,
     config: &Config,
-    threshold_secs: i64,
 ) -> Result<Vec<(String, String, Option<String>)>> {
-    // Step 1: find orphaned root runs (including zero-step runs — the
-    // executor may have died before creating any steps).
+    // Find orphaned root runs whose lease has expired (or was never set, which
+    // covers runs created before migration 084). Includes zero-step runs where
+    // the executor died before creating any steps.
     let orphaned: Vec<(String, String, Option<String>)> = query_collect(
         conn,
         "SELECT id, workflow_name, target_label FROM workflow_runs \
@@ -612,11 +612,8 @@ pub fn claim_heartbeat_stuck_runs(
                  WHERE wrs.workflow_run_id = workflow_runs.id \
                    AND wrs.status IN ('running', 'pending', 'waiting') \
                ) \
-               AND ( \
-                 CAST(strftime('%s', 'now') AS INTEGER) - \
-                 CAST(strftime('%s', COALESCE(last_heartbeat, started_at)) AS INTEGER) \
-               ) > :threshold_secs",
-        named_params![":threshold_secs": threshold_secs],
+               AND (lease_until < datetime('now') OR lease_until IS NULL)",
+        [],
         |row| {
             Ok((
                 row.get("id")?,
@@ -638,7 +635,7 @@ pub fn claim_heartbeat_stuck_runs(
         &orphaned_ids,
         "running",
         ORPHAN_BETWEEN_STEPS_MSG,
-        "claim_heartbeat_stuck_runs",
+        "claim_expired_lease_runs",
     )?
     .into_iter()
     .collect();
@@ -788,7 +785,7 @@ const SQL_RESET_COMPLETED: &str =
 const SQL_RESET_FROM_POS: &str =
     reset_sql!("WHERE workflow_run_id = :run_id AND position >= :position");
 
-fn terminate_subprocesses(
+pub fn terminate_subprocesses(
     conn: &Connection,
     workflow_run_id: &str,
     from_position: Option<i64>,
@@ -1055,19 +1052,28 @@ pub fn claim_needs_resume_runs(conn: &Connection, config: &Config) -> Result<Vec
     )
 }
 
-pub fn run_workflow_maintenance(
+/// Claim any expired-lease workflow runs, kill their stale subprocesses, and
+/// spawn a heartbeat-resume thread for each one.
+pub fn claim_and_resume_expired_leases(
     conn: &Connection,
     config: &Config,
     conductor_bin_dir: Option<std::path::PathBuf>,
 ) {
-    match reap_finalization_stuck_workflow_runs(conn, 60) {
-        Ok(n) if n > 0 => tracing::info!("reaper finalized {n} stuck workflow run(s)"),
-        Ok(_) => {}
-        Err(e) => tracing::warn!("reap_finalization_stuck_workflow_runs failed: {e}"),
-    }
-    match claim_heartbeat_stuck_runs(conn, config, 60) {
+    match claim_expired_lease_runs(conn, config) {
         Ok(claimed) if !claimed.is_empty() => {
-            tracing::info!("auto-resuming {} stuck workflow run(s)", claimed.len());
+            tracing::info!(
+                "auto-resuming {} expired-lease workflow run(s)",
+                claimed.len()
+            );
+            for (run_id, _, _) in &claimed {
+                // Kill any zombie subprocesses from the dead engine before
+                // spawning a fresh resume — prevents duplicate side effects.
+                if let Err(e) = terminate_subprocesses(conn, run_id, None) {
+                    tracing::warn!(
+                        "terminate_subprocesses before watchdog resume failed for {run_id}: {e}"
+                    );
+                }
+            }
             for (run_id, wf_name, label) in claimed {
                 crate::workflow::spawn_heartbeat_resume(
                     crate::workflow::SpawnHeartbeatResumeParams {
@@ -1082,8 +1088,21 @@ pub fn run_workflow_maintenance(
             }
         }
         Ok(_) => {}
-        Err(e) => tracing::warn!("claim_heartbeat_stuck_runs failed: {e}"),
+        Err(e) => tracing::warn!("claim_expired_lease_runs failed: {e}"),
     }
+}
+
+pub fn run_workflow_maintenance(
+    conn: &Connection,
+    config: &Config,
+    conductor_bin_dir: Option<std::path::PathBuf>,
+) {
+    match reap_finalization_stuck_workflow_runs(conn, 60) {
+        Ok(n) if n > 0 => tracing::info!("reaper finalized {n} stuck workflow run(s)"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("reap_finalization_stuck_workflow_runs failed: {e}"),
+    }
+    claim_and_resume_expired_leases(conn, config, conductor_bin_dir.clone());
     let auto_resume_limit = config.general.auto_resume_limit;
     if auto_resume_limit > 0 {
         match classify_resumable_workflows(conn, auto_resume_limit) {
@@ -1144,6 +1163,27 @@ mod tests {
               started_at, iteration, error) \
              VALUES (:id, 'test-wf', 'w1', :parent_id, :status, 0, 'manual', '2024-01-01T00:00:00Z', :iteration, :error)",
             named_params![":id": id, ":parent_id": parent_id, ":status": status, ":iteration": iteration, ":error": error],
+        )
+        .unwrap();
+    }
+
+    /// Insert a workflow_run with the given status and lease_until (None → NULL).
+    /// Uses `datetime('now')` for started_at so the finalization-stuck reaper
+    /// (60s threshold) won't claim the run before the watchdog does.
+    fn insert_run_with_lease(
+        conn: &rusqlite::Connection,
+        id: &str,
+        parent_id: &str,
+        status: &str,
+        lease_until: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+              started_at, iteration, lease_until) \
+             VALUES (:id, 'test-wf', 'w1', :parent_id, :status, 0, 'manual', \
+                     datetime('now'), 0, :lease_until)",
+            named_params![":id": id, ":parent_id": parent_id, ":status": status, ":lease_until": lease_until],
         )
         .unwrap();
     }
@@ -1426,6 +1466,131 @@ mod tests {
 
         // Must not panic — there are no stuck/stale/needs_resume runs to process.
         crate::workflow::run_workflow_maintenance(&conn, &config, None);
+    }
+
+    /// `run_workflow_maintenance` calls `terminate_subprocesses` for each claimed
+    /// expired-lease run before spawning a fresh resume. Verify that the function
+    /// completes without panic and the run is transitioned out of 'running'.
+    #[test]
+    fn test_run_workflow_maintenance_terminates_before_resume() {
+        let (conn, parent_id) = setup();
+        // Insert a running root run with expired lease and no active steps.
+        // claim_expired_lease_runs picks it up; started_at = now() prevents the
+        // finalization-stuck reaper (60s threshold) from claiming it first.
+        insert_run_with_lease(
+            &conn,
+            "maint-run-1",
+            &parent_id,
+            "running",
+            Some("1970-01-01T00:00:00Z"),
+        );
+
+        let config = Config::default();
+        // Must not panic — terminate_subprocesses is called for each claimed run
+        // (lines 1073-1078 in run_workflow_maintenance) before spawn_heartbeat_resume.
+        crate::workflow::run_workflow_maintenance(&conn, &config, None);
+
+        // The CAS flip in claim_expired_lease_runs transitions the run to 'failed'.
+        assert_eq!(
+            run_status(&conn, "maint-run-1"),
+            "failed",
+            "watchdog must claim expired-lease run"
+        );
+    }
+
+    // ── claim_and_resume_expired_leases ──────────────────────────────────────────
+
+    /// No expired-lease runs → function is a no-op and returns without panicking.
+    #[test]
+    fn test_claim_and_resume_empty_is_noop() {
+        let conn = crate::test_helpers::setup_db_with_agent_run();
+        let config = Config::default();
+        // Must not panic; DB has no running workflow runs at all.
+        crate::workflow::claim_and_resume_expired_leases(&conn, &config, None);
+    }
+
+    /// Multiple running root runs with expired leases and no active steps are all
+    /// claimed (status → 'failed') before any resume thread is spawned.
+    #[test]
+    fn test_claim_and_resume_multiple_expired_leases_all_claimed() {
+        let (conn, parent_id) = setup();
+        for id in &["exp-run-1", "exp-run-2", "exp-run-3"] {
+            insert_run_with_lease(
+                &conn,
+                id,
+                &parent_id,
+                "running",
+                Some("1970-01-01T00:00:00Z"),
+            );
+        }
+        let config = Config::default();
+        crate::workflow::claim_and_resume_expired_leases(&conn, &config, None);
+        // All three runs must be transitioned to 'failed' by the CAS flip that
+        // happens inside claim_expired_lease_runs before resume threads are spawned.
+        for id in &["exp-run-1", "exp-run-2", "exp-run-3"] {
+            assert_eq!(
+                run_status(&conn, id),
+                "failed",
+                "run {id} must be claimed (status = 'failed') before resume"
+            );
+        }
+    }
+
+    /// A run with a valid (future) lease must not be reclaimed, even when it has
+    /// no active steps — the watchdog only targets expired leases.
+    #[test]
+    fn test_claim_and_resume_skips_run_with_valid_lease() {
+        let (conn, parent_id) = setup();
+        insert_run_with_lease(
+            &conn,
+            "live-run",
+            &parent_id,
+            "running",
+            Some("3000-01-01T00:00:00Z"),
+        );
+        let config = Config::default();
+        crate::workflow::claim_and_resume_expired_leases(&conn, &config, None);
+        assert_eq!(
+            run_status(&conn, "live-run"),
+            "running",
+            "run with valid lease must not be reclaimed"
+        );
+    }
+
+    /// A non-running (e.g. completed) run with an expired lease must not be
+    /// reclaimed — claim_expired_lease_runs requires status = 'running'.
+    #[test]
+    fn test_claim_and_resume_ignores_non_running_runs() {
+        let (conn, parent_id) = setup();
+        insert_run_with_lease(
+            &conn,
+            "done-run",
+            &parent_id,
+            "completed",
+            Some("1970-01-01T00:00:00Z"),
+        );
+        let config = Config::default();
+        crate::workflow::claim_and_resume_expired_leases(&conn, &config, None);
+        assert_eq!(
+            run_status(&conn, "done-run"),
+            "completed",
+            "completed run must not be reclaimed even if its lease expired"
+        );
+    }
+
+    /// A running run with NULL lease_until (pre-migration, backward-compat path) must
+    /// be claimed — the watchdog query includes `OR lease_until IS NULL` for this case.
+    #[test]
+    fn test_claim_and_resume_claims_null_lease() {
+        let (conn, parent_id) = setup();
+        insert_run_with_lease(&conn, "null-lease-run", &parent_id, "running", None);
+        let config = Config::default();
+        crate::workflow::claim_and_resume_expired_leases(&conn, &config, None);
+        assert_eq!(
+            run_status(&conn, "null-lease-run"),
+            "failed",
+            "run with NULL lease_until must be claimed by watchdog (pre-migration backward compat)"
+        );
     }
 
     // ── delete_run_recursive: multi-level CTE deletion ────────────────────────
