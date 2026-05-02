@@ -196,6 +196,24 @@ fn lock_shared(
         .map_err(|e| ConductorError::Workflow(format!("db mutex poisoned: {e}")))
 }
 
+/// Kill any subprocess PIDs belonging to `run_id` after a LeaseLost cancellation.
+///
+/// Both `execute_workflow_standalone` and `resume_workflow` share this path.
+fn terminate_subprocesses_on_lease_lost(
+    shared_conn: &Arc<std::sync::Mutex<Connection>>,
+    run_id: &str,
+    context: &str,
+) {
+    match lock_shared(shared_conn) {
+        Ok(guard) => {
+            if let Err(te) = crate::workflow::terminate_subprocesses(&guard, run_id, None) {
+                tracing::warn!("terminate_subprocesses on LeaseLost ({context}): {te}");
+            }
+        }
+        Err(e) => tracing::warn!("lock_shared on LeaseLost ({context}): {e}"),
+    }
+}
+
 /// Guard for active runs at depth 0.
 ///
 /// Returns `Ok(())` when no active run is found, or when the active run is cancelled
@@ -661,16 +679,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
                 // Belt-and-braces: kill any subprocess PIDs the dead engine left
                 // behind. signal_lease_abort fires registry.cancel, but this
                 // ensures termination even if the cancel path had no PID.
-                match lock_shared(&shared_conn) {
-                    Ok(guard) => {
-                        if let Err(te) =
-                            crate::workflow::terminate_subprocesses(&guard, &wf_run_id, None)
-                        {
-                            tracing::warn!("terminate_subprocesses on LeaseLost (run): {te}");
-                        }
-                    }
-                    Err(e) => tracing::warn!("lock_shared on LeaseLost (run): {e}"),
-                }
+                terminate_subprocesses_on_lease_lost(&shared_conn, &wf_run_id, "run");
             }
             return Err(map_engine_error(e, &workflow.name, "run"));
         }
@@ -1134,16 +1143,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
                 // Belt-and-braces: kill any subprocess PIDs the dead engine left
                 // behind. signal_lease_abort fires registry.cancel, but this
                 // ensures termination even if the cancel path had no PID.
-                match lock_shared(&shared_conn) {
-                    Ok(guard) => {
-                        if let Err(te) =
-                            crate::workflow::terminate_subprocesses(&guard, &wf_run.id, None)
-                        {
-                            tracing::warn!("terminate_subprocesses on LeaseLost (resume): {te}");
-                        }
-                    }
-                    Err(e) => tracing::warn!("lock_shared on LeaseLost (resume): {e}"),
-                }
+                terminate_subprocesses_on_lease_lost(&shared_conn, &wf_run.id, "resume");
             }
             return Err(map_engine_error(e, &wf_run.workflow_name, "resume"));
         }
