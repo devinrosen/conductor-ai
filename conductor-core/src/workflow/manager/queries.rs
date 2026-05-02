@@ -79,14 +79,16 @@ pub fn active_run_counts_by_repo(
                AND repo_id IS NOT NULL \
              GROUP BY repo_id, status"
     );
-    let active_strings = WorkflowRunStatus::active_strings();
     let mut stmt = conn.prepare_cached(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(active_strings.iter()), |row| {
-        let repo_id: String = row.get("repo_id")?;
-        let status: String = row.get("status")?;
-        let cnt: u32 = row.get("cnt")?;
-        Ok((repo_id, status, cnt))
-    })?;
+    let rows = stmt.query_map(
+        rusqlite::params_from_iter(WorkflowRunStatus::active_strings().iter()),
+        |row| {
+            let repo_id: String = row.get("repo_id")?;
+            let status: String = row.get("status")?;
+            let cnt: u32 = row.get("cnt")?;
+            Ok((repo_id, status, cnt))
+        },
+    )?;
     let mut map: HashMap<String, ActiveWorkflowCounts> = HashMap::new();
     for row in rows {
         let (repo_id, status, cnt) = row?;
@@ -376,7 +378,11 @@ pub fn get_active_run_for_worktree(
     );
     let mut all_params: Vec<rusqlite::types::Value> =
         vec![rusqlite::types::Value::Text(worktree_id.to_owned())];
-    all_params.extend(active_strings.into_iter().map(rusqlite::types::Value::Text));
+    all_params.extend(
+        active_strings
+            .iter()
+            .map(|s| rusqlite::types::Value::Text(s.to_string())),
+    );
     Ok(conn
         .query_row(
             &sql,
@@ -875,7 +881,6 @@ pub fn list_all_waiting_gate_steps(
     conn: &Connection,
 ) -> Result<Vec<(WorkflowRunStep, String, Option<String>)>> {
     let placeholders = sql_placeholders(WorkflowRunStatus::ACTIVE.len());
-    let active_strings = WorkflowRunStatus::active_strings();
     let sql = format!(
         "SELECT {cols}, r.workflow_name, r.target_label \
              FROM workflow_run_steps s \
@@ -888,7 +893,7 @@ pub fn list_all_waiting_gate_steps(
     crate::db::query_collect(
         conn,
         &sql,
-        rusqlite::params_from_iter(active_strings.iter()),
+        rusqlite::params_from_iter(WorkflowRunStatus::active_strings().iter()),
         waiting_gate_step_row_mapper,
     )
 }
@@ -916,8 +921,8 @@ pub fn list_waiting_gate_steps_for_repo(
             cols = &*STEP_COLUMNS_WITH_PREFIX,
         );
     let mut all_params: Vec<rusqlite::types::Value> = active_strings
-        .into_iter()
-        .map(rusqlite::types::Value::Text)
+        .iter()
+        .map(|s| rusqlite::types::Value::Text(s.to_string()))
         .collect();
     // repo_id appears twice in the WHERE clause (once for r.repo_id, once for wt.repo_id)
     all_params.push(rusqlite::types::Value::Text(repo_id.to_owned()));
