@@ -22,6 +22,16 @@ fn main() -> Result<()> {
         original_hook(info);
     }));
 
+    // Tracing is opt-in: only install a subscriber when RUST_LOG is set, since
+    // unredirected stderr output would corrupt the ratatui display. Pair with
+    // `2>conductor.log` (see trace.sh) to capture engine traces while using the TUI.
+    if std::env::var("RUST_LOG").is_ok() {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_target(false)
+            .init();
+    }
+
     let config = load_config()?;
     ensure_dirs(&config)?;
 
