@@ -474,6 +474,34 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         Ok(())
     }
 
+    fn batch_update_fan_out_items(
+        &self,
+        updates: &[(String, FanOutItemUpdate)],
+    ) -> Result<(), EngineError> {
+        if updates.is_empty() {
+            return Ok(());
+        }
+        let mut store = self.lock()?;
+        let now = Utc::now().to_rfc3339();
+        for (item_id, update) in updates {
+            let item = store.fan_out_items.get_mut(item_id).ok_or_else(|| {
+                EngineError::Persistence(format!("fan-out item {item_id} not found"))
+            })?;
+            match update {
+                FanOutItemUpdate::Running { child_run_id } => {
+                    item.status = "running".to_string();
+                    item.child_run_id = Some(child_run_id.clone());
+                    item.dispatched_at = Some(now.clone());
+                }
+                FanOutItemUpdate::Terminal { status } => {
+                    item.status = status.as_str().to_string();
+                    item.completed_at = Some(now.clone());
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn get_fan_out_items(
         &self,
         step_run_id: &str,
@@ -1047,6 +1075,128 @@ mod tests {
         assert!(p
             .persist_metrics(&run.id, 100, 200, 50, 25, 0.01, 3, 5000)
             .is_ok());
+    }
+
+    #[test]
+    fn batch_update_fan_out_items_mixed_terminal_statuses() {
+        use crate::traits::persistence::{FanOutItemStatus, FanOutItemUpdate};
+
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        let step_id = p.insert_step(make_new_step(&run.id, "foreach")).unwrap();
+
+        let id1 = p
+            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
+            .unwrap();
+        let id2 = p
+            .insert_fan_out_item(&step_id, "ticket", "t-2", "ref-2")
+            .unwrap();
+        let id3 = p
+            .insert_fan_out_item(&step_id, "ticket", "t-3", "ref-3")
+            .unwrap();
+
+        let updates = vec![
+            (
+                id1.clone(),
+                FanOutItemUpdate::Terminal {
+                    status: FanOutItemStatus::Completed,
+                },
+            ),
+            (
+                id2.clone(),
+                FanOutItemUpdate::Terminal {
+                    status: FanOutItemStatus::Failed,
+                },
+            ),
+            (
+                id3.clone(),
+                FanOutItemUpdate::Terminal {
+                    status: FanOutItemStatus::Skipped,
+                },
+            ),
+        ];
+
+        p.batch_update_fan_out_items(&updates).unwrap();
+
+        let items = p.get_fan_out_items(&step_id, None).unwrap();
+        let get = |id: &str| items.iter().find(|i| i.id == id).unwrap().clone();
+
+        let item1 = get(&id1);
+        assert_eq!(item1.status, "completed");
+        assert!(item1.completed_at.is_some(), "completed_at must be set");
+
+        let item2 = get(&id2);
+        assert_eq!(item2.status, "failed");
+        assert!(item2.completed_at.is_some());
+
+        let item3 = get(&id3);
+        assert_eq!(item3.status, "skipped");
+        assert!(item3.completed_at.is_some());
+    }
+
+    #[test]
+    fn batch_update_fan_out_items_empty_is_noop() {
+        use crate::traits::persistence::FanOutItemUpdate;
+
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        let step_id = p.insert_step(make_new_step(&run.id, "foreach")).unwrap();
+        let _id = p
+            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
+            .unwrap();
+
+        p.batch_update_fan_out_items(&[] as &[(String, FanOutItemUpdate)])
+            .unwrap();
+
+        let items = p.get_fan_out_items(&step_id, None).unwrap();
+        assert_eq!(items[0].status, "pending", "empty batch must be a no-op");
+    }
+
+    #[test]
+    fn batch_update_fan_out_items_running_variant() {
+        use crate::traits::persistence::FanOutItemUpdate;
+
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        let step_id = p.insert_step(make_new_step(&run.id, "foreach")).unwrap();
+        let id1 = p
+            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
+            .unwrap();
+
+        let updates = vec![(
+            id1.clone(),
+            FanOutItemUpdate::Running {
+                child_run_id: "run-child-abc".to_string(),
+            },
+        )];
+        p.batch_update_fan_out_items(&updates).unwrap();
+
+        let items = p.get_fan_out_items(&step_id, None).unwrap();
+        let item = items.iter().find(|i| i.id == id1).unwrap();
+        assert_eq!(item.status, "running");
+        assert_eq!(item.child_run_id.as_deref(), Some("run-child-abc"));
+        assert!(item.dispatched_at.is_some(), "dispatched_at must be set");
+        assert!(item.completed_at.is_none(), "completed_at must not be set");
+    }
+
+    #[test]
+    fn batch_update_fan_out_items_missing_item_returns_error() {
+        use crate::traits::persistence::{FanOutItemStatus, FanOutItemUpdate};
+
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        let _step_id = p.insert_step(make_new_step(&run.id, "foreach")).unwrap();
+
+        let updates = vec![(
+            "does-not-exist".to_string(),
+            FanOutItemUpdate::Terminal {
+                status: FanOutItemStatus::Completed,
+            },
+        )];
+        assert!(
+            p.batch_update_fan_out_items(&updates).is_err(),
+            "should error for non-existent item"
+        );
     }
 
     #[test]

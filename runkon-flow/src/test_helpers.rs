@@ -284,6 +284,12 @@ impl crate::traits::persistence::WorkflowPersistence for CountingPersistence {
     ) -> Result<(), crate::engine_error::EngineError> {
         self.inner.update_fan_out_item(id, u)
     }
+    fn batch_update_fan_out_items(
+        &self,
+        updates: &[(String, crate::traits::persistence::FanOutItemUpdate)],
+    ) -> Result<(), crate::engine_error::EngineError> {
+        self.inner.batch_update_fan_out_items(updates)
+    }
     fn get_fan_out_items(
         &self,
         step_run_id: &str,

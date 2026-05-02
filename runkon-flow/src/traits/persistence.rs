@@ -140,6 +140,7 @@ impl TryFrom<&str> for FanOutItemStatus {
 }
 
 /// Update payload for a fan-out item, mapping the two existing update variants.
+#[derive(Clone)]
 pub enum FanOutItemUpdate {
     Running { child_run_id: String },
     Terminal { status: FanOutItemStatus },
@@ -221,6 +222,19 @@ pub trait WorkflowPersistence: Send + Sync {
         item_id: &str,
         update: FanOutItemUpdate,
     ) -> Result<(), EngineError>;
+    /// Flush a batch of fan-out item updates in a single operation.
+    ///
+    /// The default impl loops over `update_fan_out_item` for backwards compatibility.
+    /// Production backends override this with a transactional bulk-write.
+    fn batch_update_fan_out_items(
+        &self,
+        updates: &[(String, FanOutItemUpdate)],
+    ) -> Result<(), EngineError> {
+        for (id, update) in updates {
+            self.update_fan_out_item(id, update.clone())?;
+        }
+        Ok(())
+    }
     fn get_fan_out_items(
         &self,
         step_run_id: &str,

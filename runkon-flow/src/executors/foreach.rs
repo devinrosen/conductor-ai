@@ -325,6 +325,7 @@ pub fn execute_foreach(
             completed.push(m);
         }
 
+        let mut batch: Vec<(String, FanOutItemUpdate)> = Vec::new();
         for (item_db_id, succeeded) in completed {
             in_flight -= 1;
 
@@ -343,19 +344,16 @@ pub fn execute_foreach(
                 String::new()
             });
 
-            state
-                .persistence
-                .update_fan_out_item(
-                    &item_db_id,
-                    FanOutItemUpdate::Terminal {
-                        status: if succeeded {
-                            FanOutItemStatus::Completed
-                        } else {
-                            FanOutItemStatus::Failed
-                        },
+            batch.push((
+                item_db_id,
+                FanOutItemUpdate::Terminal {
+                    status: if succeeded {
+                        FanOutItemStatus::Completed
+                    } else {
+                        FanOutItemStatus::Failed
                     },
-                )
-                .map_err(p_err)?;
+                },
+            ));
 
             emit_event(
                 state,
@@ -391,15 +389,12 @@ pub fn execute_foreach(
                         skipped_count += to_skip.len();
                         for skip_id in &to_skip {
                             if let Some(skip_db_id) = item_id_to_db_id.get(skip_id) {
-                                state
-                                    .persistence
-                                    .update_fan_out_item(
-                                        skip_db_id,
-                                        FanOutItemUpdate::Terminal {
-                                            status: FanOutItemStatus::Skipped,
-                                        },
-                                    )
-                                    .map_err(p_err)?;
+                                batch.push((
+                                    skip_db_id.clone(),
+                                    FanOutItemUpdate::Terminal {
+                                        status: FanOutItemStatus::Skipped,
+                                    },
+                                ));
                             }
                             terminal_ids.insert(skip_id.clone());
                             newly_terminal.push(skip_id.clone());
@@ -442,6 +437,12 @@ pub fn execute_foreach(
                     });
                 }
             }
+        }
+        if !batch.is_empty() {
+            state
+                .persistence
+                .batch_update_fan_out_items(&batch)
+                .map_err(p_err)?;
         }
 
         // 2. Check parent cancellation.
