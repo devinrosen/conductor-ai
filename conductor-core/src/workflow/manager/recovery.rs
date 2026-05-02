@@ -1167,6 +1167,27 @@ mod tests {
         .unwrap();
     }
 
+    /// Insert a workflow_run with the given status and lease_until (None → NULL).
+    /// Uses `datetime('now')` for started_at so the finalization-stuck reaper
+    /// (60s threshold) won't claim the run before the watchdog does.
+    fn insert_run_with_lease(
+        conn: &rusqlite::Connection,
+        id: &str,
+        parent_id: &str,
+        status: &str,
+        lease_until: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+              started_at, iteration, lease_until) \
+             VALUES (:id, 'test-wf', 'w1', :parent_id, :status, 0, 'manual', \
+                     datetime('now'), 0, :lease_until)",
+            named_params![":id": id, ":parent_id": parent_id, ":status": status, ":lease_until": lease_until],
+        )
+        .unwrap();
+    }
+
     /// Insert a workflow_run_step with the given status for the given run.
     fn insert_step(conn: &rusqlite::Connection, run_id: &str, step_id: &str, status: &str) {
         conn.execute(
@@ -1453,20 +1474,10 @@ mod tests {
     #[test]
     fn test_run_workflow_maintenance_terminates_before_resume() {
         let (conn, parent_id) = setup();
-        // Insert a running root run with expired lease and no active steps
-        // (no active steps is required by claim_expired_lease_runs query).
-        // Use datetime('now') for started_at so the finalization-stuck reaper
-        // (60s threshold) doesn't claim the run first; lease_until in the past
-        // ensures claim_expired_lease_runs picks it up.
-        conn.execute(
-            "INSERT INTO workflow_runs \
-             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
-              started_at, iteration, lease_until) \
-             VALUES ('maint-run-1', 'test-wf', 'w1', :parent_id, 'running', 0, 'manual', \
-                     datetime('now'), 0, '1970-01-01T00:00:00Z')",
-            named_params![":parent_id": parent_id],
-        )
-        .unwrap();
+        // Insert a running root run with expired lease and no active steps.
+        // claim_expired_lease_runs picks it up; started_at = now() prevents the
+        // finalization-stuck reaper (60s threshold) from claiming it first.
+        insert_run_with_lease(&conn, "maint-run-1", &parent_id, "running", Some("1970-01-01T00:00:00Z"));
 
         let config = Config::default();
         // Must not panic — terminate_subprocesses is called for each claimed run
@@ -1498,15 +1509,7 @@ mod tests {
     fn test_claim_and_resume_multiple_expired_leases_all_claimed() {
         let (conn, parent_id) = setup();
         for id in &["exp-run-1", "exp-run-2", "exp-run-3"] {
-            conn.execute(
-                "INSERT INTO workflow_runs \
-                 (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
-                  started_at, iteration, lease_until) \
-                 VALUES (:id, 'test-wf', 'w1', :parent_id, 'running', 0, 'manual', \
-                         datetime('now'), 0, '1970-01-01T00:00:00Z')",
-                named_params![":id": id, ":parent_id": parent_id],
-            )
-            .unwrap();
+            insert_run_with_lease(&conn, id, &parent_id, "running", Some("1970-01-01T00:00:00Z"));
         }
         let config = Config::default();
         crate::workflow::claim_and_resume_expired_leases(&conn, &config, None);
@@ -1526,15 +1529,7 @@ mod tests {
     #[test]
     fn test_claim_and_resume_skips_run_with_valid_lease() {
         let (conn, parent_id) = setup();
-        conn.execute(
-            "INSERT INTO workflow_runs \
-             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
-              started_at, iteration, lease_until) \
-             VALUES ('live-run', 'test-wf', 'w1', :parent_id, 'running', 0, 'manual', \
-                     datetime('now'), 0, datetime('now', '+1 hour'))",
-            named_params![":parent_id": parent_id],
-        )
-        .unwrap();
+        insert_run_with_lease(&conn, "live-run", &parent_id, "running", Some("3000-01-01T00:00:00Z"));
         let config = Config::default();
         crate::workflow::claim_and_resume_expired_leases(&conn, &config, None);
         assert_eq!(
@@ -1549,21 +1544,28 @@ mod tests {
     #[test]
     fn test_claim_and_resume_ignores_non_running_runs() {
         let (conn, parent_id) = setup();
-        conn.execute(
-            "INSERT INTO workflow_runs \
-             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
-              started_at, iteration, lease_until) \
-             VALUES ('done-run', 'test-wf', 'w1', :parent_id, 'completed', 0, 'manual', \
-                     datetime('now'), 0, '1970-01-01T00:00:00Z')",
-            named_params![":parent_id": parent_id],
-        )
-        .unwrap();
+        insert_run_with_lease(&conn, "done-run", &parent_id, "completed", Some("1970-01-01T00:00:00Z"));
         let config = Config::default();
         crate::workflow::claim_and_resume_expired_leases(&conn, &config, None);
         assert_eq!(
             run_status(&conn, "done-run"),
             "completed",
             "completed run must not be reclaimed even if its lease expired"
+        );
+    }
+
+    /// A running run with NULL lease_until (pre-migration, backward-compat path) must
+    /// be claimed — the watchdog query includes `OR lease_until IS NULL` for this case.
+    #[test]
+    fn test_claim_and_resume_claims_null_lease() {
+        let (conn, parent_id) = setup();
+        insert_run_with_lease(&conn, "null-lease-run", &parent_id, "running", None);
+        let config = Config::default();
+        crate::workflow::claim_and_resume_expired_leases(&conn, &config, None);
+        assert_eq!(
+            run_status(&conn, "null-lease-run"),
+            "failed",
+            "run with NULL lease_until must be claimed by watchdog (pre-migration backward compat)"
         );
     }
 
