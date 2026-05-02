@@ -156,6 +156,14 @@ async fn main() -> Result<()> {
                         claimed.len()
                     );
                     for (run_id, wf_name, label) in claimed {
+                        if let Err(e) = conductor_core::workflow::terminate_subprocesses(
+                            &conn, &run_id, None,
+                        ) {
+                            tracing::warn!(
+                                "terminate_subprocesses before watchdog resume failed for \
+                                 {run_id}: {e}"
+                            );
+                        }
                         conductor_core::workflow::spawn_heartbeat_resume(
                             conductor_core::workflow::SpawnHeartbeatResumeParams {
                                 run_id,
@@ -260,6 +268,14 @@ async fn main() -> Result<()> {
                                 claimed.len()
                             );
                             for (run_id, wf_name, label) in claimed {
+                                if let Err(e) = conductor_core::workflow::terminate_subprocesses(
+                                    &conn, &run_id, None,
+                                ) {
+                                    tracing::warn!(
+                                        "terminate_subprocesses before watchdog resume failed \
+                                         for {run_id}: {e}"
+                                    );
+                                }
                                 conductor_core::workflow::spawn_heartbeat_resume(
                                     conductor_core::workflow::SpawnHeartbeatResumeParams {
                                         run_id,

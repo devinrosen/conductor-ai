@@ -661,12 +661,15 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
                 // Belt-and-braces: kill any subprocess PIDs the dead engine left
                 // behind. signal_lease_abort fires registry.cancel, but this
                 // ensures termination even if the cancel path had no PID.
-                if let Ok(guard) = lock_shared(&shared_conn) {
-                    if let Err(te) =
-                        crate::workflow::terminate_subprocesses(&guard, &wf_run_id, None)
-                    {
-                        tracing::warn!("terminate_subprocesses on LeaseLost (run): {te}");
+                match lock_shared(&shared_conn) {
+                    Ok(guard) => {
+                        if let Err(te) =
+                            crate::workflow::terminate_subprocesses(&guard, &wf_run_id, None)
+                        {
+                            tracing::warn!("terminate_subprocesses on LeaseLost (run): {te}");
+                        }
                     }
+                    Err(e) => tracing::warn!("lock_shared on LeaseLost (run): {e}"),
                 }
             }
             return Err(map_engine_error(e, &workflow.name, "run"));
@@ -1131,12 +1134,15 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
                 // Belt-and-braces: kill any subprocess PIDs the dead engine left
                 // behind. signal_lease_abort fires registry.cancel, but this
                 // ensures termination even if the cancel path had no PID.
-                if let Ok(guard) = lock_shared(&shared_conn) {
-                    if let Err(te) =
-                        crate::workflow::terminate_subprocesses(&guard, &wf_run.id, None)
-                    {
-                        tracing::warn!("terminate_subprocesses on LeaseLost (resume): {te}");
+                match lock_shared(&shared_conn) {
+                    Ok(guard) => {
+                        if let Err(te) =
+                            crate::workflow::terminate_subprocesses(&guard, &wf_run.id, None)
+                        {
+                            tracing::warn!("terminate_subprocesses on LeaseLost (resume): {te}");
+                        }
                     }
+                    Err(e) => tracing::warn!("lock_shared on LeaseLost (resume): {e}"),
                 }
             }
             return Err(map_engine_error(e, &wf_run.workflow_name, "resume"));
@@ -2084,6 +2090,77 @@ mod tests {
         assert!(
             result.all_succeeded,
             "restarted empty workflow must complete with all_succeeded=true"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // LeaseLost subprocess cleanup path
+    // -------------------------------------------------------------------------
+
+    /// The LeaseLost handlers in execute_workflow_standalone and resume_workflow
+    /// call lock_shared() + terminate_subprocesses(). Test that this cleanup
+    /// sequence completes without error using the same pattern as the handler.
+    #[cfg(unix)]
+    #[test]
+    fn lease_lost_cleanup_terminate_subprocesses_tolerate_esrch() {
+        use std::sync::{Arc, Mutex};
+
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        let wf_run_id = {
+            let conn = crate::db::open_database(db_file.path()).unwrap();
+            let agent_mgr = crate::agent::AgentManager::new(&conn);
+            let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
+            let run = crate::workflow::create_workflow_run(
+                &conn, "test-wf", None, &parent.id, false, "manual", None,
+            )
+            .unwrap();
+            // Seed a running step with a dead PID — terminate_subprocesses must
+            // tolerate ESRCH without propagating an error.
+            conn.execute(
+                "INSERT INTO workflow_run_steps \
+                 (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
+                 VALUES ('step-ll', ?1, 'script', 'script', 0, 'running', 0, 99999)",
+                rusqlite::params![run.id],
+            )
+            .unwrap();
+            run.id
+        };
+
+        // Reopen via a shared_conn (as the coordinator does) and run the same
+        // lock_shared() + terminate_subprocesses() sequence as the LeaseLost handler.
+        let conn2 = crate::db::open_database(db_file.path()).unwrap();
+        let shared = Arc::new(Mutex::new(conn2));
+        let guard = lock_shared(&shared).expect("mutex must not be poisoned");
+        let result = crate::workflow::terminate_subprocesses(&guard, &wf_run_id, None);
+        assert!(
+            result.is_ok(),
+            "LeaseLost cleanup path must tolerate ESRCH: {result:?}"
+        );
+    }
+
+    /// lock_shared returns Err on a poisoned mutex. The fixed LeaseLost handler
+    /// uses a match so the Err arm logs a warning without panicking.
+    #[test]
+    fn lease_lost_cleanup_poisoned_mutex_returns_err() {
+        use std::sync::{Arc, Mutex};
+
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        let conn = crate::db::open_database(db_file.path()).unwrap();
+        let shared: Arc<Mutex<rusqlite::Connection>> = Arc::new(Mutex::new(conn));
+
+        // Poison the mutex by panicking while holding the lock.
+        let shared_clone = Arc::clone(&shared);
+        let _ = std::panic::catch_unwind(move || {
+            let _guard = shared_clone.lock().unwrap();
+            panic!("poison the mutex");
+        });
+
+        // lock_shared on a poisoned mutex must return Err (not panic) so that
+        // the LeaseLost Err arm can log and proceed.
+        let result = lock_shared(&shared);
+        assert!(
+            result.is_err(),
+            "lock_shared on poisoned mutex must return Err"
         );
     }
 }

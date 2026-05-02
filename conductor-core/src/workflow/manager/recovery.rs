@@ -785,7 +785,7 @@ const SQL_RESET_COMPLETED: &str =
 const SQL_RESET_FROM_POS: &str =
     reset_sql!("WHERE workflow_run_id = :run_id AND position >= :position");
 
-pub(crate) fn terminate_subprocesses(
+pub fn terminate_subprocesses(
     conn: &Connection,
     workflow_run_id: &str,
     from_position: Option<i64>,
@@ -1435,6 +1435,40 @@ mod tests {
 
         // Must not panic — there are no stuck/stale/needs_resume runs to process.
         crate::workflow::run_workflow_maintenance(&conn, &config, None);
+    }
+
+    /// `run_workflow_maintenance` calls `terminate_subprocesses` for each claimed
+    /// expired-lease run before spawning a fresh resume. Verify that the function
+    /// completes without panic and the run is transitioned out of 'running'.
+    #[test]
+    fn test_run_workflow_maintenance_terminates_before_resume() {
+        let (conn, parent_id) = setup();
+        // Insert a running root run with expired lease and no active steps
+        // (no active steps is required by claim_expired_lease_runs query).
+        // Use datetime('now') for started_at so the finalization-stuck reaper
+        // (60s threshold) doesn't claim the run first; lease_until in the past
+        // ensures claim_expired_lease_runs picks it up.
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+              started_at, iteration, lease_until) \
+             VALUES ('maint-run-1', 'test-wf', 'w1', :parent_id, 'running', 0, 'manual', \
+                     datetime('now'), 0, '1970-01-01T00:00:00Z')",
+            named_params![":parent_id": parent_id],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        // Must not panic — terminate_subprocesses is called for each claimed run
+        // (lines 1073-1078 in run_workflow_maintenance) before spawn_heartbeat_resume.
+        crate::workflow::run_workflow_maintenance(&conn, &config, None);
+
+        // The CAS flip in claim_expired_lease_runs transitions the run to 'failed'.
+        assert_eq!(
+            run_status(&conn, "maint-run-1"),
+            "failed",
+            "watchdog must claim expired-lease run"
+        );
     }
 
     // ── delete_run_recursive: multi-level CTE deletion ────────────────────────

@@ -103,7 +103,7 @@ pub use manager::recovery::{
 // so internal callers (coordinator, etc.) can address it via the standard
 // `crate::workflow::` path instead of reaching into `manager::recovery::`.
 pub(crate) use manager::recovery::count_live_subprocess_steps;
-pub(crate) use manager::recovery::terminate_subprocesses;
+pub use manager::recovery::terminate_subprocesses;
 pub use manager::steps::{
     active_step_exists, approve_gate, get_gate_approval_state, insert_step, insert_step_running,
     mark_step_pending, mark_step_running, mark_step_terminal, mirror_step_metrics_from_run,
