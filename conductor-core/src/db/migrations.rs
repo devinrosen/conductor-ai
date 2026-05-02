@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 84;
+pub const LATEST_SCHEMA_VERSION: u32 = 85;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1305,6 +1305,27 @@ pub fn run(conn: &Connection) -> Result<()> {
             conn.execute_batch(include_str!("migrations/084_workflow_run_lease.sql"))?;
         }
         bump_version(conn, 84)?;
+    }
+
+    // Migration 085: index workflow_run_steps(child_run_id) to convert the
+    // full table scan in mirror_step_metrics_from_run into a b-tree lookup.
+    // Table-existence guard is required because some unit tests build minimal
+    // fixtures that omit workflow_run_steps.
+    if version < 85 {
+        let has_workflow_run_steps_table: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='table' AND name='workflow_run_steps'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)?;
+        if has_workflow_run_steps_table {
+            conn.execute_batch(include_str!(
+                "migrations/085_workflow_run_steps_child_run_id_index.sql"
+            ))?;
+        }
+        bump_version(conn, 85)?;
     }
 
     Ok(())
@@ -2829,5 +2850,90 @@ mod tests {
 
         // Must not error when feature_id / feature tables are already absent.
         run(&conn).expect("migration 073 must be idempotent when tables are already absent");
+    }
+
+    // -----------------------------------------------------------------------
+    // Migration 085 tests
+    // -----------------------------------------------------------------------
+
+    /// Verifies that migration 085 creates `idx_workflow_run_steps_child_run_id`
+    /// when the `workflow_run_steps` table is present.
+    #[test]
+    fn test_migration_085_creates_index_when_table_exists() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE workflow_run_steps (
+                 id               TEXT PRIMARY KEY,
+                 workflow_run_id  TEXT NOT NULL,
+                 step_name        TEXT NOT NULL,
+                 role             TEXT NOT NULL,
+                 status           TEXT NOT NULL DEFAULT 'pending',
+                 child_run_id     TEXT,
+                 position         INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO _conductor_meta VALUES ('schema_version', '84');",
+        )
+        .unwrap();
+
+        run(&conn).expect("migration 085 must succeed when workflow_run_steps exists");
+
+        let index_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='index' AND name='idx_workflow_run_steps_child_run_id'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index_exists, 1, "index must be created on child_run_id");
+
+        let version: i64 = conn
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM _conductor_meta WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 85, "schema_version must be bumped to 85");
+    }
+
+    /// Verifies that migration 085 skips the index (and does not error) when
+    /// `workflow_run_steps` is absent — minimal fixture DBs omit this table.
+    /// Also confirms the schema version is still bumped to 85, and that the
+    /// `?` error propagation path is exercised (previously `.unwrap_or(false)`
+    /// would have silently swallowed any query error instead of propagating it).
+    #[test]
+    fn test_migration_085_skips_index_when_table_absent() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO _conductor_meta VALUES ('schema_version', '84');",
+        )
+        .unwrap();
+
+        run(&conn).expect("migration 085 must succeed even without workflow_run_steps");
+
+        let index_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='index' AND name='idx_workflow_run_steps_child_run_id'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            index_exists, 0,
+            "no index should be created when table is absent"
+        );
+
+        let version: i64 = conn
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM _conductor_meta WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 85, "schema_version must still be bumped to 85");
     }
 }
