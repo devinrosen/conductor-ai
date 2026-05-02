@@ -4945,10 +4945,11 @@ fn test_reap_finalization_skips_run_with_in_flight_actor_cleanup() {
 }
 
 #[test]
-fn test_reap_finalization_finalizes_run_after_actor_completes() {
+fn test_reap_finalization_flags_orphan_run_for_resume() {
     // Regression for the legitimate case from #1777: all steps did finish
     // (agent_run flipped to 'completed') but the parent's status update
-    // failed. The reaper must still finalize this case.
+    // failed. The reaper must act on this run — but now flags it needs_resume
+    // instead of completed, so the resume pipeline determines true outcome.
     let conn = setup_db();
     insert_root_run_with_actor_step(
         &conn,
@@ -4961,11 +4962,102 @@ fn test_reap_finalization_finalizes_run_after_actor_completes() {
     let reaped = crate::workflow::reap_finalization_stuck_workflow_runs(&conn, 60).unwrap();
     assert_eq!(
         reaped, 1,
-        "must finalize a run whose actor agent is fully done"
+        "must act on a run whose actor agent is fully done"
     );
     assert_eq!(
         get_run_status(&conn, "run-finalization-failed"),
-        "completed",
-        "parent must transition to completed"
+        "needs_resume",
+        "parent must transition to needs_resume, never completed"
+    );
+}
+
+#[test]
+fn test_reap_finalization_keeps_failed_status_when_step_failed() {
+    // When at least one step failed, the reaper must still transition the
+    // stuck run to 'failed' (not needs_resume).
+    let conn = setup_db();
+    insert_running_root_run(&conn, "run-step-failed");
+
+    let agent_mgr = AgentManager::new(&conn);
+    let agent_run = agent_mgr.create_run(None, "actor", None).unwrap();
+    conn.execute(
+        "UPDATE agent_runs SET status = 'completed' WHERE id = :id",
+        named_params! { ":id": agent_run.id },
+    )
+    .unwrap();
+
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, \
+          ended_at, child_run_id) \
+         VALUES ('step-failed-1', 'run-step-failed', 'implement', 'actor', 0, 'failed', 0, \
+                 '2020-01-01T00:00:00Z', :child_run_id)",
+        named_params! { ":child_run_id": agent_run.id },
+    )
+    .unwrap();
+
+    let reaped = crate::workflow::reap_finalization_stuck_workflow_runs(&conn, 60).unwrap();
+    assert_eq!(reaped, 1, "must finalize a run with a failed step");
+    assert_eq!(
+        get_run_status(&conn, "run-step-failed"),
+        "failed",
+        "run with a failed step must transition to failed"
+    );
+}
+
+#[test]
+fn test_reap_finalization_orphan_mid_body_flagged_for_resume() {
+    // Acceptance-criterion test for issue #2819: a workflow run crashed
+    // mid-body (only 2 of N steps written, no pending/running/waiting steps,
+    // all linked agent_runs terminal). The reaper must flag it needs_resume,
+    // never completed.
+    let conn = setup_db();
+    insert_running_root_run(&conn, "run-orphan-mid-body");
+
+    let agent_mgr = AgentManager::new(&conn);
+
+    // Step 0 — plan — completed
+    let agent_plan = agent_mgr.create_run(None, "actor", None).unwrap();
+    conn.execute(
+        "UPDATE agent_runs SET status = 'completed' WHERE id = :id",
+        named_params! { ":id": agent_plan.id },
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, \
+          ended_at, child_run_id) \
+         VALUES ('step-plan', 'run-orphan-mid-body', 'plan', 'actor', 0, 'completed', 0, \
+                 '2020-01-01T00:00:00Z', :child_run_id)",
+        named_params! { ":child_run_id": agent_plan.id },
+    )
+    .unwrap();
+
+    // Step 1 — implement — completed; engine died before scheduling step 2
+    let agent_impl = agent_mgr.create_run(None, "actor", None).unwrap();
+    conn.execute(
+        "UPDATE agent_runs SET status = 'completed' WHERE id = :id",
+        named_params! { ":id": agent_impl.id },
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, \
+          ended_at, child_run_id) \
+         VALUES ('step-impl', 'run-orphan-mid-body', 'implement', 'actor', 1, 'completed', 0, \
+                 '2020-01-01T00:00:00Z', :child_run_id)",
+        named_params! { ":child_run_id": agent_impl.id },
+    )
+    .unwrap();
+
+    // Steps 2-4 (lint-fix, fmt-fix, push-and-pr) were never scheduled —
+    // no rows exist for them. This is the orphan-mid-body scenario.
+
+    let reaped = crate::workflow::reap_finalization_stuck_workflow_runs(&conn, 60).unwrap();
+    assert_eq!(reaped, 1, "reaper must act on the orphaned mid-body run");
+    let status = get_run_status(&conn, "run-orphan-mid-body");
+    assert_eq!(
+        status, "needs_resume",
+        "orphaned mid-body run must land in needs_resume, not completed (got: {status})"
     );
 }

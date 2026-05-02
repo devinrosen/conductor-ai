@@ -712,35 +712,41 @@ pub fn reap_finalization_stuck_workflow_runs(
         // stateless (wraps &Connection) so rebuilding it per iteration is wasteful.
         let agent_mgr = crate::agent::AgentManager::new(conn);
 
-        const SUMMARY: &str =
-            "Auto-finalized by reaper: all steps terminal, status was stuck in 'running'";
+        const SUMMARY_FAILED: &str =
+            "Auto-finalized by reaper: step failure detected, status was stuck in 'running'";
+        const SUMMARY_NEEDS_RESUME: &str =
+            "Reaper detected stuck run with all-terminal steps — flagged for resume";
 
         for (run_id, parent_run_id, has_failure) in stuck {
-            let final_status = if has_failure {
-                WorkflowRunStatus::Failed
+            let (final_status, summary) = if has_failure {
+                (WorkflowRunStatus::Failed, SUMMARY_FAILED)
             } else {
-                WorkflowRunStatus::Completed
+                // Never auto-finalize to Completed: the run may have crashed
+                // mid-body before scheduling the next step. NeedsResume lets
+                // the resume pipeline determine the true outcome; for runs
+                // whose body was already complete, resume is a no-op.
+                (WorkflowRunStatus::NeedsResume, SUMMARY_NEEDS_RESUME)
             };
 
             super::lifecycle::update_workflow_status(
                 conn,
                 &run_id,
                 final_status.clone(),
-                Some(SUMMARY),
+                Some(summary),
                 None,
             )?;
             tracing::info!(
                 run_id = %run_id,
                 status = %final_status,
-                "Reaper finalized stuck workflow run"
+                "Reaper flagged stuck workflow run"
             );
 
             // Best-effort: update the parent agent_runs row if still running.
-            let update_result = if has_failure {
-                agent_mgr.update_run_failed_if_running(&parent_run_id, SUMMARY)
-            } else {
-                agent_mgr.update_run_completed_if_running(&parent_run_id, SUMMARY)
-            };
+            // For NeedsResume, use update_run_failed_if_running — the engine
+            // died, so the parent is not completing normally. Calling
+            // update_run_completed_if_running here would be the same data-loss
+            // class on the parent row that this fix eliminates on the child.
+            let update_result = agent_mgr.update_run_failed_if_running(&parent_run_id, summary);
             if let Err(e) = update_result {
                 tracing::warn!(
                     run_id = %run_id,
