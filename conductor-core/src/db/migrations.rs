@@ -2922,7 +2922,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(index_exists, 0, "no index should be created when table is absent");
+        assert_eq!(
+            index_exists, 0,
+            "no index should be created when table is absent"
+        );
 
         let version: i64 = conn
             .query_row(
