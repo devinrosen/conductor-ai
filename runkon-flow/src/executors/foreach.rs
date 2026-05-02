@@ -430,17 +430,16 @@ pub fn execute_foreach(
                     }
                 }
                 if !candidates.is_empty() {
-                    let mut still_waiting = Vec::new();
-                    for item in waiting.drain(..) {
+                    waiting.retain(|item| {
                         if candidates.contains(&item.item_id)
                             && is_eligible(&item.item_id, &dep_map, &terminal_ids)
                         {
-                            ready.push_back(item);
+                            ready.push_back(item.clone());
+                            false
                         } else {
-                            still_waiting.push(item);
+                            true
                         }
-                    }
-                    waiting = still_waiting;
+                    });
                 }
             }
         }
@@ -625,15 +624,14 @@ mod tests {
         dep_map: &HashMap<String, HashSet<String>>,
         terminal_ids: &HashSet<String>,
     ) {
-        let mut still_waiting = Vec::new();
-        for item in waiting.drain(..) {
+        waiting.retain(|item| {
             if is_eligible(&item.item_id, dep_map, terminal_ids) {
-                ready.push_back(item);
+                ready.push_back(item.clone());
+                false
             } else {
-                still_waiting.push(item);
+                true
             }
-        }
-        *waiting = still_waiting;
+        });
     }
 
     /// Verifies that the seeding fold correctly counts pre-existing terminal items
