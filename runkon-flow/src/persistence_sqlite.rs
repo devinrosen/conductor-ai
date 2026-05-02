@@ -652,9 +652,9 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
         let tx = conn.unchecked_transaction().map_err(db_err)?;
         let now = Utc::now().to_rfc3339();
         for (item_id, update) in updates {
-            match update {
-                FanOutItemUpdate::Running { child_run_id } => {
-                    tx.execute(
+            let rows_changed = match update {
+                FanOutItemUpdate::Running { child_run_id } => tx
+                    .execute(
                         "UPDATE workflow_run_step_fan_out_items \
                          SET status = 'running', child_run_id = :child_run_id, dispatched_at = :now \
                          WHERE id = :id",
@@ -664,10 +664,9 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
                             ":id": item_id,
                         ],
                     )
-                    .map_err(db_err)?;
-                }
-                FanOutItemUpdate::Terminal { status } => {
-                    tx.execute(
+                    .map_err(db_err)?,
+                FanOutItemUpdate::Terminal { status } => tx
+                    .execute(
                         "UPDATE workflow_run_step_fan_out_items \
                          SET status = :status, completed_at = :now \
                          WHERE id = :id",
@@ -677,8 +676,12 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
                             ":id": item_id,
                         ],
                     )
-                    .map_err(db_err)?;
-                }
+                    .map_err(db_err)?,
+            };
+            if rows_changed == 0 {
+                return Err(EngineError::Persistence(format!(
+                    "fan-out item {item_id} not found"
+                )));
             }
         }
         tx.commit().map_err(db_err)?;
@@ -1354,6 +1357,49 @@ mod tests {
 
         let items = p.get_fan_out_items(&step_id, None).unwrap();
         assert_eq!(items[0].status, "pending", "empty batch must be a no-op");
+    }
+
+    #[test]
+    fn batch_update_fan_out_items_running_variant() {
+        use crate::traits::persistence::FanOutItemUpdate;
+
+        let (p, step_id) = make_fan_out_db();
+        let id1 = p
+            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
+            .unwrap();
+
+        let updates = vec![(
+            id1.clone(),
+            FanOutItemUpdate::Running {
+                child_run_id: "run-child-abc".to_string(),
+            },
+        )];
+        p.batch_update_fan_out_items(&updates).unwrap();
+
+        let items = p.get_fan_out_items(&step_id, None).unwrap();
+        let item = items.iter().find(|i| i.id == id1).unwrap();
+        assert_eq!(item.status, "running");
+        assert_eq!(item.child_run_id.as_deref(), Some("run-child-abc"));
+        assert!(item.dispatched_at.is_some(), "dispatched_at must be set");
+        assert!(item.completed_at.is_none(), "completed_at must not be set");
+    }
+
+    #[test]
+    fn batch_update_fan_out_items_missing_item_returns_error() {
+        use crate::traits::persistence::{FanOutItemStatus, FanOutItemUpdate};
+
+        let (p, _step_id) = make_fan_out_db();
+
+        let updates = vec![(
+            "does-not-exist".to_string(),
+            FanOutItemUpdate::Terminal {
+                status: FanOutItemStatus::Completed,
+            },
+        )];
+        assert!(
+            p.batch_update_fan_out_items(&updates).is_err(),
+            "should error for non-existent item"
+        );
     }
 
     #[test]

@@ -345,7 +345,7 @@ pub fn execute_foreach(
             });
 
             batch.push((
-                item_db_id.clone(),
+                item_db_id,
                 FanOutItemUpdate::Terminal {
                     status: if succeeded {
                         FanOutItemStatus::Completed
