@@ -43,6 +43,34 @@ static STEP_COLUMNS_WITH_PREFIX: std::sync::LazyLock<String> = std::sync::LazyLo
         .join(", ")
 });
 
+/// Precomputed SQL for the terminal-status UPDATE in `update_step`. Allocated once so
+/// the hot-path call site carries no per-invocation heap cost.
+static SQL_UPDATE_TERMINAL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "UPDATE workflow_run_steps SET status = :status, \
+         child_run_id = COALESCE(:child_run_id, child_run_id), \
+         ended_at = :ended_at, result_text = :result_text, context_out = :context_out, \
+         markers_out = :markers_out, \
+         retry_count = COALESCE(:retry_count, retry_count), \
+         structured_output = :structured_output, step_error = :step_error \
+         WHERE id = :id \
+         AND (SELECT generation FROM workflow_runs \
+              WHERE id = workflow_run_steps.workflow_run_id) = :generation \
+         AND status NOT IN ({TERMINAL_STATUSES_SQL})"
+    )
+});
+
+/// Precomputed SQL for the already-terminal disambiguation check in `update_step`.
+static SQL_CHECK_TERMINAL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "SELECT 1 FROM workflow_run_steps \
+         WHERE id = :id \
+         AND (SELECT generation FROM workflow_runs \
+              WHERE id = workflow_run_steps.workflow_run_id) = :generation \
+         AND status IN ({TERMINAL_STATUSES_SQL})"
+    )
+});
+
 // ---------------------------------------------------------------------------
 // Row mappers (rusqlite::Row → runkon-flow type)
 // ---------------------------------------------------------------------------
@@ -475,21 +503,9 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
             .map_err(db_err)?
         } else if update.status.is_terminal() {
             let now = Utc::now().to_rfc3339();
-            let update_sql = format!(
-                "UPDATE workflow_run_steps SET status = :status, \
-                 child_run_id = COALESCE(:child_run_id, child_run_id), \
-                 ended_at = :ended_at, result_text = :result_text, context_out = :context_out, \
-                 markers_out = :markers_out, \
-                 retry_count = COALESCE(:retry_count, retry_count), \
-                 structured_output = :structured_output, step_error = :step_error \
-                 WHERE id = :id \
-                 AND (SELECT generation FROM workflow_runs \
-                      WHERE id = workflow_run_steps.workflow_run_id) = :generation \
-                 AND status NOT IN ({TERMINAL_STATUSES_SQL})"
-            );
             let n = conn
                 .execute(
-                    &update_sql,
+                    &SQL_UPDATE_TERMINAL,
                     named_params![
                         ":status": update.status,
                         ":child_run_id": update.child_run_id,
@@ -508,16 +524,9 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
             if n == 0 {
                 // Disambiguate: already terminal with correct generation (benign no-op) vs
                 // generation truly mismatched (caller lost the lease).
-                let check_sql = format!(
-                    "SELECT 1 FROM workflow_run_steps \
-                     WHERE id = :id \
-                     AND (SELECT generation FROM workflow_runs \
-                          WHERE id = workflow_run_steps.workflow_run_id) = :generation \
-                     AND status IN ({TERMINAL_STATUSES_SQL})"
-                );
                 let already_terminal = conn
                     .query_row(
-                        &check_sql,
+                        &SQL_CHECK_TERMINAL,
                         named_params![":id": step_id, ":generation": update.generation],
                         |_| Ok(()),
                     )
