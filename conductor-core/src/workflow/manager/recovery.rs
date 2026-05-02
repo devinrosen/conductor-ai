@@ -10,7 +10,7 @@ use crate::error::Result;
 
 use super::helpers::row_to_workflow_run;
 
-use crate::workflow::constants::RUN_COLUMNS;
+use crate::workflow::constants::{RUN_COLUMNS, TERMINAL_STATUSES_SQL};
 use crate::workflow::types::StepKey;
 use crate::workflow::WorkflowRun;
 use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
@@ -203,7 +203,7 @@ fn bulk_recover_steps(
                      structured_output = NULL, \
                      step_error  = NULL \
                  WHERE id IN ({in_placeholders}) \
-                 AND status NOT IN ('completed','failed','skipped','timed_out')"
+                 AND status NOT IN ({TERMINAL_STATUSES_SQL})"
         );
 
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(5 * n + 1);

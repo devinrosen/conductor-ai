@@ -12,7 +12,7 @@ use chrono::Utc;
 use rusqlite::{named_params, Connection, OptionalExtension};
 
 use crate::cancellation_reason::CancellationReason;
-use crate::constants::RUN_COLUMNS;
+use crate::constants::{RUN_COLUMNS, TERMINAL_STATUSES_SQL};
 use crate::engine_error::EngineError;
 use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::traits::persistence::{
@@ -475,9 +475,8 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
             .map_err(db_err)?
         } else if update.status.is_terminal() {
             let now = Utc::now().to_rfc3339();
-            let n = conn
-                .execute(
-                    "UPDATE workflow_run_steps SET status = :status, \
+            let update_sql = format!(
+                "UPDATE workflow_run_steps SET status = :status, \
                  child_run_id = COALESCE(:child_run_id, child_run_id), \
                  ended_at = :ended_at, result_text = :result_text, context_out = :context_out, \
                  markers_out = :markers_out, \
@@ -486,7 +485,11 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
                  WHERE id = :id \
                  AND (SELECT generation FROM workflow_runs \
                       WHERE id = workflow_run_steps.workflow_run_id) = :generation \
-                 AND status NOT IN ('completed','failed','skipped','timed_out')",
+                 AND status NOT IN ({TERMINAL_STATUSES_SQL})"
+            );
+            let n = conn
+                .execute(
+                    &update_sql,
                     named_params![
                         ":status": update.status,
                         ":child_run_id": update.child_run_id,
@@ -505,13 +508,16 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
             if n == 0 {
                 // Disambiguate: already terminal with correct generation (benign no-op) vs
                 // generation truly mismatched (caller lost the lease).
+                let check_sql = format!(
+                    "SELECT 1 FROM workflow_run_steps \
+                     WHERE id = :id \
+                     AND (SELECT generation FROM workflow_runs \
+                          WHERE id = workflow_run_steps.workflow_run_id) = :generation \
+                     AND status IN ({TERMINAL_STATUSES_SQL})"
+                );
                 let already_terminal = conn
                     .query_row(
-                        "SELECT 1 FROM workflow_run_steps \
-                         WHERE id = :id \
-                         AND (SELECT generation FROM workflow_runs \
-                              WHERE id = workflow_run_steps.workflow_run_id) = :generation \
-                         AND status IN ('completed','failed','skipped','timed_out')",
+                        &check_sql,
                         named_params![":id": step_id, ":generation": update.generation],
                         |_| Ok(()),
                     )
