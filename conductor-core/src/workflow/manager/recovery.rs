@@ -1481,6 +1481,92 @@ mod tests {
         );
     }
 
+    // ── claim_and_resume_expired_leases ──────────────────────────────────────────
+
+    /// No expired-lease runs → function is a no-op and returns without panicking.
+    #[test]
+    fn test_claim_and_resume_empty_is_noop() {
+        let conn = crate::test_helpers::setup_db_with_agent_run();
+        let config = Config::default();
+        // Must not panic; DB has no running workflow runs at all.
+        crate::workflow::claim_and_resume_expired_leases(&conn, &config, None);
+    }
+
+    /// Multiple running root runs with expired leases and no active steps are all
+    /// claimed (status → 'failed') before any resume thread is spawned.
+    #[test]
+    fn test_claim_and_resume_multiple_expired_leases_all_claimed() {
+        let (conn, parent_id) = setup();
+        for id in &["exp-run-1", "exp-run-2", "exp-run-3"] {
+            conn.execute(
+                "INSERT INTO workflow_runs \
+                 (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+                  started_at, iteration, lease_until) \
+                 VALUES (:id, 'test-wf', 'w1', :parent_id, 'running', 0, 'manual', \
+                         datetime('now'), 0, '1970-01-01T00:00:00Z')",
+                named_params![":id": id, ":parent_id": parent_id],
+            )
+            .unwrap();
+        }
+        let config = Config::default();
+        crate::workflow::claim_and_resume_expired_leases(&conn, &config, None);
+        // All three runs must be transitioned to 'failed' by the CAS flip that
+        // happens inside claim_expired_lease_runs before resume threads are spawned.
+        for id in &["exp-run-1", "exp-run-2", "exp-run-3"] {
+            assert_eq!(
+                run_status(&conn, id),
+                "failed",
+                "run {id} must be claimed (status = 'failed') before resume"
+            );
+        }
+    }
+
+    /// A run with a valid (future) lease must not be reclaimed, even when it has
+    /// no active steps — the watchdog only targets expired leases.
+    #[test]
+    fn test_claim_and_resume_skips_run_with_valid_lease() {
+        let (conn, parent_id) = setup();
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+              started_at, iteration, lease_until) \
+             VALUES ('live-run', 'test-wf', 'w1', :parent_id, 'running', 0, 'manual', \
+                     datetime('now'), 0, datetime('now', '+1 hour'))",
+            named_params![":parent_id": parent_id],
+        )
+        .unwrap();
+        let config = Config::default();
+        crate::workflow::claim_and_resume_expired_leases(&conn, &config, None);
+        assert_eq!(
+            run_status(&conn, "live-run"),
+            "running",
+            "run with valid lease must not be reclaimed"
+        );
+    }
+
+    /// A non-running (e.g. completed) run with an expired lease must not be
+    /// reclaimed — claim_expired_lease_runs requires status = 'running'.
+    #[test]
+    fn test_claim_and_resume_ignores_non_running_runs() {
+        let (conn, parent_id) = setup();
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+              started_at, iteration, lease_until) \
+             VALUES ('done-run', 'test-wf', 'w1', :parent_id, 'completed', 0, 'manual', \
+                     datetime('now'), 0, '1970-01-01T00:00:00Z')",
+            named_params![":parent_id": parent_id],
+        )
+        .unwrap();
+        let config = Config::default();
+        crate::workflow::claim_and_resume_expired_leases(&conn, &config, None);
+        assert_eq!(
+            run_status(&conn, "done-run"),
+            "completed",
+            "completed run must not be reclaimed even if its lease expired"
+        );
+    }
+
     // ── delete_run_recursive: multi-level CTE deletion ────────────────────────
 
     #[test]
