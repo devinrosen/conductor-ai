@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 84;
+pub const LATEST_SCHEMA_VERSION: u32 = 85;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1305,6 +1305,28 @@ pub fn run(conn: &Connection) -> Result<()> {
             conn.execute_batch(include_str!("migrations/084_workflow_run_lease.sql"))?;
         }
         bump_version(conn, 84)?;
+    }
+
+    // Migration 085: index workflow_run_steps(child_run_id) to convert the
+    // full table scan in mirror_step_metrics_from_run into a b-tree lookup.
+    // Table-existence guard is required because some unit tests build minimal
+    // fixtures that omit workflow_run_steps.
+    if version < 85 {
+        let has_workflow_run_steps_table: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='table' AND name='workflow_run_steps'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        if has_workflow_run_steps_table {
+            conn.execute_batch(include_str!(
+                "migrations/085_workflow_run_steps_child_run_id_index.sql"
+            ))?;
+        }
+        bump_version(conn, 85)?;
     }
 
     Ok(())
