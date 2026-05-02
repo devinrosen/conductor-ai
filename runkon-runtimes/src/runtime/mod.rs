@@ -145,32 +145,51 @@ pub fn resolve_runtime(
 }
 
 /// Extract a value from a serde_json::Value using a dot-separated path.
-pub fn extract_json_path(value: &serde_json::Value, path: &str) -> Option<serde_json::Value> {
+pub fn extract_json_path<'a>(
+    value: &'a serde_json::Value,
+    path: &str,
+) -> Option<Cow<'a, serde_json::Value>> {
     let parts: Vec<&str> = path.split('.').collect();
     extract_path_recursive(value, &parts)
 }
 
-fn extract_path_recursive(value: &serde_json::Value, parts: &[&str]) -> Option<serde_json::Value> {
+fn extract_path_recursive<'a>(
+    value: &'a serde_json::Value,
+    parts: &[&str],
+) -> Option<Cow<'a, serde_json::Value>> {
     if parts.is_empty() {
-        return Some(value.clone());
+        return Some(Cow::Borrowed(value));
     }
     let head = parts[0];
     let tail = &parts[1..];
     if head == "*" {
-        let children: Vec<serde_json::Value> = match value {
-            serde_json::Value::Object(m) => m.values().cloned().collect(),
-            serde_json::Value::Array(a) => a.clone(),
+        match value {
+            serde_json::Value::Object(m) => {
+                if tail.is_empty() {
+                    return Some(Cow::Owned(serde_json::Value::Array(
+                        m.values().cloned().collect(),
+                    )));
+                }
+                let sum: f64 = m
+                    .values()
+                    .filter_map(|child| extract_path_recursive(child, tail))
+                    .filter_map(|v| v.as_f64())
+                    .sum();
+                return Some(Cow::Owned(serde_json::json!(sum)));
+            }
+            serde_json::Value::Array(a) => {
+                if tail.is_empty() {
+                    return Some(Cow::Borrowed(value));
+                }
+                let sum: f64 = a
+                    .iter()
+                    .filter_map(|child| extract_path_recursive(child, tail))
+                    .filter_map(|v| v.as_f64())
+                    .sum();
+                return Some(Cow::Owned(serde_json::json!(sum)));
+            }
             _ => return None,
-        };
-        if tail.is_empty() {
-            return Some(serde_json::Value::Array(children));
         }
-        let sum: f64 = children
-            .iter()
-            .filter_map(|child| extract_path_recursive(child, tail))
-            .filter_map(|v| v.as_f64())
-            .sum();
-        return Some(serde_json::json!(sum));
     }
     match value {
         serde_json::Value::Object(m) => {
@@ -231,13 +250,19 @@ mod tests {
     #[test]
     fn test_extract_simple_field() {
         let v = json!({"response": "hello", "status": "ok"});
-        assert_eq!(extract_json_path(&v, "response"), Some(json!("hello")));
+        assert_eq!(
+            extract_json_path(&v, "response").as_deref(),
+            Some(&json!("hello"))
+        );
     }
 
     #[test]
     fn test_extract_nested_field() {
         let v = json!({"stats": {"total": 42}});
-        assert_eq!(extract_json_path(&v, "stats.total"), Some(json!(42)));
+        assert_eq!(
+            extract_json_path(&v, "stats.total").as_deref(),
+            Some(&json!(42))
+        );
     }
 
     #[test]
