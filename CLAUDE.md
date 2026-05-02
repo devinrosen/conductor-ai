@@ -53,10 +53,17 @@ mkdir -p ~/.cargo
 cat >> ~/.cargo/config.toml <<'EOF'
 [build]
 rustc-wrapper = "sccache"
+incremental = false
 EOF
 
-sccache --show-stats   # verify it's wired in after the next cargo build
+sccache --show-stats   # after a cargo clean + build, "Cache misses" > 0
 ```
+
+`incremental = false` is required: sccache classifies incremental builds as
+non-cacheable (the incremental cache state isn't deterministic), so without
+this every invocation shows up as `Non-cacheable calls` and nothing is stored.
+Cost is small — the cross-worktree cache more than pays for the lost
+intra-worktree incremental speedup.
 
 The first worktree pays full compile cost; subsequent worktrees pull unchanged
 crates from cache. `target/` still grows per-worktree (linker output) and is
