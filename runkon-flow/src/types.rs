@@ -176,6 +176,12 @@ pub struct WorkflowExecConfig {
     /// Defaults to empty (no sinks). Use `..WorkflowExecConfig::default()` spread
     /// syntax to leave this unset when you don't need events.
     pub event_sinks: Vec<Arc<dyn crate::events::EventSink>>,
+    /// Lease TTL passed to `acquire_lease`. Defaults to 30s (LEASE_TTL_SECONDS).
+    /// Override in tests to use a shorter TTL.
+    pub lease_ttl_secs: i64,
+    /// How often the background refresh thread renews the lease. Defaults to 10s.
+    /// Override in tests to exercise refresh behaviour without long waits.
+    pub lease_refresh_interval: Duration,
 }
 
 impl std::fmt::Debug for WorkflowExecConfig {
@@ -190,6 +196,8 @@ impl std::fmt::Debug for WorkflowExecConfig {
                 "event_sinks",
                 &format_args!("[{} sink(s)]", self.event_sinks.len()),
             )
+            .field("lease_ttl_secs", &self.lease_ttl_secs)
+            .field("lease_refresh_interval", &self.lease_refresh_interval)
             .finish()
     }
 }
@@ -203,6 +211,8 @@ impl Default for WorkflowExecConfig {
             dry_run: false,
             shutdown: None,
             event_sinks: vec![],
+            lease_ttl_secs: 30,
+            lease_refresh_interval: Duration::from_secs(10),
         }
     }
 }

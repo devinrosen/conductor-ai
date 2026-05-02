@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::cancellation::CancellationToken;
 use crate::cancellation_reason::CancellationReason;
@@ -18,8 +19,6 @@ use crate::traits::workflow_resolver::WorkflowResolver;
 use crate::types::{WorkflowResult, WorkflowRunStep};
 use crate::workflow_resolver_directory::DirectoryWorkflowResolver;
 
-const LEASE_TTL_SECONDS: i64 = 30; // refreshed in PR 3/5
-
 // ---------------------------------------------------------------------------
 // FlowEngine
 // ---------------------------------------------------------------------------
@@ -33,6 +32,75 @@ struct ActiveRunEntry {
     registry: Arc<ActionRegistry>,
     /// (executor_label, step_id) of the step currently in flight, if any.
     exec_info: Arc<Mutex<Option<(String, String)>>>,
+    /// Stop flag for the lease refresh thread. Set to `true` to ask it to exit.
+    refresh_stop: Arc<AtomicBool>,
+    /// Thread handle used to `unpark()` the refresh thread for fast teardown.
+    refresh_thread: Option<std::thread::Thread>,
+    /// Join handle for the refresh thread.
+    refresh_handle: Option<std::thread::JoinHandle<()>>,
+}
+
+// ---------------------------------------------------------------------------
+// Lease refresh thread
+// ---------------------------------------------------------------------------
+
+struct RefreshContext {
+    persistence: Arc<dyn WorkflowPersistence>,
+    run_id: String,
+    token: String,
+    ttl_seconds: i64,
+    refresh_interval: Duration,
+    stop: Arc<AtomicBool>,
+    cancellation: CancellationToken,
+    shutdown: Arc<AtomicBool>,
+    registry: Arc<ActionRegistry>,
+    exec_info: Arc<Mutex<Option<(String, String)>>>,
+}
+
+fn refresh_lease_loop(ctx: RefreshContext) {
+    loop {
+        std::thread::park_timeout(ctx.refresh_interval);
+        if ctx.stop.load(Ordering::Relaxed) {
+            return;
+        }
+        match ctx
+            .persistence
+            .acquire_lease(&ctx.run_id, &ctx.token, ctx.ttl_seconds)
+        {
+            Ok(Some(_)) => {} // renewed successfully
+            Ok(None) => {
+                tracing::warn!(
+                    "run {}: lease reclaimed by another engine, aborting",
+                    ctx.run_id
+                );
+                signal_lease_abort(ctx.shutdown, ctx.cancellation, ctx.registry, ctx.exec_info);
+                return;
+            }
+            Err(e) => {
+                tracing::warn!("run {}: lease refresh DB error: {e}, aborting", ctx.run_id);
+                signal_lease_abort(ctx.shutdown, ctx.cancellation, ctx.registry, ctx.exec_info);
+                return;
+            }
+        }
+    }
+}
+
+fn signal_lease_abort(
+    shutdown: Arc<AtomicBool>,
+    cancellation: CancellationToken,
+    registry: Arc<ActionRegistry>,
+    exec_info: Arc<Mutex<Option<(String, String)>>>,
+) {
+    shutdown.store(true, Ordering::SeqCst);
+    cancellation.cancel(CancellationReason::LeaseLost);
+    let snap = exec_info.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some((exec_label, step_id)) = snap {
+        std::thread::spawn(move || {
+            if let Err(e) = registry.cancel(&exec_label, &step_id) {
+                tracing::warn!("lease abort: cancel step '{step_id}' failed: {e}");
+            }
+        });
+    }
 }
 
 /// The primary harness for running and validating workflows.
@@ -113,6 +181,9 @@ impl FlowEngine {
         }
         state.event_sinks = Arc::from(self.event_sinks.clone());
 
+        let lease_ttl_secs = state.exec_config.lease_ttl_secs;
+        let refresh_interval = state.exec_config.lease_refresh_interval;
+
         // Acquire or re-claim lease (idempotent when token already set by resume()).
         let token = state
             .owner_token
@@ -120,7 +191,7 @@ impl FlowEngine {
             .as_str();
         match state
             .persistence
-            .acquire_lease(&state.workflow_run_id, token, LEASE_TTL_SECONDS)
+            .acquire_lease(&state.workflow_run_id, token, lease_ttl_secs)
         {
             Ok(Some(gen)) => {
                 state.lease_generation = Some(gen);
@@ -136,9 +207,29 @@ impl FlowEngine {
             .get_or_insert_with(|| Arc::new(AtomicBool::new(false)))
             .clone();
 
+        let run_id = state.workflow_run_id.clone();
+
+        // Spawn the background refresh thread.
+        let refresh_stop = Arc::new(AtomicBool::new(false));
+        let refresh_handle = {
+            let ctx = RefreshContext {
+                persistence: Arc::clone(&state.persistence),
+                run_id: run_id.clone(),
+                token: state.owner_token.clone().unwrap(),
+                ttl_seconds: lease_ttl_secs,
+                refresh_interval,
+                stop: Arc::clone(&refresh_stop),
+                cancellation: state.cancellation.clone(),
+                shutdown: Arc::clone(&shutdown_arc),
+                registry: Arc::clone(&state.action_registry),
+                exec_info: Arc::clone(&state.current_execution_id),
+            };
+            std::thread::spawn(move || refresh_lease_loop(ctx))
+        };
+        let refresh_thread = refresh_handle.thread().clone();
+
         // Register all per-run cancellation state in a single lock so cancel_run()
         // and Drop each see a consistent snapshot.
-        let run_id = state.workflow_run_id.clone();
         {
             let mut runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
             runs.insert(
@@ -149,16 +240,38 @@ impl FlowEngine {
                     persistence: Arc::clone(&state.persistence),
                     registry: Arc::clone(&state.action_registry),
                     exec_info: Arc::clone(&state.current_execution_id),
+                    refresh_stop,
+                    refresh_thread: Some(refresh_thread),
+                    refresh_handle: Some(refresh_handle),
                 },
             );
         }
 
         let result = run_workflow_engine(state, def);
 
-        // Deregister on completion regardless of outcome.
-        {
+        // Stop the refresh thread and join it before deregistering.
+        let join_handle = {
             let mut runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
-            runs.remove(&run_id);
+            runs.remove(&run_id).and_then(|entry| {
+                entry.refresh_stop.store(true, Ordering::SeqCst);
+                if let Some(t) = &entry.refresh_thread {
+                    t.unpark();
+                }
+                entry.refresh_handle
+            })
+        };
+        // Join outside the lock to avoid blocking cancel_run callers.
+        if let Some(h) = join_handle {
+            let _ = h.join();
+        }
+
+        // If the run was aborted due to lease loss, surface it as a distinct error
+        // so callers can distinguish it from normal completion or failure.
+        if matches!(
+            state.cancellation.reason(),
+            Some(CancellationReason::LeaseLost)
+        ) {
+            return Err(EngineError::Cancelled(CancellationReason::LeaseLost));
         }
 
         result
@@ -182,9 +295,10 @@ impl FlowEngine {
 
         // Acquire before any DB reads so concurrent resume() calls race exactly once.
         let token = ulid::Ulid::new().to_string();
+        let lease_ttl_secs = state.exec_config.lease_ttl_secs;
         match state
             .persistence
-            .acquire_lease(&state.workflow_run_id, &token, LEASE_TTL_SECONDS)
+            .acquire_lease(&state.workflow_run_id, &token, lease_ttl_secs)
         {
             Ok(Some(gen)) => {
                 state.owner_token = Some(token);
@@ -241,18 +355,21 @@ impl FlowEngine {
                     Arc::clone(&e.persistence),
                     Arc::clone(&e.registry),
                     Arc::clone(&e.exec_info),
+                    Arc::clone(&e.refresh_stop),
+                    e.refresh_thread.clone(),
                 )
             })
         };
 
-        let (token, shutdown, persistence, registry, exec_info) = match entry {
-            Some(e) => e,
-            None => {
-                return Err(EngineError::Workflow(format!(
-                    "cancel_run: run '{run_id}' is not active in this engine instance"
-                )))
-            }
-        };
+        let (token, shutdown, persistence, registry, exec_info, refresh_stop, refresh_thread) =
+            match entry {
+                Some(e) => e,
+                None => {
+                    return Err(EngineError::Workflow(format!(
+                        "cancel_run: run '{run_id}' is not active in this engine instance"
+                    )))
+                }
+            };
 
         // Mark DB as Cancelling so cross-process engines also observe the signal.
         if let Err(e) =
@@ -277,6 +394,12 @@ impl FlowEngine {
                     );
                 }
             });
+        }
+
+        // Stop the refresh thread (does not join — run() teardown handles the join).
+        refresh_stop.store(true, Ordering::SeqCst);
+        if let Some(t) = refresh_thread {
+            t.unpark();
         }
 
         Ok(())
@@ -605,6 +728,12 @@ impl Drop for FlowEngine {
             guard.drain().map(|(_, e)| e).collect()
         };
         for entry in entries {
+            // Stop the refresh thread first so it exits before we cancel the token.
+            entry.refresh_stop.store(true, Ordering::SeqCst);
+            if let Some(t) = &entry.refresh_thread {
+                t.unpark();
+            }
+            // Dropping refresh_handle detaches the thread; no join in Drop to avoid deadlock.
             entry.shutdown.store(true, Ordering::SeqCst);
             entry.token.cancel(CancellationReason::EngineShutdown);
         }
@@ -1567,6 +1696,9 @@ mod tests {
                     persistence: Arc::clone(&persistence) as Arc<dyn WorkflowPersistence>,
                     registry: Arc::new(ActionRegistry::new(HashMap::new(), None)),
                     exec_info: Arc::new(Mutex::new(None)),
+                    refresh_stop: Arc::new(AtomicBool::new(false)),
+                    refresh_thread: None,
+                    refresh_handle: None,
                 },
             );
         }
