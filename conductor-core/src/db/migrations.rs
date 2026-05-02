@@ -1319,8 +1319,7 @@ pub fn run(conn: &Connection) -> Result<()> {
                 [],
                 |row| row.get::<_, i64>(0),
             )
-            .map(|n| n > 0)
-            .unwrap_or(false);
+            .map(|n| n > 0)?;
         if has_workflow_run_steps_table {
             conn.execute_batch(include_str!(
                 "migrations/085_workflow_run_steps_child_run_id_index.sql"
