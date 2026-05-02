@@ -103,6 +103,14 @@ fn signal_lease_abort(
     }
 }
 
+/// Signal the refresh thread to exit and wake it immediately.
+fn stop_refresh_thread(stop: &AtomicBool, thread: Option<&std::thread::Thread>) {
+    stop.store(true, Ordering::SeqCst);
+    if let Some(t) = thread {
+        t.unpark();
+    }
+}
+
 /// The primary harness for running and validating workflows.
 ///
 /// Produced by [`FlowEngineBuilder::build()`].
@@ -215,7 +223,10 @@ impl FlowEngine {
             let ctx = RefreshContext {
                 persistence: Arc::clone(&state.persistence),
                 run_id: run_id.clone(),
-                token: state.owner_token.clone().unwrap(),
+                token: state
+                    .owner_token
+                    .clone()
+                    .expect("owner_token was just set by get_or_insert_with"),
                 ttl_seconds: lease_ttl_secs,
                 refresh_interval,
                 stop: Arc::clone(&refresh_stop),
@@ -249,14 +260,18 @@ impl FlowEngine {
 
         let result = run_workflow_engine(state, def);
 
+        // Capture LeaseLost BEFORE stopping the refresh thread to avoid a teardown
+        // race where the thread sets LeaseLost after the run has already succeeded.
+        let lease_lost_during_run = matches!(
+            state.cancellation.reason(),
+            Some(CancellationReason::LeaseLost)
+        );
+
         // Stop the refresh thread and join it before deregistering.
         let join_handle = {
             let mut runs = self.active_runs.lock().unwrap_or_else(|e| e.into_inner());
             runs.remove(&run_id).and_then(|entry| {
-                entry.refresh_stop.store(true, Ordering::SeqCst);
-                if let Some(t) = &entry.refresh_thread {
-                    t.unpark();
-                }
+                stop_refresh_thread(&entry.refresh_stop, entry.refresh_thread.as_ref());
                 entry.refresh_handle
             })
         };
@@ -265,12 +280,7 @@ impl FlowEngine {
             let _ = h.join();
         }
 
-        // If the run was aborted due to lease loss, surface it as a distinct error
-        // so callers can distinguish it from normal completion or failure.
-        if matches!(
-            state.cancellation.reason(),
-            Some(CancellationReason::LeaseLost)
-        ) {
+        if lease_lost_during_run {
             return Err(EngineError::Cancelled(CancellationReason::LeaseLost));
         }
 
@@ -397,10 +407,7 @@ impl FlowEngine {
         }
 
         // Stop the refresh thread (does not join — run() teardown handles the join).
-        refresh_stop.store(true, Ordering::SeqCst);
-        if let Some(t) = refresh_thread {
-            t.unpark();
-        }
+        stop_refresh_thread(&refresh_stop, refresh_thread.as_ref());
 
         Ok(())
     }
@@ -729,10 +736,7 @@ impl Drop for FlowEngine {
         };
         for entry in entries {
             // Stop the refresh thread first so it exits before we cancel the token.
-            entry.refresh_stop.store(true, Ordering::SeqCst);
-            if let Some(t) = &entry.refresh_thread {
-                t.unpark();
-            }
+            stop_refresh_thread(&entry.refresh_stop, entry.refresh_thread.as_ref());
             // Dropping refresh_handle detaches the thread; no join in Drop to avoid deadlock.
             entry.shutdown.store(true, Ordering::SeqCst);
             entry.token.cancel(CancellationReason::EngineShutdown);
@@ -2398,6 +2402,93 @@ mod tests {
         assert!(
             result.all_succeeded,
             "single-engine workflow should complete successfully"
+        );
+    }
+
+    // AC: refresh_lease_loop Err path — DB error during refresh triggers LeaseLost abort.
+    //
+    // Setup: executor blocks until its shutdown flag is set; fail_acquire_lease is flipped
+    // from a side thread once the executor is running so the initial acquire() in run()
+    // still succeeds. The first refresh tick then returns Err, calling signal_lease_abort
+    // which sets shutdown=true. The executor exits, and run() returns Err(Cancelled(LeaseLost)).
+    #[test]
+    fn refresh_db_error_causes_lease_lost_abort() {
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::traits::action_executor::{ActionOutput, ActionParams, ExecutionContext};
+        use crate::traits::persistence::WorkflowPersistence;
+        use std::sync::atomic::Ordering;
+        use std::thread;
+        use std::time::Duration;
+
+        struct BlockingExecutor {
+            started: Arc<AtomicBool>,
+        }
+        impl ActionExecutor for BlockingExecutor {
+            fn name(&self) -> &str {
+                "alpha"
+            }
+            fn execute(
+                &self,
+                ectx: &ExecutionContext,
+                _: &ActionParams,
+            ) -> Result<ActionOutput, EngineError> {
+                self.started.store(true, Ordering::SeqCst);
+                // Spin until the engine's shutdown flag is set by signal_lease_abort.
+                loop {
+                    if ectx
+                        .shutdown
+                        .as_ref()
+                        .is_some_and(|s| s.load(Ordering::Relaxed))
+                    {
+                        return Ok(ActionOutput::default());
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        }
+
+        let persistence = Arc::new(InMemoryWorkflowPersistence::new());
+        let run = make_test_run(&persistence);
+
+        let started = Arc::new(AtomicBool::new(false));
+        let started_clone = Arc::clone(&started);
+        let persistence_clone = Arc::clone(&persistence);
+
+        // Side thread: wait until the executor has started (initial acquire done),
+        // then flip fail_acquire_lease so the next refresh tick returns Err.
+        let watcher = thread::spawn(move || {
+            while !started_clone.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            persistence_clone.set_fail_acquire_lease(true);
+        });
+
+        let mut m = HashMap::new();
+        m.insert(
+            "alpha".to_string(),
+            Box::new(BlockingExecutor {
+                started: Arc::clone(&started),
+            }) as Box<dyn crate::traits::action_executor::ActionExecutor>,
+        );
+        let mut state = make_bare_state("wf");
+        state.persistence = Arc::clone(&persistence) as Arc<dyn WorkflowPersistence>;
+        state.action_registry = Arc::new(ActionRegistry::new(m, None));
+        state.workflow_run_id = run.id.clone();
+        // Short refresh interval so the error is detected quickly.
+        state.exec_config.lease_refresh_interval = Duration::from_millis(15);
+
+        let engine = FlowEngineBuilder::new().build().unwrap();
+        let def = make_def("wf", vec![call_node("alpha")]);
+
+        let result = engine.run(&def, &mut state);
+        watcher.join().unwrap();
+
+        assert!(
+            matches!(
+                result,
+                Err(EngineError::Cancelled(CancellationReason::LeaseLost))
+            ),
+            "DB error in refresh should abort with LeaseLost; got {result:?}"
         );
     }
 

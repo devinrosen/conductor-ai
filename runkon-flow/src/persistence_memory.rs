@@ -36,6 +36,8 @@ pub struct InMemoryWorkflowPersistence {
     fail_get_fan_out_items: AtomicBool,
     /// When `true`, `get_steps` returns a `Workflow` error.
     fail_get_steps: AtomicBool,
+    /// When `true`, `acquire_lease` returns a `Persistence` error.
+    fail_acquire_lease: AtomicBool,
 }
 
 impl InMemoryWorkflowPersistence {
@@ -50,6 +52,7 @@ impl InMemoryWorkflowPersistence {
             }),
             fail_get_fan_out_items: AtomicBool::new(false),
             fail_get_steps: AtomicBool::new(false),
+            fail_acquire_lease: AtomicBool::new(false),
         }
     }
 }
@@ -72,6 +75,15 @@ impl InMemoryWorkflowPersistence {
     /// `get_steps` returns `EngineError::Workflow`.
     pub fn set_fail_get_steps(&self, fail: bool) {
         self.fail_get_steps
+            .store(fail, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Inject a failure into `acquire_lease`. When `fail` is `true`, every call
+    /// to `acquire_lease` returns `EngineError::Persistence`. Used to test the
+    /// refresh-thread DB error path.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn set_fail_acquire_lease(&self, fail: bool) {
+        self.fail_acquire_lease
             .store(fail, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -564,6 +576,11 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         token: &str,
         ttl_seconds: i64,
     ) -> Result<Option<i64>, EngineError> {
+        if self.fail_acquire_lease.load(Ordering::Relaxed) {
+            return Err(EngineError::Persistence(
+                "simulated acquire_lease failure".to_string(),
+            ));
+        }
         let mut store = self.store.lock().map_err(|_| lock_err())?;
         let now = chrono::Utc::now();
 
