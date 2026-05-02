@@ -1920,6 +1920,7 @@ mod tests {
             .update_step(
                 &step_id,
                 StepUpdate {
+                    generation: 0,
                     status: WorkflowStepStatus::Completed,
                     child_run_id: None,
                     result_text: None,
@@ -1977,6 +1978,7 @@ mod tests {
             .update_step(
                 &step_id,
                 StepUpdate {
+                    generation: 0,
                     status: WorkflowStepStatus::Completed,
                     child_run_id: None,
                     result_text: None,
@@ -2075,6 +2077,7 @@ mod tests {
             .update_step(
                 &cond_id,
                 StepUpdate {
+                    generation: 0,
                     status: WorkflowStepStatus::Completed,
                     child_run_id: None,
                     result_text: None,
@@ -2105,6 +2108,7 @@ mod tests {
                     .update_step(
                         &sid,
                         StepUpdate {
+                            generation: 0,
                             status: WorkflowStepStatus::Completed,
                             child_run_id: None,
                             result_text: None,
@@ -2489,6 +2493,93 @@ mod tests {
                 Err(EngineError::Cancelled(CancellationReason::LeaseLost))
             ),
             "DB error in refresh should abort with LeaseLost; got {result:?}"
+        );
+    }
+
+    // AC: stale generation on step write — when another engine steals the lease mid-run,
+    // the next executor step write sees a generation mismatch, returns LeaseLost, and
+    // the engine aborts cleanly without duplicate side effects.
+    #[test]
+    fn stale_generation_on_step_write_aborts_with_lease_lost() {
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::traits::action_executor::{ActionOutput, ActionParams, ExecutionContext};
+        use crate::traits::persistence::WorkflowPersistence;
+        use std::sync::atomic::Ordering;
+        use std::thread;
+        use std::time::Duration;
+
+        // Executor that signals when started, waits for proceed, then returns Ok.
+        // The stealer steals the lease between started and proceed so the step
+        // write (persist_completed_step) sees a stale generation.
+        struct LatchedExecutor {
+            started: Arc<AtomicBool>,
+            proceed: Arc<AtomicBool>,
+        }
+        impl ActionExecutor for LatchedExecutor {
+            fn name(&self) -> &str {
+                "alpha"
+            }
+            fn execute(
+                &self,
+                _ectx: &ExecutionContext,
+                _: &ActionParams,
+            ) -> Result<ActionOutput, EngineError> {
+                self.started.store(true, Ordering::SeqCst);
+                while !self.proceed.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Ok(ActionOutput::default())
+            }
+        }
+
+        let persistence = Arc::new(InMemoryWorkflowPersistence::new());
+        let run = make_test_run(&persistence);
+        let run_id = run.id.clone();
+
+        let started = Arc::new(AtomicBool::new(false));
+        let proceed = Arc::new(AtomicBool::new(false));
+        let started_clone = Arc::clone(&started);
+        let proceed_clone = Arc::clone(&proceed);
+        let persistence_clone = Arc::clone(&persistence);
+
+        // Side thread: waits for the executor to start, steals the lease (bumps
+        // generation), then lets the executor proceed so it tries to write the step.
+        let stealer = thread::spawn(move || {
+            while !started_clone.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            persistence_clone.expire_and_steal_lease(&run_id, "thief-token");
+            proceed_clone.store(true, Ordering::SeqCst);
+        });
+
+        let mut m = HashMap::new();
+        m.insert(
+            "alpha".to_string(),
+            Box::new(LatchedExecutor {
+                started: Arc::clone(&started),
+                proceed: Arc::clone(&proceed),
+            }) as Box<dyn crate::traits::action_executor::ActionExecutor>,
+        );
+
+        let mut state = make_bare_state("wf");
+        state.persistence = Arc::clone(&persistence) as Arc<dyn WorkflowPersistence>;
+        state.action_registry = Arc::new(ActionRegistry::new(m, None));
+        state.workflow_run_id = run.id.clone();
+        // Short refresh interval so the refresh thread also detects the steal quickly.
+        state.exec_config.lease_refresh_interval = Duration::from_millis(15);
+
+        let engine = FlowEngineBuilder::new().build().unwrap();
+        let def = make_def("wf", vec![call_node("alpha")]);
+
+        let result = engine.run(&def, &mut state);
+        stealer.join().unwrap();
+
+        assert!(
+            matches!(
+                result,
+                Err(EngineError::Cancelled(CancellationReason::LeaseLost))
+            ),
+            "stale generation on step write should abort with LeaseLost; got {result:?}"
         );
     }
 

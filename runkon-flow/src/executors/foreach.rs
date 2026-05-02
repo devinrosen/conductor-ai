@@ -549,23 +549,23 @@ pub fn execute_foreach(
 
     let step_succeeded = failed_count == 0;
 
+    let generation = state.expect_lease_generation();
+
     if step_succeeded {
-        state
-            .persistence
-            .update_step(
-                &step_id,
-                StepUpdate {
-                    status: WorkflowStepStatus::Completed,
-                    child_run_id: None,
-                    result_text: Some(context.clone()),
-                    context_out: Some(context.clone()),
-                    markers_out: None,
-                    retry_count: Some(0),
-                    structured_output: None,
-                    step_error: None,
-                },
-            )
-            .map_err(p_err)?;
+        state.persistence.update_step(
+            &step_id,
+            StepUpdate {
+                generation,
+                status: WorkflowStepStatus::Completed,
+                child_run_id: None,
+                result_text: Some(context.clone()),
+                context_out: Some(context.clone()),
+                markers_out: None,
+                retry_count: Some(0),
+                structured_output: None,
+                step_error: None,
+            },
+        )?;
 
         record_foreach_step_success(state, step_key, &node.name, context, iteration);
     } else {
@@ -574,22 +574,20 @@ pub fn execute_foreach(
             node.name
         );
 
-        state
-            .persistence
-            .update_step(
-                &step_id,
-                StepUpdate {
-                    status: WorkflowStepStatus::Failed,
-                    child_run_id: None,
-                    result_text: Some(error_msg.clone()),
-                    context_out: Some(context),
-                    markers_out: None,
-                    retry_count: Some(0),
-                    structured_output: None,
-                    step_error: Some(error_msg.clone()),
-                },
-            )
-            .map_err(p_err)?;
+        state.persistence.update_step(
+            &step_id,
+            StepUpdate {
+                generation,
+                status: WorkflowStepStatus::Failed,
+                child_run_id: None,
+                result_text: Some(error_msg.clone()),
+                context_out: Some(context),
+                markers_out: None,
+                retry_count: Some(0),
+                structured_output: None,
+                step_error: Some(error_msg.clone()),
+            },
+        )?;
 
         return record_step_failure(state, step_key, &node.name, error_msg, 1, true);
     }

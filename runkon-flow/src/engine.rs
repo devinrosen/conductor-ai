@@ -156,6 +156,16 @@ impl ExecutionState {
         Arc::new(AtomicI64::new(0))
     }
 
+    /// Read the current lease generation, panicking with a consistent message
+    /// if the lease was never acquired. Every executor `update_step` call site
+    /// requires a generation, and `FlowEngine::run`/`resume` is the single
+    /// entry point that sets it — so a `None` here is a programmer error in
+    /// engine construction, not a runtime condition.
+    pub fn expect_lease_generation(&self) -> i64 {
+        self.lease_generation
+            .expect("lease_generation must be set after FlowEngine::run/resume entry")
+    }
+
     /// Throttled heartbeat tick + external cancel check.
     ///
     /// Bumps `last_heartbeat` in persistence at most once every 5 seconds and
@@ -426,6 +436,17 @@ pub fn run_workflow_engine(
         tracing::error!("Body execution error: {msg}");
         state.all_succeeded = false;
         body_error = Some(msg);
+        // Mirror LeaseLost onto the cancellation token so FlowEngine::run's
+        // lease_lost_during_run check fires even when the error reached us via
+        // a step-write failure rather than the refresh thread.
+        if matches!(
+            e,
+            EngineError::Cancelled(crate::cancellation_reason::CancellationReason::LeaseLost)
+        ) {
+            state
+                .cancellation
+                .cancel(crate::cancellation_reason::CancellationReason::LeaseLost);
+        }
     }
 
     // Execute always block regardless of outcome

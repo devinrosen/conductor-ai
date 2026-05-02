@@ -159,7 +159,9 @@ pub fn make_test_execution_state(
         cancellation: CancellationToken::new(),
         current_execution_id: Arc::new(Mutex::new(None)),
         owner_token: None,
-        lease_generation: None,
+        // Runs created via CountingPersistence start at generation=0; match that
+        // so update_step's generation check passes in executor-level tests.
+        lease_generation: Some(0),
     }
 }
 

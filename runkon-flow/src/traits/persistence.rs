@@ -34,8 +34,14 @@ pub struct NewStep {
 }
 
 /// Fields to update on an existing workflow step.
-#[derive(Default)]
+///
+/// `generation` must match the parent `workflow_runs.generation` at write time;
+/// a mismatch means another engine re-claimed the run and the write is rejected
+/// with `EngineError::Cancelled(CancellationReason::LeaseLost)`.
+/// Default is intentionally not derived — a silent `generation: 0` would mask
+/// stale-write bugs.
 pub struct StepUpdate {
+    pub generation: i64,
     pub status: WorkflowStepStatus,
     pub child_run_id: Option<String>,
     pub result_text: Option<String>,
@@ -49,6 +55,7 @@ pub struct StepUpdate {
 impl StepUpdate {
     /// Convenience constructor for a successful step completion.
     pub fn completed(
+        generation: i64,
         child_run_id: Option<String>,
         result_text: Option<String>,
         context_out: Option<String>,
@@ -57,6 +64,7 @@ impl StepUpdate {
         structured_output: Option<String>,
     ) -> Self {
         Self {
+            generation,
             status: WorkflowStepStatus::Completed,
             child_run_id,
             result_text,
@@ -69,18 +77,20 @@ impl StepUpdate {
     }
 
     /// Convenience constructor for a failed step.
-    pub fn failed(err_msg: impl Into<String>, attempt: u32) -> Self {
-        Self::failed_with_child(err_msg, attempt, None)
+    pub fn failed(generation: i64, err_msg: impl Into<String>, attempt: u32) -> Self {
+        Self::failed_with_child(generation, err_msg, attempt, None)
     }
 
     /// Convenience constructor for a failed step with an optional child run ID.
     pub fn failed_with_child(
+        generation: i64,
         err_msg: impl Into<String>,
         attempt: u32,
         child_run_id: Option<String>,
     ) -> Self {
         let err_msg = err_msg.into();
         Self {
+            generation,
             status: WorkflowStepStatus::Failed,
             child_run_id,
             result_text: Some(err_msg.clone()),
@@ -344,6 +354,7 @@ mod tests {
     #[test]
     fn step_update_completed_sets_correct_fields() {
         let update = StepUpdate::completed(
+            7,
             Some("child-123".into()),
             Some("result".into()),
             Some("ctx".into()),
@@ -351,6 +362,7 @@ mod tests {
             3,
             Some("{\"key\": \"val\"}".into()),
         );
+        assert_eq!(update.generation, 7);
         assert_eq!(update.status, WorkflowStepStatus::Completed);
         assert_eq!(update.child_run_id, Some("child-123".into()));
         assert_eq!(update.result_text, Some("result".into()));
@@ -363,7 +375,8 @@ mod tests {
 
     #[test]
     fn step_update_failed_sets_correct_fields() {
-        let update = StepUpdate::failed("oops", 2);
+        let update = StepUpdate::failed(5, "oops", 2);
+        assert_eq!(update.generation, 5);
         assert_eq!(update.status, WorkflowStepStatus::Failed);
         assert_eq!(update.result_text, Some("oops".into()));
         assert_eq!(update.step_error, Some("oops".into()));
@@ -376,7 +389,8 @@ mod tests {
 
     #[test]
     fn step_update_failed_with_child_sets_child_run_id() {
-        let update = StepUpdate::failed_with_child("child err", 1, Some("child-run-42".into()));
+        let update = StepUpdate::failed_with_child(3, "child err", 1, Some("child-run-42".into()));
+        assert_eq!(update.generation, 3);
         assert_eq!(update.status, WorkflowStepStatus::Failed);
         assert_eq!(update.result_text, Some("child err".into()));
         assert_eq!(update.step_error, Some("child err".into()));
