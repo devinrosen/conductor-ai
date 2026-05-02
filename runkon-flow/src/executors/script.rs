@@ -36,9 +36,7 @@ fn fail_script_step(
     err_msg: String,
 ) -> Result<()> {
     tracing::warn!("{}", err_msg);
-    let generation = state
-        .lease_generation
-        .expect("lease_generation must be set after FlowEngine::run/resume entry");
+    let generation = state.expect_lease_generation();
     state
         .persistence
         .update_step(step_id, StepUpdate::failed(generation, err_msg.clone(), 0))?;

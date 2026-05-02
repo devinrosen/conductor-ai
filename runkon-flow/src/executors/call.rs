@@ -222,9 +222,7 @@ fn execute_call_inner(
                     agent_label,
                     node.timeout,
                 );
-                let generation = state
-                    .lease_generation
-                    .expect("lease_generation must be set after FlowEngine::run/resume entry");
+                let generation = state.expect_lease_generation();
                 state.persistence.update_step(
                     &step_id,
                     StepUpdate {
@@ -279,9 +277,7 @@ fn execute_call_inner(
                 return Ok(());
             }
             Err(EngineError::Cancelled(reason)) => {
-                let generation = state
-                    .lease_generation
-                    .expect("lease_generation must be set after FlowEngine::run/resume entry");
+                let generation = state.expect_lease_generation();
                 state.persistence.update_step(
                     &step_id,
                     StepUpdate {
@@ -306,9 +302,7 @@ fn execute_call_inner(
                     attempt + 1,
                     max_attempts,
                 );
-                let generation = state
-                    .lease_generation
-                    .expect("lease_generation must be set after FlowEngine::run/resume entry");
+                let generation = state.expect_lease_generation();
                 state.persistence.update_step(
                     &step_id,
                     StepUpdate::failed(generation, err_msg.clone(), attempt),

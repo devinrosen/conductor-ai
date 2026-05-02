@@ -1060,12 +1060,14 @@ mod tests {
 
         let (p, _run_id, step_id) = make_step_db();
 
-        // DB has generation=1; send generation=0 (stale). Status=Waiting is the status-only branch.
+        // DB has generation=1; send generation=0 (stale). Status=Pending is the
+        // only value that is neither `is_starting()` nor `is_terminal()`, so
+        // it's the only one that hits the third (status-only) UPDATE branch.
         let result = p.update_step(
             &step_id,
             StepUpdate {
                 generation: 0,
-                status: WorkflowStepStatus::Waiting,
+                status: WorkflowStepStatus::Pending,
                 child_run_id: None,
                 result_text: None,
                 context_out: None,

@@ -342,9 +342,7 @@ pub fn execute_parallel(
             }
             Err(e) => {
                 tracing::warn!("parallel: '{}' failed: {e}", pr.agent_name);
-                let generation = state
-                    .lease_generation
-                    .expect("lease_generation must be set after FlowEngine::run/resume entry");
+                let generation = state.expect_lease_generation();
                 state.persistence.update_step(
                     &pr.step_id,
                     StepUpdate::failed(generation, e.to_string(), pr.attempt),

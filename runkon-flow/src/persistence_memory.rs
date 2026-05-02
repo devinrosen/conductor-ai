@@ -361,7 +361,10 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
             return Err(EngineError::Cancelled(CancellationReason::LeaseLost));
         }
 
-        let step = store.steps.get_mut(step_id).unwrap();
+        let step = store
+            .steps
+            .get_mut(step_id)
+            .expect("step existence verified above when reading workflow_run_id");
         let now = Utc::now().to_rfc3339();
         let is_starting = update.status == WorkflowStepStatus::Running
             || update.status == WorkflowStepStatus::Waiting;

@@ -170,7 +170,7 @@ pub fn make_state(
         cancellation: CancellationToken::new(),
         current_execution_id: Arc::new(Mutex::new(None)),
         owner_token: None,
-        lease_generation: None,
+        lease_generation: Some(0),
     }
 }
 

@@ -240,9 +240,7 @@ pub fn execute_quality_gate(
     let on_fail_action = qg.on_fail_action.clone();
 
     let step_id = super::insert_step_record(state, &node.name, "gate", pos, iteration, None)?;
-    let generation = state
-        .lease_generation
-        .expect("lease_generation must be set after FlowEngine::run/resume entry");
+    let generation = state.expect_lease_generation();
 
     let set_step_status = |status: WorkflowStepStatus, context: &str| -> Result<()> {
         state.persistence.update_step(
@@ -358,9 +356,7 @@ pub fn handle_gate_timeout(
     node: &GateNode,
 ) -> Result<()> {
     tracing::warn!("Gate '{}' timed out", node.name);
-    let generation = state
-        .lease_generation
-        .expect("lease_generation must be set after FlowEngine::run/resume entry");
+    let generation = state.expect_lease_generation();
     match node.on_timeout {
         OnTimeout::Fail => {
             state.persistence.update_step(

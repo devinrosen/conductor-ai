@@ -63,9 +63,7 @@ pub(super) fn insert_step_with_status(
 ) -> crate::engine_error::Result<String> {
     use crate::traits::persistence::StepUpdate;
     let step_id = insert_step_record(state, step_name, role, pos, iteration, retry_count)?;
-    let generation = state
-        .lease_generation
-        .expect("lease_generation must be set after FlowEngine::run/resume entry");
+    let generation = state.expect_lease_generation();
     state.persistence.update_step(
         &step_id,
         StepUpdate {
@@ -166,9 +164,7 @@ pub(super) fn persist_completed_step(
     structured_output: Option<String>,
 ) -> crate::engine_error::Result<()> {
     use crate::traits::persistence::StepUpdate;
-    let generation = state
-        .lease_generation
-        .expect("lease_generation must be set after FlowEngine::run/resume entry");
+    let generation = state.expect_lease_generation();
     state.persistence.update_step(
         step_id,
         StepUpdate::completed(

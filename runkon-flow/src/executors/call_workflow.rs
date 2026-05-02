@@ -150,9 +150,7 @@ pub fn execute_call_workflow(
                         node.workflow,
                         result.workflow_run_id,
                     );
-                    let generation = state
-                        .lease_generation
-                        .expect("lease_generation must be set after FlowEngine::run/resume entry");
+                    let generation = state.expect_lease_generation();
                     state.persistence.update_step(
                         &step_id,
                         StepUpdate::failed_with_child(
@@ -171,9 +169,7 @@ pub fn execute_call_workflow(
                         node.workflow,
                         prior_child.id,
                     );
-                    let generation = state
-                        .lease_generation
-                        .expect("lease_generation must be set after FlowEngine::run/resume entry");
+                    let generation = state.expect_lease_generation();
                     state.persistence.update_step(
                         &step_id,
                         StepUpdate::failed_with_child(
@@ -254,9 +250,7 @@ pub fn execute_call_workflow(
                     node.workflow, missing,
                 );
                 tracing::warn!("{msg}");
-                let generation = state
-                    .lease_generation
-                    .expect("lease_generation must be set after FlowEngine::run/resume entry");
+                let generation = state.expect_lease_generation();
                 state.persistence.update_step(
                     &step_id,
                     StepUpdate::failed(generation, msg.clone(), attempt),
@@ -298,9 +292,7 @@ pub fn execute_call_workflow(
                         max_attempts,
                         result.workflow_run_id,
                     );
-                    let generation = state
-                        .lease_generation
-                        .expect("lease_generation must be set after FlowEngine::run/resume entry");
+                    let generation = state.expect_lease_generation();
                     state.persistence.update_step(
                         &step_id,
                         StepUpdate::failed_with_child(
@@ -317,9 +309,7 @@ pub fn execute_call_workflow(
             Err(e) => {
                 let msg = format!("Sub-workflow '{}' error: {e}", node.workflow);
                 tracing::warn!("{} (attempt {}/{})", msg, attempt + 1, max_attempts);
-                let generation = state
-                    .lease_generation
-                    .expect("lease_generation must be set after FlowEngine::run/resume entry");
+                let generation = state.expect_lease_generation();
                 state.persistence.update_step(
                     &step_id,
                     StepUpdate::failed(generation, msg.clone(), attempt),

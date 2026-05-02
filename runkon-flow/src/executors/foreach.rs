@@ -549,9 +549,7 @@ pub fn execute_foreach(
 
     let step_succeeded = failed_count == 0;
 
-    let generation = state
-        .lease_generation
-        .expect("lease_generation must be set after FlowEngine::run/resume entry");
+    let generation = state.expect_lease_generation();
 
     if step_succeeded {
         state.persistence.update_step(
