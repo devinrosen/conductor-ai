@@ -1368,8 +1368,10 @@ mod tests {
         let mut prev_marker_sets: VecDeque<HashSet<String>> = VecDeque::new();
 
         for i in 0u32..10 {
-            let mut result = StepResult::default();
-            result.markers = vec![format!("marker-{i}")];
+            let result = StepResult {
+                markers: vec![format!("marker-{i}")],
+                ..Default::default()
+            };
             state.step_results.insert("step".to_string(), result);
 
             let res = check_stuck(
@@ -1405,8 +1407,10 @@ mod tests {
         let stuck_after = 3u32;
         let mut prev_marker_sets: VecDeque<HashSet<String>> = VecDeque::new();
 
-        let mut step = StepResult::default();
-        step.markers = vec!["same-marker".to_string()];
+        let step = StepResult {
+            markers: vec!["same-marker".to_string()],
+            ..Default::default()
+        };
         state.step_results.insert("step".to_string(), step);
 
         for i in 0u32..stuck_after {
