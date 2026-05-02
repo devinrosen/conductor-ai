@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use chrono::Utc;
 use rusqlite::{named_params, Connection, OptionalExtension};
 
+use crate::cancellation_reason::CancellationReason;
 use crate::constants::RUN_COLUMNS;
 use crate::engine_error::EngineError;
 use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
@@ -456,19 +457,22 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
 
     fn update_step(&self, step_id: &str, update: StepUpdate) -> Result<(), EngineError> {
         let conn = self.lock()?;
-        if update.status.is_starting() {
+        let affected = if update.status.is_starting() {
             let now = Utc::now().to_rfc3339();
             conn.execute(
                 "UPDATE workflow_run_steps SET status = :status, child_run_id = :child_run_id, \
-                 started_at = :started_at WHERE id = :id",
+                 started_at = :started_at WHERE id = :id \
+                 AND (SELECT generation FROM workflow_runs \
+                      WHERE id = workflow_run_steps.workflow_run_id) = :generation",
                 named_params![
                     ":status": update.status,
                     ":child_run_id": update.child_run_id,
                     ":started_at": now,
                     ":id": step_id,
+                    ":generation": update.generation,
                 ],
             )
-            .map_err(db_err)?;
+            .map_err(db_err)?
         } else if update.status.is_terminal() {
             let now = Utc::now().to_rfc3339();
             conn.execute(
@@ -478,7 +482,9 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
                  markers_out = :markers_out, \
                  retry_count = COALESCE(:retry_count, retry_count), \
                  structured_output = :structured_output, step_error = :step_error \
-                 WHERE id = :id",
+                 WHERE id = :id \
+                 AND (SELECT generation FROM workflow_runs \
+                      WHERE id = workflow_run_steps.workflow_run_id) = :generation",
                 named_params![
                     ":status": update.status,
                     ":child_run_id": update.child_run_id,
@@ -490,15 +496,25 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
                     ":structured_output": update.structured_output,
                     ":step_error": update.step_error,
                     ":id": step_id,
+                    ":generation": update.generation,
                 ],
             )
-            .map_err(db_err)?;
+            .map_err(db_err)?
         } else {
             conn.execute(
-                "UPDATE workflow_run_steps SET status = :status WHERE id = :id",
-                named_params![":status": update.status, ":id": step_id],
+                "UPDATE workflow_run_steps SET status = :status WHERE id = :id \
+                 AND (SELECT generation FROM workflow_runs \
+                      WHERE id = workflow_run_steps.workflow_run_id) = :generation",
+                named_params![
+                    ":status": update.status,
+                    ":id": step_id,
+                    ":generation": update.generation,
+                ],
             )
-            .map_err(db_err)?;
+            .map_err(db_err)?
+        };
+        if affected == 0 {
+            return Err(EngineError::Cancelled(CancellationReason::LeaseLost));
         }
         Ok(())
     }
@@ -759,7 +775,7 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
             "UPDATE workflow_runs \
              SET owner_token = :token, \
                  lease_until = datetime('now', '+' || :ttl || ' seconds'), \
-                 generation  = generation + 1 \
+                 generation  = CASE WHEN owner_token = :token THEN generation ELSE generation + 1 END \
              WHERE id = :run_id \
                AND (owner_token IS NULL \
                     OR lease_until < datetime('now') \
@@ -914,14 +930,158 @@ mod tests {
     }
 
     #[test]
-    fn acquire_lease_increments_generation() {
+    fn acquire_lease_increments_generation_on_new_owner() {
         let (p, run_id) = make_lease_db();
 
         let gen1 = p.acquire_lease(&run_id, "tok", 60).unwrap();
         assert_eq!(gen1, Some(1), "first acquire should return generation 1");
 
+        // Same-token renewal must NOT increment generation.
         let gen2 = p.acquire_lease(&run_id, "tok", 60).unwrap();
-        assert_eq!(gen2, Some(2), "same-token re-acquire should increment to 2");
+        assert_eq!(
+            gen2,
+            Some(1),
+            "same-token re-acquire must not increment generation"
+        );
+    }
+
+    /// create a minimal DB with workflow_runs + workflow_run_steps for update_step tests.
+    fn make_step_db() -> (SqliteWorkflowPersistence, String, String) {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE workflow_runs (
+                id TEXT PRIMARY KEY,
+                owner_token TEXT,
+                lease_until TEXT,
+                generation INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE workflow_run_steps (
+                id TEXT PRIMARY KEY,
+                workflow_run_id TEXT NOT NULL REFERENCES workflow_runs(id),
+                step_name TEXT NOT NULL DEFAULT '',
+                role TEXT NOT NULL DEFAULT 'actor',
+                can_commit INTEGER NOT NULL DEFAULT 0,
+                condition_expr TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                started_at TEXT,
+                ended_at TEXT,
+                result_text TEXT,
+                context_out TEXT,
+                markers_out TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                structured_output TEXT,
+                step_error TEXT,
+                child_run_id TEXT,
+                position INTEGER NOT NULL DEFAULT 0,
+                iteration INTEGER NOT NULL DEFAULT 0,
+                output_file TEXT,
+                gate_options TEXT
+            );
+            INSERT INTO workflow_runs (id, generation) VALUES ('run-1', 1);
+            INSERT INTO workflow_run_steps (id, workflow_run_id, status) VALUES ('step-1', 'run-1', 'running');",
+        )
+        .unwrap();
+        let p = SqliteWorkflowPersistence::from_shared_connection(Arc::new(Mutex::new(conn)));
+        (p, "run-1".to_string(), "step-1".to_string())
+    }
+
+    #[test]
+    fn update_step_starting_branch_returns_lease_lost_on_stale_generation() {
+        use crate::cancellation_reason::CancellationReason;
+        use crate::engine_error::EngineError;
+        use crate::status::WorkflowStepStatus;
+        use crate::traits::persistence::StepUpdate;
+
+        let (p, _run_id, step_id) = make_step_db();
+
+        // DB has generation=1; send generation=0 (stale).
+        let result = p.update_step(
+            &step_id,
+            StepUpdate {
+                generation: 0,
+                status: WorkflowStepStatus::Running,
+                child_run_id: None,
+                result_text: None,
+                context_out: None,
+                markers_out: None,
+                retry_count: None,
+                structured_output: None,
+                step_error: None,
+            },
+        );
+        assert!(
+            matches!(
+                result,
+                Err(EngineError::Cancelled(CancellationReason::LeaseLost))
+            ),
+            "starting branch should return LeaseLost on stale generation; got {result:?}"
+        );
+    }
+
+    #[test]
+    fn update_step_terminal_branch_returns_lease_lost_on_stale_generation() {
+        use crate::cancellation_reason::CancellationReason;
+        use crate::engine_error::EngineError;
+        use crate::status::WorkflowStepStatus;
+        use crate::traits::persistence::StepUpdate;
+
+        let (p, _run_id, step_id) = make_step_db();
+
+        // DB has generation=1; send generation=0 (stale).
+        let result = p.update_step(
+            &step_id,
+            StepUpdate {
+                generation: 0,
+                status: WorkflowStepStatus::Completed,
+                child_run_id: None,
+                result_text: None,
+                context_out: None,
+                markers_out: None,
+                retry_count: None,
+                structured_output: None,
+                step_error: None,
+            },
+        );
+        assert!(
+            matches!(
+                result,
+                Err(EngineError::Cancelled(CancellationReason::LeaseLost))
+            ),
+            "terminal branch should return LeaseLost on stale generation; got {result:?}"
+        );
+    }
+
+    #[test]
+    fn update_step_status_only_branch_returns_lease_lost_on_stale_generation() {
+        use crate::cancellation_reason::CancellationReason;
+        use crate::engine_error::EngineError;
+        use crate::status::WorkflowStepStatus;
+        use crate::traits::persistence::StepUpdate;
+
+        let (p, _run_id, step_id) = make_step_db();
+
+        // DB has generation=1; send generation=0 (stale). Status=Waiting is the status-only branch.
+        let result = p.update_step(
+            &step_id,
+            StepUpdate {
+                generation: 0,
+                status: WorkflowStepStatus::Waiting,
+                child_run_id: None,
+                result_text: None,
+                context_out: None,
+                markers_out: None,
+                retry_count: None,
+                structured_output: None,
+                step_error: None,
+            },
+        );
+        assert!(
+            matches!(
+                result,
+                Err(EngineError::Cancelled(CancellationReason::LeaseLost))
+            ),
+            "status-only branch should return LeaseLost on stale generation; got {result:?}"
+        );
     }
 
     #[test]

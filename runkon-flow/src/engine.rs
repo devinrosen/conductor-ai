@@ -426,6 +426,17 @@ pub fn run_workflow_engine(
         tracing::error!("Body execution error: {msg}");
         state.all_succeeded = false;
         body_error = Some(msg);
+        // Mirror LeaseLost onto the cancellation token so FlowEngine::run's
+        // lease_lost_during_run check fires even when the error reached us via
+        // a step-write failure rather than the refresh thread.
+        if matches!(
+            e,
+            EngineError::Cancelled(crate::cancellation_reason::CancellationReason::LeaseLost)
+        ) {
+            state
+                .cancellation
+                .cancel(crate::cancellation_reason::CancellationReason::LeaseLost);
+        }
     }
 
     // Execute always block regardless of outcome

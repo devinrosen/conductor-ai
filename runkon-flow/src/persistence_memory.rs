@@ -6,6 +6,7 @@ use std::sync::Mutex;
 
 use chrono::Utc;
 
+use crate::cancellation_reason::CancellationReason;
 use crate::engine_error::EngineError;
 use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::traits::persistence::{
@@ -347,10 +348,20 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
 
     fn update_step(&self, step_id: &str, update: StepUpdate) -> Result<(), EngineError> {
         let mut store = self.lock()?;
-        let step = store
+
+        // Check generation before touching the step.
+        let run_id = store
             .steps
-            .get_mut(step_id)
-            .ok_or_else(|| EngineError::Persistence(format!("step {step_id} not found")))?;
+            .get(step_id)
+            .ok_or_else(|| EngineError::Persistence(format!("step {step_id} not found")))?
+            .workflow_run_id
+            .clone();
+        let run_generation = store.runs.get(&run_id).map(|r| r.generation).unwrap_or(0);
+        if run_generation != update.generation {
+            return Err(EngineError::Cancelled(CancellationReason::LeaseLost));
+        }
+
+        let step = store.steps.get_mut(step_id).unwrap();
         let now = Utc::now().to_rfc3339();
         let is_starting = update.status == WorkflowStepStatus::Running
             || update.status == WorkflowStepStatus::Waiting;
@@ -604,9 +615,12 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
             return Ok(None);
         }
 
+        // Only increment generation when ownership actually changes.
+        if run.owner_token.as_deref() != Some(token) {
+            run.generation += 1;
+        }
         run.owner_token = Some(token.to_string());
         run.lease_until = Some((now + chrono::Duration::seconds(ttl_seconds)).to_rfc3339());
-        run.generation += 1;
         Ok(Some(run.generation))
     }
 
@@ -753,6 +767,7 @@ mod tests {
         p.update_step(
             &step_id,
             StepUpdate {
+                generation: 0,
                 status: WorkflowStepStatus::Completed,
                 child_run_id: None,
                 result_text: Some("done".to_string()),
@@ -769,6 +784,58 @@ mod tests {
         assert_eq!(steps[0].status, WorkflowStepStatus::Completed);
         assert_eq!(steps[0].result_text.as_deref(), Some("done"));
         assert!(steps[0].ended_at.is_some());
+    }
+
+    #[test]
+    fn update_step_returns_lease_lost_on_stale_generation() {
+        use crate::cancellation_reason::CancellationReason;
+        use crate::engine_error::EngineError;
+
+        let p = InMemoryWorkflowPersistence::new();
+        let run = p.create_run(make_new_run("test")).unwrap();
+        // Acquire lease → generation becomes 1.
+        p.acquire_lease(&run.id, "tok", 60).unwrap();
+        let step_id = p.insert_step(make_new_step(&run.id, "s")).unwrap();
+
+        // Supply stale generation=0; DB has generation=1.
+        let result = p.update_step(
+            &step_id,
+            StepUpdate {
+                generation: 0,
+                status: WorkflowStepStatus::Completed,
+                child_run_id: None,
+                result_text: None,
+                context_out: None,
+                markers_out: None,
+                retry_count: None,
+                structured_output: None,
+                step_error: None,
+            },
+        );
+        assert!(
+            matches!(
+                result,
+                Err(EngineError::Cancelled(CancellationReason::LeaseLost))
+            ),
+            "stale generation should return LeaseLost; got {result:?}"
+        );
+
+        // Correct generation passes.
+        p.update_step(
+            &step_id,
+            StepUpdate {
+                generation: 1,
+                status: WorkflowStepStatus::Completed,
+                child_run_id: None,
+                result_text: None,
+                context_out: None,
+                markers_out: None,
+                retry_count: None,
+                structured_output: None,
+                step_error: None,
+            },
+        )
+        .unwrap();
     }
 
     #[test]
@@ -999,8 +1066,9 @@ mod tests {
         let p = InMemoryWorkflowPersistence::new();
         let run = p.create_run(make_new_run("test")).unwrap();
         p.acquire_lease(&run.id, "token-abc", 30).unwrap();
+        // Same-token renewal must not increment generation.
         let result = p.acquire_lease(&run.id, "token-abc", 30).unwrap();
-        assert_eq!(result, Some(2));
+        assert_eq!(result, Some(1));
     }
 
     #[test]
