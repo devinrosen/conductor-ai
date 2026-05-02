@@ -149,10 +149,10 @@ async fn main() -> Result<()> {
         }
         {
             let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-            match conductor_core::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60) {
+            match conductor_core::workflow::claim_expired_lease_runs(&conn, &config) {
                 Ok(claimed) if !claimed.is_empty() => {
                     tracing::info!(
-                        "Auto-resuming {} stuck workflow run(s) on startup",
+                        "Auto-resuming {} expired-lease workflow run(s) on startup",
                         claimed.len()
                     );
                     for (run_id, wf_name, label) in claimed {
@@ -169,7 +169,7 @@ async fn main() -> Result<()> {
                     }
                 }
                 Ok(_) => {}
-                Err(e) => tracing::warn!("claim_heartbeat_stuck_runs failed on startup: {e}"),
+                Err(e) => tracing::warn!("claim_expired_lease_runs failed on startup: {e}"),
             }
         }
     }
@@ -253,9 +253,12 @@ async fn main() -> Result<()> {
                 }
                 {
                     let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-                    match conductor_core::workflow::claim_heartbeat_stuck_runs(&conn, &cfg, 60) {
+                    match conductor_core::workflow::claim_expired_lease_runs(&conn, &cfg) {
                         Ok(claimed) if !claimed.is_empty() => {
-                            tracing::info!("Auto-resuming {} stuck workflow run(s)", claimed.len());
+                            tracing::info!(
+                                "Auto-resuming {} expired-lease workflow run(s)",
+                                claimed.len()
+                            );
                             for (run_id, wf_name, label) in claimed {
                                 conductor_core::workflow::spawn_heartbeat_resume(
                                     conductor_core::workflow::SpawnHeartbeatResumeParams {
@@ -270,7 +273,7 @@ async fn main() -> Result<()> {
                             }
                         }
                         Ok(_) => {}
-                        Err(e) => tracing::warn!("claim_heartbeat_stuck_runs failed: {e}"),
+                        Err(e) => tracing::warn!("claim_expired_lease_runs failed: {e}"),
                     }
                     let auto_resume_limit = cfg.general.auto_resume_limit;
                     if auto_resume_limit > 0 {

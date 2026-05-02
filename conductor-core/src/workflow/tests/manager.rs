@@ -3936,15 +3936,15 @@ fn test_reset_steps_from_position_clears_step_error() {
 }
 
 // ---------------------------------------------------------------------------
-// claim_heartbeat_stuck_runs tests
+// claim_expired_lease_runs tests
 // ---------------------------------------------------------------------------
 
 /// Helper: insert a minimal running root workflow_run with explicit started_at
-/// and optional last_heartbeat. Returns the run's id.
+/// and optional lease_until. Returns the run's id.
 fn insert_orphaned_root_run(
     conn: &Connection,
     started_at: &str,
-    last_heartbeat: Option<&str>,
+    lease_until: Option<&str>,
 ) -> String {
     let agent_mgr = AgentManager::new(conn);
     let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
@@ -3952,9 +3952,9 @@ fn insert_orphaned_root_run(
     conn.execute(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
-          started_at, parent_workflow_run_id, last_heartbeat) \
-         VALUES (:id, 'test-wf', NULL, :parent_run_id, 'running', 0, 'manual', :started_at, NULL, :last_heartbeat)",
-        named_params! { ":id": id, ":parent_run_id": parent.id, ":started_at": started_at, ":last_heartbeat": last_heartbeat },
+          started_at, parent_workflow_run_id, lease_until) \
+         VALUES (:id, 'test-wf', NULL, :parent_run_id, 'running', 0, 'manual', :started_at, NULL, :lease_until)",
+        named_params! { ":id": id, ":parent_run_id": parent.id, ":started_at": started_at, ":lease_until": lease_until },
     )
     .unwrap();
     id
@@ -3978,19 +3978,18 @@ fn get_step_status(conn: &Connection, step_id: &str) -> String {
     .unwrap()
 }
 
-/// A stale last_heartbeat (> threshold) should be reaped and resumed.
+/// Expired lease_until (in the past) must be reaped by the watchdog.
 #[test]
-fn test_reap_heartbeat_stuck_stale_heartbeat() {
+fn test_claim_expired_lease_runs_expired_lease() {
     let conn = setup_db();
-    // Heartbeat 200 seconds ago — stale with threshold=60.
-    let stale = chrono::Utc::now() - chrono::Duration::seconds(200);
-    let stale_str = stale.to_rfc3339();
-    let run_id = insert_orphaned_root_run(&conn, &stale_str, Some(&stale_str));
+    let expired = chrono::Utc::now() - chrono::Duration::seconds(300);
+    // Use SQLite datetime format — production acquire_lease also uses datetime('now', '+N seconds').
+    let expired_sqlite = expired.format("%Y-%m-%d %H:%M:%S").to_string();
+    let run_id = insert_orphaned_root_run(&conn, &expired_sqlite, Some(&expired_sqlite));
     let config = crate::config::Config::default();
-    let claimed = crate::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60).unwrap();
+    let claimed = crate::workflow::claim_expired_lease_runs(&conn, &config).unwrap();
 
     assert_eq!(claimed.len(), 1, "expected 1 run reaped");
-    // Status must be flipped to 'failed' by the CAS.
     assert_eq!(
         get_run_status(&conn, &run_id),
         "failed",
@@ -3998,17 +3997,20 @@ fn test_reap_heartbeat_stuck_stale_heartbeat() {
     );
 }
 
-/// A fresh last_heartbeat (< threshold) must NOT be reaped.
+/// A lease_until in the future must NOT be reaped.
 #[test]
-fn test_reap_heartbeat_stuck_fresh_heartbeat() {
+fn test_claim_expired_lease_runs_fresh_lease() {
     let conn = setup_db();
-    let fresh = chrono::Utc::now() - chrono::Duration::seconds(10);
-    let fresh_str = fresh.to_rfc3339();
-    let run_id = insert_orphaned_root_run(&conn, &fresh_str, Some(&fresh_str));
+    let now = chrono::Utc::now();
+    let fresh_lease = now + chrono::Duration::seconds(300);
+    // Use SQLite datetime format — production acquire_lease also uses datetime('now', '+N seconds').
+    let now_sqlite = now.format("%Y-%m-%d %H:%M:%S").to_string();
+    let fresh_sqlite = fresh_lease.format("%Y-%m-%d %H:%M:%S").to_string();
+    let run_id = insert_orphaned_root_run(&conn, &now_sqlite, Some(&fresh_sqlite));
     let config = crate::config::Config::default();
-    let claimed = crate::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60).unwrap();
+    let claimed = crate::workflow::claim_expired_lease_runs(&conn, &config).unwrap();
 
-    assert_eq!(claimed.len(), 0, "fresh run must not be reaped");
+    assert_eq!(claimed.len(), 0, "run with future lease must not be reaped");
     assert_eq!(
         get_run_status(&conn, &run_id),
         "running",
@@ -4016,47 +4018,27 @@ fn test_reap_heartbeat_stuck_fresh_heartbeat() {
     );
 }
 
-/// NULL heartbeat falls back to started_at — stale started_at must be reaped.
+/// NULL lease_until (pre-migration row or unset) must be reaped — treated as expired.
 #[test]
-fn test_reap_heartbeat_stuck_null_heartbeat_stale_started() {
+fn test_claim_expired_lease_runs_null_lease_until() {
     let conn = setup_db();
-    let stale = chrono::Utc::now() - chrono::Duration::seconds(200);
-    let run_id = insert_orphaned_root_run(&conn, &stale.to_rfc3339(), None);
+    let now = chrono::Utc::now();
+    let run_id = insert_orphaned_root_run(&conn, &now.to_rfc3339(), None);
     let config = crate::config::Config::default();
-    let claimed = crate::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60).unwrap();
+    let claimed = crate::workflow::claim_expired_lease_runs(&conn, &config).unwrap();
 
-    assert_eq!(
-        claimed.len(),
-        1,
-        "stale run with NULL heartbeat must be reaped"
-    );
+    assert_eq!(claimed.len(), 1, "run with NULL lease_until must be reaped");
     assert_eq!(get_run_status(&conn, &run_id), "failed");
 }
 
-/// NULL heartbeat falls back to started_at — fresh started_at must NOT be reaped.
-#[test]
-fn test_reap_heartbeat_stuck_null_heartbeat_fresh_started() {
-    let conn = setup_db();
-    let fresh = chrono::Utc::now() - chrono::Duration::seconds(10);
-    let run_id = insert_orphaned_root_run(&conn, &fresh.to_rfc3339(), None);
-    let config = crate::config::Config::default();
-    let claimed = crate::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60).unwrap();
-
-    assert_eq!(
-        claimed.len(),
-        0,
-        "fresh run with NULL heartbeat must not be reaped"
-    );
-    assert_eq!(get_run_status(&conn, &run_id), "running");
-}
-
 /// A run with an active child step (status='pending') must NOT be reaped, even
-/// when the heartbeat is stale — the NOT EXISTS guard blocks it.
+/// when the lease is expired — the NOT EXISTS guard blocks it.
 #[test]
-fn test_reap_heartbeat_stuck_active_child_step() {
+fn test_claim_expired_lease_runs_active_step_blocks_reap() {
     let conn = setup_db();
-    let stale = chrono::Utc::now() - chrono::Duration::seconds(200);
-    let run_id = insert_orphaned_root_run(&conn, &stale.to_rfc3339(), None);
+    let expired = chrono::Utc::now() - chrono::Duration::seconds(300);
+    let expired_sqlite = expired.format("%Y-%m-%d %H:%M:%S").to_string();
+    let run_id = insert_orphaned_root_run(&conn, &expired_sqlite, Some(&expired_sqlite));
 
     // Insert a pending step — makes the NOT EXISTS guard fire.
     conn.execute(
@@ -4067,7 +4049,7 @@ fn test_reap_heartbeat_stuck_active_child_step() {
     )
     .unwrap();
     let config = crate::config::Config::default();
-    let claimed = crate::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60).unwrap();
+    let claimed = crate::workflow::claim_expired_lease_runs(&conn, &config).unwrap();
 
     assert_eq!(claimed.len(), 0, "run with active step must not be reaped");
     assert_eq!(get_run_status(&conn, &run_id), "running");
@@ -4076,26 +4058,29 @@ fn test_reap_heartbeat_stuck_active_child_step() {
 /// Two sequential calls on the same orphan: first wins the CAS (count=1),
 /// second sees changes()=0 (count=0).
 #[test]
-fn test_reap_heartbeat_stuck_concurrent_race() {
+fn test_claim_expired_lease_runs_cas_race() {
     let conn = setup_db();
-    let stale = chrono::Utc::now() - chrono::Duration::seconds(200);
-    let _run_id = insert_orphaned_root_run(&conn, &stale.to_rfc3339(), None);
+    let expired = chrono::Utc::now() - chrono::Duration::seconds(300);
+    let expired_sqlite = expired.format("%Y-%m-%d %H:%M:%S").to_string();
+    let _run_id = insert_orphaned_root_run(&conn, &expired_sqlite, Some(&expired_sqlite));
     let config = crate::config::Config::default();
 
     // First call wins the CAS.
-    let claimed1 = crate::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60).unwrap();
+    let claimed1 = crate::workflow::claim_expired_lease_runs(&conn, &config).unwrap();
     assert_eq!(claimed1.len(), 1, "first call should win the CAS");
 
     // Second call sees status='failed' — detection query excludes it, count=0.
-    let claimed2 = crate::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60).unwrap();
+    let claimed2 = crate::workflow::claim_expired_lease_runs(&conn, &config).unwrap();
     assert_eq!(claimed2.len(), 0, "second call must see no orphaned runs");
 }
 
 /// Sub-workflow runs (parent_workflow_run_id IS NOT NULL) must never be reaped.
 #[test]
-fn test_reap_heartbeat_stuck_sub_workflow_excluded() {
+fn test_claim_expired_lease_runs_sub_workflow_excluded() {
     let conn = setup_db();
-    let stale = chrono::Utc::now() - chrono::Duration::seconds(200);
+    let expired = chrono::Utc::now() - chrono::Duration::seconds(300);
+    // Use SQLite datetime format for lease_until comparison.
+    let expired_sqlite = expired.format("%Y-%m-%d %H:%M:%S").to_string();
 
     // First create a parent run (to satisfy FK).
     let parent_agent = AgentManager::new(&conn)
@@ -4105,9 +4090,14 @@ fn test_reap_heartbeat_stuck_sub_workflow_excluded() {
     conn.execute(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
-          started_at, parent_workflow_run_id, last_heartbeat) \
-         VALUES (:parent_run_id, 'parent-wf', NULL, :parent_agent_id, 'running', 0, 'manual', :stale_ts, NULL, NULL)",
-        named_params! { ":parent_run_id": parent_run_id, ":parent_agent_id": parent_agent.id, ":stale_ts": stale.to_rfc3339() },
+          started_at, parent_workflow_run_id, lease_until) \
+         VALUES (:parent_run_id, 'parent-wf', NULL, :parent_agent_id, 'running', 0, 'manual', :ts, NULL, :expired)",
+        named_params! {
+            ":parent_run_id": parent_run_id,
+            ":parent_agent_id": parent_agent.id,
+            ":ts": expired_sqlite,
+            ":expired": expired_sqlite,
+        },
     )
     .unwrap();
 
@@ -4119,20 +4109,86 @@ fn test_reap_heartbeat_stuck_sub_workflow_excluded() {
     conn.execute(
         "INSERT INTO workflow_runs \
          (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
-          started_at, parent_workflow_run_id, last_heartbeat) \
-         VALUES (:child_run_id, 'child-wf', NULL, :child_agent_id, 'running', 0, 'manual', :stale_ts, :parent_run_id, NULL)",
-        named_params! { ":child_run_id": child_run_id, ":child_agent_id": child_agent.id, ":stale_ts": stale.to_rfc3339(), ":parent_run_id": parent_run_id },
+          started_at, parent_workflow_run_id, lease_until) \
+         VALUES (:child_run_id, 'child-wf', NULL, :child_agent_id, 'running', 0, 'manual', :ts, :parent_run_id, :expired)",
+        named_params! {
+            ":child_run_id": child_run_id,
+            ":child_agent_id": child_agent.id,
+            ":ts": expired_sqlite,
+            ":parent_run_id": parent_run_id,
+            ":expired": expired_sqlite,
+        },
     )
     .unwrap();
     let config = crate::config::Config::default();
     // Only the parent root run should be reaped; the child is excluded.
-    let claimed = crate::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60).unwrap();
+    let claimed = crate::workflow::claim_expired_lease_runs(&conn, &config).unwrap();
     assert_eq!(claimed.len(), 1, "only root run should be reaped");
 
     assert_eq!(
         get_run_status(&conn, &child_run_id),
         "running",
         "sub-workflow run must not be reaped"
+    );
+}
+
+/// A completed run must not be reclaimed by the watchdog, even if its lease is expired.
+#[test]
+fn test_claim_expired_lease_runs_completed_run_not_reclaimed() {
+    let conn = setup_db();
+    let expired = chrono::Utc::now() - chrono::Duration::seconds(300);
+    let expired_sqlite = expired.format("%Y-%m-%d %H:%M:%S").to_string();
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
+    let run_id = crate::new_id();
+    // Insert with status='completed' — the query only picks up status='running' rows.
+    conn.execute(
+        "INSERT INTO workflow_runs \
+         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+          started_at, parent_workflow_run_id, lease_until) \
+         VALUES (:id, 'test-wf', NULL, :parent_run_id, 'completed', 0, 'manual', :ts, NULL, :expired)",
+        named_params! {
+            ":id": run_id,
+            ":parent_run_id": parent.id,
+            ":ts": expired_sqlite,
+            ":expired": expired_sqlite,
+        },
+    )
+    .unwrap();
+    let config = crate::config::Config::default();
+    let claimed = crate::workflow::claim_expired_lease_runs(&conn, &config).unwrap();
+    assert_eq!(claimed.len(), 0, "completed run must not be reclaimed");
+    assert_eq!(get_run_status(&conn, &run_id), "completed");
+}
+
+/// terminate_subprocesses tolerates a nonexistent PID (ESRCH) without panicking.
+/// This is the same ESRCH-tolerance pattern verified by the recovery.rs unit test —
+/// exercise it here against the watchdog claim path.
+#[cfg(unix)]
+#[test]
+fn test_claim_expired_lease_runs_terminate_subprocess_esrch_tolerated() {
+    let conn = setup_db();
+    let expired = chrono::Utc::now() - chrono::Duration::seconds(300);
+    let expired_sqlite = expired.format("%Y-%m-%d %H:%M:%S").to_string();
+
+    // Insert a running root workflow run with expired lease and no active steps.
+    let run_id = insert_orphaned_root_run(&conn, &expired_sqlite, Some(&expired_sqlite));
+
+    // Insert a running step with a nonexistent subprocess PID — terminate_subprocesses
+    // spawns a cancel thread for PID 99999 and must not panic on ESRCH.
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
+         VALUES ('step-esrch', :run_id, 'script', 'script', 0, 'running', 0, 99999)",
+        named_params! { ":run_id": run_id },
+    )
+    .unwrap();
+
+    // Call terminate_subprocesses directly — must return Ok even with a dead PID.
+    let result = crate::workflow::terminate_subprocesses(&conn, &run_id, None);
+    assert!(
+        result.is_ok(),
+        "terminate_subprocesses must tolerate ESRCH: {result:?}"
     );
 }
 

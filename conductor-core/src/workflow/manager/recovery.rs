@@ -595,13 +595,13 @@ pub fn claim_stuck_workflows(
     Ok(flipped_ids)
 }
 
-pub fn claim_heartbeat_stuck_runs(
+pub fn claim_expired_lease_runs(
     conn: &Connection,
     config: &Config,
-    threshold_secs: i64,
 ) -> Result<Vec<(String, String, Option<String>)>> {
-    // Step 1: find orphaned root runs (including zero-step runs — the
-    // executor may have died before creating any steps).
+    // Find orphaned root runs whose lease has expired (or was never set, which
+    // covers runs created before migration 084). Includes zero-step runs where
+    // the executor died before creating any steps.
     let orphaned: Vec<(String, String, Option<String>)> = query_collect(
         conn,
         "SELECT id, workflow_name, target_label FROM workflow_runs \
@@ -612,11 +612,8 @@ pub fn claim_heartbeat_stuck_runs(
                  WHERE wrs.workflow_run_id = workflow_runs.id \
                    AND wrs.status IN ('running', 'pending', 'waiting') \
                ) \
-               AND ( \
-                 CAST(strftime('%s', 'now') AS INTEGER) - \
-                 CAST(strftime('%s', COALESCE(last_heartbeat, started_at)) AS INTEGER) \
-               ) > :threshold_secs",
-        named_params![":threshold_secs": threshold_secs],
+               AND (lease_until < datetime('now') OR lease_until IS NULL)",
+        [],
         |row| {
             Ok((
                 row.get("id")?,
@@ -638,7 +635,7 @@ pub fn claim_heartbeat_stuck_runs(
         &orphaned_ids,
         "running",
         ORPHAN_BETWEEN_STEPS_MSG,
-        "claim_heartbeat_stuck_runs",
+        "claim_expired_lease_runs",
     )?
     .into_iter()
     .collect();
@@ -788,7 +785,7 @@ const SQL_RESET_COMPLETED: &str =
 const SQL_RESET_FROM_POS: &str =
     reset_sql!("WHERE workflow_run_id = :run_id AND position >= :position");
 
-fn terminate_subprocesses(
+pub(crate) fn terminate_subprocesses(
     conn: &Connection,
     workflow_run_id: &str,
     from_position: Option<i64>,
@@ -1065,9 +1062,21 @@ pub fn run_workflow_maintenance(
         Ok(_) => {}
         Err(e) => tracing::warn!("reap_finalization_stuck_workflow_runs failed: {e}"),
     }
-    match claim_heartbeat_stuck_runs(conn, config, 60) {
+    match claim_expired_lease_runs(conn, config) {
         Ok(claimed) if !claimed.is_empty() => {
-            tracing::info!("auto-resuming {} stuck workflow run(s)", claimed.len());
+            tracing::info!(
+                "auto-resuming {} expired-lease workflow run(s)",
+                claimed.len()
+            );
+            for (run_id, _, _) in &claimed {
+                // Kill any zombie subprocesses from the dead engine before
+                // spawning a fresh resume — prevents duplicate side effects.
+                if let Err(e) = terminate_subprocesses(conn, run_id, None) {
+                    tracing::warn!(
+                        "terminate_subprocesses before watchdog resume failed for {run_id}: {e}"
+                    );
+                }
+            }
             for (run_id, wf_name, label) in claimed {
                 crate::workflow::spawn_heartbeat_resume(
                     crate::workflow::SpawnHeartbeatResumeParams {
@@ -1082,7 +1091,7 @@ pub fn run_workflow_maintenance(
             }
         }
         Ok(_) => {}
-        Err(e) => tracing::warn!("claim_heartbeat_stuck_runs failed: {e}"),
+        Err(e) => tracing::warn!("claim_expired_lease_runs failed: {e}"),
     }
     let auto_resume_limit = config.general.auto_resume_limit;
     if auto_resume_limit > 0 {

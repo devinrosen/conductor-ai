@@ -182,6 +182,11 @@ impl ExecutionState {
     /// Without this being called from inside long-running wait loops (parallel
     /// blocks, foreach fan-out), the heartbeat goes stale during multi-minute
     /// waits and the watchdog reaper races the engine after >60 s — see #2731.
+    ///
+    /// NOTE (#2731/#2796): lease refresh (refresh_lease_loop in flow_engine.rs)
+    /// is now the load-bearing ownership mechanism. Heartbeat writes are retained
+    /// solely for UI staleness display (detect_stuck_workflow_run_ids reads
+    /// last_heartbeat). Do not remove them without auditing that query.
     pub fn tick_heartbeat_throttled(&self) -> Result<()> {
         use crate::cancellation_reason::CancellationReason;
 

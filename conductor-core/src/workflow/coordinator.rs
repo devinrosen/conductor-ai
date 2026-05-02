@@ -615,7 +615,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         persistence: Arc::clone(&persistence),
         action_registry,
         script_env_provider,
-        workflow_run_id: wf_run_id,
+        workflow_run_id: wf_run_id.clone(),
         workflow_name: workflow.name.clone(),
         worktree_ctx: runkon_flow::engine::WorktreeContext {
             worktree_id: params.worktree_id.clone(),
@@ -649,9 +649,29 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         &workflow.name,
     )?;
 
-    let rk_result = engine
-        .run(&rk_def, &mut rk_state)
-        .map_err(|e| map_engine_error(e, &workflow.name, "run"))?;
+    let rk_result = match engine.run(&rk_def, &mut rk_state) {
+        Ok(r) => r,
+        Err(e) => {
+            if matches!(
+                &e,
+                runkon_flow::engine_error::EngineError::Cancelled(
+                    runkon_flow::cancellation_reason::CancellationReason::LeaseLost
+                )
+            ) {
+                // Belt-and-braces: kill any subprocess PIDs the dead engine left
+                // behind. signal_lease_abort fires registry.cancel, but this
+                // ensures termination even if the cancel path had no PID.
+                if let Ok(guard) = lock_shared(&shared_conn) {
+                    if let Err(te) =
+                        crate::workflow::terminate_subprocesses(&guard, &wf_run_id, None)
+                    {
+                        tracing::warn!("terminate_subprocesses on LeaseLost (run): {te}");
+                    }
+                }
+            }
+            return Err(map_engine_error(e, &workflow.name, "run"));
+        }
+    };
 
     // Close the parent agent run. It was created without a subprocess_pid (workflow
     // parent runs never spawn a subprocess), so the orphan reaper would sweep it the
@@ -1099,9 +1119,29 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         &wf_run.workflow_name,
     )?;
 
-    let rk_result = engine
-        .resume(&rk_def, &mut rk_state)
-        .map_err(|e| map_engine_error(e, &wf_run.workflow_name, "resume"))?;
+    let rk_result = match engine.resume(&rk_def, &mut rk_state) {
+        Ok(r) => r,
+        Err(e) => {
+            if matches!(
+                &e,
+                runkon_flow::engine_error::EngineError::Cancelled(
+                    runkon_flow::cancellation_reason::CancellationReason::LeaseLost
+                )
+            ) {
+                // Belt-and-braces: kill any subprocess PIDs the dead engine left
+                // behind. signal_lease_abort fires registry.cancel, but this
+                // ensures termination even if the cancel path had no PID.
+                if let Ok(guard) = lock_shared(&shared_conn) {
+                    if let Err(te) =
+                        crate::workflow::terminate_subprocesses(&guard, &wf_run.id, None)
+                    {
+                        tracing::warn!("terminate_subprocesses on LeaseLost (resume): {te}");
+                    }
+                }
+            }
+            return Err(map_engine_error(e, &wf_run.workflow_name, "resume"));
+        }
+    };
 
     Ok(rk_result)
 }
