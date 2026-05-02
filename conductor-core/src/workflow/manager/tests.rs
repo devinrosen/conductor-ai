@@ -4897,3 +4897,48 @@ fn test_workflow_title_malformed_snapshot_json() {
         .unwrap();
     assert_eq!(fetched.workflow_title, None);
 }
+
+// ── cancel_run step-status preservation ─────────────────────────────────────
+
+#[test]
+fn test_cancel_run_does_not_overwrite_completed_step() {
+    let conn = setup_db();
+    let run = create_worktree_run(&conn, "w1");
+
+    // Insert a step that is already completed with a known ended_at.
+    let step_id = "test-step-completed-01";
+    let original_ended_at = "2024-01-01T13:23:44Z";
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, ended_at) \
+         VALUES (:id, :run_id, 'implement', 'actor', 0, 'completed', :ended_at)",
+        rusqlite::named_params! {
+            ":id": step_id,
+            ":run_id": run.id,
+            ":ended_at": original_ended_at,
+        },
+    )
+    .unwrap();
+
+    // Cancel the run (run is in pending state, which is cancellable).
+    crate::workflow::cancel_run(&conn, &run.id, "workflow cancelled: UserRequested(None)")
+        .expect("cancel_run must succeed");
+
+    // The completed step row must be unchanged.
+    let (status, ended_at): (String, String) = conn
+        .query_row(
+            "SELECT status, ended_at FROM workflow_run_steps WHERE id = ?",
+            rusqlite::params![step_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("step row must exist after cancel");
+
+    assert_eq!(
+        status, "completed",
+        "cancel_run must not regress a completed step to failed"
+    );
+    assert_eq!(
+        ended_at, original_ended_at,
+        "cancel_run must not overwrite ended_at of a completed step"
+    );
+}

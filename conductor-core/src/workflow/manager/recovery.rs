@@ -202,7 +202,8 @@ fn bulk_recover_steps(
                      markers_out = NULL, \
                      structured_output = NULL, \
                      step_error  = NULL \
-                 WHERE id IN ({in_placeholders})"
+                 WHERE id IN ({in_placeholders}) \
+                 AND status NOT IN ('completed','failed','skipped','timed_out')"
         );
 
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(5 * n + 1);
