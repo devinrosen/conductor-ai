@@ -14,6 +14,9 @@ pub const RUN_COLUMNS: &str =
      total_cache_creation_input_tokens, total_turns, total_cost_usd, total_duration_ms, model, \
      error, dismissed, workflow_title, owner_token, lease_until, generation";
 
+/// SQL fragment listing every terminal step status, for use in `IN`/`NOT IN` clauses.
+pub const TERMINAL_STATUSES_SQL: &str = "'completed','failed','skipped','timed_out'";
+
 pub const FLOW_OUTPUT_INSTRUCTION: &str = r#"
 When you have finished your work, output the following block exactly as the
 last thing in your response. Do not include this block in code examples or

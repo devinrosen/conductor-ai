@@ -1,5 +1,5 @@
 pub(super) use runkon_flow::constants::RUN_COLUMNS;
-pub use runkon_flow::constants::{STEP_ROLE_FOREACH, STEP_ROLE_WORKFLOW};
+pub use runkon_flow::constants::{STEP_ROLE_FOREACH, STEP_ROLE_WORKFLOW, TERMINAL_STATUSES_SQL};
 
 /// Minimum number of recent runs required to emit a regression signal.
 pub const REGRESSION_MIN_RECENT_RUNS: i64 = 5;

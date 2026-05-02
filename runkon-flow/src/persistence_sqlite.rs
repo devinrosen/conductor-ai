@@ -12,7 +12,7 @@ use chrono::Utc;
 use rusqlite::{named_params, Connection, OptionalExtension};
 
 use crate::cancellation_reason::CancellationReason;
-use crate::constants::RUN_COLUMNS;
+use crate::constants::{RUN_COLUMNS, TERMINAL_STATUSES_SQL};
 use crate::engine_error::EngineError;
 use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::traits::persistence::{
@@ -41,6 +41,34 @@ static STEP_COLUMNS_WITH_PREFIX: std::sync::LazyLock<String> = std::sync::LazyLo
         .map(|c| format!("s.{c}"))
         .collect::<Vec<_>>()
         .join(", ")
+});
+
+/// Precomputed SQL for the terminal-status UPDATE in `update_step`. Allocated once so
+/// the hot-path call site carries no per-invocation heap cost.
+static SQL_UPDATE_TERMINAL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "UPDATE workflow_run_steps SET status = :status, \
+         child_run_id = COALESCE(:child_run_id, child_run_id), \
+         ended_at = :ended_at, result_text = :result_text, context_out = :context_out, \
+         markers_out = :markers_out, \
+         retry_count = COALESCE(:retry_count, retry_count), \
+         structured_output = :structured_output, step_error = :step_error \
+         WHERE id = :id \
+         AND (SELECT generation FROM workflow_runs \
+              WHERE id = workflow_run_steps.workflow_run_id) = :generation \
+         AND status NOT IN ({TERMINAL_STATUSES_SQL})"
+    )
+});
+
+/// Precomputed SQL for the already-terminal disambiguation check in `update_step`.
+static SQL_CHECK_TERMINAL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "SELECT 1 FROM workflow_run_steps \
+         WHERE id = :id \
+         AND (SELECT generation FROM workflow_runs \
+              WHERE id = workflow_run_steps.workflow_run_id) = :generation \
+         AND status IN ({TERMINAL_STATUSES_SQL})"
+    )
 });
 
 // ---------------------------------------------------------------------------
@@ -475,31 +503,46 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
             .map_err(db_err)?
         } else if update.status.is_terminal() {
             let now = Utc::now().to_rfc3339();
-            conn.execute(
-                "UPDATE workflow_run_steps SET status = :status, \
-                 child_run_id = COALESCE(:child_run_id, child_run_id), \
-                 ended_at = :ended_at, result_text = :result_text, context_out = :context_out, \
-                 markers_out = :markers_out, \
-                 retry_count = COALESCE(:retry_count, retry_count), \
-                 structured_output = :structured_output, step_error = :step_error \
-                 WHERE id = :id \
-                 AND (SELECT generation FROM workflow_runs \
-                      WHERE id = workflow_run_steps.workflow_run_id) = :generation",
-                named_params![
-                    ":status": update.status,
-                    ":child_run_id": update.child_run_id,
-                    ":ended_at": now,
-                    ":result_text": update.result_text,
-                    ":context_out": update.context_out,
-                    ":markers_out": update.markers_out,
-                    ":retry_count": update.retry_count,
-                    ":structured_output": update.structured_output,
-                    ":step_error": update.step_error,
-                    ":id": step_id,
-                    ":generation": update.generation,
-                ],
-            )
-            .map_err(db_err)?
+            let n = conn
+                .execute(
+                    &SQL_UPDATE_TERMINAL,
+                    named_params![
+                        ":status": update.status,
+                        ":child_run_id": update.child_run_id,
+                        ":ended_at": now,
+                        ":result_text": update.result_text,
+                        ":context_out": update.context_out,
+                        ":markers_out": update.markers_out,
+                        ":retry_count": update.retry_count,
+                        ":structured_output": update.structured_output,
+                        ":step_error": update.step_error,
+                        ":id": step_id,
+                        ":generation": update.generation,
+                    ],
+                )
+                .map_err(db_err)?;
+            if n == 0 {
+                // Disambiguate: already terminal with correct generation (benign no-op) vs
+                // generation truly mismatched (caller lost the lease).
+                let already_terminal = conn
+                    .query_row(
+                        &SQL_CHECK_TERMINAL,
+                        named_params![":id": step_id, ":generation": update.generation],
+                        |_| Ok(()),
+                    )
+                    .optional()
+                    .map_err(db_err)?
+                    .is_some();
+                if already_terminal {
+                    tracing::debug!(
+                        step_id = %step_id,
+                        "update_step: step already terminal, skipping overwrite"
+                    );
+                    return Ok(());
+                }
+                return Err(EngineError::Cancelled(CancellationReason::LeaseLost));
+            }
+            n
         } else {
             conn.execute(
                 "UPDATE workflow_run_steps SET status = :status WHERE id = :id \
@@ -1049,6 +1092,82 @@ mod tests {
             ),
             "terminal branch should return LeaseLost on stale generation; got {result:?}"
         );
+    }
+
+    #[test]
+    fn update_step_terminal_branch_noop_when_already_completed() {
+        use crate::status::WorkflowStepStatus;
+        use crate::traits::persistence::StepUpdate;
+
+        let (p, run_id, step_id) = make_step_db();
+
+        // Mark the step as completed (generation=1 matches the DB seed).
+        p.update_step(
+            &step_id,
+            StepUpdate {
+                generation: 1,
+                status: WorkflowStepStatus::Completed,
+                child_run_id: None,
+                result_text: Some("success".to_string()),
+                context_out: None,
+                markers_out: None,
+                retry_count: None,
+                structured_output: None,
+                step_error: None,
+            },
+        )
+        .expect("first update to completed must succeed");
+
+        // Capture the ended_at written by the first update.
+        let (status_after_first, ended_at_after_first): (String, String) = p
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT status, ended_at FROM workflow_run_steps WHERE id = ?",
+                rusqlite::params![step_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("row must exist");
+        assert_eq!(status_after_first, "completed");
+
+        // Try to overwrite with Failed — must be a no-op.
+        let result = p.update_step(
+            &step_id,
+            StepUpdate {
+                generation: 1,
+                status: WorkflowStepStatus::Failed,
+                child_run_id: None,
+                result_text: Some("overwrite attempt".to_string()),
+                context_out: None,
+                markers_out: None,
+                retry_count: None,
+                structured_output: None,
+                step_error: Some("cancelled".to_string()),
+            },
+        );
+        assert!(
+            result.is_ok(),
+            "update_step on already-completed step must return Ok; got {result:?}"
+        );
+
+        // Row must be unchanged.
+        let (status_final, ended_at_final): (String, String) = p
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT status, ended_at FROM workflow_run_steps WHERE id = ?",
+                rusqlite::params![step_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("row must still exist");
+        assert_eq!(status_final, "completed", "status must remain completed");
+        assert_eq!(
+            ended_at_final, ended_at_after_first,
+            "ended_at must be unchanged after no-op"
+        );
+
+        // run_id is read by other tests; suppress the unused warning.
+        let _ = run_id;
     }
 
     #[test]
