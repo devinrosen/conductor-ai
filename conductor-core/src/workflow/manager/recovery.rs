@@ -1477,7 +1477,13 @@ mod tests {
         // Insert a running root run with expired lease and no active steps.
         // claim_expired_lease_runs picks it up; started_at = now() prevents the
         // finalization-stuck reaper (60s threshold) from claiming it first.
-        insert_run_with_lease(&conn, "maint-run-1", &parent_id, "running", Some("1970-01-01T00:00:00Z"));
+        insert_run_with_lease(
+            &conn,
+            "maint-run-1",
+            &parent_id,
+            "running",
+            Some("1970-01-01T00:00:00Z"),
+        );
 
         let config = Config::default();
         // Must not panic — terminate_subprocesses is called for each claimed run
@@ -1509,7 +1515,13 @@ mod tests {
     fn test_claim_and_resume_multiple_expired_leases_all_claimed() {
         let (conn, parent_id) = setup();
         for id in &["exp-run-1", "exp-run-2", "exp-run-3"] {
-            insert_run_with_lease(&conn, id, &parent_id, "running", Some("1970-01-01T00:00:00Z"));
+            insert_run_with_lease(
+                &conn,
+                id,
+                &parent_id,
+                "running",
+                Some("1970-01-01T00:00:00Z"),
+            );
         }
         let config = Config::default();
         crate::workflow::claim_and_resume_expired_leases(&conn, &config, None);
@@ -1529,7 +1541,13 @@ mod tests {
     #[test]
     fn test_claim_and_resume_skips_run_with_valid_lease() {
         let (conn, parent_id) = setup();
-        insert_run_with_lease(&conn, "live-run", &parent_id, "running", Some("3000-01-01T00:00:00Z"));
+        insert_run_with_lease(
+            &conn,
+            "live-run",
+            &parent_id,
+            "running",
+            Some("3000-01-01T00:00:00Z"),
+        );
         let config = Config::default();
         crate::workflow::claim_and_resume_expired_leases(&conn, &config, None);
         assert_eq!(
@@ -1544,7 +1562,13 @@ mod tests {
     #[test]
     fn test_claim_and_resume_ignores_non_running_runs() {
         let (conn, parent_id) = setup();
-        insert_run_with_lease(&conn, "done-run", &parent_id, "completed", Some("1970-01-01T00:00:00Z"));
+        insert_run_with_lease(
+            &conn,
+            "done-run",
+            &parent_id,
+            "completed",
+            Some("1970-01-01T00:00:00Z"),
+        );
         let config = Config::default();
         crate::workflow::claim_and_resume_expired_leases(&conn, &config, None);
         assert_eq!(
