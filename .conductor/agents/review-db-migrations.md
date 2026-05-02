@@ -17,3 +17,11 @@ Focus exclusively on changes to migration files in conductor-core/src/db/migrati
 - Schema changes that don't match the corresponding Rust struct fields in conductor-core/src/
 
 If the diff contains no migration changes, report no issues.
+
+## Scope constraint
+
+Only read files that appear directly in the diff, plus their immediate imports/callers (one hop max). Do NOT perform codebase-wide grep sweeps for migration patterns.
+
+Do NOT run `cargo build`, `cargo test`, `cargo clippy`, or any other build/test/lint commands — verifying compile/test correctness is CI's job, not a reviewer's. The only shell commands needed for review are `git diff` / `git log`. Running cargo just adds latency without changing your findings.
+
+If you encounter a migration issue in unchanged code (no `+` or `-` lines in the diff), it MUST go into `off_diff_findings`, NOT `findings`. Pre-existing migration issues found incidentally during an unrelated PR review are not actionable blockers. Never flag unchanged code as blocking.
