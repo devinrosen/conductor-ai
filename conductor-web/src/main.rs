@@ -18,47 +18,6 @@ use conductor_web::state::AppState;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-/// Claim any expired-lease workflow runs, kill their stale subprocesses, and
-/// spawn a heartbeat-resume thread for each one. Used both on startup and in
-/// the periodic maintenance tick; `startup` controls the log suffix only.
-fn claim_and_resume_expired_leases(
-    conn: &rusqlite::Connection,
-    config: &conductor_core::config::Config,
-    startup: bool,
-) {
-    let suffix = if startup { " on startup" } else { "" };
-    let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-    match conductor_core::workflow::claim_expired_lease_runs(conn, config) {
-        Ok(claimed) if !claimed.is_empty() => {
-            tracing::info!(
-                "Auto-resuming {} expired-lease workflow run(s){suffix}",
-                claimed.len()
-            );
-            for (run_id, wf_name, label) in claimed {
-                if let Err(e) =
-                    conductor_core::workflow::terminate_subprocesses(conn, &run_id, None)
-                {
-                    tracing::warn!(
-                        "terminate_subprocesses before watchdog resume failed for {run_id}: {e}"
-                    );
-                }
-                conductor_core::workflow::spawn_heartbeat_resume(
-                    conductor_core::workflow::SpawnHeartbeatResumeParams {
-                        run_id,
-                        workflow_name: wf_name,
-                        target_label: label,
-                        config: config.clone(),
-                        conductor_bin_dir: conductor_bin_dir.clone(),
-                        db_path: None,
-                    },
-                );
-            }
-        }
-        Ok(_) => {}
-        Err(e) => tracing::warn!("claim_expired_lease_runs failed{suffix}: {e}"),
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -189,7 +148,12 @@ async fn main() -> Result<()> {
             }
         }
         {
-            claim_and_resume_expired_leases(&conn, &config, true);
+            let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
+            conductor_core::workflow::claim_and_resume_expired_leases(
+                &conn,
+                &config,
+                conductor_bin_dir,
+            );
         }
     }
 
@@ -271,8 +235,12 @@ async fn main() -> Result<()> {
                     }
                 }
                 {
-                    claim_and_resume_expired_leases(&conn, &cfg, false);
                     let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
+                    conductor_core::workflow::claim_and_resume_expired_leases(
+                        &conn,
+                        &cfg,
+                        conductor_bin_dir.clone(),
+                    );
                     let auto_resume_limit = cfg.general.auto_resume_limit;
                     if auto_resume_limit > 0 {
                         match conductor_core::workflow::classify_resumable_workflows(

@@ -90,8 +90,8 @@ pub use manager::queries::{
     resolve_run_context,
 };
 pub use manager::recovery::{
-    claim_expired_lease_runs, claim_needs_resume_runs, claim_stuck_workflows,
-    classify_resumable_workflows, delete_orphaned_pending_steps, delete_run,
+    claim_and_resume_expired_leases, claim_expired_lease_runs, claim_needs_resume_runs,
+    claim_stuck_workflows, classify_resumable_workflows, delete_orphaned_pending_steps, delete_run,
     detect_stale_workflow_runs, detect_stuck_workflow_run_ids, find_resumable_child_run,
     get_completed_step_keys, purge, purge_count, reap_finalization_stuck_workflow_runs,
     reap_orphaned_script_steps, reap_orphaned_workflow_runs, reap_stale_workflow_runs,

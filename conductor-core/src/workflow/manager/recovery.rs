@@ -1052,16 +1052,13 @@ pub fn claim_needs_resume_runs(conn: &Connection, config: &Config) -> Result<Vec
     )
 }
 
-pub fn run_workflow_maintenance(
+/// Claim any expired-lease workflow runs, kill their stale subprocesses, and
+/// spawn a heartbeat-resume thread for each one.
+pub fn claim_and_resume_expired_leases(
     conn: &Connection,
     config: &Config,
     conductor_bin_dir: Option<std::path::PathBuf>,
 ) {
-    match reap_finalization_stuck_workflow_runs(conn, 60) {
-        Ok(n) if n > 0 => tracing::info!("reaper finalized {n} stuck workflow run(s)"),
-        Ok(_) => {}
-        Err(e) => tracing::warn!("reap_finalization_stuck_workflow_runs failed: {e}"),
-    }
     match claim_expired_lease_runs(conn, config) {
         Ok(claimed) if !claimed.is_empty() => {
             tracing::info!(
@@ -1093,6 +1090,19 @@ pub fn run_workflow_maintenance(
         Ok(_) => {}
         Err(e) => tracing::warn!("claim_expired_lease_runs failed: {e}"),
     }
+}
+
+pub fn run_workflow_maintenance(
+    conn: &Connection,
+    config: &Config,
+    conductor_bin_dir: Option<std::path::PathBuf>,
+) {
+    match reap_finalization_stuck_workflow_runs(conn, 60) {
+        Ok(n) if n > 0 => tracing::info!("reaper finalized {n} stuck workflow run(s)"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("reap_finalization_stuck_workflow_runs failed: {e}"),
+    }
+    claim_and_resume_expired_leases(conn, config, conductor_bin_dir.clone());
     let auto_resume_limit = config.general.auto_resume_limit;
     if auto_resume_limit > 0 {
         match classify_resumable_workflows(conn, auto_resume_limit) {
