@@ -36,6 +36,8 @@ pub struct InMemoryWorkflowPersistence {
     fail_get_fan_out_items: AtomicBool,
     /// When `true`, `get_steps` returns a `Workflow` error.
     fail_get_steps: AtomicBool,
+    /// When `true`, `acquire_lease` returns a `Persistence` error.
+    fail_acquire_lease: AtomicBool,
 }
 
 impl InMemoryWorkflowPersistence {
@@ -50,6 +52,7 @@ impl InMemoryWorkflowPersistence {
             }),
             fail_get_fan_out_items: AtomicBool::new(false),
             fail_get_steps: AtomicBool::new(false),
+            fail_acquire_lease: AtomicBool::new(false),
         }
     }
 }
@@ -72,6 +75,15 @@ impl InMemoryWorkflowPersistence {
     /// `get_steps` returns `EngineError::Workflow`.
     pub fn set_fail_get_steps(&self, fail: bool) {
         self.fail_get_steps
+            .store(fail, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Inject a failure into `acquire_lease`. When `fail` is `true`, every call
+    /// to `acquire_lease` returns `EngineError::Persistence`. Used to test the
+    /// refresh-thread DB error path.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn set_fail_acquire_lease(&self, fail: bool) {
+        self.fail_acquire_lease
             .store(fail, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -118,6 +130,20 @@ impl InMemoryWorkflowPersistence {
             generation: 0,
         };
         self.store.lock().unwrap().runs.insert(id.to_string(), run);
+    }
+
+    /// Test helper: forcibly expire the current lease for `run_id`, then immediately
+    /// steal it with `new_token`. Used to simulate another engine claiming the lease
+    /// while the original engine is still running.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn expire_and_steal_lease(&self, run_id: &str, new_token: &str) {
+        {
+            let mut store = self.store.lock().unwrap();
+            if let Some(run) = store.runs.get_mut(run_id) {
+                run.lease_until = Some("1970-01-01T00:00:00Z".to_string());
+            }
+        }
+        self.acquire_lease(run_id, new_token, 3600).unwrap();
     }
 
     /// Test helper: directly set the metric fields on a step so that
@@ -550,6 +576,11 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         token: &str,
         ttl_seconds: i64,
     ) -> Result<Option<i64>, EngineError> {
+        if self.fail_acquire_lease.load(Ordering::Relaxed) {
+            return Err(EngineError::Persistence(
+                "simulated acquire_lease failure".to_string(),
+            ));
+        }
         let mut store = self.store.lock().map_err(|_| lock_err())?;
         let now = chrono::Utc::now();
 
