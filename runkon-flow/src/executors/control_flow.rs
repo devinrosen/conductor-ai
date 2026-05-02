@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use crate::dsl::{Condition, DoNode, DoWhileNode, IfNode, UnlessNode, WhileNode};
 use crate::engine::{
@@ -56,7 +56,7 @@ pub fn execute_while(state: &mut ExecutionState, node: &WhileNode) -> Result<()>
         0u32
     };
     let mut iteration = start_iteration;
-    let mut prev_marker_sets: Vec<HashSet<String>> = Vec::new();
+    let mut prev_marker_sets: VecDeque<HashSet<String>> = VecDeque::new();
 
     loop {
         // Check condition
@@ -125,7 +125,7 @@ pub fn execute_while(state: &mut ExecutionState, node: &WhileNode) -> Result<()>
 
 pub fn execute_do_while(state: &mut ExecutionState, node: &DoWhileNode) -> Result<()> {
     let mut iteration = 0u32;
-    let mut prev_marker_sets: Vec<HashSet<String>> = Vec::new();
+    let mut prev_marker_sets: VecDeque<HashSet<String>> = VecDeque::new();
 
     loop {
         if check_max_iterations(

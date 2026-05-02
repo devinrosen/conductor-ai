@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -918,7 +918,7 @@ pub fn fetch_child_completion_data(
 /// iterations). Returns `Err` if stuck, `Ok(())` otherwise.
 pub fn check_stuck(
     state: &mut ExecutionState,
-    prev_marker_sets: &mut Vec<HashSet<String>>,
+    prev_marker_sets: &mut VecDeque<HashSet<String>>,
     step: &str,
     marker: &str,
     stuck_after: u32,
@@ -930,19 +930,21 @@ pub fn check_stuck(
         .map(|r| r.markers.iter().cloned().collect())
         .unwrap_or_default();
 
-    prev_marker_sets.push(current_markers.clone());
+    prev_marker_sets.push_back(current_markers.clone());
+    if prev_marker_sets.len() > stuck_after as usize {
+        prev_marker_sets.pop_front();
+    }
 
-    if prev_marker_sets.len() >= stuck_after as usize {
-        let window = &prev_marker_sets[prev_marker_sets.len() - stuck_after as usize..];
-        if window.iter().all(|s| s == &current_markers) {
-            tracing::warn!(
-                "{loop_kind} {step}.{marker} — stuck: identical markers for {stuck_after} consecutive iterations",
-            );
-            state.all_succeeded = false;
-            return Err(EngineError::Workflow(format!(
-                "{loop_kind} {step}.{marker} stuck after {stuck_after} iterations with identical markers",
-            )));
-        }
+    if prev_marker_sets.len() >= stuck_after as usize
+        && prev_marker_sets.iter().all(|s| s == &current_markers)
+    {
+        tracing::warn!(
+            "{loop_kind} {step}.{marker} — stuck: identical markers for {stuck_after} consecutive iterations",
+        );
+        state.all_succeeded = false;
+        return Err(EngineError::Workflow(format!(
+            "{loop_kind} {step}.{marker} stuck after {stuck_after} iterations with identical markers",
+        )));
     }
 
     Ok(())
@@ -1350,5 +1352,81 @@ mod tests {
             state.cancellation.is_cancelled(),
             "helper must set state.cancellation on external cancel"
         );
+    }
+
+    #[test]
+    fn check_stuck_bounds_buffer() {
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::types::StepResult;
+
+        let mut state = crate::test_helpers::make_test_execution_state(
+            Arc::new(InMemoryWorkflowPersistence::new()),
+            "run-bounds".into(),
+        );
+
+        let stuck_after = 3u32;
+        let mut prev_marker_sets: VecDeque<HashSet<String>> = VecDeque::new();
+
+        for i in 0u32..10 {
+            let result = StepResult {
+                markers: vec![format!("marker-{i}")],
+                ..Default::default()
+            };
+            state.step_results.insert("step".to_string(), result);
+
+            let res = check_stuck(
+                &mut state,
+                &mut prev_marker_sets,
+                "step",
+                "m",
+                stuck_after,
+                "while",
+            );
+            assert!(
+                res.is_ok(),
+                "should not be stuck with changing markers at iteration {i}"
+            );
+            assert!(
+                prev_marker_sets.len() <= stuck_after as usize,
+                "buffer exceeded stuck_after at iteration {i}: len={}",
+                prev_marker_sets.len()
+            );
+        }
+    }
+
+    #[test]
+    fn check_stuck_detects_stuck() {
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::types::StepResult;
+
+        let mut state = crate::test_helpers::make_test_execution_state(
+            Arc::new(InMemoryWorkflowPersistence::new()),
+            "run-stuck".into(),
+        );
+
+        let stuck_after = 3u32;
+        let mut prev_marker_sets: VecDeque<HashSet<String>> = VecDeque::new();
+
+        let step = StepResult {
+            markers: vec!["same-marker".to_string()],
+            ..Default::default()
+        };
+        state.step_results.insert("step".to_string(), step);
+
+        for i in 0u32..stuck_after {
+            let res = check_stuck(
+                &mut state,
+                &mut prev_marker_sets,
+                "step",
+                "m",
+                stuck_after,
+                "while",
+            );
+            if i + 1 < stuck_after {
+                assert!(res.is_ok(), "should not be stuck yet at iteration {i}");
+            } else {
+                assert!(res.is_err(), "should detect stuck at iteration {i}");
+            }
+        }
     }
 }
