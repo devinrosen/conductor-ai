@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
     let config = load_config()?;
     ensure_dirs(&config)?;
 
-    let mut web_cfg = load_web_config().unwrap_or_default();
+    let mut web_cfg = load_web_config()?;
 
     // Generate or load VAPID keys for push notifications.
     // The placeholder check detects zero-filled keys written by older versions.
