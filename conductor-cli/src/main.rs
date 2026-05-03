@@ -1,7 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
 
-use conductor_core::config::ensure_dirs;
 use conductor_core::Conductor;
 
 #[cfg(unix)]
@@ -43,7 +42,6 @@ fn main() -> Result<()> {
     } else {
         Conductor::open()?
     };
-    ensure_dirs(&conductor.config)?;
 
     helpers::check_prerequisites();
 

@@ -40,8 +40,7 @@ impl ServerHandler for ConductorMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, rmcp::ErrorData> {
         let resources = tokio::task::spawn_blocking(move || {
-            let conductor =
-                conductor_core::Conductor::open().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let conductor = conductor_core::Conductor::open().map_err(anyhow::Error::from)?;
             super::resources::enumerate_resources(&conductor)
         })
         .await
@@ -58,8 +57,7 @@ impl ServerHandler for ConductorMcpServer {
     ) -> Result<ReadResourceResult, rmcp::ErrorData> {
         let uri = request.uri.clone();
         let text = tokio::task::spawn_blocking(move || {
-            let conductor =
-                conductor_core::Conductor::open().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let conductor = conductor_core::Conductor::open().map_err(anyhow::Error::from)?;
             super::resources::read_resource_by_uri(&conductor, &uri)
         })
         .await
@@ -94,8 +92,7 @@ impl ServerHandler for ConductorMcpServer {
         let name = request.name.to_string();
         let args = request.arguments.unwrap_or_default();
         let result = tokio::task::spawn_blocking(move || {
-            let conductor =
-                conductor_core::Conductor::open().map_err(|e| anyhow::anyhow!(e.to_string()));
+            let conductor = conductor_core::Conductor::open().map_err(anyhow::Error::from);
             match conductor {
                 Ok(c) => super::tools::dispatch_tool(&c, &name, &args),
                 Err(e) => crate::mcp::helpers::tool_err(e),

@@ -328,23 +328,9 @@ pub(super) fn tool_get_step_log(
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_helpers::make_test_conductor;
     use super::*;
     use serde_json::Value;
-
-    fn make_test_conductor() -> (tempfile::NamedTempFile, Conductor) {
-        use conductor_core::config::Config;
-        use conductor_core::db::open_database;
-        let file = tempfile::NamedTempFile::new().expect("temp file");
-        let path = file.path().to_path_buf();
-        let conn = open_database(&path).expect("open_database");
-        (
-            file,
-            Conductor {
-                conn,
-                config: Config::default(),
-            },
-        )
-    }
 
     fn empty_args() -> serde_json::Map<String, Value> {
         serde_json::Map::new()
