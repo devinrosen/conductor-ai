@@ -1484,6 +1484,7 @@ mod tests {
     use conductor_core::agent::{AgentManager, AgentRunStatus};
     use conductor_core::config::Config;
 
+    use crate::config::WebConfig;
     use crate::events::EventBus;
     use crate::routes::api_router;
     use crate::state::AppState;
@@ -1598,6 +1599,7 @@ mod tests {
         let state = AppState {
             db: Arc::new(Mutex::new(conn)),
             config: Arc::new(RwLock::new(Config::default())),
+            web_config: Arc::new(RwLock::new(WebConfig::default())),
             events: EventBus::new(8),
             // Deliberately bad path so the drain thread's DB open fails.
             db_path: std::path::PathBuf::from("/nonexistent/__conductor_drain_test.db"),
@@ -1701,6 +1703,7 @@ mod tests {
         let state = AppState {
             db: Arc::new(Mutex::new(bad_conn)),
             config: Arc::new(RwLock::new(Config::default())),
+            web_config: Arc::new(RwLock::new(WebConfig::default())),
             events: EventBus::new(8),
             // Deliberately bad path so the drain thread (if it were ever
             // reached) would also fail — but it won't be reached here.
@@ -1799,6 +1802,7 @@ mod tests {
         let state = AppState {
             db: Arc::new(Mutex::new(conn)),
             config: Arc::new(RwLock::new(Config::default())),
+            web_config: Arc::new(RwLock::new(WebConfig::default())),
             events: EventBus::new(8),
             db_path: tmp.path().to_path_buf(),
             workflow_done_notify: None,

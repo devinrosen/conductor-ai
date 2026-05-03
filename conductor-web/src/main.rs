@@ -3,8 +3,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::http::{header, HeaderValue, Method};
 use conductor_core::agent::AgentManager;
-use conductor_core::config::{conductor_dir, db_path, ensure_dirs, load_config, save_config};
+use conductor_core::config::{conductor_dir, db_path, ensure_dirs, load_config};
 use conductor_core::db::open_database;
+use conductor_web::config::{load_web_config, save_web_config};
 use tokio::sync::{Mutex, RwLock};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -27,24 +28,26 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let mut config = load_config()?;
+    let config = load_config()?;
     ensure_dirs(&config)?;
+
+    let mut web_cfg = load_web_config()?;
 
     // Generate or load VAPID keys for push notifications.
     // The placeholder check detects zero-filled keys written by older versions.
     fn is_placeholder_key(key: &str) -> bool {
         key == "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     }
-    let needs_keygen = config.web_push.vapid_public_key.is_none()
-        || config.web_push.vapid_private_key.is_none()
-        || config
-            .web_push
+    let needs_keygen = web_cfg.push.vapid_public_key.is_none()
+        || web_cfg.push.vapid_private_key.is_none()
+        || web_cfg
+            .push
             .vapid_private_key
             .as_deref()
             .map(is_placeholder_key)
             .unwrap_or(false)
-        || config
-            .web_push
+        || web_cfg
+            .push
             .vapid_public_key
             .as_deref()
             .map(is_placeholder_key)
@@ -70,11 +73,11 @@ async fn main() -> Result<()> {
             public_key_bytes,
         );
 
-        config.web_push.vapid_private_key = Some(private_key);
-        config.web_push.vapid_public_key = Some(public_key);
-        config.web_push.vapid_subject = Some("mailto:notifications@conductor.local".to_string());
+        web_cfg.push.vapid_private_key = Some(private_key);
+        web_cfg.push.vapid_public_key = Some(public_key);
+        web_cfg.push.vapid_subject = Some("mailto:notifications@conductor.local".to_string());
 
-        if let Err(e) = save_config(&config) {
+        if let Err(e) = save_web_config(&web_cfg) {
             tracing::warn!("Failed to save VAPID keys to config: {e}");
         } else {
             tracing::info!("VAPID keys saved to config");
@@ -160,6 +163,7 @@ async fn main() -> Result<()> {
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         config: Arc::new(RwLock::new(config)),
+        web_config: Arc::new(RwLock::new(web_cfg)),
         events: EventBus::new(64),
         db_path: db_path(),
         workflow_done_notify: None,
@@ -171,6 +175,7 @@ async fn main() -> Result<()> {
     // runtime with synchronous DB queries and subprocess calls.
     let reaper_state = state.clone();
     let reaper_config = state.config.clone();
+    let reaper_web_config = state.web_config.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval_at(
             tokio::time::Instant::now() + std::time::Duration::from_secs(30),
@@ -190,6 +195,7 @@ async fn main() -> Result<()> {
             interval.tick().await;
             let db = reaper_state.db.clone();
             let cfg = reaper_config.clone();
+            let web_cfg = reaper_web_config.clone();
             let mut seen = std::mem::take(&mut seen_agent_statuses);
             let mut init = agent_initialized;
             let mut wf_seen = std::mem::take(&mut seen_workflow_statuses);
@@ -200,6 +206,7 @@ async fn main() -> Result<()> {
                 mgr.reap_orphaned_runs()?;
                 mgr.dismiss_expired_feedback_requests()?;
                 let cfg = cfg.blocking_read();
+                let web_cfg = web_cfg.blocking_read();
                 let wt_mgr = conductor_core::worktree::WorktreeManager::new(&conn, &cfg);
                 wt_mgr.reap_stale_worktrees()?;
                 if cfg.general.auto_cleanup_merged_branches {
@@ -329,9 +336,9 @@ async fn main() -> Result<()> {
                         };
 
                         if let (Some(private_key), Some(public_key), Some(subject)) = (
-                            &cfg.web_push.vapid_private_key,
-                            &cfg.web_push.vapid_public_key,
-                            &cfg.web_push.vapid_subject,
+                            &web_cfg.push.vapid_private_key,
+                            &web_cfg.push.vapid_public_key,
+                            &web_cfg.push.vapid_subject,
                         ) {
                             let push_mgr = PushSubscriptionManager::new(
                                 &conn,
@@ -402,9 +409,9 @@ async fn main() -> Result<()> {
                         };
 
                         if let (Some(private_key), Some(public_key), Some(subject)) = (
-                            &cfg.web_push.vapid_private_key,
-                            &cfg.web_push.vapid_public_key,
-                            &cfg.web_push.vapid_subject,
+                            &web_cfg.push.vapid_private_key,
+                            &web_cfg.push.vapid_public_key,
+                            &web_cfg.push.vapid_subject,
                         ) {
                             let push_mgr = PushSubscriptionManager::new(
                                 &conn,
@@ -657,15 +664,15 @@ async fn main() -> Result<()> {
             match rx.recv().await {
                 Ok(ConductorEvent::WorkflowGateWaiting { run_id, .. }) => {
                     let db = gate_state.db.clone();
-                    let cfg = gate_state.config.clone();
+                    let web_cfg = gate_state.web_config.clone();
                     let run_id = run_id.clone();
                     tokio::task::spawn_blocking(move || {
                         let conn = db.blocking_lock();
-                        let cfg = cfg.blocking_read();
+                        let web_cfg = web_cfg.blocking_read();
                         if let (Some(priv_k), Some(pub_k), Some(sub)) = (
-                            &cfg.web_push.vapid_private_key,
-                            &cfg.web_push.vapid_public_key,
-                            &cfg.web_push.vapid_subject,
+                            &web_cfg.push.vapid_private_key,
+                            &web_cfg.push.vapid_public_key,
+                            &web_cfg.push.vapid_subject,
                         ) {
                             let push_mgr = PushSubscriptionManager::new(
                                 &conn,
@@ -692,16 +699,16 @@ async fn main() -> Result<()> {
                     ..
                 }) => {
                     let db = gate_state.db.clone();
-                    let cfg = gate_state.config.clone();
+                    let web_cfg = gate_state.web_config.clone();
                     let run_id = run_id.clone();
                     let worktree_id = worktree_id.clone();
                     tokio::task::spawn_blocking(move || {
                         let conn = db.blocking_lock();
-                        let cfg = cfg.blocking_read();
+                        let web_cfg = web_cfg.blocking_read();
                         if let (Some(priv_k), Some(pub_k), Some(sub)) = (
-                            &cfg.web_push.vapid_private_key,
-                            &cfg.web_push.vapid_public_key,
-                            &cfg.web_push.vapid_subject,
+                            &web_cfg.push.vapid_private_key,
+                            &web_cfg.push.vapid_public_key,
+                            &web_cfg.push.vapid_subject,
                         ) {
                             let push_mgr = PushSubscriptionManager::new(
                                 &conn,

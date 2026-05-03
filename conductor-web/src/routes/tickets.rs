@@ -245,6 +245,7 @@ mod tests {
     use tokio::sync::{Mutex, RwLock};
     use tower::ServiceExt;
 
+    use crate::config::WebConfig;
     use crate::events::EventBus;
     use crate::routes::api_router;
 
@@ -295,6 +296,7 @@ mod tests {
         AppState {
             db: Arc::new(Mutex::new(conn)),
             config: Arc::new(RwLock::new(Config::default())),
+            web_config: Arc::new(RwLock::new(WebConfig::default())),
             events: EventBus::new(1),
             db_path: std::path::PathBuf::new(),
             workflow_done_notify: None,

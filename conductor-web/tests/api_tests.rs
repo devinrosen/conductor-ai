@@ -6,6 +6,7 @@ use conductor_core::repo::RepoManager;
 use rusqlite::Connection;
 use tokio::sync::{Mutex, RwLock};
 
+use conductor_web::config::WebConfig;
 use conductor_web::events::EventBus;
 use conductor_web::routes::api_router;
 use conductor_web::state::AppState;
@@ -28,6 +29,7 @@ async fn spawn_test_server_with_setup(setup: impl Fn(&Connection)) -> String {
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         config: Arc::new(RwLock::new(Config::default())),
+        web_config: Arc::new(RwLock::new(WebConfig::default())),
         events: EventBus::new(64),
         db_path,
         workflow_done_notify: None,

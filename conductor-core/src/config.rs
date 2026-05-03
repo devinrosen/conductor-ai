@@ -156,19 +156,6 @@ impl Default for WorkflowNotificationConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct WebPushConfig {
-    /// VAPID public key (base64url encoded)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub vapid_public_key: Option<String>,
-    /// VAPID private key (base64url encoded)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub vapid_private_key: Option<String>,
-    /// Subject for VAPID (typically a mailto: or https: URL)
-    #[serde(default)]
-    pub vapid_subject: Option<String>,
-}
-
 /// Configuration for a single notification hook (shell or HTTP).
 ///
 /// ```toml
@@ -239,8 +226,6 @@ pub struct Config {
     pub github: GitHubSettings,
     #[serde(default)]
     pub notifications: NotificationConfig,
-    #[serde(default)]
-    pub web_push: WebPushConfig,
     #[serde(default)]
     pub notify: NotifyConfig,
     /// Named runtime configurations for non-Claude agent runtimes (RFC 007).
@@ -589,6 +574,12 @@ fn load_config_from(path: &std::path::Path) -> Result<Config> {
         tracing::warn!(
             "[general].theme is deprecated — move to [tui].theme; conductor-core no longer reads it"
         );
+    }
+
+    // Deprecation: warn if top-level [web_push] is present — VAPID keys moved to [web].push.
+    // Key values are intentionally not logged here (they are secrets).
+    if raw.get("web_push").is_some() {
+        tracing::warn!("top-level [web_push] section is deprecated; move to [web].push");
     }
 
     // Guard: if [github.app] is present in the raw TOML but deserialized to None,
@@ -1828,6 +1819,69 @@ bot_name = "my-bot"
         assert_eq!(
             AgentPermissionMode::Plan.allowed_tools(),
             AgentPermissionMode::RepoSafe.allowed_tools()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // [web_push] preservation regression test (#2816)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_load_config_deprecation_warn_path_for_web_push() {
+        // Exercises the [web_push] deprecation-warn branch in load_config_from.
+        // The warn fires as a side-effect; this test verifies the branch is reached
+        // without error and that the rest of the config loads correctly.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[web_push]\nvapid_public_key = \"pub\"\nvapid_private_key = \"priv\"\n",
+        )
+        .unwrap();
+        let result = load_config_from(&path);
+        assert!(
+            result.is_ok(),
+            "load_config_from must succeed when [web_push] is present (only warns, not errors)"
+        );
+    }
+
+    #[test]
+    fn test_save_preserves_user_web_push_section() {
+        // Removing `web_push` from Config must NOT strip a user's existing [web_push]
+        // section from disk when other binaries (conductor-cli, conductor-tui) call
+        // save_config without knowledge of the field.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[web_push]
+vapid_public_key = "pub_key"
+vapid_private_key = "priv_key"
+vapid_subject = "mailto:test@example.com"
+"#,
+        )
+        .unwrap();
+
+        // Load the config (web_push field no longer exists on Config)
+        let config = load_config_from(&path).unwrap();
+
+        // Save — patch-write must preserve [web_push] even though Config has no field for it
+        save_config_to(&config, &path).unwrap();
+
+        // Re-read raw TOML and assert [web_push] is still intact
+        let raw_contents = std::fs::read_to_string(&path).unwrap();
+        let raw: toml::Value = toml::from_str(&raw_contents).unwrap();
+        assert!(
+            raw.get("web_push").is_some(),
+            "[web_push] section should survive save when Config no longer has the field"
+        );
+        assert_eq!(
+            raw.get("web_push")
+                .and_then(|wp| wp.get("vapid_subject"))
+                .and_then(|v| v.as_str()),
+            Some("mailto:test@example.com"),
+            "vapid_subject should be preserved verbatim"
         );
     }
 }

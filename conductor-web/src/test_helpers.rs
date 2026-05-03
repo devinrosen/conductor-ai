@@ -4,6 +4,7 @@ use conductor_core::config::Config;
 use tempfile::{NamedTempFile, TempDir};
 use tokio::sync::{Mutex, RwLock};
 
+use crate::config::WebConfig;
 use crate::events::EventBus;
 use crate::state::AppState;
 
@@ -21,6 +22,7 @@ fn state_with_file_db(setup: impl FnOnce(&rusqlite::Connection)) -> (AppState, N
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         config: Arc::new(RwLock::new(Config::default())),
+        web_config: Arc::new(RwLock::new(WebConfig::default())),
         events: EventBus::new(1),
         db_path,
         workflow_done_notify: None,
