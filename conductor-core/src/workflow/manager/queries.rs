@@ -727,14 +727,12 @@ pub fn list_workflow_runs_for_repo(
 ) -> Result<Vec<WorkflowRun>> {
     query_collect(
         conn,
-        &format!(
-            "SELECT DISTINCT workflow_runs.* \
-                 FROM workflow_runs \
-                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                 WHERE workflow_runs.repo_id = :repo_id OR worktrees.repo_id = :repo_id \
-                 ORDER BY workflow_runs.started_at DESC LIMIT {limit}"
-        ),
-        named_params! { ":repo_id": repo_id },
+        "SELECT DISTINCT workflow_runs.* \
+             FROM workflow_runs \
+             LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+             WHERE workflow_runs.repo_id = :repo_id OR worktrees.repo_id = :repo_id \
+             ORDER BY workflow_runs.started_at DESC LIMIT :limit",
+        named_params! { ":repo_id": repo_id, ":limit": limit as i64 },
         row_to_workflow_run,
     )
 }
