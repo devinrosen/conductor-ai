@@ -29,8 +29,6 @@ async fn main() -> Result<()> {
         .init();
 
     let conductor = Conductor::open()?;
-    let conn = conductor.conn;
-    let config = conductor.config;
 
     let mut web_cfg = load_web_config()?;
 
@@ -85,7 +83,7 @@ async fn main() -> Result<()> {
         }
     }
     // Reap orphaned agent runs on startup.
-    let agent_mgr = AgentManager::new(&conn);
+    let agent_mgr = AgentManager::new(&conductor.conn);
     match agent_mgr.reap_orphaned_runs() {
         Ok(n) if n > 0 => tracing::info!("Reaped {n} orphaned agent run(s) on startup"),
         Ok(_) => {}
@@ -95,13 +93,13 @@ async fn main() -> Result<()> {
     // Reap stale worktrees on startup.
     {
         use conductor_core::worktree::WorktreeManager;
-        let wt_mgr = WorktreeManager::new(&conn, &config);
+        let wt_mgr = WorktreeManager::new(&conductor.conn, &conductor.config);
         match wt_mgr.reap_stale_worktrees() {
             Ok(n) if n > 0 => tracing::info!("Reaped {n} stale worktree(s) on startup"),
             Ok(_) => {}
             Err(e) => tracing::warn!("reap_stale_worktrees failed on startup: {e}"),
         }
-        if config.general.auto_cleanup_merged_branches {
+        if conductor.config.general.auto_cleanup_merged_branches {
             match wt_mgr.cleanup_merged_worktrees(None) {
                 Ok(n) if n > 0 => {
                     tracing::info!("Auto-cleaned {n} merged worktree(s) on startup")
@@ -114,19 +112,19 @@ async fn main() -> Result<()> {
 
     // Reap orphaned workflow runs on startup.
     {
-        match conductor_core::workflow::reap_orphaned_workflow_runs(&conn) {
+        match conductor_core::workflow::reap_orphaned_workflow_runs(&conductor.conn) {
             Ok(n) if n > 0 => tracing::info!("Reaped {n} orphaned workflow run(s) on startup"),
             Ok(_) => {}
             Err(e) => tracing::warn!("reap_orphaned_workflow_runs failed on startup: {e}"),
         }
-        match conductor_core::workflow::reap_orphaned_script_steps(&conn) {
+        match conductor_core::workflow::reap_orphaned_script_steps(&conductor.conn) {
             Ok(n) if n > 0 => {
                 tracing::info!("Reaped {n} orphaned script step(s) on startup")
             }
             Ok(_) => {}
             Err(e) => tracing::warn!("reap_orphaned_script_steps failed on startup: {e}"),
         }
-        match conductor_core::workflow::reap_finalization_stuck_workflow_runs(&conn, 60) {
+        match conductor_core::workflow::reap_finalization_stuck_workflow_runs(&conductor.conn, 60) {
             Ok(n) if n > 0 => {
                 tracing::info!("Reaper finalized {n} stuck workflow run(s) on startup")
             }
@@ -135,10 +133,10 @@ async fn main() -> Result<()> {
                 tracing::warn!("reap_finalization_stuck_workflow_runs failed on startup: {e}")
             }
         }
-        if config.general.stale_workflow_minutes > 0 {
+        if conductor.config.general.stale_workflow_minutes > 0 {
             match conductor_core::workflow::reap_stale_workflow_runs(
-                &conn,
-                config.general.stale_workflow_minutes as i64,
+                &conductor.conn,
+                conductor.config.general.stale_workflow_minutes as i64,
             ) {
                 Ok(reaped) if !reaped.is_empty() => {
                     tracing::info!("Reaped {} stale workflow run(s) on startup", reaped.len());
@@ -150,13 +148,15 @@ async fn main() -> Result<()> {
         {
             let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
             conductor_core::workflow::claim_and_resume_expired_leases(
-                &conn,
-                &config,
+                &conductor.conn,
+                &conductor.config,
                 conductor_bin_dir,
             );
         }
     }
 
+    // Install the conductor's connection and config in Axum router state.
+    let Conductor { conn, config } = conductor;
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         config: Arc::new(RwLock::new(config)),
