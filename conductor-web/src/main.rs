@@ -3,8 +3,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::http::{header, HeaderValue, Method};
 use conductor_core::agent::AgentManager;
-use conductor_core::config::{conductor_dir, db_path, ensure_dirs, load_config};
-use conductor_core::db::open_database;
+use conductor_core::config::db_path;
+use conductor_core::Conductor;
 use conductor_web::config::{load_web_config, save_web_config};
 use tokio::sync::{Mutex, RwLock};
 use tower_http::cors::CorsLayer;
@@ -28,8 +28,9 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let config = load_config()?;
-    ensure_dirs(&config)?;
+    let conductor = Conductor::open()?;
+    let conn = conductor.conn;
+    let config = conductor.config;
 
     let mut web_cfg = load_web_config()?;
 
@@ -83,10 +84,6 @@ async fn main() -> Result<()> {
             tracing::info!("VAPID keys saved to config");
         }
     }
-    // Always use the global database — the web server manages all repos,
-    // so worktree-local DB detection must be bypassed.
-    let conn = open_database(&conductor_dir().join("conductor.db"))?;
-
     // Reap orphaned agent runs on startup.
     let agent_mgr = AgentManager::new(&conn);
     match agent_mgr.reap_orphaned_runs() {
@@ -364,10 +361,13 @@ async fn main() -> Result<()> {
                     &mut wf_init,
                 );
                 for t in &wf_transitions {
+                    let wf_ctx = conductor_web::notify::NotificationCtx {
+                        conn: &conn,
+                        config: &cfg.notifications,
+                        hooks: &cfg.notify.hooks,
+                    };
                     conductor_web::notify::fire_workflow_notification(
-                        &conn,
-                        &cfg.notifications,
-                        &cfg.notify.hooks,
+                        &wf_ctx,
                         &conductor_web::notify::WorkflowNotificationArgs {
                             run_id: &t.run_id,
                             workflow_name: &t.workflow_name,

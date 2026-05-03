@@ -166,10 +166,13 @@ fn error_path_deterministic_key_deduplicates() {
 fn fire_workflow_notification_disabled_does_not_claim() {
     let conn = in_memory_db();
     let cfg = config(false, true, true);
+    let ctx = NotificationCtx {
+        conn: &conn,
+        config: &cfg,
+        hooks: &[],
+    };
     fire_workflow_notification(
-        &conn,
-        &cfg,
-        &[],
+        &ctx,
         &WorkflowNotificationArgs {
             run_id: "run-1",
             workflow_name: "my-workflow",
@@ -202,10 +205,13 @@ fn fire_workflow_notification_disabled_does_not_claim() {
 fn fire_workflow_notification_disabled_does_not_claim_on_failure() {
     let conn = in_memory_db();
     let cfg = config(false, true, true);
+    let ctx = NotificationCtx {
+        conn: &conn,
+        config: &cfg,
+        hooks: &[],
+    };
     fire_workflow_notification(
-        &conn,
-        &cfg,
-        &[],
+        &ctx,
         &WorkflowNotificationArgs {
             run_id: "run-6",
             workflow_name: "my-workflow",
@@ -238,10 +244,13 @@ fn fire_workflow_notification_disabled_does_not_claim_on_failure() {
 fn fire_workflow_notification_on_success_false_does_not_claim_success() {
     let conn = in_memory_db();
     let cfg = config(true, false, true);
+    let ctx = NotificationCtx {
+        conn: &conn,
+        config: &cfg,
+        hooks: &[],
+    };
     fire_workflow_notification(
-        &conn,
-        &cfg,
-        &[],
+        &ctx,
         &WorkflowNotificationArgs {
             run_id: "run-2",
             workflow_name: "my-workflow",
@@ -274,10 +283,13 @@ fn fire_workflow_notification_on_success_false_does_not_claim_success() {
 fn fire_workflow_notification_on_failure_false_does_not_claim_failure() {
     let conn = in_memory_db();
     let cfg = config(true, true, false); // enabled, on_success=true, on_failure=false
+    let ctx = NotificationCtx {
+        conn: &conn,
+        config: &cfg,
+        hooks: &[],
+    };
     fire_workflow_notification(
-        &conn,
-        &cfg,
-        &[],
+        &ctx,
         &WorkflowNotificationArgs {
             run_id: "run-5",
             workflow_name: "my-workflow",
@@ -310,11 +322,14 @@ fn fire_workflow_notification_on_failure_false_does_not_claim_failure() {
 fn fire_workflow_notification_enabled_claims_once_for_success() {
     let conn = in_memory_db();
     let cfg = config(true, true, true);
+    let ctx = NotificationCtx {
+        conn: &conn,
+        config: &cfg,
+        hooks: &[],
+    };
     // Fire twice — second call must be a no-op (claim already taken).
     fire_workflow_notification(
-        &conn,
-        &cfg,
-        &[],
+        &ctx,
         &WorkflowNotificationArgs {
             run_id: "run-3",
             workflow_name: "my-workflow",
@@ -331,9 +346,7 @@ fn fire_workflow_notification_enabled_claims_once_for_success() {
         },
     );
     fire_workflow_notification(
-        &conn,
-        &cfg,
-        &[],
+        &ctx,
         &WorkflowNotificationArgs {
             run_id: "run-3",
             workflow_name: "my-workflow",
@@ -366,10 +379,13 @@ fn fire_workflow_notification_enabled_claims_once_for_success() {
 fn fire_workflow_notification_enabled_claims_once_for_failure() {
     let conn = in_memory_db();
     let cfg = config(true, true, true);
+    let ctx = NotificationCtx {
+        conn: &conn,
+        config: &cfg,
+        hooks: &[],
+    };
     fire_workflow_notification(
-        &conn,
-        &cfg,
-        &[],
+        &ctx,
         &WorkflowNotificationArgs {
             run_id: "run-4",
             workflow_name: "my-workflow",
@@ -386,9 +402,7 @@ fn fire_workflow_notification_enabled_claims_once_for_failure() {
         },
     );
     fire_workflow_notification(
-        &conn,
-        &cfg,
-        &[],
+        &ctx,
         &WorkflowNotificationArgs {
             run_id: "run-4",
             workflow_name: "my-workflow",
@@ -440,10 +454,13 @@ fn deep_link_all_some_produces_correct_url() {
     // Also verify that fire_workflow_notification reads web_url from config and fires.
     let conn = in_memory_db();
     let cfg = config_with_web_url(true, true, true, "https://conductor.example.ts.net");
+    let ctx = NotificationCtx {
+        conn: &conn,
+        config: &cfg,
+        hooks: &[],
+    };
     fire_workflow_notification(
-        &conn,
-        &cfg,
-        &[],
+        &ctx,
         &WorkflowNotificationArgs {
             run_id: "run-dl-1",
             workflow_name: "deploy",
@@ -490,10 +507,13 @@ fn deep_link_trailing_slash_trimmed() {
     // Confirm fire_workflow_notification still claims the notification.
     let conn = in_memory_db();
     let cfg = config_with_web_url(true, true, true, "https://conductor.example.ts.net/");
+    let ctx = NotificationCtx {
+        conn: &conn,
+        config: &cfg,
+        hooks: &[],
+    };
     fire_workflow_notification(
-        &conn,
-        &cfg,
-        &[],
+        &ctx,
         &WorkflowNotificationArgs {
             run_id: "run-dl-2",
             workflow_name: "deploy",
@@ -556,10 +576,13 @@ fn deep_link_any_none_produces_no_url() {
     // fire_workflow_notification must still fire (without a deep link) when worktree_id is absent.
     let conn = in_memory_db();
     let cfg = config_with_web_url(true, true, true, "https://conductor.example.ts.net");
+    let ctx = NotificationCtx {
+        conn: &conn,
+        config: &cfg,
+        hooks: &[],
+    };
     fire_workflow_notification(
-        &conn,
-        &cfg,
-        &[],
+        &ctx,
         &WorkflowNotificationArgs {
             run_id: "run-dl-3",
             workflow_name: "deploy",
@@ -1815,10 +1838,13 @@ fn hooks_fire_when_notifications_disabled_workflow() {
     let conn = in_memory_db();
     let cfg = config(false, true, true); // enabled=false
     let hooks = vec![hook_matching_all()];
+    let ctx = NotificationCtx {
+        conn: &conn,
+        config: &cfg,
+        hooks: &hooks,
+    };
     fire_workflow_notification(
-        &conn,
-        &cfg,
-        &hooks,
+        &ctx,
         &WorkflowNotificationArgs {
             run_id: "run-hooks-1",
             workflow_name: "deploy",
@@ -1853,10 +1879,13 @@ fn hooks_fire_when_notifications_disabled_workflow_failure() {
     let conn = in_memory_db();
     let cfg = config(false, true, true); // enabled=false
     let hooks = vec![hook_matching_all()];
+    let ctx = NotificationCtx {
+        conn: &conn,
+        config: &cfg,
+        hooks: &hooks,
+    };
     fire_workflow_notification(
-        &conn,
-        &cfg,
-        &hooks,
+        &ctx,
         &WorkflowNotificationArgs {
             run_id: "run-hooks-2",
             workflow_name: "deploy",
@@ -1928,10 +1957,13 @@ fn hooks_fire_when_on_success_false_but_hooks_configured() {
     let conn = in_memory_db();
     let cfg = config(true, false, true); // enabled=true, on_success=false
     let hooks = vec![hook_matching_all()];
+    let ctx = NotificationCtx {
+        conn: &conn,
+        config: &cfg,
+        hooks: &hooks,
+    };
     fire_workflow_notification(
-        &conn,
-        &cfg,
-        &hooks,
+        &ctx,
         &WorkflowNotificationArgs {
             run_id: "run-hooks-3",
             workflow_name: "deploy",
