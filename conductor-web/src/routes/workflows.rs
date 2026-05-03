@@ -89,6 +89,20 @@ async fn wait_for_run_id(slot: RunIdSlot) -> Option<String> {
     })
 }
 
+/// Acquire state locks, build a [`NotificationCtx`], and call
+/// [`fire_workflow_notification`]. Locks are released when this function
+/// returns, before the caller emits any downstream events.
+fn fire_notification_via_state(state: &AppState, args: &WorkflowNotificationArgs<'_>) {
+    let conn = state.db.blocking_lock();
+    let cfg = state.config.blocking_read();
+    let ctx = NotificationCtx {
+        conn: &conn,
+        config: &cfg.notifications,
+        hooks: &cfg.notify.hooks,
+    };
+    fire_workflow_notification(&ctx, args);
+}
+
 // ── Response types ────────────────────────────────────────────────────
 
 /// Web-layer wrapper that attaches active steps to a `WorkflowRun` for the list endpoint.
@@ -548,32 +562,23 @@ pub async fn run_workflow(
                 (error_run_id, false, "failed", params.worktree_id.clone())
             }
         };
-        {
-            let conn = state_clone.db.blocking_lock();
-            let cfg = state_clone.config.blocking_read();
-            let ctx = NotificationCtx {
-                conn: &conn,
-                config: &cfg.notifications,
-                hooks: &cfg.notify.hooks,
-            };
-            fire_workflow_notification(
-                &ctx,
-                &WorkflowNotificationArgs {
-                    run_id: &notify_run_id,
-                    workflow_name: &workflow_name,
-                    target_label: Some(&wt_target_label),
-                    succeeded: notify_succeeded,
-                    parent_workflow_run_id: None, // workflows launched from web are always root runs
-                    repo_slug: &repo_slug,
-                    branch: &wt_slug,
-                    duration_ms: None,
-                    ticket_url: None,
-                    error: None,
-                    repo_id: Some(&repo_id),
-                    worktree_id: params.worktree_id.as_deref(),
-                },
-            );
-        } // DB + config locks released before event emit
+        fire_notification_via_state(
+            &state_clone,
+            &WorkflowNotificationArgs {
+                run_id: &notify_run_id,
+                workflow_name: &workflow_name,
+                target_label: Some(&wt_target_label),
+                succeeded: notify_succeeded,
+                parent_workflow_run_id: None, // workflows launched from web are always root runs
+                repo_slug: &repo_slug,
+                branch: &wt_slug,
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: Some(&repo_id),
+                worktree_id: params.worktree_id.as_deref(),
+            },
+        );
         state_clone
             .events
             .emit(ConductorEvent::WorkflowRunStatusChanged {
@@ -816,32 +821,23 @@ pub async fn post_workflow_run(
                 )
             }
         };
-        {
-            let conn = state_clone.db.blocking_lock();
-            let cfg = state_clone.config.blocking_read();
-            let ctx = NotificationCtx {
-                conn: &conn,
-                config: &cfg.notifications,
-                hooks: &cfg.notify.hooks,
-            };
-            fire_workflow_notification(
-                &ctx,
-                &WorkflowNotificationArgs {
-                    run_id: &notify_run_id,
-                    workflow_name: &workflow_name,
-                    target_label: Some(&target_label),
-                    succeeded: notify_succeeded,
-                    parent_workflow_run_id: None, // workflows launched from web are always root runs
-                    repo_slug: notify_repo_slug,
-                    branch: notify_branch,
-                    duration_ms: None,
-                    ticket_url: None,
-                    error: None,
-                    repo_id: Some(&repo_id),
-                    worktree_id: wt_id_clone.as_deref(),
-                },
-            );
-        } // DB + config locks released before event emit
+        fire_notification_via_state(
+            &state_clone,
+            &WorkflowNotificationArgs {
+                run_id: &notify_run_id,
+                workflow_name: &workflow_name,
+                target_label: Some(&target_label),
+                succeeded: notify_succeeded,
+                parent_workflow_run_id: None, // workflows launched from web are always root runs
+                repo_slug: notify_repo_slug,
+                branch: notify_branch,
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: Some(&repo_id),
+                worktree_id: wt_id_clone.as_deref(),
+            },
+        );
         state_clone
             .events
             .emit(ConductorEvent::WorkflowRunStatusChanged {
@@ -1689,32 +1685,23 @@ pub async fn resume_workflow_endpoint(
                 }
                 Err(_) => (params.workflow_run_id.clone(), false, None, None, None),
             };
-        {
-            let conn = state_clone.db.blocking_lock();
-            let cfg = state_clone.config.blocking_read();
-            let ctx = NotificationCtx {
-                conn: &conn,
-                config: &cfg.notifications,
-                hooks: &cfg.notify.hooks,
-            };
-            fire_workflow_notification(
-                &ctx,
-                &WorkflowNotificationArgs {
-                    run_id: &notify_run_id,
-                    workflow_name: &workflow_name,
-                    target_label: target_label.as_deref(),
-                    succeeded: notify_succeeded,
-                    parent_workflow_run_id: None, // workflows resumed from web are always root runs
-                    repo_slug: resume_repo_slug,
-                    branch: resume_branch,
-                    duration_ms: None,
-                    ticket_url: None,
-                    error: None,
-                    repo_id: run_repo_id.as_deref(),
-                    worktree_id: run_worktree_id.as_deref(),
-                },
-            );
-        } // DB + config locks released before event emit
+        fire_notification_via_state(
+            &state_clone,
+            &WorkflowNotificationArgs {
+                run_id: &notify_run_id,
+                workflow_name: &workflow_name,
+                target_label: target_label.as_deref(),
+                succeeded: notify_succeeded,
+                parent_workflow_run_id: None, // workflows resumed from web are always root runs
+                repo_slug: resume_repo_slug,
+                branch: resume_branch,
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: run_repo_id.as_deref(),
+                worktree_id: run_worktree_id.as_deref(),
+            },
+        );
         if let (Some(emit_run_id), Some(emit_status)) = (emit_run_id_opt, emit_status_opt) {
             state_clone
                 .events
