@@ -6,6 +6,18 @@ use super::{
     DispatchParams,
 };
 
+/// Narrow context bundle for [`fire_workflow_notification`].
+///
+/// Holds references rather than owned values so all three call-site patterns
+/// fit without ownership transfer: `MutexGuard<Connection>` in the web
+/// background task, `RwLockReadGuard<Config>` slices, and plain `&Connection`
+/// in the TUI background thread.
+pub struct NotificationCtx<'a> {
+    pub conn: &'a rusqlite::Connection,
+    pub config: &'a NotificationConfig,
+    pub hooks: &'a [HookConfig],
+}
+
 /// Parameters for [`fire_workflow_notification`].
 pub struct WorkflowNotificationArgs<'a> {
     pub run_id: &'a str,
@@ -52,13 +64,11 @@ pub struct FeedbackNotificationParams<'a> {
 /// instances run concurrently.
 /// Matching entries in `notify_hooks` are fired after the dedup claim succeeds.
 pub fn fire_workflow_notification(
-    conn: &rusqlite::Connection,
-    config: &NotificationConfig,
-    notify_hooks: &[HookConfig],
+    ctx: &NotificationCtx<'_>,
     params: &WorkflowNotificationArgs<'_>,
 ) {
-    let has_hooks = !notify_hooks.is_empty();
-    if !should_notify(config, params.succeeded) && !has_hooks {
+    let has_hooks = !ctx.hooks.is_empty();
+    if !should_notify(ctx.config, params.succeeded) && !has_hooks {
         return;
     }
 
@@ -73,7 +83,7 @@ pub fn fire_workflow_notification(
     let ticket_url = params.ticket_url.clone();
     let error = params.error.map(|s| s.to_string());
     let deep_link = build_workflow_deep_link(
-        config.web_url.as_deref(),
+        ctx.config.web_url.as_deref(),
         params.repo_id,
         params.worktree_id,
         run_id,
@@ -112,11 +122,11 @@ pub fn fire_workflow_notification(
     };
 
     dispatch_notification(
-        conn,
+        ctx.conn,
         &DispatchParams {
             dedup_entity_id: run_id,
             dedup_event_type: event_type,
-            hooks: notify_hooks,
+            hooks: ctx.hooks,
             event: Some(&hook_event),
         },
     );

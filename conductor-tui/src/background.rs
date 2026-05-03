@@ -120,10 +120,13 @@ pub fn spawn_db_poller(
                                 .collect();
 
                         for t in transitions {
-                            crate::notify::fire_workflow_notification(
+                            let wf_ctx = crate::notify::NotificationCtx {
                                 conn,
-                                &config.notifications,
-                                &config.notify.hooks,
+                                config: &config.notifications,
+                                hooks: &config.notify.hooks,
+                            };
+                            crate::notify::fire_workflow_notification(
+                                &wf_ctx,
                                 &crate::notify::WorkflowNotificationArgs {
                                     run_id: &t.run_id,
                                     workflow_name: &t.workflow_name,
