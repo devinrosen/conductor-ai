@@ -199,13 +199,16 @@ pub fn skip_fan_out_items_by_item_ids(
 pub fn refresh_fan_out_counters(conn: &Connection, step_run_id: &str) -> Result<()> {
     execute_sql(
         conn,
-        "UPDATE workflow_run_steps SET \
-             fan_out_completed = (SELECT COUNT(*) FROM workflow_run_step_fan_out_items \
-                                  WHERE step_run_id = :step_run_id AND status = 'completed'), \
-             fan_out_failed = (SELECT COUNT(*) FROM workflow_run_step_fan_out_items \
-                               WHERE step_run_id = :step_run_id AND status = 'failed'), \
-             fan_out_skipped = (SELECT COUNT(*) FROM workflow_run_step_fan_out_items \
-                                WHERE step_run_id = :step_run_id AND status = 'skipped') \
+        "UPDATE workflow_run_steps \
+             SET fan_out_completed = c.completed, \
+                 fan_out_failed    = c.failed, \
+                 fan_out_skipped   = c.skipped \
+             FROM (SELECT \
+                 COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed, \
+                 COALESCE(SUM(CASE WHEN status = 'failed'    THEN 1 ELSE 0 END), 0) AS failed, \
+                 COALESCE(SUM(CASE WHEN status = 'skipped'   THEN 1 ELSE 0 END), 0) AS skipped \
+                 FROM workflow_run_step_fan_out_items \
+                 WHERE step_run_id = :step_run_id) AS c \
              WHERE id = :step_run_id",
         named_params![":step_run_id": step_run_id],
     )
