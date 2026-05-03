@@ -43,14 +43,21 @@ impl runkon_flow::events::EventSink for PositionSink {
             runkon_flow::events::EngineEvent::BodyPositionAdvanced { .. }
         ) {
             if let Ok(conn) = self.0.lock() {
-                let now = chrono::Utc::now().to_rfc3339();
-                let _ = conn.execute(
-                    "UPDATE workflow_runs SET last_position_advanced_at = ?1 WHERE id = ?2",
-                    rusqlite::params![now, event.run_id],
-                );
+                let _ =
+                    super::manager::lifecycle::tick_position_advanced(&conn, &event.run_id);
             }
         }
     }
+}
+
+/// Append a `PositionSink` to `base_sinks` and return the combined sink slice.
+fn with_position_sink(
+    base_sinks: Vec<Arc<dyn runkon_flow::EventSink>>,
+    conn: Arc<Mutex<Connection>>,
+) -> Arc<[Arc<dyn runkon_flow::EventSink>]> {
+    let mut sinks = base_sinks;
+    sinks.push(Arc::new(PositionSink(conn)));
+    Arc::from(sinks)
 }
 
 /// Validate required workflow inputs are present and apply default values.
@@ -648,10 +655,10 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
     let schema_resolver = make_schema_resolver(workflow.name.clone());
 
     let rk_exec_config = params.exec_config.clone();
-    let mut all_sinks: Vec<Arc<dyn runkon_flow::EventSink>> =
-        params.exec_config.event_sinks.clone();
-    all_sinks.push(Arc::new(PositionSink(Arc::clone(&shared_conn))));
-    let event_sinks: Arc<[Arc<dyn runkon_flow::EventSink>]> = Arc::from(all_sinks);
+    let event_sinks = with_position_sink(
+        params.exec_config.event_sinks.clone(),
+        Arc::clone(&shared_conn),
+    );
 
     let mut rk_state = build_rk_execution_state(RkStateArgs {
         persistence: Arc::clone(&persistence),
@@ -1130,9 +1137,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
 
     let schema_resolver = make_schema_resolver(wf_run.workflow_name.clone());
 
-    let mut all_sinks: Vec<Arc<dyn runkon_flow::EventSink>> = input.event_sinks.clone();
-    all_sinks.push(Arc::new(PositionSink(Arc::clone(&shared_conn))));
-    let event_sinks: Arc<[Arc<dyn runkon_flow::EventSink>]> = Arc::from(all_sinks);
+    let event_sinks = with_position_sink(input.event_sinks.clone(), Arc::clone(&shared_conn));
 
     let mut rk_state = build_rk_execution_state(RkStateArgs {
         persistence: Arc::clone(&persistence),

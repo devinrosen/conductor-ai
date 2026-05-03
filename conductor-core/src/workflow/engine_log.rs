@@ -1,8 +1,10 @@
 //! Per-run engine diagnostics: scoped tracing subscriber and panic capture.
 //!
 //! Each engine thread gets its own log file at `~/.conductor/workflow-logs/<run_id>.log`.
-//! The subscriber is thread-local (`tracing::subscriber::with_default`) so it does not
-//! affect the host binary's global subscriber on other threads.
+//! `tracing::subscriber::with_default` installs a thread-local subscriber that writes to the
+//! per-run file.  A `GlobalForwardLayer` included in that subscriber forwards every event to
+//! the host binary's global dispatch as well, so the host binary's subscriber (stderr, log
+//! file, etc.) continues to receive engine events for the duration of the call.
 //!
 //! Panics that escape the engine are caught, written to the per-run log and to
 //! `workflow_runs.error`, then re-raised so the host binary's panic handler still fires.
@@ -12,7 +14,22 @@ use std::path::{Path, PathBuf};
 
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::prelude::*;
-use tracing_subscriber::{fmt, EnvFilter, Registry};
+use tracing_subscriber::{fmt, EnvFilter, Layer, Registry};
+
+/// Forwards every event to a captured `tracing::Dispatch` so the host binary's
+/// global subscriber still receives events when `with_default` overrides the
+/// thread-local dispatcher.
+struct GlobalForwardLayer(tracing::Dispatch);
+
+impl<S: tracing::Subscriber> Layer<S> for GlobalForwardLayer {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        self.0.event(event);
+    }
+}
 
 /// Run `f` on the current thread with a per-run tracing subscriber installed and a
 /// top-level `catch_unwind` guard.
@@ -88,9 +105,14 @@ fn setup_per_run_tracing(
     // when the host binary's filter is stricter (e.g. `warn`).
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
+    // Capture the current global dispatch so events are forwarded to the host binary's
+    // subscriber even while with_default overrides the thread-local dispatcher.
+    let global_dispatch = tracing::dispatcher::get_default(|d| d.clone());
+
     let subscriber = Registry::default()
         .with(filter)
-        .with(fmt::Layer::new().with_writer(non_blocking).with_ansi(false));
+        .with(fmt::Layer::new().with_writer(non_blocking).with_ansi(false))
+        .with(GlobalForwardLayer(global_dispatch));
 
     (subscriber, guard)
 }
@@ -114,11 +136,11 @@ fn record_panic_in_db(db_path: &Path, run_id: &str, msg: &str) {
                  WHERE id = ?2 AND status = 'running'",
                 rusqlite::params![error_msg, run_id],
             ) {
-                tracing::error!("engine_log: failed to record panic in DB: {e}");
+                tracing::error!(run_id = %run_id, "engine_log: failed to record panic in DB: {e}");
             }
         }
         Err(e) => {
-            tracing::error!("engine_log: failed to open DB to record panic: {e}");
+            tracing::error!(run_id = %run_id, "engine_log: failed to open DB to record panic: {e}");
         }
     }
 }

@@ -348,6 +348,16 @@ pub fn tick_heartbeat(conn: &Connection, run_id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn tick_position_advanced(conn: &Connection, run_id: &str) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE workflow_runs SET last_position_advanced_at = :now \
+             WHERE id = :id",
+        named_params![":now": now, ":id": run_id],
+    )?;
+    Ok(())
+}
+
 pub fn set_dismissed(conn: &Connection, run_id: &str, dismissed: bool) -> Result<()> {
     let val: i64 = if dismissed { 1 } else { 0 };
     conn.execute(
