@@ -6,8 +6,7 @@
 //! - [`CombinedSink`]: the [`runkon_runtimes::tracker::EventSink`] used by callers
 //!   to persist runtime events into `AgentManager` while also forwarding parsed
 //!   `AgentEvent`s to a UI/WebSocket callback. Construct it via
-//!   [`CombinedSink::new`] and pass it to
-//!   [`runkon_runtimes::headless::drain_stream_json`].
+//!   [`CombinedSink::new`] and pass it to [`drain_stream_json`].
 
 use std::borrow::Cow;
 
@@ -60,12 +59,11 @@ pub fn drain_stream_json(
 /// `EventSink` that persists runtime events into [`AgentManager`] (model/session,
 /// token deltas, completion/failure) and fans `AgentEvent`s out to a UI callback.
 ///
-/// Construct with [`CombinedSink::new`] and pass to
-/// [`runkon_runtimes::headless::drain_stream_json`]:
+/// Construct with [`CombinedSink::new`] and pass to [`drain_stream_json`]:
 ///
 /// ```ignore
 /// let sink = CombinedSink::new(&mgr, |event| { /* forward to UI */ });
-/// runkon_runtimes::headless::drain_stream_json(stdout, run_id, &log_path, &sink);
+/// conductor_core::agent_runtime::drain_stream_json(stdout, run_id, &log_path, &sink);
 /// ```
 ///
 /// [`AgentManager`]: crate::agent::AgentManager
