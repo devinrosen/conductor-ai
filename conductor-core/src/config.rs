@@ -526,6 +526,23 @@ pub fn agent_log_path(run_id: &str) -> Result<PathBuf> {
     Ok(agent_log_dir().join(format!("{run_id}.log")))
 }
 
+/// Returns the directory for per-run workflow engine log files.
+pub fn workflow_log_dir() -> PathBuf {
+    conductor_dir().join("workflow-logs")
+}
+
+/// Returns the log file path for a given workflow run ID.
+///
+/// Convention: `~/.conductor/workflow-logs/{run_id}.log`
+///
+/// Returns an error if `run_id` is not a valid ULID, preventing path traversal.
+pub fn workflow_log_path(run_id: &str) -> Result<PathBuf> {
+    run_id
+        .parse::<ulid::Ulid>()
+        .map_err(|_| ConductorError::Workflow(format!("invalid run_id: {run_id}")))?;
+    Ok(workflow_log_dir().join(format!("{run_id}.log")))
+}
+
 impl Config {
     /// Returns the Anthropic API key from the `ANTHROPIC_API_KEY` environment variable.
     ///
@@ -1728,6 +1745,20 @@ bot_name = "my-bot"
     #[test]
     fn agent_log_path_path_traversal_rejected() {
         let err = super::agent_log_path("../../secret").unwrap_err();
+        assert!(err.to_string().contains("invalid run_id"));
+    }
+
+    #[test]
+    fn workflow_log_path_valid_ulid_returns_ok() {
+        let ulid = crate::new_id();
+        let path = super::workflow_log_path(&ulid).expect("valid ULID should succeed");
+        assert!(path.to_string_lossy().ends_with(&format!("{ulid}.log")));
+        assert!(path.to_string_lossy().contains("workflow-logs"));
+    }
+
+    #[test]
+    fn workflow_log_path_invalid_ulid_returns_error() {
+        let err = super::workflow_log_path("../etc/passwd").unwrap_err();
         assert!(err.to_string().contains("invalid run_id"));
     }
 

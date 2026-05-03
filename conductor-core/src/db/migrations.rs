@@ -2895,12 +2895,15 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 85, "schema_version must be bumped to 85");
+        assert_eq!(
+            version, LATEST_SCHEMA_VERSION as i64,
+            "schema_version must be bumped to LATEST_SCHEMA_VERSION"
+        );
     }
 
     /// Verifies that migration 085 skips the index (and does not error) when
     /// `workflow_run_steps` is absent — minimal fixture DBs omit this table.
-    /// Also confirms the schema version is still bumped to 85, and that the
+    /// Also confirms the schema version is still bumped, and that the
     /// `?` error propagation path is exercised (previously `.unwrap_or(false)`
     /// would have silently swallowed any query error instead of propagating it).
     #[test]
@@ -2934,6 +2937,9 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 85, "schema_version must still be bumped to 85");
+        assert_eq!(
+            version, LATEST_SCHEMA_VERSION as i64,
+            "schema_version must still be bumped to LATEST_SCHEMA_VERSION"
+        );
     }
 }

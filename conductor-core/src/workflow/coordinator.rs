@@ -811,10 +811,19 @@ pub fn spawn_workflow_resume(
     conductor_bin_dir: Option<std::path::PathBuf>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
+        let db_path = crate::config::db_path();
         let params = make_resume_params((*config).clone(), run_id.clone(), conductor_bin_dir, None);
-        if let Err(e) = resume_workflow_standalone(&params) {
-            tracing::warn!(run_id = %run_id, "spawn_workflow_resume: auto-resume failed: {e}");
-        }
+        let run_id_inner = run_id.clone();
+        super::engine_log::run_engine_with_diagnostics(
+            &run_id,
+            db_path,
+            None,
+            std::panic::AssertUnwindSafe(move || {
+                if let Err(e) = resume_workflow_standalone(&params) {
+                    tracing::warn!(run_id = %run_id_inner, "spawn_workflow_resume: auto-resume failed: {e}");
+                }
+            }),
+        );
     })
 }
 
@@ -834,29 +843,38 @@ pub fn spawn_heartbeat_resume(p: SpawnHeartbeatResumeParams) -> std::thread::Joi
             p.conductor_bin_dir,
             Some(effective_db.clone()),
         );
-        if let Err(e) = resume_workflow_standalone(&params) {
-            tracing::warn!(run_id = %p.run_id, "spawn_heartbeat_resume: auto-resume failed: {e}");
-            match crate::db::open_database(&effective_db) {
-                Ok(db) => {
-                    crate::notify::fire_heartbeat_stuck_failed_notification(
-                        &db,
-                        &p.config.notifications,
-                        &p.config.notify.hooks,
-                        &p.run_id,
-                        &p.workflow_name,
-                        p.target_label.as_deref(),
-                        &e.to_string(),
-                    );
+        let run_id = p.run_id.clone();
+        let db_path = effective_db.clone();
+        super::engine_log::run_engine_with_diagnostics(
+            &run_id,
+            db_path,
+            None,
+            std::panic::AssertUnwindSafe(move || {
+                if let Err(e) = resume_workflow_standalone(&params) {
+                    tracing::warn!(run_id = %p.run_id, "spawn_heartbeat_resume: auto-resume failed: {e}");
+                    match crate::db::open_database(&effective_db) {
+                        Ok(db) => {
+                            crate::notify::fire_heartbeat_stuck_failed_notification(
+                                &db,
+                                &p.config.notifications,
+                                &p.config.notify.hooks,
+                                &p.run_id,
+                                &p.workflow_name,
+                                p.target_label.as_deref(),
+                                &e.to_string(),
+                            );
+                        }
+                        Err(db_err) => {
+                            tracing::warn!(
+                                run_id = %p.run_id,
+                                error = %db_err,
+                                "spawn_heartbeat_resume: could not open DB to fire stuck-run notification"
+                            );
+                        }
+                    }
                 }
-                Err(db_err) => {
-                    tracing::warn!(
-                        run_id = %p.run_id,
-                        error = %db_err,
-                        "spawn_heartbeat_resume: could not open DB to fire stuck-run notification"
-                    );
-                }
-            }
-        }
+            }),
+        );
     })
 }
 
