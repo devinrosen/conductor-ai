@@ -399,11 +399,7 @@ mod tests {
 
         let mut script = tempfile::NamedTempFile::new().expect("tempfile");
         writeln!(script, "sleep 300 &").unwrap();
-        writeln!(
-            script,
-            r#"echo '{{"type":"result","result":"done"}}'"#
-        )
-        .unwrap();
+        writeln!(script, r#"echo '{{"type":"result","result":"done"}}'"#).unwrap();
         writeln!(script, "wait").unwrap();
 
         let child = std::process::Command::new("sh")
