@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::sync::Arc;
 
 use rmcp::model::{CallToolResult, Content, RawResource, Resource};
@@ -114,17 +113,6 @@ pub(crate) fn pagination_hint(offset: usize, count: usize, limit: usize) -> Stri
         end = offset + count,
         next = offset + limit,
     )
-}
-
-/// Helper: open the database and load config.
-pub(crate) fn open_db_and_config(
-    db_path: &Path,
-) -> anyhow::Result<(rusqlite::Connection, conductor_core::config::Config)> {
-    use conductor_core::config::load_config;
-    use conductor_core::db::open_database;
-    let conn = open_database(db_path)?;
-    let config = load_config()?;
-    Ok((conn, config))
 }
 
 #[cfg(test)]

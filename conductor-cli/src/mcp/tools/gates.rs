@@ -1,12 +1,11 @@
-use std::path::Path;
-
+use conductor_core::Conductor;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, open_db_and_config, tool_err, tool_ok};
+use crate::mcp::helpers::{get_arg, tool_err, tool_ok};
 
 pub(super) fn tool_approve_gate(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     let run_id = require_arg!(args, "run_id");
@@ -22,11 +21,8 @@ pub(super) fn tool_approve_gate(
                     .collect()
             });
 
-    let (conn, _config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let step = match conductor_core::workflow::find_waiting_gate(&conn, run_id) {
+    let conn = &conductor.conn;
+    let step = match conductor_core::workflow::find_waiting_gate(conn, run_id) {
         Ok(Some(s)) => s,
         Ok(None) => return tool_err(format!("No waiting gate found for run {run_id}")),
         Err(e) => return tool_err(e),
@@ -36,7 +32,7 @@ pub(super) fn tool_approve_gate(
         .filter(|s| !s.is_empty())
         .map(conductor_core::workflow::helpers::format_gate_selection_context);
     match conductor_core::workflow::approve_gate(
-        &conn,
+        conn,
         &step.id,
         "mcp",
         feedback,
@@ -49,21 +45,18 @@ pub(super) fn tool_approve_gate(
 }
 
 pub(super) fn tool_reject_gate(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     let run_id = require_arg!(args, "run_id");
-    let (conn, _config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
+    let conn = &conductor.conn;
     let feedback = get_arg(args, "feedback");
-    let step = match conductor_core::workflow::find_waiting_gate(&conn, run_id) {
+    let step = match conductor_core::workflow::find_waiting_gate(conn, run_id) {
         Ok(Some(s)) => s,
         Ok(None) => return tool_err(format!("No waiting gate found for run {run_id}")),
         Err(e) => return tool_err(e),
     };
-    match conductor_core::workflow::reject_gate(&conn, &step.id, "mcp", feedback) {
+    match conductor_core::workflow::reject_gate(conn, &step.id, "mcp", feedback) {
         Ok(()) => tool_ok(format!("Gate rejected for run {run_id}.")),
         Err(e) => tool_err(e),
     }
@@ -78,12 +71,19 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
-    fn make_test_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
+    fn make_test_conductor() -> (tempfile::NamedTempFile, Conductor) {
+        use conductor_core::config::Config;
         use conductor_core::db::open_database;
         let file = tempfile::NamedTempFile::new().expect("temp file");
         let path = file.path().to_path_buf();
-        open_database(&path).expect("open_database");
-        (file, path)
+        let conn = open_database(&path).expect("open_database");
+        (
+            file,
+            Conductor {
+                conn,
+                config: Config::default(),
+            },
+        )
     }
 
     fn empty_args() -> serde_json::Map<String, Value> {
@@ -97,26 +97,25 @@ mod tests {
     }
 
     /// Helper: set up a workflow run with a waiting gate step. Returns (run_id, step_id).
-    fn make_waiting_gate(db_path: &std::path::Path) -> (String, String) {
+    fn make_waiting_gate(conductor: &Conductor) -> (String, String) {
         use conductor_core::agent::AgentManager;
-        use conductor_core::db::open_database;
         use conductor_core::workflow::{GateType, WorkflowStepStatus};
 
-        let conn = open_database(db_path).expect("open db");
+        let conn = &conductor.conn;
 
         // FK: workflow_runs.parent_run_id references agent_runs.id
-        let agent_mgr = AgentManager::new(&conn);
+        let agent_mgr = AgentManager::new(conn);
         let parent = agent_mgr
             .create_run(None, "workflow", None)
             .expect("create agent run");
 
         let run = conductor_core::workflow::create_workflow_run(
-            &conn, "test-wf", None, &parent.id, false, "manual", None,
+            conn, "test-wf", None, &parent.id, false, "manual", None,
         )
         .expect("create run");
 
         let step_id = conductor_core::workflow::insert_step(
-            &conn,
+            conn,
             &run.id,
             "human_review",
             "reviewer",
@@ -127,7 +126,7 @@ mod tests {
         .expect("insert step");
 
         conductor_core::workflow::set_step_gate_info(
-            &conn,
+            conn,
             &step_id,
             GateType::HumanApproval,
             Some("Approve?"),
@@ -136,7 +135,7 @@ mod tests {
         .expect("set gate info");
 
         conductor_core::workflow::update_step_status(
-            &conn,
+            conn,
             &step_id,
             WorkflowStepStatus::Waiting,
             None,
@@ -152,8 +151,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_approve_gate_missing_run_id_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_approve_gate(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_approve_gate(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -164,8 +163,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_reject_gate_missing_run_id_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_reject_gate(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_reject_gate(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -176,27 +175,27 @@ mod tests {
 
     #[test]
     fn test_dispatch_approve_gate_no_waiting_gate() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
-        let result = tool_approve_gate(&db, &args);
+        let result = tool_approve_gate(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_dispatch_reject_gate_no_waiting_gate() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
-        let result = tool_reject_gate(&db, &args);
+        let result = tool_reject_gate(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_dispatch_approve_gate_success() {
-        let (_f, db) = make_test_db();
-        let (run_id, _step_id) = make_waiting_gate(&db);
+        let (_f, conductor) = make_test_conductor();
+        let (run_id, _step_id) = make_waiting_gate(&conductor);
 
         let args = args_with("run_id", &run_id);
-        let result = tool_approve_gate(&db, &args);
+        let result = tool_approve_gate(&conductor, &args);
         assert_ne!(
             result.is_error,
             Some(true),
@@ -216,11 +215,11 @@ mod tests {
 
     #[test]
     fn test_dispatch_reject_gate_success() {
-        let (_f, db) = make_test_db();
-        let (run_id, _step_id) = make_waiting_gate(&db);
+        let (_f, conductor) = make_test_conductor();
+        let (run_id, _step_id) = make_waiting_gate(&conductor);
 
         let args = args_with("run_id", &run_id);
-        let result = tool_reject_gate(&db, &args);
+        let result = tool_reject_gate(&conductor, &args);
         assert_ne!(
             result.is_error,
             Some(true),
@@ -240,28 +239,26 @@ mod tests {
 
     #[test]
     fn test_dispatch_approve_gate_with_feedback() {
-        let (_f, db) = make_test_db();
-        let (run_id, _step_id) = make_waiting_gate(&db);
+        let (_f, conductor) = make_test_conductor();
+        let (run_id, _step_id) = make_waiting_gate(&conductor);
 
         let mut args = serde_json::Map::new();
         args.insert("run_id".to_string(), Value::String(run_id.clone()));
         args.insert("feedback".to_string(), Value::String("LGTM".to_string()));
-        let result = tool_approve_gate(&db, &args);
+        let result = tool_approve_gate(&conductor, &args);
         assert_ne!(result.is_error, Some(true));
 
         // Verify the feedback was persisted
-        use conductor_core::db::open_database;
-        let conn = open_database(&db).expect("open db");
-        let steps =
-            conductor_core::workflow::get_workflow_steps(&conn, &run_id).expect("get steps");
+        let steps = conductor_core::workflow::get_workflow_steps(&conductor.conn, &run_id)
+            .expect("get steps");
         assert_eq!(steps[0].gate_feedback.as_deref(), Some("LGTM"));
         assert_eq!(steps[0].gate_approved_by.as_deref(), Some("mcp"));
     }
 
     #[test]
     fn test_dispatch_reject_gate_with_feedback() {
-        let (_f, db) = make_test_db();
-        let (run_id, _step_id) = make_waiting_gate(&db);
+        let (_f, conductor) = make_test_conductor();
+        let (run_id, _step_id) = make_waiting_gate(&conductor);
 
         let mut args = serde_json::Map::new();
         args.insert("run_id".to_string(), Value::String(run_id.clone()));
@@ -269,14 +266,12 @@ mod tests {
             "feedback".to_string(),
             Value::String("Needs more work".to_string()),
         );
-        let result = tool_reject_gate(&db, &args);
+        let result = tool_reject_gate(&conductor, &args);
         assert_ne!(result.is_error, Some(true));
 
         // Verify the feedback was persisted
-        use conductor_core::db::open_database;
-        let conn = open_database(&db).expect("open db");
-        let steps =
-            conductor_core::workflow::get_workflow_steps(&conn, &run_id).expect("get steps");
+        let steps = conductor_core::workflow::get_workflow_steps(&conductor.conn, &run_id)
+            .expect("get steps");
         assert_eq!(steps[0].gate_feedback.as_deref(), Some("Needs more work"));
         assert_eq!(steps[0].gate_approved_by.as_deref(), Some("mcp"));
     }

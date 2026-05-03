@@ -1,15 +1,14 @@
-use std::path::Path;
-
+use conductor_core::Conductor;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, open_db_and_config, pagination_hint, tool_err, tool_ok};
+use crate::mcp::helpers::{get_arg, pagination_hint, tool_err, tool_ok};
 use crate::mcp::resources::{
     format_run_detail_with_log, format_run_summary_line, format_run_summary_line_with_repo,
 };
 
 pub(super) fn tool_list_runs(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::repo::RepoManager;
@@ -40,34 +39,32 @@ pub(super) fn tool_list_runs(
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
+    let conn = &conductor.conn;
+    let config = &conductor.config;
 
     if let Some(slug) = repo_slug {
         // Per-repo path (existing behaviour)
-        let repo_mgr = RepoManager::new(&conn, &config);
+        let repo_mgr = RepoManager::new(conn, config);
         let repo = match repo_mgr.get_by_slug(slug) {
             Ok(r) => r,
             Err(e) => return tool_err(e),
         };
 
         let runs = if let Some(wt_slug) = worktree_slug {
-            let wt_mgr = WorktreeManager::new(&conn, &config);
+            let wt_mgr = WorktreeManager::new(conn, config);
             let wt = match wt_mgr.get_by_slug_or_branch(&repo.id, wt_slug) {
                 Ok(w) => w,
                 Err(e) => return tool_err(e),
             };
             match conductor_core::workflow::list_workflow_runs_filtered_paginated(
-                &conn, &wt.id, status, limit, offset,
+                conn, &wt.id, status, limit, offset,
             ) {
                 Ok(r) => r,
                 Err(e) => return tool_err(e),
             }
         } else {
             match conductor_core::workflow::list_workflow_runs_by_repo_id_filtered(
-                &conn, &repo.id, limit, offset, status,
+                conn, &repo.id, limit, offset, status,
             ) {
                 Ok(r) => r,
                 Err(e) => return tool_err(e),
@@ -80,7 +77,7 @@ pub(super) fn tool_list_runs(
 
         // Bulk-fetch all worktrees for this repo once, then build a lookup map.
         // This avoids N+1 DB queries and config file reads (one per run).
-        let wt_mgr = WorktreeManager::new(&conn, &config);
+        let wt_mgr = WorktreeManager::new(conn, config);
         let worktrees = match wt_mgr.list_by_repo_id(&repo.id, false) {
             Ok(wts) => wts,
             Err(e) => return tool_err(e),
@@ -105,7 +102,7 @@ pub(super) fn tool_list_runs(
         tool_ok(out)
     } else {
         // Cross-repo path: return runs across all registered repos
-        let repo_mgr = RepoManager::new(&conn, &config);
+        let repo_mgr = RepoManager::new(conn, config);
         let repos = match repo_mgr.list() {
             Ok(r) => r,
             Err(e) => return tool_err(e),
@@ -114,7 +111,7 @@ pub(super) fn tool_list_runs(
             repos.into_iter().map(|r| (r.id, r.slug)).collect();
 
         let runs = match conductor_core::workflow::list_all_workflow_runs_filtered_paginated(
-            &conn, status, limit, offset,
+            conn, status, limit, offset,
         ) {
             Ok(r) => r,
             Err(e) => return tool_err(e),
@@ -139,26 +136,24 @@ pub(super) fn tool_list_runs(
 }
 
 pub(super) fn tool_get_run(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     let run_id = require_arg!(args, "run_id");
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let run = match conductor_core::workflow::get_workflow_run(&conn, run_id) {
+    let conn = &conductor.conn;
+    let config = &conductor.config;
+    let run = match conductor_core::workflow::get_workflow_run(conn, run_id) {
         Ok(Some(r)) => r,
         Ok(None) => return tool_err(format!("Workflow run {run_id} not found")),
         Err(e) => return tool_err(e),
     };
-    let steps = match conductor_core::workflow::get_workflow_steps(&conn, run_id) {
+    let steps = match conductor_core::workflow::get_workflow_steps(conn, run_id) {
         Ok(s) => s,
         Err(e) => return tool_err(e),
     };
     let claude_dir = config.general.resolve_optional_claude_dir();
     tool_ok(format_run_detail_with_log(
-        &conn,
+        conn,
         &run,
         &steps,
         claude_dir.as_deref(),
@@ -166,21 +161,18 @@ pub(super) fn tool_get_run(
 }
 
 pub(super) fn tool_cancel_run(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     let run_id = require_arg!(args, "run_id");
-    let (conn, _config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let run = match conductor_core::workflow::get_workflow_run(&conn, run_id) {
+    let conn = &conductor.conn;
+    let run = match conductor_core::workflow::get_workflow_run(conn, run_id) {
         Ok(Some(r)) => r,
         Ok(None) => return tool_err(format!("Workflow run not found: {run_id}")),
         Err(e) => return tool_err(e),
     };
     match conductor_core::workflow::cancel_run(
-        &conn,
+        conn,
         run_id,
         "Cancelled via MCP conductor_cancel_run",
     ) {
@@ -193,7 +185,7 @@ pub(super) fn tool_cancel_run(
 }
 
 pub(super) fn tool_resume_run(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::workflow::{
@@ -205,11 +197,9 @@ pub(super) fn tool_resume_run(
     let from_step = get_arg(args, "from_step").map(str::to_string);
     let model = get_arg(args, "model").map(str::to_string);
 
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let run = match conductor_core::workflow::get_workflow_run(&conn, run_id) {
+    let conn = &conductor.conn;
+    let config = conductor.config.clone();
+    let run = match conductor_core::workflow::get_workflow_run(conn, run_id) {
         Ok(Some(r)) => r,
         Ok(None) => return tool_err(format!("Workflow run not found: {run_id}")),
         Err(e) => return tool_err(e),
@@ -225,7 +215,7 @@ pub(super) fn tool_resume_run(
         model,
         from_step,
         restart: false,
-        db_path: Some(db_path.to_path_buf()),
+        db_path: Some(Conductor::db_path()),
         conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
         shutdown: None,
     };
@@ -270,7 +260,7 @@ pub(super) fn tool_resume_run(
 }
 
 pub(super) fn tool_get_step_log(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::agent::AgentManager;
@@ -278,20 +268,17 @@ pub(super) fn tool_get_step_log(
     let run_id = require_arg!(args, "run_id");
     let step_name = require_arg!(args, "step_name");
 
-    let (conn, _config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
+    let conn = &conductor.conn;
 
     // Verify the workflow run exists.
-    match conductor_core::workflow::get_workflow_run(&conn, run_id) {
+    match conductor_core::workflow::get_workflow_run(conn, run_id) {
         Ok(Some(_)) => {}
         Ok(None) => return tool_err(format!("Workflow run {run_id} not found")),
         Err(e) => return tool_err(e),
     }
 
     // Find all steps for this run and pick the last matching step_name.
-    let steps = match conductor_core::workflow::get_workflow_steps(&conn, run_id) {
+    let steps = match conductor_core::workflow::get_workflow_steps(conn, run_id) {
         Ok(s) => s,
         Err(e) => return tool_err(e),
     };
@@ -320,7 +307,7 @@ pub(super) fn tool_get_step_log(
     };
 
     // Resolve the log file path (verifies run exists; respects log_file override).
-    let agent_mgr = AgentManager::new(&conn);
+    let agent_mgr = AgentManager::new(conn);
     let log_path = match agent_mgr.log_path_for_run(&child_run_id) {
         Ok(p) => p,
         Err(e) => return tool_err(e),
@@ -344,12 +331,19 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
-    fn make_test_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
+    fn make_test_conductor() -> (tempfile::NamedTempFile, Conductor) {
+        use conductor_core::config::Config;
         use conductor_core::db::open_database;
         let file = tempfile::NamedTempFile::new().expect("temp file");
         let path = file.path().to_path_buf();
-        open_database(&path).expect("open_database");
-        (file, path)
+        let conn = open_database(&path).expect("open_database");
+        (
+            file,
+            Conductor {
+                conn,
+                config: Config::default(),
+            },
+        )
     }
 
     fn empty_args() -> serde_json::Map<String, Value> {
@@ -420,24 +414,24 @@ mod tests {
 
     #[test]
     fn test_dispatch_get_run_missing_run_id_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_get_run(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_get_run(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_dispatch_get_run_nonexistent_run() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
-        let result = tool_get_run(&db, &args);
+        let result = tool_get_run(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_dispatch_list_runs_missing_repo_arg() {
         // repo is now optional — empty-args call should succeed (empty result)
-        let (_f, db) = make_test_db();
-        let result = tool_list_runs(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_list_runs(&conductor, &empty_args());
         assert_ne!(
             result.is_error,
             Some(true),
@@ -452,9 +446,9 @@ mod tests {
 
     #[test]
     fn test_dispatch_list_runs_worktree_without_repo_fails() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = args_with("worktree", "some-wt");
-        let result = tool_list_runs(&db, &args);
+        let result = tool_list_runs(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -471,11 +465,11 @@ mod tests {
         use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;
 
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         {
-            let conn = open_database(&db).expect("open db");
+            let conn = open_database(_f.path()).expect("open db");
 
-            // Register two repos (make_test_db only runs migrations, no seed data)
+            // Register two repos (make_test_conductor only runs migrations, no seed data)
             conn.execute(
                 "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
                  VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
@@ -531,7 +525,7 @@ mod tests {
             .unwrap();
         }
 
-        let result = tool_list_runs(&db, &empty_args());
+        let result = tool_list_runs(&conductor, &empty_args());
         assert_ne!(
             result.is_error,
             Some(true),
@@ -568,8 +562,8 @@ mod tests {
     fn test_list_workflow_runs_by_repo_id_empty() {
         use conductor_core::db::open_database;
 
-        let (_f, db) = make_test_db();
-        let conn = open_database(&db).expect("open db");
+        let (_f, _conductor) = make_test_conductor();
+        let conn = open_database(_f.path()).expect("open db");
         let runs = conductor_core::workflow::list_workflow_runs_by_repo_id(
             &conn,
             "nonexistent-repo-id",
@@ -587,8 +581,8 @@ mod tests {
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
-        let (_f, db) = make_test_db();
-        let conn = open_database(&db).expect("open db");
+        let (_f, _conductor) = make_test_conductor();
+        let conn = open_database(_f.path()).expect("open db");
         let config = Config::default();
         let repo_mgr = RepoManager::new(&conn, &config);
         let repo_a = repo_mgr
@@ -649,8 +643,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_cancel_run_missing_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_cancel_run(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_cancel_run(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -661,9 +655,9 @@ mod tests {
 
     #[test]
     fn test_dispatch_cancel_run_not_found() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
-        let result = tool_cancel_run(&db, &args);
+        let result = tool_cancel_run(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -675,10 +669,10 @@ mod tests {
     #[test]
     fn test_dispatch_cancel_run_already_completed() {
         use conductor_core::workflow::WorkflowRunStatus;
-        let (_f, db) = make_test_db();
-        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Completed);
+        let (_f, conductor) = make_test_conductor();
+        let run_id = make_workflow_run_with_status(_f.path(), WorkflowRunStatus::Completed);
         let args = args_with("run_id", &run_id);
-        let result = tool_cancel_run(&db, &args);
+        let result = tool_cancel_run(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -690,20 +684,20 @@ mod tests {
     #[test]
     fn test_dispatch_cancel_run_already_failed() {
         use conductor_core::workflow::WorkflowRunStatus;
-        let (_f, db) = make_test_db();
-        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Failed);
+        let (_f, conductor) = make_test_conductor();
+        let run_id = make_workflow_run_with_status(_f.path(), WorkflowRunStatus::Failed);
         let args = args_with("run_id", &run_id);
-        let result = tool_cancel_run(&db, &args);
+        let result = tool_cancel_run(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_dispatch_cancel_run_already_cancelled() {
         use conductor_core::workflow::WorkflowRunStatus;
-        let (_f, db) = make_test_db();
-        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Cancelled);
+        let (_f, conductor) = make_test_conductor();
+        let run_id = make_workflow_run_with_status(_f.path(), WorkflowRunStatus::Cancelled);
         let args = args_with("run_id", &run_id);
-        let result = tool_cancel_run(&db, &args);
+        let result = tool_cancel_run(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 
@@ -711,10 +705,10 @@ mod tests {
     fn test_dispatch_cancel_run_running() {
         use conductor_core::db::open_database;
         use conductor_core::workflow::WorkflowRunStatus;
-        let (_f, db) = make_test_db();
-        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Running);
+        let (_f, conductor) = make_test_conductor();
+        let run_id = make_workflow_run_with_status(_f.path(), WorkflowRunStatus::Running);
         let args = args_with("run_id", &run_id);
-        let result = tool_cancel_run(&db, &args);
+        let result = tool_cancel_run(&conductor, &args);
         assert_ne!(
             result.is_error,
             Some(true),
@@ -732,7 +726,7 @@ mod tests {
         assert!(text.contains("cancelled"), "got: {text}");
 
         // Verify the run status was updated in the DB.
-        let conn = open_database(&db).expect("open db");
+        let conn = open_database(_f.path()).expect("open db");
         let run = conductor_core::workflow::get_workflow_run(&conn, &run_id)
             .expect("query")
             .expect("run exists");
@@ -745,8 +739,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_resume_run_missing_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_resume_run(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_resume_run(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -757,9 +751,9 @@ mod tests {
 
     #[test]
     fn test_dispatch_resume_run_not_found() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
-        let result = tool_resume_run(&db, &args);
+        let result = tool_resume_run(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -771,10 +765,10 @@ mod tests {
     #[test]
     fn test_dispatch_resume_run_already_running() {
         use conductor_core::workflow::WorkflowRunStatus;
-        let (_f, db) = make_test_db();
-        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Running);
+        let (_f, conductor) = make_test_conductor();
+        let run_id = make_workflow_run_with_status(_f.path(), WorkflowRunStatus::Running);
         let args = args_with("run_id", &run_id);
-        let result = tool_resume_run(&db, &args);
+        let result = tool_resume_run(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -786,10 +780,10 @@ mod tests {
     #[test]
     fn test_dispatch_resume_run_already_completed() {
         use conductor_core::workflow::WorkflowRunStatus;
-        let (_f, db) = make_test_db();
-        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Completed);
+        let (_f, conductor) = make_test_conductor();
+        let run_id = make_workflow_run_with_status(_f.path(), WorkflowRunStatus::Completed);
         let args = args_with("run_id", &run_id);
-        let result = tool_resume_run(&db, &args);
+        let result = tool_resume_run(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -801,10 +795,10 @@ mod tests {
     #[test]
     fn test_dispatch_resume_run_already_cancelled() {
         use conductor_core::workflow::WorkflowRunStatus;
-        let (_f, db) = make_test_db();
-        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Cancelled);
+        let (_f, conductor) = make_test_conductor();
+        let run_id = make_workflow_run_with_status(_f.path(), WorkflowRunStatus::Cancelled);
         let args = args_with("run_id", &run_id);
-        let result = tool_resume_run(&db, &args);
+        let result = tool_resume_run(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -816,10 +810,10 @@ mod tests {
     #[test]
     fn test_dispatch_resume_run_failed() {
         use conductor_core::workflow::WorkflowRunStatus;
-        let (_f, db) = make_test_db();
-        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Failed);
+        let (_f, conductor) = make_test_conductor();
+        let run_id = make_workflow_run_with_status(_f.path(), WorkflowRunStatus::Failed);
         let args = args_with("run_id", &run_id);
-        let result = tool_resume_run(&db, &args);
+        let result = tool_resume_run(&conductor, &args);
         // Status validation passes for Failed runs — any error must come from setup
         // (e.g. missing snapshot), not from the status check.
         let text = result.content[0]
@@ -847,8 +841,8 @@ mod tests {
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
-        let (_f, db) = make_test_db();
-        let conn = open_database(&db).expect("open db");
+        let (_f, conductor) = make_test_conductor();
+        let conn = open_database(_f.path()).expect("open db");
         let config = Config::default();
 
         // Register a repo.
@@ -898,7 +892,7 @@ mod tests {
 
         // Call tool_list_runs and verify worktree_slug appears in output.
         let args = args_with("repo", "slug-test-repo");
-        let result = tool_list_runs(&db, &args);
+        let result = tool_list_runs(&conductor, &args);
         assert_ne!(
             result.is_error,
             Some(true),
@@ -925,8 +919,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_get_step_log_missing_run_id() {
-        let (_f, db) = make_test_db();
-        let result = tool_get_step_log(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_get_step_log(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -937,8 +931,11 @@ mod tests {
 
     #[test]
     fn test_dispatch_get_step_log_missing_step_name() {
-        let (_f, db) = make_test_db();
-        let result = tool_get_step_log(&db, &args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX"));
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_get_step_log(
+            &conductor,
+            &args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX"),
+        );
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -949,14 +946,14 @@ mod tests {
 
     #[test]
     fn test_dispatch_get_step_log_nonexistent_run() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = serde_json::Map::new();
         args.insert(
             "run_id".to_string(),
             Value::String("01HXXXXXXXXXXXXXXXXXXXXXXX".to_string()),
         );
         args.insert("step_name".to_string(), Value::String("build".to_string()));
-        let result = tool_get_step_log(&db, &args);
+        let result = tool_get_step_log(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -967,15 +964,15 @@ mod tests {
 
     #[test]
     fn test_dispatch_get_step_log_step_not_found() {
-        let (_f, db) = make_test_db();
-        let (run_id, _step_id) = make_run_with_step(&db, "build");
+        let (_f, conductor) = make_test_conductor();
+        let (run_id, _step_id) = make_run_with_step(_f.path(), "build");
         let mut args = serde_json::Map::new();
         args.insert("run_id".to_string(), Value::String(run_id));
         args.insert(
             "step_name".to_string(),
             Value::String("nonexistent-step".to_string()),
         );
-        let result = tool_get_step_log(&db, &args);
+        let result = tool_get_step_log(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -987,15 +984,15 @@ mod tests {
     #[test]
     fn test_dispatch_get_step_log_no_child_run() {
         // A step with no child_run_id (gate/skipped step) should return an error.
-        let (_f, db) = make_test_db();
-        let (run_id, _step_id) = make_run_with_step(&db, "review-gate");
+        let (_f, conductor) = make_test_conductor();
+        let (run_id, _step_id) = make_run_with_step(_f.path(), "review-gate");
         let mut args = serde_json::Map::new();
         args.insert("run_id".to_string(), Value::String(run_id));
         args.insert(
             "step_name".to_string(),
             Value::String("review-gate".to_string()),
         );
-        let result = tool_get_step_log(&db, &args);
+        let result = tool_get_step_log(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -1011,15 +1008,15 @@ mod tests {
         use conductor_core::db::open_database;
         use conductor_core::workflow::WorkflowStepStatus;
 
-        let (_f, db) = make_test_db();
-        let (run_id, step_id) = make_run_with_step(&db, "build");
+        let (_f, conductor) = make_test_conductor();
+        let (run_id, step_id) = make_run_with_step(_f.path(), "build");
 
         // Create a child agent run with a nonexistent log_file path inside agent_log_dir.
         let log_dir = conductor_core::test_helpers::ensure_agent_log_dir();
         let nonexistent = log_dir.join("test-nonexistent-missing.log");
         let nonexistent_str = nonexistent.to_str().unwrap().to_string();
 
-        let conn = open_database(&db).expect("open db");
+        let conn = open_database(_f.path()).expect("open db");
         let agent_mgr = AgentManager::new(&conn);
         let child_run = agent_mgr
             .create_run(None, "agent", None)
@@ -1044,7 +1041,7 @@ mod tests {
         let mut args = serde_json::Map::new();
         args.insert("run_id".to_string(), Value::String(run_id));
         args.insert("step_name".to_string(), Value::String("build".to_string()));
-        let result = tool_get_step_log(&db, &args);
+        let result = tool_get_step_log(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -1072,8 +1069,8 @@ mod tests {
         use conductor_core::workflow::WorkflowStepStatus;
         use std::io::Write as _;
 
-        let (_f, db) = make_test_db();
-        let (run_id, step_id) = make_run_with_step(&db, "test-step");
+        let (_f, conductor) = make_test_conductor();
+        let (run_id, step_id) = make_run_with_step(_f.path(), "test-step");
 
         // Write a temporary log file inside agent_log_dir so validation passes.
         let log_dir = conductor_core::test_helpers::ensure_agent_log_dir();
@@ -1084,7 +1081,7 @@ mod tests {
         writeln!(log_file.as_file(), "agent log line 2").expect("write");
         let log_path = log_file.path().to_str().unwrap().to_string();
 
-        let conn = open_database(&db).expect("open db");
+        let conn = open_database(_f.path()).expect("open db");
         let child_run_id = create_run_with_log(&conn, &log_path);
         conductor_core::workflow::update_step_status(
             &conn,
@@ -1104,7 +1101,7 @@ mod tests {
             "step_name".to_string(),
             Value::String("test-step".to_string()),
         );
-        let result = tool_get_step_log(&db, &args);
+        let result = tool_get_step_log(&conductor, &args);
         assert_ne!(
             result.is_error,
             Some(true),
@@ -1129,8 +1126,8 @@ mod tests {
         use conductor_core::workflow::WorkflowStepStatus;
         use std::io::Write as _;
 
-        let (_f, db) = make_test_db();
-        let (run_id, step0_id) = make_run_with_step(&db, "build");
+        let (_f, conductor) = make_test_conductor();
+        let (run_id, step0_id) = make_run_with_step(_f.path(), "build");
 
         // Write log files inside agent_log_dir so validation passes.
         let log_dir = conductor_core::test_helpers::ensure_agent_log_dir();
@@ -1145,7 +1142,7 @@ mod tests {
         let path0 = log_iter0.path().to_str().unwrap().to_string();
         let path1 = log_iter1.path().to_str().unwrap().to_string();
 
-        let conn = open_database(&db).expect("open db");
+        let conn = open_database(_f.path()).expect("open db");
         let child0_id = create_run_with_log(&conn, &path0);
         conductor_core::workflow::update_step_status(
             &conn,
@@ -1179,7 +1176,7 @@ mod tests {
         let mut args = serde_json::Map::new();
         args.insert("run_id".to_string(), Value::String(run_id));
         args.insert("step_name".to_string(), Value::String("build".to_string()));
-        let result = tool_get_step_log(&db, &args);
+        let result = tool_get_step_log(&conductor, &args);
         assert_ne!(
             result.is_error,
             Some(true),
@@ -1210,8 +1207,8 @@ mod tests {
         use conductor_core::workflow::WorkflowStepStatus;
         use std::io::Write as _;
 
-        let (_f, db) = make_test_db();
-        let (run_id, build_step_id) = make_run_with_step(&db, "build");
+        let (_f, conductor) = make_test_conductor();
+        let (run_id, build_step_id) = make_run_with_step(_f.path(), "build");
 
         // Write log files inside agent_log_dir so validation passes.
         let log_dir = conductor_core::test_helpers::ensure_agent_log_dir();
@@ -1231,7 +1228,7 @@ mod tests {
         let path_test0 = log_test0.path().to_str().unwrap().to_string();
         let path_test1 = log_test1.path().to_str().unwrap().to_string();
 
-        let conn = open_database(&db).expect("open db");
+        let conn = open_database(_f.path()).expect("open db");
 
         // Link build step to its agent run.
         let child_build_id = create_run_with_log(&conn, &path_build);
@@ -1285,7 +1282,7 @@ mod tests {
         let mut args = serde_json::Map::new();
         args.insert("run_id".to_string(), Value::String(run_id));
         args.insert("step_name".to_string(), Value::String("test".to_string()));
-        let result = tool_get_step_log(&db, &args);
+        let result = tool_get_step_log(&conductor, &args);
         assert_ne!(
             result.is_error,
             Some(true),

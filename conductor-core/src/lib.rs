@@ -26,6 +26,9 @@ macro_rules! impl_sql_enum {
 
 pub(crate) use impl_sql_enum;
 
+pub mod conductor;
+pub use conductor::Conductor;
+
 pub mod agent;
 pub mod agent_config;
 pub mod agent_runtime;

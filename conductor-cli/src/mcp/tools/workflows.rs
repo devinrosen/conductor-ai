@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-use std::path::Path;
 
+use conductor_core::Conductor;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, get_bool_arg, open_db_and_config, tool_err, tool_ok};
+use crate::mcp::helpers::{get_arg, get_bool_arg, tool_err, tool_ok};
 use crate::mcp::resources::format_workflow_def;
 
 /// Resolve the working directory path for a tool call.
@@ -31,22 +31,20 @@ fn resolve_wt_path(
 }
 
 pub(super) fn tool_list_workflows(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::repo::RepoManager;
 
     let repo_slug = require_arg!(args, "repo");
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let repo_mgr = RepoManager::new(&conn, &config);
+    let conn = &conductor.conn;
+    let config = &conductor.config;
+    let repo_mgr = RepoManager::new(conn, config);
     let repo = match repo_mgr.get_by_slug(repo_slug) {
         Ok(r) => r,
         Err(e) => return tool_err(e),
     };
-    let wt_path = match resolve_wt_path(&conn, &config, &repo, get_arg(args, "worktree")) {
+    let wt_path = match resolve_wt_path(conn, config, &repo, get_arg(args, "worktree")) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -72,7 +70,7 @@ pub(super) fn tool_list_workflows(
 }
 
 pub(super) fn tool_validate_workflow(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::repo::RepoManager;
@@ -80,16 +78,14 @@ pub(super) fn tool_validate_workflow(
     let repo_slug = require_arg!(args, "repo");
     let workflow_name = require_arg!(args, "workflow");
 
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+    let conn = &conductor.conn;
+    let config = &conductor.config;
+    let repo = match RepoManager::new(conn, config).get_by_slug(repo_slug) {
         Ok(r) => r,
         Err(e) => return tool_err(e),
     };
 
-    let wt_path = match resolve_wt_path(&conn, &config, &repo, get_arg(args, "worktree")) {
+    let wt_path = match resolve_wt_path(conn, config, &repo, get_arg(args, "worktree")) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -156,7 +152,7 @@ fn format_validation_result(
 }
 
 pub(super) fn tool_run_workflow(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::repo::RepoManager;
@@ -211,11 +207,9 @@ pub(super) fn tool_run_workflow(
         Some(other) => return tool_err(format!("inputs must be an object, got: {other}")),
     };
 
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let repo_mgr = RepoManager::new(&conn, &config);
+    let conn = &conductor.conn;
+    let config = &conductor.config;
+    let repo_mgr = RepoManager::new(conn, config);
     let repo = match repo_mgr.get_by_slug(repo_slug) {
         Ok(r) => r,
         Err(e) => return tool_err(e),
@@ -242,7 +236,7 @@ pub(super) fn tool_run_workflow(
         };
 
         // Find the local worktree for that branch
-        let wt_mgr = WorktreeManager::new(&conn, &config);
+        let wt_mgr = WorktreeManager::new(conn, config);
         let wt = match wt_mgr.get_by_branch(&repo.id, &branch) {
             Ok(wt) => wt,
             Err(conductor_core::error::ConductorError::WorktreeNotFound { .. }) => {
@@ -255,7 +249,7 @@ pub(super) fn tool_run_workflow(
         };
         (Some(wt.id), wt.path, format!("{}#{}", repo_slug, pr_number))
     } else if let Some(wt_slug) = worktree_slug {
-        let wt_mgr = WorktreeManager::new(&conn, &config);
+        let wt_mgr = WorktreeManager::new(conn, config);
         match wt_mgr.get_by_slug_or_branch(&repo.id, wt_slug) {
             Ok(wt) => (Some(wt.id), wt.path, repo_slug.to_string()),
             Err(e) => return tool_err(e),
@@ -270,7 +264,7 @@ pub(super) fn tool_run_workflow(
 
     // Fire-and-forget: execute in a background thread
     let standalone = WorkflowExecStandalone {
-        config,
+        config: conductor.config.clone(),
         workflow,
         worktree_id,
         working_dir,
@@ -350,7 +344,7 @@ pub(super) fn tool_run_workflow(
 }
 
 pub(super) fn tool_list_templates(
-    _db_path: &Path,
+    _conductor: &Conductor,
     _args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::workflow_template::list_embedded_templates;
@@ -383,7 +377,7 @@ pub(super) fn tool_list_templates(
 }
 
 pub(super) fn tool_instantiate_template(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::repo::RepoManager;
@@ -405,18 +399,16 @@ pub(super) fn tool_instantiate_template(
         }
     };
 
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
+    let conn = &conductor.conn;
+    let config = &conductor.config;
 
-    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+    let repo = match RepoManager::new(conn, config).get_by_slug(repo_slug) {
         Ok(r) => r,
         Err(e) => return tool_err(e),
     };
 
     let working_dir = if let Some(wt_slug) = worktree_slug {
-        let wt_mgr = WorktreeManager::new(&conn, &config);
+        let wt_mgr = WorktreeManager::new(conn, config);
         match wt_mgr.get_by_slug_or_branch(&repo.id, wt_slug) {
             Ok(wt) => wt.path,
             Err(e) => return tool_err(e),
@@ -448,12 +440,19 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
-    fn make_test_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
+    fn make_test_conductor() -> (tempfile::NamedTempFile, Conductor) {
+        use conductor_core::config::Config;
         use conductor_core::db::open_database;
         let file = tempfile::NamedTempFile::new().expect("temp file");
         let path = file.path().to_path_buf();
-        open_database(&path).expect("open_database");
-        (file, path)
+        let conn = open_database(&path).expect("open_database");
+        (
+            file,
+            Conductor {
+                conn,
+                config: Config::default(),
+            },
+        )
     }
 
     fn empty_args() -> serde_json::Map<String, Value> {
@@ -478,8 +477,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_list_workflows_missing_repo_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_list_workflows(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_list_workflows(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -490,14 +489,14 @@ mod tests {
 
     #[test]
     fn test_dispatch_list_workflows_unknown_repo() {
-        let (_f, db) = make_test_db();
-        let result = tool_list_workflows(&db, &args_with("repo", "ghost-repo"));
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_list_workflows(&conductor, &args_with("repo", "ghost-repo"));
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_dispatch_list_workflows_includes_input_schema() {
-        use conductor_core::config::load_config;
+        use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
@@ -514,16 +513,16 @@ workflow deploy {
         let wf_dir = make_wf_dir_with_workflow("deploy", wf_content);
         let repo_path = wf_dir.path().to_str().unwrap();
 
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         {
-            let conn = open_database(&db).expect("open db");
-            let config = load_config().expect("load config");
+            let conn = open_database(_f.path()).expect("open db");
+            let config = Config::default();
             RepoManager::new(&conn, &config)
                 .register("my-repo", repo_path, "https://github.com/x/y", None)
                 .expect("register repo");
         }
 
-        let result = tool_list_workflows(&db, &args_with("repo", "my-repo"));
+        let result = tool_list_workflows(&conductor, &args_with("repo", "my-repo"));
         assert_ne!(
             result.is_error,
             Some(true),
@@ -574,7 +573,7 @@ workflow deploy {
 
     #[test]
     fn test_dispatch_list_workflows_boolean_inputs_show_type() {
-        use conductor_core::config::load_config;
+        use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
@@ -592,16 +591,16 @@ workflow ticket-to-pr {
         let wf_dir = make_wf_dir_with_workflow("ticket-to-pr", wf_content);
         let repo_path = wf_dir.path().to_str().unwrap();
 
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         {
-            let conn = open_database(&db).expect("open db");
-            let config = load_config().expect("load config");
+            let conn = open_database(_f.path()).expect("open db");
+            let config = Config::default();
             RepoManager::new(&conn, &config)
                 .register("my-repo2", repo_path, "https://github.com/x/y", None)
                 .expect("register repo");
         }
 
-        let result = tool_list_workflows(&db, &args_with("repo", "my-repo2"));
+        let result = tool_list_workflows(&conductor, &args_with("repo", "my-repo2"));
         assert_ne!(
             result.is_error,
             Some(true),
@@ -626,7 +625,7 @@ workflow ticket-to-pr {
     #[test]
     fn test_dispatch_list_workflows_description_only_input_is_required() {
         // Regression test: an input declared with only a description must remain required.
-        use conductor_core::config::load_config;
+        use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
@@ -642,16 +641,16 @@ workflow w {
         let wf_dir = make_wf_dir_with_workflow("w", wf_content);
         let repo_path = wf_dir.path().to_str().unwrap();
 
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         {
-            let conn = open_database(&db).expect("open db");
-            let config = load_config().expect("load config");
+            let conn = open_database(_f.path()).expect("open db");
+            let config = Config::default();
             RepoManager::new(&conn, &config)
                 .register("my-repo", repo_path, "https://github.com/x/y", None)
                 .expect("register repo");
         }
 
-        let result = tool_list_workflows(&db, &args_with("repo", "my-repo"));
+        let result = tool_list_workflows(&conductor, &args_with("repo", "my-repo"));
         assert_ne!(
             result.is_error,
             Some(true),
@@ -671,7 +670,7 @@ workflow w {
 
     #[test]
     fn test_dispatch_list_workflows_includes_targets() {
-        use conductor_core::config::load_config;
+        use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
@@ -684,16 +683,16 @@ workflow deploy {
         let wf_dir = make_wf_dir_with_workflow("deploy", wf_content);
         let repo_path = wf_dir.path().to_str().unwrap();
 
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         {
-            let conn = open_database(&db).expect("open db");
-            let config = load_config().expect("load config");
+            let conn = open_database(_f.path()).expect("open db");
+            let config = Config::default();
             RepoManager::new(&conn, &config)
                 .register("my-repo-tgt", repo_path, "https://github.com/x/y", None)
                 .expect("register repo");
         }
 
-        let result = tool_list_workflows(&db, &args_with("repo", "my-repo-tgt"));
+        let result = tool_list_workflows(&conductor, &args_with("repo", "my-repo-tgt"));
         assert_ne!(
             result.is_error,
             Some(true),
@@ -713,7 +712,7 @@ workflow deploy {
 
     #[test]
     fn test_dispatch_list_workflows_includes_group() {
-        use conductor_core::config::load_config;
+        use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
@@ -726,16 +725,16 @@ workflow review {
         let wf_dir = make_wf_dir_with_workflow("review", wf_content);
         let repo_path = wf_dir.path().to_str().unwrap();
 
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         {
-            let conn = open_database(&db).expect("open db");
-            let config = load_config().expect("load config");
+            let conn = open_database(_f.path()).expect("open db");
+            let config = Config::default();
             RepoManager::new(&conn, &config)
                 .register("my-repo-grp", repo_path, "https://github.com/x/y", None)
                 .expect("register repo");
         }
 
-        let result = tool_list_workflows(&db, &args_with("repo", "my-repo-grp"));
+        let result = tool_list_workflows(&conductor, &args_with("repo", "my-repo-grp"));
         assert_ne!(
             result.is_error,
             Some(true),
@@ -755,25 +754,25 @@ workflow review {
 
     #[test]
     fn test_dispatch_run_workflow_missing_args() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         // Missing both "workflow" and "repo"
-        let result = tool_run_workflow(&db, &empty_args());
+        let result = tool_run_workflow(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_dispatch_run_workflow_unknown_repo() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = serde_json::Map::new();
         args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
-        let result = tool_run_workflow(&db, &args);
+        let result = tool_run_workflow(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_dispatch_run_workflow_inputs_as_object() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut inputs_map = serde_json::Map::new();
         inputs_map.insert("key1".to_string(), Value::String("val1".to_string()));
         inputs_map.insert("key2".to_string(), Value::String("val2".to_string()));
@@ -782,7 +781,7 @@ workflow review {
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         args.insert("inputs".to_string(), Value::Object(inputs_map));
         // Should fail at repo lookup, not at inputs parsing
-        let result = tool_run_workflow(&db, &args);
+        let result = tool_run_workflow(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let content = format!("{result:?}");
         assert!(
@@ -793,7 +792,7 @@ workflow review {
 
     #[test]
     fn test_dispatch_run_workflow_inputs_as_string_fails() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = serde_json::Map::new();
         args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
@@ -801,7 +800,7 @@ workflow review {
             "inputs".to_string(),
             Value::String(r#"{"key":"val"}"#.to_string()),
         );
-        let result = tool_run_workflow(&db, &args);
+        let result = tool_run_workflow(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let content = format!("{result:?}");
         assert!(
@@ -812,14 +811,14 @@ workflow review {
 
     #[test]
     fn test_dispatch_run_workflow_inputs_non_string_value_fails() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut inputs_map = serde_json::Map::new();
         inputs_map.insert("count".to_string(), Value::Number(42.into()));
         let mut args = serde_json::Map::new();
         args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         args.insert("inputs".to_string(), Value::Object(inputs_map));
-        let result = tool_run_workflow(&db, &args);
+        let result = tool_run_workflow(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let content = format!("{result:?}");
         assert!(
@@ -851,13 +850,13 @@ workflow review {
 
     #[test]
     fn test_dispatch_run_workflow_dry_run_flag_parsed() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         // dry_run: true should be accepted and reach the repo lookup (not fail on arg parsing)
         let mut args = serde_json::Map::new();
         args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         args.insert("dry_run".to_string(), Value::Bool(true));
-        let result = tool_run_workflow(&db, &args);
+        let result = tool_run_workflow(&conductor, &args);
         // Should fail at repo lookup (ghost-repo not registered), not at arg parsing
         assert_eq!(result.is_error, Some(true));
         let content = format!("{result:?}");
@@ -871,7 +870,7 @@ workflow review {
         args2.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args2.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         args2.insert("dry_run".to_string(), Value::String("true".to_string()));
-        let result2 = tool_run_workflow(&db, &args2);
+        let result2 = tool_run_workflow(&conductor, &args2);
         assert_eq!(result2.is_error, Some(true));
         let content2 = format!("{result2:?}");
         assert!(
@@ -882,7 +881,7 @@ workflow review {
 
     #[test]
     fn test_dispatch_run_workflow_pr_and_worktree_mutually_exclusive() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = serde_json::Map::new();
         args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
@@ -891,7 +890,7 @@ workflow review {
             "worktree".to_string(),
             Value::String("feat-something".to_string()),
         );
-        let result = tool_run_workflow(&db, &args);
+        let result = tool_run_workflow(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -905,7 +904,7 @@ workflow review {
 
     #[test]
     fn test_dispatch_run_workflow_pr_invalid_format() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = serde_json::Map::new();
         args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
@@ -913,7 +912,7 @@ workflow review {
             "pr".to_string(),
             Value::String("not-a-pr-number-or-url".to_string()),
         );
-        let result = tool_run_workflow(&db, &args);
+        let result = tool_run_workflow(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -928,12 +927,12 @@ workflow review {
     #[test]
     fn test_dispatch_run_workflow_pr_number_valid_parse() {
         // A valid numeric string should pass parse and reach repo lookup (not parse error).
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = serde_json::Map::new();
         args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         args.insert("pr".to_string(), Value::String("42".to_string()));
-        let result = tool_run_workflow(&db, &args);
+        let result = tool_run_workflow(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -949,7 +948,7 @@ workflow review {
     #[test]
     fn test_dispatch_run_workflow_pr_url_valid_parse() {
         // A full GitHub PR URL should be parsed and reach repo lookup (not parse error).
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = serde_json::Map::new();
         args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
@@ -957,7 +956,7 @@ workflow review {
             "pr".to_string(),
             Value::String("https://github.com/owner/repo/pull/99".to_string()),
         );
-        let result = tool_run_workflow(&db, &args);
+        let result = tool_run_workflow(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -972,8 +971,8 @@ workflow review {
 
     #[test]
     fn test_validate_workflow_missing_repo_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_validate_workflow(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_validate_workflow(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -984,8 +983,8 @@ workflow review {
 
     #[test]
     fn test_validate_workflow_missing_workflow_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_validate_workflow(&db, &args_with("repo", "my-repo"));
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_validate_workflow(&conductor, &args_with("repo", "my-repo"));
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -996,11 +995,11 @@ workflow review {
 
     #[test]
     fn test_validate_workflow_unknown_repo() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut a = empty_args();
         a.insert("repo".into(), Value::String("ghost-repo".into()));
         a.insert("workflow".into(), Value::String("deploy".into()));
-        let result = tool_validate_workflow(&db, &a);
+        let result = tool_validate_workflow(&conductor, &a);
         assert_eq!(result.is_error, Some(true));
     }
 
@@ -1021,15 +1020,15 @@ workflow review {
 
     #[test]
     fn test_list_workflows_unknown_worktree_slug_returns_error() {
-        use conductor_core::config::load_config;
+        use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
         let repo_dir = tempfile::TempDir::new().expect("tempdir");
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         {
-            let conn = open_database(&db).expect("open db");
-            let config = load_config().expect("load config");
+            let conn = open_database(_f.path()).expect("open db");
+            let config = Config::default();
             RepoManager::new(&conn, &config)
                 .register(
                     "wt-list-repo",
@@ -1046,7 +1045,7 @@ workflow review {
             "worktree".into(),
             Value::String("nonexistent-worktree".into()),
         );
-        let result = tool_list_workflows(&db, &args);
+        let result = tool_list_workflows(&conductor, &args);
         assert_eq!(
             result.is_error,
             Some(true),
@@ -1057,15 +1056,15 @@ workflow review {
 
     #[test]
     fn test_validate_workflow_unknown_worktree_slug_returns_error() {
-        use conductor_core::config::load_config;
+        use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
         let repo_dir = tempfile::TempDir::new().expect("tempdir");
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         {
-            let conn = open_database(&db).expect("open db");
-            let config = load_config().expect("load config");
+            let conn = open_database(_f.path()).expect("open db");
+            let config = Config::default();
             RepoManager::new(&conn, &config)
                 .register(
                     "wt-validate-repo",
@@ -1083,7 +1082,7 @@ workflow review {
             "worktree".into(),
             Value::String("nonexistent-worktree".into()),
         );
-        let result = tool_validate_workflow(&db, &args);
+        let result = tool_validate_workflow(&conductor, &args);
         assert_eq!(
             result.is_error,
             Some(true),
@@ -1097,7 +1096,7 @@ workflow review {
         // Regression test for #1966: workflows that only exist in a worktree
         // branch (not in the main repo) must be found when a worktree slug is
         // passed.
-        use conductor_core::config::load_config;
+        use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
@@ -1114,11 +1113,11 @@ workflow feature-wf {
 "#,
         );
 
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let repo_id: String;
         {
-            let conn = open_database(&db).expect("open db");
-            let config = load_config().expect("load config");
+            let conn = open_database(_f.path()).expect("open db");
+            let config = Config::default();
             let repo = RepoManager::new(&conn, &config)
                 .register(
                     "wt-list-repo2",
@@ -1140,7 +1139,7 @@ workflow feature-wf {
         let mut args = serde_json::Map::new();
         args.insert("repo".into(), Value::String("wt-list-repo2".into()));
         args.insert("worktree".into(), Value::String("feat-123-feature".into()));
-        let result = tool_list_workflows(&db, &args);
+        let result = tool_list_workflows(&conductor, &args);
         assert_ne!(
             result.is_error,
             Some(true),
@@ -1162,7 +1161,7 @@ workflow feature-wf {
     fn test_validate_workflow_with_worktree_slug_finds_worktree_workflow() {
         // Regression test for #1966: validate_workflow must succeed when the
         // workflow only exists in the worktree branch, not in the main repo.
-        use conductor_core::config::load_config;
+        use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
@@ -1179,11 +1178,11 @@ workflow wt-only-wf {
 "#,
         );
 
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let repo_id: String;
         {
-            let conn = open_database(&db).expect("open db");
-            let config = load_config().expect("load config");
+            let conn = open_database(_f.path()).expect("open db");
+            let config = Config::default();
             let repo = RepoManager::new(&conn, &config)
                 .register(
                     "wt-validate-repo2",
@@ -1206,7 +1205,7 @@ workflow wt-only-wf {
         args.insert("repo".into(), Value::String("wt-validate-repo2".into()));
         args.insert("workflow".into(), Value::String("wt-only-wf".into()));
         args.insert("worktree".into(), Value::String("feat-456-wt-only".into()));
-        let result = tool_validate_workflow(&db, &args);
+        let result = tool_validate_workflow(&conductor, &args);
         assert_ne!(
             result.is_error,
             Some(true),
@@ -1321,8 +1320,8 @@ workflow wt-only-wf {
 
     #[test]
     fn test_tool_list_templates_returns_content() {
-        let (_f, db) = make_test_db();
-        let result = tool_list_templates(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_list_templates(&conductor, &empty_args());
         assert_ne!(
             result.is_error,
             Some(true),
@@ -1341,11 +1340,11 @@ workflow wt-only-wf {
 
     #[test]
     fn test_tool_instantiate_template_unknown_template() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = args_with("template", "nonexistent-xyz");
         let mut args = args;
         args.insert("repo".to_string(), Value::String("my-repo".to_string()));
-        let result = tool_instantiate_template(&db, &args);
+        let result = tool_instantiate_template(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -1359,7 +1358,7 @@ workflow wt-only-wf {
 
     #[test]
     fn test_tool_instantiate_template_unknown_repo() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         // Use the first embedded template name if available, else a placeholder
         let template_name = {
             use conductor_core::workflow_template::list_embedded_templates;
@@ -1373,7 +1372,7 @@ workflow wt-only-wf {
         let mut args = serde_json::Map::new();
         args.insert("template".to_string(), Value::String(template_name));
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
-        let result = tool_instantiate_template(&db, &args);
+        let result = tool_instantiate_template(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 }

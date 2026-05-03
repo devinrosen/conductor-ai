@@ -1,17 +1,19 @@
-use std::path::Path;
-
+use conductor_core::Conductor;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, open_db_and_config, pagination_hint, tool_err, tool_ok};
+use crate::mcp::helpers::{get_arg, pagination_hint, tool_err, tool_ok};
 
 pub(super) fn tool_list_agent_runs(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::agent::{AgentManager, AgentRunStatus};
     use conductor_core::repo::RepoManager;
     use conductor_core::worktree::WorktreeManager;
+
+    let conn = &conductor.conn;
+    let config = &conductor.config;
 
     let repo_slug = get_arg(args, "repo");
     let worktree_slug = get_arg(args, "worktree");
@@ -37,21 +39,17 @@ pub(super) fn tool_list_agent_runs(
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let agent_mgr = AgentManager::new(&conn);
+    let agent_mgr = AgentManager::new(conn);
 
     // Resolve repo / worktree IDs when provided
     let (resolved_repo_id, resolved_worktree_id) = if let Some(slug) = repo_slug {
-        let repo_mgr = RepoManager::new(&conn, &config);
+        let repo_mgr = RepoManager::new(conn, config);
         let repo = match repo_mgr.get_by_slug(slug) {
             Ok(r) => r,
             Err(e) => return tool_err(e),
         };
         if let Some(wt_slug) = worktree_slug {
-            let wt_mgr = WorktreeManager::new(&conn, &config);
+            let wt_mgr = WorktreeManager::new(conn, config);
             let wt = match wt_mgr.get_by_slug_or_branch(&repo.id, wt_slug) {
                 Ok(w) => w,
                 Err(e) => return tool_err(e),
@@ -87,7 +85,7 @@ pub(super) fn tool_list_agent_runs(
         .into_iter()
         .collect();
 
-    let wt_mgr = WorktreeManager::new(&conn, &config);
+    let wt_mgr = WorktreeManager::new(conn, config);
     let wt_map: std::collections::HashMap<String, (String, String)> =
         match wt_mgr.get_by_ids(&wt_ids) {
             Ok(wts) => wts
@@ -100,7 +98,7 @@ pub(super) fn tool_list_agent_runs(
     // Batch-load workflow run IDs for all agent run IDs
     let run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
     let workflow_id_map =
-        match conductor_core::workflow::get_workflow_run_ids_for_agent_runs(&conn, &run_ids) {
+        match conductor_core::workflow::get_workflow_run_ids_for_agent_runs(conn, &run_ids) {
             Ok(m) => m,
             Err(e) => return tool_err(e),
         };
@@ -157,7 +155,7 @@ pub(super) fn tool_list_agent_runs(
 }
 
 pub(super) fn tool_submit_agent_feedback(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::agent::AgentManager;
@@ -165,11 +163,8 @@ pub(super) fn tool_submit_agent_feedback(
     let run_id = require_arg!(args, "run_id");
     let feedback = require_arg!(args, "feedback");
 
-    let (conn, _config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let mgr = AgentManager::new(&conn);
+    let conn = &conductor.conn;
+    let mgr = AgentManager::new(conn);
     let pending = match mgr.pending_feedback_for_run(run_id) {
         Ok(Some(fb)) => fb,
         Ok(None) => {
@@ -214,12 +209,19 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
-    fn make_test_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
+    fn make_test_conductor() -> (tempfile::NamedTempFile, Conductor) {
+        use conductor_core::config::Config;
         use conductor_core::db::open_database;
         let file = tempfile::NamedTempFile::new().expect("temp file");
         let path = file.path().to_path_buf();
-        open_database(&path).expect("open_database");
-        (file, path)
+        let conn = open_database(&path).expect("open_database");
+        (
+            file,
+            Conductor {
+                conn,
+                config: Config::default(),
+            },
+        )
     }
 
     fn empty_args() -> serde_json::Map<String, Value> {
@@ -234,8 +236,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_list_agent_runs_empty() {
-        let (_f, db) = make_test_db();
-        let result = tool_list_agent_runs(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_list_agent_runs(&conductor, &empty_args());
         assert_ne!(
             result.is_error,
             Some(true),
@@ -251,9 +253,9 @@ mod tests {
 
     #[test]
     fn test_dispatch_list_agent_runs_worktree_requires_repo() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = args_with("worktree", "some-wt");
-        let result = tool_list_agent_runs(&db, &args);
+        let result = tool_list_agent_runs(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -270,9 +272,9 @@ mod tests {
         use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;
 
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         {
-            let conn = open_database(&db).expect("open db");
+            let conn = open_database(_f.path()).expect("open db");
             conn.execute(
                 "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
                  VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
@@ -304,7 +306,7 @@ mod tests {
 
         // Filter by running — should see only the running task
         let args = args_with("status", "running");
-        let result = tool_list_agent_runs(&db, &args);
+        let result = tool_list_agent_runs(&conductor, &args);
         assert_ne!(result.is_error, Some(true), "should not error");
         let text = result.content[0]
             .as_text()
@@ -319,9 +321,9 @@ mod tests {
         use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;
 
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         {
-            let conn = open_database(&db).expect("open db");
+            let conn = open_database(_f.path()).expect("open db");
             conn.execute(
                 "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
                  VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
@@ -340,7 +342,7 @@ mod tests {
         }
 
         let args = args_with("status", "waiting_for_feedback");
-        let result = tool_list_agent_runs(&db, &args);
+        let result = tool_list_agent_runs(&conductor, &args);
         assert_ne!(result.is_error, Some(true), "should not error");
         let text = result.content[0]
             .as_text()
@@ -351,9 +353,9 @@ mod tests {
 
     #[test]
     fn test_dispatch_submit_agent_feedback_missing_run_id() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = args_with("feedback", "some response");
-        let result = tool_submit_agent_feedback(&db, &args);
+        let result = tool_submit_agent_feedback(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -364,9 +366,9 @@ mod tests {
 
     #[test]
     fn test_dispatch_submit_agent_feedback_missing_feedback() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
-        let result = tool_submit_agent_feedback(&db, &args);
+        let result = tool_submit_agent_feedback(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -378,12 +380,10 @@ mod tests {
     #[test]
     fn test_dispatch_submit_agent_feedback_no_pending() {
         use conductor_core::agent::AgentManager;
-        use conductor_core::db::open_database;
 
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         // Create an agent run (not waiting for feedback)
-        let conn = open_database(&db).expect("open db");
-        let mgr = AgentManager::new(&conn);
+        let mgr = AgentManager::new(&conductor.conn);
         let run = mgr
             .create_run(None, "do something", None)
             .expect("create run");
@@ -394,7 +394,7 @@ mod tests {
             "feedback".to_string(),
             Value::String("some response".to_string()),
         );
-        let result = tool_submit_agent_feedback(&db, &args);
+        let result = tool_submit_agent_feedback(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -408,9 +408,8 @@ mod tests {
         use conductor_core::agent::{AgentManager, AgentRunStatus};
         use conductor_core::db::open_database;
 
-        let (_f, db) = make_test_db();
-        let conn = open_database(&db).expect("open db");
-        let mgr = AgentManager::new(&conn);
+        let (_f, conductor) = make_test_conductor();
+        let mgr = AgentManager::new(&conductor.conn);
         let run = mgr
             .create_run(None, "do something", None)
             .expect("create run");
@@ -424,7 +423,7 @@ mod tests {
             "feedback".to_string(),
             Value::String("Yes, proceed.".to_string()),
         );
-        let result = tool_submit_agent_feedback(&db, &args);
+        let result = tool_submit_agent_feedback(&conductor, &args);
         assert_ne!(
             result.is_error,
             Some(true),
@@ -442,7 +441,7 @@ mod tests {
         assert!(text.contains("Feedback submitted"), "got: {text}");
 
         // Verify run status is back to running
-        let conn2 = open_database(&db).expect("open db");
+        let conn2 = open_database(_f.path()).expect("open db");
         let mgr2 = AgentManager::new(&conn2);
         let updated = mgr2.get_run(&run.id).expect("query").expect("run exists");
         assert_eq!(updated.status, AgentRunStatus::Running);

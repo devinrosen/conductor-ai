@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use anyhow::Result;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, Implementation, ListResourcesResult, ListToolsResult,
@@ -9,15 +7,13 @@ use rmcp::model::{
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler};
 
-/// The conductor MCP server. Holds only the DB path — each request opens its
-/// own connection inside `spawn_blocking` to avoid the `!Send` issue.
-pub struct ConductorMcpServer {
-    db_path: PathBuf,
-}
+/// The conductor MCP server. Each request opens its own `Conductor` inside
+/// `spawn_blocking` to avoid the `!Send` issue with `rusqlite::Connection`.
+pub struct ConductorMcpServer {}
 
 impl ConductorMcpServer {
-    pub fn new(db_path: PathBuf) -> Self {
-        Self { db_path }
+    pub fn new() -> Self {
+        Self {}
     }
 }
 
@@ -38,50 +34,46 @@ impl ServerHandler for ConductorMcpServer {
             )
     }
 
-    fn list_resources(
+    async fn list_resources(
         &self,
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<ListResourcesResult, rmcp::ErrorData>> + Send + '_
-    {
-        let db_path = self.db_path.clone();
-        async move {
-            let resources = tokio::task::spawn_blocking(move || {
-                super::resources::enumerate_resources(&db_path)
-            })
-            .await
-            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?
-            .map_err(|e: anyhow::Error| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+    ) -> Result<ListResourcesResult, rmcp::ErrorData> {
+        let resources = tokio::task::spawn_blocking(move || {
+            let conductor =
+                conductor_core::Conductor::open().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            super::resources::enumerate_resources(&conductor)
+        })
+        .await
+        .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?
+        .map_err(|e: anyhow::Error| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
-            Ok(ListResourcesResult::with_all_items(resources))
-        }
+        Ok(ListResourcesResult::with_all_items(resources))
     }
 
-    fn read_resource(
+    async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<ReadResourceResult, rmcp::ErrorData>> + Send + '_
-    {
-        let db_path = self.db_path.clone();
+    ) -> Result<ReadResourceResult, rmcp::ErrorData> {
         let uri = request.uri.clone();
-        async move {
-            let text = tokio::task::spawn_blocking(move || {
-                super::resources::read_resource_by_uri(&db_path, &uri)
-            })
-            .await
-            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?
-            .map_err(|e: anyhow::Error| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        let text = tokio::task::spawn_blocking(move || {
+            let conductor =
+                conductor_core::Conductor::open().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            super::resources::read_resource_by_uri(&conductor, &uri)
+        })
+        .await
+        .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?
+        .map_err(|e: anyhow::Error| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
-            Ok(ReadResourceResult::new(vec![
-                ResourceContents::TextResourceContents {
-                    uri: request.uri,
-                    mime_type: Some("text/plain".into()),
-                    text,
-                    meta: None,
-                },
-            ]))
-        }
+        Ok(ReadResourceResult::new(vec![
+            ResourceContents::TextResourceContents {
+                uri: request.uri,
+                mime_type: Some("text/plain".into()),
+                text,
+                meta: None,
+            },
+        ]))
     }
 
     async fn list_tools(
@@ -94,23 +86,24 @@ impl ServerHandler for ConductorMcpServer {
         ))
     }
 
-    fn call_tool(
+    async fn call_tool(
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<CallToolResult, rmcp::ErrorData>> + Send + '_
-    {
-        let db_path = self.db_path.clone();
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         let name = request.name.to_string();
         let args = request.arguments.unwrap_or_default();
-        async move {
-            let result = tokio::task::spawn_blocking(move || {
-                super::tools::dispatch_tool(&db_path, &name, &args)
-            })
-            .await
-            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        let result = tokio::task::spawn_blocking(move || {
+            let conductor =
+                conductor_core::Conductor::open().map_err(|e| anyhow::anyhow!(e.to_string()));
+            match conductor {
+                Ok(c) => super::tools::dispatch_tool(&c, &name, &args),
+                Err(e) => crate::mcp::helpers::tool_err(e),
+            }
+        })
+        .await
+        .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
-            Ok(result)
-        }
+        Ok(result)
     }
 }
