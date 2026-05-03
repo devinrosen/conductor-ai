@@ -308,10 +308,6 @@ pub struct GeneralConfig {
     /// into agent prompts. Defaults to true; set to false to disable.
     #[serde(default = "default_true")]
     pub inject_startup_context: bool,
-    /// TUI color theme. One of: "conductor" (default), "nord", "gruvbox", "catppuccin_mocha",
-    /// or the stem of a file in `~/.conductor/themes/`. Omit to use the default conductor theme.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub theme: Option<String>,
     /// Automatically detect merged PRs and clean up worktrees (delete local/remote branch,
     /// remove worktree directory, auto-close orphaned features). Defaults to true.
     #[serde(default = "default_true")]
@@ -382,7 +378,6 @@ impl Default for GeneralConfig {
             agent_permission_mode: AgentPermissionMode::default(),
             model: None,
             inject_startup_context: true,
-            theme: None,
             auto_cleanup_merged_branches: true,
             stale_workflow_minutes: default_stale_workflow_minutes(),
             claude_config_dir: None,
@@ -509,11 +504,6 @@ pub fn hooks_dir() -> PathBuf {
     conductor_dir().join("hooks")
 }
 
-/// Returns the directory for user-supplied theme files: ~/.conductor/themes/
-pub fn themes_dir() -> PathBuf {
-    conductor_dir().join("themes")
-}
-
 /// Returns the log file path for a given agent run ID.
 ///
 /// Convention: `~/.conductor/agent-logs/{run_id}.log`
@@ -591,6 +581,13 @@ fn load_config_from(path: &std::path::Path) -> Result<Config> {
         tracing::warn!(
             "[notifications.workflows] is deprecated — migrate to [[notify.hooks]] with `on` patterns; \
              see CHANGELOG.md"
+        );
+    }
+
+    // Deprecation: warn if [general].theme is still present — it moved to [tui].theme.
+    if raw.get("general").and_then(|g| g.get("theme")).is_some() {
+        tracing::warn!(
+            "[general].theme is deprecated — move to [tui].theme; conductor-core no longer reads it"
         );
     }
 
@@ -687,7 +684,6 @@ fn save_config_to(config: &Config, path: &std::path::Path) -> Result<()> {
 pub fn ensure_dirs(config: &Config) -> Result<()> {
     std::fs::create_dir_all(conductor_dir())?;
     std::fs::create_dir_all(&config.general.workspace_root)?;
-    std::fs::create_dir_all(themes_dir())?;
     Ok(())
 }
 

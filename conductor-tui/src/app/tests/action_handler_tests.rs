@@ -7,7 +7,12 @@ use conductor_core::config::Config;
 
 fn make_app() -> App {
     let conn = conductor_core::db::open_database(std::path::Path::new(":memory:")).unwrap();
-    App::new(conn, Config::default(), Theme::default())
+    App::new(
+        conn,
+        Config::default(),
+        crate::config::TuiConfig::default(),
+        Theme::default(),
+    )
 }
 
 // Action::Quit with an open modal immediately sets should_quit = true

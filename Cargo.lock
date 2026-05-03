@@ -710,6 +710,7 @@ dependencies = [
  "ratatui",
  "runkon-runtimes",
  "rusqlite",
+ "serde",
  "serde_json",
  "serde_yml",
  "tempfile",

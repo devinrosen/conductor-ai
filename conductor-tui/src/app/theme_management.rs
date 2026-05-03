@@ -48,8 +48,7 @@ impl App {
         warnings: Vec<String>,
     ) {
         let current_name = self
-            .config
-            .general
+            .tui_config
             .theme
             .clone()
             .unwrap_or_else(|| "conductor".to_string());
@@ -105,16 +104,16 @@ impl App {
             };
             return;
         };
-        // Update in-memory config immediately (non-blocking).
-        self.config.general.theme = Some(name.clone());
-        // Write the updated config to disk off the TUI main thread to avoid
+        // Update in-memory TUI config immediately (non-blocking).
+        self.tui_config.theme = Some(name.clone());
+        // Write the updated TUI config to disk off the TUI main thread to avoid
         // blocking the render loop.
-        let config = self.config.clone();
+        let tui_config = self.tui_config.clone();
         self.state.modal = Modal::Progress {
             message: format!("Saving theme \"{name}\"…"),
         };
         std::thread::spawn(move || {
-            let result = conductor_core::config::save_config(&config)
+            let result = crate::config::save_tui_config(&tui_config)
                 .map(|()| format!("Theme set to \"{name}\""))
                 .map_err(|e| e.to_string());
             let _ = bg_tx.send(Action::ThemeSaveComplete { result });
