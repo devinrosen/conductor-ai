@@ -81,6 +81,23 @@ impl RuntimeRequest {
     }
 }
 
+impl Default for RuntimeRequest {
+    fn default() -> Self {
+        Self {
+            run_id: String::new(),
+            agent_def: crate::agent_def::AgentDef::default(),
+            prompt: String::new(),
+            working_dir: PathBuf::new(),
+            model: None,
+            extra_cli_args: vec![],
+            plugin_dirs: vec![],
+            resume_session_id: None,
+            tracker: Arc::new(crate::tracker::NoopTracker),
+            event_sink: Arc::new(crate::tracker::NoopEventSink),
+        }
+    }
+}
+
 /// Error returned by `AgentRuntime::poll`.
 #[derive(Debug)]
 pub enum PollError {

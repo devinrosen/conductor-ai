@@ -43,7 +43,6 @@ fn synthesize_tui_agent_def(model: Option<&str>) -> AgentDef {
 struct TuiEventSink {
     inner: Arc<SqliteHostAdapter>,
     tx: std::sync::Mutex<crate::event::BackgroundSender>,
-    run_id: String,
 }
 
 impl EventSink for TuiEventSink {
@@ -51,15 +50,17 @@ impl EventSink for TuiEventSink {
         self.inner.on_event(run_id, event);
     }
 
-    fn on_raw_value(&self, _run_id: &str, value: &serde_json::Value) {
+    fn on_raw_value(&self, run_id: &str, value: &serde_json::Value) {
         let events = conductor_core::agent::parse_events_from_value(value);
-        if let Ok(tx) = self.tx.lock() {
-            for ev in events {
-                let _ = tx.send(Action::AgentEvent {
-                    run_id: self.run_id.clone(),
-                    event: ev,
-                });
-            }
+        let tx = self.tx.lock().unwrap_or_else(|e| {
+            tracing::warn!("TuiEventSink: mutex poisoned, recovering");
+            e.into_inner()
+        });
+        for ev in events {
+            let _ = tx.send(Action::AgentEvent {
+                run_id: run_id.to_string(),
+                event: ev,
+            });
         }
     }
 }
@@ -125,7 +126,6 @@ pub(super) fn drive_headless_run(
     let event_sink: Arc<dyn runkon_runtimes::tracker::RunEventSink> = Arc::new(TuiEventSink {
         inner: adapter.clone(),
         tx: std::sync::Mutex::new(tx.clone()),
-        run_id: run.id.clone(),
     });
     let tracker: Arc<dyn runkon_runtimes::tracker::RunTracker> = adapter;
 
@@ -143,10 +143,14 @@ pub(super) fn drive_headless_run(
     };
 
     if let Err(e) = runtime.spawn_validated(&request) {
-        let db2 = conductor_core::config::db_path();
-        if let Ok(conn) = conductor_core::db::open_database(&db2) {
-            let mgr = AgentManager::new(&conn);
-            let _ = mgr.update_run_failed(&run.id, &e.to_string());
+        if let Err(mark_err) = request
+            .tracker
+            .mark_failed_if_running(&run.id, &e.to_string())
+        {
+            tracing::warn!(
+                "drive_headless_run: failed to mark run {} failed: {mark_err}",
+                run.id
+            );
         }
         let _ = tx.send(on_launched(Err(e.to_string())));
         return;
