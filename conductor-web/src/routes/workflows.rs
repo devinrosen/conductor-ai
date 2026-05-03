@@ -34,21 +34,6 @@ fn parse_granularity(granularity: Option<String>) -> Result<TimeGranularity, Api
         .map_err(|e: String| ApiError::Core(ConductorError::InvalidInput(e)))
 }
 
-/// Acquire the shared DB mutex + config read-lock and fire a workflow notification.
-///
-/// Centralizes the lock-acquire and `NotificationCtx` construction shared by
-/// `run_workflow`, `post_workflow_run`, and `resume_workflow_endpoint`.
-fn fire_workflow_notification_via_state(state: &AppState, args: &WorkflowNotificationArgs<'_>) {
-    let conn = state.db.blocking_lock();
-    let cfg = state.config.blocking_read();
-    let ctx = NotificationCtx {
-        conn: &conn,
-        config: &cfg.notifications,
-        hooks: &cfg.notify.hooks,
-    };
-    fire_workflow_notification(&ctx, args);
-}
-
 /// Resolve the run ID to use for error-path notifications.
 ///
 /// When `execute_workflow` created a run record before failing, the slot holds
@@ -541,70 +526,61 @@ pub async fn run_workflow(
 
         let result = conductor_core::workflow::execute_workflow_standalone(&params);
 
-        // Always emit events and notify, even if DB operations fail
-        match result {
+        // Always emit events and notify, even if DB operations fail.
+        // Determine run_id and outcome first, then acquire locks once for the
+        // single notification call (one lock acquisition regardless of Ok/Err).
+        if let Err(e) = &result {
+            tracing::error!("Workflow execution failed: {e}");
+        }
+        let (notify_run_id, notify_succeeded, emit_status, emit_wt_id) = match &result {
             Ok(res) => {
                 let succeeded = res.all_succeeded;
-                let status = if succeeded { "completed" } else { "failed" };
-
-                fire_workflow_notification_via_state(
-                    &state_clone,
-                    &WorkflowNotificationArgs {
-                        run_id: &res.workflow_run_id,
-                        workflow_name: &workflow_name,
-                        target_label: Some(&wt_target_label),
-                        succeeded,
-                        parent_workflow_run_id: None, // workflows launched from web are always root runs
-                        repo_slug: &repo_slug,
-                        branch: &wt_slug,
-                        duration_ms: None,
-                        ticket_url: None,
-                        error: None,
-                        repo_id: Some(&repo_id),
-                        worktree_id: params.worktree_id.as_deref(),
-                    },
-                );
-
-                state_clone
-                    .events
-                    .emit(ConductorEvent::WorkflowRunStatusChanged {
-                        run_id: res.workflow_run_id,
-                        worktree_id: res.worktree_id,
-                        status: status.to_string(),
-                    });
+                (
+                    res.workflow_run_id.clone(),
+                    succeeded,
+                    if succeeded { "completed" } else { "failed" },
+                    res.worktree_id.clone(),
+                )
             }
-            Err(e) => {
-                tracing::error!("Workflow execution failed: {e}");
+            Err(_) => {
                 let error_run_id =
                     resolve_error_run_id(&run_id_slot, &workflow_name, &wt_target_label);
-
-                fire_workflow_notification_via_state(
-                    &state_clone,
-                    &WorkflowNotificationArgs {
-                        run_id: &error_run_id,
-                        workflow_name: &workflow_name,
-                        target_label: Some(&wt_target_label),
-                        succeeded: false,
-                        parent_workflow_run_id: None, // workflows launched from web are always root runs
-                        repo_slug: &repo_slug,
-                        branch: &wt_slug,
-                        duration_ms: None,
-                        ticket_url: None,
-                        error: None,
-                        repo_id: Some(&repo_id),
-                        worktree_id: params.worktree_id.as_deref(),
-                    },
-                );
-
-                state_clone
-                    .events
-                    .emit(ConductorEvent::WorkflowRunStatusChanged {
-                        run_id: error_run_id,
-                        worktree_id: params.worktree_id.clone(),
-                        status: "failed".to_string(),
-                    });
+                (error_run_id, false, "failed", params.worktree_id.clone())
             }
-        }
+        };
+        {
+            let conn = state_clone.db.blocking_lock();
+            let cfg = state_clone.config.blocking_read();
+            let ctx = NotificationCtx {
+                conn: &conn,
+                config: &cfg.notifications,
+                hooks: &cfg.notify.hooks,
+            };
+            fire_workflow_notification(
+                &ctx,
+                &WorkflowNotificationArgs {
+                    run_id: &notify_run_id,
+                    workflow_name: &workflow_name,
+                    target_label: Some(&wt_target_label),
+                    succeeded: notify_succeeded,
+                    parent_workflow_run_id: None, // workflows launched from web are always root runs
+                    repo_slug: &repo_slug,
+                    branch: &wt_slug,
+                    duration_ms: None,
+                    ticket_url: None,
+                    error: None,
+                    repo_id: Some(&repo_id),
+                    worktree_id: params.worktree_id.as_deref(),
+                },
+            );
+        } // DB + config locks released before event emit
+        state_clone
+            .events
+            .emit(ConductorEvent::WorkflowRunStatusChanged {
+                run_id: notify_run_id,
+                worktree_id: emit_wt_id,
+                status: emit_status.to_string(),
+            });
 
         if let Some(notify) = &state_clone.workflow_done_notify {
             notify.notify_one();
@@ -809,61 +785,70 @@ pub async fn post_workflow_run(
         let (notify_repo_slug, notify_branch) =
             conductor_core::notify::parse_target_label(Some(&target_label));
 
-        match result {
+        // Determine run_id and outcome first, then acquire locks once for the
+        // single notification call (one lock acquisition regardless of Ok/Err).
+        if let Err(e) = &result {
+            tracing::error!(
+                "Workflow execution failed workflow={workflow_name} target={target_label}: {e}"
+            );
+        }
+        let (notify_run_id, notify_succeeded, emit_run_id, emit_wt_id, emit_status) = match &result
+        {
             Ok(res) => {
                 let succeeded = res.all_succeeded;
-                let status = if succeeded { "completed" } else { "failed" };
-
-                fire_workflow_notification_via_state(
-                    &state_clone,
-                    &WorkflowNotificationArgs {
-                        run_id: &res.workflow_run_id,
-                        workflow_name: &workflow_name,
-                        target_label: Some(&target_label),
-                        succeeded,
-                        parent_workflow_run_id: None, // workflows launched from web are always root runs
-                        repo_slug: notify_repo_slug,
-                        branch: notify_branch,
-                        duration_ms: None,
-                        ticket_url: None,
-                        error: None,
-                        repo_id: Some(&repo_id),
-                        worktree_id: wt_id_clone.as_deref(),
-                    },
-                );
-
-                state_clone
-                    .events
-                    .emit(ConductorEvent::WorkflowRunStatusChanged {
-                        run_id: res.workflow_run_id,
-                        worktree_id: res.worktree_id,
-                        status: status.to_string(),
-                    });
+                (
+                    res.workflow_run_id.clone(),
+                    succeeded,
+                    res.workflow_run_id.clone(),
+                    res.worktree_id.clone(),
+                    if succeeded { "completed" } else { "failed" },
+                )
             }
-            Err(e) => {
-                tracing::error!(
-                    "Workflow execution failed workflow={workflow_name} target={target_label}: {e}"
-                );
-                let error_run_id = emit_failed(&run_id_slot, wt_id_clone.clone());
-                fire_workflow_notification_via_state(
-                    &state_clone,
-                    &WorkflowNotificationArgs {
-                        run_id: &error_run_id,
-                        workflow_name: &workflow_name,
-                        target_label: Some(&target_label),
-                        succeeded: false,
-                        parent_workflow_run_id: None, // workflows launched from web are always root runs
-                        repo_slug: notify_repo_slug,
-                        branch: notify_branch,
-                        duration_ms: None,
-                        ticket_url: None,
-                        error: None,
-                        repo_id: Some(&repo_id),
-                        worktree_id: wt_id_clone.as_deref(),
-                    },
-                );
+            Err(_) => {
+                let error_run_id =
+                    resolve_error_run_id(&run_id_slot, &workflow_name, &target_label);
+                (
+                    error_run_id.clone(),
+                    false,
+                    error_run_id,
+                    wt_id_clone.clone(),
+                    "failed",
+                )
             }
-        }
+        };
+        {
+            let conn = state_clone.db.blocking_lock();
+            let cfg = state_clone.config.blocking_read();
+            let ctx = NotificationCtx {
+                conn: &conn,
+                config: &cfg.notifications,
+                hooks: &cfg.notify.hooks,
+            };
+            fire_workflow_notification(
+                &ctx,
+                &WorkflowNotificationArgs {
+                    run_id: &notify_run_id,
+                    workflow_name: &workflow_name,
+                    target_label: Some(&target_label),
+                    succeeded: notify_succeeded,
+                    parent_workflow_run_id: None, // workflows launched from web are always root runs
+                    repo_slug: notify_repo_slug,
+                    branch: notify_branch,
+                    duration_ms: None,
+                    ticket_url: None,
+                    error: None,
+                    repo_id: Some(&repo_id),
+                    worktree_id: wt_id_clone.as_deref(),
+                },
+            );
+        } // DB + config locks released before event emit
+        state_clone
+            .events
+            .emit(ConductorEvent::WorkflowRunStatusChanged {
+                run_id: emit_run_id,
+                worktree_id: emit_wt_id,
+                status: emit_status.to_string(),
+            });
 
         if let Some(notify) = &state_clone.workflow_done_notify {
             notify.notify_one();
@@ -1685,57 +1670,59 @@ pub async fn resume_workflow_endpoint(
         let (resume_repo_slug, resume_branch) =
             conductor_core::notify::parse_target_label(target_label.as_deref());
 
-        match result {
-            Ok(res) => {
-                let succeeded = res.all_succeeded;
-                let status = if succeeded { "completed" } else { "failed" };
-
-                fire_workflow_notification_via_state(
-                    &state_clone,
-                    &WorkflowNotificationArgs {
-                        run_id: &res.workflow_run_id,
-                        workflow_name: &workflow_name,
-                        target_label: target_label.as_deref(),
+        // Determine run_id and outcome first, then acquire locks once for the
+        // single notification call (one lock acquisition regardless of Ok/Err).
+        if let Err(e) = &result {
+            tracing::error!("Workflow resume failed: {e}");
+        }
+        let (notify_run_id, notify_succeeded, emit_run_id_opt, emit_wt_id_opt, emit_status_opt) =
+            match &result {
+                Ok(res) => {
+                    let succeeded = res.all_succeeded;
+                    (
+                        res.workflow_run_id.clone(),
                         succeeded,
-                        parent_workflow_run_id: None, // workflows resumed from web are always root runs
-                        repo_slug: resume_repo_slug,
-                        branch: resume_branch,
-                        duration_ms: None,
-                        ticket_url: None,
-                        error: None,
-                        repo_id: run_repo_id.as_deref(),
-                        worktree_id: run_worktree_id.as_deref(),
-                    },
-                );
-
-                state_clone
-                    .events
-                    .emit(ConductorEvent::WorkflowRunStatusChanged {
-                        run_id: res.workflow_run_id,
-                        worktree_id: res.worktree_id,
-                        status: status.to_string(),
-                    });
-            }
-            Err(e) => {
-                tracing::error!("Workflow resume failed: {e}");
-                fire_workflow_notification_via_state(
-                    &state_clone,
-                    &WorkflowNotificationArgs {
-                        run_id: &params.workflow_run_id,
-                        workflow_name: &workflow_name,
-                        target_label: target_label.as_deref(),
-                        succeeded: false,
-                        parent_workflow_run_id: None, // workflows resumed from web are always root runs
-                        repo_slug: resume_repo_slug,
-                        branch: resume_branch,
-                        duration_ms: None,
-                        ticket_url: None,
-                        error: None,
-                        repo_id: run_repo_id.as_deref(),
-                        worktree_id: run_worktree_id.as_deref(),
-                    },
-                );
-            }
+                        Some(res.workflow_run_id.clone()),
+                        res.worktree_id.clone(),
+                        Some(if succeeded { "completed" } else { "failed" }),
+                    )
+                }
+                Err(_) => (params.workflow_run_id.clone(), false, None, None, None),
+            };
+        {
+            let conn = state_clone.db.blocking_lock();
+            let cfg = state_clone.config.blocking_read();
+            let ctx = NotificationCtx {
+                conn: &conn,
+                config: &cfg.notifications,
+                hooks: &cfg.notify.hooks,
+            };
+            fire_workflow_notification(
+                &ctx,
+                &WorkflowNotificationArgs {
+                    run_id: &notify_run_id,
+                    workflow_name: &workflow_name,
+                    target_label: target_label.as_deref(),
+                    succeeded: notify_succeeded,
+                    parent_workflow_run_id: None, // workflows resumed from web are always root runs
+                    repo_slug: resume_repo_slug,
+                    branch: resume_branch,
+                    duration_ms: None,
+                    ticket_url: None,
+                    error: None,
+                    repo_id: run_repo_id.as_deref(),
+                    worktree_id: run_worktree_id.as_deref(),
+                },
+            );
+        } // DB + config locks released before event emit
+        if let (Some(emit_run_id), Some(emit_status)) = (emit_run_id_opt, emit_status_opt) {
+            state_clone
+                .events
+                .emit(ConductorEvent::WorkflowRunStatusChanged {
+                    run_id: emit_run_id,
+                    worktree_id: emit_wt_id_opt,
+                    status: emit_status.to_string(),
+                });
         }
     });
 
