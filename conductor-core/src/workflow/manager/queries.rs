@@ -727,14 +727,12 @@ pub fn list_workflow_runs_for_repo(
 ) -> Result<Vec<WorkflowRun>> {
     query_collect(
         conn,
-        &format!(
-            "SELECT DISTINCT workflow_runs.* \
-                 FROM workflow_runs \
-                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                 WHERE workflow_runs.repo_id = :repo_id OR worktrees.repo_id = :repo_id \
-                 ORDER BY workflow_runs.started_at DESC LIMIT {limit}"
-        ),
-        named_params! { ":repo_id": repo_id },
+        "SELECT DISTINCT workflow_runs.* \
+             FROM workflow_runs \
+             LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+             WHERE workflow_runs.repo_id = :repo_id OR worktrees.repo_id = :repo_id \
+             ORDER BY workflow_runs.started_at DESC LIMIT :limit",
+        named_params! { ":repo_id": repo_id, ":limit": limit as i64 },
         row_to_workflow_run,
     )
 }
@@ -2243,5 +2241,42 @@ mod tests {
         );
         assert_eq!(step.cache_read_input_tokens, None);
         assert_eq!(step.cache_creation_input_tokens, None);
+    }
+
+    /// Regression test for #2757: `list_workflow_runs_for_repo` previously interpolated
+    /// `LIMIT {limit}` directly into the SQL string, defeating `prepare_cached`.
+    /// Verify that the named-param binding works, the limit is respected, and calling
+    /// the function multiple times (exercising `prepare_cached`) does not panic.
+    #[test]
+    fn list_workflow_runs_for_repo_respects_limit() {
+        let conn = setup_db();
+        let repo_id = "repo-2757";
+
+        for i in 0..5u8 {
+            conn.execute(
+                "INSERT INTO workflow_runs \
+                 (id, workflow_name, worktree_id, parent_run_id, status, started_at, repo_id) \
+                 VALUES (:id, 'test-wf', NULL, 'dummy-ar', 'completed', \
+                         datetime('now', :offset), :repo_id)",
+                rusqlite::named_params! {
+                    ":id": format!("run-2757-{i}"),
+                    ":offset": format!("-{i} seconds"),
+                    ":repo_id": repo_id,
+                },
+            )
+            .unwrap();
+        }
+
+        // Limit smaller than total — result must be capped.
+        let runs = super::list_workflow_runs_for_repo(&conn, repo_id, 2).unwrap();
+        assert_eq!(runs.len(), 2, "limit=2 should return exactly 2 runs");
+
+        // Second call reuses the prepared statement; must not panic.
+        let runs_all = super::list_workflow_runs_for_repo(&conn, repo_id, 10).unwrap();
+        assert_eq!(runs_all.len(), 5, "limit=10 should return all 5 runs");
+
+        // Unknown repo → empty result, not an error.
+        let empty = super::list_workflow_runs_for_repo(&conn, "no-such-repo", 10).unwrap();
+        assert!(empty.is_empty(), "unknown repo_id should return empty vec");
     }
 }
