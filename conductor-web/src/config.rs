@@ -245,6 +245,28 @@ mod tests {
     }
 
     #[test]
+    fn test_load_from_completely_invalid_toml_returns_error() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "!!! this is not valid toml !!!").unwrap();
+        let result = load_from(&path);
+        assert!(result.is_err(), "completely invalid TOML must return Err");
+    }
+
+    #[test]
+    fn test_save_to_malformed_existing_file_returns_error() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "!!! not valid toml !!!").unwrap();
+        let cfg = WebConfig::default();
+        let result = save_to(&cfg, &path);
+        assert!(
+            result.is_err(),
+            "save_to must return Err when existing file is not valid TOML"
+        );
+    }
+
+    #[test]
     fn test_save_preserves_general_content() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");

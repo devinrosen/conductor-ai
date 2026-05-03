@@ -57,6 +57,11 @@ fn main() {
                 )
             });
             let config = load_config().expect("Failed to load conductor config");
+            let web_config = conductor_web::config::load_web_config()
+                .unwrap_or_else(|e| {
+                    tracing::warn!("Failed to load web config, using defaults: {e}");
+                    conductor_web::config::WebConfig::default()
+                });
 
             // Reap stale resources on startup.
             log_reap(
@@ -92,7 +97,7 @@ fn main() {
             }
 
             // Build the conductor-web AppState for the embedded HTTP server.
-            let web_state = conductor_web::state::AppState::new(conn, config, db_path_val, 64);
+            let web_state = conductor_web::state::AppState::new(conn, config, web_config, db_path_val, 64);
 
             // Channel to receive the bound port (or error) from the server thread.
             let (port_tx, port_rx) = std::sync::mpsc::channel::<Result<u16, String>>();

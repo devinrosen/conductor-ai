@@ -1827,6 +1827,25 @@ bot_name = "my-bot"
     // -----------------------------------------------------------------------
 
     #[test]
+    fn test_load_config_deprecation_warn_path_for_web_push() {
+        // Exercises the [web_push] deprecation-warn branch in load_config_from.
+        // The warn fires as a side-effect; this test verifies the branch is reached
+        // without error and that the rest of the config loads correctly.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[web_push]\nvapid_public_key = \"pub\"\nvapid_private_key = \"priv\"\n",
+        )
+        .unwrap();
+        let result = load_config_from(&path);
+        assert!(
+            result.is_ok(),
+            "load_config_from must succeed when [web_push] is present (only warns, not errors)"
+        );
+    }
+
+    #[test]
     fn test_save_preserves_user_web_push_section() {
         // Removing `web_push` from Config must NOT strip a user's existing [web_push]
         // section from disk when other binaries (conductor-cli, conductor-tui) call
