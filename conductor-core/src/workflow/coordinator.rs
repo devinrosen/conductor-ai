@@ -43,8 +43,7 @@ impl runkon_flow::events::EventSink for PositionSink {
             runkon_flow::events::EngineEvent::BodyPositionAdvanced { .. }
         ) {
             if let Ok(conn) = self.0.lock() {
-                let _ =
-                    super::manager::lifecycle::tick_position_advanced(&conn, &event.run_id);
+                let _ = super::manager::lifecycle::tick_position_advanced(&conn, &event.run_id);
             }
         }
     }
