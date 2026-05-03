@@ -3,8 +3,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::http::{header, HeaderValue, Method};
 use conductor_core::agent::AgentManager;
-use conductor_core::config::{conductor_dir, db_path, ensure_dirs, load_config, save_config};
-use conductor_core::db::open_database;
+use conductor_core::config::db_path;
+use conductor_core::Conductor;
+use conductor_web::config::{load_web_config, save_web_config};
 use tokio::sync::{Mutex, RwLock};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -27,24 +28,25 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let mut config = load_config()?;
-    ensure_dirs(&config)?;
+    let conductor = Conductor::open()?;
+
+    let mut web_cfg = load_web_config()?;
 
     // Generate or load VAPID keys for push notifications.
     // The placeholder check detects zero-filled keys written by older versions.
     fn is_placeholder_key(key: &str) -> bool {
         key == "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     }
-    let needs_keygen = config.web_push.vapid_public_key.is_none()
-        || config.web_push.vapid_private_key.is_none()
-        || config
-            .web_push
+    let needs_keygen = web_cfg.push.vapid_public_key.is_none()
+        || web_cfg.push.vapid_private_key.is_none()
+        || web_cfg
+            .push
             .vapid_private_key
             .as_deref()
             .map(is_placeholder_key)
             .unwrap_or(false)
-        || config
-            .web_push
+        || web_cfg
+            .push
             .vapid_public_key
             .as_deref()
             .map(is_placeholder_key)
@@ -70,22 +72,18 @@ async fn main() -> Result<()> {
             public_key_bytes,
         );
 
-        config.web_push.vapid_private_key = Some(private_key);
-        config.web_push.vapid_public_key = Some(public_key);
-        config.web_push.vapid_subject = Some("mailto:notifications@conductor.local".to_string());
+        web_cfg.push.vapid_private_key = Some(private_key);
+        web_cfg.push.vapid_public_key = Some(public_key);
+        web_cfg.push.vapid_subject = Some("mailto:notifications@conductor.local".to_string());
 
-        if let Err(e) = save_config(&config) {
+        if let Err(e) = save_web_config(&web_cfg) {
             tracing::warn!("Failed to save VAPID keys to config: {e}");
         } else {
             tracing::info!("VAPID keys saved to config");
         }
     }
-    // Always use the global database — the web server manages all repos,
-    // so worktree-local DB detection must be bypassed.
-    let conn = open_database(&conductor_dir().join("conductor.db"))?;
-
     // Reap orphaned agent runs on startup.
-    let agent_mgr = AgentManager::new(&conn);
+    let agent_mgr = AgentManager::new(&conductor.conn);
     match agent_mgr.reap_orphaned_runs() {
         Ok(n) if n > 0 => tracing::info!("Reaped {n} orphaned agent run(s) on startup"),
         Ok(_) => {}
@@ -95,13 +93,13 @@ async fn main() -> Result<()> {
     // Reap stale worktrees on startup.
     {
         use conductor_core::worktree::WorktreeManager;
-        let wt_mgr = WorktreeManager::new(&conn, &config);
+        let wt_mgr = WorktreeManager::new(&conductor.conn, &conductor.config);
         match wt_mgr.reap_stale_worktrees() {
             Ok(n) if n > 0 => tracing::info!("Reaped {n} stale worktree(s) on startup"),
             Ok(_) => {}
             Err(e) => tracing::warn!("reap_stale_worktrees failed on startup: {e}"),
         }
-        if config.general.auto_cleanup_merged_branches {
+        if conductor.config.general.auto_cleanup_merged_branches {
             match wt_mgr.cleanup_merged_worktrees(None) {
                 Ok(n) if n > 0 => {
                     tracing::info!("Auto-cleaned {n} merged worktree(s) on startup")
@@ -114,19 +112,19 @@ async fn main() -> Result<()> {
 
     // Reap orphaned workflow runs on startup.
     {
-        match conductor_core::workflow::reap_orphaned_workflow_runs(&conn) {
+        match conductor_core::workflow::reap_orphaned_workflow_runs(&conductor.conn) {
             Ok(n) if n > 0 => tracing::info!("Reaped {n} orphaned workflow run(s) on startup"),
             Ok(_) => {}
             Err(e) => tracing::warn!("reap_orphaned_workflow_runs failed on startup: {e}"),
         }
-        match conductor_core::workflow::reap_orphaned_script_steps(&conn) {
+        match conductor_core::workflow::reap_orphaned_script_steps(&conductor.conn) {
             Ok(n) if n > 0 => {
                 tracing::info!("Reaped {n} orphaned script step(s) on startup")
             }
             Ok(_) => {}
             Err(e) => tracing::warn!("reap_orphaned_script_steps failed on startup: {e}"),
         }
-        match conductor_core::workflow::reap_finalization_stuck_workflow_runs(&conn, 60) {
+        match conductor_core::workflow::reap_finalization_stuck_workflow_runs(&conductor.conn, 60) {
             Ok(n) if n > 0 => {
                 tracing::info!("Reaper finalized {n} stuck workflow run(s) on startup")
             }
@@ -135,10 +133,10 @@ async fn main() -> Result<()> {
                 tracing::warn!("reap_finalization_stuck_workflow_runs failed on startup: {e}")
             }
         }
-        if config.general.stale_workflow_minutes > 0 {
+        if conductor.config.general.stale_workflow_minutes > 0 {
             match conductor_core::workflow::reap_stale_workflow_runs(
-                &conn,
-                config.general.stale_workflow_minutes as i64,
+                &conductor.conn,
+                conductor.config.general.stale_workflow_minutes as i64,
             ) {
                 Ok(reaped) if !reaped.is_empty() => {
                     tracing::info!("Reaped {} stale workflow run(s) on startup", reaped.len());
@@ -149,34 +147,20 @@ async fn main() -> Result<()> {
         }
         {
             let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-            match conductor_core::workflow::claim_heartbeat_stuck_runs(&conn, &config, 60) {
-                Ok(claimed) if !claimed.is_empty() => {
-                    tracing::info!(
-                        "Auto-resuming {} stuck workflow run(s) on startup",
-                        claimed.len()
-                    );
-                    for (run_id, wf_name, label) in claimed {
-                        conductor_core::workflow::spawn_heartbeat_resume(
-                            conductor_core::workflow::SpawnHeartbeatResumeParams {
-                                run_id,
-                                workflow_name: wf_name,
-                                target_label: label,
-                                config: config.clone(),
-                                conductor_bin_dir: conductor_bin_dir.clone(),
-                                db_path: None,
-                            },
-                        );
-                    }
-                }
-                Ok(_) => {}
-                Err(e) => tracing::warn!("claim_heartbeat_stuck_runs failed on startup: {e}"),
-            }
+            conductor_core::workflow::claim_and_resume_expired_leases(
+                &conductor.conn,
+                &conductor.config,
+                conductor_bin_dir,
+            );
         }
     }
 
+    // Install the conductor's connection and config in Axum router state.
+    let Conductor { conn, config } = conductor;
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         config: Arc::new(RwLock::new(config)),
+        web_config: Arc::new(RwLock::new(web_cfg)),
         events: EventBus::new(64),
         db_path: db_path(),
         workflow_done_notify: None,
@@ -188,6 +172,7 @@ async fn main() -> Result<()> {
     // runtime with synchronous DB queries and subprocess calls.
     let reaper_state = state.clone();
     let reaper_config = state.config.clone();
+    let reaper_web_config = state.web_config.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval_at(
             tokio::time::Instant::now() + std::time::Duration::from_secs(30),
@@ -207,6 +192,7 @@ async fn main() -> Result<()> {
             interval.tick().await;
             let db = reaper_state.db.clone();
             let cfg = reaper_config.clone();
+            let web_cfg = reaper_web_config.clone();
             let mut seen = std::mem::take(&mut seen_agent_statuses);
             let mut init = agent_initialized;
             let mut wf_seen = std::mem::take(&mut seen_workflow_statuses);
@@ -217,6 +203,7 @@ async fn main() -> Result<()> {
                 mgr.reap_orphaned_runs()?;
                 mgr.dismiss_expired_feedback_requests()?;
                 let cfg = cfg.blocking_read();
+                let web_cfg = web_cfg.blocking_read();
                 let wt_mgr = conductor_core::worktree::WorktreeManager::new(&conn, &cfg);
                 wt_mgr.reap_stale_worktrees()?;
                 if cfg.general.auto_cleanup_merged_branches {
@@ -253,25 +240,11 @@ async fn main() -> Result<()> {
                 }
                 {
                     let conductor_bin_dir = conductor_core::workflow::resolve_conductor_bin_dir();
-                    match conductor_core::workflow::claim_heartbeat_stuck_runs(&conn, &cfg, 60) {
-                        Ok(claimed) if !claimed.is_empty() => {
-                            tracing::info!("Auto-resuming {} stuck workflow run(s)", claimed.len());
-                            for (run_id, wf_name, label) in claimed {
-                                conductor_core::workflow::spawn_heartbeat_resume(
-                                    conductor_core::workflow::SpawnHeartbeatResumeParams {
-                                        run_id,
-                                        workflow_name: wf_name,
-                                        target_label: label,
-                                        config: (*cfg).clone(),
-                                        conductor_bin_dir: conductor_bin_dir.clone(),
-                                        db_path: None,
-                                    },
-                                );
-                            }
-                        }
-                        Ok(_) => {}
-                        Err(e) => tracing::warn!("claim_heartbeat_stuck_runs failed: {e}"),
-                    }
+                    conductor_core::workflow::claim_and_resume_expired_leases(
+                        &conn,
+                        &cfg,
+                        conductor_bin_dir.clone(),
+                    );
                     let auto_resume_limit = cfg.general.auto_resume_limit;
                     if auto_resume_limit > 0 {
                         match conductor_core::workflow::classify_resumable_workflows(
@@ -360,9 +333,9 @@ async fn main() -> Result<()> {
                         };
 
                         if let (Some(private_key), Some(public_key), Some(subject)) = (
-                            &cfg.web_push.vapid_private_key,
-                            &cfg.web_push.vapid_public_key,
-                            &cfg.web_push.vapid_subject,
+                            &web_cfg.push.vapid_private_key,
+                            &web_cfg.push.vapid_public_key,
+                            &web_cfg.push.vapid_subject,
                         ) {
                             let push_mgr = PushSubscriptionManager::new(
                                 &conn,
@@ -388,10 +361,13 @@ async fn main() -> Result<()> {
                     &mut wf_init,
                 );
                 for t in &wf_transitions {
+                    let wf_ctx = conductor_web::notify::NotificationCtx {
+                        conn: &conn,
+                        config: &cfg.notifications,
+                        hooks: &cfg.notify.hooks,
+                    };
                     conductor_web::notify::fire_workflow_notification(
-                        &conn,
-                        &cfg.notifications,
-                        &cfg.notify.hooks,
+                        &wf_ctx,
                         &conductor_web::notify::WorkflowNotificationArgs {
                             run_id: &t.run_id,
                             workflow_name: &t.workflow_name,
@@ -433,9 +409,9 @@ async fn main() -> Result<()> {
                         };
 
                         if let (Some(private_key), Some(public_key), Some(subject)) = (
-                            &cfg.web_push.vapid_private_key,
-                            &cfg.web_push.vapid_public_key,
-                            &cfg.web_push.vapid_subject,
+                            &web_cfg.push.vapid_private_key,
+                            &web_cfg.push.vapid_public_key,
+                            &web_cfg.push.vapid_subject,
                         ) {
                             let push_mgr = PushSubscriptionManager::new(
                                 &conn,
@@ -688,15 +664,15 @@ async fn main() -> Result<()> {
             match rx.recv().await {
                 Ok(ConductorEvent::WorkflowGateWaiting { run_id, .. }) => {
                     let db = gate_state.db.clone();
-                    let cfg = gate_state.config.clone();
+                    let web_cfg = gate_state.web_config.clone();
                     let run_id = run_id.clone();
                     tokio::task::spawn_blocking(move || {
                         let conn = db.blocking_lock();
-                        let cfg = cfg.blocking_read();
+                        let web_cfg = web_cfg.blocking_read();
                         if let (Some(priv_k), Some(pub_k), Some(sub)) = (
-                            &cfg.web_push.vapid_private_key,
-                            &cfg.web_push.vapid_public_key,
-                            &cfg.web_push.vapid_subject,
+                            &web_cfg.push.vapid_private_key,
+                            &web_cfg.push.vapid_public_key,
+                            &web_cfg.push.vapid_subject,
                         ) {
                             let push_mgr = PushSubscriptionManager::new(
                                 &conn,
@@ -723,16 +699,16 @@ async fn main() -> Result<()> {
                     ..
                 }) => {
                     let db = gate_state.db.clone();
-                    let cfg = gate_state.config.clone();
+                    let web_cfg = gate_state.web_config.clone();
                     let run_id = run_id.clone();
                     let worktree_id = worktree_id.clone();
                     tokio::task::spawn_blocking(move || {
                         let conn = db.blocking_lock();
-                        let cfg = cfg.blocking_read();
+                        let web_cfg = web_cfg.blocking_read();
                         if let (Some(priv_k), Some(pub_k), Some(sub)) = (
-                            &cfg.web_push.vapid_private_key,
-                            &cfg.web_push.vapid_public_key,
-                            &cfg.web_push.vapid_subject,
+                            &web_cfg.push.vapid_private_key,
+                            &web_cfg.push.vapid_public_key,
+                            &web_cfg.push.vapid_subject,
                         ) {
                             let push_mgr = PushSubscriptionManager::new(
                                 &conn,

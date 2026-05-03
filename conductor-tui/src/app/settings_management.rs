@@ -50,8 +50,8 @@ impl App {
             "off"
         }
         .to_string();
-        let theme = cfg
-            .general
+        let theme = self
+            .tui_config
             .theme
             .clone()
             .unwrap_or_else(|| "conductor (default)".into());

@@ -38,6 +38,37 @@ git config core.hooksPath .githooks
 # To skip: SKIP_E2E=1 git push
 # To run manually: cd conductor-web/frontend && bun run test:e2e
 
+### Cross-worktree build cache (recommended)
+
+Each conductor worktree gets its own `target/` (Cargo default), so parallel
+worktrees don't fight over a build lock — but they redundantly recompile the
+same crates. Wire up `sccache` once per machine to share compiled artifacts
+across worktrees while keeping per-worktree `target/` for linking:
+
+```bash
+brew install sccache
+
+# Make it apply to every cargo invocation, in every shell, without polluting env.
+mkdir -p ~/.cargo
+cat >> ~/.cargo/config.toml <<'EOF'
+[build]
+rustc-wrapper = "sccache"
+incremental = false
+EOF
+
+sccache --show-stats   # after a cargo clean + build, "Cache misses" > 0
+```
+
+`incremental = false` is required: sccache classifies incremental builds as
+non-cacheable (the incremental cache state isn't deterministic), so without
+this every invocation shows up as `Non-cacheable calls` and nothing is stored.
+Cost is small — the cross-worktree cache more than pays for the lost
+intra-worktree incremental speedup.
+
+The first worktree pays full compile cost; subsequent worktrees pull unchanged
+crates from cache. `target/` still grows per-worktree (linker output) and is
+cleaned up automatically when conductor deletes the worktree.
+
 ## Architecture
 
 **Conductor** is a multi-repo orchestration tool: manages git repos, worktrees, tickets, and AI agent runs locally with SQLite.

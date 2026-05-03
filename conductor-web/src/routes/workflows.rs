@@ -21,7 +21,7 @@ use conductor_core::worktree::WorktreeManager;
 
 use crate::error::ApiError;
 use crate::events::ConductorEvent;
-use crate::notify::{fire_workflow_notification, WorkflowNotificationArgs};
+use crate::notify::{fire_workflow_notification, NotificationCtx, WorkflowNotificationArgs};
 use crate::state::AppState;
 
 /// Parse granularity from query parameter with default fallback.
@@ -87,6 +87,20 @@ async fn wait_for_run_id(slot: RunIdSlot) -> Option<String> {
         tracing::warn!("wait_for_run_id: spawn_blocking task failed: {e}");
         None
     })
+}
+
+/// Acquire state locks, build a [`NotificationCtx`], and call
+/// [`fire_workflow_notification`]. Locks are released when this function
+/// returns, before the caller emits any downstream events.
+fn fire_notification_via_state(state: &AppState, args: &WorkflowNotificationArgs<'_>) {
+    let conn = state.db.blocking_lock();
+    let cfg = state.config.blocking_read();
+    let ctx = NotificationCtx {
+        conn: &conn,
+        config: &cfg.notifications,
+        hooks: &cfg.notify.hooks,
+    };
+    fire_workflow_notification(&ctx, args);
 }
 
 // ── Response types ────────────────────────────────────────────────────
@@ -486,8 +500,6 @@ pub async fn run_workflow(
     // all other API requests).
     let wt_target_label = format!("{repo_slug}/{wt_slug}");
     let config = state.config.read().await.clone();
-    let notifications = config.notifications.clone();
-    let notify_hooks = config.notify.hooks.clone();
     // Slot receives the real workflow run ULID once execute_workflow creates the
     // DB record. On the error path we prefer the real ULID (so dedup aligns with
     // any concurrent TUI notification keyed on the same ID); we fall back to the
@@ -528,87 +540,52 @@ pub async fn run_workflow(
 
         let result = conductor_core::workflow::execute_workflow_standalone(&params);
 
-        // Use the same db_path as the workflow execution for consistency
-        let notification_conn = conductor_core::db::open_database(&db_path);
-
-        // Always emit events and notify, even if DB operations fail
-        match result {
+        // Always emit events and notify, even if DB operations fail.
+        // Determine run_id and outcome first, then acquire locks once for the
+        // single notification call (one lock acquisition regardless of Ok/Err).
+        if let Err(e) = &result {
+            tracing::error!("Workflow execution failed: {e}");
+        }
+        let (notify_run_id, notify_succeeded, emit_status, emit_wt_id) = match &result {
             Ok(res) => {
                 let succeeded = res.all_succeeded;
-                let status = if succeeded { "completed" } else { "failed" };
-
-                // Send notification if DB connection is available
-                if let Ok(conn) = &notification_conn {
-                    fire_workflow_notification(
-                        conn,
-                        &notifications,
-                        &notify_hooks,
-                        &WorkflowNotificationArgs {
-                            run_id: &res.workflow_run_id,
-                            workflow_name: &workflow_name,
-                            target_label: Some(&wt_target_label),
-                            succeeded,
-                            parent_workflow_run_id: None, // workflows launched from web are always root runs
-                            repo_slug: &repo_slug,
-                            branch: &wt_slug,
-                            duration_ms: None,
-                            ticket_url: None,
-                            error: None,
-                            repo_id: Some(&repo_id),
-                            worktree_id: params.worktree_id.as_deref(),
-                        },
-                    );
-                } else if let Err(e) = &notification_conn {
-                    tracing::error!("notify: DB open failed, skipping notification: {e}");
-                }
-
-                state_clone
-                    .events
-                    .emit(ConductorEvent::WorkflowRunStatusChanged {
-                        run_id: res.workflow_run_id,
-                        worktree_id: res.worktree_id,
-                        status: status.to_string(),
-                    });
+                (
+                    res.workflow_run_id.clone(),
+                    succeeded,
+                    if succeeded { "completed" } else { "failed" },
+                    res.worktree_id.clone(),
+                )
             }
-            Err(e) => {
-                tracing::error!("Workflow execution failed: {e}");
+            Err(_) => {
                 let error_run_id =
                     resolve_error_run_id(&run_id_slot, &workflow_name, &wt_target_label);
-
-                // Send notification if DB connection is available
-                if let Ok(conn) = &notification_conn {
-                    fire_workflow_notification(
-                        conn,
-                        &notifications,
-                        &notify_hooks,
-                        &WorkflowNotificationArgs {
-                            run_id: &error_run_id,
-                            workflow_name: &workflow_name,
-                            target_label: Some(&wt_target_label),
-                            succeeded: false,
-                            parent_workflow_run_id: None, // workflows launched from web are always root runs
-                            repo_slug: &repo_slug,
-                            branch: &wt_slug,
-                            duration_ms: None,
-                            ticket_url: None,
-                            error: None,
-                            repo_id: Some(&repo_id),
-                            worktree_id: params.worktree_id.as_deref(),
-                        },
-                    );
-                } else if let Err(e) = &notification_conn {
-                    tracing::error!("notify: DB open failed, skipping notification: {e}");
-                }
-
-                state_clone
-                    .events
-                    .emit(ConductorEvent::WorkflowRunStatusChanged {
-                        run_id: error_run_id,
-                        worktree_id: params.worktree_id.clone(),
-                        status: "failed".to_string(),
-                    });
+                (error_run_id, false, "failed", params.worktree_id.clone())
             }
-        }
+        };
+        fire_notification_via_state(
+            &state_clone,
+            &WorkflowNotificationArgs {
+                run_id: &notify_run_id,
+                workflow_name: &workflow_name,
+                target_label: Some(&wt_target_label),
+                succeeded: notify_succeeded,
+                parent_workflow_run_id: None, // workflows launched from web are always root runs
+                repo_slug: &repo_slug,
+                branch: &wt_slug,
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: Some(&repo_id),
+                worktree_id: params.worktree_id.as_deref(),
+            },
+        );
+        state_clone
+            .events
+            .emit(ConductorEvent::WorkflowRunStatusChanged {
+                run_id: notify_run_id,
+                worktree_id: emit_wt_id,
+                status: emit_status.to_string(),
+            });
 
         if let Some(notify) = &state_clone.workflow_done_notify {
             notify.notify_one();
@@ -764,18 +741,6 @@ pub async fn post_workflow_run(
             error_run_id
         };
 
-        let conn = match conductor_core::db::open_database(&db_path) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("DB open failed workflow={workflow_name}: {e}");
-                emit_failed(&run_id_slot, wt_id_clone.clone());
-                if let Some(notify) = &state_clone.workflow_done_notify {
-                    notify.notify_one();
-                }
-                return;
-            }
-        };
-
         if let Err(e) = apply_workflow_input_defaults(&def, &mut inputs) {
             tracing::error!("Workflow input validation failed workflow={workflow_name}: {e}");
             emit_failed(&run_id_slot, wt_id_clone.clone());
@@ -821,72 +786,65 @@ pub async fn post_workflow_run(
         };
 
         let result = execute_workflow_standalone(&input);
-        let notifications = config.notifications.clone();
-        let notify_hooks = config.notify.hooks.clone();
 
-        match result {
+        let (notify_repo_slug, notify_branch) =
+            conductor_core::notify::parse_target_label(Some(&target_label));
+
+        // Determine run_id and outcome first, then acquire locks once for the
+        // single notification call (one lock acquisition regardless of Ok/Err).
+        if let Err(e) = &result {
+            tracing::error!(
+                "Workflow execution failed workflow={workflow_name} target={target_label}: {e}"
+            );
+        }
+        let (notify_run_id, notify_succeeded, emit_run_id, emit_wt_id, emit_status) = match &result
+        {
             Ok(res) => {
                 let succeeded = res.all_succeeded;
-                let status = if succeeded { "completed" } else { "failed" };
-
-                let (notify_repo_slug, notify_branch) =
-                    conductor_core::notify::parse_target_label(Some(&target_label));
-                fire_workflow_notification(
-                    &conn,
-                    &notifications,
-                    &notify_hooks,
-                    &WorkflowNotificationArgs {
-                        run_id: &res.workflow_run_id,
-                        workflow_name: &workflow_name,
-                        target_label: Some(&target_label),
-                        succeeded,
-                        parent_workflow_run_id: None, // workflows launched from web are always root runs
-                        repo_slug: notify_repo_slug,
-                        branch: notify_branch,
-                        duration_ms: None,
-                        ticket_url: None,
-                        error: None,
-                        repo_id: Some(&repo_id),
-                        worktree_id: wt_id_clone.as_deref(),
-                    },
-                );
-
-                state_clone
-                    .events
-                    .emit(ConductorEvent::WorkflowRunStatusChanged {
-                        run_id: res.workflow_run_id,
-                        worktree_id: res.worktree_id,
-                        status: status.to_string(),
-                    });
+                (
+                    res.workflow_run_id.clone(),
+                    succeeded,
+                    res.workflow_run_id.clone(),
+                    res.worktree_id.clone(),
+                    if succeeded { "completed" } else { "failed" },
+                )
             }
-            Err(e) => {
-                tracing::error!(
-                    "Workflow execution failed workflow={workflow_name} target={target_label}: {e}"
-                );
-                let error_run_id = emit_failed(&run_id_slot, wt_id_clone.clone());
-                let (notify_repo_slug, notify_branch) =
-                    conductor_core::notify::parse_target_label(Some(&target_label));
-                fire_workflow_notification(
-                    &conn,
-                    &notifications,
-                    &notify_hooks,
-                    &WorkflowNotificationArgs {
-                        run_id: &error_run_id,
-                        workflow_name: &workflow_name,
-                        target_label: Some(&target_label),
-                        succeeded: false,
-                        parent_workflow_run_id: None, // workflows launched from web are always root runs
-                        repo_slug: notify_repo_slug,
-                        branch: notify_branch,
-                        duration_ms: None,
-                        ticket_url: None,
-                        error: None,
-                        repo_id: Some(&repo_id),
-                        worktree_id: wt_id_clone.as_deref(),
-                    },
-                );
+            Err(_) => {
+                let error_run_id =
+                    resolve_error_run_id(&run_id_slot, &workflow_name, &target_label);
+                (
+                    error_run_id.clone(),
+                    false,
+                    error_run_id,
+                    wt_id_clone.clone(),
+                    "failed",
+                )
             }
-        }
+        };
+        fire_notification_via_state(
+            &state_clone,
+            &WorkflowNotificationArgs {
+                run_id: &notify_run_id,
+                workflow_name: &workflow_name,
+                target_label: Some(&target_label),
+                succeeded: notify_succeeded,
+                parent_workflow_run_id: None, // workflows launched from web are always root runs
+                repo_slug: notify_repo_slug,
+                branch: notify_branch,
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: Some(&repo_id),
+                worktree_id: wt_id_clone.as_deref(),
+            },
+        );
+        state_clone
+            .events
+            .emit(ConductorEvent::WorkflowRunStatusChanged {
+                run_id: emit_run_id,
+                worktree_id: emit_wt_id,
+                status: emit_status.to_string(),
+            });
 
         if let Some(notify) = &state_clone.workflow_done_notify {
             notify.notify_one();
@@ -1691,9 +1649,6 @@ pub async fn resume_workflow_endpoint(
     // Spawn blocking task with its own DB connection (same pattern as run_workflow)
     let state_clone = state.clone();
     let run_id = id.clone();
-    let notifications = config.notifications.clone();
-    let notify_hooks = config.notify.hooks.clone();
-    let db_path = state.db_path.clone();
     tokio::task::spawn_blocking(move || {
         let params = WorkflowResumeStandalone {
             config,
@@ -1708,72 +1663,53 @@ pub async fn resume_workflow_endpoint(
 
         let result = conductor_core::workflow::resume_workflow_standalone(&params);
 
-        let conn = match conductor_core::db::open_database(&db_path) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("notify: DB open failed: {e}");
-                return;
-            }
-        };
-
         let (resume_repo_slug, resume_branch) =
             conductor_core::notify::parse_target_label(target_label.as_deref());
 
-        match result {
-            Ok(res) => {
-                let succeeded = res.all_succeeded;
-                let status = if succeeded { "completed" } else { "failed" };
-
-                fire_workflow_notification(
-                    &conn,
-                    &notifications,
-                    &notify_hooks,
-                    &WorkflowNotificationArgs {
-                        run_id: &res.workflow_run_id,
-                        workflow_name: &workflow_name,
-                        target_label: target_label.as_deref(),
+        // Determine run_id and outcome first, then acquire locks once for the
+        // single notification call (one lock acquisition regardless of Ok/Err).
+        if let Err(e) = &result {
+            tracing::error!("Workflow resume failed: {e}");
+        }
+        let (notify_run_id, notify_succeeded, emit_run_id_opt, emit_wt_id_opt, emit_status_opt) =
+            match &result {
+                Ok(res) => {
+                    let succeeded = res.all_succeeded;
+                    (
+                        res.workflow_run_id.clone(),
                         succeeded,
-                        parent_workflow_run_id: None, // workflows resumed from web are always root runs
-                        repo_slug: resume_repo_slug,
-                        branch: resume_branch,
-                        duration_ms: None,
-                        ticket_url: None,
-                        error: None,
-                        repo_id: run_repo_id.as_deref(),
-                        worktree_id: run_worktree_id.as_deref(),
-                    },
-                );
-
-                state_clone
-                    .events
-                    .emit(ConductorEvent::WorkflowRunStatusChanged {
-                        run_id: res.workflow_run_id,
-                        worktree_id: res.worktree_id,
-                        status: status.to_string(),
-                    });
-            }
-            Err(e) => {
-                tracing::error!("Workflow resume failed: {e}");
-                fire_workflow_notification(
-                    &conn,
-                    &notifications,
-                    &notify_hooks,
-                    &WorkflowNotificationArgs {
-                        run_id: &params.workflow_run_id,
-                        workflow_name: &workflow_name,
-                        target_label: target_label.as_deref(),
-                        succeeded: false,
-                        parent_workflow_run_id: None, // workflows resumed from web are always root runs
-                        repo_slug: resume_repo_slug,
-                        branch: resume_branch,
-                        duration_ms: None,
-                        ticket_url: None,
-                        error: None,
-                        repo_id: run_repo_id.as_deref(),
-                        worktree_id: run_worktree_id.as_deref(),
-                    },
-                );
-            }
+                        Some(res.workflow_run_id.clone()),
+                        res.worktree_id.clone(),
+                        Some(if succeeded { "completed" } else { "failed" }),
+                    )
+                }
+                Err(_) => (params.workflow_run_id.clone(), false, None, None, None),
+            };
+        fire_notification_via_state(
+            &state_clone,
+            &WorkflowNotificationArgs {
+                run_id: &notify_run_id,
+                workflow_name: &workflow_name,
+                target_label: target_label.as_deref(),
+                succeeded: notify_succeeded,
+                parent_workflow_run_id: None, // workflows resumed from web are always root runs
+                repo_slug: resume_repo_slug,
+                branch: resume_branch,
+                duration_ms: None,
+                ticket_url: None,
+                error: None,
+                repo_id: run_repo_id.as_deref(),
+                worktree_id: run_worktree_id.as_deref(),
+            },
+        );
+        if let (Some(emit_run_id), Some(emit_status)) = (emit_run_id_opt, emit_status_opt) {
+            state_clone
+                .events
+                .emit(ConductorEvent::WorkflowRunStatusChanged {
+                    run_id: emit_run_id,
+                    worktree_id: emit_wt_id_opt,
+                    status: emit_status.to_string(),
+                });
         }
     });
 
@@ -1997,6 +1933,7 @@ mod tests {
     use tokio::sync::{Mutex, RwLock};
     use tower::ServiceExt;
 
+    use crate::config::WebConfig;
     use crate::events::EventBus;
     use crate::routes::api_router;
     use crate::test_helpers as th;
@@ -2309,10 +2246,13 @@ mod tests {
         let notifications = conductor_core::config::NotificationConfig::default(); // enabled=false
 
         tokio::task::spawn_blocking(move || {
+            let ctx = NotificationCtx {
+                conn: &conn,
+                config: &notifications,
+                hooks: &[],
+            };
             fire_workflow_notification(
-                &conn,
-                &notifications,
-                &[],
+                &ctx,
                 &WorkflowNotificationArgs {
                     run_id: "test-run-id",
                     workflow_name: "test-wf",
@@ -2368,10 +2308,13 @@ mod tests {
         let key1 = key.clone();
         tokio::task::spawn_blocking(move || {
             let conn = db1.blocking_lock();
+            let ctx = NotificationCtx {
+                conn: &conn,
+                config: &notifications1,
+                hooks: &[],
+            };
             fire_workflow_notification(
-                &conn,
-                &notifications1,
-                &[],
+                &ctx,
                 &WorkflowNotificationArgs {
                     run_id: &key1,
                     workflow_name: "my-workflow",
@@ -2396,10 +2339,13 @@ mod tests {
         let key2 = key.clone();
         tokio::task::spawn_blocking(move || {
             let conn = db2.blocking_lock();
+            let ctx = NotificationCtx {
+                conn: &conn,
+                config: &notifications,
+                hooks: &[],
+            };
             fire_workflow_notification(
-                &conn,
-                &notifications,
-                &[],
+                &ctx,
                 &WorkflowNotificationArgs {
                     run_id: &key2,
                     workflow_name: "my-workflow",
@@ -2441,7 +2387,8 @@ mod tests {
         let notifications = test_notification_config();
 
         tokio::task::spawn_blocking(move || {
-            fire_workflow_notification(&conn, &notifications, &[], &WorkflowNotificationArgs { run_id: "run-notify-1", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None, repo_slug: "", branch: "", duration_ms: None, ticket_url: None, error: None, repo_id: None, worktree_id: None });
+            let ctx = NotificationCtx { conn: &conn, config: &notifications, hooks: &[] };
+            fire_workflow_notification(&ctx, &WorkflowNotificationArgs { run_id: "run-notify-1", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None, repo_slug: "", branch: "", duration_ms: None, ticket_url: None, error: None, repo_id: None, worktree_id: None });
 
             // Verify the dedup row was inserted into notification_log
             let count: i64 = conn
@@ -2526,6 +2473,7 @@ mod tests {
         let state = AppState {
             db: Arc::new(Mutex::new(conn)),
             config: Arc::new(RwLock::new(conductor_core::config::Config::default())),
+            web_config: Arc::new(RwLock::new(WebConfig::default())),
             events: EventBus::new(1),
             db_path: test_db_path.clone(),
             workflow_done_notify: Some(Arc::clone(&notify)),

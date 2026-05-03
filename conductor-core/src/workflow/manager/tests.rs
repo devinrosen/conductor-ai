@@ -4897,3 +4897,113 @@ fn test_workflow_title_malformed_snapshot_json() {
         .unwrap();
     assert_eq!(fetched.workflow_title, None);
 }
+
+// ── cancel_run step-status preservation ─────────────────────────────────────
+
+#[test]
+fn test_cancel_run_does_not_overwrite_completed_step() {
+    let conn = setup_db();
+    let run = create_worktree_run(&conn, "w1");
+
+    // Insert a step that is already completed with a known ended_at.
+    let step_id = "test-step-completed-01";
+    let original_ended_at = "2024-01-01T13:23:44Z";
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, ended_at) \
+         VALUES (:id, :run_id, 'implement', 'actor', 0, 'completed', :ended_at)",
+        rusqlite::named_params! {
+            ":id": step_id,
+            ":run_id": run.id,
+            ":ended_at": original_ended_at,
+        },
+    )
+    .unwrap();
+
+    // Cancel the run (run is in pending state, which is cancellable).
+    crate::workflow::cancel_run(&conn, &run.id, "workflow cancelled: UserRequested(None)")
+        .expect("cancel_run must succeed");
+
+    // The completed step row must be unchanged.
+    let (status, ended_at): (String, String) = conn
+        .query_row(
+            "SELECT status, ended_at FROM workflow_run_steps WHERE id = ?",
+            rusqlite::params![step_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("step row must exist after cancel");
+
+    assert_eq!(
+        status, "completed",
+        "cancel_run must not regress a completed step to failed"
+    );
+    assert_eq!(
+        ended_at, original_ended_at,
+        "cancel_run must not overwrite ended_at of a completed step"
+    );
+}
+
+// ── refresh_fan_out_counters tests ───────────────────────────────────────────
+
+fn read_fan_out_counters(conn: &rusqlite::Connection, step_id: &str) -> (i64, i64, i64) {
+    conn.query_row(
+        "SELECT fan_out_completed, fan_out_failed, fan_out_skipped \
+         FROM workflow_run_steps WHERE id = ?1",
+        rusqlite::params![step_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )
+    .unwrap()
+}
+
+#[test]
+fn test_refresh_fan_out_counters_mixed_statuses() {
+    let conn = setup_db();
+
+    let run = create_worktree_run(&conn, "w1");
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "fan-step", "actor", false, 0, 0).unwrap();
+
+    // 2 completed, 1 failed, 1 skipped, 1 pending, 1 running
+    let id1 =
+        crate::workflow::insert_fan_out_item(&conn, &step_id, "ticket", "t1", "TICKET-1").unwrap();
+    let id2 =
+        crate::workflow::insert_fan_out_item(&conn, &step_id, "ticket", "t2", "TICKET-2").unwrap();
+    let id3 =
+        crate::workflow::insert_fan_out_item(&conn, &step_id, "ticket", "t3", "TICKET-3").unwrap();
+    let id4 =
+        crate::workflow::insert_fan_out_item(&conn, &step_id, "ticket", "t4", "TICKET-4").unwrap();
+    let id5 =
+        crate::workflow::insert_fan_out_item(&conn, &step_id, "ticket", "t5", "TICKET-5").unwrap();
+    crate::workflow::insert_fan_out_item(&conn, &step_id, "ticket", "t6", "TICKET-6").unwrap();
+
+    crate::workflow::update_fan_out_item_terminal(&conn, &id1, "completed").unwrap();
+    crate::workflow::update_fan_out_item_terminal(&conn, &id2, "completed").unwrap();
+    crate::workflow::update_fan_out_item_terminal(&conn, &id3, "failed").unwrap();
+    crate::workflow::update_fan_out_item_terminal(&conn, &id4, "skipped").unwrap();
+    crate::workflow::update_fan_out_item_running(&conn, &id5, "child-run-5").unwrap();
+    // t6 stays pending
+
+    crate::workflow::refresh_fan_out_counters(&conn, &step_id).unwrap();
+
+    let (completed, failed, skipped) = read_fan_out_counters(&conn, &step_id);
+    assert_eq!(completed, 2);
+    assert_eq!(failed, 1);
+    assert_eq!(skipped, 1);
+}
+
+#[test]
+fn test_refresh_fan_out_counters_empty_fan_out_yields_zeros() {
+    let conn = setup_db();
+
+    let run = create_worktree_run(&conn, "w1");
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "fan-step", "actor", false, 0, 0).unwrap();
+
+    // No fan-out items at all — COALESCE must make each SUM return 0.
+    crate::workflow::refresh_fan_out_counters(&conn, &step_id).unwrap();
+
+    let (completed, failed, skipped) = read_fan_out_counters(&conn, &step_id);
+    assert_eq!(completed, 0);
+    assert_eq!(failed, 0);
+    assert_eq!(skipped, 0);
+}

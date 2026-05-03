@@ -14,3 +14,4 @@ script-*.out
 conductor.db
 conductor.db-wal
 conductor.db-shm
+conductor.log

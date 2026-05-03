@@ -5,18 +5,20 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::helpers::make_resource;
+use conductor_core::Conductor;
 use rmcp::model::Resource;
 
 // ---------------------------------------------------------------------------
 // Resource enumeration
 // ---------------------------------------------------------------------------
 
-pub(super) fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource>> {
+pub(super) fn enumerate_resources(conductor: &Conductor) -> anyhow::Result<Vec<Resource>> {
     use conductor_core::repo::RepoManager;
     use conductor_core::tickets::TicketSyncer;
     use conductor_core::worktree::WorktreeManager;
 
-    let (conn, config) = super::helpers::open_db_and_config(db_path)?;
+    let conn = &conductor.conn;
+    let config = &conductor.config;
 
     let mut resources = Vec::new();
 
@@ -27,14 +29,14 @@ pub(super) fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource
         "All registered repos",
     ));
 
-    let repo_mgr = RepoManager::new(&conn, &config);
+    let repo_mgr = RepoManager::new(conn, config);
     let repos = repo_mgr.list()?;
 
     // Bulk-fetch all tickets, worktrees, and workflow runs once to avoid N+1 queries.
-    let syncer = TicketSyncer::new(&conn);
+    let syncer = TicketSyncer::new(conn);
     let all_tickets = syncer.list(None)?;
 
-    let wt_mgr = WorktreeManager::new(&conn, &config);
+    let wt_mgr = WorktreeManager::new(conn, config);
     let all_worktrees = wt_mgr.list(None, false)?;
 
     for repo in &repos {
@@ -89,7 +91,7 @@ pub(super) fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource
         // Per-repo workflow runs: query directly by repo_id to avoid the global
         // cap silently dropping older runs when many repos are registered.
         let repo_runs =
-            conductor_core::workflow::list_workflow_runs_by_repo_id(&conn, &repo.id, 50, 0)?;
+            conductor_core::workflow::list_workflow_runs_by_repo_id(conn, &repo.id, 50, 0)?;
         for run in &repo_runs {
             resources.push(make_resource(
                 format!("conductor://run/{}", run.id),
@@ -106,16 +108,17 @@ pub(super) fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource
 // Resource reading
 // ---------------------------------------------------------------------------
 
-pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<String> {
+pub(super) fn read_resource_by_uri(conductor: &Conductor, uri: &str) -> anyhow::Result<String> {
     use conductor_core::repo::RepoManager;
     use conductor_core::tickets::TicketSyncer;
     use conductor_core::worktree::WorktreeManager;
     use std::collections::HashMap;
 
-    let (conn, config) = super::helpers::open_db_and_config(db_path)?;
+    let conn = &conductor.conn;
+    let config = &conductor.config;
 
     if uri == "conductor://repos" {
-        let mgr = RepoManager::new(&conn, &config);
+        let mgr = RepoManager::new(conn, config);
         let repos = mgr.list()?;
         if repos.is_empty() {
             return Ok(
@@ -133,7 +136,7 @@ pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<
     }
 
     if let Some(slug) = uri.strip_prefix("conductor://repo/") {
-        let mgr = RepoManager::new(&conn, &config);
+        let mgr = RepoManager::new(conn, config);
         let r = mgr.get_by_slug(slug)?;
         return Ok(format!(
             "slug: {}\nlocal_path: {}\nremote_url: {}\ndefault_branch: {}\nworkspace_dir: {}\ncreated_at: {}\n",
@@ -142,9 +145,9 @@ pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<
     }
 
     if let Some(repo_slug) = uri.strip_prefix("conductor://tickets/") {
-        let repo_mgr = RepoManager::new(&conn, &config);
+        let repo_mgr = RepoManager::new(conn, config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
-        let syncer = TicketSyncer::new(&conn);
+        let syncer = TicketSyncer::new(conn);
         let tickets = syncer.list(Some(&repo.id))?;
         if tickets.is_empty() {
             return Ok(format!(
@@ -167,9 +170,9 @@ pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<
         if parts.len() == 2 {
             let repo_slug = parts[0];
             let source_id = parts[1];
-            let repo_mgr = RepoManager::new(&conn, &config);
+            let repo_mgr = RepoManager::new(conn, config);
             let repo = repo_mgr.get_by_slug(repo_slug)?;
-            let syncer = TicketSyncer::new(&conn);
+            let syncer = TicketSyncer::new(conn);
             let ticket = syncer.get_by_source_id(&repo.id, source_id)?;
             let labels = syncer.get_labels(&ticket.id)?;
             let label_str: Vec<String> = labels.iter().map(|l| l.label.clone()).collect();
@@ -187,9 +190,9 @@ pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<
     }
 
     if let Some(repo_slug) = uri.strip_prefix("conductor://worktrees/") {
-        let repo_mgr = RepoManager::new(&conn, &config);
+        let repo_mgr = RepoManager::new(conn, config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
-        let wt_mgr = WorktreeManager::new(&conn, &config);
+        let wt_mgr = WorktreeManager::new(conn, config);
         let worktrees = wt_mgr.list(Some(&repo.slug), false)?;
         if worktrees.is_empty() {
             return Ok(format!("No worktrees for {repo_slug}."));
@@ -215,16 +218,16 @@ pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<
         if parts.len() == 2 {
             let repo_slug = parts[0];
             let wt_slug = parts[1];
-            let repo_mgr = RepoManager::new(&conn, &config);
+            let repo_mgr = RepoManager::new(conn, config);
             let repo = repo_mgr.get_by_slug(repo_slug)?;
-            let wt_mgr = WorktreeManager::new(&conn, &config);
+            let wt_mgr = WorktreeManager::new(conn, config);
             let wt = wt_mgr.get_by_slug(&repo.id, wt_slug)?;
             let mut out = format!(
                 "slug: {}\nbranch: {}\npath: {}\nstatus: {}\ncreated_at: {}\n",
                 wt.slug, wt.branch, wt.path, wt.status, wt.created_at
             );
             if let Some(ticket_id) = &wt.ticket_id {
-                let syncer = TicketSyncer::new(&conn);
+                let syncer = TicketSyncer::new(conn);
                 match syncer.get_by_id(ticket_id) {
                     Ok(ticket) => out.push_str(&format!(
                         "linked_ticket: #{} — {}\n",
@@ -240,15 +243,15 @@ pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<
     }
 
     if let Some(repo_slug) = uri.strip_prefix("conductor://runs/") {
-        let repo_mgr = RepoManager::new(&conn, &config);
+        let repo_mgr = RepoManager::new(conn, config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
         let repo_runs =
-            conductor_core::workflow::list_workflow_runs_by_repo_id(&conn, &repo.id, 50, 0)?;
+            conductor_core::workflow::list_workflow_runs_by_repo_id(conn, &repo.id, 50, 0)?;
         if repo_runs.is_empty() {
             return Ok(format!("No workflow runs for {repo_slug}."));
         }
         // Cache worktree lookups so we don't hit the DB (and load_config) once per run.
-        let wt_mgr = WorktreeManager::new(&conn, &config);
+        let wt_mgr = WorktreeManager::new(conn, config);
         let mut wt_cache: HashMap<String, (String, String)> = HashMap::new();
         let mut out = String::new();
         for run in &repo_runs {
@@ -278,12 +281,12 @@ pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<
     }
 
     if let Some(run_id) = uri.strip_prefix("conductor://run/") {
-        let run = conductor_core::workflow::get_workflow_run(&conn, run_id)?
+        let run = conductor_core::workflow::get_workflow_run(conn, run_id)?
             .ok_or_else(|| anyhow::anyhow!("Workflow run {run_id} not found"))?;
-        let steps = conductor_core::workflow::get_workflow_steps(&conn, run_id)?;
+        let steps = conductor_core::workflow::get_workflow_steps(conn, run_id)?;
         let claude_dir = config.general.resolve_optional_claude_dir();
         return Ok(format_run_detail_with_log(
-            &conn,
+            conn,
             &run,
             &steps,
             claude_dir.as_deref(),
@@ -291,7 +294,7 @@ pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<
     }
 
     if let Some(repo_slug) = uri.strip_prefix("conductor://workflows/") {
-        let repo_mgr = RepoManager::new(&conn, &config);
+        let repo_mgr = RepoManager::new(conn, config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
         let (defs, warnings) =
             conductor_core::workflow::list_defs(&repo.local_path, &repo.local_path)?;
@@ -583,20 +586,22 @@ pub(crate) fn resolve_worktree_info(
 mod tests {
     use super::*;
 
-    fn make_test_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
+    fn make_test_conductor() -> (tempfile::NamedTempFile, Conductor) {
+        use conductor_core::config::Config;
         use conductor_core::db::open_database;
         let file = tempfile::NamedTempFile::new().expect("temp file");
         let path = file.path().to_path_buf();
-        open_database(&path).expect("open_database");
-        (file, path)
+        let conn = open_database(&path).expect("open_database");
+        let config = Config::default();
+        (file, Conductor { conn, config })
     }
 
     // -- read_resource_by_uri -----------------------------------------------
 
     #[test]
     fn test_read_resource_unknown_uri_returns_error() {
-        let (_f, db) = make_test_db();
-        let result = read_resource_by_uri(&db, "conductor://does-not-exist/foo");
+        let (_f, conductor) = make_test_conductor();
+        let result = read_resource_by_uri(&conductor, "conductor://does-not-exist/foo");
         assert!(result.is_err(), "unknown URI should be an error");
         let msg = result.unwrap_err().to_string();
         assert!(
@@ -607,8 +612,8 @@ mod tests {
 
     #[test]
     fn test_read_resource_repos_empty_db() {
-        let (_f, db) = make_test_db();
-        let result = read_resource_by_uri(&db, "conductor://repos").expect("should succeed");
+        let (_f, conductor) = make_test_conductor();
+        let result = read_resource_by_uri(&conductor, "conductor://repos").expect("should succeed");
         assert!(
             result.contains("No repos registered"),
             "expected empty message, got: {result}"
@@ -617,43 +622,43 @@ mod tests {
 
     #[test]
     fn test_read_resource_repo_not_found() {
-        let (_f, db) = make_test_db();
-        let result = read_resource_by_uri(&db, "conductor://repo/no-such-repo");
+        let (_f, conductor) = make_test_conductor();
+        let result = read_resource_by_uri(&conductor, "conductor://repo/no-such-repo");
         assert!(result.is_err(), "missing repo should be an error");
     }
 
     #[test]
     fn test_read_resource_tickets_unknown_repo() {
-        let (_f, db) = make_test_db();
-        let result = read_resource_by_uri(&db, "conductor://tickets/ghost-repo");
+        let (_f, conductor) = make_test_conductor();
+        let result = read_resource_by_uri(&conductor, "conductor://tickets/ghost-repo");
         assert!(result.is_err(), "unknown repo should produce an error");
     }
 
     #[test]
     fn test_read_resource_worktrees_unknown_repo() {
-        let (_f, db) = make_test_db();
-        let result = read_resource_by_uri(&db, "conductor://worktrees/ghost-repo");
+        let (_f, conductor) = make_test_conductor();
+        let result = read_resource_by_uri(&conductor, "conductor://worktrees/ghost-repo");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_read_resource_runs_unknown_repo() {
-        let (_f, db) = make_test_db();
-        let result = read_resource_by_uri(&db, "conductor://runs/ghost-repo");
+        let (_f, conductor) = make_test_conductor();
+        let result = read_resource_by_uri(&conductor, "conductor://runs/ghost-repo");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_read_resource_run_not_found() {
-        let (_f, db) = make_test_db();
-        let result = read_resource_by_uri(&db, "conductor://run/01HXXXXXXXXXXXXXXXXXXXXXXX");
+        let (_f, conductor) = make_test_conductor();
+        let result = read_resource_by_uri(&conductor, "conductor://run/01HXXXXXXXXXXXXXXXXXXXXXXX");
         assert!(result.is_err(), "non-existent run_id should be an error");
     }
 
     #[test]
     fn test_read_resource_workflows_unknown_repo() {
-        let (_f, db) = make_test_db();
-        let result = read_resource_by_uri(&db, "conductor://workflows/ghost-repo");
+        let (_f, conductor) = make_test_conductor();
+        let result = read_resource_by_uri(&conductor, "conductor://workflows/ghost-repo");
         assert!(result.is_err());
     }
 
@@ -689,16 +694,16 @@ workflow build {
         let wf_dir = make_wf_dir_with_workflow("build", wf_content);
         let repo_path = wf_dir.path().to_str().unwrap();
 
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         {
-            let conn = open_database(&db).expect("open db");
+            let conn = open_database(_f.path()).expect("open db");
             let config = load_config().expect("load config");
             RepoManager::new(&conn, &config)
                 .register("my-repo", repo_path, "https://github.com/x/y", None)
                 .expect("register repo");
         }
 
-        let result = read_resource_by_uri(&db, "conductor://workflows/my-repo")
+        let result = read_resource_by_uri(&conductor, "conductor://workflows/my-repo")
             .expect("resource read should succeed");
 
         assert!(

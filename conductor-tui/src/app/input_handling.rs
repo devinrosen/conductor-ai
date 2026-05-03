@@ -958,7 +958,12 @@ mod tests {
     /// - worktree `w1` (slug `feat-test`, branch `feat/test`, status `active`)
     fn make_app() -> App {
         let conn = conductor_core::test_helpers::setup_db();
-        App::new(conn, Config::default(), Theme::default())
+        App::new(
+            conn,
+            Config::default(),
+            crate::config::TuiConfig::default(),
+            Theme::default(),
+        )
     }
 
     /// on_submit action that targets the pre-seeded worktree so DB writes succeed.

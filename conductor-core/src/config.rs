@@ -156,19 +156,6 @@ impl Default for WorkflowNotificationConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct WebPushConfig {
-    /// VAPID public key (base64url encoded)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub vapid_public_key: Option<String>,
-    /// VAPID private key (base64url encoded)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub vapid_private_key: Option<String>,
-    /// Subject for VAPID (typically a mailto: or https: URL)
-    #[serde(default)]
-    pub vapid_subject: Option<String>,
-}
-
 /// Configuration for a single notification hook (shell or HTTP).
 ///
 /// ```toml
@@ -240,8 +227,6 @@ pub struct Config {
     #[serde(default)]
     pub notifications: NotificationConfig,
     #[serde(default)]
-    pub web_push: WebPushConfig,
-    #[serde(default)]
     pub notify: NotifyConfig,
     /// Named runtime configurations for non-Claude agent runtimes (RFC 007).
     /// The built-in "claude" runtime does not require an entry here.
@@ -308,10 +293,6 @@ pub struct GeneralConfig {
     /// into agent prompts. Defaults to true; set to false to disable.
     #[serde(default = "default_true")]
     pub inject_startup_context: bool,
-    /// TUI color theme. One of: "conductor" (default), "nord", "gruvbox", "catppuccin_mocha",
-    /// or the stem of a file in `~/.conductor/themes/`. Omit to use the default conductor theme.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub theme: Option<String>,
     /// Automatically detect merged PRs and clean up worktrees (delete local/remote branch,
     /// remove worktree directory, auto-close orphaned features). Defaults to true.
     #[serde(default = "default_true")]
@@ -382,7 +363,6 @@ impl Default for GeneralConfig {
             agent_permission_mode: AgentPermissionMode::default(),
             model: None,
             inject_startup_context: true,
-            theme: None,
             auto_cleanup_merged_branches: true,
             stale_workflow_minutes: default_stale_workflow_minutes(),
             claude_config_dir: None,
@@ -509,11 +489,6 @@ pub fn hooks_dir() -> PathBuf {
     conductor_dir().join("hooks")
 }
 
-/// Returns the directory for user-supplied theme files: ~/.conductor/themes/
-pub fn themes_dir() -> PathBuf {
-    conductor_dir().join("themes")
-}
-
 /// Returns the log file path for a given agent run ID.
 ///
 /// Convention: `~/.conductor/agent-logs/{run_id}.log`
@@ -524,6 +499,23 @@ pub fn agent_log_path(run_id: &str) -> Result<PathBuf> {
         .parse::<ulid::Ulid>()
         .map_err(|_| ConductorError::Agent(format!("invalid run_id: {run_id}")))?;
     Ok(agent_log_dir().join(format!("{run_id}.log")))
+}
+
+/// Returns the directory for per-run workflow engine log files.
+pub fn workflow_log_dir() -> PathBuf {
+    conductor_dir().join("workflow-logs")
+}
+
+/// Returns the log file path for a given workflow run ID.
+///
+/// Convention: `~/.conductor/workflow-logs/{run_id}.log`
+///
+/// Returns an error if `run_id` is not a valid ULID, preventing path traversal.
+pub fn workflow_log_path(run_id: &str) -> Result<PathBuf> {
+    run_id
+        .parse::<ulid::Ulid>()
+        .map_err(|_| ConductorError::Workflow(format!("invalid run_id: {run_id}")))?;
+    Ok(workflow_log_dir().join(format!("{run_id}.log")))
 }
 
 impl Config {
@@ -575,6 +567,19 @@ fn load_config_from(path: &std::path::Path) -> Result<Config> {
             "[notifications.workflows] is deprecated — migrate to [[notify.hooks]] with `on` patterns; \
              see CHANGELOG.md"
         );
+    }
+
+    // Deprecation: warn if [general].theme is still present — it moved to [tui].theme.
+    if raw.get("general").and_then(|g| g.get("theme")).is_some() {
+        tracing::warn!(
+            "[general].theme is deprecated — move to [tui].theme; conductor-core no longer reads it"
+        );
+    }
+
+    // Deprecation: warn if top-level [web_push] is present — VAPID keys moved to [web].push.
+    // Key values are intentionally not logged here (they are secrets).
+    if raw.get("web_push").is_some() {
+        tracing::warn!("top-level [web_push] section is deprecated; move to [web].push");
     }
 
     // Guard: if [github.app] is present in the raw TOML but deserialized to None,
@@ -670,7 +675,6 @@ fn save_config_to(config: &Config, path: &std::path::Path) -> Result<()> {
 pub fn ensure_dirs(config: &Config) -> Result<()> {
     std::fs::create_dir_all(conductor_dir())?;
     std::fs::create_dir_all(&config.general.workspace_root)?;
-    std::fs::create_dir_all(themes_dir())?;
     Ok(())
 }
 
@@ -1731,6 +1735,20 @@ bot_name = "my-bot"
         assert!(err.to_string().contains("invalid run_id"));
     }
 
+    #[test]
+    fn workflow_log_path_valid_ulid_returns_ok() {
+        let ulid = crate::new_id();
+        let path = super::workflow_log_path(&ulid).expect("valid ULID should succeed");
+        assert!(path.to_string_lossy().ends_with(&format!("{ulid}.log")));
+        assert!(path.to_string_lossy().contains("workflow-logs"));
+    }
+
+    #[test]
+    fn workflow_log_path_invalid_ulid_returns_error() {
+        let err = super::workflow_log_path("../etc/passwd").unwrap_err();
+        assert!(err.to_string().contains("invalid run_id"));
+    }
+
     // -----------------------------------------------------------------------
     // AgentPermissionModeExt tests
     // -----------------------------------------------------------------------
@@ -1801,6 +1819,69 @@ bot_name = "my-bot"
         assert_eq!(
             AgentPermissionMode::Plan.allowed_tools(),
             AgentPermissionMode::RepoSafe.allowed_tools()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // [web_push] preservation regression test (#2816)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_load_config_deprecation_warn_path_for_web_push() {
+        // Exercises the [web_push] deprecation-warn branch in load_config_from.
+        // The warn fires as a side-effect; this test verifies the branch is reached
+        // without error and that the rest of the config loads correctly.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[web_push]\nvapid_public_key = \"pub\"\nvapid_private_key = \"priv\"\n",
+        )
+        .unwrap();
+        let result = load_config_from(&path);
+        assert!(
+            result.is_ok(),
+            "load_config_from must succeed when [web_push] is present (only warns, not errors)"
+        );
+    }
+
+    #[test]
+    fn test_save_preserves_user_web_push_section() {
+        // Removing `web_push` from Config must NOT strip a user's existing [web_push]
+        // section from disk when other binaries (conductor-cli, conductor-tui) call
+        // save_config without knowledge of the field.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[web_push]
+vapid_public_key = "pub_key"
+vapid_private_key = "priv_key"
+vapid_subject = "mailto:test@example.com"
+"#,
+        )
+        .unwrap();
+
+        // Load the config (web_push field no longer exists on Config)
+        let config = load_config_from(&path).unwrap();
+
+        // Save — patch-write must preserve [web_push] even though Config has no field for it
+        save_config_to(&config, &path).unwrap();
+
+        // Re-read raw TOML and assert [web_push] is still intact
+        let raw_contents = std::fs::read_to_string(&path).unwrap();
+        let raw: toml::Value = toml::from_str(&raw_contents).unwrap();
+        assert!(
+            raw.get("web_push").is_some(),
+            "[web_push] section should survive save when Config no longer has the field"
+        );
+        assert_eq!(
+            raw.get("web_push")
+                .and_then(|wp| wp.get("vapid_subject"))
+                .and_then(|v| v.as_str()),
+            Some("mailto:test@example.com"),
+            "vapid_subject should be preserved verbatim"
         );
     }
 }

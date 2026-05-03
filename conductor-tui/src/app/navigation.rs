@@ -1070,6 +1070,7 @@ mod tests {
         App::new(
             conn,
             conductor_core::config::Config::default(),
+            crate::config::TuiConfig::default(),
             crate::theme::Theme::default(),
         )
     }

@@ -1,5 +1,6 @@
 pub mod assets;
 pub mod attachments;
+pub mod config;
 pub mod error;
 pub mod events;
 pub mod notify;

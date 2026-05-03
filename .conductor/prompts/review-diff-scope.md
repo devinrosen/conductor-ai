@@ -1,5 +1,17 @@
 ## Diff scope rules
 
+### Working directory — do not `cd`
+
+Run every `git` command from your current working directory. Do **NOT**
+`cd` to any other path (including paths you may know from prior sessions
+or memory like `/Users/.../Personal/conductor-ai`). The harness has
+already placed you in the worktree that holds this PR's branch — any
+other checkout will have a different `HEAD`, producing a fabricated
+diff that contaminates the entire review (this is the same class of bug
+that `resolve-pr-base.sh` was added to prevent — see #2736).
+
+### Diff command
+
 Get the diff for this PR using the appropriate command for the review scope:
 
 - If the scope is **full** (default): the PR's base branch has already been
@@ -16,6 +28,15 @@ Get the diff for this PR using the appropriate command for the review scope:
 **Review scope: {{scope}}**
 
 If the diff exceeds ~50KB, focus on files most relevant to your review area.
+
+If an **incremental** diff comes back surprisingly large (hundreds of
+KB, or contains files unrelated to the ticket), do **not** try to filter
+it down by reading individual files — re-run the diff against
+`origin/{{base_branch}}...HEAD` instead. A bloated incremental diff
+almost always means `HEAD` is not where you expect it (e.g. you are in
+the wrong working directory, or the worktree has just been rebased over
+many upstream commits). Switch commands and proceed; do not waste
+turns picking through a fabricated diff.
 
 **In scope — review carefully:**
 - Lines starting with `+` (added code)

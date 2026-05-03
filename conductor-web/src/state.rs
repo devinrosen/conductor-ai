@@ -5,12 +5,14 @@ use conductor_core::config::Config;
 use rusqlite::Connection;
 use tokio::sync::{Mutex, Notify, RwLock};
 
+use crate::config::WebConfig;
 use crate::events::EventBus;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
     pub config: Arc<RwLock<Config>>,
+    pub web_config: Arc<RwLock<WebConfig>>,
     pub events: EventBus,
     /// Path to the SQLite database file. Used by `spawn_blocking` closures that
     /// need their own `rusqlite::Connection` (which is not `Send`).
@@ -22,10 +24,17 @@ pub struct AppState {
 
 impl AppState {
     /// Construct a production `AppState` with the given connection, config, and event bus capacity.
-    pub fn new(conn: Connection, config: Config, db_path: PathBuf, event_capacity: usize) -> Self {
+    pub fn new(
+        conn: Connection,
+        config: Config,
+        web_config: WebConfig,
+        db_path: PathBuf,
+        event_capacity: usize,
+    ) -> Self {
         Self {
             db: Arc::new(Mutex::new(conn)),
             config: Arc::new(RwLock::new(config)),
+            web_config: Arc::new(RwLock::new(web_config)),
             events: EventBus::new(event_capacity),
             db_path,
             workflow_done_notify: None,

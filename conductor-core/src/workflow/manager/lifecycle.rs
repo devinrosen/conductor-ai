@@ -107,6 +107,9 @@ pub fn create_workflow_run_with_targets(
         total_duration_ms: None,
         model: None,
         dismissed: false,
+        owner_token: None,
+        lease_until: None,
+        generation: 0,
     })
 }
 
@@ -331,6 +334,9 @@ pub fn persist_workflow_metrics(
     Ok(())
 }
 
+// NOTE (#2731/#2796): lease refresh (FlowEngine's refresh_lease_loop) is now the
+// load-bearing ownership mechanism. This heartbeat write is retained only for UI
+// staleness display — detect_stuck_workflow_run_ids reads last_heartbeat.
 pub fn tick_heartbeat(conn: &Connection, run_id: &str) -> Result<()> {
     let now = Utc::now().to_rfc3339();
     conn.execute(

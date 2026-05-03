@@ -1,12 +1,11 @@
-use std::path::Path;
-
+use conductor_core::Conductor;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, open_db_and_config, tool_err, tool_ok};
+use crate::mcp::helpers::{get_arg, tool_err, tool_ok};
 
 pub(super) fn tool_create_gh_issue(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::agent::AgentManager;
@@ -24,12 +23,10 @@ pub(super) fn tool_create_gh_issue(
         .collect();
     let run_id = get_arg(args, "run_id");
 
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
+    let conn = &conductor.conn;
+    let config = &conductor.config;
 
-    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+    let repo = match RepoManager::new(conn, config).get_by_slug(repo_slug) {
         Ok(r) => r,
         Err(e) => return tool_err(e),
     };
@@ -52,7 +49,7 @@ pub(super) fn tool_create_gh_issue(
 
     // If run_id is provided, record the created issue for tracking
     if let Some(rid) = run_id {
-        let agent_mgr = AgentManager::new(&conn);
+        let agent_mgr = AgentManager::new(conn);
         if let Err(e) =
             agent_mgr.record_created_issue(rid, &repo.id, "github", &number, title, &url)
         {
@@ -72,16 +69,9 @@ pub(super) fn tool_create_gh_issue(
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_helpers::make_test_conductor;
     use super::*;
     use serde_json::Value;
-
-    fn make_test_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
-        use conductor_core::db::open_database;
-        let file = tempfile::NamedTempFile::new().expect("temp file");
-        let path = file.path().to_path_buf();
-        open_database(&path).expect("open_database");
-        (file, path)
-    }
 
     fn empty_args() -> serde_json::Map<String, Value> {
         serde_json::Map::new()
@@ -97,8 +87,8 @@ mod tests {
 
     #[test]
     fn test_create_gh_issue_missing_repo() {
-        let (_f, db) = make_test_db();
-        let result = tool_create_gh_issue(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_create_gh_issue(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -112,8 +102,8 @@ mod tests {
 
     #[test]
     fn test_create_gh_issue_missing_title() {
-        let (_f, db) = make_test_db();
-        let result = tool_create_gh_issue(&db, &args_with(&[("repo", "test-repo")]));
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_create_gh_issue(&conductor, &args_with(&[("repo", "test-repo")]));
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -127,9 +117,9 @@ mod tests {
 
     #[test]
     fn test_create_gh_issue_missing_body() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let result = tool_create_gh_issue(
-            &db,
+            &conductor,
             &args_with(&[("repo", "test-repo"), ("title", "Test issue")]),
         );
         assert_eq!(result.is_error, Some(true));
@@ -145,9 +135,9 @@ mod tests {
 
     #[test]
     fn test_create_gh_issue_unknown_repo() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let result = tool_create_gh_issue(
-            &db,
+            &conductor,
             &args_with(&[
                 ("repo", "ghost-repo"),
                 ("title", "Test"),
@@ -160,19 +150,15 @@ mod tests {
     #[test]
     fn test_create_gh_issue_non_github_remote() {
         use conductor_core::config::Config;
-        use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
-        let (_f, db) = make_test_db();
-        let conn = open_database(&db).expect("open db");
-        let config = Config::default();
-        RepoManager::new(&conn, &config)
+        let (_f, conductor) = make_test_conductor();
+        RepoManager::new(&conductor.conn, &Config::default())
             .register("gitlab-repo", "/tmp/gitlab", "https://gitlab.com/x/y", None)
             .expect("register repo");
-        drop(conn);
 
         let result = tool_create_gh_issue(
-            &db,
+            &conductor,
             &args_with(&[("repo", "gitlab-repo"), ("title", "Test"), ("body", "Body")]),
         );
         assert_eq!(result.is_error, Some(true));

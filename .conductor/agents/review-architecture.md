@@ -13,6 +13,7 @@ Focus exclusively on:
 - Design pattern misuse or missed opportunities (especially the manager pattern used throughout conductor-core)
 - API surface consistency across manager structs (RepoManager, WorktreeManager, AgentManager, etc.)
 - Crate boundary violations — conductor-core should be a clean library; CLI/TUI/web are thin consumers
+- **runkon-flow trait surface (pre-publish discipline, until the trait-cleanup umbrella lands)**: in `runkon-flow/src/traits/`, flag new concrete `*Context` structs on per-step traits, new conductor-domain or Claude-runtime-shaped fields on shared types (`ActionOutput`, `ActionParams`, `WorkflowRun`, `WorkflowRunStep`), and new non-storage methods on `WorkflowPersistence`. The keystone direction is `&dyn RunContext` plus `metadata: HashMap<String, String>`; harness-neutral lifecycle fields (e.g. `generation: i64`) are fine — domain-shaped additions add to cleanup debt and become semver-major breaks once `runkon-flow 0.1.0-alpha` ships
 
 Do NOT flag:
 - Minor style preferences or speculative improvements
@@ -21,5 +22,7 @@ Do NOT flag:
 ## Scope constraint
 
 Only read files that appear directly in the diff, plus their immediate imports/callers (one hop max). Do NOT perform codebase-wide grep sweeps for architectural patterns.
+
+Do NOT run `cargo build`, `cargo test`, `cargo clippy`, or any other build/test/lint commands — verifying compile/test correctness is CI's job, not a reviewer's. The only shell commands needed for review are `git diff` / `git log`. Running cargo just adds latency without changing your findings.
 
 If you encounter an architectural issue in unchanged code (no `+` or `-` lines in the diff), it MUST go into `off_diff_findings`, NOT `findings`. Pre-existing architectural issues found incidentally during an unrelated PR review are not actionable blockers. Never flag unchanged code as blocking.

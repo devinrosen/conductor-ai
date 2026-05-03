@@ -1,6 +1,6 @@
-use std::path::Path;
 use std::sync::Arc;
 
+use conductor_core::Conductor;
 use rmcp::model::{CallToolResult, Tool, ToolAnnotations};
 use serde_json::{json, Value};
 
@@ -15,6 +15,9 @@ mod runs;
 mod tickets;
 mod workflows;
 mod worktrees;
+
+#[cfg(test)]
+mod test_helpers;
 
 pub(super) fn conductor_tools() -> Vec<Tool> {
     vec![
@@ -481,41 +484,41 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
 }
 
 pub(super) fn dispatch_tool(
-    db_path: &Path,
+    conductor: &Conductor,
     name: &str,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     match name {
-        "conductor_list_tickets" => tickets::tool_list_tickets(db_path, args),
-        "conductor_list_worktrees" => worktrees::tool_list_worktrees(db_path, args),
-        "conductor_create_worktree" => worktrees::tool_create_worktree(db_path, args),
-        "conductor_delete_worktree" => worktrees::tool_delete_worktree(db_path, args),
-        "conductor_sync_tickets" => tickets::tool_sync_tickets(db_path, args),
-        "conductor_run_workflow" => workflows::tool_run_workflow(db_path, args),
-        "conductor_list_runs" => runs::tool_list_runs(db_path, args),
-        "conductor_list_agent_runs" => agents::tool_list_agent_runs(db_path, args),
-        "conductor_get_run" => runs::tool_get_run(db_path, args),
-        "conductor_approve_gate" => gates::tool_approve_gate(db_path, args),
-        "conductor_reject_gate" => gates::tool_reject_gate(db_path, args),
-        "conductor_push_worktree" => worktrees::tool_push_worktree(db_path, args),
-        "conductor_set_base_branch" => worktrees::tool_set_base_branch(db_path, args),
-        "conductor_cancel_run" => runs::tool_cancel_run(db_path, args),
-        "conductor_list_workflows" => workflows::tool_list_workflows(db_path, args),
-        "conductor_list_repos" => repos::tool_list_repos(db_path),
-        "conductor_resume_run" => runs::tool_resume_run(db_path, args),
-        "conductor_submit_agent_feedback" => agents::tool_submit_agent_feedback(db_path, args),
-        "conductor_get_worktree" => worktrees::tool_get_worktree(db_path, args),
-        "conductor_get_step_log" => runs::tool_get_step_log(db_path, args),
-        "conductor_list_prs" => prs::tool_list_prs(db_path, args),
-        "conductor_validate_workflow" => workflows::tool_validate_workflow(db_path, args),
-        "conductor_register_repo" => repos::tool_register_repo(db_path, args),
-        "conductor_unregister_repo" => repos::tool_unregister_repo(db_path, args),
-        "conductor_delete_ticket" => tickets::tool_delete_ticket(db_path, args),
-        "conductor_upsert_ticket" => tickets::tool_upsert_ticket(db_path, args),
-        "conductor_get_ready_tickets" => tickets::tool_get_ready_tickets(db_path, args),
-        "conductor_list_templates" => workflows::tool_list_templates(db_path, args),
-        "conductor_instantiate_template" => workflows::tool_instantiate_template(db_path, args),
-        "conductor_create_gh_issue" => issues::tool_create_gh_issue(db_path, args),
+        "conductor_list_tickets" => tickets::tool_list_tickets(conductor, args),
+        "conductor_list_worktrees" => worktrees::tool_list_worktrees(conductor, args),
+        "conductor_create_worktree" => worktrees::tool_create_worktree(conductor, args),
+        "conductor_delete_worktree" => worktrees::tool_delete_worktree(conductor, args),
+        "conductor_sync_tickets" => tickets::tool_sync_tickets(conductor, args),
+        "conductor_run_workflow" => workflows::tool_run_workflow(conductor, args),
+        "conductor_list_runs" => runs::tool_list_runs(conductor, args),
+        "conductor_list_agent_runs" => agents::tool_list_agent_runs(conductor, args),
+        "conductor_get_run" => runs::tool_get_run(conductor, args),
+        "conductor_approve_gate" => gates::tool_approve_gate(conductor, args),
+        "conductor_reject_gate" => gates::tool_reject_gate(conductor, args),
+        "conductor_push_worktree" => worktrees::tool_push_worktree(conductor, args),
+        "conductor_set_base_branch" => worktrees::tool_set_base_branch(conductor, args),
+        "conductor_cancel_run" => runs::tool_cancel_run(conductor, args),
+        "conductor_list_workflows" => workflows::tool_list_workflows(conductor, args),
+        "conductor_list_repos" => repos::tool_list_repos(conductor),
+        "conductor_resume_run" => runs::tool_resume_run(conductor, args),
+        "conductor_submit_agent_feedback" => agents::tool_submit_agent_feedback(conductor, args),
+        "conductor_get_worktree" => worktrees::tool_get_worktree(conductor, args),
+        "conductor_get_step_log" => runs::tool_get_step_log(conductor, args),
+        "conductor_list_prs" => prs::tool_list_prs(conductor, args),
+        "conductor_validate_workflow" => workflows::tool_validate_workflow(conductor, args),
+        "conductor_register_repo" => repos::tool_register_repo(conductor, args),
+        "conductor_unregister_repo" => repos::tool_unregister_repo(conductor, args),
+        "conductor_delete_ticket" => tickets::tool_delete_ticket(conductor, args),
+        "conductor_upsert_ticket" => tickets::tool_upsert_ticket(conductor, args),
+        "conductor_get_ready_tickets" => tickets::tool_get_ready_tickets(conductor, args),
+        "conductor_list_templates" => workflows::tool_list_templates(conductor, args),
+        "conductor_instantiate_template" => workflows::tool_instantiate_template(conductor, args),
+        "conductor_create_gh_issue" => issues::tool_create_gh_issue(conductor, args),
         _ => tool_err(format!("Unknown tool: {name}")),
     }
 }
@@ -526,16 +529,9 @@ pub(super) fn dispatch_tool(
 
 #[cfg(test)]
 mod tests {
+    use super::test_helpers::make_test_conductor;
     use super::*;
     use serde_json::Value;
-
-    fn make_test_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
-        use conductor_core::db::open_database;
-        let file = tempfile::NamedTempFile::new().expect("temp file");
-        let path = file.path().to_path_buf();
-        open_database(&path).expect("open_database");
-        (file, path)
-    }
 
     fn empty_args() -> serde_json::Map<String, Value> {
         serde_json::Map::new()
@@ -543,8 +539,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_unknown_tool() {
-        let (_f, db) = make_test_db();
-        let result = dispatch_tool(&db, "conductor_nonexistent", &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = dispatch_tool(&conductor, "conductor_nonexistent", &empty_args());
         assert_eq!(
             result.is_error,
             Some(true),

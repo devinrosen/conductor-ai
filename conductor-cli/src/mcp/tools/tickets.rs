@@ -1,9 +1,8 @@
-use std::path::Path;
-
+use conductor_core::Conductor;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, get_arg_usize, open_db_and_config, tool_err, tool_ok};
+use crate::mcp::helpers::{get_arg, get_arg_usize, tool_err, tool_ok};
 
 fn parse_comma_arg(args: &serde_json::Map<String, Value>, key: &str) -> Vec<String> {
     get_arg(args, key)
@@ -17,7 +16,7 @@ fn parse_comma_arg(args: &serde_json::Map<String, Value>, key: &str) -> Vec<Stri
 }
 
 pub(super) fn tool_list_tickets(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::repo::RepoManager;
@@ -36,16 +35,14 @@ pub(super) fn tool_list_tickets(
         unlabeled_only: false,
     };
 
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let repo_mgr = RepoManager::new(&conn, &config);
+    let conn = &conductor.conn;
+    let config = &conductor.config;
+    let repo_mgr = RepoManager::new(conn, config);
     let repo = match repo_mgr.get_by_slug(repo_slug) {
         Ok(r) => r,
         Err(e) => return tool_err(e),
     };
-    let syncer = TicketSyncer::new(&conn);
+    let syncer = TicketSyncer::new(conn);
     let tickets = match syncer.list_filtered(Some(&repo.id), &filter) {
         Ok(t) => t,
         Err(e) => return tool_err(e),
@@ -63,7 +60,7 @@ pub(super) fn tool_list_tickets(
 }
 
 pub(super) fn tool_sync_tickets(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::issue_source::IssueSourceManager;
@@ -72,16 +69,14 @@ pub(super) fn tool_sync_tickets(
     use conductor_core::tickets::TicketSyncer;
     let repo_slug = require_arg!(args, "repo");
     let ticket_id_arg = get_arg(args, "ticket_id");
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let repo_mgr = RepoManager::new(&conn, &config);
+    let conn = &conductor.conn;
+    let config = &conductor.config;
+    let repo_mgr = RepoManager::new(conn, config);
     let repo = match repo_mgr.get_by_slug(repo_slug) {
         Ok(r) => r,
         Err(e) => return tool_err(e),
     };
-    let source_mgr = IssueSourceManager::new(&conn);
+    let source_mgr = IssueSourceManager::new(conn);
     let sources = match source_mgr.list(&repo.id) {
         Ok(s) => s,
         Err(e) => return tool_err(e),
@@ -91,7 +86,7 @@ pub(super) fn tool_sync_tickets(
             "No issue sources configured for {repo_slug}. Use `conductor repo sources add` to configure one."
         ));
     }
-    let syncer = TicketSyncer::new(&conn);
+    let syncer = TicketSyncer::new(conn);
 
     // Single-ticket sync path
     if let Some(ticket_id_str) = ticket_id_arg {
@@ -169,7 +164,7 @@ pub(super) fn tool_sync_tickets(
 }
 
 pub(super) fn tool_upsert_ticket(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::repo::RepoManager;
@@ -189,11 +184,9 @@ pub(super) fn tool_upsert_ticket(
     let children = parse_comma_arg(args, "children");
     let parent = get_arg(args, "parent").map(|s| s.to_string());
 
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+    let conn = &conductor.conn;
+    let config = &conductor.config;
+    let repo = match RepoManager::new(conn, config).get_by_slug(repo_slug) {
         Ok(r) => r,
         Err(e) => return tool_err(e),
     };
@@ -215,7 +208,7 @@ pub(super) fn tool_upsert_ticket(
         parent,
     };
 
-    let syncer = TicketSyncer::new(&conn);
+    let syncer = TicketSyncer::new(conn);
     match syncer.upsert_tickets(&repo.id, &[ticket_input]) {
         Ok(_) => tool_ok(format!(
             "Upserted ticket {source_type}#{source_id} into {repo_slug}."
@@ -225,7 +218,7 @@ pub(super) fn tool_upsert_ticket(
 }
 
 pub(super) fn tool_get_ready_tickets(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::repo::RepoManager;
@@ -236,15 +229,13 @@ pub(super) fn tool_get_ready_tickets(
     let label = get_arg(args, "label").map(|s| s.to_string());
     let limit = get_arg_usize(args, "limit").unwrap_or(50);
 
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+    let conn = &conductor.conn;
+    let config = &conductor.config;
+    let repo = match RepoManager::new(conn, config).get_by_slug(repo_slug) {
         Ok(r) => r,
         Err(e) => return tool_err(e),
     };
-    let syncer = TicketSyncer::new(&conn);
+    let syncer = TicketSyncer::new(conn);
     let tickets = match syncer.get_ready_tickets(
         &repo.id,
         root_ticket_id.as_deref(),
@@ -265,7 +256,7 @@ pub(super) fn tool_get_ready_tickets(
 }
 
 pub(super) fn tool_delete_ticket(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::repo::RepoManager;
@@ -275,16 +266,14 @@ pub(super) fn tool_delete_ticket(
     let source_type = require_arg!(args, "source_type");
     let source_id = require_arg!(args, "source_id");
 
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+    let conn = &conductor.conn;
+    let config = &conductor.config;
+    let repo = match RepoManager::new(conn, config).get_by_slug(repo_slug) {
         Ok(r) => r,
         Err(e) => return tool_err(e),
     };
 
-    let syncer = TicketSyncer::new(&conn);
+    let syncer = TicketSyncer::new(conn);
     match syncer.delete_ticket(&repo.id, source_type, source_id) {
         Ok(()) => tool_ok(format!(
             "Deleted ticket {source_type}#{source_id} from {repo_slug}."
@@ -299,16 +288,9 @@ pub(super) fn tool_delete_ticket(
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_helpers::make_test_conductor;
     use super::*;
     use serde_json::Value;
-
-    fn make_test_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
-        use conductor_core::db::open_database;
-        let file = tempfile::NamedTempFile::new().expect("temp file");
-        let path = file.path().to_path_buf();
-        open_database(&path).expect("open_database");
-        (file, path)
-    }
 
     fn empty_args() -> serde_json::Map<String, Value> {
         serde_json::Map::new()
@@ -348,8 +330,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_list_tickets_missing_repo_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_list_tickets(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_list_tickets(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -360,8 +342,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_sync_tickets_missing_repo_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_sync_tickets(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_sync_tickets(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -372,8 +354,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_sync_tickets_unknown_repo() {
-        let (_f, db) = make_test_db();
-        let result = tool_sync_tickets(&db, &args_with("repo", "ghost-repo"));
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_sync_tickets(&conductor, &args_with("repo", "ghost-repo"));
         assert_eq!(result.is_error, Some(true));
     }
 
@@ -384,8 +366,8 @@ mod tests {
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
-        let (_f, db) = make_test_db();
-        let conn = open_database(&db).expect("open db");
+        let (_f, conductor) = make_test_conductor();
+        let conn = open_database(_f.path()).expect("open db");
         let config = Config::default();
         let repo_mgr = RepoManager::new(&conn, &config);
         repo_mgr
@@ -397,7 +379,7 @@ mod tests {
             )
             .expect("register repo");
 
-        let result = tool_sync_tickets(&db, &args_with("repo", "test-repo"));
+        let result = tool_sync_tickets(&conductor, &args_with("repo", "test-repo"));
         assert_eq!(
             result.is_error,
             Some(true),
@@ -410,8 +392,8 @@ mod tests {
         use conductor_core::db::open_database;
         use conductor_core::tickets::TicketSyncer;
 
-        let (_f, db) = make_test_db();
-        let conn = open_database(&db).expect("open db");
+        let (_f, _conductor) = make_test_conductor();
+        let conn = open_database(_f.path()).expect("open db");
         let syncer = TicketSyncer::new(&conn);
         let result = syncer.get_by_source_id("nonexistent-repo", "999");
         assert!(result.is_err(), "should fail for unknown repo+source_id");
@@ -429,8 +411,8 @@ mod tests {
         use conductor_core::repo::RepoManager;
         use conductor_core::tickets::{TicketInput, TicketSyncer};
 
-        let (_f, db) = make_test_db();
-        let conn = open_database(&db).expect("open db");
+        let (_f, _conductor) = make_test_conductor();
+        let conn = open_database(_f.path()).expect("open db");
         let config = Config::default();
         let repo = RepoManager::new(&conn, &config)
             .register("test-repo", "/tmp/test", "https://github.com/x/y", None)
@@ -462,8 +444,8 @@ mod tests {
 
     #[test]
     fn test_upsert_ticket_missing_repo() {
-        let (_f, db) = make_test_db();
-        let result = tool_upsert_ticket(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_upsert_ticket(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -477,10 +459,10 @@ mod tests {
 
     #[test]
     fn test_upsert_ticket_missing_source_type() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = full_ticket_args("test-repo");
         args.remove("source_type");
-        let result = tool_upsert_ticket(&db, &args);
+        let result = tool_upsert_ticket(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -494,10 +476,10 @@ mod tests {
 
     #[test]
     fn test_upsert_ticket_missing_source_id() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = full_ticket_args("test-repo");
         args.remove("source_id");
-        let result = tool_upsert_ticket(&db, &args);
+        let result = tool_upsert_ticket(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -511,10 +493,10 @@ mod tests {
 
     #[test]
     fn test_upsert_ticket_missing_title() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = full_ticket_args("test-repo");
         args.remove("title");
-        let result = tool_upsert_ticket(&db, &args);
+        let result = tool_upsert_ticket(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -528,10 +510,10 @@ mod tests {
 
     #[test]
     fn test_upsert_ticket_missing_state() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = full_ticket_args("test-repo");
         args.remove("state");
-        let result = tool_upsert_ticket(&db, &args);
+        let result = tool_upsert_ticket(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -545,11 +527,11 @@ mod tests {
 
     #[test]
     fn test_upsert_ticket_invalid_state() {
-        let (_f, db) = make_test_db();
-        seed_test_repo(&db);
+        let (_f, conductor) = make_test_conductor();
+        seed_test_repo(_f.path());
         let mut args = full_ticket_args("test-repo");
         args.insert("state".to_string(), Value::String("pending".to_string()));
-        let result = tool_upsert_ticket(&db, &args);
+        let result = tool_upsert_ticket(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -575,18 +557,18 @@ mod tests {
 
     #[test]
     fn test_upsert_ticket_unknown_repo() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = full_ticket_args("ghost-repo");
-        let result = tool_upsert_ticket(&db, &args);
+        let result = tool_upsert_ticket(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_upsert_ticket_success_minimal() {
-        let (_f, db) = make_test_db();
-        seed_test_repo(&db);
+        let (_f, conductor) = make_test_conductor();
+        seed_test_repo(_f.path());
         let args = full_ticket_args("test-repo");
-        let result = tool_upsert_ticket(&db, &args);
+        let result = tool_upsert_ticket(&conductor, &args);
         assert_ne!(
             result.is_error,
             Some(true),
@@ -609,12 +591,12 @@ mod tests {
 
     #[test]
     fn test_upsert_ticket_idempotent() {
-        let (_f, db) = make_test_db();
-        seed_test_repo(&db);
+        let (_f, conductor) = make_test_conductor();
+        seed_test_repo(_f.path());
         let args = full_ticket_args("test-repo");
-        let result1 = tool_upsert_ticket(&db, &args);
+        let result1 = tool_upsert_ticket(&conductor, &args);
         assert_ne!(result1.is_error, Some(true));
-        let result2 = tool_upsert_ticket(&db, &args);
+        let result2 = tool_upsert_ticket(&conductor, &args);
         assert_ne!(
             result2.is_error,
             Some(true),
@@ -624,11 +606,11 @@ mod tests {
 
     #[test]
     fn test_upsert_ticket_optional_fields_default() {
-        let (_f, db) = make_test_db();
-        seed_test_repo(&db);
+        let (_f, conductor) = make_test_conductor();
+        seed_test_repo(_f.path());
         // Only required fields — no body, url, assignee, priority, labels
         let args = full_ticket_args("test-repo");
-        let result = tool_upsert_ticket(&db, &args);
+        let result = tool_upsert_ticket(&conductor, &args);
         assert_ne!(
             result.is_error,
             Some(true),
@@ -638,14 +620,14 @@ mod tests {
 
     #[test]
     fn test_upsert_ticket_labels_comma_separated() {
-        let (_f, db) = make_test_db();
-        seed_test_repo(&db);
+        let (_f, conductor) = make_test_conductor();
+        seed_test_repo(_f.path());
         let mut args = full_ticket_args("test-repo");
         args.insert(
             "labels".to_string(),
             Value::String("bug,enhancement,help wanted".to_string()),
         );
-        let result = tool_upsert_ticket(&db, &args);
+        let result = tool_upsert_ticket(&conductor, &args);
         assert_ne!(
             result.is_error,
             Some(true),
@@ -655,11 +637,11 @@ mod tests {
 
     #[test]
     fn test_upsert_ticket_labels_empty_string() {
-        let (_f, db) = make_test_db();
-        seed_test_repo(&db);
+        let (_f, conductor) = make_test_conductor();
+        seed_test_repo(_f.path());
         let mut args = full_ticket_args("test-repo");
         args.insert("labels".to_string(), Value::String("".to_string()));
-        let result = tool_upsert_ticket(&db, &args);
+        let result = tool_upsert_ticket(&conductor, &args);
         assert_ne!(
             result.is_error,
             Some(true),
@@ -669,14 +651,14 @@ mod tests {
 
     #[test]
     fn test_upsert_ticket_labels_whitespace_trimmed() {
-        let (_f, db) = make_test_db();
-        seed_test_repo(&db);
+        let (_f, conductor) = make_test_conductor();
+        seed_test_repo(_f.path());
         let mut args = full_ticket_args("test-repo");
         args.insert(
             "labels".to_string(),
             Value::String(" bug , enhancement ".to_string()),
         );
-        let result = tool_upsert_ticket(&db, &args);
+        let result = tool_upsert_ticket(&conductor, &args);
         assert_ne!(
             result.is_error,
             Some(true),
@@ -688,8 +670,8 @@ mod tests {
 
     #[test]
     fn test_get_ready_tickets_missing_repo() {
-        let (_f, db) = make_test_db();
-        let result = tool_get_ready_tickets(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_get_ready_tickets(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -700,16 +682,16 @@ mod tests {
 
     #[test]
     fn test_get_ready_tickets_unknown_repo() {
-        let (_f, db) = make_test_db();
-        let result = tool_get_ready_tickets(&db, &args_with("repo", "ghost-repo"));
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_get_ready_tickets(&conductor, &args_with("repo", "ghost-repo"));
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_get_ready_tickets_empty_result() {
-        let (_f, db) = make_test_db();
-        seed_test_repo(&db);
-        let result = tool_get_ready_tickets(&db, &args_with("repo", "test-repo"));
+        let (_f, conductor) = make_test_conductor();
+        seed_test_repo(_f.path());
+        let result = tool_get_ready_tickets(&conductor, &args_with("repo", "test-repo"));
         assert_ne!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -720,14 +702,14 @@ mod tests {
 
     #[test]
     fn test_get_ready_tickets_happy_path() {
-        let (_f, db) = make_test_db();
-        seed_test_repo(&db);
+        let (_f, conductor) = make_test_conductor();
+        seed_test_repo(_f.path());
         // Upsert a ticket
         let args = full_ticket_args("test-repo");
-        let upsert = tool_upsert_ticket(&db, &args);
+        let upsert = tool_upsert_ticket(&conductor, &args);
         assert_ne!(upsert.is_error, Some(true));
 
-        let result = tool_get_ready_tickets(&db, &args_with("repo", "test-repo"));
+        let result = tool_get_ready_tickets(&conductor, &args_with("repo", "test-repo"));
         assert_ne!(result.is_error, Some(true), "got: {:?}", result.content);
         let text = result.content[0]
             .as_text()
@@ -761,8 +743,8 @@ mod tests {
 
     #[test]
     fn test_delete_ticket_missing_repo() {
-        let (_f, db) = make_test_db();
-        let result = tool_delete_ticket(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_delete_ticket(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -776,8 +758,8 @@ mod tests {
 
     #[test]
     fn test_delete_ticket_missing_source_type() {
-        let (_f, db) = make_test_db();
-        let result = tool_delete_ticket(&db, &args_with("repo", "test-repo"));
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_delete_ticket(&conductor, &args_with("repo", "test-repo"));
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -791,18 +773,18 @@ mod tests {
 
     #[test]
     fn test_delete_ticket_unknown_repo() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = delete_args("ghost-repo", "github", "42");
-        let result = tool_delete_ticket(&db, &args);
+        let result = tool_delete_ticket(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_delete_ticket_not_found() {
-        let (_f, db) = make_test_db();
-        seed_test_repo(&db);
+        let (_f, conductor) = make_test_conductor();
+        seed_test_repo(_f.path());
         let args = delete_args("test-repo", "github", "999");
-        let result = tool_delete_ticket(&db, &args);
+        let result = tool_delete_ticket(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -816,16 +798,16 @@ mod tests {
 
     #[test]
     fn test_delete_ticket_success() {
-        let (_f, db) = make_test_db();
-        seed_test_repo(&db);
+        let (_f, conductor) = make_test_conductor();
+        seed_test_repo(_f.path());
         // First upsert a ticket
         let upsert_args = full_ticket_args("test-repo");
-        let upsert_result = tool_upsert_ticket(&db, &upsert_args);
+        let upsert_result = tool_upsert_ticket(&conductor, &upsert_args);
         assert_ne!(upsert_result.is_error, Some(true), "upsert should succeed");
 
         // Now delete it
         let del_args = delete_args("test-repo", "github", "42");
-        let result = tool_delete_ticket(&db, &del_args);
+        let result = tool_delete_ticket(&conductor, &del_args);
         assert_ne!(
             result.is_error,
             Some(true),
@@ -846,7 +828,7 @@ mod tests {
         );
 
         // Deleting again should fail (not found)
-        let result2 = tool_delete_ticket(&db, &del_args);
+        let result2 = tool_delete_ticket(&conductor, &del_args);
         assert_eq!(
             result2.is_error,
             Some(true),
@@ -858,15 +840,15 @@ mod tests {
     fn test_delete_ticket_nullifies_workflow_run_ticket_id() {
         use conductor_core::db::open_database;
 
-        let (_f, db) = make_test_db();
-        seed_test_repo(&db);
+        let (_f, conductor) = make_test_conductor();
+        seed_test_repo(_f.path());
 
         // Upsert a ticket
         let upsert_args = full_ticket_args("test-repo");
-        let upsert_result = tool_upsert_ticket(&db, &upsert_args);
+        let upsert_result = tool_upsert_ticket(&conductor, &upsert_args);
         assert_ne!(upsert_result.is_error, Some(true), "upsert should succeed");
 
-        let conn = open_database(&db).expect("open db");
+        let conn = open_database(_f.path()).expect("open db");
 
         // Get the ticket id
         let ticket_id: String = conn
@@ -915,11 +897,11 @@ mod tests {
 
         // Delete the ticket
         let del_args = delete_args("test-repo", "github", "42");
-        let result = tool_delete_ticket(&db, &del_args);
+        let result = tool_delete_ticket(&conductor, &del_args);
         assert_ne!(result.is_error, Some(true), "delete should succeed");
 
         // Verify the workflow_run's ticket_id is now NULL
-        let conn = open_database(&db).expect("open db");
+        let conn = open_database(_f.path()).expect("open db");
         let after: Option<String> = conn
             .query_row(
                 "SELECT ticket_id FROM workflow_runs WHERE id = 'wr1'",
@@ -935,12 +917,12 @@ mod tests {
 
     // ---- parent field tests ----
 
-    fn upsert_ticket_with_args(db: &std::path::Path, extra: &[(&str, &str)]) -> CallToolResult {
+    fn upsert_ticket_with_args(conductor: &Conductor, extra: &[(&str, &str)]) -> CallToolResult {
         let mut args = full_ticket_args("test-repo");
         for (k, v) in extra {
             args.insert(k.to_string(), Value::String(v.to_string()));
         }
-        tool_upsert_ticket(db, &args)
+        tool_upsert_ticket(conductor, &args)
     }
 
     fn count_parent_edges(db: &std::path::Path, child_source_id: &str) -> usize {
@@ -972,8 +954,8 @@ mod tests {
 
     #[test]
     fn test_upsert_ticket_parent_field_creates_relationship() {
-        let (_f, db) = make_test_db();
-        seed_test_repo(&db);
+        let (_f, conductor) = make_test_conductor();
+        seed_test_repo(_f.path());
 
         // Upsert parent ticket (source_id "10")
         let mut parent_args = full_ticket_args("test-repo");
@@ -982,7 +964,7 @@ mod tests {
             "title".to_string(),
             Value::String("Parent ticket".to_string()),
         );
-        let r = tool_upsert_ticket(&db, &parent_args);
+        let r = tool_upsert_ticket(&conductor, &parent_args);
         assert_ne!(
             r.is_error,
             Some(true),
@@ -991,7 +973,7 @@ mod tests {
         );
 
         // Upsert child ticket (source_id "42") with parent="10"
-        let r = upsert_ticket_with_args(&db, &[("parent", "10")]);
+        let r = upsert_ticket_with_args(&conductor, &[("parent", "10")]);
         assert_ne!(
             r.is_error,
             Some(true),
@@ -1000,12 +982,12 @@ mod tests {
         );
 
         assert_eq!(
-            count_parent_edges(&db, "42"),
+            count_parent_edges(_f.path(), "42"),
             1,
             "expected 1 parent_of edge for child"
         );
         assert_eq!(
-            get_parent_source_id(&db, "42").as_deref(),
+            get_parent_source_id(_f.path(), "42").as_deref(),
             Some("10"),
             "parent source_id should be '10'"
         );
@@ -1013,33 +995,33 @@ mod tests {
 
     #[test]
     fn test_upsert_ticket_parent_replaces_existing() {
-        let (_f, db) = make_test_db();
-        seed_test_repo(&db);
+        let (_f, conductor) = make_test_conductor();
+        seed_test_repo(_f.path());
 
         // Upsert two parent tickets
         for sid in ["10", "11"] {
             let mut a = full_ticket_args("test-repo");
             a.insert("source_id".to_string(), Value::String(sid.to_string()));
             a.insert("title".to_string(), Value::String(format!("Parent {sid}")));
-            let r = tool_upsert_ticket(&db, &a);
+            let r = tool_upsert_ticket(&conductor, &a);
             assert_ne!(r.is_error, Some(true));
         }
 
         // Set parent to "10"
-        let r = upsert_ticket_with_args(&db, &[("parent", "10")]);
+        let r = upsert_ticket_with_args(&conductor, &[("parent", "10")]);
         assert_ne!(r.is_error, Some(true));
-        assert_eq!(get_parent_source_id(&db, "42").as_deref(), Some("10"));
+        assert_eq!(get_parent_source_id(_f.path(), "42").as_deref(), Some("10"));
 
         // Replace with parent "11"
-        let r = upsert_ticket_with_args(&db, &[("parent", "11")]);
+        let r = upsert_ticket_with_args(&conductor, &[("parent", "11")]);
         assert_ne!(r.is_error, Some(true));
         assert_eq!(
-            count_parent_edges(&db, "42"),
+            count_parent_edges(_f.path(), "42"),
             1,
             "should have exactly 1 parent after replace"
         );
         assert_eq!(
-            get_parent_source_id(&db, "42").as_deref(),
+            get_parent_source_id(_f.path(), "42").as_deref(),
             Some("11"),
             "parent should now be '11'"
         );
@@ -1047,28 +1029,28 @@ mod tests {
 
     #[test]
     fn test_upsert_ticket_children_replaces_not_merges() {
-        let (_f, db) = make_test_db();
-        seed_test_repo(&db);
+        let (_f, conductor) = make_test_conductor();
+        seed_test_repo(_f.path());
 
         // Upsert two child tickets
         for sid in ["10", "11"] {
             let mut a = full_ticket_args("test-repo");
             a.insert("source_id".to_string(), Value::String(sid.to_string()));
             a.insert("title".to_string(), Value::String(format!("Child {sid}")));
-            let r = tool_upsert_ticket(&db, &a);
+            let r = tool_upsert_ticket(&conductor, &a);
             assert_ne!(r.is_error, Some(true));
         }
 
         // Upsert parent (source_id "42") with children=[10, 11]
-        let r = upsert_ticket_with_args(&db, &[("children", "10,11")]);
+        let r = upsert_ticket_with_args(&conductor, &[("children", "10,11")]);
         assert_ne!(r.is_error, Some(true));
 
         // Re-upsert with only child [10] — 11 should be removed
-        let r = upsert_ticket_with_args(&db, &[("children", "10")]);
+        let r = upsert_ticket_with_args(&conductor, &[("children", "10")]);
         assert_ne!(r.is_error, Some(true));
 
         use conductor_core::db::open_database;
-        let conn = open_database(&db).expect("open db");
+        let conn = open_database(_f.path()).expect("open db");
         let child_count: usize = conn
             .query_row(
                 "SELECT COUNT(*) FROM ticket_dependencies td \
@@ -1086,26 +1068,26 @@ mod tests {
 
     #[test]
     fn test_upsert_ticket_parent_no_opinion_when_absent() {
-        let (_f, db) = make_test_db();
-        seed_test_repo(&db);
+        let (_f, conductor) = make_test_conductor();
+        seed_test_repo(_f.path());
 
         // Upsert parent ticket
         let mut parent_args = full_ticket_args("test-repo");
         parent_args.insert("source_id".to_string(), Value::String("10".to_string()));
         parent_args.insert("title".to_string(), Value::String("Parent".to_string()));
-        let r = tool_upsert_ticket(&db, &parent_args);
+        let r = tool_upsert_ticket(&conductor, &parent_args);
         assert_ne!(r.is_error, Some(true));
 
         // Set parent relationship via parent field
-        let r = upsert_ticket_with_args(&db, &[("parent", "10")]);
+        let r = upsert_ticket_with_args(&conductor, &[("parent", "10")]);
         assert_ne!(r.is_error, Some(true));
-        assert_eq!(count_parent_edges(&db, "42"), 1);
+        assert_eq!(count_parent_edges(_f.path(), "42"), 1);
 
         // Re-upsert child without parent field — should leave relationship untouched
-        let r = upsert_ticket_with_args(&db, &[]);
+        let r = upsert_ticket_with_args(&conductor, &[]);
         assert_ne!(r.is_error, Some(true));
         assert_eq!(
-            count_parent_edges(&db, "42"),
+            count_parent_edges(_f.path(), "42"),
             1,
             "existing parent relationship should not be removed when parent field is absent"
         );

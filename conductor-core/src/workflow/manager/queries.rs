@@ -79,14 +79,16 @@ pub fn active_run_counts_by_repo(
                AND repo_id IS NOT NULL \
              GROUP BY repo_id, status"
     );
-    let active_strings = WorkflowRunStatus::active_strings();
     let mut stmt = conn.prepare_cached(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(active_strings.iter()), |row| {
-        let repo_id: String = row.get("repo_id")?;
-        let status: String = row.get("status")?;
-        let cnt: u32 = row.get("cnt")?;
-        Ok((repo_id, status, cnt))
-    })?;
+    let rows = stmt.query_map(
+        rusqlite::params_from_iter(WorkflowRunStatus::active_strings().iter()),
+        |row| {
+            let repo_id: String = row.get("repo_id")?;
+            let status: String = row.get("status")?;
+            let cnt: u32 = row.get("cnt")?;
+            Ok((repo_id, status, cnt))
+        },
+    )?;
     let mut map: HashMap<String, ActiveWorkflowCounts> = HashMap::new();
     for row in rows {
         let (repo_id, status, cnt) = row?;
@@ -376,7 +378,11 @@ pub fn get_active_run_for_worktree(
     );
     let mut all_params: Vec<rusqlite::types::Value> =
         vec![rusqlite::types::Value::Text(worktree_id.to_owned())];
-    all_params.extend(active_strings.into_iter().map(rusqlite::types::Value::Text));
+    all_params.extend(
+        active_strings
+            .iter()
+            .map(|s| rusqlite::types::Value::Text(s.to_string())),
+    );
     Ok(conn
         .query_row(
             &sql,
@@ -721,14 +727,12 @@ pub fn list_workflow_runs_for_repo(
 ) -> Result<Vec<WorkflowRun>> {
     query_collect(
         conn,
-        &format!(
-            "SELECT DISTINCT workflow_runs.* \
-                 FROM workflow_runs \
-                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                 WHERE workflow_runs.repo_id = :repo_id OR worktrees.repo_id = :repo_id \
-                 ORDER BY workflow_runs.started_at DESC LIMIT {limit}"
-        ),
-        named_params! { ":repo_id": repo_id },
+        "SELECT DISTINCT workflow_runs.* \
+             FROM workflow_runs \
+             LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+             WHERE workflow_runs.repo_id = :repo_id OR worktrees.repo_id = :repo_id \
+             ORDER BY workflow_runs.started_at DESC LIMIT :limit",
+        named_params! { ":repo_id": repo_id, ":limit": limit as i64 },
         row_to_workflow_run,
     )
 }
@@ -875,7 +879,6 @@ pub fn list_all_waiting_gate_steps(
     conn: &Connection,
 ) -> Result<Vec<(WorkflowRunStep, String, Option<String>)>> {
     let placeholders = sql_placeholders(WorkflowRunStatus::ACTIVE.len());
-    let active_strings = WorkflowRunStatus::active_strings();
     let sql = format!(
         "SELECT {cols}, r.workflow_name, r.target_label \
              FROM workflow_run_steps s \
@@ -888,7 +891,7 @@ pub fn list_all_waiting_gate_steps(
     crate::db::query_collect(
         conn,
         &sql,
-        rusqlite::params_from_iter(active_strings.iter()),
+        rusqlite::params_from_iter(WorkflowRunStatus::active_strings().iter()),
         waiting_gate_step_row_mapper,
     )
 }
@@ -916,8 +919,8 @@ pub fn list_waiting_gate_steps_for_repo(
             cols = &*STEP_COLUMNS_WITH_PREFIX,
         );
     let mut all_params: Vec<rusqlite::types::Value> = active_strings
-        .into_iter()
-        .map(rusqlite::types::Value::Text)
+        .iter()
+        .map(|s| rusqlite::types::Value::Text(s.to_string()))
         .collect();
     // repo_id appears twice in the WHERE clause (once for r.repo_id, once for wt.repo_id)
     all_params.push(rusqlite::types::Value::Text(repo_id.to_owned()));
@@ -2238,5 +2241,42 @@ mod tests {
         );
         assert_eq!(step.cache_read_input_tokens, None);
         assert_eq!(step.cache_creation_input_tokens, None);
+    }
+
+    /// Regression test for #2757: `list_workflow_runs_for_repo` previously interpolated
+    /// `LIMIT {limit}` directly into the SQL string, defeating `prepare_cached`.
+    /// Verify that the named-param binding works, the limit is respected, and calling
+    /// the function multiple times (exercising `prepare_cached`) does not panic.
+    #[test]
+    fn list_workflow_runs_for_repo_respects_limit() {
+        let conn = setup_db();
+        let repo_id = "repo-2757";
+
+        for i in 0..5u8 {
+            conn.execute(
+                "INSERT INTO workflow_runs \
+                 (id, workflow_name, worktree_id, parent_run_id, status, started_at, repo_id) \
+                 VALUES (:id, 'test-wf', NULL, 'dummy-ar', 'completed', \
+                         datetime('now', :offset), :repo_id)",
+                rusqlite::named_params! {
+                    ":id": format!("run-2757-{i}"),
+                    ":offset": format!("-{i} seconds"),
+                    ":repo_id": repo_id,
+                },
+            )
+            .unwrap();
+        }
+
+        // Limit smaller than total — result must be capped.
+        let runs = super::list_workflow_runs_for_repo(&conn, repo_id, 2).unwrap();
+        assert_eq!(runs.len(), 2, "limit=2 should return exactly 2 runs");
+
+        // Second call reuses the prepared statement; must not panic.
+        let runs_all = super::list_workflow_runs_for_repo(&conn, repo_id, 10).unwrap();
+        assert_eq!(runs_all.len(), 5, "limit=10 should return all 5 runs");
+
+        // Unknown repo → empty result, not an error.
+        let empty = super::list_workflow_runs_for_repo(&conn, "no-such-repo", 10).unwrap();
+        assert!(empty.is_empty(), "unknown repo_id should return empty vec");
     }
 }

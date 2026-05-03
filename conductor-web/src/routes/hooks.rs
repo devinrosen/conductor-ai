@@ -323,6 +323,7 @@ mod tests {
     use tokio::sync::{Mutex, RwLock};
 
     use super::{patch_hook_on, truncate_command, PatchHookOnRequest};
+    use crate::config::WebConfig;
     use crate::events::EventBus;
     use crate::state::AppState;
 
@@ -334,6 +335,7 @@ mod tests {
         let state = AppState {
             db: Arc::new(Mutex::new(conn)),
             config: Arc::new(RwLock::new(config)),
+            web_config: Arc::new(RwLock::new(WebConfig::default())),
             events: EventBus::new(1),
             db_path: tmp.path().to_path_buf(),
             workflow_done_notify: None,

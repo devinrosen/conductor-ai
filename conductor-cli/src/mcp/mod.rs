@@ -14,8 +14,7 @@ pub use server::ConductorMcpServer;
 
 /// Start the stdio MCP server and block until the client disconnects.
 pub async fn serve() -> anyhow::Result<()> {
-    let db_path = conductor_core::config::db_path();
-    let server = ConductorMcpServer::new(db_path);
+    let server = ConductorMcpServer::new();
     let service = rmcp::serve_server(server, rmcp::transport::stdio()).await?;
     service.waiting().await?;
     Ok(())
