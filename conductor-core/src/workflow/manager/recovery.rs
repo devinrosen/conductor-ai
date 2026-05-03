@@ -1035,13 +1035,35 @@ pub fn classify_resumable_workflows(conn: &Connection, auto_resume_limit: u32) -
 }
 
 pub fn claim_needs_resume_runs(conn: &Connection, config: &Config) -> Result<Vec<String>> {
-    // Step 1: find all needs_resume root runs.
+    let limit = config.general.auto_resume_limit;
+
+    // Phase 1: Escalate any needs_resume runs that have hit or exceeded the cap.
+    let escalated = conn.execute(
+        "UPDATE workflow_runs \
+         SET status = 'failed', \
+             error  = :error \
+         WHERE status = 'needs_resume' \
+           AND parent_workflow_run_id IS NULL \
+           AND iteration >= :limit",
+        named_params![
+            ":limit": limit,
+            ":error": format!("exceeded auto_resume_limit ({limit})"),
+        ],
+    )?;
+    if escalated > 0 {
+        tracing::warn!(
+            "claim_needs_resume_runs: escalated {escalated} over-limit needs_resume run(s) to failed"
+        );
+    }
+
+    // Phase 2: Select only runs still under the cap.
     let candidates: Vec<String> = query_collect(
         conn,
         "SELECT id FROM workflow_runs \
-             WHERE status = 'needs_resume' \
-               AND parent_workflow_run_id IS NULL",
-        [],
+         WHERE status = 'needs_resume' \
+           AND parent_workflow_run_id IS NULL \
+           AND iteration < :limit",
+        named_params![":limit": limit],
         |row| row.get("id"),
     )?;
 
@@ -1049,14 +1071,28 @@ pub fn claim_needs_resume_runs(conn: &Connection, config: &Config) -> Result<Vec
         return Ok(vec![]);
     }
 
-    cas_claim_ids_and_notify(
+    // Phase 3: CAS-claim and bump iteration so the cap advances each cycle.
+    let claimed = cas_claim_ids_and_notify(
         conn,
         config,
         &candidates,
         "needs_resume",
         "Orphaned: parent agent run died — auto-resumed by watchdog",
         "claim_needs_resume_runs",
-    )
+    )?;
+
+    if !claimed.is_empty() {
+        let placeholders = sql_placeholders(claimed.len());
+        let sql = format!(
+            "UPDATE workflow_runs SET iteration = iteration + 1 WHERE id IN ({placeholders})"
+        );
+        conn.execute(
+            &sql,
+            rusqlite::params_from_iter(claimed.iter().map(|s| s.as_str())),
+        )?;
+    }
+
+    Ok(claimed)
 }
 
 /// Claim any expired-lease workflow runs, kill their stale subprocesses, and
@@ -1212,6 +1248,26 @@ mod tests {
             "SELECT status FROM workflow_runs WHERE id = :id",
             named_params![":id": run_id],
             |row| row.get("status"),
+        )
+        .unwrap()
+    }
+
+    /// Read the `iteration` of a workflow_run by ID.
+    fn run_iteration(conn: &rusqlite::Connection, run_id: &str) -> i64 {
+        conn.query_row(
+            "SELECT iteration FROM workflow_runs WHERE id = :id",
+            named_params![":id": run_id],
+            |row| row.get("iteration"),
+        )
+        .unwrap()
+    }
+
+    /// Read the `error` of a workflow_run by ID.
+    fn run_error(conn: &rusqlite::Connection, run_id: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT error FROM workflow_runs WHERE id = :id",
+            named_params![":id": run_id],
+            |row| row.get("error"),
         )
         .unwrap()
     }
@@ -1390,6 +1446,98 @@ mod tests {
             "watchdog should not touch non-needs_resume runs"
         );
         assert_eq!(run_status(&conn, "run1"), "failed");
+    }
+
+    #[test]
+    fn test_watchdog_bumps_iteration_on_claim() {
+        let (conn, parent_id) = setup();
+        insert_run(
+            &conn,
+            "run1",
+            &parent_id,
+            "needs_resume",
+            Some(ORPHAN_ERROR),
+            0,
+        );
+        let config = Config::default(); // auto_resume_limit = 3
+        let claimed = crate::workflow::claim_needs_resume_runs(&conn, &config).unwrap();
+
+        assert_eq!(claimed.len(), 1, "watchdog should claim the run");
+        assert_eq!(
+            run_iteration(&conn, "run1"),
+            1,
+            "iteration should be bumped to 1 after claim"
+        );
+    }
+
+    #[test]
+    fn test_watchdog_terminalizes_over_cap_run() {
+        let (conn, parent_id) = setup();
+        // iteration == limit (3) → at cap, must be escalated
+        insert_run(
+            &conn,
+            "run1",
+            &parent_id,
+            "needs_resume",
+            Some(ORPHAN_ERROR),
+            3,
+        );
+        let config = Config::default(); // auto_resume_limit = 3
+        let claimed = crate::workflow::claim_needs_resume_runs(&conn, &config).unwrap();
+
+        assert!(claimed.is_empty(), "over-cap run must not be claimed");
+        assert_eq!(
+            run_status(&conn, "run1"),
+            "failed",
+            "over-cap run must be escalated to failed"
+        );
+        let err = run_error(&conn, "run1").unwrap_or_default();
+        assert!(
+            err.contains("exceeded auto_resume_limit"),
+            "error must mention the limit, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_watchdog_caps_multi_cycle() {
+        let (conn, parent_id) = setup();
+        insert_run(
+            &conn,
+            "run1",
+            &parent_id,
+            "needs_resume",
+            Some(ORPHAN_ERROR),
+            0,
+        );
+        let config = Config::default(); // auto_resume_limit = 3
+        let limit = config.general.auto_resume_limit as i64;
+
+        // Simulate `limit` reap→claim cycles; iteration should advance each time.
+        for i in 0..limit {
+            let claimed = crate::workflow::claim_needs_resume_runs(&conn, &config).unwrap();
+            assert_eq!(claimed.len(), 1, "cycle {i}: should claim the run");
+            assert_eq!(
+                run_iteration(&conn, "run1"),
+                i + 1,
+                "cycle {i}: iteration should be {}",
+                i + 1
+            );
+            // Simulate the reaper writing needs_resume again (status only, not iteration).
+            conn.execute(
+                "UPDATE workflow_runs SET status = 'needs_resume' WHERE id = 'run1'",
+                [],
+            )
+            .unwrap();
+        }
+
+        // On the (limit+1)th call, iteration == limit → Phase 1 escalates to failed.
+        let claimed = crate::workflow::claim_needs_resume_runs(&conn, &config).unwrap();
+        assert!(claimed.is_empty(), "must not claim over-cap run");
+        assert_eq!(
+            run_status(&conn, "run1"),
+            "failed",
+            "over-cap run must be failed after multi-cycle test"
+        );
     }
 
     #[test]
