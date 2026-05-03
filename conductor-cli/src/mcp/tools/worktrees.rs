@@ -1,10 +1,9 @@
-use std::path::Path;
-
+use conductor_core::Conductor;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
 use crate::mcp::helpers::{
-    get_arg, get_arg_usize, get_bool_arg, open_db_and_config, pagination_hint, tool_err, tool_ok,
+    get_arg, get_arg_usize, get_bool_arg, pagination_hint, tool_err, tool_ok,
 };
 
 /// Returns `true` if `s` looks like a ULID: exactly 26 uppercase alphanumeric chars.
@@ -14,7 +13,7 @@ fn looks_like_ulid(s: &str) -> bool {
 }
 
 pub(super) fn tool_list_worktrees(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::worktree::WorktreeManager;
@@ -31,11 +30,9 @@ pub(super) fn tool_list_worktrees(
     };
     let limit = get_arg_usize(args, "limit").unwrap_or(50);
     let offset = get_arg_usize(args, "offset").unwrap_or(0);
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let wt_mgr = WorktreeManager::new(&conn, &config);
+    let conn = &conductor.conn;
+    let config = &conductor.config;
+    let wt_mgr = WorktreeManager::new(conn, config);
     let worktrees = match wt_mgr.list_paginated(Some(repo_slug), active_only, limit, offset) {
         Ok(w) => w,
         Err(e) => return tool_err(e),
@@ -58,7 +55,7 @@ pub(super) fn tool_list_worktrees(
 }
 
 pub(super) fn tool_get_worktree(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::agent::AgentManager;
@@ -70,17 +67,15 @@ pub(super) fn tool_get_worktree(
     let repo_slug = require_arg!(args, "repo");
     let wt_slug = require_arg!(args, "slug");
 
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
+    let conn = &conductor.conn;
+    let config = &conductor.config;
 
-    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+    let repo = match RepoManager::new(conn, config).get_by_slug(repo_slug) {
         Ok(r) => r,
         Err(e) => return tool_err(e),
     };
 
-    let wt = match WorktreeManager::new(&conn, &config).get_by_slug_or_branch(&repo.id, wt_slug) {
+    let wt = match WorktreeManager::new(conn, config).get_by_slug_or_branch(&repo.id, wt_slug) {
         Ok(w) => w,
         Err(e) => return tool_err(e),
     };
@@ -97,7 +92,7 @@ pub(super) fn tool_get_worktree(
 
     // Linked ticket
     if let Some(ticket_id) = &wt.ticket_id {
-        let syncer = TicketSyncer::new(&conn);
+        let syncer = TicketSyncer::new(conn);
         match syncer.get_by_id(ticket_id) {
             Ok(ticket) => {
                 out.push_str(&format!(
@@ -120,7 +115,7 @@ pub(super) fn tool_get_worktree(
     }
 
     // Latest agent run
-    let agent_mgr = AgentManager::new(&conn);
+    let agent_mgr = AgentManager::new(conn);
     match agent_mgr.latest_run_for_worktree(&wt.id) {
         Ok(Some(run)) => {
             out.push_str(&format!(
@@ -136,7 +131,7 @@ pub(super) fn tool_get_worktree(
     }
 
     // Latest workflow run
-    match conductor_core::workflow::list_workflow_runs(&conn, &wt.id) {
+    match conductor_core::workflow::list_workflow_runs(conn, &wt.id) {
         Ok(runs) => {
             if let Some(run) = runs.first() {
                 out.push_str(&format!(
@@ -152,7 +147,7 @@ pub(super) fn tool_get_worktree(
 }
 
 pub(super) fn tool_create_worktree(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::repo::RepoManager;
@@ -163,10 +158,8 @@ pub(super) fn tool_create_worktree(
     let name = require_arg!(args, "name");
     let raw_ticket_id = get_arg(args, "ticket_id");
 
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
+    let conn = &conductor.conn;
+    let config = &conductor.config;
 
     // Resolve ticket_id: if it looks like a ULID pass it through; otherwise treat
     // it as an external source_id and look up the internal ULID.
@@ -174,12 +167,12 @@ pub(super) fn tool_create_worktree(
         None => None,
         Some(id) if looks_like_ulid(id) => Some(id.to_string()),
         Some(source_id) => {
-            let repo_mgr = RepoManager::new(&conn, &config);
+            let repo_mgr = RepoManager::new(conn, config);
             let repo = match repo_mgr.get_by_slug(repo_slug) {
                 Ok(r) => r,
                 Err(e) => return tool_err(e),
             };
-            let syncer = TicketSyncer::new(&conn);
+            let syncer = TicketSyncer::new(conn);
             match syncer.get_by_source_id(&repo.id, source_id) {
                 Ok(ticket) => Some(ticket.id),
                 Err(e) => {
@@ -191,7 +184,7 @@ pub(super) fn tool_create_worktree(
 
     let from_branch = get_arg(args, "from_branch").map(str::to_string);
 
-    let wt_mgr = WorktreeManager::new(&conn, &config);
+    let wt_mgr = WorktreeManager::new(conn, config);
     match wt_mgr.create(
         repo_slug,
         name,
@@ -216,18 +209,16 @@ pub(super) fn tool_create_worktree(
 }
 
 pub(super) fn tool_delete_worktree(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::worktree::WorktreeManager;
 
     let repo_slug = require_arg!(args, "repo");
     let slug = require_arg!(args, "slug");
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let wt_mgr = WorktreeManager::new(&conn, &config);
+    let conn = &conductor.conn;
+    let config = &conductor.config;
+    let wt_mgr = WorktreeManager::new(conn, config);
     match wt_mgr.delete(repo_slug, slug) {
         Ok(wt) => tool_ok(format!("Deleted worktree {}.", wt.slug)),
         Err(e) => tool_err(e),
@@ -235,7 +226,7 @@ pub(super) fn tool_delete_worktree(
 }
 
 pub(super) fn tool_set_base_branch(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::worktree::WorktreeManager;
@@ -245,11 +236,9 @@ pub(super) fn tool_set_base_branch(
     let base_branch = get_arg(args, "base_branch");
     let rebase = get_bool_arg(args, "rebase");
 
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let wt_mgr = WorktreeManager::new(&conn, &config);
+    let conn = &conductor.conn;
+    let config = &conductor.config;
+    let wt_mgr = WorktreeManager::new(conn, config);
     let opts = conductor_core::worktree::SetBaseBranchOptions { rebase };
     match wt_mgr.set_base_branch(repo_slug, name, base_branch, opts) {
         Ok(()) => {
@@ -261,18 +250,16 @@ pub(super) fn tool_set_base_branch(
 }
 
 pub(super) fn tool_push_worktree(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::worktree::WorktreeManager;
 
     let repo_slug = require_arg!(args, "repo");
     let slug = require_arg!(args, "slug");
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let wt_mgr = WorktreeManager::new(&conn, &config);
+    let conn = &conductor.conn;
+    let config = &conductor.config;
+    let wt_mgr = WorktreeManager::new(conn, config);
     match wt_mgr.push(repo_slug, slug) {
         Ok(msg) => tool_ok(msg),
         Err(e) => tool_err(e),
@@ -285,16 +272,9 @@ pub(super) fn tool_push_worktree(
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_helpers::make_test_conductor;
     use super::*;
     use serde_json::Value;
-
-    fn make_test_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
-        use conductor_core::db::open_database;
-        let file = tempfile::NamedTempFile::new().expect("temp file");
-        let path = file.path().to_path_buf();
-        open_database(&path).expect("open_database");
-        (file, path)
-    }
 
     fn empty_args() -> serde_json::Map<String, Value> {
         serde_json::Map::new()
@@ -312,16 +292,16 @@ mod tests {
 
     #[test]
     fn test_dispatch_list_worktrees_missing_repo_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_list_worktrees(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_list_worktrees(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_dispatch_list_worktrees_default_status_active_only() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = args_with("repo", "nonexistent-repo");
-        let result = tool_list_worktrees(&db, &args);
+        let result = tool_list_worktrees(&conductor, &args);
         // Unknown repo returns empty list (not an error) — confirms default path works.
         assert_eq!(result.is_error, Some(false));
         let text = result.content[0]
@@ -337,10 +317,10 @@ mod tests {
 
     #[test]
     fn test_dispatch_list_worktrees_explicit_active_status() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = args_with("repo", "nonexistent-repo");
         args.insert("status".to_string(), Value::String("active".to_string()));
-        let result = tool_list_worktrees(&db, &args);
+        let result = tool_list_worktrees(&conductor, &args);
         assert_eq!(result.is_error, Some(false));
         let text = result.content[0]
             .as_text()
@@ -355,10 +335,10 @@ mod tests {
 
     #[test]
     fn test_dispatch_list_worktrees_status_all() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = args_with("repo", "nonexistent-repo");
         args.insert("status".to_string(), Value::String("all".to_string()));
-        let result = tool_list_worktrees(&db, &args);
+        let result = tool_list_worktrees(&conductor, &args);
         assert_eq!(result.is_error, Some(false));
         let text = result.content[0]
             .as_text()
@@ -374,10 +354,10 @@ mod tests {
 
     #[test]
     fn test_dispatch_list_worktrees_unknown_status_returns_error() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = args_with("repo", "any-repo");
         args.insert("status".to_string(), Value::String("merged".to_string()));
-        let result = tool_list_worktrees(&db, &args);
+        let result = tool_list_worktrees(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -407,8 +387,8 @@ mod tests {
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
-        let (_f, db) = make_test_db();
-        let conn = open_database(&db).expect("open db");
+        let (_f, conductor) = make_test_conductor();
+        let conn = open_database(_f.path()).expect("open db");
         let config = Config::default();
         RepoManager::new(&conn, &config)
             .register(
@@ -423,7 +403,7 @@ mod tests {
         args.insert("repo".to_string(), Value::String("test-repo".to_string()));
         args.insert("name".to_string(), Value::String("feat-test".to_string()));
         args.insert("ticket_id".to_string(), Value::String("999".to_string()));
-        let result = tool_create_worktree(&db, &args);
+        let result = tool_create_worktree(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -437,8 +417,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_create_worktree_missing_repo_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_create_worktree(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_create_worktree(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -449,8 +429,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_create_worktree_missing_name_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_create_worktree(&db, &args_with("repo", "my-repo"));
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_create_worktree(&conductor, &args_with("repo", "my-repo"));
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -461,18 +441,18 @@ mod tests {
 
     #[test]
     fn test_dispatch_create_worktree_unknown_repo() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = serde_json::Map::new();
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         args.insert("name".to_string(), Value::String("feat-test".to_string()));
-        let result = tool_create_worktree(&db, &args);
+        let result = tool_create_worktree(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_dispatch_delete_worktree_missing_repo_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_delete_worktree(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_delete_worktree(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -483,8 +463,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_delete_worktree_missing_slug_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_delete_worktree(&db, &args_with("repo", "my-repo"));
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_delete_worktree(&conductor, &args_with("repo", "my-repo"));
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -495,18 +475,18 @@ mod tests {
 
     #[test]
     fn test_dispatch_delete_worktree_unknown_repo() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = serde_json::Map::new();
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         args.insert("slug".to_string(), Value::String("feat-wt".to_string()));
-        let result = tool_delete_worktree(&db, &args);
+        let result = tool_delete_worktree(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_dispatch_push_worktree_missing_repo_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_push_worktree(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_push_worktree(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -517,8 +497,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_push_worktree_missing_slug_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_push_worktree(&db, &args_with("repo", "my-repo"));
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_push_worktree(&conductor, &args_with("repo", "my-repo"));
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -529,18 +509,18 @@ mod tests {
 
     #[test]
     fn test_dispatch_push_worktree_unknown_repo() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = serde_json::Map::new();
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         args.insert("slug".to_string(), Value::String("feat-wt".to_string()));
-        let result = tool_push_worktree(&db, &args);
+        let result = tool_push_worktree(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_dispatch_get_worktree_missing_repo_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_get_worktree(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_get_worktree(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -551,8 +531,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_get_worktree_missing_slug_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_get_worktree(&db, &args_with("repo", "my-repo"));
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_get_worktree(&conductor, &args_with("repo", "my-repo"));
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -566,11 +546,11 @@ mod tests {
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
 
         // Register a repo so the repo lookup succeeds but the worktree is absent.
         {
-            let conn = open_database(&db).expect("open db");
+            let conn = open_database(_f.path()).expect("open db");
             let config = conductor_core::config::Config::default();
             RepoManager::new(&conn, &config)
                 .register(
@@ -585,19 +565,19 @@ mod tests {
         let mut args = serde_json::Map::new();
         args.insert("repo".into(), Value::String("my-repo".into()));
         args.insert("slug".into(), Value::String("feat-nonexistent".into()));
-        let result = tool_get_worktree(&db, &result_args(args));
+        let result = tool_get_worktree(&conductor, &result_args(args));
         assert_eq!(result.is_error, Some(true));
     }
 
     /// Set up a test DB with one registered repo and 2 inserted worktrees.
-    /// Returns the tempfile guard (keep alive), the db path, and the repo slug.
-    fn make_pagination_test_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
+    /// Returns the tempfile guard (keep alive) and the conductor.
+    fn make_pagination_test_conductor() -> (tempfile::NamedTempFile, Conductor) {
         use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
-        let (_f, db) = make_test_db();
-        let conn = open_database(&db).expect("open db");
+        let (_f, conductor) = make_test_conductor();
+        let conn = open_database(_f.path()).expect("open db");
         let config = Config::default();
 
         let repo = RepoManager::new(&conn, &config)
@@ -624,18 +604,18 @@ mod tests {
             .expect("insert worktree");
         }
 
-        (_f, db)
+        (_f, conductor)
     }
 
     #[test]
     fn test_list_worktrees_pagination_hint_shown_when_full_page() {
-        let (_f, db) = make_pagination_test_db();
+        let (_f, conductor) = make_pagination_test_conductor();
 
         let mut args = serde_json::Map::new();
         args.insert("repo".into(), Value::String("my-repo".into()));
         // limit == number of rows → full page → hint should appear
         args.insert("limit".into(), Value::Number(2.into()));
-        let result = tool_list_worktrees(&db, &args);
+        let result = tool_list_worktrees(&conductor, &args);
         assert_eq!(result.is_error, Some(false));
         let text = result.content[0]
             .as_text()
@@ -649,13 +629,13 @@ mod tests {
 
     #[test]
     fn test_list_worktrees_pagination_hint_not_shown_when_partial_page() {
-        let (_f, db) = make_pagination_test_db();
+        let (_f, conductor) = make_pagination_test_conductor();
 
         let mut args = serde_json::Map::new();
         args.insert("repo".into(), Value::String("my-repo".into()));
         // limit > number of rows → partial page → hint should NOT appear
         args.insert("limit".into(), Value::Number(3.into()));
-        let result = tool_list_worktrees(&db, &args);
+        let result = tool_list_worktrees(&conductor, &args);
         assert_eq!(result.is_error, Some(false));
         let text = result.content[0]
             .as_text()
@@ -672,8 +652,8 @@ mod tests {
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
-        let (_f, db) = make_test_db();
-        let conn = open_database(&db).expect("open db");
+        let (_f, conductor) = make_test_conductor();
+        let conn = open_database(_f.path()).expect("open db");
         let config = conductor_core::config::Config::default();
 
         let repo = RepoManager::new(&conn, &config)
@@ -702,7 +682,7 @@ mod tests {
         let mut args = serde_json::Map::new();
         args.insert("repo".into(), Value::String("my-repo".into()));
         args.insert("slug".into(), Value::String("feat/my-feature".into()));
-        let result = tool_get_worktree(&db, &result_args(args));
+        let result = tool_get_worktree(&conductor, &result_args(args));
         assert_ne!(
             result.is_error,
             Some(true),
@@ -725,28 +705,28 @@ mod tests {
 
     #[test]
     fn test_tool_create_worktree_missing_repo_returns_error() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = serde_json::Map::new();
         args.insert("name".into(), Value::String("feat-new".into()));
-        let result = tool_create_worktree(&db, &args);
+        let result = tool_create_worktree(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_tool_create_worktree_missing_name_returns_error() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = args_with("repo", "my-repo");
-        let result = tool_create_worktree(&db, &args);
+        let result = tool_create_worktree(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_tool_create_worktree_unknown_repo_returns_error() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = serde_json::Map::new();
         args.insert("repo".into(), Value::String("nonexistent".into()));
         args.insert("name".into(), Value::String("feat-new".into()));
-        let result = tool_create_worktree(&db, &args);
+        let result = tool_create_worktree(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -760,14 +740,14 @@ mod tests {
 
     #[test]
     fn test_tool_create_worktree_with_from_branch_propagates() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = serde_json::Map::new();
         args.insert("repo".into(), Value::String("nonexistent-repo".into()));
         args.insert("name".into(), Value::String("feat-based".into()));
         args.insert("from_branch".into(), Value::String("release/v1.0".into()));
         // The call will fail because the repo doesn't exist, but the from_branch arg
         // must not cause a parse error — it should reach the repo lookup phase.
-        let result = tool_create_worktree(&db, &args);
+        let result = tool_create_worktree(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -782,38 +762,38 @@ mod tests {
 
     #[test]
     fn test_tool_set_base_branch_missing_repo_returns_error() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = args_with("name", "feat-wt");
-        let result = tool_set_base_branch(&db, &args);
+        let result = tool_set_base_branch(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_tool_set_base_branch_missing_name_returns_error() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = args_with("repo", "my-repo");
-        let result = tool_set_base_branch(&db, &args);
+        let result = tool_set_base_branch(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_tool_set_base_branch_unknown_worktree_returns_error() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = serde_json::Map::new();
         args.insert("repo".into(), Value::String("nonexistent".into()));
         args.insert("name".into(), Value::String("feat-wt".into()));
-        let result = tool_set_base_branch(&db, &args);
+        let result = tool_set_base_branch(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_tool_set_base_branch_dash_name_rejected() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = serde_json::Map::new();
         args.insert("repo".into(), Value::String("any-repo".into()));
         args.insert("name".into(), Value::String("feat-wt".into()));
         args.insert("base_branch".into(), Value::String("--malicious".into()));
-        let result = tool_set_base_branch(&db, &args);
+        let result = tool_set_base_branch(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -828,12 +808,12 @@ mod tests {
     /// Assert the `rebase` parameter value is accepted (no parse error) — the tool will still
     /// return an error because "nonexistent" repo doesn't exist, but it must not be a type error.
     fn assert_rebase_arg_accepted(rebase_value: Value) {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = serde_json::Map::new();
         args.insert("repo".into(), Value::String("nonexistent".into()));
         args.insert("name".into(), Value::String("feat-wt".into()));
         args.insert("rebase".into(), rebase_value);
-        let result = tool_set_base_branch(&db, &args);
+        let result = tool_set_base_branch(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()

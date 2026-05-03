@@ -1,30 +1,27 @@
-use std::path::Path;
-
+use conductor_core::Conductor;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, open_db_and_config, tool_err, tool_ok};
+use crate::mcp::helpers::{get_arg, tool_err, tool_ok};
 
-pub(super) fn tool_list_repos(db_path: &Path) -> CallToolResult {
+pub(super) fn tool_list_repos(conductor: &Conductor) -> CallToolResult {
     use conductor_core::agent::AgentManager;
     use conductor_core::repo::RepoManager;
 
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    let repos = match RepoManager::new(&conn, &config).list() {
+    let conn = &conductor.conn;
+    let config = &conductor.config;
+    let repos = match RepoManager::new(conn, config).list() {
         Ok(r) => r,
         Err(e) => return tool_err(e),
     };
     if repos.is_empty() {
         return tool_ok("No repos registered. Use `conductor repo register` to register one.");
     }
-    let agent_counts = match AgentManager::new(&conn).active_run_counts_by_repo() {
+    let agent_counts = match AgentManager::new(conn).active_run_counts_by_repo() {
         Ok(m) => m,
         Err(e) => return tool_err(e),
     };
-    let workflow_counts = match conductor_core::workflow::active_run_counts_by_repo(&conn) {
+    let workflow_counts = match conductor_core::workflow::active_run_counts_by_repo(conn) {
         Ok(m) => m,
         Err(e) => return tool_err(e),
     };
@@ -58,22 +55,20 @@ pub(super) fn tool_list_repos(db_path: &Path) -> CallToolResult {
 }
 
 pub(super) fn tool_register_repo(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 
     let remote_url = require_arg!(args, "remote_url");
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
+    let conn = &conductor.conn;
+    let config = &conductor.config;
     let slug = derive_slug_from_url(remote_url);
     let local = match get_arg(args, "local_path") {
         Some(p) => p.to_string(),
-        None => derive_local_path(&config, &slug),
+        None => derive_local_path(config, &slug),
     };
-    match RepoManager::new(&conn, &config).register(&slug, &local, remote_url, None) {
+    match RepoManager::new(conn, config).register(&slug, &local, remote_url, None) {
         Ok(repo) => tool_ok(format!(
             "Registered repo: {slug}\nlocal_path: {local_path}\nremote_url: {remote_url}\ndefault_branch: {default_branch}\n",
             slug = repo.slug,
@@ -86,17 +81,15 @@ pub(super) fn tool_register_repo(
 }
 
 pub(super) fn tool_unregister_repo(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::repo::RepoManager;
 
     let slug = require_arg!(args, "repo");
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
-    match RepoManager::new(&conn, &config).unregister(slug) {
+    let conn = &conductor.conn;
+    let config = &conductor.config;
+    match RepoManager::new(conn, config).unregister(slug) {
         Ok(()) => tool_ok(format!(
             "Unregistered repo: {slug}. The local directory was not modified."
         )),
@@ -110,16 +103,9 @@ pub(super) fn tool_unregister_repo(
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_helpers::make_test_conductor;
     use super::*;
     use serde_json::Value;
-
-    fn make_test_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
-        use conductor_core::db::open_database;
-        let file = tempfile::NamedTempFile::new().expect("temp file");
-        let path = file.path().to_path_buf();
-        open_database(&path).expect("open_database");
-        (file, path)
-    }
 
     fn empty_args() -> serde_json::Map<String, Value> {
         serde_json::Map::new()
@@ -135,8 +121,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_list_repos_empty_db() {
-        let (_f, db) = make_test_db();
-        let result = tool_list_repos(&db);
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_list_repos(&conductor);
         assert_ne!(result.is_error, Some(true), "empty list should succeed");
         let text = result.content[0]
             .as_text()
@@ -150,14 +136,14 @@ mod tests {
 
     #[test]
     fn test_dispatch_list_repos_populated() {
-        use conductor_core::config::load_config;
+        use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         {
-            let conn = open_database(&db).expect("open db");
-            let config = load_config().expect("load config");
+            let conn = open_database(_f.path()).expect("open db");
+            let config = Config::default();
             RepoManager::new(&conn, &config)
                 .register(
                     "my-repo",
@@ -167,7 +153,7 @@ mod tests {
                 )
                 .expect("register repo");
         }
-        let result = tool_list_repos(&db);
+        let result = tool_list_repos(&conductor);
         assert_ne!(result.is_error, Some(true), "populated list should succeed");
         let text = result.content[0]
             .as_text()
@@ -195,14 +181,14 @@ mod tests {
     #[test]
     fn test_dispatch_list_repos_with_active_runs() {
         use conductor_core::agent::AgentManager;
-        use conductor_core::config::load_config;
+        use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
 
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         {
-            let conn = open_database(&db).expect("open db");
-            let config = load_config().expect("load config");
+            let conn = open_database(_f.path()).expect("open db");
+            let config = Config::default();
             let repo = RepoManager::new(&conn, &config)
                 .register(
                     "active-repo",
@@ -222,7 +208,7 @@ mod tests {
                 .create_run(Some("wt-test-1"), "test prompt", None)
                 .expect("create run");
         }
-        let result = tool_list_repos(&db);
+        let result = tool_list_repos(&conductor);
         assert_ne!(result.is_error, Some(true), "should succeed");
         let text = result.content[0]
             .as_text()
@@ -236,8 +222,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_register_repo_missing_url() {
-        let (_f, db) = make_test_db();
-        let result = tool_register_repo(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_register_repo(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -248,9 +234,9 @@ mod tests {
 
     #[test]
     fn test_dispatch_register_repo_ok() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = args_with("remote_url", "https://github.com/acme/my-repo");
-        let result = tool_register_repo(&db, &args);
+        let result = tool_register_repo(&conductor, &args);
         assert_ne!(
             result.is_error,
             Some(true),
@@ -273,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_dispatch_register_repo_with_local_path() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let mut args = serde_json::Map::new();
         args.insert(
             "remote_url".into(),
@@ -283,7 +269,7 @@ mod tests {
             "local_path".into(),
             Value::String("/custom/path/other-repo".into()),
         );
-        let result = tool_register_repo(&db, &args);
+        let result = tool_register_repo(&conductor, &args);
         assert_ne!(
             result.is_error,
             Some(true),
@@ -302,11 +288,11 @@ mod tests {
 
     #[test]
     fn test_dispatch_register_repo_duplicate() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = args_with("remote_url", "https://github.com/acme/dup-repo");
-        let first = tool_register_repo(&db, &args);
+        let first = tool_register_repo(&conductor, &args);
         assert_ne!(first.is_error, Some(true), "first register should succeed");
-        let second = tool_register_repo(&db, &args);
+        let second = tool_register_repo(&conductor, &args);
         assert_eq!(
             second.is_error,
             Some(true),
@@ -316,8 +302,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_unregister_repo_missing_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_unregister_repo(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_unregister_repo(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -328,22 +314,22 @@ mod tests {
 
     #[test]
     fn test_dispatch_unregister_repo_not_found() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = args_with("repo", "ghost-repo");
-        let result = tool_unregister_repo(&db, &args);
+        let result = tool_unregister_repo(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn test_dispatch_unregister_repo_ok() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         // Register first
         let reg_args = args_with("remote_url", "https://github.com/acme/to-remove");
-        let reg = tool_register_repo(&db, &reg_args);
+        let reg = tool_register_repo(&conductor, &reg_args);
         assert_ne!(reg.is_error, Some(true), "register should succeed");
         // Now unregister
         let unreg_args = args_with("repo", "to-remove");
-        let result = tool_unregister_repo(&db, &unreg_args);
+        let result = tool_unregister_repo(&conductor, &unreg_args);
         assert_ne!(
             result.is_error,
             Some(true),

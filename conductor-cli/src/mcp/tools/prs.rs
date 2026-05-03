@@ -1,9 +1,8 @@
-use std::path::Path;
-
+use conductor_core::Conductor;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, open_db_and_config, tool_err, tool_ok};
+use crate::mcp::helpers::{get_arg, tool_err, tool_ok};
 
 fn format_prs_output(
     prs: &[conductor_core::github::GithubPr],
@@ -38,7 +37,7 @@ fn format_prs_output(
 }
 
 pub(super) fn tool_list_prs(
-    db_path: &Path,
+    conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
     use conductor_core::github::list_open_prs;
@@ -47,12 +46,10 @@ pub(super) fn tool_list_prs(
 
     let repo_slug = require_arg!(args, "repo");
 
-    let (conn, config) = match open_db_and_config(db_path) {
-        Ok(v) => v,
-        Err(e) => return tool_err(e),
-    };
+    let conn = &conductor.conn;
+    let config = &conductor.config;
 
-    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+    let repo = match RepoManager::new(conn, config).get_by_slug(repo_slug) {
         Ok(r) => r,
         Err(e) => return tool_err(e),
     };
@@ -66,7 +63,7 @@ pub(super) fn tool_list_prs(
         return tool_ok(format!("No open PRs found for repo '{repo_slug}'."));
     }
 
-    let wt_mgr = WorktreeManager::new(&conn, &config);
+    let wt_mgr = WorktreeManager::new(conn, config);
     tool_ok(format_prs_output(&prs, &wt_mgr, &repo.id))
 }
 
@@ -76,16 +73,9 @@ pub(super) fn tool_list_prs(
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_helpers::make_test_conductor;
     use super::*;
     use serde_json::Value;
-
-    fn make_test_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
-        use conductor_core::db::open_database;
-        let file = tempfile::NamedTempFile::new().expect("temp file");
-        let path = file.path().to_path_buf();
-        open_database(&path).expect("open_database");
-        (file, path)
-    }
 
     fn empty_args() -> serde_json::Map<String, Value> {
         serde_json::Map::new()
@@ -99,8 +89,8 @@ mod tests {
 
     #[test]
     fn test_dispatch_list_prs_missing_repo_arg() {
-        let (_f, db) = make_test_db();
-        let result = tool_list_prs(&db, &empty_args());
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_list_prs(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -111,9 +101,9 @@ mod tests {
 
     #[test]
     fn test_dispatch_list_prs_unknown_repo() {
-        let (_f, db) = make_test_db();
+        let (_f, conductor) = make_test_conductor();
         let args = args_with("repo", "nonexistent-repo");
-        let result = tool_list_prs(&db, &args);
+        let result = tool_list_prs(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -127,19 +117,14 @@ mod tests {
 
     #[test]
     fn test_dispatch_list_prs_non_github_repo_returns_empty() {
-        use conductor_core::db::open_database;
-        let (_f, db) = make_test_db();
-        {
-            // Register a non-GitHub repo (no open PRs can be fetched).
-            let conn = open_database(&db).expect("open db");
-            conn.execute(
-                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
-                 VALUES ('r1', 'local-repo', '/tmp/repo', 'file:///tmp/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
-                [],
-            ).unwrap();
-        }
+        let (_f, conductor) = make_test_conductor();
+        conductor.conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('r1', 'local-repo', '/tmp/repo', 'file:///tmp/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
         let args = args_with("repo", "local-repo");
-        let result = tool_list_prs(&db, &args);
+        let result = tool_list_prs(&conductor, &args);
         // Non-GitHub repos yield empty PR list — tool_ok with "No open PRs" message.
         assert_ne!(
             result.is_error,
@@ -159,8 +144,8 @@ mod tests {
         use conductor_core::github::GithubPr;
         use conductor_core::worktree::WorktreeManager;
 
-        let (_f, db) = make_test_db();
-        let conn = open_database(&db).expect("open db");
+        let (_f, _conductor) = make_test_conductor();
+        let conn = open_database(_f.path()).expect("open db");
 
         // Insert a repo and a matching worktree.
         conn.execute(
@@ -201,8 +186,8 @@ mod tests {
         use conductor_core::github::GithubPr;
         use conductor_core::worktree::WorktreeManager;
 
-        let (_f, db) = make_test_db();
-        let conn = open_database(&db).expect("open db");
+        let (_f, _conductor) = make_test_conductor();
+        let conn = open_database(_f.path()).expect("open db");
 
         conn.execute(
             "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
