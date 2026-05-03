@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 /// TUI-specific configuration stored under `[tui]` in `~/.conductor/config.toml`.
@@ -40,8 +40,10 @@ fn load_from(path: &Path) -> Result<TuiConfig> {
     if !path.exists() {
         return Ok(TuiConfig::default());
     }
-    let contents = std::fs::read_to_string(path)?;
-    let raw: toml::Value = toml::from_str(&contents)?;
+    let contents =
+        std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let raw: toml::Value =
+        toml::from_str(&contents).with_context(|| format!("parse {}", path.display()))?;
 
     let mut cfg: TuiConfig = if let Some(tui_section) = raw.get("tui") {
         match tui_section.clone().try_into() {
@@ -76,27 +78,27 @@ fn load_from(path: &Path) -> Result<TuiConfig> {
 
 fn save_to(cfg: &TuiConfig, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create config dir {}", parent.display()))?;
     }
 
     let mut merged: toml::Value = if path.exists() {
-        let existing = std::fs::read_to_string(path)?;
+        let existing =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
         toml::from_str(&existing)
-            .map_err(|e| anyhow::anyhow!("existing config is malformed: {e}"))?
+            .with_context(|| format!("existing config is malformed: {}", path.display()))?
     } else {
         toml::Value::Table(toml::map::Map::new())
     };
 
-    let tui_value: toml::Value =
-        toml::Value::try_from(cfg).map_err(|e| anyhow::anyhow!("serialize tui config: {e}"))?;
+    let tui_value: toml::Value = toml::Value::try_from(cfg).context("serialize tui config")?;
 
     if let toml::Value::Table(ref mut table) = merged {
         table.insert("tui".to_string(), tui_value);
     }
 
-    let contents = toml::to_string_pretty(&merged)
-        .map_err(|e| anyhow::anyhow!("serialize tui config: {e}"))?;
-    std::fs::write(path, contents)?;
+    let contents = toml::to_string_pretty(&merged).context("serialize tui config")?;
+    std::fs::write(path, contents).with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
 
