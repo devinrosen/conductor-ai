@@ -2155,7 +2155,12 @@ mod tests {
 
     fn make_app() -> App {
         let conn = conductor_core::test_helpers::create_test_conn();
-        App::new(conn, Config::default(), Theme::default())
+        App::new(
+            conn,
+            Config::default(),
+            crate::config::TuiConfig::default(),
+            Theme::default(),
+        )
     }
 
     fn make_worktree(id: &str, repo_id: &str, model: Option<&str>) -> Worktree {

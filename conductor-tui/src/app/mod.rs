@@ -10,6 +10,7 @@ use conductor_core::config::Config;
 
 use crate::action::Action;
 use crate::background;
+use crate::config::TuiConfig;
 use crate::event::{BackgroundSender, EventLoop};
 use crate::input;
 use crate::state::AppState;
@@ -42,6 +43,7 @@ pub struct App {
     state: AppState,
     conn: Connection,
     config: Config,
+    tui_config: TuiConfig,
     bg_tx: Option<BackgroundSender>,
     /// Guard to prevent multiple concurrent workflow poll threads.
     workflow_poll_in_flight: Arc<AtomicBool>,
@@ -55,13 +57,14 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(conn: Connection, config: Config, theme: Theme) -> Self {
+    pub fn new(conn: Connection, config: Config, tui_config: TuiConfig, theme: Theme) -> Self {
         let mut state = AppState::new();
         state.theme = theme;
         Self {
             state,
             conn,
             config,
+            tui_config,
             bg_tx: None,
             workflow_poll_in_flight: Arc::new(AtomicBool::new(false)),
             workflow_threads: Vec::new(),

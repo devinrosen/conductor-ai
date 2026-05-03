@@ -57,7 +57,7 @@ impl Theme {
             "gruvbox" => Ok(Self::gruvbox()),
             "catppuccin_mocha" => Ok(Self::catppuccin_mocha()),
             _ => {
-                let dir = conductor_core::config::themes_dir();
+                let dir = crate::config::themes_dir();
                 let toml_path = dir.join(format!("{name}.toml"));
                 if toml_path.exists() {
                     return Self::from_base16_file(&toml_path);
@@ -288,7 +288,7 @@ pub fn all_themes() -> (Vec<(String, String)>, Vec<String>) {
 /// - `warnings`: human-readable error strings for files that failed to parse, each including
 ///   the file path so the user can identify and fix the broken file.
 pub fn scan_custom_themes() -> (Vec<(String, String)>, Vec<String>) {
-    let dir = conductor_core::config::themes_dir();
+    let dir = crate::config::themes_dir();
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return (vec![], vec![]);
     };
