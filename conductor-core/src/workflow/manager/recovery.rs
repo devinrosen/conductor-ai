@@ -525,11 +525,19 @@ fn cas_flip_run_to_failed_from(
     run_id: &str,
     from_status: &str,
     error_msg: &str,
+    bump_iteration: bool,
 ) -> Result<bool> {
-    let changed = conn.execute(
+    let sql = if bump_iteration {
+        "UPDATE workflow_runs \
+             SET status = 'failed', error = :error, iteration = iteration + 1 \
+             WHERE id = :id AND status = :from"
+    } else {
         "UPDATE workflow_runs \
              SET status = 'failed', error = :error \
-             WHERE id = :id AND status = :from",
+             WHERE id = :id AND status = :from"
+    };
+    let changed = conn.execute(
+        sql,
         named_params![":id": run_id, ":from": from_status, ":error": error_msg],
     )?;
     Ok(changed == 1)
@@ -542,10 +550,11 @@ fn cas_claim_ids_and_notify(
     from_status: &str,
     error_msg: &str,
     caller_name: &str,
+    bump_iteration: bool,
 ) -> Result<Vec<String>> {
     let mut claimed: Vec<String> = Vec::new();
     for run_id in candidates {
-        if !cas_flip_run_to_failed_from(conn, run_id, from_status, error_msg)? {
+        if !cas_flip_run_to_failed_from(conn, run_id, from_status, error_msg, bump_iteration)? {
             tracing::debug!(
                 run_id = %run_id,
                 "{caller_name}: CAS lost race (already claimed)"
@@ -586,6 +595,7 @@ pub fn claim_stuck_workflows(
         "running",
         ORPHAN_BETWEEN_STEPS_MSG,
         "claim_stuck_workflows",
+        false,
     )?;
 
     if !flipped_ids.is_empty() {
@@ -637,6 +647,7 @@ pub fn claim_expired_lease_runs(
         "running",
         ORPHAN_BETWEEN_STEPS_MSG,
         "claim_expired_lease_runs",
+        false,
     )?
     .into_iter()
     .collect();
@@ -1071,7 +1082,8 @@ pub fn claim_needs_resume_runs(conn: &Connection, config: &Config) -> Result<Vec
         return Ok(vec![]);
     }
 
-    // Phase 3: CAS-claim and bump iteration so the cap advances each cycle.
+    // Phase 3: CAS-claim; iteration bump is included in the same UPDATE so the
+    // cap advances even if the process crashes before the engine starts.
     let claimed = cas_claim_ids_and_notify(
         conn,
         config,
@@ -1079,18 +1091,8 @@ pub fn claim_needs_resume_runs(conn: &Connection, config: &Config) -> Result<Vec
         "needs_resume",
         "Orphaned: parent agent run died — auto-resumed by watchdog",
         "claim_needs_resume_runs",
+        true,
     )?;
-
-    if !claimed.is_empty() {
-        let placeholders = sql_placeholders(claimed.len());
-        let sql = format!(
-            "UPDATE workflow_runs SET iteration = iteration + 1 WHERE id IN ({placeholders})"
-        );
-        conn.execute(
-            &sql,
-            rusqlite::params_from_iter(claimed.iter().map(|s| s.as_str())),
-        )?;
-    }
 
     Ok(claimed)
 }
