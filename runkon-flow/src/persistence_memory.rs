@@ -129,6 +129,7 @@ impl InMemoryWorkflowPersistence {
             owner_token: None,
             lease_until: None,
             generation: 0,
+            last_position_advanced_at: None,
         };
         self.store.lock().unwrap().runs.insert(id.to_string(), run);
     }
@@ -234,6 +235,7 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
             owner_token: None,
             lease_until: None,
             generation: 0,
+            last_position_advanced_at: None,
         };
         let mut store = self.lock()?;
         store.runs.insert(id, run.clone());

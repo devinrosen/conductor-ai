@@ -5,7 +5,7 @@
 //! been removed; this module is the canonical home for workflow orchestration logic.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
 
@@ -30,6 +30,28 @@ use super::{WorkflowRunStatus, WorkflowStepStatus};
 ///
 /// Canonical definition lives in `runkon_flow::engine::ENGINE_INJECTED_KEYS`.
 pub(crate) use runkon_flow::ENGINE_INJECTED_KEYS;
+
+/// Event sink that updates `workflow_runs.last_position_advanced_at` when the engine
+/// advances past a body node. Wired into every engine execution path so the reaper and
+/// observability tooling can distinguish a live-and-progressing engine from a wedged one.
+struct PositionSink(Arc<Mutex<Connection>>);
+
+impl runkon_flow::events::EventSink for PositionSink {
+    fn emit(&self, event: &runkon_flow::events::EngineEventData) {
+        if matches!(
+            event.event,
+            runkon_flow::events::EngineEvent::BodyPositionAdvanced { .. }
+        ) {
+            if let Ok(conn) = self.0.lock() {
+                let now = chrono::Utc::now().to_rfc3339();
+                let _ = conn.execute(
+                    "UPDATE workflow_runs SET last_position_advanced_at = ?1 WHERE id = ?2",
+                    rusqlite::params![now, event.run_id],
+                );
+            }
+        }
+    }
+}
 
 /// Validate required workflow inputs are present and apply default values.
 ///
@@ -626,8 +648,10 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
     let schema_resolver = make_schema_resolver(workflow.name.clone());
 
     let rk_exec_config = params.exec_config.clone();
-    let event_sinks: Arc<[Arc<dyn runkon_flow::EventSink>]> =
-        Arc::from(params.exec_config.event_sinks.clone());
+    let mut all_sinks: Vec<Arc<dyn runkon_flow::EventSink>> =
+        params.exec_config.event_sinks.clone();
+    all_sinks.push(Arc::new(PositionSink(Arc::clone(&shared_conn))));
+    let event_sinks: Arc<[Arc<dyn runkon_flow::EventSink>]> = Arc::from(all_sinks);
 
     let mut rk_state = build_rk_execution_state(RkStateArgs {
         persistence: Arc::clone(&persistence),
@@ -811,10 +835,19 @@ pub fn spawn_workflow_resume(
     conductor_bin_dir: Option<std::path::PathBuf>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
+        let db_path = crate::config::db_path();
         let params = make_resume_params((*config).clone(), run_id.clone(), conductor_bin_dir, None);
-        if let Err(e) = resume_workflow_standalone(&params) {
-            tracing::warn!(run_id = %run_id, "spawn_workflow_resume: auto-resume failed: {e}");
-        }
+        let run_id_inner = run_id.clone();
+        super::engine_log::run_engine_with_diagnostics(
+            &run_id,
+            db_path,
+            None,
+            std::panic::AssertUnwindSafe(move || {
+                if let Err(e) = resume_workflow_standalone(&params) {
+                    tracing::warn!(run_id = %run_id_inner, "spawn_workflow_resume: auto-resume failed: {e}");
+                }
+            }),
+        );
     })
 }
 
@@ -834,29 +867,38 @@ pub fn spawn_heartbeat_resume(p: SpawnHeartbeatResumeParams) -> std::thread::Joi
             p.conductor_bin_dir,
             Some(effective_db.clone()),
         );
-        if let Err(e) = resume_workflow_standalone(&params) {
-            tracing::warn!(run_id = %p.run_id, "spawn_heartbeat_resume: auto-resume failed: {e}");
-            match crate::db::open_database(&effective_db) {
-                Ok(db) => {
-                    crate::notify::fire_heartbeat_stuck_failed_notification(
-                        &db,
-                        &p.config.notifications,
-                        &p.config.notify.hooks,
-                        &p.run_id,
-                        &p.workflow_name,
-                        p.target_label.as_deref(),
-                        &e.to_string(),
-                    );
+        let run_id = p.run_id.clone();
+        let db_path = effective_db.clone();
+        super::engine_log::run_engine_with_diagnostics(
+            &run_id,
+            db_path,
+            None,
+            std::panic::AssertUnwindSafe(move || {
+                if let Err(e) = resume_workflow_standalone(&params) {
+                    tracing::warn!(run_id = %p.run_id, "spawn_heartbeat_resume: auto-resume failed: {e}");
+                    match crate::db::open_database(&effective_db) {
+                        Ok(db) => {
+                            crate::notify::fire_heartbeat_stuck_failed_notification(
+                                &db,
+                                &p.config.notifications,
+                                &p.config.notify.hooks,
+                                &p.run_id,
+                                &p.workflow_name,
+                                p.target_label.as_deref(),
+                                &e.to_string(),
+                            );
+                        }
+                        Err(db_err) => {
+                            tracing::warn!(
+                                run_id = %p.run_id,
+                                error = %db_err,
+                                "spawn_heartbeat_resume: could not open DB to fire stuck-run notification"
+                            );
+                        }
+                    }
                 }
-                Err(db_err) => {
-                    tracing::warn!(
-                        run_id = %p.run_id,
-                        error = %db_err,
-                        "spawn_heartbeat_resume: could not open DB to fire stuck-run notification"
-                    );
-                }
-            }
-        }
+            }),
+        );
     })
 }
 
@@ -1088,7 +1130,9 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
 
     let schema_resolver = make_schema_resolver(wf_run.workflow_name.clone());
 
-    let event_sinks: Arc<[Arc<dyn runkon_flow::EventSink>]> = Arc::from(input.event_sinks.clone());
+    let mut all_sinks: Vec<Arc<dyn runkon_flow::EventSink>> = input.event_sinks.clone();
+    all_sinks.push(Arc::new(PositionSink(Arc::clone(&shared_conn))));
+    let event_sinks: Arc<[Arc<dyn runkon_flow::EventSink>]> = Arc::from(all_sinks);
 
     let mut rk_state = build_rk_execution_state(RkStateArgs {
         persistence: Arc::clone(&persistence),

@@ -77,6 +77,7 @@ pub struct WorkflowRun {
     pub lease_until: Option<String>,
     #[serde(skip)]
     pub generation: i64,
+    pub last_position_advanced_at: Option<String>,
 }
 
 /// Extract the human-readable title from a workflow definition snapshot JSON string.

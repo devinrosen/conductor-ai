@@ -85,6 +85,11 @@ pub enum EngineEvent {
         total_turns: i64,
         total_duration_ms: i64,
     },
+    // Engine progress
+    BodyPositionAdvanced {
+        index: usize,
+        total: usize,
+    },
 }
 
 /// Observability sink that receives engine events after each DB-write state transition.

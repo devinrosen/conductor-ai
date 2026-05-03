@@ -110,6 +110,7 @@ pub fn create_workflow_run_with_targets(
         owner_token: None,
         lease_until: None,
         generation: 0,
+        last_position_advanced_at: None,
     })
 }
 

@@ -595,7 +595,8 @@ pub fn execute_nodes(
     nodes: &[WorkflowNode],
     respect_fail_fast: bool,
 ) -> Result<()> {
-    for node in nodes {
+    let total = nodes.len();
+    for (index, node) in nodes.iter().enumerate() {
         if respect_fail_fast && !state.all_succeeded && state.exec_config.fail_fast {
             break;
         }
@@ -605,6 +606,7 @@ pub fn execute_nodes(
         }
         state.tick_heartbeat_throttled()?;
         execute_single_node(state, node, 0)?;
+        emit_event(state, EngineEvent::BodyPositionAdvanced { index, total });
     }
     Ok(())
 }

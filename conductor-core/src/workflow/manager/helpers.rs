@@ -100,6 +100,7 @@ pub(in crate::workflow) fn row_to_workflow_run(
         owner_token: row.get("owner_token")?,
         lease_until: row.get("lease_until")?,
         generation: row.get("generation")?,
+        last_position_advanced_at: row.get("last_position_advanced_at")?,
     })
 }
 
