@@ -12,8 +12,18 @@ Guidelines:
 - Run `cargo fmt --all` to fix formatting issues
 - Apply clippy suggestions where appropriate
 - For complex clippy warnings, use your judgment on the best fix
-- Re-run the lint commands after fixes to verify they pass
+- After applying fixes, re-verify with **only** these commands — nothing else:
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+  - `cargo fmt --all --check`
 - Commit all fixes with a descriptive commit message
+
+**Do NOT run any of the following** — these are covered by later workflow steps and are out of scope for this agent:
+- `cargo build` (any profile)
+- `cargo test` or `cargo nextest` (any variant)
+- End-to-end or integration tests
+- Workflow execution
+
+**Bound iteration cost:** If clippy still fails after one round of fixes within a single invocation, stop and let the workflow's outer `max_iterations` envelope drive the next attempt. Do not chain many internal fix-verify cycles inside one invocation.
 
 ## Fixing Workflow Syntax Errors
 
