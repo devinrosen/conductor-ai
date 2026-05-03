@@ -91,13 +91,15 @@ fn save_to(cfg: &TuiConfig, path: &Path) -> Result<()> {
         toml::Value::Table(toml::map::Map::new())
     };
 
-    let tui_value: toml::Value = toml::Value::try_from(cfg).context("serialize tui config")?;
+    let tui_value: toml::Value = toml::Value::try_from(cfg)
+        .with_context(|| format!("serialize tui config for {}", path.display()))?;
 
     if let toml::Value::Table(ref mut table) = merged {
         table.insert("tui".to_string(), tui_value);
     }
 
-    let contents = toml::to_string_pretty(&merged).context("serialize tui config")?;
+    let contents = toml::to_string_pretty(&merged)
+        .with_context(|| format!("serialize merged config for {}", path.display()))?;
     std::fs::write(path, contents).with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
