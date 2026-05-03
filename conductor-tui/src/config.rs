@@ -56,9 +56,8 @@ fn load_from(path: &Path) -> Result<TuiConfig> {
             .and_then(|g| g.get("theme"))
             .and_then(|t| t.as_str())
         {
-            tracing::warn!(
-                "[general].theme is deprecated — move to [tui].theme; conductor-core no longer reads it"
-            );
+            // conductor-core already emits a deprecation warn for [general].theme —
+            // no need to duplicate it here.
             cfg.theme = Some(legacy.to_string());
         }
     }
