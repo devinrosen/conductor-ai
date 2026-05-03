@@ -1,25 +1,20 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use conductor_core::agent::{AgentManager, AgentRun, FeedbackRequest};
+use conductor_core::agent_config::{AgentDef, AgentRole};
 use conductor_core::config::AutoStartAgent;
+use conductor_core::runtime::adapter::SqliteHostAdapter;
+use conductor_core::runtime::{resolve_runtime, RuntimeOptions, RuntimeRequest};
 use conductor_core::tickets::build_agent_prompt;
 use conductor_core::worktree::{WorktreeCreateOptions, WorktreeManager};
+use runkon_runtimes::tracker::{EventSink, RuntimeEvent};
 
 use crate::action::Action;
 use crate::state::{InputAction, Modal, WorkflowPickerItem};
 
 use super::App;
-
-fn resolve_log_path(run: &AgentRun) -> Option<PathBuf> {
-    match run.log_path() {
-        Ok(p) => Some(p),
-        Err(e) => {
-            tracing::error!("invalid run_id {}: {e}", run.id);
-            None
-        }
-    }
-}
 
 /// Owned configuration for spawning a headless agent run, sized to the union
 /// of inputs the three TUI launch flows (`start_agent_headless`,
@@ -34,33 +29,61 @@ pub(super) struct HeadlessRunConfig {
     pub permission_mode: Option<conductor_core::config::AgentPermissionMode>,
 }
 
+fn synthesize_tui_agent_def(model: Option<&str>) -> AgentDef {
+    AgentDef {
+        name: "tui-ad-hoc".to_string(),
+        role: AgentRole::Actor,
+        can_commit: true,
+        model: model.map(String::from),
+        runtime: "claude".to_string(),
+        prompt: String::new(),
+    }
+}
+
+struct TuiEventSink {
+    inner: Arc<SqliteHostAdapter>,
+    tx: std::sync::Mutex<crate::event::BackgroundSender>,
+    run_id: String,
+}
+
+impl EventSink for TuiEventSink {
+    fn on_event(&self, run_id: &str, event: RuntimeEvent) {
+        self.inner.on_event(run_id, event);
+    }
+
+    fn on_raw_value(&self, _run_id: &str, value: &serde_json::Value) {
+        let events = conductor_core::agent::parse_events_from_value(value);
+        if let Ok(tx) = self.tx.lock() {
+            for ev in events {
+                let _ = tx.send(Action::AgentEvent {
+                    run_id: self.run_id.clone(),
+                    event: ev,
+                });
+            }
+        }
+    }
+}
+
 /// Shared post-creation logic for the three TUI headless launch flows.
 ///
-/// The caller is responsible for opening the DB, creating the `AgentRun`
-/// (each flow calls a different `AgentManager` method), and constructing
-/// the surrounding modal/UI state. From there, this helper:
-///
-/// 1. Builds args + spawns the subprocess via `try_spawn_headless_run`,
-///    marking the run failed on spawn errors.
-/// 2. Records the subprocess PID on the run.
-/// 3. Sends the launch-result action via `on_launched`.
-/// 4. Drains stdout, emitting `Action::AgentEvent` per parsed event.
-/// 5. Sends `Action::AgentComplete` and removes the prompt file on exit.
-///
-/// `on_launched` decides which `Action` variant carries the launch result —
-/// flows differ (`AgentLaunchComplete`, `RepoAgentLaunched`,
-/// `AgentRestartComplete`) but all wrap a `Result<String, String>`.
+/// Routes through the `AgentRuntime` trait (`resolve_runtime` →
+/// `spawn_validated` → `poll`) so the TUI uses the same execution machinery
+/// as workflow Claude steps. `on_launched` decides which `Action` variant
+/// carries the launch result — flows differ (`AgentLaunchComplete`,
+/// `RepoAgentLaunched`, `AgentRestartComplete`) but all wrap a
+/// `Result<String, String>`.
 pub(super) fn drive_headless_run(
     run: AgentRun,
     config: HeadlessRunConfig,
-    mgr: &AgentManager<'_>,
     tx: &crate::event::BackgroundSender,
     on_launched: impl FnOnce(std::result::Result<String, String>) -> Action,
     success_msg: &str,
 ) {
-    let runtime_permission = config
+    let permission_mode = config
         .permission_mode
-        .map(|m| m.to_runtime_permission_mode());
+        .map(|m| m.to_runtime_permission_mode())
+        .unwrap_or_default();
+
     let bot_name_args: Vec<(
         std::borrow::Cow<'static, str>,
         std::borrow::Cow<'static, str>,
@@ -71,52 +94,72 @@ pub(super) fn drive_headless_run(
         )],
         None => vec![],
     };
-    let spawn_params = conductor_core::agent_runtime::SpawnHeadlessParams {
-        run_id: &run.id,
-        working_dir: &config.working_dir,
-        prompt: &config.prompt,
-        resume_session_id: config.resume_session_id.as_deref(),
-        model: config.model.as_deref(),
-        extra_cli_args: &bot_name_args,
-        permission_mode: runtime_permission.as_ref(),
-        plugin_dirs: &[],
+
+    let runtime_options = RuntimeOptions {
+        binary_path: conductor_core::agent_runtime::resolve_conductor_bin().into(),
+        log_path_for_run: Arc::new(|run_id: &str| {
+            conductor_core::config::agent_log_path(run_id)
+                .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")))
+        }),
+        workspace_root: PathBuf::from(&config.working_dir),
     };
 
-    // `try_spawn_headless_run` combines build_headless_agent_args + spawn_headless.
-    // If spawn fails after the prompt file was written, it removes the file
-    // internally before returning Err, so no separate cleanup is needed here.
-    let (handle, prompt_file) =
-        match conductor_core::agent_runtime::try_spawn_headless_run(&spawn_params) {
-            Ok(pair) => pair,
+    let runtime =
+        match resolve_runtime("claude", permission_mode, &HashMap::new(), &runtime_options) {
+            Ok(r) => r,
             Err(e) => {
-                let _ = mgr.update_run_failed(&run.id, &e);
-                let _ = tx.send(on_launched(Err(e)));
+                let _ = tx.send(on_launched(Err(e.to_string())));
                 return;
             }
         };
 
-    if let Err(e) = mgr.update_run_subprocess_pid(&run.id, handle.pid()) {
-        tracing::warn!("failed to store subprocess PID for run {}: {e}", run.id);
+    let db = conductor_core::config::db_path();
+    let adapter = match SqliteHostAdapter::new(db) {
+        Ok(a) => Arc::new(a),
+        Err(e) => {
+            let _ = tx.send(on_launched(Err(e.to_string())));
+            return;
+        }
+    };
+
+    let event_sink: Arc<dyn runkon_runtimes::tracker::RunEventSink> = Arc::new(TuiEventSink {
+        inner: adapter.clone(),
+        tx: std::sync::Mutex::new(tx.clone()),
+        run_id: run.id.clone(),
+    });
+    let tracker: Arc<dyn runkon_runtimes::tracker::RunTracker> = adapter;
+
+    let request = RuntimeRequest {
+        run_id: run.id.clone(),
+        agent_def: synthesize_tui_agent_def(config.model.as_deref()),
+        prompt: config.prompt.clone(),
+        working_dir: PathBuf::from(&config.working_dir),
+        model: config.model.clone(),
+        extra_cli_args: bot_name_args,
+        plugin_dirs: vec![],
+        resume_session_id: config.resume_session_id.clone(),
+        tracker,
+        event_sink,
+    };
+
+    if let Err(e) = runtime.spawn_validated(&request) {
+        let db2 = conductor_core::config::db_path();
+        if let Ok(conn) = conductor_core::db::open_database(&db2) {
+            let mgr = AgentManager::new(&conn);
+            let _ = mgr.update_run_failed(&run.id, &e.to_string());
+        }
+        let _ = tx.send(on_launched(Err(e.to_string())));
+        return;
     }
 
     let _ = tx.send(on_launched(Ok(success_msg.to_string())));
 
     let run_id = run.id.clone();
-    let Some(log_path) = resolve_log_path(&run) else {
-        return;
-    };
-    let tx2 = tx.clone();
-    let (stdout, finish) = handle.into_drain_parts();
-    let sink = conductor_core::agent_runtime::CombinedSink::new(mgr, |event| {
-        let _ = tx2.send(Action::AgentEvent {
-            run_id: run_id.clone(),
-            event: event.clone(),
-        });
-    });
-    conductor_core::agent_runtime::drain_stream_json(stdout, &run_id, &log_path, &sink);
+    let step_timeout = std::time::Duration::from_secs(24 * 60 * 60);
+    if let Err(e) = runtime.poll(&run_id, None, step_timeout) {
+        tracing::warn!("drive_headless_run: poll ended for run {run_id}: {e}");
+    }
 
-    let _ = std::fs::remove_file(&prompt_file);
-    finish();
     let _ = tx.send(Action::AgentComplete { run_id });
 }
 
@@ -631,7 +674,6 @@ impl App {
                     bot_name: None,
                     permission_mode: None,
                 },
-                &mgr,
                 &tx,
                 |result| Action::AgentLaunchComplete { result },
                 "Agent launched (headless)",
@@ -732,7 +774,6 @@ impl App {
                     bot_name: None,
                     permission_mode: Some(conductor_core::config::AgentPermissionMode::RepoSafe),
                 },
-                &mgr,
                 &tx,
                 |result| Action::RepoAgentLaunched { result },
                 "Repo agent launched (headless)",
@@ -816,7 +857,6 @@ impl App {
                     bot_name,
                     permission_mode: None,
                 },
-                &mgr,
                 &tx,
                 |result| Action::AgentRestartComplete { result },
                 "Agent restarted (headless)",

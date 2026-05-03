@@ -48,6 +48,7 @@ pub fn make_request(
         working_dir: std::path::PathBuf::from("/tmp"),
         extra_cli_args: vec![],
         plugin_dirs: vec![],
+        resume_session_id: None,
         tracker,
         event_sink,
     }

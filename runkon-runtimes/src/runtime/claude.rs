@@ -68,7 +68,7 @@ impl AgentRuntime for ClaudeRuntime {
                 run_id: &request.run_id,
                 working_dir: request.working_dir.to_str().unwrap_or("."),
                 prompt: &request.prompt,
-                resume_session_id: None,
+                resume_session_id: request.resume_session_id.as_deref(),
                 model: request.resolved_model(),
                 extra_cli_args: &request.extra_cli_args,
                 permission_mode: Some(&self.options.permission_mode),
@@ -298,6 +298,7 @@ mod tests {
             model: None,
             extra_cli_args: vec![],
             plugin_dirs: vec![],
+            resume_session_id: None,
             tracker: Arc::new(NoopTracker),
             event_sink: Arc::new(NoopEventSink),
         }

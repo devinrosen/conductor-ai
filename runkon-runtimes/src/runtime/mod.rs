@@ -66,6 +66,7 @@ pub struct RuntimeRequest {
     pub model: Option<String>,
     pub extra_cli_args: Vec<(Cow<'static, str>, Cow<'static, str>)>,
     pub plugin_dirs: Vec<String>,
+    pub resume_session_id: Option<String>,
     pub tracker: Arc<dyn RunTracker>,
     pub event_sink: Arc<dyn RunEventSink>,
 }
@@ -224,6 +225,7 @@ mod tests {
             model: req_model.map(String::from),
             extra_cli_args: vec![],
             plugin_dirs: vec![],
+            resume_session_id: None,
             tracker: Arc::new(NoopTracker),
             event_sink: Arc::new(NoopEventSink),
         }
