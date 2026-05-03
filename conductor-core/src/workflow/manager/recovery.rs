@@ -527,17 +527,18 @@ fn cas_flip_run_to_failed_from(
     error_msg: &str,
     bump_iteration: bool,
 ) -> Result<bool> {
-    let sql = if bump_iteration {
-        "UPDATE workflow_runs \
-             SET status = 'failed', error = :error, iteration = iteration + 1 \
-             WHERE id = :id AND status = :from"
+    let iter_clause = if bump_iteration {
+        ", iteration = iteration + 1"
     } else {
-        "UPDATE workflow_runs \
-             SET status = 'failed', error = :error \
-             WHERE id = :id AND status = :from"
+        ""
     };
+    let sql = format!(
+        "UPDATE workflow_runs \
+         SET status = 'failed', error = :error{iter_clause} \
+         WHERE id = :id AND status = :from"
+    );
     let changed = conn.execute(
-        sql,
+        &sql,
         named_params![":id": run_id, ":from": from_status, ":error": error_msg],
     )?;
     Ok(changed == 1)
