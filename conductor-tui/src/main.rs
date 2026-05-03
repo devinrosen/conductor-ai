@@ -11,8 +11,7 @@ mod ui;
 
 use anyhow::Result;
 
-use conductor_core::config::{db_path, ensure_dirs, load_config};
-use conductor_core::db::open_database;
+use conductor_core::Conductor;
 use config::{ensure_tui_dirs, load_tui_config};
 use theme::Theme;
 
@@ -37,8 +36,7 @@ fn main() -> Result<()> {
             .init();
     }
 
-    let config = load_config()?;
-    ensure_dirs(&config)?;
+    let conductor = Conductor::open()?;
 
     let tui_config = load_tui_config()?;
     // ensure_tui_dirs must run before Theme::from_name so custom themes can be found.
@@ -52,11 +50,9 @@ fn main() -> Result<()> {
         None => Theme::default(),
     };
 
-    let db = db_path();
-    let conn = open_database(&db)?;
-
     let mut terminal = ratatui::init();
-    let result = app::App::new(conn, config, tui_config, theme).run(&mut terminal);
+    let result =
+        app::App::new(conductor.conn, conductor.config, tui_config, theme).run(&mut terminal);
     ratatui::restore();
 
     result
