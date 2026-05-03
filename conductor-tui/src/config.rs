@@ -44,7 +44,16 @@ fn load_from(path: &Path) -> Result<TuiConfig> {
     let raw: toml::Value = toml::from_str(&contents)?;
 
     let mut cfg: TuiConfig = if let Some(tui_section) = raw.get("tui") {
-        tui_section.clone().try_into().unwrap_or_default()
+        match tui_section.clone().try_into() {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                tracing::warn!(
+                    "ignoring malformed [tui] section in {}: {e}",
+                    path.display()
+                );
+                TuiConfig::default()
+            }
+        }
     } else {
         TuiConfig::default()
     };
@@ -179,6 +188,36 @@ mod tests {
             contents.contains("sync_interval_minutes"),
             "general section should be preserved"
         );
+    }
+
+    #[test]
+    fn test_load_malformed_tui_section_falls_back_to_default() {
+        // [tui].theme = 42 is type-mismatched (expects Option<String>). Loader must
+        // log and fall back to default rather than swallow silently or fail outright,
+        // so user misconfigurations are visible without bricking the TUI.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[tui]\ntheme = 42\n").unwrap();
+        let cfg = load_from(&path).unwrap();
+        assert_eq!(
+            cfg.theme, None,
+            "malformed [tui] section must fall back to default"
+        );
+    }
+
+    #[test]
+    fn test_load_malformed_tui_falls_back_to_legacy() {
+        // When [tui] is malformed but [general].theme is valid, fallback should
+        // still recover the legacy theme rather than ignore both.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[general]\ntheme = \"gruvbox\"\n\n[tui]\ntheme = 42\n",
+        )
+        .unwrap();
+        let cfg = load_from(&path).unwrap();
+        assert_eq!(cfg.theme.as_deref(), Some("gruvbox"));
     }
 
     #[test]
