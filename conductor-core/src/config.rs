@@ -1748,6 +1748,20 @@ bot_name = "my-bot"
         assert!(err.to_string().contains("invalid run_id"));
     }
 
+    #[test]
+    fn workflow_log_path_valid_ulid_returns_ok() {
+        let ulid = crate::new_id();
+        let path = super::workflow_log_path(&ulid).expect("valid ULID should succeed");
+        assert!(path.to_string_lossy().ends_with(&format!("{ulid}.log")));
+        assert!(path.to_string_lossy().contains("workflow-logs"));
+    }
+
+    #[test]
+    fn workflow_log_path_invalid_ulid_returns_error() {
+        let err = super::workflow_log_path("../etc/passwd").unwrap_err();
+        assert!(err.to_string().contains("invalid run_id"));
+    }
+
     // -----------------------------------------------------------------------
     // AgentPermissionModeExt tests
     // -----------------------------------------------------------------------
