@@ -4880,6 +4880,7 @@ fn test_active_step_exists_false_for_timed_out() {
 
 /// Insert one terminal step + its linked agent_run into an existing workflow run.
 /// Use this to build up multi-step scenarios without re-creating the parent run.
+#[allow(clippy::too_many_arguments)]
 fn insert_step_with_agent(
     conn: &Connection,
     run_id: &str,
