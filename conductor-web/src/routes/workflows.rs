@@ -34,6 +34,21 @@ fn parse_granularity(granularity: Option<String>) -> Result<TimeGranularity, Api
         .map_err(|e: String| ApiError::Core(ConductorError::InvalidInput(e)))
 }
 
+/// Acquire the shared DB mutex + config read-lock and fire a workflow notification.
+///
+/// Centralizes the lock-acquire and `NotificationCtx` construction shared by
+/// `run_workflow`, `post_workflow_run`, and `resume_workflow_endpoint`.
+fn fire_workflow_notification_via_state(state: &AppState, args: &WorkflowNotificationArgs<'_>) {
+    let conn = state.db.blocking_lock();
+    let cfg = state.config.blocking_read();
+    let ctx = NotificationCtx {
+        conn: &conn,
+        config: &cfg.notifications,
+        hooks: &cfg.notify.hooks,
+    };
+    fire_workflow_notification(&ctx, args);
+}
+
 /// Resolve the run ID to use for error-path notifications.
 ///
 /// When `execute_workflow` created a run record before failing, the slot holds
@@ -526,23 +541,14 @@ pub async fn run_workflow(
 
         let result = conductor_core::workflow::execute_workflow_standalone(&params);
 
-        // Use the shared state connection/config for notifications — no new DB open needed.
-        let conn = state_clone.db.blocking_lock();
-        let cfg = state_clone.config.blocking_read();
-
         // Always emit events and notify, even if DB operations fail
         match result {
             Ok(res) => {
                 let succeeded = res.all_succeeded;
                 let status = if succeeded { "completed" } else { "failed" };
 
-                let ctx = NotificationCtx {
-                    conn: &conn,
-                    config: &cfg.notifications,
-                    hooks: &cfg.notify.hooks,
-                };
-                fire_workflow_notification(
-                    &ctx,
+                fire_workflow_notification_via_state(
+                    &state_clone,
                     &WorkflowNotificationArgs {
                         run_id: &res.workflow_run_id,
                         workflow_name: &workflow_name,
@@ -572,13 +578,8 @@ pub async fn run_workflow(
                 let error_run_id =
                     resolve_error_run_id(&run_id_slot, &workflow_name, &wt_target_label);
 
-                let ctx = NotificationCtx {
-                    conn: &conn,
-                    config: &cfg.notifications,
-                    hooks: &cfg.notify.hooks,
-                };
-                fire_workflow_notification(
-                    &ctx,
+                fire_workflow_notification_via_state(
+                    &state_clone,
                     &WorkflowNotificationArgs {
                         run_id: &error_run_id,
                         workflow_name: &workflow_name,
@@ -805,24 +806,16 @@ pub async fn post_workflow_run(
 
         let result = execute_workflow_standalone(&input);
 
-        // Use the shared state connection/config for notifications — no new DB open needed.
-        let conn = state_clone.db.blocking_lock();
-        let cfg = state_clone.config.blocking_read();
+        let (notify_repo_slug, notify_branch) =
+            conductor_core::notify::parse_target_label(Some(&target_label));
 
         match result {
             Ok(res) => {
                 let succeeded = res.all_succeeded;
                 let status = if succeeded { "completed" } else { "failed" };
 
-                let (notify_repo_slug, notify_branch) =
-                    conductor_core::notify::parse_target_label(Some(&target_label));
-                let ctx = NotificationCtx {
-                    conn: &conn,
-                    config: &cfg.notifications,
-                    hooks: &cfg.notify.hooks,
-                };
-                fire_workflow_notification(
-                    &ctx,
+                fire_workflow_notification_via_state(
+                    &state_clone,
                     &WorkflowNotificationArgs {
                         run_id: &res.workflow_run_id,
                         workflow_name: &workflow_name,
@@ -852,15 +845,8 @@ pub async fn post_workflow_run(
                     "Workflow execution failed workflow={workflow_name} target={target_label}: {e}"
                 );
                 let error_run_id = emit_failed(&run_id_slot, wt_id_clone.clone());
-                let (notify_repo_slug, notify_branch) =
-                    conductor_core::notify::parse_target_label(Some(&target_label));
-                let ctx = NotificationCtx {
-                    conn: &conn,
-                    config: &cfg.notifications,
-                    hooks: &cfg.notify.hooks,
-                };
-                fire_workflow_notification(
-                    &ctx,
+                fire_workflow_notification_via_state(
+                    &state_clone,
                     &WorkflowNotificationArgs {
                         run_id: &error_run_id,
                         workflow_name: &workflow_name,
@@ -1696,10 +1682,6 @@ pub async fn resume_workflow_endpoint(
 
         let result = conductor_core::workflow::resume_workflow_standalone(&params);
 
-        // Use the shared state connection/config for notifications — no new DB open needed.
-        let conn = state_clone.db.blocking_lock();
-        let cfg = state_clone.config.blocking_read();
-
         let (resume_repo_slug, resume_branch) =
             conductor_core::notify::parse_target_label(target_label.as_deref());
 
@@ -1708,13 +1690,8 @@ pub async fn resume_workflow_endpoint(
                 let succeeded = res.all_succeeded;
                 let status = if succeeded { "completed" } else { "failed" };
 
-                let ctx = NotificationCtx {
-                    conn: &conn,
-                    config: &cfg.notifications,
-                    hooks: &cfg.notify.hooks,
-                };
-                fire_workflow_notification(
-                    &ctx,
+                fire_workflow_notification_via_state(
+                    &state_clone,
                     &WorkflowNotificationArgs {
                         run_id: &res.workflow_run_id,
                         workflow_name: &workflow_name,
@@ -1741,13 +1718,8 @@ pub async fn resume_workflow_endpoint(
             }
             Err(e) => {
                 tracing::error!("Workflow resume failed: {e}");
-                let ctx = NotificationCtx {
-                    conn: &conn,
-                    config: &cfg.notifications,
-                    hooks: &cfg.notify.hooks,
-                };
-                fire_workflow_notification(
-                    &ctx,
+                fire_workflow_notification_via_state(
+                    &state_clone,
                     &WorkflowNotificationArgs {
                         run_id: &params.workflow_run_id,
                         workflow_name: &workflow_name,
