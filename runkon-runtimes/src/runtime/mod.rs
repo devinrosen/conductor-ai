@@ -66,6 +66,7 @@ pub struct RuntimeRequest {
     pub model: Option<String>,
     pub extra_cli_args: Vec<(Cow<'static, str>, Cow<'static, str>)>,
     pub plugin_dirs: Vec<String>,
+    pub resume_session_id: Option<String>,
     pub tracker: Arc<dyn RunTracker>,
     pub event_sink: Arc<dyn RunEventSink>,
 }
@@ -77,6 +78,23 @@ impl RuntimeRequest {
     /// and the spawned subprocess inherits the host's default.
     pub fn resolved_model(&self) -> Option<&str> {
         self.model.as_deref().or(self.agent_def.model.as_deref())
+    }
+}
+
+impl Default for RuntimeRequest {
+    fn default() -> Self {
+        Self {
+            run_id: String::new(),
+            agent_def: crate::agent_def::AgentDef::default(),
+            prompt: String::new(),
+            working_dir: PathBuf::new(),
+            model: None,
+            extra_cli_args: vec![],
+            plugin_dirs: vec![],
+            resume_session_id: None,
+            tracker: Arc::new(crate::tracker::NoopTracker),
+            event_sink: Arc::new(crate::tracker::NoopEventSink),
+        }
     }
 }
 
@@ -224,6 +242,7 @@ mod tests {
             model: req_model.map(String::from),
             extra_cli_args: vec![],
             plugin_dirs: vec![],
+            resume_session_id: None,
             tracker: Arc::new(NoopTracker),
             event_sink: Arc::new(NoopEventSink),
         }

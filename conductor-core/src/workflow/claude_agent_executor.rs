@@ -82,6 +82,7 @@ impl ActionExecutor for ClaudeAgentExecutor {
                 None => vec![],
             },
             plugin_dirs: ectx.plugin_dirs.clone(),
+            resume_session_id: None,
             tracker,
             event_sink,
         };
