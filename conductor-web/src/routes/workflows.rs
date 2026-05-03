@@ -1997,6 +1997,7 @@ mod tests {
     use tokio::sync::{Mutex, RwLock};
     use tower::ServiceExt;
 
+    use crate::config::WebConfig;
     use crate::events::EventBus;
     use crate::routes::api_router;
     use crate::test_helpers as th;
@@ -2526,6 +2527,7 @@ mod tests {
         let state = AppState {
             db: Arc::new(Mutex::new(conn)),
             config: Arc::new(RwLock::new(conductor_core::config::Config::default())),
+            web_config: Arc::new(RwLock::new(WebConfig::default())),
             events: EventBus::new(1),
             db_path: test_db_path.clone(),
             workflow_done_notify: Some(Arc::clone(&notify)),

@@ -44,9 +44,9 @@ pub struct PushSubscribeResponse {
 pub async fn get_vapid_public_key(
     State(state): State<AppState>,
 ) -> Result<Json<VapidPublicKeyResponse>, ApiError> {
-    let config = state.config.read().await;
+    let web_config = state.web_config.read().await;
 
-    match &config.web_push.vapid_public_key {
+    match &web_config.push.vapid_public_key {
         Some(public_key) => Ok(Json(VapidPublicKeyResponse {
             public_key: public_key.clone(),
         })),
@@ -73,13 +73,13 @@ pub async fn subscribe_push(
     Json(request): Json<PushSubscribeRequest>,
 ) -> Result<Json<PushSubscribeResponse>, ApiError> {
     let db = state.db.lock().await;
-    let config = state.config.read().await;
+    let web_config = state.web_config.read().await;
 
     // Verify we have VAPID keys configured
     let (vapid_private_key, vapid_public_key, vapid_subject) = match (
-        &config.web_push.vapid_private_key,
-        &config.web_push.vapid_public_key,
-        &config.web_push.vapid_subject,
+        &web_config.push.vapid_private_key,
+        &web_config.push.vapid_public_key,
+        &web_config.push.vapid_subject,
     ) {
         (Some(private_key), Some(public_key), Some(subject)) => {
             (private_key.clone(), public_key.clone(), subject.clone())
@@ -124,13 +124,13 @@ pub async fn unsubscribe_push(
     Json(request): Json<PushSubscribeRequest>,
 ) -> Result<StatusCode, ApiError> {
     let db = state.db.lock().await;
-    let config = state.config.read().await;
+    let web_config = state.web_config.read().await;
 
     // Verify we have VAPID keys configured
     let (vapid_private_key, vapid_public_key, vapid_subject) = match (
-        &config.web_push.vapid_private_key,
-        &config.web_push.vapid_public_key,
-        &config.web_push.vapid_subject,
+        &web_config.push.vapid_private_key,
+        &web_config.push.vapid_public_key,
+        &web_config.push.vapid_subject,
     ) {
         (Some(private_key), Some(public_key), Some(subject)) => {
             (private_key.clone(), public_key.clone(), subject.clone())
@@ -160,24 +160,25 @@ pub async fn unsubscribe_push(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{WebConfig, WebPushConfig};
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
-    use conductor_core::config::{Config, WebPushConfig};
+    use conductor_core::config::Config;
     use tempfile::NamedTempFile;
 
     fn setup_test_state() -> (AppState, NamedTempFile) {
         let tmp = NamedTempFile::new().expect("create temp db file");
         let db = conductor_core::db::open_database(tmp.path()).expect("open temp db");
-        let config = Config {
-            web_push: WebPushConfig {
+        let config = Config::default();
+        let web_config = WebConfig {
+            push: WebPushConfig {
                 vapid_public_key: Some("test_public_key".to_string()),
                 vapid_private_key: Some("test_private_key".to_string()),
                 vapid_subject: Some("mailto:test@example.com".to_string()),
             },
-            ..Default::default()
         };
         let db_path = tmp.path().to_path_buf();
-        (AppState::new(db, config, db_path, 100), tmp)
+        (AppState::new(db, config, web_config, db_path, 100), tmp)
     }
 
     #[tokio::test]
@@ -215,8 +216,9 @@ mod tests {
         let tmp = NamedTempFile::new().expect("create temp db file");
         let db = conductor_core::db::open_database(tmp.path()).expect("open temp db");
         let db_path = tmp.path().to_path_buf();
-        let config = Config::default(); // No VAPID keys configured
-        let state = AppState::new(db, config, db_path, 100);
+        let config = Config::default();
+        let web_config = WebConfig::default(); // No VAPID keys configured
+        let state = AppState::new(db, config, web_config, db_path, 100);
 
         let result = get_vapid_public_key(State(state)).await;
 
