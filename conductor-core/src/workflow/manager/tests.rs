@@ -4942,3 +4942,68 @@ fn test_cancel_run_does_not_overwrite_completed_step() {
         "cancel_run must not overwrite ended_at of a completed step"
     );
 }
+
+// ── refresh_fan_out_counters tests ───────────────────────────────────────────
+
+fn read_fan_out_counters(conn: &rusqlite::Connection, step_id: &str) -> (i64, i64, i64) {
+    conn.query_row(
+        "SELECT fan_out_completed, fan_out_failed, fan_out_skipped \
+         FROM workflow_run_steps WHERE id = ?1",
+        rusqlite::params![step_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )
+    .unwrap()
+}
+
+#[test]
+fn test_refresh_fan_out_counters_mixed_statuses() {
+    let conn = setup_db();
+
+    let run = create_worktree_run(&conn, "w1");
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "fan-step", "actor", false, 0, 0).unwrap();
+
+    // 2 completed, 1 failed, 1 skipped, 1 pending, 1 running
+    let id1 =
+        crate::workflow::insert_fan_out_item(&conn, &step_id, "ticket", "t1", "TICKET-1").unwrap();
+    let id2 =
+        crate::workflow::insert_fan_out_item(&conn, &step_id, "ticket", "t2", "TICKET-2").unwrap();
+    let id3 =
+        crate::workflow::insert_fan_out_item(&conn, &step_id, "ticket", "t3", "TICKET-3").unwrap();
+    let id4 =
+        crate::workflow::insert_fan_out_item(&conn, &step_id, "ticket", "t4", "TICKET-4").unwrap();
+    let id5 =
+        crate::workflow::insert_fan_out_item(&conn, &step_id, "ticket", "t5", "TICKET-5").unwrap();
+    crate::workflow::insert_fan_out_item(&conn, &step_id, "ticket", "t6", "TICKET-6").unwrap();
+
+    crate::workflow::update_fan_out_item_terminal(&conn, &id1, "completed").unwrap();
+    crate::workflow::update_fan_out_item_terminal(&conn, &id2, "completed").unwrap();
+    crate::workflow::update_fan_out_item_terminal(&conn, &id3, "failed").unwrap();
+    crate::workflow::update_fan_out_item_terminal(&conn, &id4, "skipped").unwrap();
+    crate::workflow::update_fan_out_item_running(&conn, &id5, "child-run-5").unwrap();
+    // t6 stays pending
+
+    crate::workflow::refresh_fan_out_counters(&conn, &step_id).unwrap();
+
+    let (completed, failed, skipped) = read_fan_out_counters(&conn, &step_id);
+    assert_eq!(completed, 2);
+    assert_eq!(failed, 1);
+    assert_eq!(skipped, 1);
+}
+
+#[test]
+fn test_refresh_fan_out_counters_empty_fan_out_yields_zeros() {
+    let conn = setup_db();
+
+    let run = create_worktree_run(&conn, "w1");
+    let step_id =
+        crate::workflow::insert_step(&conn, &run.id, "fan-step", "actor", false, 0, 0).unwrap();
+
+    // No fan-out items at all — COALESCE must make each SUM return 0.
+    crate::workflow::refresh_fan_out_counters(&conn, &step_id).unwrap();
+
+    let (completed, failed, skipped) = read_fan_out_counters(&conn, &step_id);
+    assert_eq!(completed, 0);
+    assert_eq!(failed, 0);
+    assert_eq!(skipped, 0);
+}

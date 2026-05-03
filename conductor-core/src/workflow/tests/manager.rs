@@ -4878,25 +4878,25 @@ fn test_active_step_exists_false_for_timed_out() {
 // actor cleanup (issue #2787)
 // ---------------------------------------------------------------------------
 
+struct StepWithAgent<'a> {
+    run_id: &'a str,
+    step_id: &'a str,
+    step_name: &'a str,
+    position: i64,
+    step_status: &'a str,
+    agent_status: &'a str,
+    ended_at: &'a str,
+}
+
 /// Insert one terminal step + its linked agent_run into an existing workflow run.
 /// Use this to build up multi-step scenarios without re-creating the parent run.
-#[allow(clippy::too_many_arguments)]
-fn insert_step_with_agent(
-    conn: &Connection,
-    run_id: &str,
-    step_id: &str,
-    step_name: &str,
-    position: i64,
-    step_status: &str,
-    agent_status: &str,
-    ended_at: &str,
-) {
+fn insert_step_with_agent(conn: &Connection, step: StepWithAgent) {
     let agent_mgr = AgentManager::new(conn);
     let agent_run = agent_mgr.create_run(None, "actor", None).unwrap();
 
     conn.execute(
         "UPDATE agent_runs SET status = :status WHERE id = :id",
-        named_params! { ":status": agent_status, ":id": agent_run.id },
+        named_params! { ":status": step.agent_status, ":id": agent_run.id },
     )
     .unwrap();
 
@@ -4907,12 +4907,12 @@ fn insert_step_with_agent(
          VALUES (:step_id, :run_id, :step_name, 'actor', :position, :step_status, 0, \
                  :ended_at, :child_run_id)",
         named_params! {
-            ":step_id": step_id,
-            ":run_id": run_id,
-            ":step_name": step_name,
-            ":position": position,
-            ":step_status": step_status,
-            ":ended_at": ended_at,
+            ":step_id": step.step_id,
+            ":run_id": step.run_id,
+            ":step_name": step.step_name,
+            ":position": step.position,
+            ":step_status": step.step_status,
+            ":ended_at": step.ended_at,
             ":child_run_id": agent_run.id,
         },
     )
@@ -4933,13 +4933,15 @@ fn insert_root_run_with_actor_step(
     insert_running_root_run(conn, run_id);
     insert_step_with_agent(
         conn,
-        run_id,
-        step_id,
-        "implement",
-        0,
-        "completed",
-        agent_status,
-        step_ended_at,
+        StepWithAgent {
+            run_id,
+            step_id,
+            step_name: "implement",
+            position: 0,
+            step_status: "completed",
+            agent_status,
+            ended_at: step_ended_at,
+        },
     );
 }
 
@@ -5004,13 +5006,15 @@ fn test_reap_finalization_keeps_failed_status_when_step_failed() {
     insert_running_root_run(&conn, "run-step-failed");
     insert_step_with_agent(
         &conn,
-        "run-step-failed",
-        "step-failed-1",
-        "implement",
-        0,
-        "failed",
-        "completed",
-        "2020-01-01T00:00:00Z",
+        StepWithAgent {
+            run_id: "run-step-failed",
+            step_id: "step-failed-1",
+            step_name: "implement",
+            position: 0,
+            step_status: "failed",
+            agent_status: "completed",
+            ended_at: "2020-01-01T00:00:00Z",
+        },
     );
 
     let reaped = crate::workflow::reap_finalization_stuck_workflow_runs(&conn, 60).unwrap();
@@ -5034,13 +5038,15 @@ fn test_reap_finalization_orphan_mid_body_flagged_for_resume() {
     // Step 0 — plan — completed
     insert_step_with_agent(
         &conn,
-        "run-orphan-mid-body",
-        "step-plan",
-        "plan",
-        0,
-        "completed",
-        "completed",
-        "2020-01-01T00:00:00Z",
+        StepWithAgent {
+            run_id: "run-orphan-mid-body",
+            step_id: "step-plan",
+            step_name: "plan",
+            position: 0,
+            step_status: "completed",
+            agent_status: "completed",
+            ended_at: "2020-01-01T00:00:00Z",
+        },
     );
 
     // Step 1 — implement — completed; engine died before scheduling step 2.
@@ -5048,13 +5054,15 @@ fn test_reap_finalization_orphan_mid_body_flagged_for_resume() {
     // no rows exist for them. This is the orphan-mid-body scenario.
     insert_step_with_agent(
         &conn,
-        "run-orphan-mid-body",
-        "step-impl",
-        "implement",
-        1,
-        "completed",
-        "completed",
-        "2020-01-01T00:00:00Z",
+        StepWithAgent {
+            run_id: "run-orphan-mid-body",
+            step_id: "step-impl",
+            step_name: "implement",
+            position: 1,
+            step_status: "completed",
+            agent_status: "completed",
+            ended_at: "2020-01-01T00:00:00Z",
+        },
     );
 
     let reaped = crate::workflow::reap_finalization_stuck_workflow_runs(&conn, 60).unwrap();
