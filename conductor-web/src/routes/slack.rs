@@ -362,7 +362,6 @@ mod tests {
             owner_token: None,
             lease_until: None,
             generation: 0,
-            last_position_advanced_at: None,
         }];
         let output = format_active_runs_for_slack(&runs);
         assert!(output.contains("Active workflow runs (1)"));

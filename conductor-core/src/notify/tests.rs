@@ -1322,7 +1322,6 @@ fn make_workflow_run(id: &str, name: &str, status: WorkflowRunStatus) -> Workflo
         owner_token: None,
         lease_until: None,
         generation: 0,
-        last_position_advanced_at: None,
     }
 }
 

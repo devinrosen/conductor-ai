@@ -136,7 +136,6 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
         owner_token: row.get("owner_token")?,
         lease_until: row.get("lease_until")?,
         generation: row.get("generation")?,
-        last_position_advanced_at: row.get("last_position_advanced_at")?,
     })
 }
 
@@ -354,7 +353,6 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
             owner_token: None,
             lease_until: None,
             generation: 0,
-            last_position_advanced_at: None,
         })
     }
 

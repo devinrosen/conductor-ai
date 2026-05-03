@@ -110,7 +110,6 @@ pub fn create_workflow_run_with_targets(
         owner_token: None,
         lease_until: None,
         generation: 0,
-        last_position_advanced_at: None,
     })
 }
 
@@ -343,16 +342,6 @@ pub fn tick_heartbeat(conn: &Connection, run_id: &str) -> Result<()> {
     conn.execute(
         "UPDATE workflow_runs SET last_heartbeat = :now \
              WHERE id = :id AND status = 'running'",
-        named_params![":now": now, ":id": run_id],
-    )?;
-    Ok(())
-}
-
-pub fn tick_position_advanced(conn: &Connection, run_id: &str) -> Result<()> {
-    let now = Utc::now().to_rfc3339();
-    conn.execute(
-        "UPDATE workflow_runs SET last_position_advanced_at = :now \
-             WHERE id = :id",
         named_params![":now": now, ":id": run_id],
     )?;
     Ok(())

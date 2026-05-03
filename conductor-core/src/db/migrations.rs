@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 86;
+pub const LATEST_SCHEMA_VERSION: u32 = 85;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1326,31 +1326,6 @@ pub fn run(conn: &Connection) -> Result<()> {
             ))?;
         }
         bump_version(conn, 85)?;
-    }
-
-    // Migration 086: add last_position_advanced_at to workflow_runs for
-    // body-position progression tracking (coarser-than-heartbeat engine progress signal).
-    // Table-existence guard required because some unit-test fixtures omit workflow_runs.
-    if version < 86 {
-        let has_workflow_runs_table: bool = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master \
-                 WHERE type='table' AND name='workflow_runs'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|n| n > 0)?;
-        if has_workflow_runs_table {
-            let has_col: bool = conn
-                .prepare("SELECT last_position_advanced_at FROM workflow_runs LIMIT 0")
-                .is_ok();
-            if !has_col {
-                conn.execute_batch(include_str!(
-                    "migrations/086_workflow_run_last_position_advanced_at.sql"
-                ))?;
-            }
-        }
-        bump_version(conn, 86)?;
     }
 
     Ok(())
@@ -2965,64 +2940,6 @@ mod tests {
         assert_eq!(
             version, LATEST_SCHEMA_VERSION as i64,
             "schema_version must still be bumped to LATEST_SCHEMA_VERSION"
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // Migration 086 tests
-    // -----------------------------------------------------------------------
-
-    /// Verifies that migration 086 adds `last_position_advanced_at` when `workflow_runs` exists.
-    #[test]
-    fn test_migration_086_adds_column_when_table_exists() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-             CREATE TABLE workflow_runs (
-                 id            TEXT PRIMARY KEY,
-                 workflow_name TEXT NOT NULL,
-                 status        TEXT NOT NULL DEFAULT 'pending',
-                 started_at    TEXT NOT NULL
-             );
-             INSERT INTO _conductor_meta VALUES ('schema_version', '85');",
-        )
-        .unwrap();
-
-        run(&conn).expect("migration 086 must succeed when workflow_runs exists");
-
-        let col_exists: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('workflow_runs') \
-                 WHERE name='last_position_advanced_at'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(col_exists, 1, "last_position_advanced_at column must exist");
-    }
-
-    /// Verifies that migration 086 skips (no error) when `workflow_runs` is absent.
-    #[test]
-    fn test_migration_086_skips_when_table_absent() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-             INSERT INTO _conductor_meta VALUES ('schema_version', '85');",
-        )
-        .unwrap();
-
-        run(&conn).expect("migration 086 must succeed even without workflow_runs");
-
-        let version: i64 = conn
-            .query_row(
-                "SELECT CAST(value AS INTEGER) FROM _conductor_meta WHERE key = 'schema_version'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            version, LATEST_SCHEMA_VERSION as i64,
-            "schema_version must be bumped to LATEST_SCHEMA_VERSION"
         );
     }
 }

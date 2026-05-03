@@ -1632,7 +1632,6 @@ mod tests {
                 EngineEvent::FanOutItemStarted { .. } => "FanOutItemStarted",
                 EngineEvent::FanOutItemCompleted { .. } => "FanOutItemCompleted",
                 EngineEvent::MetricsUpdated { .. } => "MetricsUpdated",
-                EngineEvent::BodyPositionAdvanced { .. } => "BodyPositionAdvanced",
             })
             .collect();
 

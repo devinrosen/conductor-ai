@@ -117,7 +117,6 @@ pub(crate) fn make_wf_run_full(
         owner_token: None,
         lease_until: None,
         generation: 0,
-        last_position_advanced_at: None,
     }
 }
 
