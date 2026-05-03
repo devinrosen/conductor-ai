@@ -46,6 +46,16 @@ fn bump_version(conn: &Connection, v: u32) -> Result<()> {
     Ok(())
 }
 
+fn table_exists(conn: &Connection, table_name: &str) -> Result<bool> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+        [table_name],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
+    .map_err(Into::into)
+}
+
 /// Migration 45 helper: copy `default_branch` and `model` column values from
 /// the repos table into per-repo `.conductor/config.toml` files before the
 /// columns are dropped. Errors are logged but do not abort the migration — the
@@ -567,12 +577,7 @@ pub fn run(conn: &Connection) -> Result<()> {
     // Guard: only create the index if the table exists (it may be absent in
     // minimal test schemas that start at version > 20).
     if version < 39 {
-        let table_exists: bool = conn.query_row(
-            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='workflow_run_steps'",
-            [],
-            |row| row.get(0),
-        )?;
-        if table_exists {
+        if table_exists(conn, "workflow_run_steps")? {
             conn.execute_batch(include_str!("migrations/039_idx_steps_status_gate.sql"))?;
         }
         bump_version(conn, 39)?;
@@ -582,15 +587,8 @@ pub fn run(conn: &Connection) -> Result<()> {
     let has_wf_run_iteration: bool = conn
         .prepare("SELECT iteration FROM workflow_runs LIMIT 0")
         .is_ok();
-    if !has_wf_run_iteration {
-        let table_exists: bool = conn.query_row(
-            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='workflow_runs'",
-            [],
-            |row| row.get(0),
-        )?;
-        if table_exists {
-            conn.execute_batch(include_str!("migrations/040_workflow_run_iteration.sql"))?;
-        }
+    if !has_wf_run_iteration && table_exists(conn, "workflow_runs")? {
+        conn.execute_batch(include_str!("migrations/040_workflow_run_iteration.sql"))?;
     }
     if version < 40 {
         bump_version(conn, 40)?;
@@ -601,15 +599,8 @@ pub fn run(conn: &Connection) -> Result<()> {
         let has_blocked_on: bool = conn
             .prepare("SELECT blocked_on FROM workflow_runs LIMIT 0")
             .is_ok();
-        if !has_blocked_on {
-            let table_exists: bool = conn.query_row(
-                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='workflow_runs'",
-                [],
-                |row| row.get(0),
-            )?;
-            if table_exists {
-                conn.execute_batch(include_str!("migrations/041_workflow_run_blocked_on.sql"))?;
-            }
+        if !has_blocked_on && table_exists(conn, "workflow_runs")? {
+            conn.execute_batch(include_str!("migrations/041_workflow_run_blocked_on.sql"))?;
         }
         bump_version(conn, 41)?;
     }
@@ -768,12 +759,7 @@ pub fn run(conn: &Connection) -> Result<()> {
     // so that workflow-type steps can store a workflow_runs.id value (the iOS
     // app needs this for navigation to child workflow run detail views).
     if version < 58 {
-        let table_exists: bool = conn.query_row(
-            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='workflow_run_steps'",
-            [],
-            |row| row.get(0),
-        )?;
-        if table_exists {
+        if table_exists(conn, "workflow_run_steps")? {
             with_foreign_keys_off(conn, || {
                 conn.execute_batch(include_str!(
                     "migrations/058_workflow_step_child_run_id_drop_fk.sql"
@@ -1246,15 +1232,7 @@ pub fn run(conn: &Connection) -> Result<()> {
     // Column-existence guard handles DBs that already have the new name from
     // feature branches and partial-schema test setups that lack agent_runs.
     if version < 82 {
-        let has_agent_runs_table: bool = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master \
-                 WHERE type='table' AND name='agent_runs'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|n| n > 0)
-            .unwrap_or(false);
+        let has_agent_runs_table = table_exists(conn, "agent_runs")?;
         // Only rename when the source column actually exists. Some unit tests
         // build minimal agent_runs fixtures with neither the old nor the new
         // column; the rename is a no-op there.
@@ -1312,14 +1290,7 @@ pub fn run(conn: &Connection) -> Result<()> {
     // Table-existence guard is required because some unit tests build minimal
     // fixtures that omit workflow_run_steps.
     if version < 85 {
-        let has_workflow_run_steps_table: bool = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master \
-                 WHERE type='table' AND name='workflow_run_steps'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|n| n > 0)?;
+        let has_workflow_run_steps_table = table_exists(conn, "workflow_run_steps")?;
         if has_workflow_run_steps_table {
             conn.execute_batch(include_str!(
                 "migrations/085_workflow_run_steps_child_run_id_index.sql"
