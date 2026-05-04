@@ -678,8 +678,10 @@ pub fn record_step_success(
     let input_tokens = parse_metric_i64(&success.metadata, metadata_keys::INPUT_TOKENS);
     let output_tokens = parse_metric_i64(&success.metadata, metadata_keys::OUTPUT_TOKENS);
     let cache_read = parse_metric_i64(&success.metadata, metadata_keys::CACHE_READ_INPUT_TOKENS);
-    let cache_creation =
-        parse_metric_i64(&success.metadata, metadata_keys::CACHE_CREATION_INPUT_TOKENS);
+    let cache_creation = parse_metric_i64(
+        &success.metadata,
+        metadata_keys::CACHE_CREATION_INPUT_TOKENS,
+    );
     let metrics_changed = state.accumulate_metrics(
         cost_usd,
         num_turns,

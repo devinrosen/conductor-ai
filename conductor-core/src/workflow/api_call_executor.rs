@@ -166,7 +166,6 @@ impl ActionExecutor for ApiCallExecutor {
             markers: structured.markers,
             context: Some(structured.context),
             metadata,
-            ..Default::default()
         })
     }
 }

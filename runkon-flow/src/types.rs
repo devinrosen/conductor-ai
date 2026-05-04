@@ -293,7 +293,6 @@ impl StepSuccess {
             output_file: step.output_file.clone(),
             iteration,
             metadata: HashMap::new(),
-            ..Self::default()
         }
     }
 }

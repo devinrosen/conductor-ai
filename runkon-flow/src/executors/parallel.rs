@@ -425,10 +425,18 @@ mod tests {
             _info: &crate::traits::action_executor::StepInfo,
             _params: &ActionParams,
         ) -> Result<ActionOutput, EngineError> {
+            let mut metadata = std::collections::HashMap::new();
+            metadata.insert(
+                crate::constants::metadata_keys::COST_USD.to_string(),
+                "0.05".to_string(),
+            );
             Ok(ActionOutput {
                 markers: self.markers.clone(),
                 context: Some(self.context.clone()),
-                ..Default::default()
+                result_text: None,
+                structured_output: None,
+                metadata,
+                child_run_id: None,
             })
         }
     }
