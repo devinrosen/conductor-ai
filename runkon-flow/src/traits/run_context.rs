@@ -1,5 +1,7 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(any(test, feature = "test-utils"))]
+use std::path::PathBuf;
 
 /// Abstraction over the per-run context consumed by executors and prompt builders.
 ///
