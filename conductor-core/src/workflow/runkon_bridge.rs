@@ -362,6 +362,9 @@ pub(super) struct ConductorChildWorkflowRunner {
     db_path: std::path::PathBuf,
     config: crate::config::Config,
     conn: Arc<Mutex<rusqlite::Connection>>,
+    /// Cached from the parent run at construction time to avoid a per-child DB round-trip.
+    target_label: Option<String>,
+    triggered_by_hook: bool,
 }
 
 impl ConductorChildWorkflowRunner {
@@ -369,11 +372,15 @@ impl ConductorChildWorkflowRunner {
         db_path: std::path::PathBuf,
         config: crate::config::Config,
         conn: Arc<Mutex<rusqlite::Connection>>,
+        target_label: Option<String>,
+        triggered_by_hook: bool,
     ) -> Self {
         Self {
             db_path,
             config,
             conn,
+            target_label,
+            triggered_by_hook,
         }
     }
 
@@ -435,22 +442,8 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             ..parent_ctx.exec_config.clone()
         };
 
-        // Source target_label and triggered_by_hook from the parent run DB record
-        // (these fields were removed from ChildWorkflowContext in the 4/8 refactor).
-        let (parent_target_label, parent_triggered_by_hook) = {
-            let conn = self.conn.lock().map_err(bridge_lock_err)?;
-            let parent_run = crate::workflow::get_workflow_run(&conn, &parent_ctx.workflow_run_id)
-                .map_err(|e| {
-                    EngineError::Workflow(format!(
-                        "failed to load parent run '{}': {e}",
-                        parent_ctx.workflow_run_id
-                    ))
-                })?;
-            match parent_run {
-                Some(r) => (r.target_label.clone(), r.is_triggered_by_hook()),
-                None => (None, false),
-            }
-        };
+        let parent_target_label = self.target_label.clone();
+        let parent_triggered_by_hook = self.triggered_by_hook;
 
         // Route child workflows through execute_workflow_standalone so they use
         // FlowEngine::run() — keeping event emission and step tracking consistent
@@ -702,6 +695,8 @@ mod tests {
             std::path::PathBuf::from("/tmp/test.db"),
             crate::config::Config::default(),
             conn,
+            None,
+            false,
         );
 
         let sinks: Arc<[Arc<dyn EventSink>]> = Arc::from(vec![
@@ -741,6 +736,8 @@ mod tests {
             std::path::PathBuf::from("/tmp/test.db"),
             crate::config::Config::default(),
             conn,
+            None,
+            false,
         );
 
         let parent_ctx = ChildWorkflowContext {

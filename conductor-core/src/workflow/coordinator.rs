@@ -403,6 +403,8 @@ fn build_rk_engine_components(
     config: &crate::config::Config,
     shared_conn: &Arc<std::sync::Mutex<Connection>>,
     db: &std::path::Path,
+    target_label: Option<String>,
+    triggered_by_hook: bool,
 ) -> RkEngineComponents {
     let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> = Arc::new(
         super::persistence_sqlite::SqliteWorkflowPersistence::from_shared_connection(Arc::clone(
@@ -419,6 +421,8 @@ fn build_rk_engine_components(
             db.to_path_buf(),
             config.clone(),
             Arc::clone(shared_conn),
+            target_label,
+            triggered_by_hook,
         ));
     RkEngineComponents {
         persistence,
@@ -632,7 +636,13 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         persistence,
         action_registry,
         child_runner,
-    } = build_rk_engine_components(config, &shared_conn, &db);
+    } = build_rk_engine_components(
+        config,
+        &shared_conn,
+        &db,
+        params.target_label.clone(),
+        params.triggered_by_hook,
+    );
 
     let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(
         Arc::clone(&shared_conn),
@@ -1127,7 +1137,13 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         persistence,
         action_registry,
         child_runner,
-    } = build_rk_engine_components(config, &shared_conn, &db);
+    } = build_rk_engine_components(
+        config,
+        &shared_conn,
+        &db,
+        wf_run.target_label.clone(),
+        wf_run.is_triggered_by_hook(),
+    );
 
     let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(
         Arc::clone(&shared_conn),
