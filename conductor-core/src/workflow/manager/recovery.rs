@@ -10,7 +10,8 @@ use crate::error::Result;
 
 use super::helpers::row_to_workflow_run;
 
-use crate::workflow::constants::{RUN_COLUMNS, TERMINAL_STATUSES_SQL};
+use crate::workflow::constants::RUN_COLUMNS;
+use runkon_flow::traits::persistence::WorkflowPersistence;
 use crate::workflow::types::StepKey;
 use crate::workflow::WorkflowRun;
 use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
@@ -177,56 +178,7 @@ fn fail_step_with_message(conn: &Connection, step_id: &str, error_message: &str)
     )
 }
 
-fn bulk_recover_steps(
-    conn: &Connection,
-    items: &[(String, WorkflowStepStatus, Option<String>)],
-    ended_at: &str,
-) -> Result<()> {
-    if items.is_empty() {
-        return Ok(());
-    }
-
-    for chunk in items.chunks(199) {
-        let n = chunk.len();
-        let case_arms = (0..n)
-            .map(|_| "WHEN ? THEN ?")
-            .collect::<Vec<_>>()
-            .join(" ");
-        let in_placeholders = sql_placeholders(n);
-        let sql = format!(
-            "UPDATE workflow_run_steps \
-                 SET status      = CASE id {case_arms} END, \
-                     ended_at    = ?, \
-                     result_text = CASE id {case_arms} END, \
-                     context_out = NULL, \
-                     markers_out = NULL, \
-                     structured_output = NULL, \
-                     step_error  = NULL \
-                 WHERE id IN ({in_placeholders}) \
-                 AND status NOT IN ({TERMINAL_STATUSES_SQL})"
-        );
-
-        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(5 * n + 1);
-        for (step_id, status, _) in chunk {
-            params.push(Box::new(step_id.clone()));
-            params.push(Box::new(status.to_string()));
-        }
-        params.push(Box::new(ended_at.to_string()));
-        for (step_id, _, result_text) in chunk {
-            params.push(Box::new(step_id.clone()));
-            params.push(Box::new(result_text.clone()));
-        }
-        for (step_id, _, _) in chunk {
-            params.push(Box::new(step_id.clone()));
-        }
-
-        conn.execute(&sql, rusqlite::params_from_iter(params))?;
-    }
-
-    Ok(())
-}
-
-pub fn recover_stuck_steps(conn: &Connection) -> Result<usize> {
+pub fn recover_stuck_steps(conn: &Connection, persistence: &dyn WorkflowPersistence) -> Result<usize> {
     // Step 1: fetch running workflow steps that have a child_run_id.
     let running_steps: Vec<(String, String)> = query_collect(
         conn,
@@ -270,10 +222,10 @@ pub fn recover_stuck_steps(conn: &Connection) -> Result<usize> {
 
     let ended_at = chrono::Utc::now().to_rfc3339();
     let n = stuck.len();
-    with_savepoint(conn, "recover_stuck_steps", || {
-        bulk_recover_steps(conn, &stuck, &ended_at)?;
-        Ok(n)
-    })
+    persistence
+        .bulk_recover_steps(&stuck, &ended_at)
+        .map_err(|e| crate::error::ConductorError::Other(e.to_string()))?;
+    Ok(n)
 }
 
 pub fn reap_orphaned_workflow_runs(conn: &Connection) -> Result<usize> {
@@ -1938,9 +1890,32 @@ mod tests {
     /// Regression: multiple stuck steps with mixed statuses (completed with
     /// result_text, failed with NULL result_text) must all be recovered in a
     /// single `recover_stuck_steps` call via the bulk CASE-expression UPDATE.
+    ///
+    /// Uses a file-based DB (tempfile) so that `conn` (reads) and the separate
+    /// `SqliteWorkflowPersistence` connection (writes) share the same data.
     #[test]
     fn test_recover_stuck_steps_bulk() {
-        let (conn, parent_id) = setup();
+        use crate::workflow::persistence_sqlite::SqliteWorkflowPersistence;
+
+        // File-based DB so two connections see each other's committed writes.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let conn = crate::db::open_database(&db_path).unwrap();
+
+        // Replicate what setup_db_with_agent_run() provides.
+        crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+        crate::test_helpers::insert_test_worktree(
+            &conn,
+            "w1",
+            "r1",
+            "feat-test",
+            "/tmp/ws/feat-test",
+        );
+        let parent_id = crate::agent::AgentManager::new(&conn)
+            .create_run(Some("w1"), "workflow", None)
+            .unwrap()
+            .id;
+
         insert_workflow_run(&conn, "wfrun-bulk", &parent_id);
 
         // Create two agent runs and mark them terminal.
@@ -1962,7 +1937,11 @@ mod tests {
         // Insert two running steps pointing to those agent runs.
         insert_running_agent_step(&conn, "wfrun-bulk", "step-c", &run_completed.id, 0);
         insert_running_agent_step(&conn, "wfrun-bulk", "step-f", &run_failed.id, 1);
-        let recovered = crate::workflow::recover_stuck_steps(&conn).unwrap();
+
+        // Second connection for writes: shares the same file-based DB.
+        let write_persistence = SqliteWorkflowPersistence::open(&db_path).unwrap();
+        let recovered =
+            crate::workflow::recover_stuck_steps(&conn, &write_persistence).unwrap();
         assert_eq!(recovered, 2, "both stuck steps must be recovered");
 
         let (status_c, result_text_c, ended_at_c): (String, Option<String>, Option<String>) = conn

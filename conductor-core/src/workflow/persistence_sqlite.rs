@@ -184,32 +184,6 @@ mod tests {
         assert!(!p.is_run_cancelled("nonexistent-run-id").unwrap());
     }
 
-    /// `persist_metrics` must land cost_usd in `total_cost_usd` and num_turns in
-    /// `total_turns`. Guards against future signature drift between trait and SQL.
-    #[test]
-    fn persist_metrics_maps_cost_and_turns_to_correct_columns() {
-        let (p, parent_id) = make_persistence();
-        let run = p.create_run(make_new_run(parent_id)).unwrap();
-
-        let cost_usd = 42.5_f64;
-        let num_turns = 7_i64;
-
-        p.persist_metrics(&run.id, 0, 0, 0, 0, cost_usd, num_turns, 1000)
-            .unwrap();
-
-        let fetched = p.get_run(&run.id).unwrap().expect("run should exist");
-        assert_eq!(
-            fetched.total_cost_usd,
-            Some(cost_usd),
-            "total_cost_usd should match the cost_usd argument"
-        );
-        assert_eq!(
-            fetched.total_turns,
-            Some(num_turns),
-            "total_turns should match the num_turns argument"
-        );
-    }
-
     /// `approve_gate` with non-empty `selections` must write `context_out` to the step row.
     #[test]
     fn approve_gate_with_selections_sets_context_out() {

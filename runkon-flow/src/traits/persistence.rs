@@ -2,6 +2,9 @@ use crate::engine_error::EngineError;
 use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::types::{WorkflowRun, WorkflowRunStep};
 
+pub use crate::traits::gate_approval_store::{
+    gate_approval_state_from_fields, GateApprovalState, GateApprovalStore,
+};
 pub use crate::types::FanOutItemRow;
 
 /// Parameters for creating a new workflow run.
@@ -142,42 +145,14 @@ pub enum FanOutItemUpdate {
     Terminal { status: FanOutItemStatus },
 }
 
-/// Current approval state of a gate step.
-#[derive(Debug, Clone)]
-pub enum GateApprovalState {
-    Pending,
-    Approved {
-        feedback: Option<String>,
-        selections: Option<Vec<String>>,
-    },
-    Rejected {
-        feedback: Option<String>,
-    },
-}
-
-pub fn gate_approval_state_from_fields(
-    approved_at: Option<&str>,
-    status: WorkflowStepStatus,
-    feedback: Option<String>,
-    selections: Option<Vec<String>>,
-) -> GateApprovalState {
-    if approved_at.is_some() || status == WorkflowStepStatus::Completed {
-        return GateApprovalState::Approved {
-            feedback,
-            selections,
-        };
-    }
-    if status == WorkflowStepStatus::Failed {
-        return GateApprovalState::Rejected { feedback };
-    }
-    GateApprovalState::Pending
-}
-
 /// Abstracts all persistence reads and writes needed by the workflow engine.
 ///
-/// `Send + Sync` are required for use behind `Arc<dyn WorkflowPersistence>`.
-/// All methods acquire a lock internally; no external synchronization is needed.
-pub trait WorkflowPersistence: Send + Sync {
+/// `GateApprovalStore + Send + Sync` are required bounds; `GateApprovalStore`
+/// carries the gate-approval read/write methods as a supertrait so engine code
+/// calling `state.persistence.get_gate_approval()` compiles without changes to
+/// `ExecutionState`. All methods acquire a lock internally; no external
+/// synchronization is needed.
+pub trait WorkflowPersistence: GateApprovalStore + Send + Sync {
     // --- Run lifecycle ---
 
     fn create_run(&self, new_run: NewRun) -> Result<WorkflowRun, EngineError>;
@@ -237,23 +212,6 @@ pub trait WorkflowPersistence: Send + Sync {
         status_filter: Option<FanOutItemStatus>,
     ) -> Result<Vec<FanOutItemRow>, EngineError>;
 
-    // --- Gate approval ---
-
-    fn get_gate_approval(&self, step_id: &str) -> Result<GateApprovalState, EngineError>;
-    fn approve_gate(
-        &self,
-        step_id: &str,
-        approved_by: &str,
-        feedback: Option<&str>,
-        selections: Option<&[String]>,
-    ) -> Result<(), EngineError>;
-    fn reject_gate(
-        &self,
-        step_id: &str,
-        rejected_by: &str,
-        feedback: Option<&str>,
-    ) -> Result<(), EngineError>;
-
     // --- Engine lifecycle hooks ---
 
     /// Atomically claim ownership of a workflow run. Returns the new generation on
@@ -268,21 +226,18 @@ pub trait WorkflowPersistence: Send + Sync {
     /// Returns true if the run has been cancelled (e.g. via external request).
     fn is_run_cancelled(&self, run_id: &str) -> Result<bool, EngineError>;
 
-    /// Heartbeat tick — update last-seen timestamp so the run is not considered stale.
-    fn tick_heartbeat(&self, run_id: &str) -> Result<(), EngineError>;
+    // --- Bulk step recovery ---
 
-    /// Persist per-step token/cost metrics to the run record.
-    #[allow(clippy::too_many_arguments)]
-    fn persist_metrics(
+    /// Bulk-update a list of stuck workflow steps to their resolved status.
+    ///
+    /// Implementations should guard against overwriting already-terminal rows
+    /// using a `status NOT IN (terminal statuses)` predicate. Each invocation
+    /// is a complete, self-contained write; savepoint wrapping is the caller's
+    /// responsibility.
+    fn bulk_recover_steps(
         &self,
-        run_id: &str,
-        input_tokens: i64,
-        output_tokens: i64,
-        cache_read_input_tokens: i64,
-        cache_creation_input_tokens: i64,
-        cost_usd: f64,
-        num_turns: i64,
-        duration_ms: i64,
+        items: &[(String, WorkflowStepStatus, Option<String>)],
+        ended_at: &str,
     ) -> Result<(), EngineError>;
 }
 

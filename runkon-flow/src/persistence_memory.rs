@@ -9,9 +9,11 @@ use chrono::Utc;
 use crate::cancellation_reason::CancellationReason;
 use crate::engine_error::EngineError;
 use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
+use crate::traits::gate_approval_store::{
+    gate_approval_state_from_fields, GateApprovalState, GateApprovalStore,
+};
 use crate::traits::persistence::{
-    gate_approval_state_from_fields, FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun,
-    NewStep, StepUpdate, WorkflowPersistence,
+    FanOutItemStatus, FanOutItemUpdate, NewRun, NewStep, StepUpdate, WorkflowPersistence,
 };
 use crate::types::{FanOutItemRow, WorkflowRun, WorkflowRunStep};
 
@@ -166,6 +168,76 @@ impl InMemoryWorkflowPersistence {
     {
         let mut store = self.store.lock().map_err(|_| lock_err())?;
         f(&mut store)
+    }
+}
+
+impl GateApprovalStore for InMemoryWorkflowPersistence {
+    fn get_gate_approval(&self, step_id: &str) -> Result<GateApprovalState, EngineError> {
+        let store = self.lock()?;
+        let Some(step) = store.steps.get(step_id) else {
+            return Ok(GateApprovalState::Pending);
+        };
+        let selections = step.gate_selections.as_deref().and_then(|s| {
+            serde_json::from_str::<Vec<String>>(s)
+                .map_err(|e| {
+                    tracing::warn!(
+                        "get_gate_approval: malformed gate_selections JSON for step '{step_id}': {e}"
+                    );
+                    e
+                })
+                .ok()
+        });
+        Ok(gate_approval_state_from_fields(
+            step.gate_approved_at.as_deref(),
+            step.status.clone(),
+            step.gate_feedback.clone(),
+            selections,
+        ))
+    }
+
+    fn approve_gate(
+        &self,
+        step_id: &str,
+        approved_by: &str,
+        feedback: Option<&str>,
+        selections: Option<&[String]>,
+    ) -> Result<(), EngineError> {
+        let mut store = self.lock()?;
+        let now = Utc::now().to_rfc3339();
+        let step = store
+            .steps
+            .get_mut(step_id)
+            .ok_or_else(|| EngineError::Persistence(format!("step {step_id} not found")))?;
+        step.gate_approved_at = Some(now.clone());
+        step.gate_approved_by = Some(approved_by.to_string());
+        step.gate_feedback = feedback.map(String::from);
+        step.gate_selections = selections
+            .map(|s| serde_json::to_string(s).expect("Vec<String> serialization is infallible"));
+        if let Some(items) = selections.filter(|s| !s.is_empty()) {
+            step.context_out = Some(format_gate_selection_context(items));
+        }
+        step.status = WorkflowStepStatus::Completed;
+        step.ended_at = Some(now);
+        Ok(())
+    }
+
+    fn reject_gate(
+        &self,
+        step_id: &str,
+        rejected_by: &str,
+        feedback: Option<&str>,
+    ) -> Result<(), EngineError> {
+        let mut store = self.lock()?;
+        let now = Utc::now().to_rfc3339();
+        let step = store
+            .steps
+            .get_mut(step_id)
+            .ok_or_else(|| EngineError::Persistence(format!("step {step_id} not found")))?;
+        step.gate_approved_by = Some(rejected_by.to_string());
+        step.gate_feedback = feedback.map(String::from);
+        step.status = WorkflowStepStatus::Failed;
+        step.ended_at = Some(now);
+        Ok(())
     }
 }
 
@@ -491,74 +563,6 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         Ok(items)
     }
 
-    fn get_gate_approval(&self, step_id: &str) -> Result<GateApprovalState, EngineError> {
-        let store = self.lock()?;
-        let Some(step) = store.steps.get(step_id) else {
-            return Ok(GateApprovalState::Pending);
-        };
-        let selections = step.gate_selections.as_deref().and_then(|s| {
-            serde_json::from_str::<Vec<String>>(s)
-                .map_err(|e| {
-                    tracing::warn!(
-                        "get_gate_approval: malformed gate_selections JSON for step '{step_id}': {e}"
-                    );
-                    e
-                })
-                .ok()
-        });
-        Ok(gate_approval_state_from_fields(
-            step.gate_approved_at.as_deref(),
-            step.status.clone(),
-            step.gate_feedback.clone(),
-            selections,
-        ))
-    }
-
-    fn approve_gate(
-        &self,
-        step_id: &str,
-        approved_by: &str,
-        feedback: Option<&str>,
-        selections: Option<&[String]>,
-    ) -> Result<(), EngineError> {
-        let mut store = self.lock()?;
-        let now = Utc::now().to_rfc3339();
-        let step = store
-            .steps
-            .get_mut(step_id)
-            .ok_or_else(|| EngineError::Persistence(format!("step {step_id} not found")))?;
-        step.gate_approved_at = Some(now.clone());
-        step.gate_approved_by = Some(approved_by.to_string());
-        step.gate_feedback = feedback.map(String::from);
-        step.gate_selections = selections
-            .map(|s| serde_json::to_string(s).expect("Vec<String> serialization is infallible"));
-        if let Some(items) = selections.filter(|s| !s.is_empty()) {
-            step.context_out = Some(format_gate_selection_context(items));
-        }
-        step.status = WorkflowStepStatus::Completed;
-        step.ended_at = Some(now);
-        Ok(())
-    }
-
-    fn reject_gate(
-        &self,
-        step_id: &str,
-        rejected_by: &str,
-        feedback: Option<&str>,
-    ) -> Result<(), EngineError> {
-        let mut store = self.lock()?;
-        let now = Utc::now().to_rfc3339();
-        let step = store
-            .steps
-            .get_mut(step_id)
-            .ok_or_else(|| EngineError::Persistence(format!("step {step_id} not found")))?;
-        step.gate_approved_by = Some(rejected_by.to_string());
-        step.gate_feedback = feedback.map(String::from);
-        step.status = WorkflowStepStatus::Failed;
-        step.ended_at = Some(now);
-        Ok(())
-    }
-
     fn is_run_cancelled(&self, run_id: &str) -> Result<bool, EngineError> {
         let store = self.lock()?;
         Ok(store
@@ -616,21 +620,31 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         Ok(Some(run.generation))
     }
 
-    fn tick_heartbeat(&self, _run_id: &str) -> Result<(), EngineError> {
-        Ok(())
-    }
-
-    fn persist_metrics(
+    fn bulk_recover_steps(
         &self,
-        _run_id: &str,
-        _input_tokens: i64,
-        _output_tokens: i64,
-        _cache_read_input_tokens: i64,
-        _cache_creation_input_tokens: i64,
-        _cost_usd: f64,
-        _num_turns: i64,
-        _duration_ms: i64,
+        items: &[(String, WorkflowStepStatus, Option<String>)],
+        ended_at: &str,
     ) -> Result<(), EngineError> {
+        for (step_id, status, result_text) in items {
+            let mut store = self.lock()?;
+            if let Some(step) = store.steps.get_mut(step_id) {
+                if !matches!(
+                    step.status,
+                    WorkflowStepStatus::Completed
+                        | WorkflowStepStatus::Failed
+                        | WorkflowStepStatus::Skipped
+                        | WorkflowStepStatus::TimedOut
+                ) {
+                    step.status = status.clone();
+                    step.ended_at = Some(ended_at.to_string());
+                    step.result_text = result_text.clone();
+                    step.context_out = None;
+                    step.markers_out = None;
+                    step.structured_output = None;
+                    step.step_error = None;
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -639,9 +653,9 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
 mod tests {
     use super::*;
     use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
+    use crate::traits::gate_approval_store::GateApprovalState;
     use crate::traits::persistence::{
-        FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,
-        WorkflowPersistence,
+        FanOutItemStatus, FanOutItemUpdate, NewRun, NewStep, StepUpdate, WorkflowPersistence,
     };
 
     fn make_new_run(name: &str) -> NewRun {
@@ -1016,22 +1030,6 @@ mod tests {
     fn test_is_run_cancelled_unknown_run_returns_false() {
         let p = InMemoryWorkflowPersistence::new();
         assert!(!p.is_run_cancelled("nonexistent").unwrap());
-    }
-
-    #[test]
-    fn test_tick_heartbeat_is_noop() {
-        let p = InMemoryWorkflowPersistence::new();
-        let run = p.create_run(make_new_run("test")).unwrap();
-        assert!(p.tick_heartbeat(&run.id).is_ok());
-    }
-
-    #[test]
-    fn test_persist_metrics_is_noop() {
-        let p = InMemoryWorkflowPersistence::new();
-        let run = p.create_run(make_new_run("test")).unwrap();
-        assert!(p
-            .persist_metrics(&run.id, 100, 200, 50, 25, 0.01, 3, 5000)
-            .is_ok());
     }
 
     #[test]

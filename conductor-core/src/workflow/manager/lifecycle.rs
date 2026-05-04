@@ -298,6 +298,12 @@ pub fn cancel_run(conn: &Connection, run_id: &str, reason: &str) -> Result<()> {
     )
 }
 
+/// Writes accumulated metrics to the `workflow_runs` row.
+///
+/// Called from the conductor-core action-executor path (not the runkon-flow
+/// engine). The engine previously called `WorkflowPersistence::persist_metrics`
+/// which has been removed from the trait; this helper remains as the
+/// conductor-core API-layer write path for executor-side metric flushing.
 #[allow(clippy::too_many_arguments)]
 pub fn persist_workflow_metrics(
     conn: &Connection,
@@ -333,19 +339,6 @@ pub fn persist_workflow_metrics(
             ":model": model,
             ":id": workflow_run_id,
         ],
-    )?;
-    Ok(())
-}
-
-// NOTE (#2731/#2796): lease refresh (FlowEngine's refresh_lease_loop) is now the
-// load-bearing ownership mechanism. This heartbeat write is retained only for UI
-// staleness display — detect_stuck_workflow_run_ids reads last_heartbeat.
-pub fn tick_heartbeat(conn: &Connection, run_id: &str) -> Result<()> {
-    let now = Utc::now().to_rfc3339();
-    conn.execute(
-        "UPDATE workflow_runs SET last_heartbeat = :now \
-             WHERE id = :id AND status = 'running'",
-        named_params![":now": now, ":id": run_id],
     )?;
     Ok(())
 }

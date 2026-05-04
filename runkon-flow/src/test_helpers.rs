@@ -163,15 +163,9 @@ pub fn make_test_execution_state(
 }
 
 /// `WorkflowPersistence` decorator that delegates to `InMemoryWorkflowPersistence`
-/// and counts every call to `tick_heartbeat`. Also lets tests force
-/// `is_run_cancelled` to return true at will.
-///
-/// Built for the regression coverage in #2731: wait loops in `parallel` and
-/// `foreach` must keep `tick_heartbeat` firing while children are running so
-/// the watchdog reaper does not race the engine.
+/// and lets tests force `is_run_cancelled` to return true at will.
 pub struct CountingPersistence {
     inner: crate::persistence_memory::InMemoryWorkflowPersistence,
-    tick_count: std::sync::atomic::AtomicUsize,
     cancelled: std::sync::atomic::AtomicBool,
 }
 
@@ -185,16 +179,42 @@ impl CountingPersistence {
     pub fn new() -> Self {
         Self {
             inner: crate::persistence_memory::InMemoryWorkflowPersistence::new(),
-            tick_count: std::sync::atomic::AtomicUsize::new(0),
             cancelled: std::sync::atomic::AtomicBool::new(false),
         }
-    }
-    pub fn tick_count(&self) -> usize {
-        self.tick_count.load(std::sync::atomic::Ordering::Relaxed)
     }
     pub fn set_cancelled(&self, v: bool) {
         self.cancelled
             .store(v, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl crate::traits::gate_approval_store::GateApprovalStore for CountingPersistence {
+    fn get_gate_approval(
+        &self,
+        step_id: &str,
+    ) -> Result<
+        crate::traits::gate_approval_store::GateApprovalState,
+        crate::engine_error::EngineError,
+    > {
+        self.inner.get_gate_approval(step_id)
+    }
+    fn approve_gate(
+        &self,
+        step_id: &str,
+        approved_by: &str,
+        feedback: Option<&str>,
+        selections: Option<&[String]>,
+    ) -> Result<(), crate::engine_error::EngineError> {
+        self.inner
+            .approve_gate(step_id, approved_by, feedback, selections)
+    }
+    fn reject_gate(
+        &self,
+        step_id: &str,
+        rejected_by: &str,
+        feedback: Option<&str>,
+    ) -> Result<(), crate::engine_error::EngineError> {
+        self.inner.reject_gate(step_id, rejected_by, feedback)
     }
 }
 
@@ -212,11 +232,6 @@ impl crate::traits::persistence::WorkflowPersistence for CountingPersistence {
             return Ok(true);
         }
         self.inner.is_run_cancelled(run_id)
-    }
-    fn tick_heartbeat(&self, run_id: &str) -> Result<(), crate::engine_error::EngineError> {
-        self.tick_count
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.inner.tick_heartbeat(run_id)
     }
     fn create_run(
         &self,
@@ -294,51 +309,11 @@ impl crate::traits::persistence::WorkflowPersistence for CountingPersistence {
     ) -> Result<Vec<crate::types::FanOutItemRow>, crate::engine_error::EngineError> {
         self.inner.get_fan_out_items(step_run_id, f)
     }
-    fn get_gate_approval(
+    fn bulk_recover_steps(
         &self,
-        step_id: &str,
-    ) -> Result<crate::traits::persistence::GateApprovalState, crate::engine_error::EngineError>
-    {
-        self.inner.get_gate_approval(step_id)
-    }
-    fn approve_gate(
-        &self,
-        step_id: &str,
-        approved_by: &str,
-        feedback: Option<&str>,
-        selections: Option<&[String]>,
+        items: &[(String, crate::status::WorkflowStepStatus, Option<String>)],
+        ended_at: &str,
     ) -> Result<(), crate::engine_error::EngineError> {
-        self.inner
-            .approve_gate(step_id, approved_by, feedback, selections)
-    }
-    fn reject_gate(
-        &self,
-        step_id: &str,
-        rejected_by: &str,
-        feedback: Option<&str>,
-    ) -> Result<(), crate::engine_error::EngineError> {
-        self.inner.reject_gate(step_id, rejected_by, feedback)
-    }
-    fn persist_metrics(
-        &self,
-        run_id: &str,
-        input_tokens: i64,
-        output_tokens: i64,
-        cache_read_input_tokens: i64,
-        cache_creation_input_tokens: i64,
-        cost_usd: f64,
-        num_turns: i64,
-        duration_ms: i64,
-    ) -> Result<(), crate::engine_error::EngineError> {
-        self.inner.persist_metrics(
-            run_id,
-            input_tokens,
-            output_tokens,
-            cache_read_input_tokens,
-            cache_creation_input_tokens,
-            cost_usd,
-            num_turns,
-            duration_ms,
-        )
+        self.inner.bulk_recover_steps(items, ended_at)
     }
 }

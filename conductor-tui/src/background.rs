@@ -506,10 +506,18 @@ pub fn poll_data(
                     Err(e) => tracing::warn!("cleanup_merged_worktrees failed: {e}"),
                 }
             }
-            match conductor_core::workflow::recover_stuck_steps(&conn) {
-                Ok(n) if n > 0 => tracing::debug!("Recovered {n} stuck workflow step(s)"),
-                Ok(_) => {}
-                Err(e) => tracing::warn!("recover_stuck_steps failed: {e}"),
+            // Separate connection for writes so the read `conn` and write persistence
+            // don't deadlock on the same mutex inside SqliteWorkflowPersistence.
+            if let Some(write_conn) = open_database(&db).ok() {
+                let write_persistence =
+                    conductor_core::workflow::SqliteWorkflowPersistence::from_shared_connection(
+                        Arc::new(Mutex::new(write_conn)),
+                    );
+                match conductor_core::workflow::recover_stuck_steps(&conn, &write_persistence) {
+                    Ok(n) if n > 0 => tracing::debug!("Recovered {n} stuck workflow step(s)"),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("recover_stuck_steps failed: {e}"),
+                }
             }
             match conductor_core::workflow::reap_orphaned_workflow_runs(&conn) {
                 Ok(n) if n > 0 => tracing::debug!("Reaped {n} orphaned workflow run(s)"),

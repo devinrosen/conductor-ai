@@ -185,9 +185,6 @@ fn execute_call_inner(
                             tracing::warn!("cancellation check failed for {run_id}: {e}");
                         }
                     }
-                    if let Err(e) = persistence.tick_heartbeat(&run_id) {
-                        tracing::warn!("heartbeat tick failed for {run_id}: {e}");
-                    }
                 }
             });
         }

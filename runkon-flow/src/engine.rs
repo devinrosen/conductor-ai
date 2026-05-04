@@ -175,20 +175,19 @@ impl ExecutionState {
     /// helper before the `Err` is returned.
     ///
     /// Without this being called from inside long-running wait loops (parallel
-    /// blocks, foreach fan-out), the heartbeat goes stale during multi-minute
-    /// waits and the watchdog reaper races the engine after >60 s — see #2731.
+    /// blocks, foreach fan-out), the cancellation check is skipped during
+    /// multi-minute waits — see #2731.
     ///
     /// NOTE (#2731/#2796): lease refresh (refresh_lease_loop in flow_engine.rs)
-    /// is now the load-bearing ownership mechanism. Heartbeat writes are retained
-    /// solely for UI staleness display (detect_stuck_workflow_run_ids reads
-    /// last_heartbeat). Do not remove them without auditing that query.
-    pub fn tick_heartbeat_throttled(&self) -> Result<()> {
+    /// is the load-bearing ownership mechanism. `detect_stuck_workflow_run_ids`
+    /// falls back to `started_at` when `last_heartbeat` is NULL (new runs).
+    pub fn check_cancellation_throttled(&self) -> Result<()> {
         use crate::cancellation_reason::CancellationReason;
 
         let now_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_else(|e| {
-                tracing::warn!("system clock regressed: {e}; heartbeat suppressed");
+                tracing::warn!("system clock regressed: {e}; cancellation check suppressed");
                 e.duration()
             })
             .as_secs() as i64;
@@ -217,9 +216,6 @@ impl ExecutionState {
                     e
                 );
             }
-        }
-        if let Err(e) = self.persistence.tick_heartbeat(&self.workflow_run_id) {
-            tracing::warn!("tick_heartbeat failed (non-fatal): {e}");
         }
         Ok(())
     }
@@ -315,19 +311,6 @@ impl ExecutionState {
         changed
     }
 
-    /// Persist the current accumulated metrics to the workflow run row.
-    pub fn flush_metrics(&self) -> Result<()> {
-        self.persistence.persist_metrics(
-            &self.workflow_run_id,
-            self.total_input_tokens,
-            self.total_output_tokens,
-            self.total_cache_read_input_tokens,
-            self.total_cache_creation_input_tokens,
-            self.total_cost,
-            self.total_turns,
-            self.total_duration_ms,
-        )
-    }
 }
 
 /// Resolve a schema by name using the schema_resolver callback.
@@ -480,12 +463,6 @@ pub fn run_workflow_engine(
     let wf_run_id = state.workflow_run_id.clone();
     let is_cancelled = matches!(&body_result, Err(EngineError::Cancelled(_)));
 
-    if let Err(e) = state.flush_metrics() {
-        tracing::warn!(
-            workflow_run_id = %wf_run_id,
-            "flush_metrics failed at finalization (non-fatal, metrics may be missing): {e}"
-        );
-    }
     emit_event(
         state,
         EngineEvent::MetricsUpdated {
@@ -602,7 +579,7 @@ pub fn execute_nodes(
         if state.cancellation.is_cancelled() {
             return state.cancellation.error_if_cancelled();
         }
-        state.tick_heartbeat_throttled()?;
+        state.check_cancellation_throttled()?;
         execute_single_node(state, node, 0)?;
     }
     Ok(())
@@ -687,13 +664,6 @@ pub fn record_step_success(
         cache_read,
         cache_creation,
     );
-
-    // Best-effort mid-run metrics flush — non-fatal, only if something changed
-    if metrics_changed {
-        if let Err(e) = state.flush_metrics() {
-            tracing::warn!("Failed to flush mid-run metrics: {e}");
-        }
-    }
 
     let step_result = StepResult::completed(&success);
     state.step_results.insert(step_key, step_result);
@@ -1364,37 +1334,16 @@ mod tests {
         )
     }
 
-    /// First call must tick (initial state has last_heartbeat_at = 0, far enough
-    /// in the past to clear the 5 s gate). An immediate second call must NOT
-    /// tick — it falls inside the 5 s throttle window.
-    #[test]
-    fn tick_heartbeat_throttled_first_call_ticks_second_call_throttled() {
-        let cp = Arc::new(CountingPersistence::new());
-        let state = make_state_with_counting_persistence(Arc::clone(&cp), "run-1".into());
-
-        assert_eq!(cp.tick_count(), 0);
-        state.tick_heartbeat_throttled().unwrap();
-        assert_eq!(cp.tick_count(), 1, "first call must tick");
-
-        // Immediate second call falls inside the 5 s window.
-        state.tick_heartbeat_throttled().unwrap();
-        assert_eq!(
-            cp.tick_count(),
-            1,
-            "second call within 5s must be throttled, not tick again"
-        );
-    }
-
     /// When persistence reports the run cancelled, the helper sets
     /// `state.cancellation` and returns `Err(Cancelled)`.
     #[test]
-    fn tick_heartbeat_throttled_propagates_external_cancel() {
+    fn check_cancellation_throttled_propagates_external_cancel() {
         let cp = Arc::new(CountingPersistence::new());
         cp.set_cancelled(true);
         let state = make_state_with_counting_persistence(Arc::clone(&cp), "run-1".into());
 
         assert!(!state.cancellation.is_cancelled());
-        let result = state.tick_heartbeat_throttled();
+        let result = state.check_cancellation_throttled();
         assert!(
             matches!(result, Err(EngineError::Cancelled(_))),
             "expected Err(Cancelled), got {result:?}"

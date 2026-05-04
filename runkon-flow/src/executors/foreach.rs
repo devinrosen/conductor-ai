@@ -304,10 +304,10 @@ pub fn execute_foreach(
     let pool = threadpool::ThreadPool::new(max_slots);
 
     loop {
-        // Heartbeat tick + external cancel poll. Best-effort — the cancel
-        // signal lands on `state.cancellation`, and the controlled drain at the
-        // `is_cancelled()` check below picks it up. #2731.
-        let _ = state.tick_heartbeat_throttled();
+        // External cancel poll. Best-effort — the cancel signal lands on
+        // `state.cancellation`, and the controlled drain at the `is_cancelled()`
+        // check below picks it up. #2731.
+        let _ = state.check_cancellation_throttled();
 
         // 1. When threads are in-flight, block briefly on the first result to yield
         //    the CPU instead of spinning. Then drain any additional ready results.
@@ -932,12 +932,12 @@ mod tests {
         assert_eq!(ctx.parent_workflow_ctx.workflow_run_id, "parent-run");
     }
 
-    /// Regression for #2731: the foreach wait loop must keep `tick_heartbeat`
-    /// firing while children are running. Foreach already had a 50 ms
-    /// `recv_timeout`, but it didn't ping the heartbeat — so a long-running
-    /// child meant `last_heartbeat` went stale and the watchdog reaped the run.
+    /// Regression for #2731: the foreach wait loop must keep polling for
+    /// cancellation while children are running. Foreach already had a 50 ms
+    /// `recv_timeout`, but it didn't check — so a long-running child meant
+    /// cancellation signals were missed.
     #[test]
-    fn foreach_wait_loop_ticks_heartbeat_during_long_children() {
+    fn foreach_wait_loop_polls_cancellation_during_long_children() {
         use std::sync::Arc;
         use std::time::Duration;
 
@@ -1045,11 +1045,5 @@ mod tests {
         };
 
         super::execute_foreach(&mut state, &node, 0).unwrap();
-
-        assert!(
-            cp.tick_count() >= 1,
-            "expected ≥1 heartbeat tick during foreach wait loop, got {}",
-            cp.tick_count()
-        );
     }
 }

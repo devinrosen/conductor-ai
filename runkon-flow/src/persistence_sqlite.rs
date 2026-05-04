@@ -15,9 +15,12 @@ use crate::cancellation_reason::CancellationReason;
 use crate::constants::{RUN_COLUMNS, STEP_COLUMNS, TERMINAL_STATUSES_SQL};
 use crate::engine_error::EngineError;
 use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
+use crate::traits::gate_approval_store::{
+    gate_approval_state_from_fields, GateApprovalState, GateApprovalStore,
+};
 use crate::traits::persistence::{
-    gate_approval_state_from_fields, FanOutItemRow, FanOutItemStatus, FanOutItemUpdate,
-    GateApprovalState, NewRun, NewStep, StepUpdate, WorkflowPersistence,
+    FanOutItemRow, FanOutItemStatus, FanOutItemUpdate, NewRun, NewStep, StepUpdate,
+    WorkflowPersistence,
 };
 use crate::types::{extract_workflow_title, BlockedOn, WorkflowRun, WorkflowRunStep};
 
@@ -258,6 +261,109 @@ impl SqliteWorkflowPersistence {
 
 fn db_err(e: rusqlite::Error) -> EngineError {
     EngineError::Persistence(e.to_string())
+}
+
+impl GateApprovalStore for SqliteWorkflowPersistence {
+    fn get_gate_approval(&self, step_id: &str) -> Result<GateApprovalState, EngineError> {
+        let conn = self.lock()?;
+        #[allow(clippy::type_complexity)]
+        let row: Option<(Option<String>, String, Option<String>, Option<String>)> = conn
+            .query_row(
+                "SELECT gate_approved_at, status, gate_feedback, gate_selections \
+                 FROM workflow_run_steps WHERE id = ?1",
+                rusqlite::params![step_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(db_err)?;
+
+        let Some((approved_at, status_str, feedback, selections_json)) = row else {
+            return Ok(GateApprovalState::Pending);
+        };
+        let status = status_str
+            .parse::<WorkflowStepStatus>()
+            .unwrap_or_else(|_| {
+                tracing::warn!(
+                    step_id = %step_id,
+                    status = %status_str,
+                    "get_gate_approval_state: unrecognised step status; treating as Waiting",
+                );
+                WorkflowStepStatus::Waiting
+            });
+        let selections = selections_json.and_then(|json| {
+            serde_json::from_str::<Vec<String>>(&json)
+                .map_err(|e| {
+                    tracing::warn!(
+                        step_id = %step_id,
+                        "get_gate_approval_state: failed to deserialize gate_selections: {e}",
+                    );
+                })
+                .ok()
+        });
+        Ok(gate_approval_state_from_fields(
+            approved_at.as_deref(),
+            status,
+            feedback,
+            selections,
+        ))
+    }
+
+    fn approve_gate(
+        &self,
+        step_id: &str,
+        approved_by: &str,
+        feedback: Option<&str>,
+        selections: Option<&[String]>,
+    ) -> Result<(), EngineError> {
+        let context_out = selections
+            .filter(|s| !s.is_empty())
+            .map(format_gate_selection_context);
+
+        let conn = self.lock()?;
+        if let Some(sels) = selections {
+            validate_gate_selections(&conn, step_id, sels)?;
+        }
+        let selections_json = serialize_gate_selections(selections)?;
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE workflow_run_steps SET gate_approved_at = :now, gate_approved_by = :approved_by, \
+             gate_feedback = :feedback, gate_selections = :selections_json, \
+             context_out = COALESCE(:context_out, context_out), \
+             status = 'completed', ended_at = :now WHERE id = :id",
+            named_params![
+                ":now": now,
+                ":approved_by": approved_by,
+                ":feedback": feedback,
+                ":selections_json": selections_json,
+                ":context_out": context_out,
+                ":id": step_id,
+            ],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    fn reject_gate(
+        &self,
+        step_id: &str,
+        rejected_by: &str,
+        feedback: Option<&str>,
+    ) -> Result<(), EngineError> {
+        let conn = self.lock()?;
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE workflow_run_steps SET gate_approved_by = :rejected_by, gate_feedback = :feedback, \
+             status = 'failed', ended_at = :ended_at WHERE id = :id",
+            named_params![
+                ":rejected_by": rejected_by,
+                ":feedback": feedback,
+                ":ended_at": now,
+                ":id": step_id,
+            ],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
 }
 
 fn new_id() -> String {
@@ -692,107 +798,6 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
         }
     }
 
-    fn get_gate_approval(&self, step_id: &str) -> Result<GateApprovalState, EngineError> {
-        let conn = self.lock()?;
-        #[allow(clippy::type_complexity)]
-        let row: Option<(Option<String>, String, Option<String>, Option<String>)> = conn
-            .query_row(
-                "SELECT gate_approved_at, status, gate_feedback, gate_selections \
-                 FROM workflow_run_steps WHERE id = ?1",
-                rusqlite::params![step_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .optional()
-            .map_err(db_err)?;
-
-        let Some((approved_at, status_str, feedback, selections_json)) = row else {
-            return Ok(GateApprovalState::Pending);
-        };
-        let status = status_str
-            .parse::<WorkflowStepStatus>()
-            .unwrap_or_else(|_| {
-                tracing::warn!(
-                    step_id = %step_id,
-                    status = %status_str,
-                    "get_gate_approval_state: unrecognised step status; treating as Waiting",
-                );
-                WorkflowStepStatus::Waiting
-            });
-        let selections = selections_json.and_then(|json| {
-            serde_json::from_str::<Vec<String>>(&json)
-                .map_err(|e| {
-                    tracing::warn!(
-                        step_id = %step_id,
-                        "get_gate_approval_state: failed to deserialize gate_selections: {e}",
-                    );
-                })
-                .ok()
-        });
-        Ok(gate_approval_state_from_fields(
-            approved_at.as_deref(),
-            status,
-            feedback,
-            selections,
-        ))
-    }
-
-    fn approve_gate(
-        &self,
-        step_id: &str,
-        approved_by: &str,
-        feedback: Option<&str>,
-        selections: Option<&[String]>,
-    ) -> Result<(), EngineError> {
-        let context_out = selections
-            .filter(|s| !s.is_empty())
-            .map(format_gate_selection_context);
-
-        let conn = self.lock()?;
-        if let Some(sels) = selections {
-            validate_gate_selections(&conn, step_id, sels)?;
-        }
-        let selections_json = serialize_gate_selections(selections)?;
-        let now = Utc::now().to_rfc3339();
-        conn.execute(
-            "UPDATE workflow_run_steps SET gate_approved_at = :now, gate_approved_by = :approved_by, \
-             gate_feedback = :feedback, gate_selections = :selections_json, \
-             context_out = COALESCE(:context_out, context_out), \
-             status = 'completed', ended_at = :now WHERE id = :id",
-            named_params![
-                ":now": now,
-                ":approved_by": approved_by,
-                ":feedback": feedback,
-                ":selections_json": selections_json,
-                ":context_out": context_out,
-                ":id": step_id,
-            ],
-        )
-        .map_err(db_err)?;
-        Ok(())
-    }
-
-    fn reject_gate(
-        &self,
-        step_id: &str,
-        rejected_by: &str,
-        feedback: Option<&str>,
-    ) -> Result<(), EngineError> {
-        let conn = self.lock()?;
-        let now = Utc::now().to_rfc3339();
-        conn.execute(
-            "UPDATE workflow_run_steps SET gate_approved_by = :rejected_by, gate_feedback = :feedback, \
-             status = 'failed', ended_at = :ended_at WHERE id = :id",
-            named_params![
-                ":rejected_by": rejected_by,
-                ":feedback": feedback,
-                ":ended_at": now,
-                ":id": step_id,
-            ],
-        )
-        .map_err(db_err)?;
-        Ok(())
-    }
-
     fn is_run_cancelled(&self, run_id: &str) -> Result<bool, EngineError> {
         let conn = self.lock()?;
         let status: Option<String> = conn
@@ -807,18 +812,6 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
             status.as_deref(),
             Some("cancelled") | Some("cancelling")
         ))
-    }
-
-    fn tick_heartbeat(&self, run_id: &str) -> Result<(), EngineError> {
-        let conn = self.lock()?;
-        let now = Utc::now().to_rfc3339();
-        conn.execute(
-            "UPDATE workflow_runs SET last_heartbeat = :now \
-             WHERE id = :id AND status = 'running'",
-            named_params![":now": now, ":id": run_id],
-        )
-        .map_err(db_err)?;
-        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -855,42 +848,52 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
         Ok(Some(gen))
     }
 
-    fn persist_metrics(
+    fn bulk_recover_steps(
         &self,
-        run_id: &str,
-        input_tokens: i64,
-        output_tokens: i64,
-        cache_read_input_tokens: i64,
-        cache_creation_input_tokens: i64,
-        cost_usd: f64,
-        num_turns: i64,
-        duration_ms: i64,
+        items: &[(String, WorkflowStepStatus, Option<String>)],
+        ended_at: &str,
     ) -> Result<(), EngineError> {
+        if items.is_empty() {
+            return Ok(());
+        }
         let conn = self.lock()?;
-        conn.execute(
-            "UPDATE workflow_runs SET \
-             total_input_tokens = :total_input_tokens, \
-             total_output_tokens = :total_output_tokens, \
-             total_cache_read_input_tokens = :total_cache_read_input_tokens, \
-             total_cache_creation_input_tokens = :total_cache_creation_input_tokens, \
-             total_turns = :total_turns, \
-             total_cost_usd = :total_cost_usd, \
-             total_duration_ms = :total_duration_ms, \
-             model = :model \
-             WHERE id = :id",
-            named_params![
-                ":total_input_tokens": input_tokens,
-                ":total_output_tokens": output_tokens,
-                ":total_cache_read_input_tokens": cache_read_input_tokens,
-                ":total_cache_creation_input_tokens": cache_creation_input_tokens,
-                ":total_turns": num_turns,
-                ":total_cost_usd": cost_usd,
-                ":total_duration_ms": duration_ms,
-                ":model": Option::<&str>::None,
-                ":id": run_id,
-            ],
-        )
-        .map_err(db_err)?;
+        for chunk in items.chunks(199) {
+            let n = chunk.len();
+            let case_arms = (0..n)
+                .map(|_| "WHEN ? THEN ?")
+                .collect::<Vec<_>>()
+                .join(" ");
+            let in_placeholders = (1..=n).map(|_| "?").collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "UPDATE workflow_run_steps \
+                 SET status      = CASE id {case_arms} END, \
+                     ended_at    = ?, \
+                     result_text = CASE id {case_arms} END, \
+                     context_out = NULL, \
+                     markers_out = NULL, \
+                     structured_output = NULL, \
+                     step_error  = NULL \
+                 WHERE id IN ({in_placeholders}) \
+                 AND status NOT IN ({TERMINAL_STATUSES_SQL})"
+            );
+
+            let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(5 * n + 1);
+            for (step_id, status, _) in chunk {
+                params.push(Box::new(step_id.clone()));
+                params.push(Box::new(status.to_string()));
+            }
+            params.push(Box::new(ended_at.to_string()));
+            for (step_id, _, result_text) in chunk {
+                params.push(Box::new(step_id.clone()));
+                params.push(Box::new(result_text.clone()));
+            }
+            for (step_id, _, _) in chunk {
+                params.push(Box::new(step_id.clone()));
+            }
+
+            conn.execute(&sql, rusqlite::params_from_iter(params))
+                .map_err(db_err)?;
+        }
         Ok(())
     }
 }

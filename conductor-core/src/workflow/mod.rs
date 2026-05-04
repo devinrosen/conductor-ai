@@ -21,7 +21,8 @@ pub(crate) mod item_provider;
 pub(crate) mod manager;
 pub(crate) mod output;
 pub(crate) mod panic_db_sink;
-pub(crate) mod persistence_sqlite;
+pub mod persistence_sqlite;
+pub use persistence_sqlite::SqliteWorkflowPersistence;
 pub(crate) mod prompt_builder;
 pub(crate) mod run_context;
 pub(crate) mod runkon_bridge;
@@ -68,7 +69,7 @@ pub use manager::lifecycle::{
     cancel_run, create_workflow_run, create_workflow_run_with_targets, fail_workflow_run,
     persist_workflow_metrics, set_dismissed, set_waiting_blocked_on,
     set_workflow_run_default_bot_name, set_workflow_run_inputs, set_workflow_run_iteration,
-    tick_heartbeat, update_workflow_status,
+    update_workflow_status,
 };
 pub use manager::queries::{
     active_run_counts_by_repo, find_step_by_name_and_iteration, find_waiting_gate,
