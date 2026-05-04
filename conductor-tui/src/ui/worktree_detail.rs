@@ -304,14 +304,14 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
             });
         if has_waiting {
             if has_resumable_wf {
-                "Tab=switch panel  y=copy  o=act  p=prompt  f=respond  F=dismiss  x=stop  w=workflow  r=resume wf  d=del  Esc=back"
+                "Tab=switch panel  y=copy  o=act  f=respond  F=dismiss  x=stop  w=workflow  r=resume wf  d=del  Esc=back"
             } else {
-                "Tab=switch panel  y=copy  o=act  p=prompt  f=respond  F=dismiss  x=stop  w=workflow  d=del  Esc=back"
+                "Tab=switch panel  y=copy  o=act  f=respond  F=dismiss  x=stop  w=workflow  d=del  Esc=back"
             }
         } else if has_resumable_wf {
-            "Tab=switch panel  y=copy  o=act  p=prompt  x=stop  X=clear conv  w=workflow  r=resume wf  d=del  Esc=back"
+            "Tab=switch panel  y=copy  o=act  x=stop  X=clear conv  w=workflow  r=resume wf  d=del  Esc=back"
         } else {
-            "Tab=switch panel  y=copy  o=act  p=prompt  x=stop  X=clear conv  w=workflow  d=del  Esc=back"
+            "Tab=switch panel  y=copy  o=act  x=stop  X=clear conv  w=workflow  d=del  Esc=back"
         }
     } else {
         "Tab=switch panel  y=copy  o=act  X=clear conv  Esc=back  (archived)"
@@ -357,6 +357,13 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
+    // Split into log pane (fills) and prompt input strip (fixed 3 rows).
+    let panes = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).split(area);
+    render_agent_log(frame, panes[0], state);
+    render_prompt_input(frame, panes[1], state);
+}
+
+fn render_agent_log(frame: &mut Frame, area: Rect, state: &AppState) {
     let events = &state.data.agent_events;
 
     let log_focus = state.column_focus == ColumnFocus::Content
@@ -452,6 +459,26 @@ fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
     frame.render_stateful_widget(list, area, &mut state.agent_list_state.borrow_mut());
+}
+
+fn render_prompt_input(frame: &mut Frame, area: Rect, state: &AppState) {
+    let is_focused = state.column_focus == ColumnFocus::Content
+        && state.worktree_detail_focus == WorktreeDetailFocus::PromptInput;
+
+    let border_color = if is_focused {
+        state.theme.border_focused
+    } else {
+        state.theme.border_inactive
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+        .title(" Prompt ");
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    frame.render_widget(&state.prompt_textarea, inner);
 }
 
 /// Extract a clean display label from an orchestrator child prompt.

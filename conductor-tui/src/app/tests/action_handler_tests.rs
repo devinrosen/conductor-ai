@@ -373,7 +373,7 @@ fn prev_panel_cycles_repo_detail_focus_backward() {
 }
 
 #[test]
-fn next_panel_toggles_worktree_detail_focus() {
+fn next_panel_cycles_worktree_detail_focus() {
     let mut app = make_app();
     app.state.view = View::WorktreeDetail;
     app.state.column_focus = crate::state::ColumnFocus::Content;
@@ -382,6 +382,11 @@ fn next_panel_toggles_worktree_detail_focus() {
     assert_eq!(
         app.state.worktree_detail_focus,
         crate::state::WorktreeDetailFocus::LogPanel
+    );
+    app.update(Action::NextPanel);
+    assert_eq!(
+        app.state.worktree_detail_focus,
+        crate::state::WorktreeDetailFocus::PromptInput
     );
     app.update(Action::NextPanel);
     assert_eq!(
@@ -1980,4 +1985,153 @@ fn workflow_picker_confirm_worktree_target() {
         matches!(app.state.modal, Modal::ModelPicker { .. }),
         "expected ModelPicker after confirming worktree workflow with no inputs"
     );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// handle_submit_prompt_input tests
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn submit_prompt_input_empty_is_noop() {
+    let mut app = make_app();
+    // Default textarea is empty — should return without side effects.
+    app.handle_submit_prompt_input();
+    assert!(matches!(app.state.modal, Modal::None));
+    assert!(app.state.status_message.is_none());
+}
+
+#[test]
+fn submit_prompt_input_no_worktree_sets_status() {
+    let mut app = make_app();
+    app.state.prompt_textarea = tui_textarea::TextArea::new(vec!["hello".to_string()]);
+    app.state.selected_worktree_id = None;
+    app.handle_submit_prompt_input();
+    assert_eq!(
+        app.state.status_message.as_deref(),
+        Some("Select a worktree first")
+    );
+}
+
+#[test]
+fn submit_prompt_input_with_worktree_opens_model_picker_and_resets_textarea() {
+    let mut app = make_app();
+    app.state.prompt_textarea = tui_textarea::TextArea::new(vec!["do the thing".to_string()]);
+    app.state.data.worktrees = vec![conductor_core::worktree::Worktree {
+        id: "w1".into(),
+        repo_id: "r1".into(),
+        slug: "feat-a".into(),
+        branch: "feat/a".into(),
+        path: "/tmp/ws/feat-a".into(),
+        ticket_id: None,
+        status: conductor_core::worktree::WorktreeStatus::Active,
+        created_at: "2024-01-01T00:00:00Z".into(),
+        completed_at: None,
+        model: None,
+        base_branch: None,
+    }];
+    app.state.selected_worktree_id = Some("w1".into());
+    app.handle_submit_prompt_input();
+    // No running agent → proceeds to ModelPicker.
+    assert!(
+        matches!(app.state.modal, Modal::ModelPicker { .. }),
+        "expected ModelPicker after submit with a valid worktree"
+    );
+    // Textarea must be reset to empty.
+    assert!(
+        app.state.prompt_textarea.lines().join("").trim().is_empty(),
+        "textarea must be cleared after submit"
+    );
+    // Focus must return to LogPanel.
+    assert_eq!(
+        app.state.worktree_detail_focus,
+        crate::state::WorktreeDetailFocus::LogPanel
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// handle_submit_repo_prompt_input tests
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn submit_repo_prompt_input_empty_is_noop() {
+    let mut app = make_app();
+    app.handle_submit_repo_prompt_input();
+    assert!(matches!(app.state.modal, Modal::None));
+    assert!(app.state.status_message.is_none());
+}
+
+#[test]
+fn submit_repo_prompt_input_no_repo_sets_status() {
+    let mut app = make_app();
+    app.state.repo_agent_prompt_textarea = tui_textarea::TextArea::new(vec!["hello".to_string()]);
+    app.state.selected_repo_id = None;
+    app.handle_submit_repo_prompt_input();
+    assert_eq!(
+        app.state.status_message.as_deref(),
+        Some("No repo selected")
+    );
+}
+
+#[test]
+fn submit_repo_prompt_input_with_repo_resets_textarea_and_blurs_to_repo_agent() {
+    let mut app = make_app();
+    app.state.repo_agent_prompt_textarea =
+        tui_textarea::TextArea::new(vec!["why does X happen".to_string()]);
+    app.state.data.repos = vec![conductor_core::repo::Repo {
+        id: "r1".into(),
+        slug: "my-app".into(),
+        remote_url: "https://github.com/me/my-app".into(),
+        local_path: "/tmp/repos/my-app".into(),
+        default_branch: "main".into(),
+        workspace_dir: "/tmp/repos/my-app/.worktrees".into(),
+        created_at: "2024-01-01T00:00:00Z".into(),
+        model: None,
+        allow_agent_issue_creation: false,
+        runtime_overrides: None,
+    }];
+    app.state.selected_repo_id = Some("r1".into());
+    app.state.repo_detail_focus = crate::state::RepoDetailFocus::RepoAgentPromptInput;
+    app.handle_submit_repo_prompt_input();
+    // Textarea must be reset.
+    assert!(
+        app.state
+            .repo_agent_prompt_textarea
+            .lines()
+            .join("")
+            .trim()
+            .is_empty(),
+        "textarea must be cleared after submit"
+    );
+    // Focus blurs back to the activity pane.
+    assert_eq!(
+        app.state.repo_detail_focus,
+        crate::state::RepoDetailFocus::RepoAgent
+    );
+}
+
+// `p` in RepoDetail now focuses the prompt input rather than opening a modal.
+#[test]
+fn prompt_repo_agent_focuses_prompt_input() {
+    let mut app = make_app();
+    app.state.view = View::RepoDetail;
+    app.state.data.repos = vec![conductor_core::repo::Repo {
+        id: "r1".into(),
+        slug: "my-app".into(),
+        remote_url: "https://github.com/me/my-app".into(),
+        local_path: "/tmp/repos/my-app".into(),
+        default_branch: "main".into(),
+        workspace_dir: "/tmp/repos/my-app/.worktrees".into(),
+        created_at: "2024-01-01T00:00:00Z".into(),
+        model: None,
+        allow_agent_issue_creation: false,
+        runtime_overrides: None,
+    }];
+    app.state.selected_repo_id = Some("r1".into());
+    app.handle_prompt_repo_agent();
+    assert!(matches!(app.state.modal, Modal::None));
+    assert_eq!(
+        app.state.repo_detail_focus,
+        crate::state::RepoDetailFocus::RepoAgentPromptInput
+    );
+    assert_eq!(app.state.column_focus, crate::state::ColumnFocus::Content);
 }
