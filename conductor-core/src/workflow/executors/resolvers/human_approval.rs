@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use crate::error::{ConductorError, Result};
-use crate::workflow::executors::gate_resolver::{GateContext, GateParams, GatePoll, GateResolver};
+use runkon_flow::engine_error::EngineError;
+use runkon_flow::traits::gate_resolver::{GateParams, GatePoll, GateResolver};
 use runkon_flow::traits::persistence::{GateApprovalState, WorkflowPersistence};
+use runkon_flow::traits::run_context::RunContext;
 
 /// Distinguishes the two human gate types so a single struct can register
 /// under both `"human_approval"` and `"human_review"`.
@@ -36,11 +37,13 @@ impl GateResolver for HumanApprovalGateResolver {
         }
     }
 
-    fn poll(&self, _run_id: &str, params: &GateParams, _ctx: &GateContext<'_>) -> Result<GatePoll> {
-        let state = self
-            .persistence
-            .get_gate_approval(&params.step_id)
-            .map_err(|e| ConductorError::Workflow(e.to_string()))?;
+    fn poll(
+        &self,
+        _run_id: &str,
+        params: &GateParams,
+        _ctx: &dyn RunContext,
+    ) -> Result<GatePoll, EngineError> {
+        let state = self.persistence.get_gate_approval(&params.step_id)?;
         match state {
             GateApprovalState::Approved { feedback, .. } => Ok(GatePoll::Approved(feedback)),
             GateApprovalState::Rejected { feedback } => {
@@ -56,10 +59,12 @@ impl GateResolver for HumanApprovalGateResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::executors::gate_resolver::{ApprovalMode, GateContext, GateParams};
     use crate::workflow::persistence_sqlite::SqliteWorkflowPersistence;
+    use runkon_flow::dsl::ApprovalMode;
+    use runkon_flow::traits::gate_resolver::GateParams;
     use runkon_flow::traits::persistence::WorkflowPersistence;
     use rusqlite::Connection;
+    use std::collections::HashMap;
     use std::sync::Arc;
     use tempfile::NamedTempFile;
 
@@ -83,18 +88,27 @@ mod tests {
             prompt: None,
             min_approvals: 1,
             approval_mode: ApprovalMode::default(),
-            options: vec![],
+            options: HashMap::new(),
             timeout_secs: 3600,
             bot_name: None,
             step_id: step_id.into(),
         }
     }
 
-    fn make_test_ctx<'a>(
-        config: &'a crate::config::Config,
-        db_path: &'a std::path::Path,
-    ) -> GateContext<'a> {
-        GateContext { config, db_path }
+    struct NoopCtx;
+    impl RunContext for NoopCtx {
+        fn injected_variables(&self) -> HashMap<&'static str, String> {
+            Default::default()
+        }
+        fn working_dir(&self) -> &std::path::Path {
+            std::path::Path::new("/tmp")
+        }
+        fn run_id(&self) -> &str {
+            "noop-run"
+        }
+        fn workflow_name(&self) -> &str {
+            "noop-wf"
+        }
     }
 
     fn make_persistence(db_path: &std::path::Path) -> Arc<dyn WorkflowPersistence> {
@@ -120,11 +134,9 @@ mod tests {
 
         let persistence = make_persistence(&db_path);
         let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
-        let config = crate::config::Config::default();
         let params = make_test_params("step1");
-        let ctx = make_test_ctx(&config, &db_path);
 
-        let result = resolver.poll("run1", &params, &ctx).unwrap();
+        let result = resolver.poll("run1", &params, &NoopCtx).unwrap();
         assert!(
             matches!(result, GatePoll::Approved(_)),
             "expected Approved when gate_approved_at is set"
@@ -147,11 +159,9 @@ mod tests {
 
         let persistence = make_persistence(&db_path);
         let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
-        let config = crate::config::Config::default();
         let params = make_test_params("step1");
-        let ctx = make_test_ctx(&config, &db_path);
 
-        let result = resolver.poll("run1", &params, &ctx).unwrap();
+        let result = resolver.poll("run1", &params, &NoopCtx).unwrap();
         match result {
             GatePoll::Rejected(msg) => {
                 assert_eq!(msg, "Gate 'test-gate' rejected");
@@ -176,11 +186,9 @@ mod tests {
 
         let persistence = make_persistence(&db_path);
         let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
-        let config = crate::config::Config::default();
         let params = make_test_params("step1");
-        let ctx = make_test_ctx(&config, &db_path);
 
-        let result = resolver.poll("run1", &params, &ctx).unwrap();
+        let result = resolver.poll("run1", &params, &NoopCtx).unwrap();
         match result {
             GatePoll::Rejected(msg) => {
                 assert_eq!(msg, "needs more work");
@@ -205,11 +213,9 @@ mod tests {
 
         let persistence = make_persistence(&db_path);
         let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
-        let config = crate::config::Config::default();
         let params = make_test_params("step1");
-        let ctx = make_test_ctx(&config, &db_path);
 
-        let result = resolver.poll("run1", &params, &ctx).unwrap();
+        let result = resolver.poll("run1", &params, &NoopCtx).unwrap();
         assert!(
             matches!(result, GatePoll::Pending),
             "expected Pending when step is still waiting"
@@ -240,11 +246,9 @@ mod tests {
 
         let persistence = make_persistence(&db_path);
         let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
-        let config = crate::config::Config::default();
         let params = make_test_params("nonexistent-step-id");
-        let ctx = make_test_ctx(&config, &db_path);
 
-        let result = resolver.poll("run1", &params, &ctx).unwrap();
+        let result = resolver.poll("run1", &params, &NoopCtx).unwrap();
         assert!(
             matches!(result, GatePoll::Pending),
             "expected Pending when step_id does not exist in DB"
