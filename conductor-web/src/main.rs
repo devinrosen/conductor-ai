@@ -523,11 +523,39 @@ async fn main() -> Result<()> {
                     seen_workflow_statuses = new_wf_seen;
                     workflow_initialized = new_wf_init;
                     if !agent_payloads.is_empty() || !wf_payloads.is_empty() {
-                        let conn = reaper_state.db.lock().await;
+                        let subscriptions = {
+                            let conn = reaper_state.db.lock().await;
+                            match push::get_all_subscriptions(&conn) {
+                                Ok(subs) => subs,
+                                Err(e) => {
+                                    tracing::warn!("Failed to get push subscriptions: {e}");
+                                    Vec::new()
+                                }
+                            }
+                        };
                         let web_cfg = reaper_web_config.read().await;
                         for payload in agent_payloads.iter().chain(wf_payloads.iter()) {
-                            if let Err(e) = push::send_all(&conn, &web_cfg.push, payload).await {
-                                tracing::warn!("Failed to send push notification: {e}");
+                            match push::send_all(subscriptions.clone(), &web_cfg.push, payload)
+                                .await
+                            {
+                                Ok(expired_endpoints) => {
+                                    if !expired_endpoints.is_empty() {
+                                        let conn = reaper_state.db.lock().await;
+                                        for endpoint in expired_endpoints {
+                                            if let Err(e) =
+                                                push::delete_subscription(&conn, &endpoint)
+                                            {
+                                                tracing::warn!(
+                                                    "Failed to delete expired subscription {}: {e}",
+                                                    endpoint
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Failed to send push notification: {e}");
+                                }
                             }
                         }
                     }
@@ -648,7 +676,18 @@ async fn main() -> Result<()> {
                     let web_cfg = gate_state.web_config.clone();
                     let run_id = run_id.clone();
                     tokio::spawn(async move {
-                        let conn = db.lock().await;
+                        let subscriptions = {
+                            let conn = db.lock().await;
+                            match push::get_all_subscriptions(&conn) {
+                                Ok(subs) => subs,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Failed to get push subscriptions for gate: {e}"
+                                    );
+                                    Vec::new()
+                                }
+                            }
+                        };
                         let web_cfg = web_cfg.read().await;
                         let payload = PushPayload {
                             title: "Workflow paused — your review is needed".into(),
@@ -656,8 +695,24 @@ async fn main() -> Result<()> {
                             tag: Some(format!("gate-{run_id}")),
                             url: Some(format!("/workflows/runs/{run_id}")),
                         };
-                        if let Err(e) = push::send_all(&conn, &web_cfg.push, &payload).await {
-                            tracing::warn!("gate push failed for run {run_id}: {e}");
+                        match push::send_all(subscriptions, &web_cfg.push, &payload).await {
+                            Ok(expired_endpoints) => {
+                                if !expired_endpoints.is_empty() {
+                                    let conn = db.lock().await;
+                                    for endpoint in expired_endpoints {
+                                        if let Err(e) = push::delete_subscription(&conn, &endpoint)
+                                        {
+                                            tracing::warn!(
+                                                "Failed to delete expired subscription {}: {e}",
+                                                endpoint
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("gate push failed for run {run_id}: {e}");
+                            }
                         }
                     });
                 }
@@ -671,7 +726,18 @@ async fn main() -> Result<()> {
                     let run_id = run_id.clone();
                     let worktree_id = worktree_id.clone();
                     tokio::spawn(async move {
-                        let conn = db.lock().await;
+                        let subscriptions = {
+                            let conn = db.lock().await;
+                            match push::get_all_subscriptions(&conn) {
+                                Ok(subs) => subs,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Failed to get push subscriptions for feedback: {e}"
+                                    );
+                                    Vec::new()
+                                }
+                            }
+                        };
                         let web_cfg = web_cfg.read().await;
                         let payload = PushPayload {
                             title: "Agent needs your input".into(),
@@ -679,8 +745,24 @@ async fn main() -> Result<()> {
                             tag: Some(format!("feedback-{run_id}")),
                             url: Some(format!("/worktrees/{worktree_id}")),
                         };
-                        if let Err(e) = push::send_all(&conn, &web_cfg.push, &payload).await {
-                            tracing::warn!("feedback push failed for run {run_id}: {e}");
+                        match push::send_all(subscriptions, &web_cfg.push, &payload).await {
+                            Ok(expired_endpoints) => {
+                                if !expired_endpoints.is_empty() {
+                                    let conn = db.lock().await;
+                                    for endpoint in expired_endpoints {
+                                        if let Err(e) = push::delete_subscription(&conn, &endpoint)
+                                        {
+                                            tracing::warn!(
+                                                "Failed to delete expired subscription {}: {e}",
+                                                endpoint
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("feedback push failed for run {run_id}: {e}");
+                            }
                         }
                     });
                 }

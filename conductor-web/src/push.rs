@@ -1,4 +1,3 @@
-use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -17,17 +16,19 @@ pub struct PushPayload {
     pub url: Option<String>,
 }
 
-pub async fn send_all(db: &Connection, vapid: &WebPushConfig, payload: &PushPayload) -> Result<()> {
+pub async fn send_all(
+    subscriptions: Vec<PushSubscription>,
+    vapid: &WebPushConfig,
+    payload: &PushPayload,
+) -> Result<Vec<String>> {
     let (private_key, subject) = match (&vapid.vapid_private_key, &vapid.vapid_subject) {
         (Some(pk), Some(s)) => (pk.clone(), s.clone()),
-        _ => return Ok(()),
+        _ => return Ok(Vec::new()),
     };
-
-    let subscriptions = get_all_subscriptions(db)?;
 
     if subscriptions.is_empty() {
         info!("No push subscriptions found, skipping push notification");
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     info!(
@@ -38,6 +39,8 @@ pub async fn send_all(db: &Connection, vapid: &WebPushConfig, payload: &PushPayl
     let payload_bytes = serde_json::to_vec(payload)
         .map_err(|e| conductor_core::error::ConductorError::Agent(e.to_string()))?;
 
+    let mut expired_endpoints = Vec::new();
+
     for subscription in &subscriptions {
         match send_to_subscription(&private_key, &subject, subscription, &payload_bytes).await {
             Ok(()) => {}
@@ -47,12 +50,7 @@ pub async fn send_all(db: &Connection, vapid: &WebPushConfig, payload: &PushPayl
                     "Push subscription expired (410/404), removing: {}",
                     subscription.endpoint
                 );
-                if let Err(e) = delete_subscription(db, &subscription.endpoint) {
-                    tracing::warn!(
-                        "Failed to delete expired subscription {}: {e}",
-                        subscription.endpoint
-                    );
-                }
+                expired_endpoints.push(subscription.endpoint.clone());
             }
             Err(e) => {
                 tracing::warn!("Push send failed for {}: {e}", subscription.endpoint);
@@ -60,7 +58,7 @@ pub async fn send_all(db: &Connection, vapid: &WebPushConfig, payload: &PushPayl
         }
     }
 
-    Ok(())
+    Ok(expired_endpoints)
 }
 
 async fn send_to_subscription(
@@ -92,11 +90,9 @@ async fn send_to_subscription(
 mod tests {
     use super::*;
     use crate::config::WebPushConfig;
-    use conductor_core::test_helpers::create_test_conn;
 
     #[tokio::test]
     async fn test_send_all_no_vapid_config() {
-        let db = create_test_conn();
         let vapid = WebPushConfig {
             vapid_public_key: None,
             vapid_private_key: None,
@@ -110,13 +106,13 @@ mod tests {
         };
 
         // Returns Ok without sending when VAPID keys are absent
-        let result = send_all(&db, &vapid, &payload).await;
+        let result = send_all(Vec::new(), &vapid, &payload).await;
         assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn test_send_all_no_subscriptions() {
-        let db = create_test_conn();
         let vapid = WebPushConfig {
             vapid_public_key: Some("pub".to_string()),
             vapid_private_key: Some("priv".to_string()),
@@ -130,7 +126,8 @@ mod tests {
         };
 
         // Returns Ok without error when subscription list is empty
-        let result = send_all(&db, &vapid, &payload).await;
+        let result = send_all(Vec::new(), &vapid, &payload).await;
         assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
     }
 }
