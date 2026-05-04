@@ -18,6 +18,14 @@ use super::{
 };
 use crate::theme::Theme;
 
+/// Build a fresh prompt textarea with the shared style and placeholder text.
+pub(crate) fn make_prompt_textarea() -> tui_textarea::TextArea<'static> {
+    let mut ta = tui_textarea::TextArea::default();
+    ta.set_cursor_line_style(ratatui::style::Style::default());
+    ta.set_placeholder_text("Type a prompt… (Tab to focus, Enter to send)");
+    ta
+}
+
 pub struct AppState {
     pub view: View,
     /// The view the user was in before entering WorkflowRunDetail (for back navigation).
@@ -231,12 +239,7 @@ impl AppState {
             repo_agent_list_state: RefCell::new(ListState::default()),
             worktree_detail_focus: super::WorktreeDetailFocus::InfoPanel,
             worktree_detail_selected_row: 0,
-            prompt_textarea: {
-                let mut ta = tui_textarea::TextArea::default();
-                ta.set_cursor_line_style(ratatui::style::Style::default());
-                ta.set_placeholder_text("Type a prompt… (Tab to focus, Enter to send)");
-                ta
-            },
+            prompt_textarea: make_prompt_textarea(),
             repo_detail_info_row: 0,
             filter: FilterState::default(),
             detail_ticket_filter: FilterState::default(),

@@ -1986,3 +1986,64 @@ fn workflow_picker_confirm_worktree_target() {
         "expected ModelPicker after confirming worktree workflow with no inputs"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// handle_submit_prompt_input tests
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn submit_prompt_input_empty_is_noop() {
+    let mut app = make_app();
+    // Default textarea is empty — should return without side effects.
+    app.handle_submit_prompt_input();
+    assert!(matches!(app.state.modal, Modal::None));
+    assert!(app.state.status_message.is_none());
+}
+
+#[test]
+fn submit_prompt_input_no_worktree_sets_status() {
+    let mut app = make_app();
+    app.state.prompt_textarea = tui_textarea::TextArea::new(vec!["hello".to_string()]);
+    app.state.selected_worktree_id = None;
+    app.handle_submit_prompt_input();
+    assert_eq!(
+        app.state.status_message.as_deref(),
+        Some("Select a worktree first")
+    );
+}
+
+#[test]
+fn submit_prompt_input_with_worktree_opens_model_picker_and_resets_textarea() {
+    let mut app = make_app();
+    app.state.prompt_textarea = tui_textarea::TextArea::new(vec!["do the thing".to_string()]);
+    app.state.data.worktrees = vec![conductor_core::worktree::Worktree {
+        id: "w1".into(),
+        repo_id: "r1".into(),
+        slug: "feat-a".into(),
+        branch: "feat/a".into(),
+        path: "/tmp/ws/feat-a".into(),
+        ticket_id: None,
+        status: conductor_core::worktree::WorktreeStatus::Active,
+        created_at: "2024-01-01T00:00:00Z".into(),
+        completed_at: None,
+        model: None,
+        base_branch: None,
+    }];
+    app.state.selected_worktree_id = Some("w1".into());
+    app.handle_submit_prompt_input();
+    // No running agent → proceeds to ModelPicker.
+    assert!(
+        matches!(app.state.modal, Modal::ModelPicker { .. }),
+        "expected ModelPicker after submit with a valid worktree"
+    );
+    // Textarea must be reset to empty.
+    assert!(
+        app.state.prompt_textarea.lines().join("").trim().is_empty(),
+        "textarea must be cleared after submit"
+    );
+    // Focus must return to LogPanel.
+    assert_eq!(
+        app.state.worktree_detail_focus,
+        crate::state::WorktreeDetailFocus::LogPanel
+    );
+}

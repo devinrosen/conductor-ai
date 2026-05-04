@@ -333,10 +333,7 @@ impl App {
         }
 
         // Reset the textarea immediately after capturing the prompt text.
-        let mut ta = tui_textarea::TextArea::default();
-        ta.set_cursor_line_style(ratatui::style::Style::default());
-        ta.set_placeholder_text("Type a prompt… (Tab to focus, Enter to send)");
-        self.state.prompt_textarea = ta;
+        self.state.prompt_textarea = crate::state::make_prompt_textarea();
 
         // Blur back to LogPanel so navigation keys are immediately usable.
         self.state.worktree_detail_focus = WorktreeDetailFocus::LogPanel;
