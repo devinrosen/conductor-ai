@@ -7,15 +7,11 @@ pub use crate::types::FanOutItemRow;
 /// Parameters for creating a new workflow run.
 pub struct NewRun {
     pub workflow_name: String,
-    pub worktree_id: Option<String>,
-    pub ticket_id: Option<String>,
-    pub repo_id: Option<String>,
     pub parent_run_id: String,
     pub dry_run: bool,
     pub trigger: String,
     pub definition_snapshot: Option<String>,
     pub parent_workflow_run_id: Option<String>,
-    pub target_label: Option<String>,
 }
 
 /// Parameters for inserting a new workflow step.

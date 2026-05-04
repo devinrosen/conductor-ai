@@ -79,7 +79,7 @@ fn make_wf_run_with_label(
     id: &str,
     target_label: Option<&str>,
     repo_id: Option<&str>,
-) -> conductor_core::workflow::WorkflowRun {
+) -> conductor_core::workflow::ConductorWorkflowRun {
     let mut run = make_wf_run_full(id, WorkflowRunStatus::Running, None);
     run.target_label = target_label.map(|s| s.into());
     run.repo_id = repo_id.map(|s| s.into());
@@ -458,7 +458,7 @@ fn visible_workflow_run_rows_parallel_group_header_and_members() {
 fn make_wf_run_with_target(
     id: &str,
     target_label: Option<&str>,
-) -> conductor_core::workflow::WorkflowRun {
+) -> conductor_core::workflow::ConductorWorkflowRun {
     let mut run = make_wf_run_full(id, WorkflowRunStatus::Running, None);
     run.target_label = target_label.map(|s| s.into());
     run
@@ -893,7 +893,7 @@ fn global_mode_name_filter_excludes_non_matching_run() {
 fn global_mode_name_filter_is_case_insensitive() {
     let mut state = AppState::new();
     let mut run = make_wf_run_with_label("r1", Some("repo-a/feat-1"), None);
-    run.workflow_name = "deploy-prod".into();
+    run.run.workflow_name = "deploy-prod".into();
     state.data.workflow_runs = vec![run];
     state.workflow_name_filter = Some("DEPLOY".into());
     state.rebuild_workflow_run_rows();
@@ -933,9 +933,9 @@ fn global_mode_name_filter_none_shows_all() {
 fn global_mode_name_filter_excludes_whole_target_group() {
     let mut state = AppState::new();
     let mut r1 = make_wf_run_with_label("r1", Some("repo-a/feat-1"), None);
-    r1.workflow_name = "deploy-prod".into();
+    r1.run.workflow_name = "deploy-prod".into();
     let mut r2 = make_wf_run_with_label("r2", Some("repo-a/feat-2"), None);
-    r2.workflow_name = "run-tests".into();
+    r2.run.workflow_name = "run-tests".into();
     state.data.workflow_runs = vec![r1, r2];
     state.workflow_name_filter = Some("deploy".into());
     state.rebuild_workflow_run_rows();

@@ -393,7 +393,7 @@ pub(crate) fn format_run_summary_line_with_repo(
 }
 
 fn format_run_detail(
-    run: &conductor_core::workflow::WorkflowRun,
+    run: &conductor_core::workflow::ConductorWorkflowRun,
     steps: &[conductor_core::workflow::WorkflowRunStep],
     worktree_slug: Option<&str>,
     worktree_branch: Option<&str>,
@@ -540,7 +540,7 @@ pub(crate) fn conversation_log_tail_from_dir(projects_dir: &Path) -> Option<Stri
 /// Like `format_run_detail` but also appends the conversation log tail when available.
 pub(crate) fn format_run_detail_with_log(
     conn: &rusqlite::Connection,
-    run: &conductor_core::workflow::WorkflowRun,
+    run: &conductor_core::workflow::ConductorWorkflowRun,
     steps: &[conductor_core::workflow::WorkflowRunStep],
     claude_config_dir: Option<&Path>,
 ) -> String {
@@ -559,7 +559,7 @@ pub(crate) fn format_run_detail_with_log(
 /// Returns `(slug, branch, path)` — all `None` if there is no worktree or it has been deleted.
 pub(crate) fn resolve_worktree_info(
     conn: &rusqlite::Connection,
-    run: &conductor_core::workflow::WorkflowRun,
+    run: &conductor_core::workflow::ConductorWorkflowRun,
 ) -> (Option<String>, Option<String>, Option<std::path::PathBuf>) {
     let wt_id = match run.worktree_id.as_deref() {
         Some(id) => id,

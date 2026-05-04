@@ -229,7 +229,7 @@ fn test_is_triggered_by_hook_true() {
         None,
     )
     .unwrap();
-    run.trigger = "hook".into();
+    run.run.trigger = "hook".into();
     assert!(run.is_triggered_by_hook());
 }
 

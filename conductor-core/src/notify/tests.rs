@@ -1,6 +1,7 @@
 use super::*;
 use crate::agent::{AgentRun, AgentRunStatus};
 use crate::config::{HookConfig, NotificationConfig, SlackConfig, WorkflowNotificationConfig};
+use crate::workflow::types::ConductorWorkflowRun;
 use crate::workflow::GateType;
 use crate::workflow::{WorkflowRun, WorkflowRunStatus};
 #[allow(unused_imports)]
@@ -1310,47 +1311,49 @@ fn fire_agent_run_notification_on_failure_false_suppresses_failure() {
 
 // --- detect_workflow_terminal_transitions ---
 
-fn make_workflow_run(id: &str, name: &str, status: WorkflowRunStatus) -> WorkflowRun {
-    WorkflowRun {
-        id: id.to_string(),
-        workflow_name: name.to_string(),
-        status,
+fn make_workflow_run(id: &str, name: &str, status: WorkflowRunStatus) -> ConductorWorkflowRun {
+    ConductorWorkflowRun {
+        run: WorkflowRun {
+            id: id.to_string(),
+            workflow_name: name.to_string(),
+            status,
+            parent_run_id: String::new(),
+            dry_run: false,
+            trigger: "manual".to_string(),
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+            ended_at: None,
+            result_summary: None,
+            error: None,
+            definition_snapshot: None,
+            inputs: std::collections::HashMap::new(),
+            parent_workflow_run_id: None,
+            iteration: 0,
+            blocked_on: None,
+            workflow_title: None,
+            total_input_tokens: None,
+            total_output_tokens: None,
+            total_cache_read_input_tokens: None,
+            total_cache_creation_input_tokens: None,
+            total_turns: None,
+            total_cost_usd: None,
+            total_duration_ms: None,
+            model: None,
+            dismissed: false,
+            owner_token: None,
+            lease_until: None,
+            generation: 0,
+        },
         worktree_id: None,
-        parent_run_id: String::new(),
-        dry_run: false,
-        trigger: "manual".to_string(),
-        started_at: "2026-01-01T00:00:00Z".to_string(),
-        ended_at: None,
-        result_summary: None,
-        error: None,
-        definition_snapshot: None,
-        inputs: std::collections::HashMap::new(),
         ticket_id: None,
         repo_id: None,
-        parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        iteration: 0,
-        blocked_on: None,
-        workflow_title: None,
-        total_input_tokens: None,
-        total_output_tokens: None,
-        total_cache_read_input_tokens: None,
-        total_cache_creation_input_tokens: None,
-        total_turns: None,
-        total_cost_usd: None,
-        total_duration_ms: None,
-        model: None,
-        dismissed: false,
-        owner_token: None,
-        lease_until: None,
-        generation: 0,
     }
 }
 
-fn make_sub_workflow_run(id: &str, name: &str, status: WorkflowRunStatus) -> WorkflowRun {
+fn make_sub_workflow_run(id: &str, name: &str, status: WorkflowRunStatus) -> ConductorWorkflowRun {
     let mut run = make_workflow_run(id, name, status);
-    run.parent_workflow_run_id = Some("parent-run-1".to_string());
+    run.run.parent_workflow_run_id = Some("parent-run-1".to_string());
     run
 }
 
@@ -1632,7 +1635,7 @@ fn wf_transitions_target_label_no_slash_yields_empty_repo_and_branch() {
     detect_workflow_terminal_transitions(tick1.iter(), &mut seen, &mut initialized);
 
     let mut run_done = run;
-    run_done.status = WorkflowRunStatus::Completed;
+    run_done.run.status = WorkflowRunStatus::Completed;
     let tick2 = [run_done];
     let t = detect_workflow_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
 
@@ -1653,7 +1656,7 @@ fn wf_transitions_target_label_with_slash_parses_repo_and_branch() {
     detect_workflow_terminal_transitions(tick1.iter(), &mut seen, &mut initialized);
 
     let mut run_done = run;
-    run_done.status = WorkflowRunStatus::Completed;
+    run_done.run.status = WorkflowRunStatus::Completed;
     let tick2 = [run_done];
     let t = detect_workflow_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
 

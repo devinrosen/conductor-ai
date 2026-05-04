@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::workflow::types::PendingGateRow;
+use crate::workflow::types::{ConductorWorkflowRun, PendingGateRow};
 use crate::workflow::{BlockedOn, WorkflowRun, WorkflowRunStep};
 
 /// Execute a single SQL `UPDATE` and map the rusqlite error to [`crate::error::ConductorError`].
@@ -43,11 +43,7 @@ pub(in crate::workflow) fn row_to_workflow_run(
         json_or_warn(inputs_json.as_deref(), || {
             format!("Malformed inputs JSON in workflow run {id}")
         });
-    let ticket_id: Option<String> = row.get("ticket_id")?;
-    let repo_id: Option<String> = row.get("repo_id")?;
     let parent_workflow_run_id: Option<String> = row.get("parent_workflow_run_id")?;
-    let target_label: Option<String> = row.get("target_label")?;
-    let default_bot_name: Option<String> = row.get("default_bot_name")?;
     let iteration: i64 = row.get("iteration")?;
     let blocked_on_json: Option<String> = row.get("blocked_on")?;
     let blocked_on: Option<BlockedOn> = json_or_warn(blocked_on_json.as_deref(), || {
@@ -69,7 +65,6 @@ pub(in crate::workflow) fn row_to_workflow_run(
     Ok(WorkflowRun {
         id,
         workflow_name: row.get("workflow_name")?,
-        worktree_id: row.get::<_, Option<String>>("worktree_id")?,
         parent_run_id: row.get("parent_run_id")?,
         status: row.get("status")?,
         dry_run: dry_run_int != 0,
@@ -80,11 +75,7 @@ pub(in crate::workflow) fn row_to_workflow_run(
         error,
         definition_snapshot,
         inputs,
-        ticket_id,
-        repo_id,
         parent_workflow_run_id,
-        target_label,
-        default_bot_name,
         iteration,
         blocked_on,
         workflow_title,
@@ -100,6 +91,22 @@ pub(in crate::workflow) fn row_to_workflow_run(
         owner_token: row.get("owner_token")?,
         lease_until: row.get("lease_until")?,
         generation: row.get("generation")?,
+    })
+}
+
+/// Row mapper that builds a `ConductorWorkflowRun` by calling [`row_to_workflow_run`]
+/// and then reading the five conductor-specific columns appended by `CONDUCTOR_RUN_EXTRA`.
+pub(in crate::workflow) fn row_to_conductor_run(
+    row: &rusqlite::Row,
+) -> rusqlite::Result<ConductorWorkflowRun> {
+    let run = row_to_workflow_run(row)?;
+    Ok(ConductorWorkflowRun {
+        run,
+        worktree_id: row.get("worktree_id")?,
+        ticket_id: row.get("ticket_id")?,
+        repo_id: row.get("repo_id")?,
+        target_label: row.get("target_label")?,
+        default_bot_name: row.get("default_bot_name")?,
     })
 }
 
@@ -166,13 +173,6 @@ pub(in crate::workflow) fn row_to_workflow_step(
         output_file: row.get("output_file")?,
         gate_options: row.get("gate_options")?,
         gate_selections: row.get("gate_selections")?,
-        input_tokens: row.get::<_, Option<i64>>("input_tokens")?,
-        output_tokens: row.get::<_, Option<i64>>("output_tokens")?,
-        cache_read_input_tokens: row.get::<_, Option<i64>>("cache_read_input_tokens")?,
-        cache_creation_input_tokens: row.get::<_, Option<i64>>("cache_creation_input_tokens")?,
-        cost_usd: row.get::<_, Option<f64>>("cost_usd")?,
-        num_turns: row.get::<_, Option<i64>>("num_turns")?,
-        duration_ms: row.get::<_, Option<i64>>("duration_ms")?,
         fan_out_total: row.get::<_, Option<i64>>("fan_out_total")?,
         fan_out_completed: row.get::<_, Option<i64>>("fan_out_completed")?.unwrap_or(0),
         fan_out_failed: row.get::<_, Option<i64>>("fan_out_failed")?.unwrap_or(0),

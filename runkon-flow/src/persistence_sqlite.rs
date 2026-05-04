@@ -94,7 +94,6 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
     Ok(WorkflowRun {
         id,
         workflow_name: row.get("workflow_name")?,
-        worktree_id: row.get::<_, Option<String>>("worktree_id")?,
         parent_run_id: row.get("parent_run_id")?,
         status: row.get("status")?,
         dry_run: dry_run_int != 0,
@@ -105,11 +104,7 @@ fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
         error: row.get("error")?,
         definition_snapshot,
         inputs,
-        ticket_id: row.get("ticket_id")?,
-        repo_id: row.get("repo_id")?,
         parent_workflow_run_id: row.get("parent_workflow_run_id")?,
-        target_label: row.get("target_label")?,
-        default_bot_name: row.get("default_bot_name")?,
         iteration: row.get("iteration")?,
         blocked_on,
         workflow_title,
@@ -163,13 +158,6 @@ fn row_to_step(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRunStep> {
         output_file: row.get("output_file")?,
         gate_options: row.get("gate_options")?,
         gate_selections: row.get("gate_selections")?,
-        input_tokens: row.get("input_tokens")?,
-        output_tokens: row.get("output_tokens")?,
-        cache_read_input_tokens: row.get("cache_read_input_tokens")?,
-        cache_creation_input_tokens: row.get("cache_creation_input_tokens")?,
-        cost_usd: row.get("cost_usd")?,
-        num_turns: row.get("num_turns")?,
-        duration_ms: row.get("duration_ms")?,
         fan_out_total: row.get("fan_out_total")?,
         fan_out_completed: row.get::<_, Option<i64>>("fan_out_completed")?.unwrap_or(0),
         fan_out_failed: row.get::<_, Option<i64>>("fan_out_failed")?.unwrap_or(0),
@@ -284,18 +272,15 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
 
         let workflow_title = extract_workflow_title(new_run.definition_snapshot.as_deref());
         conn.execute(
-            "INSERT INTO workflow_runs (id, workflow_name, worktree_id, ticket_id, repo_id, \
+            "INSERT INTO workflow_runs (id, workflow_name, \
              parent_run_id, status, dry_run, trigger, started_at, definition_snapshot, \
-             parent_workflow_run_id, target_label, workflow_title) \
-             VALUES (:id, :workflow_name, :worktree_id, :ticket_id, :repo_id, :parent_run_id, \
+             parent_workflow_run_id, workflow_title) \
+             VALUES (:id, :workflow_name, :parent_run_id, \
              :status, :dry_run, :trigger, :started_at, :definition_snapshot, \
-             :parent_workflow_run_id, :target_label, :workflow_title)",
+             :parent_workflow_run_id, :workflow_title)",
             named_params![
                 ":id": id,
                 ":workflow_name": new_run.workflow_name,
-                ":worktree_id": new_run.worktree_id,
-                ":ticket_id": new_run.ticket_id,
-                ":repo_id": new_run.repo_id,
                 ":parent_run_id": new_run.parent_run_id,
                 ":status": "pending",
                 ":dry_run": new_run.dry_run as i64,
@@ -303,7 +288,6 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
                 ":started_at": now,
                 ":definition_snapshot": new_run.definition_snapshot,
                 ":parent_workflow_run_id": new_run.parent_workflow_run_id,
-                ":target_label": new_run.target_label,
                 ":workflow_title": workflow_title,
             ],
         )
@@ -311,7 +295,6 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
         Ok(WorkflowRun {
             id,
             workflow_name: new_run.workflow_name,
-            worktree_id: new_run.worktree_id,
             parent_run_id: new_run.parent_run_id,
             status: WorkflowRunStatus::Pending,
             dry_run: new_run.dry_run,
@@ -322,11 +305,7 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
             error: None,
             definition_snapshot: new_run.definition_snapshot,
             inputs: HashMap::new(),
-            ticket_id: new_run.ticket_id,
-            repo_id: new_run.repo_id,
             parent_workflow_run_id: new_run.parent_workflow_run_id,
-            target_label: new_run.target_label,
-            default_bot_name: None,
             iteration: 0,
             blocked_on: None,
             workflow_title,

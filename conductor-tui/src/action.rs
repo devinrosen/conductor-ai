@@ -5,8 +5,8 @@ use conductor_core::github::DiscoveredRepo;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::{Ticket, TicketDependencies, TicketLabel};
 use conductor_core::workflow::{
-    FanOutItemRow, LiveEstimate, WorkflowDef, WorkflowRun, WorkflowRunStep, WorkflowStepSummary,
-    WorkflowWarning,
+    ConductorWorkflowRun, FanOutItemRow, LiveEstimate, WorkflowDef, WorkflowRunStep,
+    WorkflowStepSummary, WorkflowWarning,
 };
 use conductor_core::worktree::Worktree;
 use crossterm::event::KeyEvent;
@@ -28,7 +28,7 @@ pub struct WorkflowDataPayload {
     /// Pre-computed repo slug for each def in `workflow_defs` (parallel vec, same length).
     /// Empty in worktree-scoped mode (single repo implied).
     pub workflow_def_slugs: Option<Vec<String>>,
-    pub workflow_runs: Vec<WorkflowRun>,
+    pub workflow_runs: Vec<ConductorWorkflowRun>,
     pub workflow_steps: Vec<WorkflowRunStep>,
     /// Agent events for the selected step's child_run_id (live activity)
     pub step_agent_events: Vec<AgentRunEvent>,
@@ -53,11 +53,11 @@ pub struct DataRefreshedPayload {
     pub latest_agent_runs: HashMap<String, AgentRun>,
     pub ticket_agent_totals: HashMap<String, TicketAgentTotals>,
     /// Most recent workflow run per worktree (for inline indicators in the Worktrees panel).
-    pub latest_workflow_runs_by_worktree: HashMap<String, WorkflowRun>,
+    pub latest_workflow_runs_by_worktree: HashMap<String, ConductorWorkflowRun>,
     /// Currently-running step summary per workflow_run_id (for inline step indicators).
     pub workflow_step_summaries: HashMap<String, WorkflowStepSummary>,
     /// Active root workflow runs with no associated worktree (repo/ticket-targeted).
-    pub active_non_worktree_workflow_runs: Vec<WorkflowRun>,
+    pub active_non_worktree_workflow_runs: Vec<ConductorWorkflowRun>,
     /// All pending agent feedback requests (for cross-process notifications).
     pub pending_feedback_requests: Vec<FeedbackRequest>,
     /// All waiting gate steps with their workflow name and optional target label (for cross-process notifications).

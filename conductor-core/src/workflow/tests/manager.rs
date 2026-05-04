@@ -1936,7 +1936,7 @@ fn make_workflow_run_id(conn: &Connection) -> String {
         None,
     )
     .unwrap();
-    run.id
+    run.id.clone()
 }
 
 /// A step with a dead PID (subprocess has exited) must be reaped.
@@ -2449,7 +2449,7 @@ fn test_set_waiting_blocked_on_atomically_sets_status_and_blocked_on() {
         .unwrap();
     assert_eq!(updated.status, WorkflowRunStatus::Waiting);
     assert!(updated.blocked_on.is_some());
-    match updated.blocked_on.unwrap() {
+    match updated.run.blocked_on.unwrap() {
         BlockedOn::HumanApproval {
             gate_name, prompt, ..
         } => {

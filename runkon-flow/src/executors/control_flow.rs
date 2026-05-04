@@ -250,15 +250,11 @@ mod tests {
         let persistence = Arc::new(InMemoryWorkflowPersistence::default());
         let new_run = NewRun {
             workflow_name: "test-wf".to_string(),
-            worktree_id: None,
-            ticket_id: None,
-            repo_id: None,
             parent_run_id: "parent-1".to_string(),
             dry_run: false,
             trigger: "test".to_string(),
             definition_snapshot: None,
             parent_workflow_run_id: None,
-            target_label: None,
         };
         let run = persistence.create_run(new_run).unwrap();
         ExecutionState {

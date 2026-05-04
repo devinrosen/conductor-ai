@@ -2,6 +2,65 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+/// Conductor-specific metadata alongside a harness-neutral WorkflowRun.
+///
+/// `#[serde(flatten)]` preserves the JSON wire shape — all fields appear at the
+/// top level of the serialised object, identical to the old `WorkflowRun` layout.
+/// `Deref` lets call sites read harness-neutral fields (`run.id`, `run.status`, …)
+/// without changing anything.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize)]
+pub struct ConductorWorkflowRun {
+    #[serde(flatten)]
+    pub run: runkon_flow::types::WorkflowRun,
+    pub worktree_id: Option<String>,
+    pub ticket_id: Option<String>,
+    pub repo_id: Option<String>,
+    pub target_label: Option<String>,
+    pub default_bot_name: Option<String>,
+}
+
+impl std::ops::Deref for ConductorWorkflowRun {
+    type Target = runkon_flow::types::WorkflowRun;
+    fn deref(&self) -> &Self::Target {
+        &self.run
+    }
+}
+
+/// Per-step Claude-SDK metrics sourced from `agent_runs` via `child_run_id` JOIN.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct AgentRunMetrics {
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cache_read_input_tokens: Option<i64>,
+    pub cache_creation_input_tokens: Option<i64>,
+    pub cost_usd: Option<f64>,
+    pub num_turns: Option<i64>,
+    pub duration_ms: Option<i64>,
+}
+
+/// A WorkflowRunStep with per-step metrics sourced from the `agent_runs` JOIN.
+///
+/// `#[serde(flatten)]` on both inner fields preserves the flat JSON wire shape.
+/// `Deref` lets call sites read step fields (`step.child_run_id`, `step.status`, …)
+/// without changing anything.
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct WorkflowRunStepWithMetrics {
+    #[serde(flatten)]
+    pub step: runkon_flow::types::WorkflowRunStep,
+    #[serde(flatten)]
+    pub metrics: AgentRunMetrics,
+}
+
+impl std::ops::Deref for WorkflowRunStepWithMetrics {
+    type Target = runkon_flow::types::WorkflowRunStep;
+    fn deref(&self) -> &Self::Target {
+        &self.step
+    }
+}
+
 /// Time granularity for workflow analytics queries.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

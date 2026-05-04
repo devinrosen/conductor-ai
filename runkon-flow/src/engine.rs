@@ -117,10 +117,8 @@ pub struct ChildWorkflowContext {
     pub extra_plugin_dirs: Vec<String>,
     pub workflow_run_id: String,
     pub model: Option<String>,
-    pub target_label: Option<String>,
     pub exec_config: WorkflowExecConfig,
     pub inputs: HashMap<String, String>,
-    pub triggered_by_hook: bool,
     pub event_sinks: Arc<[Arc<dyn EventSink>]>,
 }
 
@@ -234,10 +232,8 @@ impl ExecutionState {
             extra_plugin_dirs: self.extra_plugin_dirs.clone(),
             workflow_run_id: self.workflow_run_id.clone(),
             model: self.model.clone(),
-            target_label: self.target_label.clone(),
             exec_config: self.exec_config.clone(),
             inputs: self.inputs.clone(),
-            triggered_by_hook: self.triggered_by_hook,
             event_sinks: Arc::clone(&self.event_sinks),
         }
     }
@@ -864,17 +860,6 @@ pub fn restore_completed_step(
     let markers = parse_markers_out(step.markers_out.as_deref(), step_key);
     let context = step.context_out.clone().unwrap_or_default();
 
-    // Accumulate costs from the step's joined agent run metrics.
-    state.accumulate_metrics(
-        step.cost_usd,
-        step.num_turns,
-        step.duration_ms,
-        step.input_tokens,
-        step.output_tokens,
-        step.cache_read_input_tokens,
-        step.cache_creation_input_tokens,
-    );
-
     // Restore gate feedback if this was a gate step
     if let Some(ref feedback) = step.gate_feedback {
         state.last_gate_feedback = Some(feedback.clone());
@@ -1246,7 +1231,7 @@ mod tests {
     }
 
     #[test]
-    fn child_workflow_context_projects_all_eight_fields() {
+    fn child_workflow_context_projects_fields() {
         use crate::cancellation::CancellationToken;
         use crate::events::{EngineEventData, EventSink};
         use crate::persistence_memory::InMemoryWorkflowPersistence;
@@ -1355,10 +1340,8 @@ mod tests {
         assert_eq!(ctx.extra_plugin_dirs, vec!["plugin-a"]);
         assert_eq!(ctx.workflow_run_id, "run-projection-test");
         assert_eq!(ctx.model.as_deref(), Some("opus"));
-        assert_eq!(ctx.target_label.as_deref(), Some("proj-label"));
         assert!(ctx.exec_config.dry_run);
         assert_eq!(ctx.inputs, state_inputs);
-        assert!(ctx.triggered_by_hook);
 
         // event_sinks slice is shared, not deep-copied.
         assert_eq!(ctx.event_sinks.len(), 2);

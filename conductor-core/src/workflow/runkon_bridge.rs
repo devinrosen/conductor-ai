@@ -362,6 +362,9 @@ pub(super) struct ConductorChildWorkflowRunner {
     db_path: std::path::PathBuf,
     config: crate::config::Config,
     conn: Arc<Mutex<rusqlite::Connection>>,
+    /// Cached from the parent run at construction time to avoid a per-child DB round-trip.
+    target_label: Option<String>,
+    triggered_by_hook: bool,
 }
 
 impl ConductorChildWorkflowRunner {
@@ -369,11 +372,15 @@ impl ConductorChildWorkflowRunner {
         db_path: std::path::PathBuf,
         config: crate::config::Config,
         conn: Arc<Mutex<rusqlite::Connection>>,
+        target_label: Option<String>,
+        triggered_by_hook: bool,
     ) -> Self {
         Self {
             db_path,
             config,
             conn,
+            target_label,
+            triggered_by_hook,
         }
     }
 
@@ -435,6 +442,9 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             ..parent_ctx.exec_config.clone()
         };
 
+        let parent_target_label = self.target_label.clone();
+        let parent_triggered_by_hook = self.triggered_by_hook;
+
         // Route child workflows through execute_workflow_standalone so they use
         // FlowEngine::run() — keeping event emission and step tracking consistent
         // between parent and child runs.
@@ -451,9 +461,9 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             model: parent_ctx.model.clone(),
             exec_config,
             inputs: params.inputs,
-            target_label: parent_ctx.target_label.clone(),
+            target_label: parent_target_label,
             run_id_notify: None,
-            triggered_by_hook: parent_ctx.triggered_by_hook,
+            triggered_by_hook: parent_triggered_by_hook,
             conductor_bin_dir: None,
             force: false,
             extra_plugin_dirs: parent_ctx.extra_plugin_dirs.clone(),
@@ -685,6 +695,8 @@ mod tests {
             std::path::PathBuf::from("/tmp/test.db"),
             crate::config::Config::default(),
             conn,
+            None,
+            false,
         );
 
         let sinks: Arc<[Arc<dyn EventSink>]> = Arc::from(vec![
@@ -698,10 +710,8 @@ mod tests {
             extra_plugin_dirs: vec![],
             workflow_run_id: "parent-run".to_string(),
             model: None,
-            target_label: None,
             exec_config: crate::workflow::WorkflowExecConfig::default(),
             inputs: HashMap::new(),
-            triggered_by_hook: false,
             event_sinks: Arc::clone(&sinks),
         };
 
@@ -726,6 +736,8 @@ mod tests {
             std::path::PathBuf::from("/tmp/test.db"),
             crate::config::Config::default(),
             conn,
+            None,
+            false,
         );
 
         let parent_ctx = ChildWorkflowContext {
@@ -734,10 +746,8 @@ mod tests {
             extra_plugin_dirs: vec![],
             workflow_run_id: "parent-run".to_string(),
             model: None,
-            target_label: None,
             exec_config: crate::workflow::WorkflowExecConfig::default(),
             inputs: HashMap::new(),
-            triggered_by_hook: false,
             event_sinks: Arc::<[Arc<dyn EventSink>]>::from(vec![]),
         };
 
