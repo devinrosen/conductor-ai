@@ -878,12 +878,29 @@ pub fn restore_completed_step(
     state.contexts.push(success.into());
 }
 
-/// Fetch both the final step output (markers + context) and all completed step
-/// results for a child workflow run in a single DB query.
+/// Returned by [`fetch_child_completion_data`].
+/// `0` — final-step `(markers, context)` of the child workflow.
+/// `1` — bubble-up step-results map keyed by child step name (used by parent
+/// for `if step.marker` checks).
+/// `2` — child step contexts in chronological order (pushed into parent's
+/// `state.contexts` so downstream agents see child step outputs in `prior_contexts`).
+pub type ChildCompletionData = (
+    (Vec<String>, String),
+    HashMap<String, StepResult>,
+    Vec<ContextEntry>,
+);
+
+/// Fetch the final step output, the bubble-up step-results map, AND the
+/// child workflow's context entries — in a single DB query. The context
+/// entries are pushed into the parent's `state.contexts` so that downstream
+/// agents in the parent workflow see child-workflow step outputs via
+/// `prior_contexts` in their prompt templates. Without this third return
+/// value, only `state.step_results` carries child step data and parent-side
+/// agents have no access to child step `context_out` / `structured_output`.
 pub fn fetch_child_completion_data(
     persistence: &dyn WorkflowPersistence,
     workflow_run_id: &str,
-) -> ((Vec<String>, String), HashMap<String, StepResult>) {
+) -> ChildCompletionData {
     let steps = match persistence.get_steps(workflow_run_id) {
         Ok(s) => s,
         Err(e) => {
@@ -891,15 +908,17 @@ pub fn fetch_child_completion_data(
                 "Failed to fetch steps for child workflow run '{}': {e}",
                 workflow_run_id,
             );
-            return ((Vec::new(), String::new()), HashMap::new());
+            return ((Vec::new(), String::new()), HashMap::new(), Vec::new());
         }
     };
 
-    // Collect completed steps once; derive both final output and bubble-up map from it.
-    let completed: Vec<_> = steps
+    // Collect completed steps once, ordered by position so context bubble-up
+    // preserves chronological order in the parent's `state.contexts`.
+    let mut completed: Vec<_> = steps
         .into_iter()
         .filter(|s| s.status == WorkflowStepStatus::Completed)
         .collect();
+    completed.sort_by_key(|s| s.position);
 
     let final_output = match completed.iter().max_by_key(|s| s.position) {
         Some(step) => {
@@ -910,25 +929,29 @@ pub fn fetch_child_completion_data(
         None => (Vec::new(), String::new()),
     };
 
-    // Build bubble-up map from all completed steps.
-    let child_steps = completed
-        .into_iter()
-        .map(|s| {
-            let markers = parse_markers_out(s.markers_out.as_deref(), &s.step_name);
-            let context = s.context_out.clone().unwrap_or_default();
-            let success = crate::types::StepSuccess::from_workflow_run_step(
-                s.step_name.clone(),
-                &s,
-                markers,
-                context,
-                0,
-            );
-            let result = StepResult::completed_without_metrics(&success);
-            (s.step_name, result)
-        })
-        .collect();
+    // Build the bubble-up step-results map AND the contexts list from the
+    // same StepSuccess values. The map is keyed by step name (used for
+    // `if step.marker` checks); the list preserves chronological order
+    // (used as `prior_contexts` in agent prompts).
+    let mut child_steps = HashMap::with_capacity(completed.len());
+    let mut child_contexts = Vec::with_capacity(completed.len());
+    for s in completed {
+        let markers = parse_markers_out(s.markers_out.as_deref(), &s.step_name);
+        let context = s.context_out.clone().unwrap_or_default();
+        let success = crate::types::StepSuccess::from_workflow_run_step(
+            s.step_name.clone(),
+            &s,
+            markers,
+            context,
+            0,
+        );
+        let result = StepResult::completed_without_metrics(&success);
+        let entry: ContextEntry = success.into();
+        child_steps.insert(s.step_name, result);
+        child_contexts.push(entry);
+    }
 
-    (final_output, child_steps)
+    (final_output, child_steps, child_contexts)
 }
 
 /// Check whether the loop is stuck (identical marker sets for `stuck_after` consecutive
@@ -1479,5 +1502,115 @@ mod tests {
                 assert!(res.is_err(), "should detect stuck at iteration {i}");
             }
         }
+    }
+
+    #[test]
+    fn fetch_child_completion_data_bubbles_contexts_in_position_order() {
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::traits::persistence::{NewStep, StepUpdate};
+
+        let p = InMemoryWorkflowPersistence::new();
+        let child_run = "01CHILDRUNID0000000000000";
+        p.seed_run(child_run);
+
+        // Insert two steps in reverse position order to verify the function
+        // sorts before bubbling — without sorting, contexts would land in
+        // insertion order, which doesn't match the chronological order
+        // parent-side agents expect.
+        let step_b = p
+            .insert_step(NewStep {
+                workflow_run_id: child_run.to_string(),
+                step_name: "step-b".to_string(),
+                role: "actor".to_string(),
+                can_commit: false,
+                position: 2,
+                iteration: 0,
+                retry_count: Some(0),
+            })
+            .unwrap();
+        let step_a = p
+            .insert_step(NewStep {
+                workflow_run_id: child_run.to_string(),
+                step_name: "step-a".to_string(),
+                role: "actor".to_string(),
+                can_commit: false,
+                position: 1,
+                iteration: 0,
+                retry_count: Some(0),
+            })
+            .unwrap();
+
+        p.update_step(
+            &step_a,
+            StepUpdate::completed(
+                0,
+                None,
+                Some("a-result".into()),
+                Some("context-from-a".into()),
+                Some(r#"["m-a"]"#.into()),
+                0,
+                Some(r#"{"k":"a"}"#.into()),
+            ),
+        )
+        .unwrap();
+        p.update_step(
+            &step_b,
+            StepUpdate::completed(
+                0,
+                None,
+                Some("b-result".into()),
+                Some("context-from-b".into()),
+                Some(r#"["m-b"]"#.into()),
+                0,
+                Some(r#"{"k":"b"}"#.into()),
+            ),
+        )
+        .unwrap();
+
+        let ((final_markers, final_context), step_results, child_contexts) =
+            fetch_child_completion_data(&p, child_run);
+
+        // Final output is the highest-position step (step-b at position 2).
+        assert_eq!(final_markers, vec!["m-b".to_string()]);
+        assert_eq!(final_context, "context-from-b");
+
+        // Both steps reachable by name in the bubble-up step_results map.
+        assert!(step_results.contains_key("step-a"));
+        assert!(step_results.contains_key("step-b"));
+
+        // Child contexts bubbled in position order regardless of insert order,
+        // and carry the per-step context_out + structured_output so parent
+        // agents downstream of call_workflow can read them via prior_contexts.
+        assert_eq!(child_contexts.len(), 2);
+        assert_eq!(child_contexts[0].step, "step-a");
+        assert_eq!(child_contexts[0].context, "context-from-a");
+        assert_eq!(child_contexts[0].markers, vec!["m-a".to_string()]);
+        assert_eq!(
+            child_contexts[0].structured_output.as_deref(),
+            Some(r#"{"k":"a"}"#)
+        );
+        assert_eq!(child_contexts[1].step, "step-b");
+        assert_eq!(child_contexts[1].context, "context-from-b");
+        assert_eq!(child_contexts[1].markers, vec!["m-b".to_string()]);
+        assert_eq!(
+            child_contexts[1].structured_output.as_deref(),
+            Some(r#"{"k":"b"}"#)
+        );
+    }
+
+    #[test]
+    fn fetch_child_completion_data_returns_empty_contexts_on_persistence_error() {
+        use crate::persistence_memory::InMemoryWorkflowPersistence;
+
+        let p = InMemoryWorkflowPersistence::new();
+        p.set_fail_get_steps(true);
+
+        let ((markers, context), step_results, child_contexts) =
+            fetch_child_completion_data(&p, "any-run-id");
+
+        assert!(markers.is_empty());
+        assert!(context.is_empty());
+        assert!(step_results.is_empty());
+        assert!(child_contexts.is_empty());
     }
 }

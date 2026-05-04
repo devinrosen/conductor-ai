@@ -40,14 +40,14 @@ pub fn execute_call_workflow(
     let step_key = node.workflow.clone();
     let mut last_error = String::new();
 
-    // Helper: persist success and bubble up child step results.
+    // Helper: persist success and bubble up child step results + contexts.
     // Used by both the resume-success path and the fresh-success path.
     let record_child_success = |state: &mut ExecutionState,
                                 step_id: &str,
                                 result: &crate::types::WorkflowResult,
                                 attempt: u32|
      -> Result<()> {
-        let ((markers, context), child_steps) =
+        let ((markers, context), child_steps, child_contexts) =
             fetch_child_completion_data(state.persistence.as_ref(), &result.workflow_run_id);
 
         let markers_json = crate::helpers::serialize_or_empty_array(
@@ -65,6 +65,14 @@ pub fn execute_call_workflow(
             attempt,
             None,
         )?;
+
+        // Bubble up child contexts BEFORE the call_workflow's own success
+        // entry so prior_contexts preserves chronological order: child steps
+        // happened first, then the call_workflow summary entry. Without this,
+        // parent-side agents downstream of the call_workflow have no access to
+        // child step `context_out` / `structured_output` (only markers bubble
+        // up via state.step_results below).
+        state.contexts.extend(child_contexts);
 
         record_step_success(
             state,

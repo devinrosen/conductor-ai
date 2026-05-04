@@ -21,6 +21,7 @@ Full context history: {{prior_contexts}}
 3. **`review-security` findings: never pushback.** Only `address` or `clarify`. Security false positives are bad; security false negatives are catastrophic. Asymmetric risk demands asymmetric default.
 4. **`review-error-handling` findings: bias even harder toward addressing.** Pushback is allowed but requires an extremely strong citation.
 5. **Do NOT commit. Do NOT push.** All actions are read-only file reads plus `gh pr comment` for posting decisions.
+6. **Do NOT fall back to `gh pr view --json reviews` or any other GitHub API to discover findings.** If `prior_contexts` lacks `review-aggregator` output, halt — do not improvise (see "Halting on missing data" below). The dismissed-review trap is real: GitHub's reviews endpoint returns BOTH dismissed and active reviews; picking the wrong one means triaging stale findings against fresh code.
 
 ## Where findings come from
 
@@ -40,7 +41,25 @@ Find the latest `review-aggregator` entry in `{{prior_contexts}}`. Parse its `st
 - `reviewer` — display name (e.g. `"Architecture"`, `"Security"`, `"DRY & Abstraction"`)
 - `labels` — array of strings (e.g. `["security", "bug"]`)
 
-If `blocking_findings` is missing or empty, emit the empty FLOW_OUTPUT from step 3 and exit. (This shouldn't normally happen — the workflow only calls you when `review-aggregator.has_blocking_findings` is true.)
+### Halting on missing data
+
+If you cannot find a `review-aggregator` entry in `{{prior_contexts}}`, OR its `structured_output` does not parse as JSON, OR `blocking_findings` is missing — **do not fall back to fetching reviews from GitHub.** A dismissed-review trap caused triage to push back against stale findings on PR #2887 (workflow run `01KQTMKWWF9E96WQYZW5KEG1V4`). Instead emit:
+
+```
+<<<FLOW_OUTPUT>>>
+{"markers": [], "context": "BUG: review-aggregator output missing from prior_contexts. Refusing to triage by fetching reviews from GitHub (risk of triaging dismissed/stale review). Halting cleanly so the loop exits without pushback or address-reviews. See workflow run history for the missing aggregator step.", "structured_output": {"triaged": [], "counts": {"address": 0, "pushback": 0, "clarify": 0}, "halt_reason": "missing_aggregator_output"}}
+<<<END_FLOW_OUTPUT>>>
+```
+
+This is intentional: better to halt than to push back on the wrong findings or commit address-reviews to fixing things that aren't actually flagged in the current review.
+
+If `blocking_findings` is present but empty, that's different — it means review-aggregator ran and found nothing blocking. The workflow normally only calls you when `review-aggregator.has_blocking_findings` is true, so this shouldn't happen, but if it does emit:
+
+```
+<<<FLOW_OUTPUT>>>
+{"markers": [], "context": "No blocking findings to triage.", "structured_output": {"triaged": [], "counts": {"address": 0, "pushback": 0, "clarify": 0}}}
+<<<END_FLOW_OUTPUT>>>
+```
 
 Also read `PLAN.md` (if it exists) for any constraints or decisions that could justify pushback.
 
@@ -111,9 +130,4 @@ After processing all findings, emit your output:
 
 Use `markers: ["has_to_address"]` if **any** finding was classified `address` (including findings escalated to `[NEEDS_FEEDBACK]` that defaulted to address). Use `markers: []` only if **every** finding was pushed back on or clarified.
 
-If `blocking_findings` was empty or missing, emit:
-```
-<<<FLOW_OUTPUT>>>
-{"markers": [], "context": "No blocking findings to triage.", "structured_output": {"triaged": [], "counts": {"address": 0, "pushback": 0, "clarify": 0}}}
-<<<END_FLOW_OUTPUT>>>
-```
+(Empty / missing `blocking_findings` is handled in step 1's "Halting on missing data" section above — do not duplicate that path here.)
