@@ -13,7 +13,7 @@ use tower_http::trace::TraceLayer;
 use conductor_web::assets::static_handler;
 use conductor_web::events::{ConductorEvent, EventBus};
 use conductor_web::openapi::ApiDoc;
-use conductor_web::push::{PushPayload, PushSubscriptionManager};
+use conductor_web::push::{self, PushPayload};
 use conductor_web::routes::api_router;
 use conductor_web::state::AppState;
 use utoipa::OpenApi;
@@ -332,23 +332,11 @@ async fn main() -> Result<()> {
                                 .map(|slug| format!("/worktrees/{}", slug)),
                         };
 
-                        if let (Some(private_key), Some(public_key), Some(subject)) = (
-                            &web_cfg.push.vapid_private_key,
-                            &web_cfg.push.vapid_public_key,
-                            &web_cfg.push.vapid_subject,
-                        ) {
-                            let push_mgr = PushSubscriptionManager::new(
-                                &conn,
-                                private_key.clone(),
-                                public_key.clone(),
-                                subject.clone(),
-                            );
-                            let runtime = tokio::runtime::Handle::current();
-                            if let Err(e) = runtime.block_on(push_mgr.send_all(&payload)) {
-                                tracing::warn!(
-                                    "Failed to send push notification for agent run: {e}"
-                                );
-                            }
+                        let runtime = tokio::runtime::Handle::current();
+                        if let Err(e) =
+                            runtime.block_on(push::send_all(&conn, &web_cfg.push, &payload))
+                        {
+                            tracing::warn!("Failed to send push notification for agent run: {e}");
                         }
                     }
                 }
@@ -408,23 +396,11 @@ async fn main() -> Result<()> {
                             url: Some(format!("/workflows/runs/{}", t.run_id)),
                         };
 
-                        if let (Some(private_key), Some(public_key), Some(subject)) = (
-                            &web_cfg.push.vapid_private_key,
-                            &web_cfg.push.vapid_public_key,
-                            &web_cfg.push.vapid_subject,
-                        ) {
-                            let push_mgr = PushSubscriptionManager::new(
-                                &conn,
-                                private_key.clone(),
-                                public_key.clone(),
-                                subject.clone(),
-                            );
-                            let runtime = tokio::runtime::Handle::current();
-                            if let Err(e) = runtime.block_on(push_mgr.send_all(&payload)) {
-                                tracing::warn!(
-                                    "Failed to send push notification for workflow: {e}"
-                                );
-                            }
+                        let runtime = tokio::runtime::Handle::current();
+                        if let Err(e) =
+                            runtime.block_on(push::send_all(&conn, &web_cfg.push, &payload))
+                        {
+                            tracing::warn!("Failed to send push notification for workflow: {e}");
                         }
                     }
                 }
@@ -669,27 +645,16 @@ async fn main() -> Result<()> {
                     tokio::task::spawn_blocking(move || {
                         let conn = db.blocking_lock();
                         let web_cfg = web_cfg.blocking_read();
-                        if let (Some(priv_k), Some(pub_k), Some(sub)) = (
-                            &web_cfg.push.vapid_private_key,
-                            &web_cfg.push.vapid_public_key,
-                            &web_cfg.push.vapid_subject,
-                        ) {
-                            let push_mgr = PushSubscriptionManager::new(
-                                &conn,
-                                priv_k.clone(),
-                                pub_k.clone(),
-                                sub.clone(),
-                            );
-                            let payload = PushPayload {
-                                title: "Workflow paused — your review is needed".into(),
-                                body: "Gate waiting for approval".into(),
-                                tag: Some(format!("gate-{run_id}")),
-                                url: Some(format!("/workflows/runs/{run_id}")),
-                            };
-                            let rt = tokio::runtime::Handle::current();
-                            if let Err(e) = rt.block_on(push_mgr.send_all(&payload)) {
-                                tracing::warn!("gate push failed for run {run_id}: {e}");
-                            }
+                        let payload = PushPayload {
+                            title: "Workflow paused — your review is needed".into(),
+                            body: "Gate waiting for approval".into(),
+                            tag: Some(format!("gate-{run_id}")),
+                            url: Some(format!("/workflows/runs/{run_id}")),
+                        };
+                        let rt = tokio::runtime::Handle::current();
+                        if let Err(e) = rt.block_on(push::send_all(&conn, &web_cfg.push, &payload))
+                        {
+                            tracing::warn!("gate push failed for run {run_id}: {e}");
                         }
                     });
                 }
@@ -705,27 +670,16 @@ async fn main() -> Result<()> {
                     tokio::task::spawn_blocking(move || {
                         let conn = db.blocking_lock();
                         let web_cfg = web_cfg.blocking_read();
-                        if let (Some(priv_k), Some(pub_k), Some(sub)) = (
-                            &web_cfg.push.vapid_private_key,
-                            &web_cfg.push.vapid_public_key,
-                            &web_cfg.push.vapid_subject,
-                        ) {
-                            let push_mgr = PushSubscriptionManager::new(
-                                &conn,
-                                priv_k.clone(),
-                                pub_k.clone(),
-                                sub.clone(),
-                            );
-                            let payload = PushPayload {
-                                title: "Agent needs your input".into(),
-                                body: format!("Feedback requested for run {run_id}"),
-                                tag: Some(format!("feedback-{run_id}")),
-                                url: Some(format!("/worktrees/{worktree_id}")),
-                            };
-                            let rt = tokio::runtime::Handle::current();
-                            if let Err(e) = rt.block_on(push_mgr.send_all(&payload)) {
-                                tracing::warn!("feedback push failed for run {run_id}: {e}");
-                            }
+                        let payload = PushPayload {
+                            title: "Agent needs your input".into(),
+                            body: format!("Feedback requested for run {run_id}"),
+                            tag: Some(format!("feedback-{run_id}")),
+                            url: Some(format!("/worktrees/{worktree_id}")),
+                        };
+                        let rt = tokio::runtime::Handle::current();
+                        if let Err(e) = rt.block_on(push::send_all(&conn, &web_cfg.push, &payload))
+                        {
+                            tracing::warn!("feedback push failed for run {run_id}: {e}");
                         }
                     });
                 }
