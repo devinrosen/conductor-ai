@@ -64,7 +64,6 @@ pub async fn get_vapid_public_key(
     request_body(content = PushSubscribeRequest, description = "Push subscription details"),
     responses(
         (status = 200, description = "Successfully subscribed", body = PushSubscribeResponse),
-        (status = 503, description = "Push notifications not configured"),
     ),
     tag = "push",
 )]
@@ -100,7 +99,6 @@ pub async fn subscribe_push(
     responses(
         (status = 204, description = "Successfully unsubscribed"),
         (status = 404, description = "Subscription not found"),
-        (status = 503, description = "Push notifications not configured"),
     ),
     tag = "push",
 )]

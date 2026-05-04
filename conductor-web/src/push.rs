@@ -3,19 +3,11 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use conductor_core::error::Result;
-use conductor_core::new_id;
+pub use conductor_core::push::{
+    delete_subscription, get_all_subscriptions, upsert_subscription, PushSubscription,
+};
 
 use crate::config::WebPushConfig;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PushSubscription {
-    pub id: String,
-    pub endpoint: String,
-    pub p256dh: String,
-    pub auth: String,
-    pub created_at: String,
-    pub updated_at: String,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushPayload {
@@ -23,68 +15,6 @@ pub struct PushPayload {
     pub body: String,
     pub tag: Option<String>,
     pub url: Option<String>,
-}
-
-fn row_to_subscription(row: &rusqlite::Row) -> rusqlite::Result<PushSubscription> {
-    Ok(PushSubscription {
-        id: row.get(0)?,
-        endpoint: row.get(1)?,
-        p256dh: row.get(2)?,
-        auth: row.get(3)?,
-        created_at: row.get(4)?,
-        updated_at: row.get(5)?,
-    })
-}
-
-pub fn upsert_subscription(
-    db: &Connection,
-    endpoint: &str,
-    p256dh: &str,
-    auth: &str,
-) -> Result<PushSubscription> {
-    let now = chrono::Utc::now().to_rfc3339();
-    let id = new_id();
-
-    db.execute(
-        "INSERT INTO push_subscriptions (id, endpoint, p256dh, auth, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         ON CONFLICT(endpoint) DO UPDATE SET
-            p256dh = excluded.p256dh,
-            auth = excluded.auth,
-            updated_at = excluded.updated_at",
-        rusqlite::params![id, endpoint, p256dh, auth, now, now],
-    )?;
-
-    let subscription = db.query_row(
-        "SELECT id, endpoint, p256dh, auth, created_at, updated_at
-         FROM push_subscriptions WHERE endpoint = ?1",
-        rusqlite::params![endpoint],
-        row_to_subscription,
-    )?;
-
-    Ok(subscription)
-}
-
-pub fn delete_subscription(db: &Connection, endpoint: &str) -> Result<bool> {
-    let rows_affected = db.execute(
-        "DELETE FROM push_subscriptions WHERE endpoint = ?1",
-        rusqlite::params![endpoint],
-    )?;
-
-    Ok(rows_affected > 0)
-}
-
-pub fn get_all_subscriptions(db: &Connection) -> Result<Vec<PushSubscription>> {
-    let mut stmt = db.prepare(
-        "SELECT id, endpoint, p256dh, auth, created_at, updated_at
-         FROM push_subscriptions ORDER BY created_at DESC",
-    )?;
-
-    let subscriptions = stmt
-        .query_map([], row_to_subscription)?
-        .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()?;
-
-    Ok(subscriptions)
 }
 
 pub async fn send_all(db: &Connection, vapid: &WebPushConfig, payload: &PushPayload) -> Result<()> {
@@ -161,54 +91,46 @@ async fn send_to_subscription(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::WebPushConfig;
     use conductor_core::test_helpers::create_test_conn;
 
     #[tokio::test]
-    async fn test_upsert_subscription() {
+    async fn test_send_all_no_vapid_config() {
         let db = create_test_conn();
+        let vapid = WebPushConfig {
+            vapid_public_key: None,
+            vapid_private_key: None,
+            vapid_subject: None,
+        };
+        let payload = PushPayload {
+            title: "Test".to_string(),
+            body: "Body".to_string(),
+            tag: None,
+            url: None,
+        };
 
-        let subscription =
-            upsert_subscription(&db, "https://example.com/push", "p256dh_key", "auth_secret")
-                .unwrap();
-
-        assert_eq!(subscription.endpoint, "https://example.com/push");
-        assert_eq!(subscription.p256dh, "p256dh_key");
-        assert_eq!(subscription.auth, "auth_secret");
+        // Returns Ok without sending when VAPID keys are absent
+        let result = send_all(&db, &vapid, &payload).await;
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
-    async fn test_delete_subscription() {
+    async fn test_send_all_no_subscriptions() {
         let db = create_test_conn();
+        let vapid = WebPushConfig {
+            vapid_public_key: Some("pub".to_string()),
+            vapid_private_key: Some("priv".to_string()),
+            vapid_subject: Some("mailto:test@example.com".to_string()),
+        };
+        let payload = PushPayload {
+            title: "Test".to_string(),
+            body: "Body".to_string(),
+            tag: None,
+            url: None,
+        };
 
-        upsert_subscription(&db, "https://example.com/push", "p256dh_key", "auth_secret").unwrap();
-
-        let deleted = delete_subscription(&db, "https://example.com/push").unwrap();
-        assert!(deleted);
-
-        let subscriptions = get_all_subscriptions(&db).unwrap();
-        assert!(subscriptions.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_get_all_subscriptions() {
-        let db = create_test_conn();
-
-        upsert_subscription(
-            &db,
-            "https://example1.com/push",
-            "p256dh_key1",
-            "auth_secret1",
-        )
-        .unwrap();
-        upsert_subscription(
-            &db,
-            "https://example2.com/push",
-            "p256dh_key2",
-            "auth_secret2",
-        )
-        .unwrap();
-
-        let subscriptions = get_all_subscriptions(&db).unwrap();
-        assert_eq!(subscriptions.len(), 2);
+        // Returns Ok without error when subscription list is empty
+        let result = send_all(&db, &vapid, &payload).await;
+        assert!(result.is_ok());
     }
 }
