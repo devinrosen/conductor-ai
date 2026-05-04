@@ -34,20 +34,15 @@ pub fn upsert_subscription(
     let now = chrono::Utc::now().to_rfc3339();
     let id = new_id();
 
-    db.execute(
+    let subscription = db.query_row(
         "INSERT INTO push_subscriptions (id, endpoint, p256dh, auth, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(endpoint) DO UPDATE SET
             p256dh = excluded.p256dh,
             auth = excluded.auth,
-            updated_at = excluded.updated_at",
+            updated_at = excluded.updated_at
+         RETURNING id, endpoint, p256dh, auth, created_at, updated_at",
         rusqlite::params![id, endpoint, p256dh, auth, now, now],
-    )?;
-
-    let subscription = db.query_row(
-        "SELECT id, endpoint, p256dh, auth, created_at, updated_at
-         FROM push_subscriptions WHERE endpoint = ?1",
-        rusqlite::params![endpoint],
         row_to_subscription,
     )?;
 
@@ -92,6 +87,27 @@ mod tests {
         assert_eq!(subscription.endpoint, "https://example.com/push");
         assert_eq!(subscription.p256dh, "p256dh_key");
         assert_eq!(subscription.auth, "auth_secret");
+    }
+
+    #[test]
+    fn test_upsert_subscription_update() {
+        let db = create_test_conn();
+
+        let inserted =
+            upsert_subscription(&db, "https://example.com/push", "p256dh_key", "auth_secret")
+                .unwrap();
+
+        let updated =
+            upsert_subscription(&db, "https://example.com/push", "p256dh_new", "auth_new")
+                .unwrap();
+
+        assert_eq!(inserted.id, updated.id);
+        assert_eq!(inserted.created_at, updated.created_at);
+        assert_eq!(updated.p256dh, "p256dh_new");
+        assert_eq!(updated.auth, "auth_new");
+
+        let all = get_all_subscriptions(&db).unwrap();
+        assert_eq!(all.len(), 1);
     }
 
     #[test]
