@@ -182,8 +182,7 @@ mod tests {
         let conn = test_helpers::setup_db();
         let config = Config::default();
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
-        let result =
-            WorktreesProvider::new(None, None).items(&ctx, None, &HashMap::new());
+        let result = WorktreesProvider::new(None, None).items(&ctx, None, &HashMap::new());
         assert!(result.is_err());
         let Err(e) = result else {
             panic!("expected error")
@@ -200,11 +199,8 @@ mod tests {
         let config = Config::default();
         // repo_id present but no scope and no worktree_id
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
-        let result = WorktreesProvider::new(Some("r1".into()), None).items(
-            &ctx,
-            None,
-            &HashMap::new(),
-        );
+        let result =
+            WorktreesProvider::new(Some("r1".into()), None).items(&ctx, None, &HashMap::new());
         assert!(result.is_err());
         let Err(e) = result else {
             panic!("expected error")
@@ -262,7 +258,11 @@ mod tests {
         let items = WorktreesProvider::new(Some("r1".into()), None)
             .items(&ctx, Some(&scope), &HashMap::new())
             .unwrap();
-        assert_eq!(items.len(), 1, "all worktrees returned regardless of prior state");
+        assert_eq!(
+            items.len(),
+            1,
+            "all worktrees returned regardless of prior state"
+        );
         assert_eq!(items[0].item_id, "w2");
     }
 

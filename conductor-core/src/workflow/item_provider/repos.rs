@@ -36,9 +36,7 @@ mod tests {
         let conn = test_helpers::setup_db();
         let config = crate::config::Config::default();
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
-        let items = ReposProvider
-            .items(&ctx, None, &HashMap::new())
-            .unwrap();
+        let items = ReposProvider.items(&ctx, None, &HashMap::new()).unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].item_id, "r1");
         assert_eq!(items[0].item_type, "repo");
@@ -50,9 +48,11 @@ mod tests {
         let config = crate::config::Config::default();
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         // Providers return ALL items; dedup is done by the foreach executor.
-        let items = ReposProvider
-            .items(&ctx, None, &HashMap::new())
-            .unwrap();
-        assert_eq!(items.len(), 1, "all repos returned regardless of prior state");
+        let items = ReposProvider.items(&ctx, None, &HashMap::new()).unwrap();
+        assert_eq!(
+            items.len(),
+            1,
+            "all repos returned regardless of prior state"
+        );
     }
 }

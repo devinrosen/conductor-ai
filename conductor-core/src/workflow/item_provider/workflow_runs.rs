@@ -91,9 +91,7 @@ mod tests {
 
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let provider = WorkflowRunsProvider;
-        let items = provider
-            .items(&ctx, None, &HashMap::new())
-            .unwrap();
+        let items = provider.items(&ctx, None, &HashMap::new()).unwrap();
 
         // Only the completed run should be returned (running is not terminal).
         let ids: Vec<&str> = items.iter().map(|i| i.item_id.as_str()).collect();
@@ -157,9 +155,7 @@ mod tests {
 
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let provider = WorkflowRunsProvider;
-        let items = provider
-            .items(&ctx, None, &filter)
-            .unwrap();
+        let items = provider.items(&ctx, None, &filter).unwrap();
 
         let ids: Vec<&str> = items.iter().map(|i| i.item_id.as_str()).collect();
         assert!(
@@ -221,9 +217,7 @@ mod tests {
         filter.insert("workflow_name".to_string(), "wf-alpha".to_string());
 
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
-        let items = WorkflowRunsProvider
-            .items(&ctx, None, &filter)
-            .unwrap();
+        let items = WorkflowRunsProvider.items(&ctx, None, &filter).unwrap();
 
         let ids: Vec<&str> = items.iter().map(|i| i.item_id.as_str()).collect();
         assert!(ids.contains(&run_a.id.as_str()), "wf-alpha run included");

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{atomic::AtomicBool, Arc};
 #[cfg(any(test, feature = "test-utils"))]
 use std::path::PathBuf;
+use std::sync::{atomic::AtomicBool, Arc};
 
 /// Abstraction over the per-run context consumed by executors and prompt builders.
 ///

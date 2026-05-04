@@ -171,11 +171,8 @@ mod tests {
             base_branch: None,
             has_open_pr: None,
         });
-        let result = TicketsProvider::new(Some("r1".into())).items(
-            &ctx,
-            Some(&scope),
-            &HashMap::new(),
-        );
+        let result =
+            TicketsProvider::new(Some("r1".into())).items(&ctx, Some(&scope), &HashMap::new());
         assert!(result.is_err());
     }
 

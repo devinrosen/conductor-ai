@@ -169,7 +169,9 @@ mod tests {
         let ctx = make_run_ctx();
         let info = make_step_info();
         let params = make_params("noop");
-        let output = registry.dispatch("noop", ctx.as_ref(), &info, &params).unwrap();
+        let output = registry
+            .dispatch("noop", ctx.as_ref(), &info, &params)
+            .unwrap();
         assert_eq!(output.markers, vec!["done"]);
     }
 
@@ -182,7 +184,9 @@ mod tests {
         let ctx = make_run_ctx();
         let info = make_step_info();
         let params = make_params("anything");
-        let output = registry.dispatch("anything", ctx.as_ref(), &info, &params).unwrap();
+        let output = registry
+            .dispatch("anything", ctx.as_ref(), &info, &params)
+            .unwrap();
         assert_eq!(output.markers, vec!["done"]);
     }
 
@@ -192,7 +196,9 @@ mod tests {
         let ctx = make_run_ctx();
         let info = make_step_info();
         let params = make_params("missing");
-        let err = registry.dispatch("missing", ctx.as_ref(), &info, &params).unwrap_err();
+        let err = registry
+            .dispatch("missing", ctx.as_ref(), &info, &params)
+            .unwrap_err();
         assert!(
             err.to_string()
                 .contains("no registered ActionExecutor for 'missing'"),

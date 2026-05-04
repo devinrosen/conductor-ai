@@ -111,9 +111,8 @@ mod tests {
 
     #[test]
     fn none_optionals_are_absent() {
-        let ctx = WorktreeRunContext::new(
-            "/work", "/repo", None, None, None, "r", "wf", None, None,
-        );
+        let ctx =
+            WorktreeRunContext::new("/work", "/repo", None, None, None, "r", "wf", None, None);
         assert!(ctx.get(keys::WORKTREE_ID).is_none());
         assert!(ctx.get(keys::TICKET_ID).is_none());
         assert!(ctx.get(keys::REPO_ID).is_none());
@@ -140,7 +139,15 @@ mod tests {
     #[test]
     fn partial_optionals() {
         let ctx = WorktreeRunContext::new(
-            "/work", "/repo", Some("wt-01".into()), None, None, "r", "wf", None, None,
+            "/work",
+            "/repo",
+            Some("wt-01".into()),
+            None,
+            None,
+            "r",
+            "wf",
+            None,
+            None,
         );
         assert_eq!(ctx.get(keys::WORKTREE_ID).as_deref(), Some("wt-01"));
         assert!(ctx.get(keys::TICKET_ID).is_none());
@@ -150,7 +157,15 @@ mod tests {
     #[test]
     fn working_dir_is_set() {
         let ctx = WorktreeRunContext::new(
-            "/my/work/dir", "/repo", None, None, None, "r", "wf", None, None,
+            "/my/work/dir",
+            "/repo",
+            None,
+            None,
+            None,
+            "r",
+            "wf",
+            None,
+            None,
         );
         assert_eq!(ctx.working_dir(), std::path::Path::new("/my/work/dir"));
     }
@@ -178,7 +193,15 @@ mod tests {
     #[test]
     fn run_id_and_workflow_name() {
         let ctx = WorktreeRunContext::new(
-            "/work", "/repo", None, None, None, "run-xyz", "my-workflow", None, None,
+            "/work",
+            "/repo",
+            None,
+            None,
+            None,
+            "run-xyz",
+            "my-workflow",
+            None,
+            None,
         );
         assert_eq!(ctx.run_id(), "run-xyz");
         assert_eq!(ctx.workflow_name(), "my-workflow");

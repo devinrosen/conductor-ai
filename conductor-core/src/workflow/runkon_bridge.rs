@@ -126,7 +126,8 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             let agent_mgr = crate::agent::AgentManager::new(&conn);
             let child_run = agent_mgr
                 .create_child_run(
-                    ctx.get(runkon_flow::traits::run_context::keys::WORKTREE_ID).as_deref(),
+                    ctx.get(runkon_flow::traits::run_context::keys::WORKTREE_ID)
+                        .as_deref(),
                     &format!("Workflow step: {}", params.name),
                     params.model.as_deref(),
                     ctx.parent_run_id().unwrap_or(""),
@@ -164,7 +165,9 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
         let core_ectx = crate::workflow::action_executor::ExecutionContext {
             run_id: child_run_id.clone(),
             working_dir: ctx.working_dir().to_path_buf(),
-            repo_path: ctx.get(runkon_flow::traits::run_context::keys::REPO_PATH).unwrap_or_default(),
+            repo_path: ctx
+                .get(runkon_flow::traits::run_context::keys::REPO_PATH)
+                .unwrap_or_default(),
             db_path: self.db_path.clone(),
             step_timeout: info.step_timeout,
             shutdown: ctx.shutdown().cloned(),
@@ -267,13 +270,7 @@ macro_rules! impl_rk_item_provider_trait {
                 scope: Option<&runkon_flow::dsl::ForeachScope>,
                 filter: &HashMap<String, String>,
             ) -> Result<Vec<runkon_flow::traits::item_provider::FanOutItem>, EngineError> {
-                delegate_items(
-                    &self.conn,
-                    &self.config,
-                    scope,
-                    filter,
-                    self.provider(),
-                )
+                delegate_items(&self.conn, &self.config, scope, filter, self.provider())
             }
             fn supports_ordered(&self) -> bool {
                 self.provider().supports_ordered()

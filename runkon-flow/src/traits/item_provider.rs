@@ -119,7 +119,9 @@ mod tests {
     #[test]
     fn test_dummy_provider_returns_items() {
         let ctx = NoopRunContext::default();
-        let info = ProviderInfo { step_id: "s1".to_string() };
+        let info = ProviderInfo {
+            step_id: "s1".to_string(),
+        };
         let provider = DummyProvider;
         let items = provider.items(&ctx, &info, None, &HashMap::new()).unwrap();
         assert_eq!(items.len(), 1);
