@@ -32,6 +32,17 @@ workflow iterate-pr {
         call address-reviews {
           as = "developer"
         }
+
+        call verify
+
+        if verify.has_failures {
+          call address-reviews {
+            retries = 1
+            as      = "developer"
+          }
+          call verify
+        }
+
         script fmt-fix {
           run = ".conductor/scripts/fmt-fix.sh"
         }

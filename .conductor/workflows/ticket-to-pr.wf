@@ -28,6 +28,16 @@ workflow ticket-to-pr {
     as      = "developer"
   }
 
+  call verify
+
+  if verify.has_failures {
+    call implement {
+      retries = 1
+      as      = "developer"
+    }
+    call verify
+  }
+
   call workflow lint-fix
 
   script fmt-fix {
