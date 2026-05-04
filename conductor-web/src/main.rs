@@ -818,7 +818,10 @@ fn compute_step_events(
     (tracker, to_emit)
 }
 
-async fn fetch_subscriptions(db: &Arc<Mutex<Connection>>, context: &str) -> Vec<push::PushSubscription> {
+async fn fetch_subscriptions(
+    db: &Arc<Mutex<Connection>>,
+    context: &str,
+) -> Vec<push::PushSubscription> {
     let conn = db.lock().await;
     match push::get_all_subscriptions(&conn) {
         Ok(subs) => subs,
