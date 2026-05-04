@@ -625,8 +625,8 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         items: &[(String, WorkflowStepStatus, Option<String>)],
         ended_at: &str,
     ) -> Result<(), EngineError> {
+        let mut store = self.lock()?;
         for (step_id, status, result_text) in items {
-            let mut store = self.lock()?;
             if let Some(step) = store.steps.get_mut(step_id) {
                 if !matches!(
                     step.status,

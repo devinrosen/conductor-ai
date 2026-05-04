@@ -1406,4 +1406,100 @@ mod tests {
             "generation should be incremented from 5 to 6"
         );
     }
+
+    #[test]
+    fn bulk_recover_steps_atomic_update_with_savepoint() {
+        use crate::status::WorkflowStepStatus;
+
+        // Use the existing make_step_db helper which has a basic schema
+        let (p, _run_id, _existing_step) = make_step_db();
+
+        // Insert additional steps for the bulk test
+        {
+            let conn = p.lock().unwrap();
+            conn.execute_batch(
+                "INSERT INTO workflow_run_steps (id, workflow_run_id, status) VALUES
+                    ('step-2', 'run-1', 'running'),
+                    ('step-3', 'run-1', 'completed'),
+                    ('step-4', 'run-1', 'running');",
+            )
+            .unwrap();
+        }
+
+        // Bulk recover steps 1, 2, and 4 (step 3 already completed, so shouldn't change)
+        let items = vec![
+            (
+                "step-1".to_string(),
+                WorkflowStepStatus::Failed,
+                Some("error 1".to_string()),
+            ),
+            ("step-2".to_string(), WorkflowStepStatus::TimedOut, None),
+            (
+                "step-3".to_string(),
+                WorkflowStepStatus::Failed,
+                Some("shouldn't update".to_string()),
+            ),
+            (
+                "step-4".to_string(),
+                WorkflowStepStatus::Failed,
+                Some("error 4".to_string()),
+            ),
+        ];
+
+        let result = p.bulk_recover_steps(&items, "2023-01-01T12:00:00Z");
+        assert!(
+            result.is_ok(),
+            "bulk_recover_steps should succeed; got {result:?}"
+        );
+
+        // Verify the atomic update by directly querying the database
+        let conn = p.lock().unwrap();
+
+        // Check step-1: should be updated to failed
+        let (status, ended_at, result_text): (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT status, ended_at, result_text FROM workflow_run_steps WHERE id = 'step-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "failed");
+        assert_eq!(ended_at, Some("2023-01-01T12:00:00Z".to_string()));
+        assert_eq!(result_text, Some("error 1".to_string()));
+
+        // Check step-2: should be updated to timed_out
+        let (status, ended_at, result_text): (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT status, ended_at, result_text FROM workflow_run_steps WHERE id = 'step-2'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "timed_out");
+        assert_eq!(ended_at, Some("2023-01-01T12:00:00Z".to_string()));
+        assert_eq!(result_text, None);
+
+        // Check step-3: should be unchanged (completed -> completed)
+        let (status, ended_at): (String, Option<String>) = conn
+            .query_row(
+                "SELECT status, ended_at FROM workflow_run_steps WHERE id = 'step-3'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "completed"); // Terminal status, shouldn't change
+        assert_eq!(ended_at, None); // Should remain unchanged
+
+        // Check step-4: should be updated to failed
+        let (status, ended_at, result_text): (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT status, ended_at, result_text FROM workflow_run_steps WHERE id = 'step-4'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "failed");
+        assert_eq!(ended_at, Some("2023-01-01T12:00:00Z".to_string()));
+        assert_eq!(result_text, Some("error 4".to_string()));
+    }
 }
