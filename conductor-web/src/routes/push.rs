@@ -3,25 +3,9 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
-use crate::config::WebConfig;
 use crate::error::ApiError;
-use crate::push::PushSubscriptionManager;
+use crate::push;
 use crate::state::AppState;
-
-fn extract_vapid_keys(web_config: &WebConfig) -> Result<(String, String, String), ApiError> {
-    match (
-        &web_config.push.vapid_private_key,
-        &web_config.push.vapid_public_key,
-        &web_config.push.vapid_subject,
-    ) {
-        (Some(private_key), Some(public_key), Some(subject)) => {
-            Ok((private_key.clone(), public_key.clone(), subject.clone()))
-        }
-        _ => Err(ApiError::ServiceUnavailable(
-            "Push notifications not configured - VAPID keys not found".to_string(),
-        )),
-    }
-}
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct PushSubscribeRequest {
@@ -89,13 +73,13 @@ pub async fn subscribe_push(
     Json(request): Json<PushSubscribeRequest>,
 ) -> Result<Json<PushSubscribeResponse>, ApiError> {
     let db = state.db.lock().await;
-    let web_config = state.web_config.read().await;
-    let (vapid_private_key, vapid_public_key, vapid_subject) = extract_vapid_keys(&web_config)?;
 
-    let manager =
-        PushSubscriptionManager::new(&db, vapid_private_key, vapid_public_key, vapid_subject);
-
-    match manager.upsert_subscription(&request.endpoint, &request.keys.p256dh, &request.keys.auth) {
+    match push::upsert_subscription(
+        &db,
+        &request.endpoint,
+        &request.keys.p256dh,
+        &request.keys.auth,
+    ) {
         Ok(_) => Ok(Json(PushSubscribeResponse {
             success: true,
             message: "Successfully subscribed to push notifications".to_string(),
@@ -125,13 +109,8 @@ pub async fn unsubscribe_push(
     Json(request): Json<PushSubscribeRequest>,
 ) -> Result<StatusCode, ApiError> {
     let db = state.db.lock().await;
-    let web_config = state.web_config.read().await;
-    let (vapid_private_key, vapid_public_key, vapid_subject) = extract_vapid_keys(&web_config)?;
 
-    let manager =
-        PushSubscriptionManager::new(&db, vapid_private_key, vapid_public_key, vapid_subject);
-
-    match manager.delete_subscription(&request.endpoint) {
+    match push::delete_subscription(&db, &request.endpoint) {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
         Ok(false) => Err(ApiError::NotFound(
             "Push subscription not found".to_string(),
