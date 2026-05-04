@@ -856,7 +856,11 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
         if items.is_empty() {
             return Ok(());
         }
-        let conn = self.lock()?;
+        let mut conn = self.lock()?;
+        // The caller cannot supply a savepoint (trait method), so we own one
+        // here to restore the all-or-nothing guarantee the old free-function
+        // caller provided via `with_savepoint(conn, "recover_stuck_steps", …)`.
+        let sp = conn.savepoint().map_err(db_err)?;
         for chunk in items.chunks(199) {
             let n = chunk.len();
             let case_arms = (0..n)
@@ -891,9 +895,10 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
                 params.push(Box::new(step_id.clone()));
             }
 
-            conn.execute(&sql, rusqlite::params_from_iter(params))
+            sp.execute(&sql, rusqlite::params_from_iter(params))
                 .map_err(db_err)?;
         }
+        sp.commit().map_err(db_err)?;
         Ok(())
     }
 }
