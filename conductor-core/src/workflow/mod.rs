@@ -14,7 +14,7 @@ pub(crate) mod claude_agent_executor;
 pub(crate) mod constants;
 pub(crate) mod coordinator;
 pub(crate) mod engine_error;
-pub(crate) mod engine_log;
+pub(crate) mod panic_db_sink;
 pub mod estimation;
 pub(crate) mod executors;
 pub mod helpers;

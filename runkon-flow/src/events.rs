@@ -85,6 +85,12 @@ pub enum EngineEvent {
         total_turns: i64,
         total_duration_ms: i64,
     },
+    // Panic capture
+    Panicked {
+        run_id: String,
+        message: String,
+        backtrace: String,
+    },
 }
 
 /// Observability sink that receives engine events after each DB-write state transition.

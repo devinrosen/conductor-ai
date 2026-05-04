@@ -814,10 +814,13 @@ pub fn spawn_workflow_resume(
         let db_path = crate::config::db_path();
         let params = make_resume_params((*config).clone(), run_id.clone(), conductor_bin_dir, None);
         let run_id_inner = run_id.clone();
-        super::engine_log::run_engine_with_diagnostics(
+        let sinks: Vec<Arc<dyn runkon_flow::EventSink>> = vec![
+            Arc::new(super::panic_db_sink::PanicDbSink::new(db_path.clone())),
+        ];
+        runkon_flow::run_with_per_run_log(
             &run_id,
-            db_path,
-            None,
+            crate::config::workflow_log_dir(),
+            sinks,
             std::panic::AssertUnwindSafe(move || {
                 if let Err(e) = resume_workflow_standalone(&params) {
                     tracing::warn!(run_id = %run_id_inner, "spawn_workflow_resume: auto-resume failed: {e}");
@@ -845,10 +848,13 @@ pub fn spawn_heartbeat_resume(p: SpawnHeartbeatResumeParams) -> std::thread::Joi
         );
         let run_id = p.run_id.clone();
         let db_path = effective_db.clone();
-        super::engine_log::run_engine_with_diagnostics(
+        let sinks: Vec<Arc<dyn runkon_flow::EventSink>> = vec![
+            Arc::new(super::panic_db_sink::PanicDbSink::new(db_path.clone())),
+        ];
+        runkon_flow::run_with_per_run_log(
             &run_id,
-            db_path,
-            None,
+            crate::config::workflow_log_dir(),
+            sinks,
             std::panic::AssertUnwindSafe(move || {
                 if let Err(e) = resume_workflow_standalone(&params) {
                     tracing::warn!(run_id = %p.run_id, "spawn_heartbeat_resume: auto-resume failed: {e}");
