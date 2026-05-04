@@ -335,36 +335,38 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         };
     }
 
-    // WorktreeDetail PromptInput capture — must precede the Ctrl+d/Ctrl+u
-    // half-page-scroll and global character bindings so the textarea owns
-    // every key while focused.
+    // Prompt-input capture — must precede Ctrl+d/Ctrl+u and global character
+    // bindings so the textarea owns every key while focused.
     //
-    // Bindings:
+    // Bindings (shared by both prompt boxes):
     //   Enter (no mods) | Ctrl+S        → submit
     //   Shift+Enter                     → newline (best-effort; terminal-dependent)
     //   Tab / Shift+Tab                 → next/prev panel
     //   Esc                             → blur (prev panel)
     //   anything else                   → textarea
-    if state.view == View::WorktreeDetail
-        && state.worktree_detail_focus == WorktreeDetailFocus::PromptInput
-        && state.column_focus == ColumnFocus::Content
-    {
-        if let Some(action) = map_prompt_input_key(key, Action::SubmitPromptInput) {
-            return action;
+    if state.column_focus == ColumnFocus::Content {
+        let prompt_actions = match state.view {
+            View::WorktreeDetail
+                if state.worktree_detail_focus == WorktreeDetailFocus::PromptInput =>
+            {
+                Some((Action::SubmitPromptInput, Action::PromptTextAreaInput(key)))
+            }
+            View::RepoDetail
+                if state.repo_detail_focus == RepoDetailFocus::RepoAgentPromptInput =>
+            {
+                Some((
+                    Action::SubmitRepoPromptInput,
+                    Action::RepoPromptTextAreaInput(key),
+                ))
+            }
+            _ => None,
+        };
+        if let Some((submit, textarea_fallback)) = prompt_actions {
+            if let Some(action) = map_prompt_input_key(key, submit) {
+                return action;
+            }
+            return textarea_fallback;
         }
-        return Action::PromptTextAreaInput(key);
-    }
-
-    // RepoDetail RepoAgentPromptInput capture — same rationale as the
-    // WorktreeDetail capture above.
-    if state.view == View::RepoDetail
-        && state.repo_detail_focus == RepoDetailFocus::RepoAgentPromptInput
-        && state.column_focus == ColumnFocus::Content
-    {
-        if let Some(action) = map_prompt_input_key(key, Action::SubmitRepoPromptInput) {
-            return action;
-        }
-        return Action::RepoPromptTextAreaInput(key);
     }
 
     // Ctrl+d / Ctrl+u for half-page scroll (must precede normal match to avoid
