@@ -752,10 +752,12 @@ mod tests {
         OnTimeout,
     };
     use crate::engine_error::EngineError;
-    use crate::test_helpers::{call_node, make_def, make_ectx, make_params, ForwardSink, VecSink};
-    use crate::traits::action_executor::{ActionOutput, ActionParams, ExecutionContext};
+    use crate::test_helpers::{
+        call_node, make_def, make_params, make_run_ctx, make_step_info, ForwardSink, VecSink,
+    };
+    use crate::traits::action_executor::{ActionOutput, ActionParams, StepInfo};
     use crate::traits::gate_resolver::{GateContext, GateParams, GatePoll};
-    use crate::traits::item_provider::{FanOutItem, ProviderContext};
+    use crate::traits::item_provider::{FanOutItem, ProviderInfo};
     use crate::traits::run_context::RunContext;
     use crate::workflow_resolver_memory::InMemoryWorkflowResolver;
     use std::collections::HashMap;
@@ -769,7 +771,8 @@ mod tests {
         }
         fn execute(
             &self,
-            _ectx: &ExecutionContext,
+            _ctx: &dyn RunContext,
+            _info: &StepInfo,
             _params: &ActionParams,
         ) -> Result<ActionOutput, EngineError> {
             Ok(ActionOutput {
@@ -786,7 +789,8 @@ mod tests {
         }
         fn execute(
             &self,
-            _ectx: &ExecutionContext,
+            _ctx: &dyn RunContext,
+            _info: &StepInfo,
             _params: &ActionParams,
         ) -> Result<ActionOutput, EngineError> {
             Ok(ActionOutput {
@@ -806,7 +810,8 @@ mod tests {
         }
         fn execute(
             &self,
-            _: &ExecutionContext,
+            _: &dyn RunContext,
+            _: &StepInfo,
             _: &ActionParams,
         ) -> Result<ActionOutput, EngineError> {
             self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -874,10 +879,10 @@ mod tests {
         }
         fn items(
             &self,
-            _ctx: &ProviderContext,
+            _ctx: &dyn RunContext,
+            _info: &ProviderInfo,
             _scope: Option<&crate::dsl::ForeachScope>,
             _filter: &HashMap<String, String>,
-            _existing_set: &std::collections::HashSet<String>,
         ) -> Result<Vec<FanOutItem>, EngineError> {
             Ok(vec![])
         }
@@ -938,9 +943,11 @@ mod tests {
             .action(Box::new(AlphaExecutor))
             .build()
             .unwrap();
+        let ctx = make_run_ctx();
+        let info = make_step_info();
         let output = engine
             .action_registry
-            .dispatch("alpha", &make_ectx(), &make_params("alpha"))
+            .dispatch("alpha", ctx.as_ref(), &info, &make_params("alpha"))
             .unwrap();
         assert_eq!(output.markers, vec!["alpha"]);
     }
@@ -952,9 +959,11 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
+        let ctx = make_run_ctx();
+        let info = make_step_info();
         let output = engine
             .action_registry
-            .dispatch("anything", &make_ectx(), &make_params("anything"))
+            .dispatch("anything", ctx.as_ref(), &info, &make_params("anything"))
             .unwrap();
         assert_eq!(output.markers, vec!["beta"]);
     }
@@ -967,9 +976,11 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
+        let ctx = make_run_ctx();
+        let info = make_step_info();
         let output = engine
             .action_registry
-            .dispatch("alpha", &make_ectx(), &make_params("alpha"))
+            .dispatch("alpha", ctx.as_ref(), &info, &make_params("alpha"))
             .unwrap();
         assert_eq!(output.markers, vec!["alpha"]);
     }
@@ -1653,7 +1664,8 @@ mod tests {
         }
         fn execute(
             &self,
-            _ectx: &ExecutionContext,
+            _ctx: &dyn RunContext,
+            _info: &StepInfo,
             _params: &ActionParams,
         ) -> Result<ActionOutput, EngineError> {
             Err(EngineError::Workflow("intentional failure".to_string()))
@@ -1822,7 +1834,8 @@ mod tests {
             }
             fn execute(
                 &self,
-                _ectx: &ExecutionContext,
+                _ctx: &dyn RunContext,
+                _info: &StepInfo,
                 _params: &ActionParams,
             ) -> Result<ActionOutput, EngineError> {
                 std::thread::sleep(std::time::Duration::from_millis(100));
@@ -2404,7 +2417,7 @@ mod tests {
     #[test]
     fn refresh_db_error_causes_lease_lost_abort() {
         use crate::persistence_memory::InMemoryWorkflowPersistence;
-        use crate::traits::action_executor::{ActionOutput, ActionParams, ExecutionContext};
+        use crate::traits::action_executor::{ActionOutput, ActionParams};
         use crate::traits::persistence::WorkflowPersistence;
         use std::sync::atomic::Ordering;
         use std::thread;
@@ -2412,6 +2425,7 @@ mod tests {
 
         struct BlockingExecutor {
             started: Arc<AtomicBool>,
+            shutdown: Arc<AtomicBool>,
         }
         impl ActionExecutor for BlockingExecutor {
             fn name(&self) -> &str {
@@ -2419,17 +2433,14 @@ mod tests {
             }
             fn execute(
                 &self,
-                ectx: &ExecutionContext,
+                _ctx: &dyn crate::traits::run_context::RunContext,
+                _info: &crate::traits::action_executor::StepInfo,
                 _: &ActionParams,
             ) -> Result<ActionOutput, EngineError> {
                 self.started.store(true, Ordering::SeqCst);
                 // Spin until the engine's shutdown flag is set by signal_lease_abort.
                 loop {
-                    if ectx
-                        .shutdown
-                        .as_ref()
-                        .is_some_and(|s| s.load(Ordering::Relaxed))
-                    {
+                    if self.shutdown.load(Ordering::Relaxed) {
                         return Ok(ActionOutput::default());
                     }
                     std::thread::sleep(Duration::from_millis(1));
@@ -2453,17 +2464,24 @@ mod tests {
             persistence_clone.set_fail_acquire_lease(true);
         });
 
+        // Pre-set the shutdown arc so the refresh thread's signal_lease_abort sets the
+        // same instance we hand to BlockingExecutor — FlowEngine::run() reuses it when
+        // exec_config.shutdown is already populated.
+        let shared_shutdown = Arc::new(AtomicBool::new(false));
+
         let mut m = HashMap::new();
         m.insert(
             "alpha".to_string(),
             Box::new(BlockingExecutor {
                 started: Arc::clone(&started),
+                shutdown: Arc::clone(&shared_shutdown),
             }) as Box<dyn crate::traits::action_executor::ActionExecutor>,
         );
         let mut state = make_bare_state("wf");
         state.persistence = Arc::clone(&persistence) as Arc<dyn WorkflowPersistence>;
         state.action_registry = Arc::new(ActionRegistry::new(m, None));
         state.workflow_run_id = run.id.clone();
+        state.exec_config.shutdown = Some(Arc::clone(&shared_shutdown));
         // Short refresh interval so the error is detected quickly.
         state.exec_config.lease_refresh_interval = Duration::from_millis(15);
 
@@ -2488,7 +2506,7 @@ mod tests {
     #[test]
     fn stale_generation_on_step_write_aborts_with_lease_lost() {
         use crate::persistence_memory::InMemoryWorkflowPersistence;
-        use crate::traits::action_executor::{ActionOutput, ActionParams, ExecutionContext};
+        use crate::traits::action_executor::{ActionOutput, ActionParams};
         use crate::traits::persistence::WorkflowPersistence;
         use std::sync::atomic::Ordering;
         use std::thread;
@@ -2507,7 +2525,8 @@ mod tests {
             }
             fn execute(
                 &self,
-                _ectx: &ExecutionContext,
+                _ctx: &dyn crate::traits::run_context::RunContext,
+                _info: &crate::traits::action_executor::StepInfo,
                 _: &ActionParams,
             ) -> Result<ActionOutput, EngineError> {
                 self.started.store(true, Ordering::SeqCst);

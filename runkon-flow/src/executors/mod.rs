@@ -121,35 +121,16 @@ pub(super) fn build_inputs_map(
     )
 }
 
-/// Construct an `ExecutionContext` from shared state fields.
+/// Construct a `StepInfo` from shared state fields.
 ///
-/// Centralises the repeated struct-literal initialisation in `call.rs` and
-/// `parallel.rs`.  Both sites differ only in `bot_name` and `plugin_dirs`;
-/// all other fields come directly from `state`.
-pub(super) fn build_execution_context(
+/// Centralises the repeated initialisation in `call.rs` and `parallel.rs`.
+pub(super) fn build_step_info(
     state: &crate::engine::ExecutionState,
     step_id: &str,
-    bot_name: Option<String>,
-    plugin_dirs: Vec<String>,
-) -> crate::traits::action_executor::ExecutionContext {
-    crate::traits::action_executor::ExecutionContext {
-        run_id: step_id.to_string(),
-        working_dir: state.run_ctx.working_dir().to_path_buf(),
-        repo_path: state
-            .run_ctx
-            .get(crate::traits::run_context::keys::REPO_PATH)
-            .unwrap_or_default(),
-        step_timeout: state.exec_config.step_timeout,
-        shutdown: state.exec_config.shutdown.clone(),
-        model: state.model.clone(),
-        bot_name,
-        plugin_dirs,
-        workflow_name: state.workflow_name.clone(),
-        worktree_id: state
-            .run_ctx
-            .get(crate::traits::run_context::keys::WORKTREE_ID),
-        parent_run_id: state.parent_run_id.clone(),
+) -> crate::traits::action_executor::StepInfo {
+    crate::traits::action_executor::StepInfo {
         step_id: step_id.to_string(),
+        step_timeout: state.exec_config.step_timeout,
     }
 }
 
@@ -195,6 +176,9 @@ pub(super) fn build_action_params(
     schema: Option<crate::output_schema::OutputSchema>,
     retries_remaining: u32,
     retry_error: Option<String>,
+    model: Option<String>,
+    bot_name: Option<String>,
+    plugin_dirs: Vec<String>,
 ) -> crate::traits::action_executor::ActionParams {
     crate::traits::action_executor::ActionParams {
         name: name.to_string(),
@@ -205,6 +189,9 @@ pub(super) fn build_action_params(
         dry_run,
         gate_feedback,
         schema,
+        model,
+        bot_name,
+        plugin_dirs,
     }
 }
 

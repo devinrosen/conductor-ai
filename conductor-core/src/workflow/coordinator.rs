@@ -643,6 +643,14 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
             params.worktree_id.clone(),
             params.ticket_id.clone(),
             effective_repo_id_owned,
+            wf_run_id.clone(),
+            workflow.name.clone(),
+            if parent_run_id.is_empty() {
+                None
+            } else {
+                Some(parent_run_id.clone())
+            },
+            params.exec_config.shutdown.clone(),
         )) as std::sync::Arc<dyn runkon_flow::traits::run_context::RunContext>,
         extra_plugin_dirs: params.extra_plugin_dirs.clone(),
         model: params.model.clone(),
@@ -1128,6 +1136,14 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
             wf_run.worktree_id.clone(),
             wf_run.ticket_id.clone(),
             wf_run.repo_id.clone(),
+            wf_run.id.clone(),
+            wf_run.workflow_name.clone(),
+            if wf_run.parent_run_id.is_empty() {
+                None
+            } else {
+                Some(wf_run.parent_run_id.clone())
+            },
+            input.shutdown.clone(),
         )) as std::sync::Arc<dyn runkon_flow::traits::run_context::RunContext>,
         extra_plugin_dirs: vec![],
         model: input.model.map(String::from),

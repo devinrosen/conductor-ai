@@ -31,7 +31,6 @@ pub trait ItemProvider: Send + Sync {
         ctx: &ProviderContext<'_>,
         scope: Option<&ForeachScope>,
         filter: &HashMap<String, String>,
-        existing_set: &HashSet<String>,
     ) -> Result<Vec<FanOutItem>>;
 
     fn dependencies(
@@ -49,21 +48,14 @@ pub trait ItemProvider: Send + Sync {
     }
 }
 
-/// Collect `FanOutItem`s from an iterator, skipping ids already in `existing_set`.
+/// Collect `FanOutItem`s from an iterator into the provider's return type.
 ///
-/// Centralises the deduplication loop that every `ItemProvider::items()` needs:
-/// `for item in list { if !existing_set.contains(&item.id) { items.push(...) } }`.
+/// Providers return all items unconditionally; the foreach executor owns the dedup.
 pub(super) fn collect_fan_out_items<T>(
     items: impl IntoIterator<Item = T>,
-    existing_set: &HashSet<String>,
-    get_id: impl Fn(&T) -> &str,
     to_item: impl Fn(T) -> FanOutItem,
 ) -> Vec<FanOutItem> {
-    items
-        .into_iter()
-        .filter(|t| !existing_set.contains(get_id(t)))
-        .map(to_item)
-        .collect()
+    items.into_iter().map(to_item).collect()
 }
 
 /// Fetch item IDs for a foreach step from the DB and return them, or `None` if the

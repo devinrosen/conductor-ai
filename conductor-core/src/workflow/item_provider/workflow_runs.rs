@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::error::Result;
 use runkon_flow::dsl::ForeachScope;
@@ -13,7 +13,6 @@ impl ItemProvider for WorkflowRunsProvider {
         ctx: &ProviderContext<'_>,
         _scope: Option<&ForeachScope>,
         filter: &HashMap<String, String>,
-        existing_set: &HashSet<String>,
     ) -> Result<Vec<FanOutItem>> {
         let status_filter = filter.get("status").map(|s| s.as_str()).unwrap_or("");
         let workflow_name_filter = filter.get("workflow_name").map(|s| s.as_str());
@@ -30,16 +29,11 @@ impl ItemProvider for WorkflowRunsProvider {
         };
         let rows = crate::workflow::list_runs_by_status(ctx.conn, &statuses, workflow_name_filter)?;
 
-        Ok(collect_fan_out_items(
-            rows,
-            existing_set,
-            |(id, _)| id.as_str(),
-            |(id, wf_name)| FanOutItem {
-                item_type: "workflow_run".to_string(),
-                item_id: id,
-                item_ref: wf_name,
-            },
-        ))
+        Ok(collect_fan_out_items(rows, |(id, wf_name)| FanOutItem {
+            item_type: "workflow_run".to_string(),
+            item_id: id,
+            item_ref: wf_name,
+        }))
     }
 }
 
@@ -97,9 +91,7 @@ mod tests {
 
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let provider = WorkflowRunsProvider;
-        let items = provider
-            .items(&ctx, None, &HashMap::new(), &HashSet::new())
-            .unwrap();
+        let items = provider.items(&ctx, None, &HashMap::new()).unwrap();
 
         // Only the completed run should be returned (running is not terminal).
         let ids: Vec<&str> = items.iter().map(|i| i.item_id.as_str()).collect();
@@ -163,9 +155,7 @@ mod tests {
 
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let provider = WorkflowRunsProvider;
-        let items = provider
-            .items(&ctx, None, &filter, &HashSet::new())
-            .unwrap();
+        let items = provider.items(&ctx, None, &filter).unwrap();
 
         let ids: Vec<&str> = items.iter().map(|i| i.item_id.as_str()).collect();
         assert!(
@@ -227,9 +217,7 @@ mod tests {
         filter.insert("workflow_name".to_string(), "wf-alpha".to_string());
 
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
-        let items = WorkflowRunsProvider
-            .items(&ctx, None, &filter, &HashSet::new())
-            .unwrap();
+        let items = WorkflowRunsProvider.items(&ctx, None, &filter).unwrap();
 
         let ids: Vec<&str> = items.iter().map(|i| i.item_id.as_str()).collect();
         assert!(ids.contains(&run_a.id.as_str()), "wf-alpha run included");
@@ -237,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn test_existing_set_deduplication() {
+    fn test_workflow_runs_returns_all_without_dedup() {
         let conn = test_helpers::setup_db();
         let config = Config::default();
 
@@ -262,17 +250,15 @@ mod tests {
         )
         .unwrap();
 
-        let mut existing = HashSet::new();
-        existing.insert(run1.id.clone());
-
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = WorkflowRunsProvider
-            .items(&ctx, None, &HashMap::new(), &existing)
+            .items(&ctx, None, &HashMap::new())
             .unwrap();
 
+        // Providers return ALL items; dedup is done by the foreach executor.
         assert!(
-            items.is_empty(),
-            "run already in existing_set should be excluded"
+            items.iter().any(|i| i.item_id == run1.id),
+            "run should be included regardless of prior state"
         );
     }
 }

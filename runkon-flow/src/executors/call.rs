@@ -94,8 +94,7 @@ fn execute_call_inner(
             }
         }
 
-        let ectx =
-            super::build_execution_context(state, &step_id, effective_bot_name, merged_plugin_dirs);
+        let info = super::build_step_info(state, &step_id);
 
         let params = build_action_params(
             agent_label,
@@ -110,6 +109,9 @@ fn execute_call_inner(
             } else {
                 Some(last_error.clone())
             },
+            state.model.clone(),
+            effective_bot_name,
+            merged_plugin_dirs,
         );
 
         // Per-step timeout: spawn a timer thread that cancels a child token after
@@ -201,7 +203,7 @@ fn execute_call_inner(
         // Clone the Arc before dispatch so we hold no borrow on `state` while
         // the executor runs.
         let registry = Arc::clone(&state.action_registry);
-        let dispatch_result = registry.dispatch(&params.name, &ectx, &params);
+        let dispatch_result = registry.dispatch(&params.name, &*state.run_ctx, &info, &params);
         // Clear the active executor record and signal the timer and heartbeat threads to exit.
         {
             let mut cur = state
@@ -350,7 +352,8 @@ mod tests {
             }
             fn execute(
                 &self,
-                _ectx: &crate::traits::action_executor::ExecutionContext,
+                _ctx: &dyn crate::traits::run_context::RunContext,
+                _info: &crate::traits::action_executor::StepInfo,
                 _params: &ActionParams,
             ) -> std::result::Result<ActionOutput, crate::engine_error::EngineError> {
                 // Long enough for the 500 ms keeper poll to fire at least once.

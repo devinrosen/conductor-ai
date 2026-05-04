@@ -34,7 +34,6 @@ impl ItemProvider for WorktreesProvider {
         ctx: &ProviderContext<'_>,
         scope: Option<&ForeachScope>,
         _filter: &HashMap<String, String>,
-        existing_set: &HashSet<String>,
     ) -> Result<Vec<FanOutItem>> {
         let repo_id = require_repo_id(&self.repo_id, "worktrees")?;
 
@@ -63,10 +62,7 @@ impl ItemProvider for WorktreesProvider {
         let wt_mgr = WorktreeManager::new(ctx.conn, ctx.config);
         let active_worktrees = wt_mgr.list_by_repo_id_and_base_branch(repo_id, base_branch)?;
 
-        let mut candidates: Vec<_> = active_worktrees
-            .into_iter()
-            .filter(|wt| !existing_set.contains(&wt.id))
-            .collect();
+        let mut candidates: Vec<_> = active_worktrees.into_iter().collect();
 
         if let Some(want_open_pr) = wt_scope_opt.and_then(|s| s.has_open_pr) {
             if !candidates.is_empty() {
@@ -186,8 +182,7 @@ mod tests {
         let conn = test_helpers::setup_db();
         let config = Config::default();
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
-        let result =
-            WorktreesProvider::new(None, None).items(&ctx, None, &HashMap::new(), &HashSet::new());
+        let result = WorktreesProvider::new(None, None).items(&ctx, None, &HashMap::new());
         assert!(result.is_err());
         let Err(e) = result else {
             panic!("expected error")
@@ -204,12 +199,8 @@ mod tests {
         let config = Config::default();
         // repo_id present but no scope and no worktree_id
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
-        let result = WorktreesProvider::new(Some("r1".into()), None).items(
-            &ctx,
-            None,
-            &HashMap::new(),
-            &HashSet::new(),
-        );
+        let result =
+            WorktreesProvider::new(Some("r1".into()), None).items(&ctx, None, &HashMap::new());
         assert!(result.is_err());
         let Err(e) = result else {
             panic!("expected error")
@@ -246,7 +237,7 @@ mod tests {
         });
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = WorktreesProvider::new(Some("r1".into()), None)
-            .items(&ctx, Some(&scope), &HashMap::new(), &HashSet::new())
+            .items(&ctx, Some(&scope), &HashMap::new())
             .unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].item_id, "w2");
@@ -254,7 +245,7 @@ mod tests {
     }
 
     #[test]
-    fn test_worktrees_items_skips_existing_set() {
+    fn test_worktrees_items_returns_all_without_dedup() {
         let conn = test_helpers::setup_db();
         insert_worktree_with_base_branch(&conn, "w2", "r1", "feat-child", "main");
         let config = Config::default();
@@ -262,16 +253,17 @@ mod tests {
             base_branch: Some("main".to_string()),
             has_open_pr: None,
         });
-        let mut existing = HashSet::new();
-        existing.insert("w2".to_string());
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        // Providers return ALL items; dedup is done by the foreach executor.
         let items = WorktreesProvider::new(Some("r1".into()), None)
-            .items(&ctx, Some(&scope), &HashMap::new(), &existing)
+            .items(&ctx, Some(&scope), &HashMap::new())
             .unwrap();
-        assert!(
-            items.is_empty(),
-            "worktree already in existing_set should be skipped"
+        assert_eq!(
+            items.len(),
+            1,
+            "all worktrees returned regardless of prior state"
         );
+        assert_eq!(items[0].item_id, "w2");
     }
 
     #[test]
@@ -283,7 +275,7 @@ mod tests {
         // No scope — should resolve base_branch from w1.branch
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = WorktreesProvider::new(Some("r1".into()), Some("w1".into()))
-            .items(&ctx, None, &HashMap::new(), &HashSet::new())
+            .items(&ctx, None, &HashMap::new())
             .unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].item_id, "w2");

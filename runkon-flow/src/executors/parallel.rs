@@ -5,8 +5,9 @@ use crate::dsl::ParallelNode;
 use crate::engine::{record_step_success, resolve_schema, ExecutionState};
 use crate::engine_error::{EngineError, Result};
 use crate::status::WorkflowStepStatus;
-use crate::traits::action_executor::{ActionOutput, ActionParams, ExecutionContext};
+use crate::traits::action_executor::{ActionOutput, ActionParams, StepInfo};
 use crate::traits::persistence::StepUpdate;
+use crate::traits::run_context::RunContext;
 use crate::types::{StepResult, StepSuccess};
 
 pub fn execute_parallel(
@@ -43,7 +44,8 @@ pub fn execute_parallel(
         step_id: String,
         agent_name: String,
         agent_step_key: String,
-        ectx: ExecutionContext,
+        run_ctx: Arc<dyn RunContext>,
+        info: StepInfo,
         params: ActionParams,
         retries: u32,
     }
@@ -158,12 +160,7 @@ pub fn execute_parallel(
 
         let inputs = Arc::clone(&shared_inputs);
 
-        let ectx = super::build_execution_context(
-            state,
-            &step_id,
-            state.default_bot_name.clone(),
-            state.extra_plugin_dirs.clone(),
-        );
+        let info = super::build_step_info(state, &step_id);
 
         let params = super::build_action_params(
             agent_label,
@@ -174,13 +171,17 @@ pub fn execute_parallel(
             call_schema,
             retries,
             None,
+            state.model.clone(),
+            state.default_bot_name.clone(),
+            state.extra_plugin_dirs.clone(),
         );
 
         dispatch_queue.push(DispatchInput {
             step_id,
             agent_name: agent_label.to_string(),
             agent_step_key,
-            ectx,
+            run_ctx: Arc::clone(&state.run_ctx),
+            info,
             params,
             retries,
         });
@@ -223,7 +224,12 @@ pub fn execute_parallel(
                 final_attempt = attempt;
 
                 result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    registry.dispatch(&params.name, &dispatch_input.ectx, &params)
+                    registry.dispatch(
+                        &params.name,
+                        &*dispatch_input.run_ctx,
+                        &dispatch_input.info,
+                        &params,
+                    )
                 }))
                 .unwrap_or_else(|payload| {
                     let msg = if let Some(s) = payload.downcast_ref::<&str>() {
@@ -422,7 +428,8 @@ mod tests {
         }
         fn execute(
             &self,
-            _ectx: &crate::traits::action_executor::ExecutionContext,
+            _ctx: &dyn crate::traits::run_context::RunContext,
+            _info: &crate::traits::action_executor::StepInfo,
             _params: &ActionParams,
         ) -> Result<ActionOutput, EngineError> {
             Ok(ActionOutput {
@@ -585,7 +592,8 @@ mod tests {
             }
             fn execute(
                 &self,
-                _ectx: &crate::traits::action_executor::ExecutionContext,
+                _ctx: &dyn crate::traits::run_context::RunContext,
+                _info: &crate::traits::action_executor::StepInfo,
                 _params: &ActionParams,
             ) -> Result<ActionOutput, EngineError> {
                 panic!("deliberate panic in test executor");
@@ -648,7 +656,8 @@ mod tests {
             }
             fn execute(
                 &self,
-                _ectx: &crate::traits::action_executor::ExecutionContext,
+                _ctx: &dyn crate::traits::run_context::RunContext,
+                _info: &crate::traits::action_executor::StepInfo,
                 _params: &ActionParams,
             ) -> Result<ActionOutput, EngineError> {
                 panic!("{}", "string payload panic".to_string())
@@ -703,7 +712,8 @@ mod tests {
             }
             fn execute(
                 &self,
-                _ectx: &crate::traits::action_executor::ExecutionContext,
+                _ctx: &dyn crate::traits::run_context::RunContext,
+                _info: &crate::traits::action_executor::StepInfo,
                 _params: &ActionParams,
             ) -> Result<ActionOutput, EngineError> {
                 std::panic::panic_any(42i32)
@@ -766,7 +776,8 @@ mod tests {
             }
             fn execute(
                 &self,
-                _ectx: &crate::traits::action_executor::ExecutionContext,
+                _ctx: &dyn crate::traits::run_context::RunContext,
+                _info: &crate::traits::action_executor::StepInfo,
                 _params: &ActionParams,
             ) -> Result<ActionOutput, EngineError> {
                 Err(EngineError::Workflow("intentional failure".to_string()))
@@ -839,7 +850,8 @@ mod tests {
             }
             fn execute(
                 &self,
-                _ectx: &crate::traits::action_executor::ExecutionContext,
+                _ctx: &dyn crate::traits::run_context::RunContext,
+                _info: &crate::traits::action_executor::StepInfo,
                 _params: &ActionParams,
             ) -> std::result::Result<ActionOutput, EngineError> {
                 // Long enough to trigger several recv_timeout (500 ms) iterations
@@ -921,7 +933,8 @@ mod tests {
             }
             fn execute(
                 &self,
-                _ectx: &crate::traits::action_executor::ExecutionContext,
+                _ctx: &dyn crate::traits::run_context::RunContext,
+                _info: &crate::traits::action_executor::StepInfo,
                 _params: &ActionParams,
             ) -> Result<ActionOutput, EngineError> {
                 let n = self.call_count.fetch_add(1, Ordering::SeqCst);
@@ -999,7 +1012,8 @@ mod tests {
             }
             fn execute(
                 &self,
-                _ectx: &crate::traits::action_executor::ExecutionContext,
+                _ctx: &dyn crate::traits::run_context::RunContext,
+                _info: &crate::traits::action_executor::StepInfo,
                 _params: &ActionParams,
             ) -> Result<ActionOutput, EngineError> {
                 self.call_count.fetch_add(1, Ordering::SeqCst);
