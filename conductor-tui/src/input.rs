@@ -504,8 +504,21 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
         let focus = state.worktree_detail_focus;
 
+        // When PromptInput is focused, capture all keys for the textarea widget.
+        if focus == WorktreeDetailFocus::PromptInput && state.column_focus == ColumnFocus::Content {
+            let is_submit = key.code == KeyCode::Enter
+                || (key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.code == KeyCode::Char('s'));
+            if is_submit {
+                return Action::SubmitPromptInput;
+            }
+            if key.code == KeyCode::Esc {
+                return Action::PrevPanel;
+            }
+            return Action::PromptTextAreaInput(key);
+        }
+
         match key.code {
-            KeyCode::Char('p') => return Action::LaunchAgent,
             KeyCode::Char('X') if !is_active => return Action::ClearConversation,
             KeyCode::Char('x') if is_active => return Action::StopAgent,
             KeyCode::Char('R') if is_failed => return Action::RestartAgent,
@@ -1039,6 +1052,53 @@ mod tests {
         assert!(matches!(
             map_key(key(KeyCode::Char('o')), &state),
             Action::WorktreeDetailOpen
+        ));
+    }
+
+    // --- PromptInput focus: all keys except Enter/Ctrl+S/Esc route to PromptTextAreaInput ---
+
+    #[test]
+    fn prompt_input_focus_j_routes_to_textarea_not_navigation() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::PromptInput);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('j')), &state),
+            Action::PromptTextAreaInput(_)
+        ));
+    }
+
+    #[test]
+    fn prompt_input_focus_enter_submits() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::PromptInput);
+        assert!(matches!(
+            map_key(key(KeyCode::Enter), &state),
+            Action::SubmitPromptInput
+        ));
+    }
+
+    #[test]
+    fn prompt_input_focus_esc_blurs_via_prev_panel() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::PromptInput);
+        assert!(matches!(
+            map_key(key(KeyCode::Esc), &state),
+            Action::PrevPanel
+        ));
+    }
+
+    #[test]
+    fn log_panel_focus_j_routes_to_scroll_not_textarea() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::LogPanel);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('j')), &state),
+            Action::AgentActivityDown
+        ));
+    }
+
+    #[test]
+    fn worktree_detail_p_key_no_longer_launches_agent() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::InfoPanel);
+        assert!(!matches!(
+            map_key(key(KeyCode::Char('p')), &state),
+            Action::LaunchAgent
         ));
     }
 

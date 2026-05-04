@@ -60,10 +60,12 @@ pub struct AppState {
     pub agent_list_state: RefCell<ListState>,
     /// Repo agent activity list navigation (repo detail view)
     pub repo_agent_list_state: RefCell<ListState>,
-    // WorktreeDetail two-panel focus model
+    // WorktreeDetail three-panel focus model
     pub worktree_detail_focus: super::WorktreeDetailFocus,
     /// Selected row index in the WorktreeDetail info panel (for j/k navigation and y/o actions).
     pub worktree_detail_selected_row: usize,
+    /// Persistent prompt input box in the WorktreeDetail Agent Activity pane.
+    pub prompt_textarea: tui_textarea::TextArea<'static>,
 
     /// Selected row index in the RepoDetail info panel (for j/k navigation and o actions).
     pub repo_detail_info_row: usize,
@@ -229,6 +231,12 @@ impl AppState {
             repo_agent_list_state: RefCell::new(ListState::default()),
             worktree_detail_focus: super::WorktreeDetailFocus::InfoPanel,
             worktree_detail_selected_row: 0,
+            prompt_textarea: {
+                let mut ta = tui_textarea::TextArea::default();
+                ta.set_cursor_line_style(ratatui::style::Style::default());
+                ta.set_placeholder_text("Type a prompt… (Tab to focus, Enter to send)");
+                ta
+            },
             repo_detail_info_row: 0,
             filter: FilterState::default(),
             detail_ticket_filter: FilterState::default(),

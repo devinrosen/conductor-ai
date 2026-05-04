@@ -400,3 +400,47 @@ fn selected_run_has_error_completed_with_summary() {
     state.selected_workflow_run_id = Some("run3".to_string());
     assert!(!state.selected_run_has_error());
 }
+
+#[test]
+fn worktree_detail_focus_next_cycles_forward() {
+    assert_eq!(
+        WorktreeDetailFocus::InfoPanel.next(),
+        WorktreeDetailFocus::LogPanel
+    );
+    assert_eq!(
+        WorktreeDetailFocus::LogPanel.next(),
+        WorktreeDetailFocus::PromptInput
+    );
+    assert_eq!(
+        WorktreeDetailFocus::PromptInput.next(),
+        WorktreeDetailFocus::InfoPanel
+    );
+}
+
+#[test]
+fn worktree_detail_focus_prev_cycles_backward() {
+    assert_eq!(
+        WorktreeDetailFocus::InfoPanel.prev(),
+        WorktreeDetailFocus::PromptInput
+    );
+    assert_eq!(
+        WorktreeDetailFocus::LogPanel.prev(),
+        WorktreeDetailFocus::InfoPanel
+    );
+    assert_eq!(
+        WorktreeDetailFocus::PromptInput.prev(),
+        WorktreeDetailFocus::LogPanel
+    );
+}
+
+#[test]
+fn worktree_detail_focus_next_prev_are_inverses() {
+    for focus in [
+        WorktreeDetailFocus::InfoPanel,
+        WorktreeDetailFocus::LogPanel,
+        WorktreeDetailFocus::PromptInput,
+    ] {
+        assert_eq!(focus.next().prev(), focus);
+        assert_eq!(focus.prev().next(), focus);
+    }
+}

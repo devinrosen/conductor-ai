@@ -12,7 +12,7 @@ use conductor_core::worktree::{WorktreeCreateOptions, WorktreeManager};
 use runkon_runtimes::tracker::{EventSink, RuntimeEvent};
 
 use crate::action::Action;
-use crate::state::{InputAction, Modal, WorkflowPickerItem};
+use crate::state::{InputAction, Modal, WorkflowPickerItem, WorktreeDetailFocus};
 
 use super::App;
 
@@ -304,6 +304,104 @@ impl App {
             wt.slug.clone(),
             resume_session_id,
         );
+    }
+
+    /// Submit the persistent prompt input box (bottom of the Agent Activity pane).
+    /// Reuses the same ModelPicker → AgentModelOverride → start_agent_headless path as
+    /// the old modal flow, but skips the text-entry modal since we already have the text.
+    pub(super) fn handle_submit_prompt_input(&mut self) {
+        let prompt = self.state.prompt_textarea.lines().join("\n");
+        let prompt = prompt.trim().to_string();
+        if prompt.is_empty() {
+            return;
+        }
+
+        let wt = self
+            .state
+            .selected_worktree_id
+            .as_ref()
+            .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
+            .cloned();
+
+        let Some(wt) = wt else {
+            self.state.status_message = Some("Select a worktree first".to_string());
+            return;
+        };
+
+        if self.agent_busy_guard(&wt.id) {
+            return;
+        }
+
+        // Reset the textarea immediately after capturing the prompt text.
+        let mut ta = tui_textarea::TextArea::default();
+        ta.set_cursor_line_style(ratatui::style::Style::default());
+        ta.set_placeholder_text("Type a prompt… (Tab to focus, Enter to send)");
+        self.state.prompt_textarea = ta;
+
+        // Blur back to LogPanel so navigation keys are immediately usable.
+        self.state.worktree_detail_focus = WorktreeDetailFocus::LogPanel;
+
+        // Determine resume session from the latest run for this worktree.
+        let resume_session_id = self
+            .state
+            .data
+            .latest_agent_runs
+            .get(&wt.id)
+            .and_then(|r| r.session_id.clone());
+
+        // Resolve the default model: per-worktree → per-repo → global config.
+        let wt_model = wt.model.as_deref();
+        let repo_model = self
+            .state
+            .data
+            .repos
+            .iter()
+            .find(|r| r.id == wt.repo_id)
+            .and_then(|r| r.model.as_deref());
+        let resolved_default = conductor_core::models::resolve_model(
+            wt_model,
+            repo_model,
+            self.config.general.model.as_deref(),
+        );
+
+        let suggested = conductor_core::models::suggest_model(&prompt);
+        let initial_selected = conductor_core::models::KNOWN_MODELS
+            .iter()
+            .position(|m| m.alias == suggested)
+            .unwrap_or(1);
+
+        let (effective_default, effective_source) = match &resolved_default {
+            Some(m) => {
+                let source = if wt_model.is_some() {
+                    "worktree"
+                } else if repo_model.is_some() {
+                    "repo"
+                } else {
+                    "global config"
+                };
+                (Some(m.clone()), source.to_string())
+            }
+            None => (None, "not set".to_string()),
+        };
+
+        self.state.modal = Modal::ModelPicker {
+            context_label: "agent run".to_string(),
+            effective_default,
+            effective_source,
+            selected: initial_selected,
+            custom_input: String::new(),
+            custom_active: false,
+            suggested: Some(suggested.to_string()),
+            allow_default: true,
+            on_submit: InputAction::AgentModelOverride {
+                prompt,
+                worktree_id: wt.id.clone(),
+                worktree_path: wt.path.clone(),
+                worktree_slug: wt.slug.clone(),
+                resume_session_id,
+                resolved_default,
+            },
+        };
     }
 
     /// Stop the running worktree agent.

@@ -205,13 +205,23 @@ pub enum WorktreeDetailFocus {
     #[default]
     InfoPanel,
     LogPanel,
+    PromptInput,
 }
 
 impl WorktreeDetailFocus {
-    pub fn toggle(self) -> Self {
+    pub fn next(self) -> Self {
         match self {
             Self::InfoPanel => Self::LogPanel,
+            Self::LogPanel => Self::PromptInput,
+            Self::PromptInput => Self::InfoPanel,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::InfoPanel => Self::PromptInput,
             Self::LogPanel => Self::InfoPanel,
+            Self::PromptInput => Self::LogPanel,
         }
     }
 }

@@ -536,6 +536,10 @@ impl App {
 
             // Agent
             Action::LaunchAgent => self.handle_launch_agent(),
+            Action::SubmitPromptInput => self.handle_submit_prompt_input(),
+            Action::PromptTextAreaInput(key) => {
+                self.state.prompt_textarea.input(key);
+            }
             Action::PromptRepoAgent => self.handle_prompt_repo_agent(),
             Action::StopAgent => {
                 if self.is_repo_agent_context() {

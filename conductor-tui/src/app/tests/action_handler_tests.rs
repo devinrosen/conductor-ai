@@ -373,7 +373,7 @@ fn prev_panel_cycles_repo_detail_focus_backward() {
 }
 
 #[test]
-fn next_panel_toggles_worktree_detail_focus() {
+fn next_panel_cycles_worktree_detail_focus() {
     let mut app = make_app();
     app.state.view = View::WorktreeDetail;
     app.state.column_focus = crate::state::ColumnFocus::Content;
@@ -382,6 +382,11 @@ fn next_panel_toggles_worktree_detail_focus() {
     assert_eq!(
         app.state.worktree_detail_focus,
         crate::state::WorktreeDetailFocus::LogPanel
+    );
+    app.update(Action::NextPanel);
+    assert_eq!(
+        app.state.worktree_detail_focus,
+        crate::state::WorktreeDetailFocus::PromptInput
     );
     app.update(Action::NextPanel);
     assert_eq!(
