@@ -11,10 +11,10 @@ use crate::error::Result;
 use super::helpers::row_to_workflow_run;
 
 use crate::workflow::constants::RUN_COLUMNS;
-use runkon_flow::traits::persistence::WorkflowPersistence;
 use crate::workflow::types::StepKey;
 use crate::workflow::WorkflowRun;
 use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
+use runkon_flow::traits::persistence::WorkflowPersistence;
 
 const ORPHAN_BETWEEN_STEPS_MSG: &str =
     "Orphaned: executor died between steps \u{2014} auto-resumed by watchdog";
@@ -178,7 +178,10 @@ fn fail_step_with_message(conn: &Connection, step_id: &str, error_message: &str)
     )
 }
 
-pub fn recover_stuck_steps(conn: &Connection, persistence: &dyn WorkflowPersistence) -> Result<usize> {
+pub fn recover_stuck_steps(
+    conn: &Connection,
+    persistence: &dyn WorkflowPersistence,
+) -> Result<usize> {
     // Step 1: fetch running workflow steps that have a child_run_id.
     let running_steps: Vec<(String, String)> = query_collect(
         conn,
@@ -224,7 +227,7 @@ pub fn recover_stuck_steps(conn: &Connection, persistence: &dyn WorkflowPersiste
     let n = stuck.len();
     persistence
         .bulk_recover_steps(&stuck, &ended_at)
-        .map_err(|e| crate::error::ConductorError::Other(e.to_string()))?;
+        .map_err(|e| crate::error::ConductorError::Workflow(e.to_string()))?;
     Ok(n)
 }
 
@@ -1940,8 +1943,7 @@ mod tests {
 
         // Second connection for writes: shares the same file-based DB.
         let write_persistence = SqliteWorkflowPersistence::open(&db_path).unwrap();
-        let recovered =
-            crate::workflow::recover_stuck_steps(&conn, &write_persistence).unwrap();
+        let recovered = crate::workflow::recover_stuck_steps(&conn, &write_persistence).unwrap();
         assert_eq!(recovered, 2, "both stuck steps must be recovered");
 
         let (status_c, result_text_c, ended_at_c): (String, Option<String>, Option<String>) = conn

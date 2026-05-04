@@ -5,7 +5,7 @@ pub(super) use runkon_flow::constants::{RUN_COLUMNS, STEP_COLUMNS};
 /// queries need to populate `ConductorWorkflowRun`.
 pub(super) const CONDUCTOR_RUN_EXTRA: &str =
     ", worktree_id, ticket_id, repo_id, target_label, default_bot_name";
-pub use runkon_flow::constants::{STEP_ROLE_FOREACH, STEP_ROLE_WORKFLOW, TERMINAL_STATUSES_SQL};
+pub use runkon_flow::constants::{STEP_ROLE_FOREACH, STEP_ROLE_WORKFLOW};
 
 /// Minimum number of recent runs required to emit a regression signal.
 pub const REGRESSION_MIN_RECENT_RUNS: i64 = 5;

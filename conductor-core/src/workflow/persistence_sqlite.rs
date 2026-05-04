@@ -16,6 +16,7 @@ mod tests {
     use runkon_flow::traits::persistence::{
         GateApprovalState, NewRun, NewStep, WorkflowPersistence,
     };
+    use runkon_flow::traits::GateApprovalStore;
 
     use crate::agent::AgentManager;
     use crate::workflow::WorkflowRunStatus;

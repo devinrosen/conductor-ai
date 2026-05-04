@@ -3496,10 +3496,8 @@ fn test_recover_stuck_steps_fixes_step_with_terminal_child() {
     .unwrap();
     // Writes route through the trait; InMemoryWorkflowPersistence suffices here
     // because we only assert the return count, not the post-write DB state.
-    let write_persistence =
-        runkon_flow::persistence_memory::InMemoryWorkflowPersistence::new();
-    let recovered =
-        crate::workflow::recover_stuck_steps(&conn, &write_persistence).unwrap();
+    let write_persistence = runkon_flow::persistence_memory::InMemoryWorkflowPersistence::new();
+    let recovered = crate::workflow::recover_stuck_steps(&conn, &write_persistence).unwrap();
     assert_eq!(recovered, 1, "should recover the stuck step");
 }
 

@@ -508,7 +508,7 @@ pub fn poll_data(
             }
             // Separate connection for writes so the read `conn` and write persistence
             // don't deadlock on the same mutex inside SqliteWorkflowPersistence.
-            if let Some(write_conn) = open_database(&db).ok() {
+            if let Ok(write_conn) = open_database(&db) {
                 let write_persistence =
                     conductor_core::workflow::SqliteWorkflowPersistence::from_shared_connection(
                         Arc::new(Mutex::new(write_conn)),

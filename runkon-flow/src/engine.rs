@@ -310,7 +310,6 @@ impl ExecutionState {
         }
         changed
     }
-
 }
 
 /// Resolve a schema by name using the schema_resolver callback.
@@ -655,7 +654,7 @@ pub fn record_step_success(
         &success.metadata,
         metadata_keys::CACHE_CREATION_INPUT_TOKENS,
     );
-    let metrics_changed = state.accumulate_metrics(
+    let _metrics_changed = state.accumulate_metrics(
         cost_usd,
         num_turns,
         duration_ms,
