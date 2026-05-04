@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use runkon_flow::engine_error::EngineError;
-use runkon_flow::traits::gate_resolver::{GatePoll, GateParams, GateResolver};
+use runkon_flow::traits::gate_resolver::{GateParams, GatePoll, GateResolver};
 use runkon_flow::traits::run_context::RunContext;
 
 use super::{GhGateCommon, GitHubTokenCache};
