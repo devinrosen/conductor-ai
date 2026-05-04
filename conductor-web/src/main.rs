@@ -510,7 +510,14 @@ async fn main() -> Result<()> {
             })
             .await;
             match result {
-                Ok(Ok((new_seen, new_init, new_wf_seen, new_wf_init, agent_payloads, wf_payloads))) => {
+                Ok(Ok((
+                    new_seen,
+                    new_init,
+                    new_wf_seen,
+                    new_wf_init,
+                    agent_payloads,
+                    wf_payloads,
+                ))) => {
                     seen_agent_statuses = new_seen;
                     agent_initialized = new_init;
                     seen_workflow_statuses = new_wf_seen;
