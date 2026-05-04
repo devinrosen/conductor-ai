@@ -1,4 +1,4 @@
-pub(super) use runkon_flow::constants::RUN_COLUMNS;
+pub(super) use runkon_flow::constants::{RUN_COLUMNS, STEP_COLUMNS};
 pub use runkon_flow::constants::{STEP_ROLE_FOREACH, STEP_ROLE_WORKFLOW, TERMINAL_STATUSES_SQL};
 
 /// Minimum number of recent runs required to emit a regression signal.
@@ -9,17 +9,6 @@ pub const REGRESSION_DURATION_THRESHOLD_PCT: f64 = 25.0;
 pub const REGRESSION_COST_THRESHOLD_PCT: f64 = 20.0;
 /// Flag failure-rate regression if failure rate increased by more than this many percentage points.
 pub const REGRESSION_FAILURE_RATE_THRESHOLD_PP: f64 = 5.0;
-
-/// Column list for `workflow_run_steps` SELECT queries (used by `row_to_workflow_step`).
-pub(super) const STEP_COLUMNS: &str =
-    "id, workflow_run_id, step_name, role, can_commit, condition_expr, status, \
-     child_run_id, position, started_at, ended_at, result_text, condition_met, \
-     iteration, parallel_group_id, context_out, markers_out, retry_count, \
-     gate_type, gate_prompt, gate_timeout, gate_approved_by, gate_approved_at, gate_feedback, \
-     structured_output, output_file, gate_options, gate_selections, \
-     fan_out_total, fan_out_completed, fan_out_failed, fan_out_skipped, step_error, \
-     input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
-     cost_usd, num_turns, duration_ms";
 
 /// Table-prefixed variant of `STEP_COLUMNS` for JOIN queries where `s` aliases `workflow_run_steps`.
 /// Use this when selecting step columns alongside columns from other tables to avoid ambiguity.
