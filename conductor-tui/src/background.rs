@@ -111,13 +111,15 @@ pub fn spawn_db_poller(
                     );
                     if let Some(ref conn) = claim_conn {
                         // Build a run_id → ConductorWorkflowRun lookup for spike detection.
-                        let run_by_id: HashMap<&str, &conductor_core::workflow::ConductorWorkflowRun> =
-                            payload
-                                .latest_workflow_runs_by_worktree
-                                .values()
-                                .chain(payload.active_non_worktree_workflow_runs.iter())
-                                .map(|r| (r.id.as_str(), r))
-                                .collect();
+                        let run_by_id: HashMap<
+                            &str,
+                            &conductor_core::workflow::ConductorWorkflowRun,
+                        > = payload
+                            .latest_workflow_runs_by_worktree
+                            .values()
+                            .chain(payload.active_non_worktree_workflow_runs.iter())
+                            .map(|r| (r.id.as_str(), r))
+                            .collect();
 
                         for t in transitions {
                             let wf_ctx = crate::notify::NotificationCtx {

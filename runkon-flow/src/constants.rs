@@ -6,8 +6,7 @@ pub const STEP_ROLE_AGENT: &str = "agent";
 /// Column list for `workflow_runs` SELECT queries (used by row mappers in both
 /// conductor-core and runkon-flow). Single source of truth — importers use
 /// `runkon_flow::constants::RUN_COLUMNS` or `pub use` re-export.
-pub const RUN_COLUMNS: &str =
-    "id, workflow_name, parent_run_id, status, dry_run, trigger, \
+pub const RUN_COLUMNS: &str = "id, workflow_name, parent_run_id, status, dry_run, trigger, \
      started_at, ended_at, result_summary, definition_snapshot, inputs, \
      parent_workflow_run_id, iteration, blocked_on, \
      total_input_tokens, total_output_tokens, total_cache_read_input_tokens, \

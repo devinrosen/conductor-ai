@@ -693,15 +693,42 @@ mod tests {
         .unwrap();
 
         // Metric fields are not in WorkflowRunStep — verify via direct SQL.
-        let (cost_usd, num_turns, duration_ms, input_tokens, output_tokens, cache_read, cache_creation):
-            (Option<f64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>) =
-            conn.query_row(
+        type MetricsTuple = (
+            Option<f64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+        );
+        let (
+            cost_usd,
+            num_turns,
+            duration_ms,
+            input_tokens,
+            output_tokens,
+            cache_read,
+            cache_creation,
+        ): MetricsTuple = conn
+            .query_row(
                 "SELECT cost_usd, num_turns, duration_ms, input_tokens, output_tokens, \
                  cache_read_input_tokens, cache_creation_input_tokens \
                  FROM workflow_run_steps WHERE id = ?1",
                 rusqlite::params![step_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
-            ).unwrap();
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                },
+            )
+            .unwrap();
         assert_eq!(cost_usd, Some(1.23));
         assert_eq!(num_turns, Some(5));
         assert_eq!(duration_ms, Some(1000));
@@ -749,14 +776,19 @@ mod tests {
         .unwrap();
 
         // Metric fields are not in WorkflowRunStep — verify via direct SQL.
-        let (cost_usd, num_turns, input_tokens, output_tokens):
-            (Option<f64>, Option<i64>, Option<i64>, Option<i64>) =
-            conn.query_row(
+        let (cost_usd, num_turns, input_tokens, output_tokens): (
+            Option<f64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+        ) = conn
+            .query_row(
                 "SELECT cost_usd, num_turns, input_tokens, output_tokens \
                  FROM workflow_run_steps WHERE id = ?1",
                 rusqlite::params![step_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            ).unwrap();
+            )
+            .unwrap();
         assert_eq!(cost_usd, Some(9.99), "cost_usd must be preserved");
         assert_eq!(num_turns, Some(3), "num_turns must be preserved");
         assert_eq!(input_tokens, Some(42));

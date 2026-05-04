@@ -324,7 +324,9 @@ pub(super) fn insert_waiting_run_with_gate(
     step_id
 }
 
-pub(super) fn make_workflow_run(conn: &Connection) -> (crate::agent::AgentRun, ConductorWorkflowRun) {
+pub(super) fn make_workflow_run(
+    conn: &Connection,
+) -> (crate::agent::AgentRun, ConductorWorkflowRun) {
     let agent_mgr = AgentManager::new(conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let run = crate::workflow::create_workflow_run(

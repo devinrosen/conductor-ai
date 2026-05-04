@@ -141,7 +141,6 @@ impl InMemoryWorkflowPersistence {
         }
         self.acquire_lease(run_id, new_token, 3600).unwrap();
     }
-
 }
 
 fn lock_err() -> EngineError {

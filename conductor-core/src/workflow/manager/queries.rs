@@ -485,7 +485,10 @@ pub fn list_workflow_runs_filtered_paginated(
 /// List recent workflow runs across all worktrees, ordered by started_at DESC.
 /// Only includes runs whose associated worktree is `active` (or runs with no
 /// worktree, i.e. ephemeral/repo-targeted runs).
-pub fn list_all_workflow_runs(conn: &Connection, limit: usize) -> Result<Vec<ConductorWorkflowRun>> {
+pub fn list_all_workflow_runs(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<ConductorWorkflowRun>> {
     query_collect(
         conn,
         &format!(
@@ -627,7 +630,10 @@ pub fn list_workflow_runs_paginated(
 /// List recent root workflow runs (those with no parent workflow run) across all
 /// worktrees, ordered by started_at DESC.  Used in the TUI per-worktree slot so that
 /// the root run wins over any concurrently-active child run.
-pub fn list_root_workflow_runs(conn: &Connection, limit: usize) -> Result<Vec<ConductorWorkflowRun>> {
+pub fn list_root_workflow_runs(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<ConductorWorkflowRun>> {
     query_collect(
         conn,
         &format!(
@@ -2263,8 +2269,14 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .unwrap();
-        assert_eq!(input_tokens, None, "no agent_run → input_tokens should be None");
-        assert_eq!(output_tokens, None, "no agent_run → output_tokens should be None");
+        assert_eq!(
+            input_tokens, None,
+            "no agent_run → input_tokens should be None"
+        );
+        assert_eq!(
+            output_tokens, None,
+            "no agent_run → output_tokens should be None"
+        );
         assert_eq!(cache_read, None);
         assert_eq!(cache_creation, None);
     }
