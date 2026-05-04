@@ -6,16 +6,30 @@ fn repo_detail_focus_next_cycles_forward() {
     assert_eq!(RepoDetailFocus::Worktrees.next(), RepoDetailFocus::Prs);
     assert_eq!(RepoDetailFocus::Prs.next(), RepoDetailFocus::Tickets);
     assert_eq!(RepoDetailFocus::Tickets.next(), RepoDetailFocus::RepoAgent);
-    assert_eq!(RepoDetailFocus::RepoAgent.next(), RepoDetailFocus::Info);
+    assert_eq!(
+        RepoDetailFocus::RepoAgent.next(),
+        RepoDetailFocus::RepoAgentPromptInput
+    );
+    assert_eq!(
+        RepoDetailFocus::RepoAgentPromptInput.next(),
+        RepoDetailFocus::Info
+    );
 }
 
 #[test]
 fn repo_detail_focus_prev_cycles_backward() {
-    assert_eq!(RepoDetailFocus::Info.prev(), RepoDetailFocus::RepoAgent);
+    assert_eq!(
+        RepoDetailFocus::Info.prev(),
+        RepoDetailFocus::RepoAgentPromptInput
+    );
     assert_eq!(RepoDetailFocus::Worktrees.prev(), RepoDetailFocus::Info);
     assert_eq!(RepoDetailFocus::Prs.prev(), RepoDetailFocus::Worktrees);
     assert_eq!(RepoDetailFocus::Tickets.prev(), RepoDetailFocus::Prs);
     assert_eq!(RepoDetailFocus::RepoAgent.prev(), RepoDetailFocus::Tickets);
+    assert_eq!(
+        RepoDetailFocus::RepoAgentPromptInput.prev(),
+        RepoDetailFocus::RepoAgent
+    );
 }
 
 #[test]
@@ -26,6 +40,7 @@ fn repo_detail_focus_next_prev_are_inverses() {
         RepoDetailFocus::Tickets,
         RepoDetailFocus::Prs,
         RepoDetailFocus::RepoAgent,
+        RepoDetailFocus::RepoAgentPromptInput,
     ] {
         assert_eq!(focus.next().prev(), focus);
         assert_eq!(focus.prev().next(), focus);

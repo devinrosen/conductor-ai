@@ -540,6 +540,10 @@ impl App {
             Action::PromptTextAreaInput(key) => {
                 self.state.prompt_textarea.input(key);
             }
+            Action::SubmitRepoPromptInput => self.handle_submit_repo_prompt_input(),
+            Action::RepoPromptTextAreaInput(key) => {
+                self.state.repo_agent_prompt_textarea.input(key);
+            }
             Action::PromptRepoAgent => self.handle_prompt_repo_agent(),
             Action::StopAgent => {
                 if self.is_repo_agent_context() {

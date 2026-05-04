@@ -465,15 +465,6 @@ fn render_prompt_input(frame: &mut Frame, area: Rect, state: &AppState) {
     let is_focused = state.column_focus == ColumnFocus::Content
         && state.worktree_detail_focus == WorktreeDetailFocus::PromptInput;
 
-    let wt_id = state.selected_worktree_id.as_deref();
-    let is_active = wt_id.is_some_and(|id| {
-        state
-            .data
-            .latest_agent_runs
-            .get(id)
-            .is_some_and(|r| r.is_active() || r.is_waiting_for_feedback())
-    });
-
     let border_color = if is_focused {
         state.theme.border_focused
     } else {
@@ -484,16 +475,6 @@ fn render_prompt_input(frame: &mut Frame, area: Rect, state: &AppState) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
         .title(" Prompt ");
-
-    if !is_active {
-        let placeholder = Paragraph::new(Span::styled(
-            "No agent running",
-            Style::default().fg(state.theme.label_secondary),
-        ))
-        .block(block);
-        frame.render_widget(placeholder, area);
-        return;
-    }
 
     let inner = block.inner(area);
     frame.render_widget(block, area);

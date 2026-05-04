@@ -62,6 +62,7 @@ pub enum RepoDetailFocus {
     Tickets,
     Prs,
     RepoAgent,
+    RepoAgentPromptInput,
 }
 
 impl RepoDetailFocus {
@@ -71,17 +72,19 @@ impl RepoDetailFocus {
             Self::Worktrees => Self::Prs,
             Self::Prs => Self::Tickets,
             Self::Tickets => Self::RepoAgent,
-            Self::RepoAgent => Self::Info,
+            Self::RepoAgent => Self::RepoAgentPromptInput,
+            Self::RepoAgentPromptInput => Self::Info,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Self::Info => Self::RepoAgent,
+            Self::Info => Self::RepoAgentPromptInput,
             Self::Worktrees => Self::Info,
             Self::Prs => Self::Worktrees,
             Self::Tickets => Self::Prs,
             Self::RepoAgent => Self::Tickets,
+            Self::RepoAgentPromptInput => Self::RepoAgent,
         }
     }
 }
@@ -520,13 +523,6 @@ pub enum InputAction {
     /// Submit a response to a pending feedback request.
     FeedbackResponse {
         feedback_id: String,
-    },
-    /// Prompt for a repo-scoped read-only agent.
-    RepoAgentPrompt {
-        repo_id: String,
-        repo_path: String,
-        repo_slug: String,
-        resume_session_id: Option<String>,
     },
     /// Second step: model picker for workflow runs.
     /// Carries the workflow target + inputs through the modal roundtrip.

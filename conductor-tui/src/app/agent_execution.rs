@@ -417,6 +417,50 @@ impl App {
         };
     }
 
+    /// Submit the persistent prompt input box in the RepoDetail Repo Agent pane.
+    /// Mirrors `handle_submit_prompt_input` but routes to the read-only repo
+    /// agent (no model picker — repo agent runs without a configurable model).
+    pub(super) fn handle_submit_repo_prompt_input(&mut self) {
+        let prompt = self.state.repo_agent_prompt_textarea.lines().join("\n");
+        let prompt = prompt.trim().to_string();
+        if prompt.is_empty() {
+            return;
+        }
+
+        let repo = self
+            .state
+            .selected_repo_id
+            .as_ref()
+            .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id))
+            .cloned();
+
+        let Some(repo) = repo else {
+            self.state.status_message = Some("No repo selected".to_string());
+            return;
+        };
+
+        // Reset the textarea immediately after capturing the prompt text.
+        self.state.repo_agent_prompt_textarea = crate::state::make_prompt_textarea();
+
+        // Blur back to the activity pane so navigation keys work right away.
+        self.state.repo_detail_focus = crate::state::RepoDetailFocus::RepoAgent;
+
+        let resume_session_id = self
+            .state
+            .data
+            .latest_repo_agent_runs
+            .get(&repo.id)
+            .and_then(|r| r.session_id.clone());
+
+        self.start_repo_agent_headless(
+            prompt,
+            repo.id,
+            repo.local_path,
+            repo.slug,
+            resume_session_id,
+        );
+    }
+
     /// Stop the running worktree agent.
     /// Runs blocking subprocess calls on a background thread per the TUI threading rule.
     pub(super) fn handle_stop_agent(&mut self) {
@@ -796,49 +840,16 @@ impl App {
         });
     }
 
+    /// `p` in RepoDetail: jump column focus into the persistent repo-agent
+    /// prompt input. (Previously opened a `Modal::AgentPrompt` — now consolidated
+    /// onto the same persistent box used for the worktree agent.)
     pub(super) fn handle_prompt_repo_agent(&mut self) {
-        let repo = self
-            .state
-            .selected_repo_id
-            .as_ref()
-            .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id))
-            .cloned();
-
-        let Some(repo) = repo else {
+        if self.state.selected_repo_id.is_none() {
             self.state.status_message = Some("No repo selected".to_string());
             return;
-        };
-
-        // Look up the latest repo-scoped run for session resume
-        let resume_session_id = self
-            .state
-            .data
-            .latest_repo_agent_runs
-            .get(&repo.id)
-            .and_then(|run| run.session_id.clone());
-
-        let title = if resume_session_id.is_some() {
-            "Repo Agent (Resume)".to_string()
-        } else {
-            "Repo Agent (read-only)".to_string()
-        };
-
-        let lines = vec![String::new()];
-        let mut textarea = tui_textarea::TextArea::new(lines);
-        textarea.set_cursor_line_style(ratatui::style::Style::default());
-        textarea.set_placeholder_text("Ask the repo agent a question (read-only)...");
-
-        self.state.modal = Modal::AgentPrompt {
-            title,
-            prompt: "Enter prompt for Claude:".to_string(),
-            textarea: Box::new(textarea),
-            on_submit: InputAction::RepoAgentPrompt {
-                repo_id: repo.id.clone(),
-                repo_path: repo.local_path.clone(),
-                repo_slug: repo.slug.clone(),
-                resume_session_id,
-            },
-        };
+        }
+        self.state.column_focus = crate::state::ColumnFocus::Content;
+        self.state.repo_detail_focus = crate::state::RepoDetailFocus::RepoAgentPromptInput;
     }
 
     pub(super) fn start_repo_agent_headless(

@@ -194,6 +194,10 @@ pub enum Action {
     SubmitPromptInput,
     /// Forward a raw key event to the persistent prompt textarea widget.
     PromptTextAreaInput(crossterm::event::KeyEvent),
+    /// Submit the persistent prompt input box in RepoDetail (repo agent).
+    SubmitRepoPromptInput,
+    /// Forward a raw key event to the RepoDetail repo-agent prompt textarea.
+    RepoPromptTextAreaInput(crossterm::event::KeyEvent),
     PromptRepoAgent,
     StopAgent,
     RestartAgent,

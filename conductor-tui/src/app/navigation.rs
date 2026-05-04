@@ -589,6 +589,7 @@ impl App {
                         .borrow_mut()
                         .select_previous();
                 }
+                RepoDetailFocus::RepoAgentPromptInput => {}
             },
             View::WorkflowRunDetail => match self.state.workflow_run_detail_focus {
                 WorkflowRunDetailFocus::Info => {
@@ -761,6 +762,7 @@ impl App {
                         self.state.repo_agent_list_state.borrow_mut().select_next();
                     }
                 }
+                RepoDetailFocus::RepoAgentPromptInput => {}
             },
             View::WorkflowRunDetail => match self.state.workflow_run_detail_focus {
                 WorkflowRunDetailFocus::Info => {
@@ -942,6 +944,9 @@ impl App {
                 RepoDetailFocus::RepoAgent => {
                     // Enter on repo agent event opens detail modal
                     self.handle_expand_repo_agent_event();
+                }
+                RepoDetailFocus::RepoAgentPromptInput => {
+                    // Enter is captured by the textarea — see input.rs.
                 }
             },
             View::WorkflowRunDetail => {

@@ -2,7 +2,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::action::Action;
 use crate::state::{
-    AppState, ColumnFocus, Modal, View, WorkflowRunDetailFocus, WorktreeDetailFocus,
+    AppState, ColumnFocus, Modal, RepoDetailFocus, View, WorkflowRunDetailFocus,
+    WorktreeDetailFocus,
 };
 
 /// Map a key event to an action based on the current app state.
@@ -334,6 +335,38 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         };
     }
 
+    // WorktreeDetail PromptInput capture — must precede the Ctrl+d/Ctrl+u
+    // half-page-scroll and global character bindings so the textarea owns
+    // every key while focused.
+    //
+    // Bindings:
+    //   Enter (no mods) | Ctrl+S        → submit
+    //   Shift+Enter                     → newline (best-effort; terminal-dependent)
+    //   Tab / Shift+Tab                 → next/prev panel
+    //   Esc                             → blur (prev panel)
+    //   anything else                   → textarea
+    if state.view == View::WorktreeDetail
+        && state.worktree_detail_focus == WorktreeDetailFocus::PromptInput
+        && state.column_focus == ColumnFocus::Content
+    {
+        if let Some(action) = map_prompt_input_key(key, Action::SubmitPromptInput) {
+            return action;
+        }
+        return Action::PromptTextAreaInput(key);
+    }
+
+    // RepoDetail RepoAgentPromptInput capture — same rationale as the
+    // WorktreeDetail capture above.
+    if state.view == View::RepoDetail
+        && state.repo_detail_focus == RepoDetailFocus::RepoAgentPromptInput
+        && state.column_focus == ColumnFocus::Content
+    {
+        if let Some(action) = map_prompt_input_key(key, Action::SubmitRepoPromptInput) {
+            return action;
+        }
+        return Action::RepoPromptTextAreaInput(key);
+    }
+
     // Ctrl+d / Ctrl+u for half-page scroll (must precede normal match to avoid
     // Ctrl+d matching 'd' → Delete)
     if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -504,19 +537,8 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
         let focus = state.worktree_detail_focus;
 
-        // When PromptInput is focused, capture all keys for the textarea widget.
-        if focus == WorktreeDetailFocus::PromptInput && state.column_focus == ColumnFocus::Content {
-            let is_submit = key.code == KeyCode::Enter
-                || (key.modifiers.contains(KeyModifiers::CONTROL)
-                    && key.code == KeyCode::Char('s'));
-            if is_submit {
-                return Action::SubmitPromptInput;
-            }
-            if key.code == KeyCode::Esc {
-                return Action::PrevPanel;
-            }
-            return Action::PromptTextAreaInput(key);
-        }
+        // PromptInput capture is hoisted above the Ctrl+d/Ctrl+u scroll
+        // early-return at the top of map_key — see the early branch.
 
         match key.code {
             KeyCode::Char('X') if !is_active => return Action::ClearConversation,
@@ -739,6 +761,28 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Char('o') => Action::OpenTicketUrl,
 
         _ => Action::None,
+    }
+}
+
+/// Shared prompt-input key router. Returns `Some(action)` for keys the
+/// persistent prompt textarea should NOT receive (submit, blur, panel-cycle);
+/// returns `None` to signal "forward to the textarea." Used by both the
+/// worktree and repo-agent prompt boxes — `submit` is the view-specific
+/// submit action.
+fn map_prompt_input_key(key: KeyEvent, submit: Action) -> Option<Action> {
+    let mods = key.modifiers;
+    match key.code {
+        // Submit: bare Enter, or Ctrl+S as a chord-friendly alternative.
+        // Shift+Enter falls through to the textarea so users on terminals
+        // that report modifiers can still type multi-line prompts.
+        KeyCode::Enter if !mods.contains(KeyModifiers::SHIFT) => Some(submit),
+        KeyCode::Char('s') if mods.contains(KeyModifiers::CONTROL) => Some(submit),
+        // Panel navigation owns Tab / Shift+Tab — the textarea must not insert tabs.
+        KeyCode::Tab => Some(Action::NextPanel),
+        KeyCode::BackTab => Some(Action::PrevPanel),
+        // Esc blurs back to the previous pane (same as Shift+Tab).
+        KeyCode::Esc => Some(Action::PrevPanel),
+        _ => None,
     }
 }
 
@@ -1055,7 +1099,8 @@ mod tests {
         ));
     }
 
-    // --- PromptInput focus: all keys except Enter/Ctrl+S/Esc route to PromptTextAreaInput ---
+    // --- PromptInput focus: Enter / Ctrl+S submit; Tab / Shift+Tab cycle panels;
+    //     Esc blurs; Shift+Enter inserts newline; everything else routes to the textarea ---
 
     #[test]
     fn prompt_input_focus_j_routes_to_textarea_not_navigation() {
@@ -1076,8 +1121,145 @@ mod tests {
     }
 
     #[test]
+    fn prompt_input_focus_shift_enter_inserts_newline() {
+        // Best-effort multi-line: terminals that report Shift+Enter as a
+        // distinct event let users insert newlines; the textarea handles it.
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::PromptInput);
+        let shift_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
+        assert!(matches!(
+            map_key(shift_enter, &state),
+            Action::PromptTextAreaInput(_)
+        ));
+    }
+
+    #[test]
+    fn prompt_input_focus_ctrl_s_submits() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::PromptInput);
+        let ctrl_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert!(matches!(map_key(ctrl_s, &state), Action::SubmitPromptInput));
+    }
+
+    #[test]
+    fn prompt_input_focus_tab_cycles_to_next_panel() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::PromptInput);
+        assert!(matches!(
+            map_key(key(KeyCode::Tab), &state),
+            Action::NextPanel
+        ));
+    }
+
+    #[test]
+    fn prompt_input_focus_shift_tab_cycles_to_prev_panel() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::PromptInput);
+        assert!(matches!(
+            map_key(key(KeyCode::BackTab), &state),
+            Action::PrevPanel
+        ));
+    }
+
+    #[test]
+    fn prompt_input_focus_ctrl_d_routes_to_textarea_not_scroll() {
+        // Regression: Ctrl+D used to be intercepted as half-page scroll before
+        // the PromptInput capture, escaping the textarea while focused.
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::PromptInput);
+        let ctrl_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        assert!(matches!(
+            map_key(ctrl_d, &state),
+            Action::PromptTextAreaInput(_)
+        ));
+    }
+
+    #[test]
     fn prompt_input_focus_esc_blurs_via_prev_panel() {
         let state = worktree_detail_state_with_focus(WorktreeDetailFocus::PromptInput);
+        assert!(matches!(
+            map_key(key(KeyCode::Esc), &state),
+            Action::PrevPanel
+        ));
+    }
+
+    // --- RepoDetail RepoAgentPromptInput focus: same routing as worktree ---
+
+    fn repo_detail_state_with_focus(focus: RepoDetailFocus) -> AppState {
+        let mut state = AppState::new();
+        state.view = View::RepoDetail;
+        state.repo_detail_focus = focus;
+        state
+    }
+
+    #[test]
+    fn repo_prompt_input_focus_routes_chars_to_textarea() {
+        let state = repo_detail_state_with_focus(RepoDetailFocus::RepoAgentPromptInput);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('j')), &state),
+            Action::RepoPromptTextAreaInput(_)
+        ));
+        assert!(matches!(
+            map_key(key(KeyCode::Char('p')), &state),
+            Action::RepoPromptTextAreaInput(_)
+        ));
+    }
+
+    #[test]
+    fn repo_prompt_input_focus_enter_submits() {
+        let state = repo_detail_state_with_focus(RepoDetailFocus::RepoAgentPromptInput);
+        assert!(matches!(
+            map_key(key(KeyCode::Enter), &state),
+            Action::SubmitRepoPromptInput
+        ));
+    }
+
+    #[test]
+    fn repo_prompt_input_focus_shift_enter_inserts_newline() {
+        let state = repo_detail_state_with_focus(RepoDetailFocus::RepoAgentPromptInput);
+        let shift_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
+        assert!(matches!(
+            map_key(shift_enter, &state),
+            Action::RepoPromptTextAreaInput(_)
+        ));
+    }
+
+    #[test]
+    fn repo_prompt_input_focus_ctrl_s_submits() {
+        let state = repo_detail_state_with_focus(RepoDetailFocus::RepoAgentPromptInput);
+        let ctrl_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert!(matches!(
+            map_key(ctrl_s, &state),
+            Action::SubmitRepoPromptInput
+        ));
+    }
+
+    #[test]
+    fn repo_prompt_input_focus_tab_cycles_to_next_panel() {
+        let state = repo_detail_state_with_focus(RepoDetailFocus::RepoAgentPromptInput);
+        assert!(matches!(
+            map_key(key(KeyCode::Tab), &state),
+            Action::NextPanel
+        ));
+    }
+
+    #[test]
+    fn repo_prompt_input_focus_shift_tab_cycles_to_prev_panel() {
+        let state = repo_detail_state_with_focus(RepoDetailFocus::RepoAgentPromptInput);
+        assert!(matches!(
+            map_key(key(KeyCode::BackTab), &state),
+            Action::PrevPanel
+        ));
+    }
+
+    #[test]
+    fn repo_prompt_input_focus_ctrl_d_routes_to_textarea_not_scroll() {
+        let state = repo_detail_state_with_focus(RepoDetailFocus::RepoAgentPromptInput);
+        let ctrl_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        assert!(matches!(
+            map_key(ctrl_d, &state),
+            Action::RepoPromptTextAreaInput(_)
+        ));
+    }
+
+    #[test]
+    fn repo_prompt_input_focus_esc_blurs_via_prev_panel() {
+        let state = repo_detail_state_with_focus(RepoDetailFocus::RepoAgentPromptInput);
         assert!(matches!(
             map_key(key(KeyCode::Esc), &state),
             Action::PrevPanel

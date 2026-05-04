@@ -2047,3 +2047,91 @@ fn submit_prompt_input_with_worktree_opens_model_picker_and_resets_textarea() {
         crate::state::WorktreeDetailFocus::LogPanel
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// handle_submit_repo_prompt_input tests
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn submit_repo_prompt_input_empty_is_noop() {
+    let mut app = make_app();
+    app.handle_submit_repo_prompt_input();
+    assert!(matches!(app.state.modal, Modal::None));
+    assert!(app.state.status_message.is_none());
+}
+
+#[test]
+fn submit_repo_prompt_input_no_repo_sets_status() {
+    let mut app = make_app();
+    app.state.repo_agent_prompt_textarea = tui_textarea::TextArea::new(vec!["hello".to_string()]);
+    app.state.selected_repo_id = None;
+    app.handle_submit_repo_prompt_input();
+    assert_eq!(
+        app.state.status_message.as_deref(),
+        Some("No repo selected")
+    );
+}
+
+#[test]
+fn submit_repo_prompt_input_with_repo_resets_textarea_and_blurs_to_repo_agent() {
+    let mut app = make_app();
+    app.state.repo_agent_prompt_textarea =
+        tui_textarea::TextArea::new(vec!["why does X happen".to_string()]);
+    app.state.data.repos = vec![conductor_core::repo::Repo {
+        id: "r1".into(),
+        slug: "my-app".into(),
+        remote_url: "https://github.com/me/my-app".into(),
+        local_path: "/tmp/repos/my-app".into(),
+        default_branch: "main".into(),
+        workspace_dir: "/tmp/repos/my-app/.worktrees".into(),
+        created_at: "2024-01-01T00:00:00Z".into(),
+        model: None,
+        allow_agent_issue_creation: false,
+        runtime_overrides: None,
+    }];
+    app.state.selected_repo_id = Some("r1".into());
+    app.state.repo_detail_focus = crate::state::RepoDetailFocus::RepoAgentPromptInput;
+    app.handle_submit_repo_prompt_input();
+    // Textarea must be reset.
+    assert!(
+        app.state
+            .repo_agent_prompt_textarea
+            .lines()
+            .join("")
+            .trim()
+            .is_empty(),
+        "textarea must be cleared after submit"
+    );
+    // Focus blurs back to the activity pane.
+    assert_eq!(
+        app.state.repo_detail_focus,
+        crate::state::RepoDetailFocus::RepoAgent
+    );
+}
+
+// `p` in RepoDetail now focuses the prompt input rather than opening a modal.
+#[test]
+fn prompt_repo_agent_focuses_prompt_input() {
+    let mut app = make_app();
+    app.state.view = View::RepoDetail;
+    app.state.data.repos = vec![conductor_core::repo::Repo {
+        id: "r1".into(),
+        slug: "my-app".into(),
+        remote_url: "https://github.com/me/my-app".into(),
+        local_path: "/tmp/repos/my-app".into(),
+        default_branch: "main".into(),
+        workspace_dir: "/tmp/repos/my-app/.worktrees".into(),
+        created_at: "2024-01-01T00:00:00Z".into(),
+        model: None,
+        allow_agent_issue_creation: false,
+        runtime_overrides: None,
+    }];
+    app.state.selected_repo_id = Some("r1".into());
+    app.handle_prompt_repo_agent();
+    assert!(matches!(app.state.modal, Modal::None));
+    assert_eq!(
+        app.state.repo_detail_focus,
+        crate::state::RepoDetailFocus::RepoAgentPromptInput
+    );
+    assert_eq!(app.state.column_focus, crate::state::ColumnFocus::Content);
+}
