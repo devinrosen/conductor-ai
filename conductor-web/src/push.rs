@@ -42,22 +42,32 @@ pub async fn send_all(
     let mut expired_endpoints = Vec::new();
 
     for subscription in subscriptions {
-        match send_to_subscription(&private_key, &subject, subscription, &payload_bytes).await {
-            Ok(()) => {}
-            Err(e) if is_expired_endpoint_error(&e) => {
-                tracing::info!(
-                    "Push subscription expired (410/404), removing: {}",
-                    subscription.endpoint
-                );
-                expired_endpoints.push(subscription.endpoint.clone());
-            }
-            Err(e) => {
-                tracing::warn!("Push send failed for {}: {e}", subscription.endpoint);
-            }
-        }
+        let result =
+            send_to_subscription(&private_key, &subject, subscription, &payload_bytes).await;
+        process_send_result(result, &subscription.endpoint, &mut expired_endpoints);
     }
 
     Ok(expired_endpoints)
+}
+
+fn process_send_result(
+    result: std::result::Result<(), web_push::WebPushError>,
+    endpoint: &str,
+    expired_endpoints: &mut Vec<String>,
+) {
+    match result {
+        Ok(()) => {}
+        Err(e) if is_expired_endpoint_error(&e) => {
+            tracing::info!(
+                "Push subscription expired (410/404), removing: {}",
+                endpoint
+            );
+            expired_endpoints.push(endpoint.to_string());
+        }
+        Err(e) => {
+            tracing::warn!("Push send failed for {}: {e}", endpoint);
+        }
+    }
 }
 
 fn is_expired_endpoint_error(err: &web_push::WebPushError) -> bool {
@@ -131,6 +141,68 @@ mod tests {
         assert!(!is_expired_endpoint_error(
             &web_push::WebPushError::ServerError(None)
         ));
+    }
+
+    #[test]
+    fn test_process_send_result_ok_not_collected() {
+        let mut expired = Vec::new();
+        process_send_result(Ok(()), "https://example.com", &mut expired);
+        assert!(expired.is_empty());
+    }
+
+    #[test]
+    fn test_process_send_result_endpoint_not_valid_collected() {
+        let mut expired = Vec::new();
+        process_send_result(
+            Err(web_push::WebPushError::EndpointNotValid),
+            "https://example.com",
+            &mut expired,
+        );
+        assert_eq!(expired, vec!["https://example.com"]);
+    }
+
+    #[test]
+    fn test_process_send_result_endpoint_not_found_collected() {
+        let mut expired = Vec::new();
+        process_send_result(
+            Err(web_push::WebPushError::EndpointNotFound),
+            "https://example.com/push",
+            &mut expired,
+        );
+        assert_eq!(expired, vec!["https://example.com/push"]);
+    }
+
+    #[test]
+    fn test_process_send_result_other_error_not_collected() {
+        let mut expired = Vec::new();
+        process_send_result(
+            Err(web_push::WebPushError::Unauthorized),
+            "https://example.com",
+            &mut expired,
+        );
+        assert!(expired.is_empty());
+    }
+
+    #[test]
+    fn test_process_send_result_multiple_endpoints() {
+        let mut expired = Vec::new();
+        process_send_result(Ok(()), "https://ok.com", &mut expired);
+        process_send_result(
+            Err(web_push::WebPushError::EndpointNotValid),
+            "https://gone1.com",
+            &mut expired,
+        );
+        process_send_result(
+            Err(web_push::WebPushError::Unauthorized),
+            "https://err.com",
+            &mut expired,
+        );
+        process_send_result(
+            Err(web_push::WebPushError::EndpointNotFound),
+            "https://gone2.com",
+            &mut expired,
+        );
+        assert_eq!(expired, vec!["https://gone1.com", "https://gone2.com"]);
     }
 
     #[tokio::test]
