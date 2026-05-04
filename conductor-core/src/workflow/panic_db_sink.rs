@@ -15,7 +15,10 @@ impl PanicDbSink {
 
 impl EventSink for PanicDbSink {
     fn emit(&self, event: &EngineEventData) {
-        if let EngineEvent::Panicked { run_id, message, .. } = &event.event {
+        if let EngineEvent::Panicked {
+            run_id, message, ..
+        } = &event.event
+        {
             record_panic_in_db(&self.db_path, run_id, message);
         }
     }
@@ -97,12 +100,7 @@ mod tests {
             vec![Arc::new(PanicDbSink::new(db_path.clone()))];
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            runkon_flow::run_with_per_run_log(
-                &run_id,
-                log_dir.clone(),
-                sinks,
-                || panic!("boom"),
-            );
+            runkon_flow::run_with_per_run_log(&run_id, log_dir.clone(), sinks, || panic!("boom"));
         }));
 
         assert!(result.is_err(), "panic should be re-raised");
@@ -151,12 +149,9 @@ mod tests {
             vec![Arc::new(PanicDbSink::new(bad_db_path))];
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            runkon_flow::run_with_per_run_log(
-                &run_id,
-                log_dir.clone(),
-                sinks,
-                || panic!("explode"),
-            );
+            runkon_flow::run_with_per_run_log(&run_id, log_dir.clone(), sinks, || {
+                panic!("explode")
+            });
         }));
 
         assert!(result.is_err(), "original panic must still propagate");
@@ -185,12 +180,9 @@ mod tests {
             vec![Arc::new(PanicDbSink::new(db_path.clone()))];
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            runkon_flow::run_with_per_run_log(
-                &run_id,
-                log_dir,
-                sinks,
-                || panic!("no log file but still panicking"),
-            );
+            runkon_flow::run_with_per_run_log(&run_id, log_dir, sinks, || {
+                panic!("no log file but still panicking")
+            });
         }));
 
         assert!(result.is_err(), "panic must still propagate");
@@ -229,12 +221,7 @@ mod tests {
             vec![Arc::new(PanicDbSink::new(db_path.clone()))];
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            runkon_flow::run_with_per_run_log(
-                &run_id,
-                log_dir,
-                sinks,
-                || panic!("late panic"),
-            );
+            runkon_flow::run_with_per_run_log(&run_id, log_dir, sinks, || panic!("late panic"));
         }));
 
         assert!(result.is_err(), "panic must still re-raise");
