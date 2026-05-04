@@ -103,6 +103,12 @@ mod tests {
         fn working_dir(&self) -> &std::path::Path {
             std::path::Path::new("/tmp")
         }
+        fn run_id(&self) -> &str {
+            "noop-run"
+        }
+        fn workflow_name(&self) -> &str {
+            "noop-wf"
+        }
     }
 
     fn make_persistence(db_path: &std::path::Path) -> Arc<dyn WorkflowPersistence> {
