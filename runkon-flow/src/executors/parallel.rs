@@ -6,8 +6,8 @@ use crate::engine::{record_step_success, resolve_schema, ExecutionState};
 use crate::engine_error::{EngineError, Result};
 use crate::status::WorkflowStepStatus;
 use crate::traits::action_executor::{ActionOutput, ActionParams, StepInfo};
-use crate::traits::run_context::RunContext;
 use crate::traits::persistence::StepUpdate;
+use crate::traits::run_context::RunContext;
 use crate::types::{StepResult, StepSuccess};
 
 pub fn execute_parallel(
@@ -224,7 +224,12 @@ pub fn execute_parallel(
                 final_attempt = attempt;
 
                 result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    registry.dispatch(&params.name, &*dispatch_input.run_ctx, &dispatch_input.info, &params)
+                    registry.dispatch(
+                        &params.name,
+                        &*dispatch_input.run_ctx,
+                        &dispatch_input.info,
+                        &params,
+                    )
                 }))
                 .unwrap_or_else(|payload| {
                     let msg = if let Some(s) = payload.downcast_ref::<&str>() {
@@ -423,7 +428,8 @@ mod tests {
         }
         fn execute(
             &self,
-            _ectx: &crate::traits::action_executor::ExecutionContext,
+            _ctx: &dyn crate::traits::run_context::RunContext,
+            _info: &crate::traits::action_executor::StepInfo,
             _params: &ActionParams,
         ) -> Result<ActionOutput, EngineError> {
             Ok(ActionOutput {
