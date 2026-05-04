@@ -87,7 +87,6 @@ pub enum EngineEvent {
     },
     // Panic capture
     Panicked {
-        run_id: String,
         message: String,
         backtrace: String,
     },

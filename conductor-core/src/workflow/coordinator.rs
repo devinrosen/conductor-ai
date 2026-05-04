@@ -798,6 +798,10 @@ fn make_resume_params(
     }
 }
 
+fn make_panic_sinks(db_path: std::path::PathBuf) -> Vec<Arc<dyn runkon_flow::EventSink>> {
+    vec![Arc::new(super::panic_db_sink::PanicDbSink::new(db_path))]
+}
+
 /// Spawn a background thread to resume a workflow run.
 ///
 /// Designed for the TUI/CLI watchdog callers so they are not blocked and the
@@ -814,9 +818,7 @@ pub fn spawn_workflow_resume(
         let db_path = crate::config::db_path();
         let params = make_resume_params((*config).clone(), run_id.clone(), conductor_bin_dir, None);
         let run_id_inner = run_id.clone();
-        let sinks: Vec<Arc<dyn runkon_flow::EventSink>> = vec![Arc::new(
-            super::panic_db_sink::PanicDbSink::new(db_path.clone()),
-        )];
+        let sinks = make_panic_sinks(db_path.clone());
         runkon_flow::run_with_per_run_log(
             &run_id,
             crate::config::workflow_log_dir(),
@@ -848,9 +850,7 @@ pub fn spawn_heartbeat_resume(p: SpawnHeartbeatResumeParams) -> std::thread::Joi
         );
         let run_id = p.run_id.clone();
         let db_path = effective_db.clone();
-        let sinks: Vec<Arc<dyn runkon_flow::EventSink>> = vec![Arc::new(
-            super::panic_db_sink::PanicDbSink::new(db_path.clone()),
-        )];
+        let sinks = make_panic_sinks(db_path.clone());
         runkon_flow::run_with_per_run_log(
             &run_id,
             crate::config::workflow_log_dir(),

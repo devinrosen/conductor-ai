@@ -15,11 +15,8 @@ impl PanicDbSink {
 
 impl EventSink for PanicDbSink {
     fn emit(&self, event: &EngineEventData) {
-        if let EngineEvent::Panicked {
-            run_id, message, ..
-        } = &event.event
-        {
-            record_panic_in_db(&self.db_path, run_id, message);
+        if let EngineEvent::Panicked { message, .. } = &event.event {
+            record_panic_in_db(&self.db_path, &event.run_id, message);
         }
     }
 }

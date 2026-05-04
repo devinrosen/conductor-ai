@@ -73,7 +73,6 @@ pub fn run_with_per_run_log<F: FnOnce() + UnwindSafe>(
                 let bt = std::backtrace::Backtrace::force_capture();
                 tracing::error!(run_id = %run_id, "engine panic: {msg}\n{bt}");
                 let event = EngineEvent::Panicked {
-                    run_id: run_id.to_string(),
                     message: msg,
                     backtrace: bt.to_string(),
                 };
