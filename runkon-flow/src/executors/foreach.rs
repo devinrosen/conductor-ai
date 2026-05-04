@@ -825,10 +825,10 @@ mod tests {
         use crate::cancellation::CancellationToken;
         use crate::engine::{
             ChildWorkflowContext, ChildWorkflowInput, ChildWorkflowRunner, ExecutionState,
-            WorktreeContext,
         };
         use crate::engine_error::Result;
         use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::traits::run_context::NoopRunContext;
         use crate::traits::script_env_provider::NoOpScriptEnvProvider;
         use crate::types::{WorkflowExecConfig, WorkflowResult};
 
@@ -873,14 +873,9 @@ mod tests {
             script_env_provider: Arc::new(NoOpScriptEnvProvider),
             workflow_run_id: "parent-run".into(),
             workflow_name: "wf".into(),
-            worktree_ctx: WorktreeContext {
-                worktree_id: None,
-                working_dir: String::new(),
-                repo_path: String::new(),
-                ticket_id: None,
-                repo_id: None,
-                extra_plugin_dirs: vec![],
-            },
+            run_ctx: Arc::new(NoopRunContext::default())
+                as Arc<dyn crate::traits::run_context::RunContext>,
+            extra_plugin_dirs: vec![],
             model: None,
             exec_config: WorkflowExecConfig::default(),
             inputs: parent_inputs.clone(),

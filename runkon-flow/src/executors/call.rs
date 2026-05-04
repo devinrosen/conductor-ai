@@ -87,7 +87,7 @@ fn execute_call_inner(
             .or(state.default_bot_name.as_deref())
             .map(String::from);
 
-        let mut merged_plugin_dirs = state.worktree_ctx.extra_plugin_dirs.clone();
+        let mut merged_plugin_dirs = state.extra_plugin_dirs.clone();
         for dir in &node.plugin_dirs {
             if !merged_plugin_dirs.contains(dir) {
                 merged_plugin_dirs.push(dir.clone());

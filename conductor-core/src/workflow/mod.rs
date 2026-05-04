@@ -23,6 +23,7 @@ pub(crate) mod output;
 pub(crate) mod panic_db_sink;
 pub(crate) mod persistence_sqlite;
 pub(crate) mod prompt_builder;
+pub(crate) mod run_context;
 pub(crate) mod runkon_bridge;
 pub(crate) mod runkon_gate_bridge;
 pub(crate) mod script_env_provider;

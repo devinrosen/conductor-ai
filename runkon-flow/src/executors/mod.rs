@@ -134,15 +134,20 @@ pub(super) fn build_execution_context(
 ) -> crate::traits::action_executor::ExecutionContext {
     crate::traits::action_executor::ExecutionContext {
         run_id: step_id.to_string(),
-        working_dir: std::path::PathBuf::from(&state.worktree_ctx.working_dir),
-        repo_path: state.worktree_ctx.repo_path.clone(),
+        working_dir: state.run_ctx.working_dir().to_path_buf(),
+        repo_path: state
+            .run_ctx
+            .get(crate::traits::run_context::keys::REPO_PATH)
+            .unwrap_or_default(),
         step_timeout: state.exec_config.step_timeout,
         shutdown: state.exec_config.shutdown.clone(),
         model: state.model.clone(),
         bot_name,
         plugin_dirs,
         workflow_name: state.workflow_name.clone(),
-        worktree_id: state.worktree_ctx.worktree_id.clone(),
+        worktree_id: state
+            .run_ctx
+            .get(crate::traits::run_context::keys::WORKTREE_ID),
         parent_run_id: state.parent_run_id.clone(),
         step_id: step_id.to_string(),
     }

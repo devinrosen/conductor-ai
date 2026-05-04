@@ -162,7 +162,7 @@ pub fn execute_parallel(
             state,
             &step_id,
             state.default_bot_name.clone(),
-            state.worktree_ctx.extra_plugin_dirs.clone(),
+            state.extra_plugin_dirs.clone(),
         );
 
         let params = super::build_action_params(
@@ -398,13 +398,14 @@ pub fn execute_parallel(
 mod tests {
     use super::*;
     use crate::dsl::{AgentRef, ParallelNode};
-    use crate::engine::{ExecutionState, WorktreeContext};
+    use crate::engine::ExecutionState;
     use crate::engine_error::EngineError;
     use crate::persistence_memory::InMemoryWorkflowPersistence;
     use crate::status::WorkflowStepStatus;
     use crate::traits::action_executor::{ActionExecutor, ActionOutput, ActionParams};
     use crate::traits::item_provider::ItemProviderRegistry;
     use crate::traits::persistence::WorkflowPersistence;
+    use crate::traits::run_context::NoopRunContext;
     use crate::traits::script_env_provider::NoOpScriptEnvProvider;
     use crate::types::WorkflowExecConfig;
     use std::collections::HashMap;
@@ -464,14 +465,9 @@ mod tests {
             script_env_provider: Arc::new(NoOpScriptEnvProvider),
             workflow_run_id: run_id,
             workflow_name: "wf".to_string(),
-            worktree_ctx: WorktreeContext {
-                worktree_id: None,
-                working_dir: String::new(),
-                repo_path: String::new(),
-                ticket_id: None,
-                repo_id: None,
-                extra_plugin_dirs: vec![],
-            },
+            run_ctx: Arc::new(NoopRunContext::default())
+                as Arc<dyn crate::traits::run_context::RunContext>,
+            extra_plugin_dirs: vec![],
             model: None,
             exec_config: WorkflowExecConfig::default(),
             inputs: HashMap::new(),

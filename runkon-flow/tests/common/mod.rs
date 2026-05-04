@@ -8,9 +8,7 @@ use runkon_flow::dsl::{
     ApprovalMode, ForEachNode, GateNode, GateType, OnChildFail, OnCycle, OnTimeout, WorkflowDef,
     WorkflowNode, WorkflowTrigger,
 };
-use runkon_flow::engine::{
-    ChildWorkflowInput, ChildWorkflowRunner, ExecutionState, ResumeContext, WorktreeContext,
-};
+use runkon_flow::engine::{ChildWorkflowInput, ChildWorkflowRunner, ExecutionState, ResumeContext};
 use runkon_flow::engine_error::EngineError;
 use runkon_flow::persistence_memory::InMemoryWorkflowPersistence;
 pub use runkon_flow::traits::action_executor::ActionExecutor;
@@ -19,6 +17,7 @@ use runkon_flow::traits::action_executor::{
 };
 use runkon_flow::traits::item_provider::{FanOutItem, ItemProvider, ProviderContext};
 use runkon_flow::traits::persistence::{NewRun, WorkflowPersistence};
+use runkon_flow::traits::run_context::NoopRunContext;
 use runkon_flow::traits::script_env_provider::NoOpScriptEnvProvider;
 use runkon_flow::types::{WorkflowExecConfig, WorkflowResult};
 use runkon_flow::CancellationReason;
@@ -131,14 +130,9 @@ pub fn make_state(
         script_env_provider: Arc::new(NoOpScriptEnvProvider),
         workflow_run_id: run.id,
         workflow_name: wf_name.to_string(),
-        worktree_ctx: WorktreeContext {
-            worktree_id: None,
-            working_dir: String::new(),
-            repo_path: String::new(),
-            ticket_id: None,
-            repo_id: None,
-            extra_plugin_dirs: vec![],
-        },
+        run_ctx: Arc::new(NoopRunContext::default())
+            as Arc<dyn runkon_flow::traits::run_context::RunContext>,
+        extra_plugin_dirs: vec![],
         model: None,
         exec_config: WorkflowExecConfig::default(),
         inputs: HashMap::new(),

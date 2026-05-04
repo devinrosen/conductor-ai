@@ -235,11 +235,12 @@ mod tests {
     use std::sync::{atomic::AtomicI64, Arc};
 
     use crate::dsl::{Condition, IfNode, UnlessNode};
-    use crate::engine::{ExecutionState, WorktreeContext};
+    use crate::engine::ExecutionState;
     use crate::persistence_memory::InMemoryWorkflowPersistence;
     use crate::traits::action_executor::ActionRegistry;
     use crate::traits::item_provider::ItemProviderRegistry;
     use crate::traits::persistence::{NewRun, WorkflowPersistence};
+    use crate::traits::run_context::NoopRunContext;
     use crate::traits::script_env_provider::NoOpScriptEnvProvider;
     use crate::types::{StepResult, WorkflowExecConfig};
 
@@ -266,14 +267,9 @@ mod tests {
             script_env_provider: Arc::new(NoOpScriptEnvProvider),
             workflow_run_id: run.id,
             workflow_name: "test-wf".to_string(),
-            worktree_ctx: WorktreeContext {
-                worktree_id: None,
-                working_dir: "/tmp".to_string(),
-                repo_path: "/tmp".to_string(),
-                ticket_id: None,
-                repo_id: None,
-                extra_plugin_dirs: vec![],
-            },
+            run_ctx: Arc::new(NoopRunContext::default().with_working_dir("/tmp"))
+                as Arc<dyn crate::traits::run_context::RunContext>,
+            extra_plugin_dirs: vec![],
             model: None,
             exec_config: WorkflowExecConfig::default(),
             inputs: Default::default(),
