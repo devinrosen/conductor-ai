@@ -38,6 +38,7 @@ hex = "0.4"
 serde_urlencoded = "0.7"
 bytes = "1"
 toml = "0.8"
+web-push = "0.10"
 
 [dev-dependencies]
 conductor-core = { path = "../conductor-core", features = ["test-helpers"] }

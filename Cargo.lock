@@ -671,7 +671,6 @@ dependencies = [
  "ulid",
  "ureq",
  "utoipa",
- "web-push",
 ]
 
 [[package]]
@@ -750,6 +749,7 @@ dependencies = [
  "tracing-subscriber",
  "utoipa",
  "utoipa-swagger-ui",
+ "web-push",
 ]
 
 [[package]]
