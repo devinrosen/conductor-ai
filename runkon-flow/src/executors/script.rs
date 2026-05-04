@@ -352,7 +352,10 @@ pub fn execute_script(state: &mut ExecutionState, node: &ScriptNode, iteration: 
             crate::types::StepSuccess {
                 step_name: node.name.clone(),
                 result_text: Some(format!("Script '{}' completed", node.name)),
-                duration_ms: Some(duration_ms),
+                metadata: std::collections::HashMap::from([(
+                    crate::constants::metadata_keys::DURATION_MS.to_string(),
+                    duration_ms.to_string(),
+                )]),
                 markers,
                 context,
                 iteration,

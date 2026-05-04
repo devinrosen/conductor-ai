@@ -148,14 +148,24 @@ impl ActionExecutor for ApiCallExecutor {
 
         let structured = crate::schema_config::derive_output_from_value(result.json, schema);
 
+        use runkon_flow::constants::metadata_keys;
+        let metadata = std::collections::HashMap::from([
+            (metadata_keys::NUM_TURNS.to_string(), "1".to_string()),
+            (
+                metadata_keys::INPUT_TOKENS.to_string(),
+                result.input_tokens.to_string(),
+            ),
+            (
+                metadata_keys::OUTPUT_TOKENS.to_string(),
+                result.output_tokens.to_string(),
+            ),
+        ]);
         Ok(ActionOutput {
             result_text: Some(result.json_string),
             structured_output: Some(structured.json_string),
             markers: structured.markers,
             context: Some(structured.context),
-            num_turns: Some(1),
-            input_tokens: Some(result.input_tokens),
-            output_tokens: Some(result.output_tokens),
+            metadata,
             ..Default::default()
         })
     }

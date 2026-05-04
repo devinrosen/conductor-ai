@@ -111,18 +111,41 @@ impl ActionExecutor for ClaudeAgentExecutor {
             .map_err(ConductorError::Workflow)?;
 
         if succeeded {
+            use runkon_flow::constants::metadata_keys;
+            let mut metadata = std::collections::HashMap::new();
+            if let Some(v) = completed.cost_usd {
+                metadata.insert(metadata_keys::COST_USD.to_string(), v.to_string());
+            }
+            if let Some(v) = completed.num_turns {
+                metadata.insert(metadata_keys::NUM_TURNS.to_string(), v.to_string());
+            }
+            if let Some(v) = completed.duration_ms {
+                metadata.insert(metadata_keys::DURATION_MS.to_string(), v.to_string());
+            }
+            if let Some(v) = completed.input_tokens {
+                metadata.insert(metadata_keys::INPUT_TOKENS.to_string(), v.to_string());
+            }
+            if let Some(v) = completed.output_tokens {
+                metadata.insert(metadata_keys::OUTPUT_TOKENS.to_string(), v.to_string());
+            }
+            if let Some(v) = completed.cache_read_input_tokens {
+                metadata.insert(
+                    metadata_keys::CACHE_READ_INPUT_TOKENS.to_string(),
+                    v.to_string(),
+                );
+            }
+            if let Some(v) = completed.cache_creation_input_tokens {
+                metadata.insert(
+                    metadata_keys::CACHE_CREATION_INPUT_TOKENS.to_string(),
+                    v.to_string(),
+                );
+            }
             Ok(ActionOutput {
                 markers,
                 context: Some(context),
                 result_text: completed.result_text,
                 structured_output,
-                cost_usd: completed.cost_usd,
-                num_turns: completed.num_turns,
-                duration_ms: completed.duration_ms,
-                input_tokens: completed.input_tokens,
-                output_tokens: completed.output_tokens,
-                cache_read_input_tokens: completed.cache_read_input_tokens,
-                cache_creation_input_tokens: completed.cache_creation_input_tokens,
+                metadata,
             })
         } else {
             let detail = completed.result_text.unwrap_or_else(|| {

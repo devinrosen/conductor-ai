@@ -54,13 +54,9 @@ pub struct ActionOutput {
     pub context: Option<String>,
     pub result_text: Option<String>,
     pub structured_output: Option<String>,
-    pub cost_usd: Option<f64>,
-    pub num_turns: Option<i64>,
-    pub duration_ms: Option<i64>,
-    pub input_tokens: Option<i64>,
-    pub output_tokens: Option<i64>,
-    pub cache_read_input_tokens: Option<i64>,
-    pub cache_creation_input_tokens: Option<i64>,
+    /// Executor-specific key/value metadata. Claude executors populate the seven
+    /// metric keys defined in `runkon_flow::constants::metadata_keys`.
+    pub metadata: HashMap<String, String>,
 }
 
 /// Conductor-specific execution context passed to every `ActionExecutor::execute` call.

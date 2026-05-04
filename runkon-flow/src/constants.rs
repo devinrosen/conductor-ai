@@ -30,6 +30,19 @@ pub const STEP_COLUMNS: &str =
      input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
      cost_usd, num_turns, duration_ms";
 
+/// Canonical metadata key strings for the seven Claude-SDK metric fields.
+/// Writers (`ClaudeAgentExecutor`) and readers (`record_step_success`) must
+/// use these constants so key names never diverge silently.
+pub mod metadata_keys {
+    pub const COST_USD: &str = "cost_usd";
+    pub const NUM_TURNS: &str = "num_turns";
+    pub const DURATION_MS: &str = "duration_ms";
+    pub const INPUT_TOKENS: &str = "input_tokens";
+    pub const OUTPUT_TOKENS: &str = "output_tokens";
+    pub const CACHE_READ_INPUT_TOKENS: &str = "cache_read_input_tokens";
+    pub const CACHE_CREATION_INPUT_TOKENS: &str = "cache_creation_input_tokens";
+}
+
 pub const FLOW_OUTPUT_INSTRUCTION: &str = r#"
 When you have finished your work, output the following block exactly as the
 last thing in your response. Do not include this block in code examples or
