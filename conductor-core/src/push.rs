@@ -98,8 +98,7 @@ mod tests {
                 .unwrap();
 
         let updated =
-            upsert_subscription(&db, "https://example.com/push", "p256dh_new", "auth_new")
-                .unwrap();
+            upsert_subscription(&db, "https://example.com/push", "p256dh_new", "auth_new").unwrap();
 
         assert_eq!(inserted.id, updated.id);
         assert_eq!(inserted.created_at, updated.created_at);
