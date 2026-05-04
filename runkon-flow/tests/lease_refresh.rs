@@ -8,9 +8,8 @@ use std::time::Duration;
 use runkon_flow::cancellation_reason::CancellationReason;
 use runkon_flow::engine_error::EngineError;
 use runkon_flow::persistence_memory::InMemoryWorkflowPersistence;
-use runkon_flow::traits::action_executor::{
-    ActionExecutor, ActionOutput, ActionParams, ExecutionContext,
-};
+use runkon_flow::traits::action_executor::{ActionExecutor, ActionOutput, ActionParams, StepInfo};
+use runkon_flow::traits::run_context::RunContext;
 use runkon_flow::traits::persistence::{NewRun, WorkflowPersistence};
 use runkon_flow::types::WorkflowExecConfig;
 use runkon_flow::FlowEngineBuilder;
@@ -61,7 +60,8 @@ impl ActionExecutor for SleepExecutor {
 
     fn execute(
         &self,
-        _ectx: &ExecutionContext,
+        _ctx: &dyn RunContext,
+        _info: &StepInfo,
         _params: &ActionParams,
     ) -> Result<ActionOutput, EngineError> {
         std::thread::sleep(Duration::from_millis(self.sleep_ms));
@@ -91,7 +91,8 @@ impl ActionExecutor for CountingExecutor {
 
     fn execute(
         &self,
-        _ectx: &ExecutionContext,
+        _ctx: &dyn RunContext,
+        _info: &StepInfo,
         _params: &ActionParams,
     ) -> Result<ActionOutput, EngineError> {
         self.count.fetch_add(1, Ordering::SeqCst);
@@ -121,7 +122,8 @@ impl ActionExecutor for LeaseStealingExecutor {
 
     fn execute(
         &self,
-        _ectx: &ExecutionContext,
+        _ctx: &dyn RunContext,
+        _info: &StepInfo,
         _params: &ActionParams,
     ) -> Result<ActionOutput, EngineError> {
         std::thread::sleep(Duration::from_millis(self.steal_after_ms));

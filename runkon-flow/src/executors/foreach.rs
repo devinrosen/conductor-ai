@@ -10,7 +10,7 @@ use crate::engine::{
 use crate::engine_error::{EngineError, Result};
 use crate::events::EngineEvent;
 use crate::status::WorkflowStepStatus;
-use crate::traits::item_provider::ProviderContext;
+use crate::traits::item_provider::ProviderInfo;
 use crate::traits::persistence::{FanOutItemStatus, FanOutItemUpdate, StepUpdate};
 
 use super::p_err;
@@ -140,9 +140,7 @@ pub fn execute_foreach(
         }
     };
 
-    // Build provider context
-    let provider_ctx = ProviderContext {
-        run_id: state.workflow_run_id.clone(),
+    let provider_info = ProviderInfo {
         step_id: step_id.clone(),
     };
 
@@ -154,10 +152,10 @@ pub fn execute_foreach(
     let existing_set: HashSet<String> = existing_items.iter().map(|i| i.item_id.clone()).collect();
 
     let provider_items = provider.items(
-        &provider_ctx,
+        &*state.run_ctx,
+        &provider_info,
         node.scope.as_ref(),
         &node.filter,
-        &existing_set,
     )?;
 
     let items: Vec<(String, String, String)> = provider_items
@@ -947,7 +945,7 @@ mod tests {
         use crate::engine::{ChildWorkflowContext, ChildWorkflowInput, ChildWorkflowRunner};
         use crate::engine_error::Result;
         use crate::traits::item_provider::{
-            FanOutItem, ItemProvider, ItemProviderRegistry, ProviderContext,
+            FanOutItem, ItemProvider, ItemProviderRegistry, ProviderInfo,
         };
         use crate::traits::persistence::{NewRun, WorkflowPersistence};
         use crate::types::WorkflowResult;
@@ -959,10 +957,10 @@ mod tests {
             }
             fn items(
                 &self,
-                _ctx: &ProviderContext,
+                _ctx: &dyn crate::traits::run_context::RunContext,
+                _info: &ProviderInfo,
                 _scope: Option<&crate::dsl::ForeachScope>,
                 _filter: &HashMap<String, String>,
-                _existing_set: &HashSet<String>,
             ) -> Result<Vec<FanOutItem>> {
                 Ok(vec![FanOutItem {
                     item_type: "test".into(),

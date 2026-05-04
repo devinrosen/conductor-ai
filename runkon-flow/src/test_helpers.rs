@@ -1,26 +1,24 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::dsl::{AgentRef, CallNode, WorkflowDef, WorkflowNode, WorkflowTrigger};
 use crate::events::{EngineEventData, EventSink};
-use crate::traits::action_executor::{ActionParams, ExecutionContext};
+use crate::traits::action_executor::{ActionParams, StepInfo};
+use crate::traits::run_context::{NoopRunContext, RunContext};
 
-pub fn make_ectx() -> ExecutionContext {
-    ExecutionContext {
-        run_id: "r1".to_string(),
-        working_dir: PathBuf::from("/tmp"),
-        repo_path: "/tmp/repo".to_string(),
-        step_timeout: Duration::from_secs(60),
-        shutdown: None,
-        model: None,
-        bot_name: None,
-        plugin_dirs: vec![],
-        workflow_name: "wf".to_string(),
-        worktree_id: None,
-        parent_run_id: "parent-run-1".to_string(),
+pub fn make_run_ctx() -> Arc<dyn RunContext> {
+    Arc::new(
+        NoopRunContext::default()
+            .with_run_id("r1")
+            .with_workflow_name("wf"),
+    )
+}
+
+pub fn make_step_info() -> StepInfo {
+    StepInfo {
         step_id: "step-1".to_string(),
+        step_timeout: Duration::from_secs(60),
     }
 }
 
@@ -34,6 +32,9 @@ pub fn make_params(name: &str) -> ActionParams {
         dry_run: false,
         gate_feedback: None,
         schema: None,
+        model: None,
+        bot_name: None,
+        plugin_dirs: vec![],
     }
 }
 

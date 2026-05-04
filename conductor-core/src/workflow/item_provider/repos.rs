@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::error::Result;
 use runkon_flow::dsl::ForeachScope;
@@ -13,22 +13,16 @@ impl ItemProvider for ReposProvider {
         ctx: &ProviderContext<'_>,
         _scope: Option<&ForeachScope>,
         _filter: &HashMap<String, String>,
-        existing_set: &HashSet<String>,
     ) -> Result<Vec<FanOutItem>> {
         use crate::repo::RepoManager;
 
         let mgr = RepoManager::new(ctx.conn, ctx.config);
         let repos = mgr.list()?;
-        Ok(collect_fan_out_items(
-            repos,
-            existing_set,
-            |r| r.id.as_str(),
-            |r| FanOutItem {
-                item_type: "repo".to_string(),
-                item_id: r.id,
-                item_ref: r.slug,
-            },
-        ))
+        Ok(collect_fan_out_items(repos, |r| FanOutItem {
+            item_type: "repo".to_string(),
+            item_id: r.id,
+            item_ref: r.slug,
+        }))
     }
 }
 
@@ -43,7 +37,7 @@ mod tests {
         let config = crate::config::Config::default();
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = ReposProvider
-            .items(&ctx, None, &HashMap::new(), &HashSet::new())
+            .items(&ctx, None, &HashMap::new())
             .unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].item_id, "r1");
@@ -51,18 +45,14 @@ mod tests {
     }
 
     #[test]
-    fn test_repos_items_skips_existing_set() {
+    fn test_repos_items_returns_all_without_dedup() {
         let conn = test_helpers::setup_db();
         let config = crate::config::Config::default();
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
-        let mut existing = HashSet::new();
-        existing.insert("r1".to_string());
+        // Providers return ALL items; dedup is done by the foreach executor.
         let items = ReposProvider
-            .items(&ctx, None, &HashMap::new(), &existing)
+            .items(&ctx, None, &HashMap::new())
             .unwrap();
-        assert!(
-            items.is_empty(),
-            "repo already in existing_set should be skipped"
-        );
+        assert_eq!(items.len(), 1, "all repos returned regardless of prior state");
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use rusqlite::Connection;
 
@@ -26,7 +26,6 @@ impl ItemProvider for TicketsProvider {
         ctx: &ProviderContext<'_>,
         scope: Option<&ForeachScope>,
         _filter: &HashMap<String, String>,
-        existing_set: &HashSet<String>,
     ) -> Result<Vec<FanOutItem>> {
         use crate::tickets::TicketSyncer;
 
@@ -42,8 +41,7 @@ impl ItemProvider for TicketsProvider {
         let items = match scope {
             Some(ForeachScope::Ticket(ts)) => match ts {
                 TicketScope::TicketId(ticket_id) => match syncer.get_by_id(ticket_id) {
-                    Ok(t) if !existing_set.contains(&t.id) => vec![ticket_item(t)],
-                    Ok(_) => vec![],
+                    Ok(t) => vec![ticket_item(t)],
                     Err(ConductorError::TicketNotFound { .. }) => {
                         return Err(ConductorError::Workflow(format!(
                             "foreach: ticket '{}' not found",
@@ -55,12 +53,12 @@ impl ItemProvider for TicketsProvider {
                 TicketScope::Label(label) => {
                     let tickets = syncer
                         .list_filtered(Some(repo_id), &ticket_filter(vec![label.clone()], false))?;
-                    collect_fan_out_items(tickets, existing_set, |t| t.id.as_str(), ticket_item)
+                    collect_fan_out_items(tickets, ticket_item)
                 }
                 TicketScope::Unlabeled => {
                     let tickets =
                         syncer.list_filtered(Some(repo_id), &ticket_filter(vec![], true))?;
-                    collect_fan_out_items(tickets, existing_set, |t| t.id.as_str(), ticket_item)
+                    collect_fan_out_items(tickets, ticket_item)
                 }
             },
             Some(ForeachScope::Worktree(_)) => {
@@ -70,7 +68,7 @@ impl ItemProvider for TicketsProvider {
             }
             None => {
                 let tickets = syncer.list_filtered(Some(repo_id), &ticket_filter(vec![], false))?;
-                collect_fan_out_items(tickets, existing_set, |t| t.id.as_str(), ticket_item)
+                collect_fan_out_items(tickets, ticket_item)
             }
         };
 
@@ -127,7 +125,7 @@ mod tests {
         let conn = test_helpers::setup_db();
         let config = crate::config::Config::default();
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
-        let result = TicketsProvider::new(None).items(&ctx, None, &HashMap::new(), &HashSet::new());
+        let result = TicketsProvider::new(None).items(&ctx, None, &HashMap::new());
         assert!(
             result.is_err(),
             "items() without repo_id should return an error"
@@ -158,44 +156,10 @@ mod tests {
             .unwrap();
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = TicketsProvider::new(Some("r1".into()))
-            .items(&ctx, None, &HashMap::new(), &HashSet::new())
+            .items(&ctx, None, &HashMap::new())
             .unwrap();
         assert_eq!(items.len(), 2);
         assert!(items.iter().all(|i| i.item_type == "ticket"));
-    }
-
-    #[test]
-    fn test_tickets_items_skips_existing_set() {
-        let conn = test_helpers::setup_db();
-        let config = crate::config::Config::default();
-        let syncer = TicketSyncer::new(&conn);
-        syncer
-            .upsert_tickets("r1", &[test_helpers::make_ticket("1", "A")])
-            .unwrap();
-        // Fetch the inserted ticket to get its ID.
-        use crate::tickets::TicketFilter;
-        let all = syncer
-            .list_filtered(
-                Some("r1"),
-                &TicketFilter {
-                    labels: vec![],
-                    search: None,
-                    include_closed: false,
-                    unlabeled_only: false,
-                },
-            )
-            .unwrap();
-        assert_eq!(all.len(), 1);
-        let mut existing = HashSet::new();
-        existing.insert(all[0].id.clone());
-        let ctx = test_helpers::make_provider_ctx(&conn, &config);
-        let items = TicketsProvider::new(Some("r1".into()))
-            .items(&ctx, None, &HashMap::new(), &existing)
-            .unwrap();
-        assert!(
-            items.is_empty(),
-            "ticket already in existing_set should be skipped"
-        );
     }
 
     #[test]
@@ -211,7 +175,6 @@ mod tests {
             &ctx,
             Some(&scope),
             &HashMap::new(),
-            &HashSet::new(),
         );
         assert!(result.is_err());
     }
@@ -241,7 +204,7 @@ mod tests {
         let scope = ForeachScope::Ticket(TicketScope::TicketId(internal_id.clone()));
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = TicketsProvider::new(Some("r1".into()))
-            .items(&ctx, Some(&scope), &HashMap::new(), &HashSet::new())
+            .items(&ctx, Some(&scope), &HashMap::new())
             .unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].item_id, internal_id);
@@ -267,7 +230,7 @@ mod tests {
         let scope = ForeachScope::Ticket(TicketScope::Label("bug".to_string()));
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = TicketsProvider::new(Some("r1".into()))
-            .items(&ctx, Some(&scope), &HashMap::new(), &HashSet::new())
+            .items(&ctx, Some(&scope), &HashMap::new())
             .unwrap();
         assert_eq!(items.len(), 1, "only the labeled ticket returned");
         assert_eq!(items[0].item_ref, "10");
@@ -296,7 +259,7 @@ mod tests {
         let scope = ForeachScope::Ticket(TicketScope::Unlabeled);
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = TicketsProvider::new(Some("r1".into()))
-            .items(&ctx, Some(&scope), &HashMap::new(), &HashSet::new())
+            .items(&ctx, Some(&scope), &HashMap::new())
             .unwrap();
         assert_eq!(items.len(), 1, "only unlabeled ticket returned");
         assert_eq!(items[0].item_ref, "21");

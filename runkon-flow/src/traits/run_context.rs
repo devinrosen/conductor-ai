@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{atomic::AtomicBool, Arc};
 #[cfg(any(test, feature = "test-utils"))]
 use std::path::PathBuf;
 
@@ -30,6 +31,24 @@ pub trait RunContext: Send + Sync {
     fn get(&self, key: &str) -> Option<String> {
         self.injected_variables().remove(key)
     }
+
+    /// Unique ID for this workflow run (matches the `workflow_runs.id` row).
+    fn run_id(&self) -> &str;
+
+    /// Name of the workflow being executed (matches `WorkflowDef::name`).
+    fn workflow_name(&self) -> &str;
+
+    /// Parent workflow run ID, or `None` for top-level runs.
+    fn parent_run_id(&self) -> Option<&str> {
+        None
+    }
+
+    /// Cooperative shutdown signal shared with the workflow engine.
+    ///
+    /// Harnesses without cancellation support return `None`.
+    fn shutdown(&self) -> Option<&Arc<AtomicBool>> {
+        None
+    }
 }
 
 /// Conventional key constants for values injected by the workflow engine.
@@ -53,10 +72,23 @@ pub mod keys {
 /// Only available when the `test-utils` feature is enabled or in `#[cfg(test)]`
 /// contexts. Do not use in production code.
 #[cfg(any(test, feature = "test-utils"))]
-#[derive(Default)]
 pub struct NoopRunContext {
     vars: HashMap<&'static str, String>,
     working_dir: PathBuf,
+    run_id: String,
+    workflow_name: String,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl Default for NoopRunContext {
+    fn default() -> Self {
+        Self {
+            vars: HashMap::new(),
+            working_dir: PathBuf::from("/tmp"),
+            run_id: "noop-run".to_string(),
+            workflow_name: "noop-wf".to_string(),
+        }
+    }
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -65,13 +97,25 @@ impl NoopRunContext {
     pub fn with_vars(vars: HashMap<&'static str, String>) -> Self {
         Self {
             vars,
-            working_dir: PathBuf::from("/tmp"),
+            ..Self::default()
         }
     }
 
     /// Set a specific working directory.
     pub fn with_working_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.working_dir = dir.into();
+        self
+    }
+
+    /// Override the run ID returned by `run_id()`.
+    pub fn with_run_id(mut self, id: impl Into<String>) -> Self {
+        self.run_id = id.into();
+        self
+    }
+
+    /// Override the workflow name returned by `workflow_name()`.
+    pub fn with_workflow_name(mut self, name: impl Into<String>) -> Self {
+        self.workflow_name = name.into();
         self
     }
 }
@@ -92,5 +136,21 @@ impl RunContext for NoopRunContext {
 
     fn get(&self, key: &str) -> Option<String> {
         self.vars.get(key).cloned()
+    }
+
+    fn run_id(&self) -> &str {
+        &self.run_id
+    }
+
+    fn workflow_name(&self) -> &str {
+        &self.workflow_name
+    }
+
+    fn parent_run_id(&self) -> Option<&str> {
+        None
+    }
+
+    fn shutdown(&self) -> Option<&Arc<AtomicBool>> {
+        None
     }
 }

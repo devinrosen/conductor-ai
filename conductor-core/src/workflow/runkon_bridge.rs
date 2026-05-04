@@ -5,7 +5,7 @@
 //!
 //! All items are `pub(super)` — visible to the parent `workflow` module only.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use runkon_flow::engine_error::EngineError;
@@ -112,7 +112,8 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
 
     fn execute(
         &self,
-        ectx: &runkon_flow::traits::action_executor::ExecutionContext,
+        ctx: &dyn runkon_flow::traits::run_context::RunContext,
+        info: &runkon_flow::traits::action_executor::StepInfo,
         params: &runkon_flow::traits::action_executor::ActionParams,
     ) -> Result<runkon_flow::traits::action_executor::ActionOutput, EngineError> {
         // ClaudeAgentExecutor needs a pre-created agent_runs row ID as `run_id` so
@@ -125,11 +126,11 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             let agent_mgr = crate::agent::AgentManager::new(&conn);
             let child_run = agent_mgr
                 .create_child_run(
-                    ectx.worktree_id.as_deref(),
+                    ctx.get(runkon_flow::traits::run_context::keys::WORKTREE_ID).as_deref(),
                     &format!("Workflow step: {}", params.name),
-                    ectx.model.as_deref(),
-                    &ectx.parent_run_id,
-                    ectx.bot_name.as_deref(),
+                    params.model.as_deref(),
+                    ctx.parent_run_id().unwrap_or(""),
+                    params.bot_name.as_deref(),
                 )
                 .map_err(|e| {
                     EngineError::Workflow(format!(
@@ -138,17 +139,17 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                     ))
                 })?;
 
-            if !ectx.step_id.is_empty() {
+            if !info.step_id.is_empty() {
                 // Best-effort pre-execution link so the TUI can show live agent output
                 // while the step is running. The ActionOutput written by the executor
                 // after execution completes is the authoritative source of child_run_id.
                 if let Err(e) =
-                    crate::workflow::update_step_child_run_id(&conn, &ectx.step_id, &child_run.id)
+                    crate::workflow::update_step_child_run_id(&conn, &info.step_id, &child_run.id)
                 {
                     tracing::warn!(
                         "step '{}' (step_id={}): failed to link child_run_id {}: {e}",
                         params.name,
-                        ectx.step_id,
+                        info.step_id,
                         child_run.id,
                     );
                 }
@@ -157,23 +158,23 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             child_run.id
         };
 
-        // Convert runkon-flow ExecutionContext → conductor-core ExecutionContext,
-        // injecting db_path which exists only in the conductor-core variant.
-        // run_id is the freshly-created agent_run ID (not the workflow step ID).
+        // Assemble conductor-core ExecutionContext from the three-input split:
+        // ctx (RunContext), info (StepInfo), params (ActionParams), plus db_path
+        // from the adapter. run_id is the freshly-created agent_run ID.
         let core_ectx = crate::workflow::action_executor::ExecutionContext {
             run_id: child_run_id.clone(),
-            working_dir: ectx.working_dir.clone(),
-            repo_path: ectx.repo_path.clone(),
+            working_dir: ctx.working_dir().to_path_buf(),
+            repo_path: ctx.get(runkon_flow::traits::run_context::keys::REPO_PATH).unwrap_or_default(),
             db_path: self.db_path.clone(),
-            step_timeout: ectx.step_timeout,
-            shutdown: ectx.shutdown.clone(),
-            model: ectx.model.clone(),
-            bot_name: ectx.bot_name.clone(),
-            plugin_dirs: ectx.plugin_dirs.clone(),
-            workflow_name: ectx.workflow_name.clone(),
-            worktree_id: ectx.worktree_id.clone(),
-            parent_run_id: ectx.parent_run_id.clone(),
-            step_id: ectx.step_id.clone(),
+            step_timeout: info.step_timeout,
+            shutdown: ctx.shutdown().cloned(),
+            model: params.model.clone(),
+            bot_name: params.bot_name.clone(),
+            plugin_dirs: params.plugin_dirs.clone(),
+            workflow_name: ctx.workflow_name().to_string(),
+            worktree_id: ctx.get(runkon_flow::traits::run_context::keys::WORKTREE_ID),
+            parent_run_id: ctx.parent_run_id().unwrap_or("").to_string(),
+            step_id: info.step_id.clone(),
         };
 
         // Convert runkon-flow ActionParams → conductor-core ActionParams.
@@ -226,7 +227,6 @@ fn delegate_items<P: ItemProvider>(
     config: &crate::config::Config,
     scope: Option<&runkon_flow::dsl::ForeachScope>,
     filter: &HashMap<String, String>,
-    existing_set: &HashSet<String>,
     provider: P,
 ) -> Result<Vec<runkon_flow::traits::item_provider::FanOutItem>, EngineError> {
     let guard = conn.lock().map_err(bridge_lock_err)?;
@@ -235,7 +235,7 @@ fn delegate_items<P: ItemProvider>(
         config,
     };
     provider
-        .items(&core_ctx, scope, filter, existing_set)
+        .items(&core_ctx, scope, filter)
         .map(|items: Vec<crate::workflow::item_provider::FanOutItem>| {
             items.into_iter().map(core_fan_out_item_to_rk).collect()
         })
@@ -262,17 +262,16 @@ macro_rules! impl_rk_item_provider_trait {
             }
             fn items(
                 &self,
-                _ctx: &runkon_flow::traits::item_provider::ProviderContext,
+                _ctx: &dyn runkon_flow::traits::run_context::RunContext,
+                _info: &runkon_flow::traits::item_provider::ProviderInfo,
                 scope: Option<&runkon_flow::dsl::ForeachScope>,
                 filter: &HashMap<String, String>,
-                existing_set: &HashSet<String>,
             ) -> Result<Vec<runkon_flow::traits::item_provider::FanOutItem>, EngineError> {
                 delegate_items(
                     &self.conn,
                     &self.config,
                     scope,
                     filter,
-                    existing_set,
                     self.provider(),
                 )
             }
@@ -596,7 +595,6 @@ mod tests {
 
     #[test]
     fn delegate_items_propagates_mutex_poison() {
-        use std::collections::HashSet;
         let conn = Arc::new(Mutex::new(
             rusqlite::Connection::open_in_memory().expect("in-memory db"),
         ));
@@ -614,7 +612,6 @@ mod tests {
             &config,
             None,
             &HashMap::new(),
-            &HashSet::new(),
             crate::workflow::item_provider::repos::ReposProvider,
         );
         match result {

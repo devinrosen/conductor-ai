@@ -81,13 +81,19 @@ pub trait ActionExecutor: Send + Sync {
     fn name(&self) -> &str;
 
     /// Execute the action. The engine calls this when a `call` node is reached.
+    /// Three orthogonal inputs — each has a single reason to change:
+    /// - `ctx`: harness-implemented run context (stable across a run).
+    /// - `info`: engine-populated per call (step identity, timeout).
+    /// - `params`: workflow-config and per-step resolver fields.
+    ///
     /// The original DSL-level call name is available as `params.name`, which
     /// fallback executors use to dispatch internally (e.g., conductor's
     /// `ClaudeAgentExecutor` uses it to look up the agent `.md` file).
     /// Returns structured output that feeds the marker/context system.
     fn execute(
         &self,
-        ectx: &ExecutionContext,
+        ctx: &dyn RunContext,
+        info: &StepInfo,
         params: &ActionParams,
     ) -> Result<ActionOutput, EngineError>;
 
@@ -98,23 +104,35 @@ pub trait ActionExecutor: Send + Sync {
     /// work: conductor's `ClaudeAgentExecutor` kills the subprocess (via PID); an
     /// HTTP-based executor aborts the in-flight request.
     ///
-    /// Well-behaved executors also check `ectx.cancellation.is_cancelled()`
-    /// from inside `execute()` — cooperative cancel is the primary path.
-    /// `cancel()` is the escalation for external work that can't observe
-    /// the cooperative token.
+    /// Well-behaved executors also check `ctx.shutdown()` from inside `execute()`
+    /// — cooperative cancel via the shutdown flag is the primary path.
+    /// `cancel()` is the escalation for external work that can't observe it.
     fn cancel(&self, execution_id: &str) -> Result<(), EngineError> {
         let _ = execution_id;
         Ok(())
     }
 }
 
+/// Engine-populated per dispatch. Contains the step's identity and timeout.
+/// Kept separate from `ActionParams` so engine infrastructure has one reason to
+/// change and workflow config has another.
+pub struct StepInfo {
+    pub step_id: String,
+    pub step_timeout: Duration,
+}
+
 pub struct ActionParams {
     pub name: String,
-    pub inputs: HashMap<String, String>,   // resolved {{variable}} substitutions
+    pub inputs: Arc<HashMap<String, String>>,  // resolved {{variable}} substitutions
     pub retries_remaining: u32,
-    pub prior_context: Option<String>,
+    pub retry_error: Option<String>,
     pub snippets: Vec<String>,             // contents of `with = [...]` snippets
     pub dry_run: bool,
+    pub gate_feedback: Option<String>,
+    pub schema: Option<OutputSchema>,
+    pub model: Option<String>,             // per-step model override
+    pub bot_name: Option<String>,          // executor identity
+    pub plugin_dirs: Vec<String>,          // extra PATH entries for script steps
 }
 
 pub struct ActionOutput {
@@ -163,12 +181,18 @@ pub trait ItemProvider: Send + Sync {
     fn name(&self) -> &str;
 
     /// Collect items to fan out over. Called once at foreach step start.
-    /// Providers that do slow I/O (remote fetch, IMAP scan) should check
-    /// `ectx.cancellation.is_cancelled()` during collection.
+    /// Providers return *all* items unconditionally — the foreach executor
+    /// owns the dedup against already-recorded items (resume safety).
+    /// Three orthogonal inputs:
+    /// - `ctx`: harness-implemented run context.
+    /// - `info`: engine-populated per call (step identity).
+    /// - `scope`: optional DSL scope block (e.g. `scope = { base_branch = "main" }`).
+    /// - `filter`: DSL filter map (e.g. `filter = { status = "failed" }`).
     fn items(
         &self,
-        ectx: &ExecutionContext,
-        scope: &HashMap<String, String>,
+        ctx: &dyn RunContext,
+        info: &ProviderInfo,
+        scope: Option<&ForeachScope>,
         filter: &HashMap<String, String>,
     ) -> Result<Vec<FanOutItem>, EngineError>;
 
@@ -177,6 +201,12 @@ pub trait ItemProvider: Send + Sync {
     fn dependencies(&self, items: &[FanOutItem]) -> Vec<(String, String)> {
         vec![]
     }
+}
+
+/// Engine-populated per foreach call. Kept separate from `StepInfo` so the two
+/// trait surfaces can evolve independently.
+pub struct ProviderInfo {
+    pub step_id: String,
 }
 
 pub struct FanOutItem {
@@ -212,7 +242,7 @@ pub trait GateResolver: Send + Sync {
         &self,
         run_id: &str,
         params: &GateParams,
-        ectx: &ExecutionContext,
+        ctx: &dyn RunContext,
     ) -> Result<GatePoll, EngineError>;
 }
 
@@ -284,6 +314,21 @@ Injected variables available to every step. Replaces the 40+ hardcoded fields in
 
 ```rust
 pub trait RunContext: Send + Sync {
+    /// Stable identifier for this workflow run.
+    fn run_id(&self) -> &str;
+
+    /// Name of the workflow definition being executed.
+    fn workflow_name(&self) -> &str;
+
+    /// Parent run ID when this run was launched as a sub-workflow.
+    /// Returns `None` for top-level runs.
+    fn parent_run_id(&self) -> Option<&str> { None }
+
+    /// Optional shutdown signal. Executors check `flag.load(Ordering::Relaxed)`
+    /// at natural interruption points for cooperative cancellation. Returns `None`
+    /// for harnesses that don't support graceful shutdown.
+    fn shutdown(&self) -> Option<&Arc<AtomicBool>> { None }
+
     /// Variable key-value pairs injected into every step's template substitution.
     /// These are reserved — the engine rejects workflows that define inputs with
     /// the same names.
@@ -310,6 +355,7 @@ pub trait RunContext: Send + Sync {
     /// crates.io. See Open Question #3.
     fn script_env(&self) -> HashMap<String, String> { HashMap::new() }
 }
+
 ```
 
 **Conductor's implementation:** `WorktreeRunContext` — injects `ticket_id`, `repo_path`,
@@ -662,34 +708,32 @@ reach whatever executor code is currently running.
 
 ### Model — cooperative + advisory preempt
 
-- **Cooperative token** is the primary mechanism. Executors check
-  `ectx.cancellation.is_cancelled()` at natural interruption points and exit
-  early.
+- **Cooperative shutdown flag** is the primary mechanism. Executors check
+  `ctx.shutdown().map_or(false, |f| f.load(Ordering::Relaxed))` at natural
+  interruption points and exit early.
 - **Advisory `ActionExecutor::cancel(execution_id)`** is the escalation for
-  external work that can't observe the token (Claude subprocess already in
+  external work that can't observe the flag (Claude subprocess already in
   flight, HTTP call mid-request). The engine fires `cancel()` and moves on —
   it does not wait for the executor to finish. Executors use this to kill
   subprocesses, abort connections, etc.
 
-### `ExecutionContext` bundling struct
+### Three-input executor shape
 
-Runtime concerns the engine passes through to executors live on a single
-struct rather than being scattered across params types:
+Executor trait methods receive three orthogonal inputs rather than a single
+bundled context struct. Each input has a single reason to change:
 
 ```rust
-pub struct ExecutionContext<'a> {
-    pub run: &'a dyn RunContext,
-    pub cancellation: &'a CancellationToken,
-    // Future: tracing span, feature flags, request-scoped telemetry, etc.
-}
+fn execute(
+    &self,
+    ctx: &dyn RunContext,   // harness-implemented, stable across a run
+    info: &StepInfo,        // engine-populated per call: step_id, step_timeout
+    params: &ActionParams,  // workflow config + per-step resolver fields
+) -> Result<ActionOutput, EngineError>;
 ```
 
-Every executor trait method takes `&ExecutionContext` instead of `&dyn
-RunContext` directly. Note: `RunContext` (the trait) and `ExecutionContext`
-(the struct) are distinct types — the struct holds a reference to a trait
-object. The earlier naming question (Open Q #7) resolved the *trait* name;
-`ExecutionContext` claims the struct name because `ExecutionState` is being
-removed in Step 1.1b.
+The shutdown signal lives on `RunContext::shutdown()` so every executor can
+reach it via `ctx` without the engine threading it separately through
+`StepInfo` on every call. Harnesses without cancellation return `None`.
 
 ### `CancellationToken`
 
@@ -781,15 +825,23 @@ out of scope.
 
 ### Shipping layers
 
-- **Layer A (Phase 1):** Types — `ExecutionContext`, `CancellationToken`,
-  `CancellationReason`. Trait signatures updated to take `&ExecutionContext`.
-  Cooperative checks added in conductor executors where cheap. This shapes
-  Steps 1.2, 1.3, 1.4.
-- **Layer B (Phase 2):** `FlowEngine::cancel_run()`, in-memory token
-  registry, parallel fail_fast wiring, step-level timeout → `token.cancel()`,
-  `ActionExecutor::cancel()` escalation, cross-process DB-backed propagation,
-  `RunCancelled` event emission, `ConductorClaudeAgentExecutor::cancel()`
-  killing the subprocess (via PID).
+- **Layer A (Phase 1 — shipped in #2850):** Three-input trait shape
+  (`&dyn RunContext`, `&StepInfo`, `&ActionParams` for executors;
+  `&dyn RunContext`, `&ProviderInfo`, scope, filter for providers).
+  Shutdown signal via `RunContext::shutdown() -> Option<&Arc<AtomicBool>>`.
+  Cooperative checks added in conductor executors where cheap.
+- **Layer B (Phase 2):** `FlowEngine::cancel_run()`, in-memory
+  `CancellationToken` registry, parallel fail_fast wiring, step-level
+  timeout, `ActionExecutor::cancel()` escalation, cross-process DB-backed
+  propagation, `RunCancelled` event emission,
+  `ConductorClaudeAgentExecutor::cancel()` killing the subprocess (via PID).
+
+> **Freeze carve-out:** the v0.12.x trait-surface freeze admits
+> harness-neutral lifecycle additions. The `RunContext::run_id()`,
+> `workflow_name()`, `parent_run_id()`, and `shutdown()` methods added in
+> #2850, and the `StepInfo`/`ProviderInfo` structs, all fall within this
+> carve-out — they carry no conductor-specific types and impose only
+> `Option`-returning defaults on existing `RunContext` impls.
 
 ---
 
@@ -808,8 +860,10 @@ out of scope.
   `TriggerSource`, `RunContext`, `WorkflowPersistence`)
 - `EventSink` trait + `EngineEvent` / `EngineEventData` types (ships no default
   sink — hosts register their own)
-- `ExecutionContext` struct, `CancellationToken`, `CancellationReason` enum
-- `FlowEngine::cancel_run(run_id, reason)` external cancellation API
+- `StepInfo` struct (step_id, step_timeout) — engine-populated per executor call
+- `ProviderInfo` struct (step_id) — engine-populated per provider call
+- `CancellationToken`, `CancellationReason` enum (Phase 2)
+- `FlowEngine::cancel_run(run_id, reason)` external cancellation API (Phase 2)
 - `FlowEngine` builder
 
 ### `conductor-core` (conductor's harness layer)
