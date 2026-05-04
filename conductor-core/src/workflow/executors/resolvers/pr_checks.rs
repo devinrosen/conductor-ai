@@ -1,12 +1,11 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::error::Result;
+use runkon_flow::engine_error::EngineError;
+use runkon_flow::traits::gate_resolver::{GatePoll, GateParams, GateResolver};
+use runkon_flow::traits::run_context::RunContext;
 
-use crate::workflow::executors::gate_resolver::{
-    GateContext, GateParams, GatePoll, GateResolver, GitHubTokenCache,
-};
-
-use super::GhGateCommon;
+use super::{GhGateCommon, GitHubTokenCache};
 
 pub(in crate::workflow) struct PrChecksGateResolver {
     common: GhGateCommon,
@@ -17,9 +16,11 @@ impl PrChecksGateResolver {
         working_dir: String,
         default_bot_name: Option<String>,
         token_cache: Arc<GitHubTokenCache>,
+        config: crate::config::Config,
+        db_path: PathBuf,
     ) -> Self {
         Self {
-            common: GhGateCommon::new(working_dir, default_bot_name, token_cache),
+            common: GhGateCommon::new(working_dir, default_bot_name, token_cache, config, db_path),
         }
     }
 }
@@ -55,11 +56,15 @@ impl GateResolver for PrChecksGateResolver {
         "pr_checks"
     }
 
-    fn poll(&self, _run_id: &str, params: &GateParams, ctx: &GateContext<'_>) -> Result<GatePoll> {
+    fn poll(
+        &self,
+        _run_id: &str,
+        params: &GateParams,
+        _ctx: &dyn RunContext,
+    ) -> Result<GatePoll, EngineError> {
         if let Some(val) = self.common.run_gh(
             &["pr", "checks", "--json", "state"],
             params.bot_name.as_deref(),
-            ctx,
         ) {
             return Ok(evaluate_checks(&val, &params.gate_name));
         }

@@ -1,12 +1,12 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::error::Result;
+use runkon_flow::dsl::ApprovalMode;
+use runkon_flow::engine_error::EngineError;
+use runkon_flow::traits::gate_resolver::{GatePoll, GateParams, GateResolver};
+use runkon_flow::traits::run_context::RunContext;
 
-use crate::workflow::executors::gate_resolver::{
-    ApprovalMode, GateContext, GateParams, GatePoll, GateResolver, GitHubTokenCache,
-};
-
-use super::GhGateCommon;
+use super::{GhGateCommon, GitHubTokenCache};
 
 pub(in crate::workflow) struct PrApprovalGateResolver {
     common: GhGateCommon,
@@ -17,9 +17,11 @@ impl PrApprovalGateResolver {
         working_dir: String,
         default_bot_name: Option<String>,
         token_cache: Arc<GitHubTokenCache>,
+        config: crate::config::Config,
+        db_path: PathBuf,
     ) -> Self {
         Self {
-            common: GhGateCommon::new(working_dir, default_bot_name, token_cache),
+            common: GhGateCommon::new(working_dir, default_bot_name, token_cache, config, db_path),
         }
     }
 }
@@ -84,12 +86,17 @@ impl GateResolver for PrApprovalGateResolver {
         "pr_approval"
     }
 
-    fn poll(&self, _run_id: &str, params: &GateParams, ctx: &GateContext<'_>) -> Result<GatePoll> {
+    fn poll(
+        &self,
+        _run_id: &str,
+        params: &GateParams,
+        _ctx: &dyn RunContext,
+    ) -> Result<GatePoll, EngineError> {
         let args = match params.approval_mode {
             ApprovalMode::MinApprovals => ["pr", "view", "--json", "reviews,author"].as_slice(),
             ApprovalMode::ReviewDecision => ["pr", "view", "--json", "reviewDecision"].as_slice(),
         };
-        if let Some(val) = self.common.run_gh(args, params.bot_name.as_deref(), ctx) {
+        if let Some(val) = self.common.run_gh(args, params.bot_name.as_deref()) {
             return Ok(evaluate_approval(&val, params));
         }
         Ok(GatePoll::Pending)
@@ -100,6 +107,7 @@ impl GateResolver for PrApprovalGateResolver {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::HashMap;
 
     fn make_params(mode: ApprovalMode, min_approvals: u32) -> GateParams {
         GateParams {
@@ -107,7 +115,7 @@ mod tests {
             prompt: None,
             min_approvals,
             approval_mode: mode,
-            options: vec![],
+            options: HashMap::new(),
             timeout_secs: 60,
             bot_name: None,
             step_id: "step-1".into(),

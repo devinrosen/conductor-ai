@@ -756,7 +756,7 @@ mod tests {
         call_node, make_def, make_params, make_run_ctx, make_step_info, ForwardSink, VecSink,
     };
     use crate::traits::action_executor::{ActionOutput, ActionParams, StepInfo};
-    use crate::traits::gate_resolver::{GateContext, GateParams, GatePoll};
+    use crate::traits::gate_resolver::{GateParams, GatePoll};
     use crate::traits::item_provider::{FanOutItem, ProviderInfo};
     use crate::traits::run_context::RunContext;
     use crate::workflow_resolver_memory::InMemoryWorkflowResolver;
@@ -897,7 +897,7 @@ mod tests {
             &self,
             _run_id: &str,
             _params: &GateParams,
-            _ctx: &GateContext,
+            _ctx: &dyn RunContext,
         ) -> Result<GatePoll, EngineError> {
             Ok(GatePoll::Approved(None))
         }

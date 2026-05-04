@@ -345,18 +345,39 @@ fn build_flow_engine(
     db: &std::path::Path,
     workflow_name: &str,
 ) -> Result<runkon_flow::FlowEngine> {
-    super::runkon_gate_bridge::register_rk_gate_resolvers(
-        runkon_flow::FlowEngineBuilder::new().with_event_sinks(event_sinks),
-        Arc::clone(persistence),
-        working_dir,
-        default_bot_name,
-        config,
-        db.to_path_buf(),
-    )
-    .build()
-    .map_err(|e| {
-        ConductorError::Workflow(format!("failed to build engine for '{workflow_name}': {e}"))
-    })
+    use super::executors::resolvers::{
+        GitHubTokenCache, HumanApprovalGateResolver, HumanGateKind, PrApprovalGateResolver,
+        PrChecksGateResolver,
+    };
+    let token_cache = Arc::new(GitHubTokenCache::new(None));
+    runkon_flow::FlowEngineBuilder::new()
+        .with_event_sinks(event_sinks)
+        .gate_resolver(HumanApprovalGateResolver::new(
+            Arc::clone(persistence),
+            HumanGateKind::HumanApproval,
+        ))
+        .gate_resolver(HumanApprovalGateResolver::new(
+            Arc::clone(persistence),
+            HumanGateKind::HumanReview,
+        ))
+        .gate_resolver(PrApprovalGateResolver::new(
+            working_dir.clone(),
+            default_bot_name.clone(),
+            Arc::clone(&token_cache),
+            config.clone(),
+            db.to_path_buf(),
+        ))
+        .gate_resolver(PrChecksGateResolver::new(
+            working_dir,
+            default_bot_name,
+            token_cache,
+            config,
+            db.to_path_buf(),
+        ))
+        .build()
+        .map_err(|e| {
+            ConductorError::Workflow(format!("failed to build engine for '{workflow_name}': {e}"))
+        })
 }
 
 /// Map a [`runkon_flow::engine_error::EngineError`] to [`ConductorError`].
