@@ -8,6 +8,9 @@ impl App {
             WorktreeDetailFocus::LogPanel => {
                 self.handle_copy_last_code_block();
             }
+            WorktreeDetailFocus::PromptInput => {
+                // No copy action for the prompt input panel.
+            }
             WorktreeDetailFocus::InfoPanel => {
                 let wt = self
                     .state

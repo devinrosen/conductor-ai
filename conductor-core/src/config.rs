@@ -293,6 +293,11 @@ pub struct GeneralConfig {
     /// into agent prompts. Defaults to true; set to false to disable.
     #[serde(default = "default_true")]
     pub inject_startup_context: bool,
+    /// Whether to auto-use the suggested model for agent runs instead of showing
+    /// the model picker modal. When enabled, skips the picker and uses the smart
+    /// suggestion based on prompt content. Defaults to false.
+    #[serde(default)]
+    pub auto_use_suggested_model: bool,
     /// Automatically detect merged PRs and clean up worktrees (delete local/remote branch,
     /// remove worktree directory, auto-close orphaned features). Defaults to true.
     #[serde(default = "default_true")]
@@ -363,6 +368,7 @@ impl Default for GeneralConfig {
             agent_permission_mode: AgentPermissionMode::default(),
             model: None,
             inject_startup_context: true,
+            auto_use_suggested_model: false,
             auto_cleanup_merged_branches: true,
             stale_workflow_minutes: default_stale_workflow_minutes(),
             claude_config_dir: None,

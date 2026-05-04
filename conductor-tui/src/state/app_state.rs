@@ -18,6 +18,14 @@ use super::{
 };
 use crate::theme::Theme;
 
+/// Build a fresh prompt textarea with the shared style and placeholder text.
+pub(crate) fn make_prompt_textarea() -> tui_textarea::TextArea<'static> {
+    let mut ta = tui_textarea::TextArea::default();
+    ta.set_cursor_line_style(ratatui::style::Style::default());
+    ta.set_placeholder_text("Type a prompt… (Enter to send, Tab/Esc to leave)");
+    ta
+}
+
 pub struct AppState {
     pub view: View,
     /// The view the user was in before entering WorkflowRunDetail (for back navigation).
@@ -60,10 +68,14 @@ pub struct AppState {
     pub agent_list_state: RefCell<ListState>,
     /// Repo agent activity list navigation (repo detail view)
     pub repo_agent_list_state: RefCell<ListState>,
-    // WorktreeDetail two-panel focus model
+    // WorktreeDetail three-panel focus model
     pub worktree_detail_focus: super::WorktreeDetailFocus,
     /// Selected row index in the WorktreeDetail info panel (for j/k navigation and y/o actions).
     pub worktree_detail_selected_row: usize,
+    /// Persistent prompt input box in the WorktreeDetail Agent Activity pane.
+    pub prompt_textarea: tui_textarea::TextArea<'static>,
+    /// Persistent prompt input box in the RepoDetail Repo Agent pane.
+    pub repo_agent_prompt_textarea: tui_textarea::TextArea<'static>,
 
     /// Selected row index in the RepoDetail info panel (for j/k navigation and o actions).
     pub repo_detail_info_row: usize,
@@ -229,6 +241,8 @@ impl AppState {
             repo_agent_list_state: RefCell::new(ListState::default()),
             worktree_detail_focus: super::WorktreeDetailFocus::InfoPanel,
             worktree_detail_selected_row: 0,
+            prompt_textarea: make_prompt_textarea(),
+            repo_agent_prompt_textarea: make_prompt_textarea(),
             repo_detail_info_row: 0,
             filter: FilterState::default(),
             detail_ticket_filter: FilterState::default(),
@@ -481,6 +495,8 @@ impl AppState {
                     let idx = self.repo_agent_list_state.borrow().selected().unwrap_or(0);
                     (idx, self.repo_agent_activity_len())
                 }
+                // Prompt input owns its own cursor — j/k navigation is N/A here.
+                RepoDetailFocus::RepoAgentPromptInput => (0, 0),
             },
             View::WorktreeDetail => {
                 let idx = self.agent_list_state.borrow().selected().unwrap_or(0);
@@ -526,6 +542,7 @@ impl AppState {
                 RepoDetailFocus::RepoAgent => {
                     self.repo_agent_list_state.borrow_mut().select(Some(index));
                 }
+                RepoDetailFocus::RepoAgentPromptInput => {}
             },
             View::WorktreeDetail => {
                 self.agent_list_state.borrow_mut().select(Some(index));

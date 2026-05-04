@@ -590,23 +590,6 @@ impl App {
                 };
                 self.do_dispatch_workflow(action.target, action.workflow_def, inputs, model);
             }
-            InputAction::RepoAgentPrompt {
-                repo_id,
-                repo_path,
-                repo_slug,
-                resume_session_id,
-            } => {
-                if value.is_empty() {
-                    return;
-                }
-                self.start_repo_agent_headless(
-                    value,
-                    repo_id,
-                    repo_path,
-                    repo_slug,
-                    resume_session_id,
-                );
-            }
             InputAction::SetWorktreeModel {
                 worktree_id,
                 repo_slug,

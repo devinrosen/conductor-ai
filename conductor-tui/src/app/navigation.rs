@@ -223,7 +223,7 @@ impl App {
                     self.next_workflow_run_detail_focus();
                 }
                 View::WorktreeDetail => {
-                    self.state.worktree_detail_focus = self.state.worktree_detail_focus.toggle();
+                    self.state.worktree_detail_focus = self.state.worktree_detail_focus.next();
                 }
                 View::WorkflowDefDetail => {} // single panel — Tab is a no-op
             },
@@ -254,7 +254,7 @@ impl App {
                     self.prev_workflow_run_detail_focus();
                 }
                 View::WorktreeDetail => {
-                    self.state.worktree_detail_focus = self.state.worktree_detail_focus.toggle();
+                    self.state.worktree_detail_focus = self.state.worktree_detail_focus.prev();
                 }
                 View::WorkflowDefDetail => {} // single panel — Tab is a no-op
             },
@@ -589,6 +589,7 @@ impl App {
                         .borrow_mut()
                         .select_previous();
                 }
+                RepoDetailFocus::RepoAgentPromptInput => {}
             },
             View::WorkflowRunDetail => match self.state.workflow_run_detail_focus {
                 WorkflowRunDetailFocus::Info => {
@@ -761,6 +762,7 @@ impl App {
                         self.state.repo_agent_list_state.borrow_mut().select_next();
                     }
                 }
+                RepoDetailFocus::RepoAgentPromptInput => {}
             },
             View::WorkflowRunDetail => match self.state.workflow_run_detail_focus {
                 WorkflowRunDetailFocus::Info => {
@@ -942,6 +944,9 @@ impl App {
                 RepoDetailFocus::RepoAgent => {
                     // Enter on repo agent event opens detail modal
                     self.handle_expand_repo_agent_event();
+                }
+                RepoDetailFocus::RepoAgentPromptInput => {
+                    // Enter is captured by the textarea — see input.rs.
                 }
             },
             View::WorkflowRunDetail => {
@@ -1325,7 +1330,7 @@ mod tests {
     }
 
     #[test]
-    fn next_panel_worktree_detail_toggles() {
+    fn next_panel_worktree_detail_cycles_forward() {
         let mut app = make_test_app();
         app.state.view = View::WorktreeDetail;
         app.state.column_focus = ColumnFocus::Content;
@@ -1336,6 +1341,34 @@ mod tests {
             WorktreeDetailFocus::LogPanel
         );
         app.next_panel();
+        assert_eq!(
+            app.state.worktree_detail_focus,
+            WorktreeDetailFocus::PromptInput
+        );
+        app.next_panel();
+        assert_eq!(
+            app.state.worktree_detail_focus,
+            WorktreeDetailFocus::InfoPanel
+        );
+    }
+
+    #[test]
+    fn prev_panel_worktree_detail_cycles_backward() {
+        let mut app = make_test_app();
+        app.state.view = View::WorktreeDetail;
+        app.state.column_focus = ColumnFocus::Content;
+        app.state.worktree_detail_focus = WorktreeDetailFocus::InfoPanel;
+        app.prev_panel();
+        assert_eq!(
+            app.state.worktree_detail_focus,
+            WorktreeDetailFocus::PromptInput
+        );
+        app.prev_panel();
+        assert_eq!(
+            app.state.worktree_detail_focus,
+            WorktreeDetailFocus::LogPanel
+        );
+        app.prev_panel();
         assert_eq!(
             app.state.worktree_detail_focus,
             WorktreeDetailFocus::InfoPanel

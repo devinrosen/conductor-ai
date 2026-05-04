@@ -62,18 +62,24 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
     };
     let pr_height = (pr_visual_rows + 2).max(3).min(area.height / 4);
 
-    // Repo Agent pane: show if there are any repo agent events or a latest run
+    // Repo Agent pane: always shown so the persistent prompt strip is reachable.
+    // Activity area + 3-row prompt strip below it.
     let has_repo_agent = state
         .selected_repo_id
         .as_ref()
         .and_then(|id| state.data.latest_repo_agent_runs.get(id))
         .is_some();
+    const PROMPT_STRIP_ROWS: u16 = 3;
     let repo_agent_height = if has_repo_agent {
-        // Status line + some events, capped at 1/4 of height
+        // Status line + some events, capped at 1/4 of height; plus prompt strip.
         let event_rows = state.data.repo_agent_activity_len() as u16;
-        (event_rows + 4).max(5).min(area.height / 4)
+        (event_rows + 4)
+            .max(5)
+            .min(area.height / 4)
+            .saturating_add(PROMPT_STRIP_ROWS)
     } else {
-        3 // minimal empty pane
+        // Minimal activity placeholder (3) + prompt strip (3).
+        3 + PROMPT_STRIP_ROWS
     };
 
     // Layout: Info | Worktrees | PRs | Tickets | RepoAgent
@@ -511,6 +517,16 @@ fn event_style(kind: &str, theme: &crate::theme::Theme) -> Style {
 }
 
 fn render_repo_agent_pane(frame: &mut Frame, area: Rect, state: &AppState) {
+    // Split: activity area (fills) + 3-row prompt input strip at the bottom.
+    let panes = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(3)])
+        .split(area);
+    render_repo_agent_activity(frame, panes[0], state);
+    render_repo_agent_prompt_input(frame, panes[1], state);
+}
+
+fn render_repo_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
     let agent_focused = state.column_focus == ColumnFocus::Content
         && state.repo_detail_focus == RepoDetailFocus::RepoAgent;
     let border_color = if agent_focused {
@@ -529,14 +545,12 @@ fn render_repo_agent_pane(frame: &mut Frame, area: Rect, state: &AppState) {
         if let Some(run) = latest_run {
             use conductor_core::agent::AgentRunStatus;
             match run.status {
-                AgentRunStatus::Running => " Repo Agent  p=prompt x=stop ",
-                AgentRunStatus::WaitingForFeedback => {
-                    " Repo Agent  p=prompt f=respond F=dismiss x=stop "
-                }
-                _ => " Repo Agent  p=prompt ",
+                AgentRunStatus::Running => " Repo Agent  x=stop ",
+                AgentRunStatus::WaitingForFeedback => " Repo Agent  f=respond F=dismiss x=stop ",
+                _ => " Repo Agent ",
             }
         } else {
-            " Repo Agent  p=prompt "
+            " Repo Agent "
         }
     } else {
         " Repo Agent "
@@ -550,7 +564,7 @@ fn render_repo_agent_pane(frame: &mut Frame, area: Rect, state: &AppState) {
     // If no run exists, show empty placeholder
     let Some(run) = latest_run else {
         let empty = Paragraph::new(Span::styled(
-            "No repo agent activity — press p to prompt",
+            "No repo agent activity",
             Style::default().fg(state.theme.label_secondary),
         ))
         .block(activity_block);
@@ -636,6 +650,26 @@ fn render_repo_agent_pane(frame: &mut Frame, area: Rect, state: &AppState) {
         pane_layout[1],
         &mut state.repo_agent_list_state.borrow_mut(),
     );
+}
+
+fn render_repo_agent_prompt_input(frame: &mut Frame, area: Rect, state: &AppState) {
+    let is_focused = state.column_focus == ColumnFocus::Content
+        && state.repo_detail_focus == RepoDetailFocus::RepoAgentPromptInput;
+
+    let border_color = if is_focused {
+        state.theme.border_focused
+    } else {
+        state.theme.border_inactive
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+        .title(" Prompt ");
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    frame.render_widget(&state.repo_agent_prompt_textarea, inner);
 }
 
 fn render_repo_agent_status(
