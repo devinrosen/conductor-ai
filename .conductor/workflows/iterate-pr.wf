@@ -24,13 +24,19 @@ workflow iterate-pr {
     }
 
     if review-aggregator.has_blocking_findings {
-      call address-reviews {
+      call triage-reviews {
         as = "developer"
       }
-      script fmt-fix {
-        run = ".conductor/scripts/fmt-fix.sh"
+
+      if triage-reviews.has_to_address {
+        call address-reviews {
+          as = "developer"
+        }
+        script fmt-fix {
+          run = ".conductor/scripts/fmt-fix.sh"
+        }
+        call workflow lint-fix
       }
-      call workflow lint-fix
     }
 
     script push {
