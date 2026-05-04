@@ -423,9 +423,14 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
     ) -> runkon_flow::engine_error::Result<runkon_flow::types::WorkflowResult> {
         // Load the real workflow definition from disk. The runner resolves the
         // actual definition by name from the worktree/repo .conductor/workflows/ directory.
+        let parent_working_dir = parent_ctx.run_ctx.working_dir_str();
+        let parent_repo_path = parent_ctx
+            .run_ctx
+            .get(runkon_flow::traits::run_context::keys::REPO_PATH)
+            .unwrap_or_default();
         let core_def = runkon_flow::dsl::load_workflow_by_name(
-            &parent_ctx.worktree_ctx.working_dir,
-            &parent_ctx.worktree_ctx.repo_path,
+            &parent_working_dir,
+            &parent_repo_path,
             workflow_name,
         )
         .map_err(|e| {
@@ -446,9 +451,11 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         let standalone_params = crate::workflow::types::WorkflowExecStandalone {
             config: self.config.clone(),
             workflow: core_def,
-            worktree_id: parent_ctx.worktree_ctx.worktree_id.clone(),
-            working_dir: parent_ctx.worktree_ctx.working_dir.clone(),
-            repo_path: parent_ctx.worktree_ctx.repo_path.clone(),
+            worktree_id: parent_ctx
+                .run_ctx
+                .get(runkon_flow::traits::run_context::keys::WORKTREE_ID),
+            working_dir: parent_working_dir,
+            repo_path: parent_repo_path,
             ticket_id: parent_ctx.inputs.get("ticket_id").cloned(),
             repo_id: parent_ctx.inputs.get("repo_id").cloned(),
             model: parent_ctx.model.clone(),
@@ -459,7 +466,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             triggered_by_hook: parent_ctx.triggered_by_hook,
             conductor_bin_dir: None,
             force: false,
-            extra_plugin_dirs: parent_ctx.worktree_ctx.extra_plugin_dirs.clone(),
+            extra_plugin_dirs: parent_ctx.extra_plugin_dirs.clone(),
             db_path: Some(self.db_path.clone()),
             parent_workflow_run_id: Some(parent_ctx.workflow_run_id.clone()),
             depth: params.depth,
@@ -698,14 +705,9 @@ mod tests {
         ]);
 
         let parent_ctx = ChildWorkflowContext {
-            worktree_ctx: runkon_flow::engine::WorktreeContext {
-                worktree_id: None,
-                working_dir: String::new(),
-                repo_path: String::new(),
-                ticket_id: None,
-                repo_id: None,
-                extra_plugin_dirs: vec![],
-            },
+            run_ctx: std::sync::Arc::new(runkon_flow::traits::run_context::NoopRunContext::default())
+                as std::sync::Arc<dyn runkon_flow::traits::run_context::RunContext>,
+            extra_plugin_dirs: vec![],
             workflow_run_id: "parent-run".to_string(),
             model: None,
             target_label: None,
@@ -739,14 +741,9 @@ mod tests {
         );
 
         let parent_ctx = ChildWorkflowContext {
-            worktree_ctx: runkon_flow::engine::WorktreeContext {
-                worktree_id: None,
-                working_dir: String::new(),
-                repo_path: String::new(),
-                ticket_id: None,
-                repo_id: None,
-                extra_plugin_dirs: vec![],
-            },
+            run_ctx: std::sync::Arc::new(runkon_flow::traits::run_context::NoopRunContext::default())
+                as std::sync::Arc<dyn runkon_flow::traits::run_context::RunContext>,
+            extra_plugin_dirs: vec![],
             workflow_run_id: "parent-run".to_string(),
             model: None,
             target_label: None,

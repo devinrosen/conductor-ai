@@ -108,9 +108,10 @@ pub fn make_test_execution_state(
     workflow_run_id: String,
 ) -> crate::engine::ExecutionState {
     use crate::cancellation::CancellationToken;
-    use crate::engine::{ExecutionState, WorktreeContext};
+    use crate::engine::ExecutionState;
     use crate::traits::action_executor::ActionRegistry;
     use crate::traits::item_provider::ItemProviderRegistry;
+    use crate::traits::run_context::NoopRunContext;
     use crate::traits::script_env_provider::NoOpScriptEnvProvider;
     use crate::types::WorkflowExecConfig;
 
@@ -120,14 +121,9 @@ pub fn make_test_execution_state(
         script_env_provider: Arc::new(NoOpScriptEnvProvider),
         workflow_run_id,
         workflow_name: "wf".into(),
-        worktree_ctx: WorktreeContext {
-            worktree_id: None,
-            working_dir: String::new(),
-            repo_path: String::new(),
-            ticket_id: None,
-            repo_id: None,
-            extra_plugin_dirs: vec![],
-        },
+        run_ctx: Arc::new(NoopRunContext::default())
+            as Arc<dyn crate::traits::run_context::RunContext>,
+        extra_plugin_dirs: vec![],
         model: None,
         exec_config: WorkflowExecConfig::default(),
         inputs: HashMap::new(),

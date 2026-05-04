@@ -13,21 +13,11 @@ use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::traits::action_executor::ActionRegistry;
 use crate::traits::item_provider::ItemProviderRegistry;
 use crate::traits::persistence::WorkflowPersistence;
+use crate::traits::run_context::RunContext;
 use crate::traits::script_env_provider::ScriptEnvProvider;
 use crate::types::{
     ContextEntry, StepKey, StepResult, WorkflowExecConfig, WorkflowResult, WorkflowRunStep,
 };
-
-/// Domain-identity context for a single workflow execution.
-#[derive(Clone)]
-pub struct WorktreeContext {
-    pub worktree_id: Option<String>,
-    pub working_dir: String,
-    pub repo_path: String,
-    pub ticket_id: Option<String>,
-    pub repo_id: Option<String>,
-    pub extra_plugin_dirs: Vec<String>,
-}
 
 /// Pre-loaded context for resuming a workflow run.
 #[derive(Clone)]
@@ -44,7 +34,13 @@ pub struct ExecutionState {
     pub script_env_provider: Arc<dyn ScriptEnvProvider>,
     pub workflow_run_id: String,
     pub workflow_name: String,
-    pub worktree_ctx: WorktreeContext,
+    /// Shared per-run context carrying injected variables and working directory.
+    /// `Arc` (not `Box`) because `ExecutionState` derives `Clone` for `fork_child`.
+    pub run_ctx: Arc<dyn RunContext>,
+    /// Extra plugin directories for the executor. Not part of `RunContext`
+    /// because `Vec<String>` doesn't fit the `HashMap<&'static str, String>`
+    /// injected-variables contract, and only executor code reads it.
+    pub extra_plugin_dirs: Vec<String>,
     pub model: Option<String>,
     pub exec_config: WorkflowExecConfig,
     pub inputs: HashMap<String, String>,
@@ -117,7 +113,8 @@ pub struct ChildWorkflowInput {
 /// run. Build via [`ExecutionState::child_workflow_context`].
 #[derive(Clone)]
 pub struct ChildWorkflowContext {
-    pub worktree_ctx: WorktreeContext,
+    pub run_ctx: Arc<dyn RunContext>,
+    pub extra_plugin_dirs: Vec<String>,
     pub workflow_run_id: String,
     pub model: Option<String>,
     pub target_label: Option<String>,
@@ -233,7 +230,8 @@ impl ExecutionState {
     /// implementation needs to spawn a child run.
     pub fn child_workflow_context(&self) -> ChildWorkflowContext {
         ChildWorkflowContext {
-            worktree_ctx: self.worktree_ctx.clone(),
+            run_ctx: Arc::clone(&self.run_ctx),
+            extra_plugin_dirs: self.extra_plugin_dirs.clone(),
             workflow_run_id: self.workflow_run_id.clone(),
             model: self.model.clone(),
             target_label: self.target_label.clone(),
@@ -339,11 +337,14 @@ impl ExecutionState {
 /// Resolve a schema by name using the schema_resolver callback.
 pub fn resolve_schema(state: &ExecutionState, name: &str) -> Result<OutputSchema> {
     match &state.schema_resolver {
-        Some(resolver) => resolver(
-            &state.worktree_ctx.working_dir,
-            &state.worktree_ctx.repo_path,
-            name,
-        ),
+        Some(resolver) => {
+            let working_dir = state.run_ctx.working_dir_str();
+            let repo_path = state
+                .run_ctx
+                .get(crate::traits::run_context::keys::REPO_PATH)
+                .unwrap_or_default();
+            resolver(&working_dir, &repo_path, name)
+        }
         None => Err(EngineError::Workflow(format!(
             "No schema resolver configured — cannot load schema '{name}'"
         ))),
@@ -360,7 +361,7 @@ pub fn emit_event(state: &ExecutionState, event: EngineEvent) {
 
 /// Input keys that the workflow engine injects automatically from the run context.
 ///
-/// These keys are populated from `WorktreeContext` fields at execution time; callers
+/// These keys are populated from the run context at execution time; callers
 /// should treat them as read-only and avoid defining workflow inputs with these names.
 pub const ENGINE_INJECTED_KEYS: &[&str] = &[
     "ticket_id",
@@ -545,7 +546,9 @@ pub fn run_workflow_engine(
 
     Ok(WorkflowResult {
         workflow_run_id: wf_run_id,
-        worktree_id: state.worktree_ctx.worktree_id.clone(),
+        worktree_id: state
+            .run_ctx
+            .get(crate::traits::run_context::keys::WORKTREE_ID),
         workflow_name: workflow.name.clone(),
         all_succeeded: state.all_succeeded,
         total_cost: state.total_cost,
@@ -1092,14 +1095,30 @@ mod tests {
             script_env_provider: Arc::new(NoOpScriptEnvProvider),
             workflow_run_id: "run-1".to_string(),
             workflow_name: "wf".to_string(),
-            worktree_ctx: WorktreeContext {
-                worktree_id: Some("wt".to_string()),
-                working_dir: "/tmp".to_string(),
-                repo_path: "/repo".to_string(),
-                ticket_id: Some("TICK-1".to_string()),
-                repo_id: Some("repo-1".to_string()),
-                extra_plugin_dirs: vec!["plugins".to_string()],
+            run_ctx: {
+                let mut vars = std::collections::HashMap::new();
+                vars.insert(
+                    crate::traits::run_context::keys::WORKTREE_ID,
+                    "wt".to_string(),
+                );
+                vars.insert(
+                    crate::traits::run_context::keys::REPO_PATH,
+                    "/repo".to_string(),
+                );
+                vars.insert(
+                    crate::traits::run_context::keys::TICKET_ID,
+                    "TICK-1".to_string(),
+                );
+                vars.insert(
+                    crate::traits::run_context::keys::REPO_ID,
+                    "repo-1".to_string(),
+                );
+                Arc::new(
+                    crate::traits::run_context::NoopRunContext::with_vars(vars)
+                        .with_working_dir("/tmp"),
+                ) as Arc<dyn RunContext>
             },
+            extra_plugin_dirs: vec!["plugins".to_string()],
             model: Some("gpt-4".to_string()),
             exec_config: WorkflowExecConfig::default(),
             inputs: {
@@ -1155,7 +1174,7 @@ mod tests {
         // Shared config cloned
         assert_eq!(child.workflow_run_id, "run-1");
         assert_eq!(child.workflow_name, "wf");
-        assert_eq!(child.worktree_ctx.working_dir, "/tmp");
+        assert_eq!(child.run_ctx.working_dir_str(), "/tmp");
         assert_eq!(child.model, Some("gpt-4".to_string()));
         assert_eq!(child.depth, 3);
         assert_eq!(child.target_label, Some("label".to_string()));
@@ -1234,14 +1253,30 @@ mod tests {
             script_env_provider: Arc::new(NoOpScriptEnvProvider),
             workflow_run_id: "run-projection-test".to_string(),
             workflow_name: "wf-projection".to_string(),
-            worktree_ctx: WorktreeContext {
-                worktree_id: Some("wt-9".to_string()),
-                working_dir: "/tmp/proj".to_string(),
-                repo_path: "/repo/proj".to_string(),
-                ticket_id: Some("TICK-42".to_string()),
-                repo_id: Some("repo-7".to_string()),
-                extra_plugin_dirs: vec!["plugin-a".to_string()],
+            run_ctx: {
+                let mut vars = std::collections::HashMap::new();
+                vars.insert(
+                    crate::traits::run_context::keys::WORKTREE_ID,
+                    "wt-9".to_string(),
+                );
+                vars.insert(
+                    crate::traits::run_context::keys::REPO_PATH,
+                    "/repo/proj".to_string(),
+                );
+                vars.insert(
+                    crate::traits::run_context::keys::TICKET_ID,
+                    "TICK-42".to_string(),
+                );
+                vars.insert(
+                    crate::traits::run_context::keys::REPO_ID,
+                    "repo-7".to_string(),
+                );
+                Arc::new(
+                    crate::traits::run_context::NoopRunContext::with_vars(vars)
+                        .with_working_dir("/tmp/proj"),
+                ) as Arc<dyn RunContext>
             },
+            extra_plugin_dirs: vec!["plugin-a".to_string()],
             model: Some("opus".to_string()),
             exec_config: exec_config.clone(),
             inputs: state_inputs.clone(),
@@ -1278,13 +1313,17 @@ mod tests {
 
         let ctx = parent.child_workflow_context();
 
-        // All eight fields project verbatim.
-        assert_eq!(ctx.worktree_ctx.worktree_id.as_deref(), Some("wt-9"));
-        assert_eq!(ctx.worktree_ctx.working_dir, "/tmp/proj");
-        assert_eq!(ctx.worktree_ctx.repo_path, "/repo/proj");
-        assert_eq!(ctx.worktree_ctx.ticket_id.as_deref(), Some("TICK-42"));
-        assert_eq!(ctx.worktree_ctx.repo_id.as_deref(), Some("repo-7"));
-        assert_eq!(ctx.worktree_ctx.extra_plugin_dirs, vec!["plugin-a"]);
+        // All fields project verbatim.
+        use crate::traits::run_context::keys;
+        assert_eq!(ctx.run_ctx.get(keys::WORKTREE_ID).as_deref(), Some("wt-9"));
+        assert_eq!(ctx.run_ctx.working_dir_str(), "/tmp/proj");
+        assert_eq!(
+            ctx.run_ctx.get(keys::REPO_PATH).as_deref(),
+            Some("/repo/proj")
+        );
+        assert_eq!(ctx.run_ctx.get(keys::TICKET_ID).as_deref(), Some("TICK-42"));
+        assert_eq!(ctx.run_ctx.get(keys::REPO_ID).as_deref(), Some("repo-7"));
+        assert_eq!(ctx.extra_plugin_dirs, vec!["plugin-a"]);
         assert_eq!(ctx.workflow_run_id, "run-projection-test");
         assert_eq!(ctx.model.as_deref(), Some("opus"));
         assert_eq!(ctx.target_label.as_deref(), Some("proj-label"));

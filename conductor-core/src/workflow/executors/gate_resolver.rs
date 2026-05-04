@@ -52,9 +52,6 @@ pub(in crate::workflow) struct GateParams {
 }
 
 /// Transient context passed to each `GateResolver::poll` call.
-///
-/// This struct is intentionally concrete and minimal for Phase 1. It will be
-/// replaced by `&dyn RunContext` when Step 1.1 lands.
 #[allow(dead_code)] // db_path is available for resolver use; not all consumed
 pub(in crate::workflow) struct GateContext<'a> {
     pub config: &'a Config,

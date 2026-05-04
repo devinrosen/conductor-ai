@@ -998,25 +998,14 @@ mod tests {
             }
         }
 
-        struct NoopCtx;
-        impl RunContext for NoopCtx {
-            fn injected_variables(&self) -> HashMap<&'static str, String> {
-                HashMap::new()
-            }
-            fn working_dir(&self) -> &std::path::Path {
-                std::path::Path::new("/tmp")
-            }
-            fn repo_path(&self) -> &std::path::Path {
-                std::path::Path::new("/tmp")
-            }
-        }
-
         let engine = FlowEngineBuilder::new()
             .script_env_provider(Box::new(FixedEnvProvider))
             .build()
             .unwrap();
 
-        let env = engine.script_env_provider.env(&NoopCtx, None);
+        let env = engine
+            .script_env_provider
+            .env(&crate::traits::run_context::NoopRunContext::default(), None);
         assert_eq!(env.get("CUSTOM_VAR").map(String::as_str), Some("42"));
     }
 
@@ -1259,8 +1248,9 @@ mod tests {
     // Builds a minimal ExecutionState with empty registries for run() tests.
     fn make_bare_state(wf_name: &str) -> crate::engine::ExecutionState {
         use crate::cancellation::CancellationToken;
-        use crate::engine::{ExecutionState, WorktreeContext};
+        use crate::engine::ExecutionState;
         use crate::persistence_memory::InMemoryWorkflowPersistence;
+        use crate::traits::run_context::NoopRunContext;
         use crate::traits::script_env_provider::NoOpScriptEnvProvider;
         use crate::types::WorkflowExecConfig;
         let persistence = InMemoryWorkflowPersistence::new();
@@ -1271,14 +1261,9 @@ mod tests {
             script_env_provider: Arc::new(NoOpScriptEnvProvider),
             workflow_run_id: "test-run".to_string(),
             workflow_name: wf_name.to_string(),
-            worktree_ctx: WorktreeContext {
-                worktree_id: None,
-                working_dir: String::new(),
-                repo_path: String::new(),
-                ticket_id: None,
-                repo_id: None,
-                extra_plugin_dirs: vec![],
-            },
+            run_ctx: Arc::new(NoopRunContext::default())
+                as Arc<dyn crate::traits::run_context::RunContext>,
+            extra_plugin_dirs: vec![],
             model: None,
             exec_config: WorkflowExecConfig::default(),
             inputs: HashMap::new(),
