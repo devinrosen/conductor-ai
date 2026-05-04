@@ -17,7 +17,7 @@ pub struct PushPayload {
 }
 
 pub async fn send_all(
-    subscriptions: Vec<PushSubscription>,
+    subscriptions: &[PushSubscription],
     vapid: &WebPushConfig,
     payload: &PushPayload,
 ) -> Result<Vec<String>> {
@@ -41,11 +41,10 @@ pub async fn send_all(
 
     let mut expired_endpoints = Vec::new();
 
-    for subscription in &subscriptions {
+    for subscription in subscriptions {
         match send_to_subscription(&private_key, &subject, subscription, &payload_bytes).await {
             Ok(()) => {}
-            Err(web_push::WebPushError::EndpointNotValid)
-            | Err(web_push::WebPushError::EndpointNotFound) => {
+            Err(e) if is_expired_endpoint_error(&e) => {
                 tracing::info!(
                     "Push subscription expired (410/404), removing: {}",
                     subscription.endpoint
@@ -59,6 +58,13 @@ pub async fn send_all(
     }
 
     Ok(expired_endpoints)
+}
+
+fn is_expired_endpoint_error(err: &web_push::WebPushError) -> bool {
+    matches!(
+        err,
+        web_push::WebPushError::EndpointNotValid | web_push::WebPushError::EndpointNotFound
+    )
 }
 
 async fn send_to_subscription(
@@ -106,9 +112,25 @@ mod tests {
         };
 
         // Returns Ok without sending when VAPID keys are absent
-        let result = send_all(Vec::new(), &vapid, &payload).await;
+        let result = send_all(&[], &vapid, &payload).await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_is_expired_endpoint_error() {
+        assert!(is_expired_endpoint_error(
+            &web_push::WebPushError::EndpointNotValid
+        ));
+        assert!(is_expired_endpoint_error(
+            &web_push::WebPushError::EndpointNotFound
+        ));
+        assert!(!is_expired_endpoint_error(
+            &web_push::WebPushError::Unauthorized
+        ));
+        assert!(!is_expired_endpoint_error(
+            &web_push::WebPushError::ServerError(None)
+        ));
     }
 
     #[tokio::test]
@@ -126,7 +148,7 @@ mod tests {
         };
 
         // Returns Ok without error when subscription list is empty
-        let result = send_all(Vec::new(), &vapid, &payload).await;
+        let result = send_all(&[], &vapid, &payload).await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
     }
