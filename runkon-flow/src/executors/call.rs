@@ -253,10 +253,8 @@ fn execute_call_inner(
         match dispatch_result {
             Ok(output) => {
                 tracing::info!(
-                    "Step '{}' completed: cost=${:.4}, {} turns, markers={:?}",
+                    "Step '{}' completed: markers={:?}",
                     agent_label,
-                    output.cost_usd.unwrap_or(0.0),
-                    output.num_turns.unwrap_or(0),
                     output.markers,
                 );
                 record_dispatch_success(
@@ -358,10 +356,7 @@ mod tests {
             ) -> std::result::Result<ActionOutput, crate::engine_error::EngineError> {
                 // Long enough for the 500 ms keeper poll to fire at least once.
                 std::thread::sleep(std::time::Duration::from_millis(1300));
-                Ok(ActionOutput {
-                    cost_usd: Some(0.0),
-                    ..Default::default()
-                })
+                Ok(ActionOutput::default())
             }
         }
 

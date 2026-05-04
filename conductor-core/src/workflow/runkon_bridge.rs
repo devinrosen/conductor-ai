@@ -45,13 +45,7 @@ pub(super) fn core_action_output_to_rk(
         context: core.context,
         result_text: core.result_text,
         structured_output: core.structured_output,
-        cost_usd: core.cost_usd,
-        num_turns: core.num_turns,
-        duration_ms: core.duration_ms,
-        input_tokens: core.input_tokens,
-        output_tokens: core.output_tokens,
-        cache_read_input_tokens: core.cache_read_input_tokens,
-        cache_creation_input_tokens: core.cache_creation_input_tokens,
+        metadata: core.metadata,
         child_run_id: None,
     }
 }

@@ -647,20 +647,49 @@ pub fn record_step_skipped(state: &mut ExecutionState, step_key: String, step_la
     state.step_results.insert(step_key, step_result);
 }
 
+/// Parse a metric value from a metadata map, logging a warning on parse failure.
+fn parse_metric_f64(map: &std::collections::HashMap<String, String>, key: &str) -> Option<f64> {
+    map.get(key).and_then(|v| {
+        v.parse::<f64>()
+            .map_err(|e| tracing::warn!("metadata key '{key}' has non-numeric value '{v}': {e}"))
+            .ok()
+    })
+}
+
+/// Parse an integer metric value from a metadata map, logging a warning on parse failure.
+fn parse_metric_i64(map: &std::collections::HashMap<String, String>, key: &str) -> Option<i64> {
+    map.get(key).and_then(|v| {
+        v.parse::<i64>()
+            .map_err(|e| tracing::warn!("metadata key '{key}' has non-integer value '{v}': {e}"))
+            .ok()
+    })
+}
+
 /// Record a successful step: accumulate stats, insert StepResult, push context.
 pub fn record_step_success(
     state: &mut ExecutionState,
     step_key: String,
     success: crate::types::StepSuccess,
 ) {
+    use crate::constants::metadata_keys;
+    let cost_usd = parse_metric_f64(&success.metadata, metadata_keys::COST_USD);
+    let num_turns = parse_metric_i64(&success.metadata, metadata_keys::NUM_TURNS);
+    let duration_ms = parse_metric_i64(&success.metadata, metadata_keys::DURATION_MS);
+    let input_tokens = parse_metric_i64(&success.metadata, metadata_keys::INPUT_TOKENS);
+    let output_tokens = parse_metric_i64(&success.metadata, metadata_keys::OUTPUT_TOKENS);
+    let cache_read = parse_metric_i64(&success.metadata, metadata_keys::CACHE_READ_INPUT_TOKENS);
+    let cache_creation = parse_metric_i64(
+        &success.metadata,
+        metadata_keys::CACHE_CREATION_INPUT_TOKENS,
+    );
     let metrics_changed = state.accumulate_metrics(
-        success.cost_usd,
-        success.num_turns,
-        success.duration_ms,
-        success.input_tokens,
-        success.output_tokens,
-        success.cache_read_input_tokens,
-        success.cache_creation_input_tokens,
+        cost_usd,
+        num_turns,
+        duration_ms,
+        input_tokens,
+        output_tokens,
+        cache_read,
+        cache_creation,
     );
 
     // Best-effort mid-run metrics flush — non-fatal, only if something changed

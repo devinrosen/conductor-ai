@@ -325,11 +325,7 @@ pub fn execute_parallel(
                     output.structured_output.clone(),
                 )?;
 
-                tracing::info!(
-                    "parallel: '{}' completed (cost=${:.4})",
-                    pr.agent_name,
-                    output.cost_usd.unwrap_or(0.0),
-                );
+                tracing::info!("parallel: '{}' completed", pr.agent_name,);
 
                 successes += 1;
                 merged_markers.extend(output.markers.iter().cloned());
@@ -384,9 +380,6 @@ pub fn execute_parallel(
             WorkflowStepStatus::Failed
         },
         result_text: None,
-        cost_usd: None,
-        num_turns: None,
-        duration_ms: None,
         markers: merged_markers,
         context: String::new(),
         child_run_id: None,
@@ -432,12 +425,18 @@ mod tests {
             _info: &crate::traits::action_executor::StepInfo,
             _params: &ActionParams,
         ) -> Result<ActionOutput, EngineError> {
+            let mut metadata = std::collections::HashMap::new();
+            metadata.insert(
+                crate::constants::metadata_keys::COST_USD.to_string(),
+                "0.05".to_string(),
+            );
             Ok(ActionOutput {
                 markers: self.markers.clone(),
                 context: Some(self.context.clone()),
-                cost_usd: Some(0.01),
-                num_turns: Some(2),
-                ..Default::default()
+                result_text: None,
+                structured_output: None,
+                metadata,
+                child_run_id: None,
             })
         }
     }
@@ -857,10 +856,7 @@ mod tests {
                 // Long enough to trigger several recv_timeout (500 ms) iterations
                 // in the wait loop so the heartbeat tick has a chance to fire.
                 std::thread::sleep(std::time::Duration::from_millis(1300));
-                Ok(ActionOutput {
-                    cost_usd: Some(0.0),
-                    ..Default::default()
-                })
+                Ok(ActionOutput::default())
             }
         }
 
