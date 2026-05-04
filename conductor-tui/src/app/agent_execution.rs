@@ -362,6 +362,22 @@ impl App {
         );
 
         let suggested = conductor_core::models::suggest_model(&prompt);
+
+        // If auto-use suggested model is enabled, skip the picker and use the suggestion directly
+        if self.config.general.auto_use_suggested_model {
+            let selected_model = Some(suggested.to_string());
+            self.start_agent_headless(
+                prompt,
+                wt.id.clone(),
+                wt.path.clone(),
+                wt.slug.clone(),
+                resume_session_id,
+                selected_model,
+            );
+            return;
+        }
+
+        // Otherwise, show the model picker (current behavior)
         let initial_selected = conductor_core::models::KNOWN_MODELS
             .iter()
             .position(|m| m.alias == suggested)
