@@ -529,7 +529,7 @@ mod tests {
         .unwrap();
         let step_id =
             crate::workflow::insert_step(conn, &run.id, "step-a", "actor", false, 0, 0).unwrap();
-        (run.id, step_id)
+        (run.id.clone(), step_id)
     }
 
     #[test]
@@ -692,16 +692,23 @@ mod tests {
         )
         .unwrap();
 
-        let step = crate::workflow::get_step_by_id(&conn, &step_id)
-            .unwrap()
-            .unwrap();
-        assert_eq!(step.cost_usd, Some(1.23));
-        assert_eq!(step.num_turns, Some(5));
-        assert_eq!(step.duration_ms, Some(1000));
-        assert_eq!(step.input_tokens, Some(100));
-        assert_eq!(step.output_tokens, Some(200));
-        assert_eq!(step.cache_read_input_tokens, Some(50));
-        assert_eq!(step.cache_creation_input_tokens, Some(25));
+        // Metric fields are not in WorkflowRunStep — verify via direct SQL.
+        let (cost_usd, num_turns, duration_ms, input_tokens, output_tokens, cache_read, cache_creation):
+            (Option<f64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>) =
+            conn.query_row(
+                "SELECT cost_usd, num_turns, duration_ms, input_tokens, output_tokens, \
+                 cache_read_input_tokens, cache_creation_input_tokens \
+                 FROM workflow_run_steps WHERE id = ?1",
+                rusqlite::params![step_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+            ).unwrap();
+        assert_eq!(cost_usd, Some(1.23));
+        assert_eq!(num_turns, Some(5));
+        assert_eq!(duration_ms, Some(1000));
+        assert_eq!(input_tokens, Some(100));
+        assert_eq!(output_tokens, Some(200));
+        assert_eq!(cache_read, Some(50));
+        assert_eq!(cache_creation, Some(25));
     }
 
     #[test]
@@ -741,13 +748,19 @@ mod tests {
         )
         .unwrap();
 
-        let step = crate::workflow::get_step_by_id(&conn, &step_id)
-            .unwrap()
-            .unwrap();
-        assert_eq!(step.cost_usd, Some(9.99), "cost_usd must be preserved");
-        assert_eq!(step.num_turns, Some(3), "num_turns must be preserved");
-        assert_eq!(step.input_tokens, Some(42));
-        assert_eq!(step.output_tokens, Some(84));
+        // Metric fields are not in WorkflowRunStep — verify via direct SQL.
+        let (cost_usd, num_turns, input_tokens, output_tokens):
+            (Option<f64>, Option<i64>, Option<i64>, Option<i64>) =
+            conn.query_row(
+                "SELECT cost_usd, num_turns, input_tokens, output_tokens \
+                 FROM workflow_run_steps WHERE id = ?1",
+                rusqlite::params![step_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            ).unwrap();
+        assert_eq!(cost_usd, Some(9.99), "cost_usd must be preserved");
+        assert_eq!(num_turns, Some(3), "num_turns must be preserved");
+        assert_eq!(input_tokens, Some(42));
+        assert_eq!(output_tokens, Some(84));
     }
 
     #[test]
@@ -767,10 +780,14 @@ mod tests {
         )
         .unwrap();
 
-        // Original step untouched.
-        let step = crate::workflow::get_step_by_id(&conn, &step_id)
-            .unwrap()
+        // Original step untouched — verify via SQL since cost_usd is not on WorkflowRunStep.
+        let cost_usd: Option<f64> = conn
+            .query_row(
+                "SELECT cost_usd FROM workflow_run_steps WHERE id = ?1",
+                rusqlite::params![step_id],
+                |row| row.get(0),
+            )
             .unwrap();
-        assert!(step.cost_usd.is_none());
+        assert!(cost_usd.is_none());
     }
 }

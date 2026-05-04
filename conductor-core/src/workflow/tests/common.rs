@@ -85,7 +85,7 @@ pub(super) fn create_child_run(conn: &Connection) -> String {
         None,
     )
     .unwrap();
-    run.id
+    run.id.clone()
 }
 
 /// Helper: create a workflow run with steps in various statuses.
@@ -135,7 +135,7 @@ pub(super) fn setup_run_with_steps(conn: &Connection) -> String {
     let s2 = crate::workflow::insert_step(conn, &run.id, "step-c", "actor", false, 2, 0).unwrap();
     set_step_status(conn, &s2, WorkflowStepStatus::Running);
 
-    run.id
+    run.id.clone()
 }
 
 /// Helper to build a WorkflowRunStep for testing without listing every field.
@@ -177,13 +177,6 @@ pub(super) fn make_test_step(
         output_file: None,
         gate_options: None,
         gate_selections: None,
-        input_tokens: None,
-        output_tokens: None,
-        cache_read_input_tokens: None,
-        cache_creation_input_tokens: None,
-        cost_usd: None,
-        num_turns: None,
-        duration_ms: None,
         fan_out_total: None,
         fan_out_completed: 0,
         fan_out_failed: 0,
@@ -281,7 +274,7 @@ pub(super) fn insert_workflow_run_with_targets(
         None,
     )
     .unwrap();
-    run.id
+    run.id.clone()
 }
 
 /// Insert a workflow run in 'waiting' status with a waiting gate step.
@@ -331,7 +324,7 @@ pub(super) fn insert_waiting_run_with_gate(
     step_id
 }
 
-pub(super) fn make_workflow_run(conn: &Connection) -> (crate::agent::AgentRun, WorkflowRun) {
+pub(super) fn make_workflow_run(conn: &Connection) -> (crate::agent::AgentRun, ConductorWorkflowRun) {
     let agent_mgr = AgentManager::new(conn);
     let parent = agent_mgr.create_run(Some("w1"), "workflow", None).unwrap();
     let run = crate::workflow::create_workflow_run(
@@ -375,7 +368,7 @@ pub(super) fn make_running_wf(conn: &Connection, name: &str) -> (String, String)
     .unwrap();
     crate::workflow::update_workflow_status(conn, &run.id, WorkflowRunStatus::Running, None, None)
         .unwrap();
-    (run.id, parent.id)
+    (run.id.clone(), parent.id)
 }
 
 /// Helper: insert a terminal step into a workflow run (auto-generates step ID via WorkflowManager).

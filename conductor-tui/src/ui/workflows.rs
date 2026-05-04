@@ -9,7 +9,7 @@ use ratatui::Frame;
 use conductor_core::workflow::InputType;
 use conductor_core::workflow::WorkflowNode;
 use conductor_core::workflow::{
-    WorkflowDef, WorkflowRun, WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus,
+    ConductorWorkflowRun, WorkflowDef, WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus,
 };
 
 use super::common::{gate_type_icon, truncate};
@@ -998,8 +998,8 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let visible = state.visible_workflow_run_rows();
 
-    // Build run_id → WorkflowRun map for O(1) lookup.
-    let run_map: HashMap<&str, &WorkflowRun> = state
+    // Build run_id → ConductorWorkflowRun map for O(1) lookup.
+    let run_map: HashMap<&str, &ConductorWorkflowRun> = state
         .data
         .workflow_runs
         .iter()
@@ -1777,18 +1777,6 @@ fn render_step_list(
         ])));
     }
 
-    // Find the index of the step with the highest combined token usage
-    let max_token_idx: Option<usize> = {
-        let mut best: Option<(usize, i64)> = None;
-        for (i, step) in state.data.workflow_steps.iter().enumerate() {
-            let total = step.input_tokens.unwrap_or(0) + step.output_tokens.unwrap_or(0);
-            if total > 0 && best.is_none_or(|(_, b)| total > b) {
-                best = Some((i, total));
-            }
-        }
-        best.map(|(i, _)| i)
-    };
-
     for (i, step) in state.data.workflow_steps.iter().enumerate() {
         let (status_symbol, status_color) = status_display(&step.status.to_string(), &state.theme);
         let duration = match (&step.started_at, &step.ended_at) {
@@ -1806,13 +1794,7 @@ fn render_step_list(
             Span::raw("  "),
             Span::styled(
                 format!("{:<20}", step.step_name),
-                if max_token_idx == Some(i) {
-                    Style::default()
-                        .add_modifier(Modifier::BOLD)
-                        .fg(state.theme.label_accent)
-                } else {
-                    Style::default().add_modifier(Modifier::BOLD)
-                },
+                Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 format!("  [{:<5}]", step.role),
@@ -1823,33 +1805,6 @@ fn render_step_list(
                 Style::default().fg(state.theme.label_accent),
             ),
         ];
-
-        // Token columns: show compact flow-format counts when present
-        if let (Some(inp), Some(out)) = (step.input_tokens, step.output_tokens) {
-            let fmt_k = |n: i64| -> String {
-                if n >= 1_000_000 {
-                    format!("{:.1}M", n as f64 / 1_000_000.0)
-                } else if n >= 1_000 {
-                    format!("{:.1}k", n as f64 / 1_000.0)
-                } else {
-                    format!("{n}")
-                }
-            };
-            spans.push(Span::styled(
-                format!("  → {} ", fmt_k(inp)),
-                Style::default().fg(state.theme.label_secondary),
-            ));
-            spans.push(Span::styled(
-                "⊙",
-                Style::default()
-                    .fg(state.theme.label_secondary)
-                    .add_modifier(ratatui::style::Modifier::DIM),
-            ));
-            spans.push(Span::styled(
-                format!(" {} →", fmt_k(out)),
-                Style::default().fg(state.theme.label_secondary),
-            ));
-        }
 
         if step.iteration > 0 {
             spans.push(Span::styled(
@@ -2208,7 +2163,7 @@ fn status_display(status: &str, theme: &Theme) -> (&'static str, Color) {
 }
 
 fn run_status_icon(
-    run: &WorkflowRun,
+    run: &ConductorWorkflowRun,
     steps: &HashMap<String, Vec<WorkflowRunStep>>,
     theme: &Theme,
 ) -> (&'static str, Color) {

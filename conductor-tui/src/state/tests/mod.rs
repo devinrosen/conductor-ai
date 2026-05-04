@@ -1,6 +1,6 @@
 use super::*;
 use conductor_core::agent::AgentRunEvent;
-use conductor_core::workflow::{WorkflowRun, WorkflowRunStatus};
+use conductor_core::workflow::{ConductorWorkflowRun, WorkflowRun, WorkflowRunStatus};
 
 mod dashboard_tests;
 mod enum_tests;
@@ -82,41 +82,43 @@ pub(crate) fn make_wf_run_full(
     id: &str,
     status: WorkflowRunStatus,
     parent_workflow_run_id: Option<&str>,
-) -> WorkflowRun {
-    WorkflowRun {
-        id: id.into(),
-        workflow_name: "test-workflow".into(),
+) -> ConductorWorkflowRun {
+    ConductorWorkflowRun {
+        run: WorkflowRun {
+            id: id.into(),
+            workflow_name: "test-workflow".into(),
+            parent_run_id: "run-1".into(),
+            status,
+            dry_run: false,
+            trigger: "manual".into(),
+            started_at: "2026-01-01T00:00:00Z".into(),
+            ended_at: None,
+            result_summary: None,
+            error: None,
+            definition_snapshot: None,
+            inputs: std::collections::HashMap::new(),
+            parent_workflow_run_id: parent_workflow_run_id.map(|s| s.into()),
+            iteration: 0,
+            blocked_on: None,
+            workflow_title: None,
+            total_input_tokens: None,
+            total_output_tokens: None,
+            total_cache_read_input_tokens: None,
+            total_cache_creation_input_tokens: None,
+            total_turns: None,
+            total_cost_usd: None,
+            total_duration_ms: None,
+            model: None,
+            dismissed: false,
+            owner_token: None,
+            lease_until: None,
+            generation: 0,
+        },
         worktree_id: None,
-        parent_run_id: "run-1".into(),
-        status,
-        dry_run: false,
-        trigger: "manual".into(),
-        started_at: "2026-01-01T00:00:00Z".into(),
-        ended_at: None,
-        result_summary: None,
-        error: None,
-        definition_snapshot: None,
-        inputs: std::collections::HashMap::new(),
         ticket_id: None,
         repo_id: None,
-        parent_workflow_run_id: parent_workflow_run_id.map(|s| s.into()),
         target_label: None,
         default_bot_name: None,
-        iteration: 0,
-        blocked_on: None,
-        workflow_title: None,
-        total_input_tokens: None,
-        total_output_tokens: None,
-        total_cache_read_input_tokens: None,
-        total_cache_creation_input_tokens: None,
-        total_turns: None,
-        total_cost_usd: None,
-        total_duration_ms: None,
-        model: None,
-        dismissed: false,
-        owner_token: None,
-        lease_until: None,
-        generation: 0,
     }
 }
 
@@ -127,10 +129,10 @@ pub(crate) fn make_wf_run_with_iter(
     parent_workflow_run_id: Option<&str>,
     workflow_name: &str,
     iteration: i64,
-) -> WorkflowRun {
+) -> ConductorWorkflowRun {
     let mut run = make_wf_run_full(id, status, parent_workflow_run_id);
-    run.workflow_name = workflow_name.into();
-    run.iteration = iteration;
+    run.run.workflow_name = workflow_name.into();
+    run.run.iteration = iteration;
     run
 }
 
@@ -188,12 +190,12 @@ pub(crate) fn make_workflow_run(
     id: &str,
     status: WorkflowRunStatus,
     summary: Option<&str>,
-) -> WorkflowRun {
+) -> ConductorWorkflowRun {
     let mut run = make_wf_run_full(id, status, None);
-    run.workflow_name = "test".to_string();
-    run.parent_run_id = String::new();
-    run.result_summary = summary.map(|s| s.to_string());
-    run.error = summary.map(|s| s.to_string());
+    run.run.workflow_name = "test".to_string();
+    run.run.parent_run_id = String::new();
+    run.run.result_summary = summary.map(|s| s.to_string());
+    run.run.error = summary.map(|s| s.to_string());
     run
 }
 

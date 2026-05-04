@@ -36,15 +36,11 @@ mod tests {
     fn make_new_run(parent_run_id: String) -> NewRun {
         NewRun {
             workflow_name: "test-wf".to_string(),
-            worktree_id: Some("w1".to_string()),
-            ticket_id: None,
-            repo_id: None,
             parent_run_id,
             dry_run: false,
             trigger: "manual".to_string(),
             definition_snapshot: None,
             parent_workflow_run_id: None,
-            target_label: None,
         }
     }
 

@@ -132,7 +132,7 @@ mod tests {
         )
         .expect("set waiting status");
 
-        (run.id, step_id)
+        (run.id.clone(), step_id)
     }
 
     #[test]

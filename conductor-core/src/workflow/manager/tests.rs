@@ -1,7 +1,7 @@
 use crate::agent::AgentManager;
 use crate::db::sql_placeholders;
-use crate::workflow::types::TimeGranularity;
-use crate::workflow::{GateType, WorkflowRun};
+use crate::workflow::types::{ConductorWorkflowRun, TimeGranularity};
+use crate::workflow::GateType;
 use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
 
 fn setup_db() -> rusqlite::Connection {
@@ -34,7 +34,7 @@ fn make_parent_id(conn: &rusqlite::Connection, wt_id: &str) -> String {
 
 // Helper to create a run linked to a worktree (worktree_id set, repo_id null — simulates
 // the common case where runs are launched from a worktree context).
-fn create_worktree_run(conn: &rusqlite::Connection, wt_id: &str) -> WorkflowRun {
+fn create_worktree_run(conn: &rusqlite::Connection, wt_id: &str) -> ConductorWorkflowRun {
     let parent_id = make_parent_id(conn, wt_id);
     crate::workflow::create_workflow_run(conn, "wf", Some(wt_id), &parent_id, false, "manual", None)
         .unwrap()
@@ -47,7 +47,7 @@ fn set_step_status(conn: &rusqlite::Connection, step_id: &str, status: WorkflowS
 }
 
 // Helper to create a run linked directly to a repo (repo_id set, worktree_id null).
-fn create_repo_run(conn: &rusqlite::Connection, repo_id: &str) -> WorkflowRun {
+fn create_repo_run(conn: &rusqlite::Connection, repo_id: &str) -> ConductorWorkflowRun {
     // Need a valid parent agent run; use w1 as the worktree for the agent run.
     let parent_id = make_parent_id(conn, "w1");
     crate::workflow::create_workflow_run_with_targets(
@@ -2044,7 +2044,7 @@ fn create_named_worktree_run(
     conn: &rusqlite::Connection,
     wt_id: &str,
     wf_name: &str,
-) -> WorkflowRun {
+) -> ConductorWorkflowRun {
     let parent_id = make_parent_id(conn, wt_id);
     crate::workflow::create_workflow_run(
         conn,
@@ -2058,7 +2058,11 @@ fn create_named_worktree_run(
     .unwrap()
 }
 
-fn create_named_repo_run(conn: &rusqlite::Connection, repo_id: &str, wf_name: &str) -> WorkflowRun {
+fn create_named_repo_run(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+    wf_name: &str,
+) -> ConductorWorkflowRun {
     let parent_id = make_parent_id(conn, "w1");
     crate::workflow::create_workflow_run_with_targets(
         conn,

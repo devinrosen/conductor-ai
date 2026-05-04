@@ -236,7 +236,7 @@ pub(crate) fn guard_active_run(
             crate::workflow::cancel_run(conn, &active.id, "force override: new run requested")?;
         } else {
             return Err(ConductorError::WorkflowRunAlreadyActive {
-                name: active.workflow_name,
+                name: active.workflow_name.clone(),
             });
         }
     }
@@ -612,8 +612,8 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         )?;
 
         (
-            wf_run.id,
-            parent_run.id,
+            wf_run.id.clone(),
+            parent_run.id.clone(),
             merged_inputs,
             effective_repo_id,
             snapshot_json,
@@ -1530,7 +1530,7 @@ mod tests {
             rusqlite::params![run.id],
         )
         .unwrap();
-        run.id
+        run.id.clone()
     }
 
     #[test]
@@ -1794,7 +1794,7 @@ mod tests {
                 rusqlite::params![run.id],
             )
             .unwrap();
-            run.id
+            run.id.clone()
         };
 
         let config = crate::config::Config::default();
@@ -1833,7 +1833,7 @@ mod tests {
                 rusqlite::params![run.id],
             )
             .unwrap();
-            run.id
+            run.id.clone()
         };
 
         let config = crate::config::Config::default();
@@ -1977,7 +1977,7 @@ mod tests {
             rusqlite::params![run.id],
         )
         .unwrap();
-        run.id
+        run.id.clone()
     }
 
     #[test]
@@ -2117,7 +2117,7 @@ mod tests {
                 rusqlite::params![run.id],
             )
             .unwrap();
-            run.id
+            run.id.clone()
         };
 
         let config = crate::config::Config::default();
@@ -2186,7 +2186,7 @@ mod tests {
                 rusqlite::params![run.id],
             )
             .unwrap();
-            run.id
+            run.id.clone()
         };
 
         // Reopen via a shared_conn (as the coordinator does) and run the same

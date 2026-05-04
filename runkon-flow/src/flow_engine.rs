@@ -825,15 +825,11 @@ mod tests {
         use crate::traits::persistence::{NewRun, WorkflowPersistence};
         p.create_run(NewRun {
             workflow_name: "wf".to_string(),
-            worktree_id: None,
-            ticket_id: None,
-            repo_id: None,
             parent_run_id: String::new(),
             dry_run: false,
             trigger: "manual".to_string(),
             definition_snapshot: None,
             parent_workflow_run_id: None,
-            target_label: None,
         })
         .unwrap()
     }
@@ -1417,15 +1413,11 @@ mod tests {
         let run = persistence
             .create_run(NewRun {
                 workflow_name: wf_name.to_string(),
-                worktree_id: None,
-                ticket_id: None,
-                repo_id: None,
                 parent_run_id: String::new(),
                 dry_run: false,
                 trigger: "manual".to_string(),
                 definition_snapshot: None,
                 parent_workflow_run_id: None,
-                target_label: None,
             })
             .unwrap();
 
@@ -1951,9 +1943,11 @@ mod tests {
         );
     }
 
-    // AC: resume() accumulates metrics from pre-completed steps into WorkflowResult totals.
+    // AC: resume() skips pre-completed steps and runs remaining steps.
+    // Metrics from pre-completed steps are sourced via agent_runs JOIN (conductor-side),
+    // not from the removed WorkflowRunStep metric fields.
     #[test]
-    fn resume_accumulates_metrics_from_completed_steps() {
+    fn resume_skips_pre_completed_steps() {
         use crate::persistence_memory::InMemoryWorkflowPersistence;
         use crate::status::WorkflowStepStatus;
         use crate::traits::persistence::{NewStep, StepUpdate, WorkflowPersistence};
@@ -1961,7 +1955,7 @@ mod tests {
         let persistence = Arc::new(InMemoryWorkflowPersistence::new());
         let run = make_test_run(&persistence);
 
-        // Pre-seed alpha as a completed step with non-zero metrics.
+        // Pre-seed alpha as a completed step.
         let step_id = persistence
             .insert_step(NewStep {
                 workflow_run_id: run.id.clone(),
@@ -1989,34 +1983,23 @@ mod tests {
                 },
             )
             .unwrap();
-        // Inject non-zero cost and turn metrics directly into the step record.
-        persistence.set_step_metrics_for_test(
-            &step_id,
-            Some(1.23),
-            Some(5),
-            Some(4000),
-            Some(100),
-            Some(200),
-        );
 
-        let (_, _, mut state) = make_counting_state(Arc::clone(&persistence), run.id);
+        let (alpha_count, beta_count, mut state) =
+            make_counting_state(Arc::clone(&persistence), run.id);
 
         let engine = FlowEngineBuilder::new().build().unwrap();
         let def = make_def("wf", vec![call_node("alpha"), call_node("beta")]);
-        let result = engine.resume(&def, &mut state).unwrap();
+        engine.resume(&def, &mut state).unwrap();
 
-        assert!(
-            (result.total_cost - 1.23).abs() < 1e-9,
-            "total_cost should include alpha's pre-completed cost; got {}",
-            result.total_cost
+        assert_eq!(
+            alpha_count.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "alpha was pre-completed and should be skipped"
         );
         assert_eq!(
-            result.total_turns, 5,
-            "total_turns should include alpha's pre-completed turns"
-        );
-        assert_eq!(
-            result.total_input_tokens, 100,
-            "total_input_tokens should include alpha's pre-completed tokens"
+            beta_count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "beta should execute once"
         );
     }
 

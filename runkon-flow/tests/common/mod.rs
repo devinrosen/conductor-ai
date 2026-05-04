@@ -113,15 +113,11 @@ pub fn make_state(
     let run = persistence
         .create_run(NewRun {
             workflow_name: wf_name.to_string(),
-            worktree_id: None,
-            ticket_id: None,
-            repo_id: None,
             parent_run_id: String::new(),
             dry_run: false,
             trigger: "test".to_string(),
             definition_snapshot: None,
             parent_workflow_run_id: None,
-            target_label: None,
         })
         .expect("create_run failed");
 

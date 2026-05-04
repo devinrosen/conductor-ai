@@ -435,6 +435,23 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             ..parent_ctx.exec_config.clone()
         };
 
+        // Source target_label and triggered_by_hook from the parent run DB record
+        // (these fields were removed from ChildWorkflowContext in the 4/8 refactor).
+        let (parent_target_label, parent_triggered_by_hook) = {
+            let conn = self.conn.lock().map_err(bridge_lock_err)?;
+            let parent_run = crate::workflow::get_workflow_run(&conn, &parent_ctx.workflow_run_id)
+                .map_err(|e| {
+                    EngineError::Workflow(format!(
+                        "failed to load parent run '{}': {e}",
+                        parent_ctx.workflow_run_id
+                    ))
+                })?;
+            match parent_run {
+                Some(r) => (r.target_label.clone(), r.is_triggered_by_hook()),
+                None => (None, false),
+            }
+        };
+
         // Route child workflows through execute_workflow_standalone so they use
         // FlowEngine::run() — keeping event emission and step tracking consistent
         // between parent and child runs.
@@ -451,9 +468,9 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             model: parent_ctx.model.clone(),
             exec_config,
             inputs: params.inputs,
-            target_label: parent_ctx.target_label.clone(),
+            target_label: parent_target_label,
             run_id_notify: None,
-            triggered_by_hook: parent_ctx.triggered_by_hook,
+            triggered_by_hook: parent_triggered_by_hook,
             conductor_bin_dir: None,
             force: false,
             extra_plugin_dirs: parent_ctx.extra_plugin_dirs.clone(),
@@ -698,10 +715,8 @@ mod tests {
             extra_plugin_dirs: vec![],
             workflow_run_id: "parent-run".to_string(),
             model: None,
-            target_label: None,
             exec_config: crate::workflow::WorkflowExecConfig::default(),
             inputs: HashMap::new(),
-            triggered_by_hook: false,
             event_sinks: Arc::clone(&sinks),
         };
 
@@ -734,10 +749,8 @@ mod tests {
             extra_plugin_dirs: vec![],
             workflow_run_id: "parent-run".to_string(),
             model: None,
-            target_label: None,
             exec_config: crate::workflow::WorkflowExecConfig::default(),
             inputs: HashMap::new(),
-            triggered_by_hook: false,
             event_sinks: Arc::<[Arc<dyn EventSink>]>::from(vec![]),
         };
 

@@ -98,7 +98,6 @@ impl InMemoryWorkflowPersistence {
         let run = crate::types::WorkflowRun {
             id: id.to_string(),
             workflow_name: String::new(),
-            worktree_id: None,
             parent_run_id: String::new(),
             status: crate::status::WorkflowRunStatus::Pending,
             dry_run: false,
@@ -109,11 +108,7 @@ impl InMemoryWorkflowPersistence {
             error: None,
             definition_snapshot: None,
             inputs: std::collections::HashMap::new(),
-            ticket_id: None,
-            repo_id: None,
             parent_workflow_run_id: None,
-            target_label: None,
-            default_bot_name: None,
             iteration: 0,
             blocked_on: None,
             workflow_title: None,
@@ -147,27 +142,6 @@ impl InMemoryWorkflowPersistence {
         self.acquire_lease(run_id, new_token, 3600).unwrap();
     }
 
-    /// Test helper: directly set the metric fields on a step so that
-    /// `restore_completed_step` can be tested with non-None metric values.
-    #[cfg(test)]
-    pub fn set_step_metrics_for_test(
-        &self,
-        step_id: &str,
-        cost_usd: Option<f64>,
-        num_turns: Option<i64>,
-        duration_ms: Option<i64>,
-        input_tokens: Option<i64>,
-        output_tokens: Option<i64>,
-    ) {
-        let mut store = self.store.lock().unwrap();
-        if let Some(step) = store.steps.get_mut(step_id) {
-            step.cost_usd = cost_usd;
-            step.num_turns = num_turns;
-            step.duration_ms = duration_ms;
-            step.input_tokens = input_tokens;
-            step.output_tokens = output_tokens;
-        }
-    }
 }
 
 fn lock_err() -> EngineError {
@@ -203,7 +177,6 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         let run = WorkflowRun {
             id: id.clone(),
             workflow_name: new_run.workflow_name,
-            worktree_id: new_run.worktree_id,
             parent_run_id: new_run.parent_run_id,
             status: WorkflowRunStatus::Pending,
             dry_run: new_run.dry_run,
@@ -214,11 +187,7 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
             error: None,
             definition_snapshot: new_run.definition_snapshot,
             inputs: HashMap::new(),
-            ticket_id: new_run.ticket_id,
-            repo_id: new_run.repo_id,
             parent_workflow_run_id: new_run.parent_workflow_run_id,
-            target_label: new_run.target_label,
-            default_bot_name: None,
             iteration: 0,
             blocked_on: None,
             workflow_title: None,
@@ -326,13 +295,6 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
             gate_feedback: None,
             gate_options: None,
             gate_selections: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
-            cost_usd: None,
-            num_turns: None,
-            duration_ms: None,
             fan_out_total: None,
             fan_out_completed: 0,
             fan_out_failed: 0,
@@ -686,15 +648,11 @@ mod tests {
     fn make_new_run(name: &str) -> NewRun {
         NewRun {
             workflow_name: name.to_string(),
-            worktree_id: None,
-            ticket_id: None,
-            repo_id: None,
             parent_run_id: "parent-run".to_string(),
             dry_run: false,
             trigger: "test".to_string(),
             definition_snapshot: None,
             parent_workflow_run_id: None,
-            target_label: None,
         }
     }
 

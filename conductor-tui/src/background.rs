@@ -110,8 +110,8 @@ pub fn spawn_db_poller(
                         &mut initialized,
                     );
                     if let Some(ref conn) = claim_conn {
-                        // Build a run_id → WorkflowRun lookup for spike detection.
-                        let run_by_id: HashMap<&str, &conductor_core::workflow::WorkflowRun> =
+                        // Build a run_id → ConductorWorkflowRun lookup for spike detection.
+                        let run_by_id: HashMap<&str, &conductor_core::workflow::ConductorWorkflowRun> =
                             payload
                                 .latest_workflow_runs_by_worktree
                                 .values()
@@ -656,10 +656,10 @@ pub fn poll_data(
     // ── Time estimation for active workflow runs ──
     let workflow_run_estimates = {
         use conductor_core::workflow::estimation;
-        use conductor_core::workflow::{WorkflowRun, WorkflowRunStatus};
+        use conductor_core::workflow::{ConductorWorkflowRun, WorkflowRunStatus};
 
         let mut estimates = std::collections::HashMap::new();
-        let active_runs: Vec<&WorkflowRun> = latest_workflow_runs_by_worktree
+        let active_runs: Vec<&ConductorWorkflowRun> = latest_workflow_runs_by_worktree
             .values()
             .chain(active_non_worktree_workflow_runs.iter())
             .filter(|r| {

@@ -1558,7 +1558,7 @@ impl App {
             title: "Resume Workflow".to_string(),
             message: format!("Resume workflow run '{}'?", run.display_name()),
             on_confirm: ConfirmAction::ResumeWorkflow {
-                workflow_run_id: run.id,
+                workflow_run_id: run.id.clone(),
             },
         };
     }
@@ -1832,10 +1832,10 @@ impl App {
             .collect()
     }
 
-    /// Build a `WorkflowPickerTarget::WorkflowRun` from a `WorkflowRun`, resolving repo_path.
+    /// Build a `WorkflowPickerTarget::WorkflowRun` from a `ConductorWorkflowRun`, resolving repo_path.
     pub(super) fn workflow_run_picker_target(
         &self,
-        run: &conductor_core::workflow::WorkflowRun,
+        run: &conductor_core::workflow::ConductorWorkflowRun,
     ) -> Option<crate::state::WorkflowPickerTarget> {
         // Resolve repo_id: try in-memory worktrees first, then DB fallback for
         // deleted/merged worktrees, then the run's own repo_id field.
