@@ -53,3 +53,67 @@ impl RunContext for WorktreeRunContext {
         self.injected.get(key).cloned()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use runkon_flow::traits::run_context::keys;
+
+    #[test]
+    fn always_inserts_repo_path() {
+        let ctx = WorktreeRunContext::new("/work", "/repo/path", None, None, None);
+        assert_eq!(ctx.get(keys::REPO_PATH).as_deref(), Some("/repo/path"));
+    }
+
+    #[test]
+    fn none_optionals_are_absent() {
+        let ctx = WorktreeRunContext::new("/work", "/repo", None, None, None);
+        assert!(ctx.get(keys::WORKTREE_ID).is_none());
+        assert!(ctx.get(keys::TICKET_ID).is_none());
+        assert!(ctx.get(keys::REPO_ID).is_none());
+    }
+
+    #[test]
+    fn some_optionals_are_present() {
+        let ctx = WorktreeRunContext::new(
+            "/work",
+            "/repo",
+            Some("wt-01".into()),
+            Some("tk-99".into()),
+            Some("repo-42".into()),
+        );
+        assert_eq!(ctx.get(keys::WORKTREE_ID).as_deref(), Some("wt-01"));
+        assert_eq!(ctx.get(keys::TICKET_ID).as_deref(), Some("tk-99"));
+        assert_eq!(ctx.get(keys::REPO_ID).as_deref(), Some("repo-42"));
+    }
+
+    #[test]
+    fn partial_optionals() {
+        let ctx = WorktreeRunContext::new("/work", "/repo", Some("wt-01".into()), None, None);
+        assert_eq!(ctx.get(keys::WORKTREE_ID).as_deref(), Some("wt-01"));
+        assert!(ctx.get(keys::TICKET_ID).is_none());
+        assert!(ctx.get(keys::REPO_ID).is_none());
+    }
+
+    #[test]
+    fn working_dir_is_set() {
+        let ctx = WorktreeRunContext::new("/my/work/dir", "/repo", None, None, None);
+        assert_eq!(ctx.working_dir(), std::path::Path::new("/my/work/dir"));
+    }
+
+    #[test]
+    fn injected_variables_matches_get() {
+        let ctx = WorktreeRunContext::new(
+            "/work",
+            "/repo",
+            Some("wt-1".into()),
+            Some("tk-1".into()),
+            Some("r-1".into()),
+        );
+        let map = ctx.injected_variables();
+        assert_eq!(map.get(keys::REPO_PATH).map(String::as_str), Some("/repo"));
+        assert_eq!(map.get(keys::WORKTREE_ID).map(String::as_str), Some("wt-1"));
+        assert_eq!(map.get(keys::TICKET_ID).map(String::as_str), Some("tk-1"));
+        assert_eq!(map.get(keys::REPO_ID).map(String::as_str), Some("r-1"));
+    }
+}

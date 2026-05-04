@@ -47,12 +47,17 @@ pub mod keys {
 ///
 /// Returns an empty injected-variables map and `/tmp` as the working directory
 /// by default. Use [`NoopRunContext::with_vars`] to inject specific values.
+///
+/// Only available when the `test-utils` feature is enabled or in `#[cfg(test)]`
+/// contexts. Do not use in production code.
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Default)]
 pub struct NoopRunContext {
     vars: HashMap<&'static str, String>,
     working_dir: PathBuf,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 impl NoopRunContext {
     /// Build a `NoopRunContext` with the given variable overrides.
     pub fn with_vars(vars: HashMap<&'static str, String>) -> Self {
@@ -69,6 +74,7 @@ impl NoopRunContext {
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 impl RunContext for NoopRunContext {
     fn injected_variables(&self) -> HashMap<&'static str, String> {
         self.vars.clone()
