@@ -1,4 +1,3 @@
-use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -17,17 +16,19 @@ pub struct PushPayload {
     pub url: Option<String>,
 }
 
-pub async fn send_all(db: &Connection, vapid: &WebPushConfig, payload: &PushPayload) -> Result<()> {
+pub async fn send_all(
+    subscriptions: &[PushSubscription],
+    vapid: &WebPushConfig,
+    payload: &PushPayload,
+) -> Result<Vec<String>> {
     let (private_key, subject) = match (&vapid.vapid_private_key, &vapid.vapid_subject) {
         (Some(pk), Some(s)) => (pk.clone(), s.clone()),
-        _ => return Ok(()),
+        _ => return Ok(Vec::new()),
     };
-
-    let subscriptions = get_all_subscriptions(db)?;
 
     if subscriptions.is_empty() {
         info!("No push subscriptions found, skipping push notification");
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     info!(
@@ -38,29 +39,42 @@ pub async fn send_all(db: &Connection, vapid: &WebPushConfig, payload: &PushPayl
     let payload_bytes = serde_json::to_vec(payload)
         .map_err(|e| conductor_core::error::ConductorError::Agent(e.to_string()))?;
 
-    for subscription in &subscriptions {
-        match send_to_subscription(&private_key, &subject, subscription, &payload_bytes).await {
-            Ok(()) => {}
-            Err(web_push::WebPushError::EndpointNotValid)
-            | Err(web_push::WebPushError::EndpointNotFound) => {
-                tracing::info!(
-                    "Push subscription expired (410/404), removing: {}",
-                    subscription.endpoint
-                );
-                if let Err(e) = delete_subscription(db, &subscription.endpoint) {
-                    tracing::warn!(
-                        "Failed to delete expired subscription {}: {e}",
-                        subscription.endpoint
-                    );
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Push send failed for {}: {e}", subscription.endpoint);
-            }
-        }
+    let mut expired_endpoints = Vec::new();
+
+    for subscription in subscriptions {
+        let result =
+            send_to_subscription(&private_key, &subject, subscription, &payload_bytes).await;
+        process_send_result(result, &subscription.endpoint, &mut expired_endpoints);
     }
 
-    Ok(())
+    Ok(expired_endpoints)
+}
+
+fn process_send_result(
+    result: std::result::Result<(), web_push::WebPushError>,
+    endpoint: &str,
+    expired_endpoints: &mut Vec<String>,
+) {
+    match result {
+        Ok(()) => {}
+        Err(e) if is_expired_endpoint_error(&e) => {
+            tracing::info!(
+                "Push subscription expired (410/404), removing: {}",
+                endpoint
+            );
+            expired_endpoints.push(endpoint.to_string());
+        }
+        Err(e) => {
+            tracing::warn!("Push send failed for {}: {e}", endpoint);
+        }
+    }
+}
+
+fn is_expired_endpoint_error(err: &web_push::WebPushError) -> bool {
+    matches!(
+        err,
+        web_push::WebPushError::EndpointNotValid | web_push::WebPushError::EndpointNotFound
+    )
 }
 
 async fn send_to_subscription(
@@ -92,11 +106,9 @@ async fn send_to_subscription(
 mod tests {
     use super::*;
     use crate::config::WebPushConfig;
-    use conductor_core::test_helpers::create_test_conn;
 
     #[tokio::test]
     async fn test_send_all_no_vapid_config() {
-        let db = create_test_conn();
         let vapid = WebPushConfig {
             vapid_public_key: None,
             vapid_private_key: None,
@@ -110,13 +122,91 @@ mod tests {
         };
 
         // Returns Ok without sending when VAPID keys are absent
-        let result = send_all(&db, &vapid, &payload).await;
+        let result = send_all(&[], &vapid, &payload).await;
         assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_is_expired_endpoint_error() {
+        assert!(is_expired_endpoint_error(
+            &web_push::WebPushError::EndpointNotValid
+        ));
+        assert!(is_expired_endpoint_error(
+            &web_push::WebPushError::EndpointNotFound
+        ));
+        assert!(!is_expired_endpoint_error(
+            &web_push::WebPushError::Unauthorized
+        ));
+        assert!(!is_expired_endpoint_error(
+            &web_push::WebPushError::ServerError(None)
+        ));
+    }
+
+    #[test]
+    fn test_process_send_result_ok_not_collected() {
+        let mut expired = Vec::new();
+        process_send_result(Ok(()), "https://example.com", &mut expired);
+        assert!(expired.is_empty());
+    }
+
+    #[test]
+    fn test_process_send_result_endpoint_not_valid_collected() {
+        let mut expired = Vec::new();
+        process_send_result(
+            Err(web_push::WebPushError::EndpointNotValid),
+            "https://example.com",
+            &mut expired,
+        );
+        assert_eq!(expired, vec!["https://example.com"]);
+    }
+
+    #[test]
+    fn test_process_send_result_endpoint_not_found_collected() {
+        let mut expired = Vec::new();
+        process_send_result(
+            Err(web_push::WebPushError::EndpointNotFound),
+            "https://example.com/push",
+            &mut expired,
+        );
+        assert_eq!(expired, vec!["https://example.com/push"]);
+    }
+
+    #[test]
+    fn test_process_send_result_other_error_not_collected() {
+        let mut expired = Vec::new();
+        process_send_result(
+            Err(web_push::WebPushError::Unauthorized),
+            "https://example.com",
+            &mut expired,
+        );
+        assert!(expired.is_empty());
+    }
+
+    #[test]
+    fn test_process_send_result_multiple_endpoints() {
+        let mut expired = Vec::new();
+        process_send_result(Ok(()), "https://ok.com", &mut expired);
+        process_send_result(
+            Err(web_push::WebPushError::EndpointNotValid),
+            "https://gone1.com",
+            &mut expired,
+        );
+        process_send_result(
+            Err(web_push::WebPushError::Unauthorized),
+            "https://err.com",
+            &mut expired,
+        );
+        process_send_result(
+            Err(web_push::WebPushError::EndpointNotFound),
+            "https://gone2.com",
+            &mut expired,
+        );
+        assert_eq!(expired, vec!["https://gone1.com", "https://gone2.com"]);
     }
 
     #[tokio::test]
     async fn test_send_all_no_subscriptions() {
-        let db = create_test_conn();
         let vapid = WebPushConfig {
             vapid_public_key: Some("pub".to_string()),
             vapid_private_key: Some("priv".to_string()),
@@ -130,7 +220,8 @@ mod tests {
         };
 
         // Returns Ok without error when subscription list is empty
-        let result = send_all(&db, &vapid, &payload).await;
+        let result = send_all(&[], &vapid, &payload).await;
         assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
     }
 }

@@ -5,7 +5,8 @@ use axum::http::{header, HeaderValue, Method};
 use conductor_core::agent::AgentManager;
 use conductor_core::config::db_path;
 use conductor_core::Conductor;
-use conductor_web::config::{load_web_config, save_web_config};
+use conductor_web::config::{load_web_config, save_web_config, WebConfig};
+use rusqlite::Connection;
 use tokio::sync::{Mutex, RwLock};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -192,7 +193,6 @@ async fn main() -> Result<()> {
             interval.tick().await;
             let db = reaper_state.db.clone();
             let cfg = reaper_config.clone();
-            let web_cfg = reaper_web_config.clone();
             let mut seen = std::mem::take(&mut seen_agent_statuses);
             let mut init = agent_initialized;
             let mut wf_seen = std::mem::take(&mut seen_workflow_statuses);
@@ -203,7 +203,6 @@ async fn main() -> Result<()> {
                 mgr.reap_orphaned_runs()?;
                 mgr.dismiss_expired_feedback_requests()?;
                 let cfg = cfg.blocking_read();
-                let web_cfg = web_cfg.blocking_read();
                 let wt_mgr = conductor_core::worktree::WorktreeManager::new(&conn, &cfg);
                 wt_mgr.reap_stale_worktrees()?;
                 if cfg.general.auto_cleanup_merged_branches {
@@ -306,39 +305,31 @@ async fn main() -> Result<()> {
                     );
                 }
 
-                // Send push notifications for agent run transitions
-                if !transitions.is_empty() {
-                    for t in &transitions {
-                        let payload = PushPayload {
-                            title: if t.succeeded {
-                                "Agent Run Completed"
-                            } else {
-                                "Agent Run Failed"
-                            }
-                            .to_string(),
-                            body: format!(
-                                "Agent run {} for worktree {}",
-                                if t.succeeded {
-                                    "completed successfully"
-                                } else {
-                                    "failed"
-                                },
-                                t.worktree_slug.as_deref().unwrap_or("unknown")
-                            ),
-                            tag: Some(format!("agent-run-{}", t.run_id)),
-                            url: t
-                                .worktree_slug
-                                .as_ref()
-                                .map(|slug| format!("/worktrees/{}", slug)),
-                        };
-
-                        let runtime = tokio::runtime::Handle::current();
-                        if let Err(e) =
-                            runtime.block_on(push::send_all(&conn, &web_cfg.push, &payload))
-                        {
-                            tracing::warn!("Failed to send push notification for agent run: {e}");
+                // Collect push payloads for agent run transitions (sent in outer async context).
+                let mut agent_push_payloads: Vec<PushPayload> = Vec::new();
+                for t in &transitions {
+                    agent_push_payloads.push(PushPayload {
+                        title: if t.succeeded {
+                            "Agent Run Completed"
+                        } else {
+                            "Agent Run Failed"
                         }
-                    }
+                        .to_string(),
+                        body: format!(
+                            "Agent run {} for worktree {}",
+                            if t.succeeded {
+                                "completed successfully"
+                            } else {
+                                "failed"
+                            },
+                            t.worktree_slug.as_deref().unwrap_or("unknown")
+                        ),
+                        tag: Some(format!("agent-run-{}", t.run_id)),
+                        url: t
+                            .worktree_slug
+                            .as_ref()
+                            .map(|slug| format!("/worktrees/{}", slug)),
+                    });
                 }
 
                 // Detect workflow run terminal transitions and fire notifications.
@@ -373,36 +364,28 @@ async fn main() -> Result<()> {
                     );
                 }
 
-                // Send push notifications for workflow run transitions
-                if !wf_transitions.is_empty() {
-                    for t in &wf_transitions {
-                        let payload = PushPayload {
-                            title: if t.succeeded {
-                                "Workflow Completed"
-                            } else {
-                                "Workflow Failed"
-                            }
-                            .to_string(),
-                            body: format!(
-                                "Workflow '{}' {}",
-                                t.workflow_name,
-                                if t.succeeded {
-                                    "completed successfully"
-                                } else {
-                                    "failed"
-                                }
-                            ),
-                            tag: Some(format!("workflow-run-{}", t.run_id)),
-                            url: Some(format!("/workflows/runs/{}", t.run_id)),
-                        };
-
-                        let runtime = tokio::runtime::Handle::current();
-                        if let Err(e) =
-                            runtime.block_on(push::send_all(&conn, &web_cfg.push, &payload))
-                        {
-                            tracing::warn!("Failed to send push notification for workflow: {e}");
+                // Collect push payloads for workflow run transitions (sent in outer async context).
+                let mut wf_push_payloads: Vec<PushPayload> = Vec::new();
+                for t in &wf_transitions {
+                    wf_push_payloads.push(PushPayload {
+                        title: if t.succeeded {
+                            "Workflow Completed"
+                        } else {
+                            "Workflow Failed"
                         }
-                    }
+                        .to_string(),
+                        body: format!(
+                            "Workflow '{}' {}",
+                            t.workflow_name,
+                            if t.succeeded {
+                                "completed successfully"
+                            } else {
+                                "failed"
+                            }
+                        ),
+                        tag: Some(format!("workflow-run-{}", t.run_id)),
+                        url: Some(format!("/workflows/runs/{}", t.run_id)),
+                    });
                 }
 
                 // Fire cost/duration spike notifications for completed root runs.
@@ -517,15 +500,44 @@ async fn main() -> Result<()> {
                     }
                 }
 
-                Ok::<_, conductor_core::error::ConductorError>((seen, init, wf_seen, wf_init))
+                Ok::<_, conductor_core::error::ConductorError>((
+                    seen,
+                    init,
+                    wf_seen,
+                    wf_init,
+                    agent_push_payloads,
+                    wf_push_payloads,
+                ))
             })
             .await;
             match result {
-                Ok(Ok((new_seen, new_init, new_wf_seen, new_wf_init))) => {
+                Ok(Ok((
+                    new_seen,
+                    new_init,
+                    new_wf_seen,
+                    new_wf_init,
+                    agent_payloads,
+                    wf_payloads,
+                ))) => {
                     seen_agent_statuses = new_seen;
                     agent_initialized = new_init;
                     seen_workflow_statuses = new_wf_seen;
                     workflow_initialized = new_wf_init;
+                    if !agent_payloads.is_empty() || !wf_payloads.is_empty() {
+                        let subscriptions = fetch_subscriptions(&reaper_state.db, "").await;
+                        let web_cfg = reaper_web_config.read().await;
+                        let mut all_expired = Vec::new();
+                        for payload in agent_payloads.iter().chain(wf_payloads.iter()) {
+                            match push::send_all(&subscriptions, &web_cfg.push, payload).await {
+                                Ok(mut expired) => all_expired.append(&mut expired),
+                                Err(e) => {
+                                    tracing::warn!("push notification failed: {e}");
+                                }
+                            }
+                        }
+                        drop(web_cfg);
+                        cleanup_expired_endpoints(&reaper_state.db, all_expired).await;
+                    }
                 }
                 Ok(Err(e)) => tracing::warn!("periodic reaper failed: {e}"),
                 Err(join_err) => tracing::warn!("periodic reaper panicked: {join_err}"),
@@ -642,20 +654,15 @@ async fn main() -> Result<()> {
                     let db = gate_state.db.clone();
                     let web_cfg = gate_state.web_config.clone();
                     let run_id = run_id.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let conn = db.blocking_lock();
-                        let web_cfg = web_cfg.blocking_read();
+                    tokio::spawn(async move {
                         let payload = PushPayload {
                             title: "Workflow paused — your review is needed".into(),
                             body: "Gate waiting for approval".into(),
                             tag: Some(format!("gate-{run_id}")),
                             url: Some(format!("/workflows/runs/{run_id}")),
                         };
-                        let rt = tokio::runtime::Handle::current();
-                        if let Err(e) = rt.block_on(push::send_all(&conn, &web_cfg.push, &payload))
-                        {
-                            tracing::warn!("gate push failed for run {run_id}: {e}");
-                        }
+                        dispatch_push(&db, &web_cfg, &payload, &format!(" for gate run {run_id}"))
+                            .await;
                     });
                 }
                 Ok(ConductorEvent::FeedbackRequested {
@@ -667,20 +674,20 @@ async fn main() -> Result<()> {
                     let web_cfg = gate_state.web_config.clone();
                     let run_id = run_id.clone();
                     let worktree_id = worktree_id.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let conn = db.blocking_lock();
-                        let web_cfg = web_cfg.blocking_read();
+                    tokio::spawn(async move {
                         let payload = PushPayload {
                             title: "Agent needs your input".into(),
                             body: format!("Feedback requested for run {run_id}"),
                             tag: Some(format!("feedback-{run_id}")),
                             url: Some(format!("/worktrees/{worktree_id}")),
                         };
-                        let rt = tokio::runtime::Handle::current();
-                        if let Err(e) = rt.block_on(push::send_all(&conn, &web_cfg.push, &payload))
-                        {
-                            tracing::warn!("feedback push failed for run {run_id}: {e}");
-                        }
+                        dispatch_push(
+                            &db,
+                            &web_cfg,
+                            &payload,
+                            &format!(" for feedback run {run_id}"),
+                        )
+                        .await;
                     });
                 }
                 Ok(_) => {}
@@ -798,6 +805,50 @@ fn compute_step_events(
         running_runs.iter().map(|r| r.id.as_str()).collect();
     tracker.retain(|id, _| active_ids.contains(id.as_str()));
     (tracker, to_emit)
+}
+
+async fn fetch_subscriptions(
+    db: &Arc<Mutex<Connection>>,
+    context: &str,
+) -> Vec<push::PushSubscription> {
+    let conn = db.lock().await;
+    match push::get_all_subscriptions(&conn) {
+        Ok(subs) => subs,
+        Err(e) => {
+            tracing::warn!("Failed to get push subscriptions{context}: {e}");
+            Vec::new()
+        }
+    }
+}
+
+async fn cleanup_expired_endpoints(db: &Arc<Mutex<Connection>>, expired: Vec<String>) {
+    if !expired.is_empty() {
+        let conn = db.lock().await;
+        for endpoint in expired {
+            if let Err(e) = push::delete_subscription(&conn, &endpoint) {
+                tracing::warn!("Failed to delete expired subscription {endpoint}: {e}");
+            }
+        }
+    }
+}
+
+async fn dispatch_push(
+    db: &Arc<Mutex<Connection>>,
+    web_config: &Arc<RwLock<WebConfig>>,
+    payload: &push::PushPayload,
+    context: &str,
+) {
+    let subscriptions = fetch_subscriptions(db, context).await;
+    let web_cfg = web_config.read().await;
+    match push::send_all(&subscriptions, &web_cfg.push, payload).await {
+        Ok(expired_endpoints) => {
+            drop(web_cfg);
+            cleanup_expired_endpoints(db, expired_endpoints).await;
+        }
+        Err(e) => {
+            tracing::warn!("push notification failed{context}: {e}");
+        }
+    }
 }
 
 #[cfg(test)]
