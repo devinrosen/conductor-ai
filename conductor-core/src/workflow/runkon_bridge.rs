@@ -412,7 +412,7 @@ impl ConductorChildWorkflowRunner {
         &self,
         workflow: runkon_flow::dsl::WorkflowDef,
         parent_ctx: &runkon_flow::engine::ChildWorkflowContext,
-        params: &runkon_flow::engine::ChildWorkflowInput,
+        params: runkon_flow::engine::ChildWorkflowInput,
     ) -> crate::workflow::types::WorkflowExecStandalone {
         let exec_config = crate::workflow::WorkflowExecConfig {
             event_sinks: parent_ctx.event_sinks.iter().cloned().collect(),
@@ -437,7 +437,7 @@ impl ConductorChildWorkflowRunner {
                 .get(crate::workflow::engine_keys::REPO_ID),
             model: parent_ctx.model.clone(),
             exec_config,
-            inputs: params.inputs.clone(),
+            inputs: params.inputs,
             target_label: self.target_label.clone(),
             run_id_notify: None,
             triggered_by_hook: self.triggered_by_hook,
@@ -447,8 +447,8 @@ impl ConductorChildWorkflowRunner {
             db_path: Some(self.db_path.clone()),
             parent_workflow_run_id: Some(parent_ctx.workflow_run_id.clone()),
             depth: params.depth,
-            parent_step_id: params.parent_step_id.clone(),
-            default_bot_name: params.bot_name.clone(),
+            parent_step_id: params.parent_step_id,
+            default_bot_name: params.bot_name,
             iteration: params.iteration,
         }
     }
@@ -510,7 +510,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         // Route child workflows through execute_workflow_standalone so they use
         // FlowEngine::run() — keeping event emission and step tracking consistent
         // between parent and child runs.
-        let standalone_params = self.build_child_standalone_params(core_def, parent_ctx, &params);
+        let standalone_params = self.build_child_standalone_params(core_def, parent_ctx, params);
 
         let core_result = super::coordinator::execute_workflow_standalone(&standalone_params)
             .map_err(|e| {
@@ -828,7 +828,7 @@ mod tests {
             cancellation: runkon_flow::CancellationToken::new(),
         };
 
-        let standalone = runner.build_child_standalone_params(workflow, &parent_ctx, &params);
+        let standalone = runner.build_child_standalone_params(workflow, &parent_ctx, params);
 
         assert_eq!(
             standalone.ticket_id,
