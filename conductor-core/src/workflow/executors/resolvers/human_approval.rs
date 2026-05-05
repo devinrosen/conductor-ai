@@ -121,7 +121,9 @@ mod tests {
         let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
         let params = make_test_params("step1");
 
-        let result = resolver.poll("run1", &params, &NoopRunContext::default()).unwrap();
+        let result = resolver
+            .poll("run1", &params, &NoopRunContext::default())
+            .unwrap();
         assert!(
             matches!(result, GatePoll::Approved(_)),
             "expected Approved when gate_approved_at is set"
@@ -146,7 +148,9 @@ mod tests {
         let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
         let params = make_test_params("step1");
 
-        let result = resolver.poll("run1", &params, &NoopRunContext::default()).unwrap();
+        let result = resolver
+            .poll("run1", &params, &NoopRunContext::default())
+            .unwrap();
         match result {
             GatePoll::Rejected(msg) => {
                 assert_eq!(msg, "Gate 'test-gate' rejected");
@@ -173,7 +177,9 @@ mod tests {
         let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
         let params = make_test_params("step1");
 
-        let result = resolver.poll("run1", &params, &NoopRunContext::default()).unwrap();
+        let result = resolver
+            .poll("run1", &params, &NoopRunContext::default())
+            .unwrap();
         match result {
             GatePoll::Rejected(msg) => {
                 assert_eq!(msg, "needs more work");
@@ -200,7 +206,9 @@ mod tests {
         let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
         let params = make_test_params("step1");
 
-        let result = resolver.poll("run1", &params, &NoopRunContext::default()).unwrap();
+        let result = resolver
+            .poll("run1", &params, &NoopRunContext::default())
+            .unwrap();
         assert!(
             matches!(result, GatePoll::Pending),
             "expected Pending when step is still waiting"
@@ -233,7 +241,9 @@ mod tests {
         let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
         let params = make_test_params("nonexistent-step-id");
 
-        let result = resolver.poll("run1", &params, &NoopRunContext::default()).unwrap();
+        let result = resolver
+            .poll("run1", &params, &NoopRunContext::default())
+            .unwrap();
         assert!(
             matches!(result, GatePoll::Pending),
             "expected Pending when step_id does not exist in DB"
