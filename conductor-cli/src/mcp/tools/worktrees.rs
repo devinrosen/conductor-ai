@@ -6,7 +6,6 @@ use crate::mcp::helpers::{
     get_arg, get_arg_usize, get_bool_arg, pagination_hint, tool_err, tool_ok,
 };
 
-
 pub(super) fn tool_list_worktrees(
     conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
@@ -417,14 +416,20 @@ mod tests {
     #[test]
     fn test_looks_like_ulid() {
         // Valid ULID: 26 uppercase alphanumeric chars
-        assert!(crate::helpers::looks_like_ulid("01HXYZABCDEFGHJKMNPQRSTVWX"));
-        assert!(crate::helpers::looks_like_ulid("01JRKBDR0B7W72V1EHNH78WKTF"));
+        assert!(crate::helpers::looks_like_ulid(
+            "01HXYZABCDEFGHJKMNPQRSTVWX"
+        ));
+        assert!(crate::helpers::looks_like_ulid(
+            "01JRKBDR0B7W72V1EHNH78WKTF"
+        ));
         // GitHub issue numbers should NOT look like ULIDs
         assert!(!crate::helpers::looks_like_ulid("680"));
         assert!(!crate::helpers::looks_like_ulid("42"));
         // Too short / too long
         assert!(!crate::helpers::looks_like_ulid("01HXYZ"));
-        assert!(!crate::helpers::looks_like_ulid("01HXYZABCDEFGHJKMNPQRSTVWXYZ"));
+        assert!(!crate::helpers::looks_like_ulid(
+            "01HXYZABCDEFGHJKMNPQRSTVWXYZ"
+        ));
     }
 
     #[test]

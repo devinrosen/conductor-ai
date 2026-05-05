@@ -218,9 +218,7 @@ pub fn handle_worktree(
             // Resolve ticket ID: ULID passthrough vs source-id lookup.
             let resolved_ticket_id: Option<String> = match &ticket {
                 None => None,
-                Some(id) if crate::helpers::looks_like_ulid(id) => {
-                    Some(id.clone())
-                }
+                Some(id) if crate::helpers::looks_like_ulid(id) => Some(id.clone()),
                 Some(source_id) => {
                     let repo_obj = RepoManager::new(conn, config).get_by_slug(&repo)?;
                     let syncer = TicketSyncer::new(conn);
