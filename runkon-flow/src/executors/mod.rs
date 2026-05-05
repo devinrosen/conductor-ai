@@ -180,6 +180,10 @@ pub(super) fn build_action_params(
     bot_name: Option<String>,
     plugin_dirs: Vec<String>,
 ) -> crate::traits::action_executor::ActionParams {
+    let mut extensions = crate::extensions::Extensions::default();
+    if let Some(s) = schema {
+        extensions.insert(s);
+    }
     crate::traits::action_executor::ActionParams {
         name: name.to_string(),
         inputs,
@@ -188,7 +192,7 @@ pub(super) fn build_action_params(
         snippets,
         dry_run,
         gate_feedback,
-        schema,
+        extensions,
         model,
         bot_name,
         plugin_dirs,

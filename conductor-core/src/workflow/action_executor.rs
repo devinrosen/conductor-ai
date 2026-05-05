@@ -4,7 +4,6 @@ use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 
 use crate::error::Result;
-use crate::schema_config::OutputSchema;
 
 /// Trait for pluggable action execution.
 ///
@@ -43,8 +42,8 @@ pub struct ActionParams {
     /// Gate feedback string from the most recent gate step, if any.
     #[allow(dead_code)]
     pub gate_feedback: Option<String>,
-    /// Output schema for structured output validation, if any.
-    pub schema: Option<OutputSchema>,
+    /// Type-erased executor-specific extensions (e.g. `OutputSchema` for Claude steps).
+    pub extensions: runkon_flow::Extensions,
 }
 
 /// Output produced by an `ActionExecutor` on success.

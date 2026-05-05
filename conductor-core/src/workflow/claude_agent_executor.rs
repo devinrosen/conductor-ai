@@ -42,7 +42,12 @@ impl ActionExecutor for ClaudeAgentExecutor {
         // api_executor.  Routing through a trait reference preserves the
         // ActionExecutor abstraction — no concrete peer dependency.
         if let Some(ref api_exec) = self.api_executor {
-            if params.schema.is_some() && self.config.anthropic_api_key().is_some() {
+            if params
+                .extensions
+                .get::<crate::schema_config::OutputSchema>()
+                .is_some()
+                && self.config.anthropic_api_key().is_some()
+            {
                 return api_exec.execute(ectx, params);
             }
         }
@@ -102,10 +107,13 @@ impl ActionExecutor for ClaudeAgentExecutor {
 
         let succeeded = completed.status == RunStatus::Completed;
 
+        let schema_arc = params
+            .extensions
+            .get::<crate::schema_config::OutputSchema>();
         let (markers, context, structured_output) =
             crate::workflow::output::interpret_agent_output(
                 completed.result_text.as_deref(),
-                params.schema.as_ref(),
+                schema_arc.as_deref(),
                 succeeded,
             )
             .map_err(ConductorError::Workflow)?;

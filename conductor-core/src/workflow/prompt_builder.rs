@@ -134,10 +134,13 @@ pub(super) fn build_agent_prompt_from_params(
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
     let snippet_refs: Vec<&str> = params.snippets.iter().map(String::as_str).collect();
+    let schema_arc = params
+        .extensions
+        .get::<crate::schema_config::OutputSchema>();
     build_prompt_core(
         agent_def,
         &vars,
-        params.schema.as_ref(),
+        schema_arc.as_deref(),
         &snippet_refs,
         params.retry_error.as_deref(),
         agent_def.can_commit && params.dry_run,

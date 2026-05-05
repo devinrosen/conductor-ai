@@ -31,7 +31,7 @@ pub fn make_params(name: &str) -> ActionParams {
         snippets: vec![],
         dry_run: false,
         gate_feedback: None,
-        schema: None,
+        extensions: crate::extensions::Extensions::default(),
         model: None,
         bot_name: None,
         plugin_dirs: vec![],

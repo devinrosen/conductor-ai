@@ -175,7 +175,6 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
         };
 
         // Convert runkon-flow ActionParams → conductor-core ActionParams.
-        let core_schema = params.schema.clone();
         let core_params = crate::workflow::action_executor::ActionParams {
             name: params.name.clone(),
             inputs: (*params.inputs).clone(),
@@ -184,7 +183,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             snippets: params.snippets.clone(),
             dry_run: params.dry_run,
             gate_feedback: params.gate_feedback.clone(),
-            schema: core_schema,
+            extensions: params.extensions.clone(),
         };
 
         // Dispatch through the inner executor, then surface child_run_id so the
