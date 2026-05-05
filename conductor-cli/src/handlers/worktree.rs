@@ -245,7 +245,10 @@ pub fn handle_worktree(
                     ticket_id: resolved_ticket_id,
                 },
             )?;
-            println!("Adopted worktree '{}' (branch: {}) in repo '{}'", wt.slug, wt.branch, repo);
+            println!(
+                "Adopted worktree '{}' (branch: {}) in repo '{}'",
+                wt.slug, wt.branch, repo
+            );
             println!("  Path: {}", wt.path);
         }
         WorktreeCommands::CreateStack {

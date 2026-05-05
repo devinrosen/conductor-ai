@@ -2784,9 +2784,7 @@ fn test_adopt_rejects_detached_head() {
         .current_dir(&local)
         .output()
         .unwrap();
-    let head_sha = String::from_utf8_lossy(&head_out.stdout)
-        .trim()
-        .to_string();
+    let head_sha = String::from_utf8_lossy(&head_out.stdout).trim().to_string();
 
     let workspace = tmp.path().join("workspaces/test-adopt-detached");
     let wt_path = workspace.join("detached-wt");

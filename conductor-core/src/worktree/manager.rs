@@ -450,7 +450,12 @@ impl<'a> WorktreeManager<'a> {
     ///
     /// Refuses if an Active row already exists for `(repo_id, slug)`.
     /// A completed (merged/abandoned) row is purged to allow re-adoption.
-    pub fn adopt(&self, repo_slug: &str, path: &Path, opts: WorktreeAdoptOptions) -> Result<Worktree> {
+    pub fn adopt(
+        &self,
+        repo_slug: &str,
+        path: &Path,
+        opts: WorktreeAdoptOptions,
+    ) -> Result<Worktree> {
         let WorktreeAdoptOptions {
             branch: opt_branch,
             base_branch: opt_base_branch,
@@ -462,25 +467,18 @@ impl<'a> WorktreeManager<'a> {
 
         // Canonicalize the path (resolve symlinks, must exist on disk).
         let canonical_path = std::fs::canonicalize(path).map_err(|e| {
-            ConductorError::InvalidInput(format!(
-                "cannot resolve path '{}': {e}",
-                path.display()
-            ))
+            ConductorError::InvalidInput(format!("cannot resolve path '{}': {e}", path.display()))
         })?;
 
         // Validate path appears in `git worktree list --porcelain` for this repo.
-        let output = check_output(
-            git_in(&repo.local_path).args(["worktree", "list", "--porcelain"]),
-        )?;
+        let output =
+            check_output(git_in(&repo.local_path).args(["worktree", "list", "--porcelain"]))?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         let is_registered_worktree = stdout
             .lines()
             .filter_map(|line| line.strip_prefix("worktree "))
             .any(|wt_path| {
-                std::fs::canonicalize(wt_path)
-                    .ok()
-                    .as_deref()
-                    == Some(canonical_path.as_path())
+                std::fs::canonicalize(wt_path).ok().as_deref() == Some(canonical_path.as_path())
             });
 
         if !is_registered_worktree {
@@ -506,9 +504,7 @@ impl<'a> WorktreeManager<'a> {
         let branch = match opt_branch {
             Some(b) => b,
             None => {
-                let out = check_output(
-                    git_in(&canonical_path).args(["branch", "--show-current"]),
-                )?;
+                let out = check_output(git_in(&canonical_path).args(["branch", "--show-current"]))?;
                 let b = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 if b.is_empty() {
                     return Err(ConductorError::InvalidInput(
@@ -520,10 +516,10 @@ impl<'a> WorktreeManager<'a> {
         };
 
         // Derive base_branch using the same logic as create().
-        let base_branch =
-            Some(opt_base_branch.unwrap_or_else(|| {
-                resolve_base_branch(&repo.local_path, &repo.default_branch)
-            }));
+        let base_branch = Some(
+            opt_base_branch
+                .unwrap_or_else(|| resolve_base_branch(&repo.local_path, &repo.default_branch)),
+        );
 
         // Check for an existing worktree row with the same (repo_id, slug).
         let existing_status: Option<WorktreeStatus> = self
@@ -537,9 +533,7 @@ impl<'a> WorktreeManager<'a> {
 
         match existing_status {
             Some(WorktreeStatus::Active) => {
-                return Err(ConductorError::WorktreeAlreadyExists {
-                    slug: slug.clone(),
-                });
+                return Err(ConductorError::WorktreeAlreadyExists { slug: slug.clone() });
             }
             Some(_) => {
                 // Purge the completed record to allow slug reuse (mirrors create() behavior).
