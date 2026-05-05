@@ -1115,43 +1115,49 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conductor_core::workflow::{WorkflowRun, WorkflowRunStatus};
+    use conductor_core::workflow::{ConductorWorkflowRun, WorkflowRun, WorkflowRunStatus};
 
-    fn make_run(id: &str, parent_workflow_run_id: Option<&str>, dismissed: bool) -> WorkflowRun {
-        WorkflowRun {
-            id: id.to_string(),
-            workflow_name: "test".to_string(),
+    fn make_run(
+        id: &str,
+        parent_workflow_run_id: Option<&str>,
+        dismissed: bool,
+    ) -> ConductorWorkflowRun {
+        ConductorWorkflowRun {
+            run: WorkflowRun {
+                id: id.to_string(),
+                workflow_name: "test".to_string(),
+                parent_run_id: "agent-1".to_string(),
+                status: WorkflowRunStatus::Failed,
+                dry_run: false,
+                trigger: "manual".to_string(),
+                started_at: "2024-01-01T00:00:00Z".to_string(),
+                ended_at: None,
+                result_summary: None,
+                error: None,
+                definition_snapshot: None,
+                inputs: Default::default(),
+                parent_workflow_run_id: parent_workflow_run_id.map(String::from),
+                iteration: 0,
+                blocked_on: None,
+                workflow_title: None,
+                total_input_tokens: None,
+                total_output_tokens: None,
+                total_cache_read_input_tokens: None,
+                total_cache_creation_input_tokens: None,
+                total_turns: None,
+                total_cost_usd: None,
+                total_duration_ms: None,
+                model: None,
+                dismissed,
+                owner_token: None,
+                lease_until: None,
+                generation: 0,
+            },
             worktree_id: None,
-            parent_run_id: "agent-1".to_string(),
-            status: WorkflowRunStatus::Failed,
-            dry_run: false,
-            trigger: "manual".to_string(),
-            started_at: "2024-01-01T00:00:00Z".to_string(),
-            ended_at: None,
-            result_summary: None,
-            error: None,
-            definition_snapshot: None,
-            inputs: Default::default(),
             ticket_id: None,
             repo_id: None,
-            parent_workflow_run_id: parent_workflow_run_id.map(String::from),
             target_label: None,
             default_bot_name: None,
-            iteration: 0,
-            blocked_on: None,
-            workflow_title: None,
-            total_input_tokens: None,
-            total_output_tokens: None,
-            total_cache_read_input_tokens: None,
-            total_cache_creation_input_tokens: None,
-            total_turns: None,
-            total_cost_usd: None,
-            total_duration_ms: None,
-            model: None,
-            dismissed,
-            owner_token: None,
-            lease_until: None,
-            generation: 0,
         }
     }
 

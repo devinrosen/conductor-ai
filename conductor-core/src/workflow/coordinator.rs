@@ -236,7 +236,7 @@ pub(crate) fn guard_active_run(
             crate::workflow::cancel_run(conn, &active.id, "force override: new run requested")?;
         } else {
             return Err(ConductorError::WorkflowRunAlreadyActive {
-                name: active.workflow_name,
+                name: active.workflow_name.clone(),
             });
         }
     }
@@ -262,7 +262,8 @@ struct RkStateArgs {
     script_env_provider: Arc<dyn runkon_flow::ScriptEnvProvider>,
     workflow_run_id: String,
     workflow_name: String,
-    worktree_ctx: runkon_flow::engine::WorktreeContext,
+    run_ctx: std::sync::Arc<dyn runkon_flow::traits::run_context::RunContext>,
+    extra_plugin_dirs: Vec<String>,
     model: Option<String>,
     exec_config: runkon_flow::types::WorkflowExecConfig,
     inputs: HashMap<String, String>,
@@ -297,7 +298,8 @@ fn build_rk_execution_state(args: RkStateArgs) -> runkon_flow::engine::Execution
         script_env_provider: args.script_env_provider,
         workflow_run_id: args.workflow_run_id,
         workflow_name: args.workflow_name,
-        worktree_ctx: args.worktree_ctx,
+        run_ctx: args.run_ctx,
+        extra_plugin_dirs: args.extra_plugin_dirs,
         model: args.model,
         exec_config: args.exec_config,
         inputs: args.inputs,
@@ -343,18 +345,39 @@ fn build_flow_engine(
     db: &std::path::Path,
     workflow_name: &str,
 ) -> Result<runkon_flow::FlowEngine> {
-    super::runkon_gate_bridge::register_rk_gate_resolvers(
-        runkon_flow::FlowEngineBuilder::new().with_event_sinks(event_sinks),
-        Arc::clone(persistence),
-        working_dir,
-        default_bot_name,
-        config,
-        db.to_path_buf(),
-    )
-    .build()
-    .map_err(|e| {
-        ConductorError::Workflow(format!("failed to build engine for '{workflow_name}': {e}"))
-    })
+    use super::executors::resolvers::{
+        GitHubTokenCache, HumanApprovalGateResolver, HumanGateKind, PrApprovalGateResolver,
+        PrChecksGateResolver,
+    };
+    let token_cache = Arc::new(GitHubTokenCache::new(None));
+    runkon_flow::FlowEngineBuilder::new()
+        .with_event_sinks(event_sinks)
+        .gate_resolver(HumanApprovalGateResolver::new(
+            Arc::clone(persistence),
+            HumanGateKind::HumanApproval,
+        ))
+        .gate_resolver(HumanApprovalGateResolver::new(
+            Arc::clone(persistence),
+            HumanGateKind::HumanReview,
+        ))
+        .gate_resolver(PrApprovalGateResolver::new(
+            working_dir.clone(),
+            default_bot_name.clone(),
+            Arc::clone(&token_cache),
+            config.clone(),
+            db.to_path_buf(),
+        ))
+        .gate_resolver(PrChecksGateResolver::new(
+            working_dir,
+            default_bot_name,
+            token_cache,
+            config,
+            db.to_path_buf(),
+        ))
+        .build()
+        .map_err(|e| {
+            ConductorError::Workflow(format!("failed to build engine for '{workflow_name}': {e}"))
+        })
 }
 
 /// Map a [`runkon_flow::engine_error::EngineError`] to [`ConductorError`].
@@ -380,6 +403,8 @@ fn build_rk_engine_components(
     config: &crate::config::Config,
     shared_conn: &Arc<std::sync::Mutex<Connection>>,
     db: &std::path::Path,
+    target_label: Option<String>,
+    triggered_by_hook: bool,
 ) -> RkEngineComponents {
     let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> = Arc::new(
         super::persistence_sqlite::SqliteWorkflowPersistence::from_shared_connection(Arc::clone(
@@ -396,6 +421,8 @@ fn build_rk_engine_components(
             db.to_path_buf(),
             config.clone(),
             Arc::clone(shared_conn),
+            target_label,
+            triggered_by_hook,
         ));
     RkEngineComponents {
         persistence,
@@ -589,8 +616,8 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         )?;
 
         (
-            wf_run.id,
-            parent_run.id,
+            wf_run.id.clone(),
+            parent_run.id.clone(),
             merged_inputs,
             effective_repo_id,
             snapshot_json,
@@ -609,7 +636,13 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         persistence,
         action_registry,
         child_runner,
-    } = build_rk_engine_components(config, &shared_conn, &db);
+    } = build_rk_engine_components(
+        config,
+        &shared_conn,
+        &db,
+        params.target_label.clone(),
+        params.triggered_by_hook,
+    );
 
     let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(
         Arc::clone(&shared_conn),
@@ -635,14 +668,22 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         script_env_provider,
         workflow_run_id: wf_run_id.clone(),
         workflow_name: workflow.name.clone(),
-        worktree_ctx: runkon_flow::engine::WorktreeContext {
-            worktree_id: params.worktree_id.clone(),
-            working_dir: params.working_dir.clone(),
-            repo_path: params.repo_path.clone(),
-            ticket_id: params.ticket_id.clone(),
-            repo_id: effective_repo_id_owned,
-            extra_plugin_dirs: params.extra_plugin_dirs.clone(),
-        },
+        run_ctx: std::sync::Arc::new(super::run_context::WorktreeRunContext::new(
+            params.working_dir.clone(),
+            params.repo_path.clone(),
+            params.worktree_id.clone(),
+            params.ticket_id.clone(),
+            effective_repo_id_owned,
+            wf_run_id.clone(),
+            workflow.name.clone(),
+            if parent_run_id.is_empty() {
+                None
+            } else {
+                Some(parent_run_id.clone())
+            },
+            params.exec_config.shutdown.clone(),
+        )) as std::sync::Arc<dyn runkon_flow::traits::run_context::RunContext>,
+        extra_plugin_dirs: params.extra_plugin_dirs.clone(),
         model: params.model.clone(),
         exec_config: rk_exec_config,
         inputs: merged_inputs,
@@ -1096,7 +1137,13 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         persistence,
         action_registry,
         child_runner,
-    } = build_rk_engine_components(config, &shared_conn, &db);
+    } = build_rk_engine_components(
+        config,
+        &shared_conn,
+        &db,
+        wf_run.target_label.clone(),
+        wf_run.is_triggered_by_hook(),
+    );
 
     let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(
         Arc::clone(&shared_conn),
@@ -1120,14 +1167,22 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         script_env_provider,
         workflow_run_id: wf_run.id.clone(),
         workflow_name: wf_run.workflow_name.clone(),
-        worktree_ctx: runkon_flow::engine::WorktreeContext {
-            worktree_id: wf_run.worktree_id.clone(),
-            working_dir: worktree_path.clone(),
+        run_ctx: std::sync::Arc::new(super::run_context::WorktreeRunContext::new(
+            worktree_path.clone(),
             repo_path,
-            ticket_id: wf_run.ticket_id.clone(),
-            repo_id: wf_run.repo_id.clone(),
-            extra_plugin_dirs: vec![],
-        },
+            wf_run.worktree_id.clone(),
+            wf_run.ticket_id.clone(),
+            wf_run.repo_id.clone(),
+            wf_run.id.clone(),
+            wf_run.workflow_name.clone(),
+            if wf_run.parent_run_id.is_empty() {
+                None
+            } else {
+                Some(wf_run.parent_run_id.clone())
+            },
+            input.shutdown.clone(),
+        )) as std::sync::Arc<dyn runkon_flow::traits::run_context::RunContext>,
+        extra_plugin_dirs: vec![],
         model: input.model.map(String::from),
         exec_config: runkon_flow::types::WorkflowExecConfig {
             shutdown: input.shutdown.clone(),
@@ -1491,7 +1546,7 @@ mod tests {
             rusqlite::params![run.id],
         )
         .unwrap();
-        run.id
+        run.id.clone()
     }
 
     #[test]
@@ -1755,7 +1810,7 @@ mod tests {
                 rusqlite::params![run.id],
             )
             .unwrap();
-            run.id
+            run.id.clone()
         };
 
         let config = crate::config::Config::default();
@@ -1794,7 +1849,7 @@ mod tests {
                 rusqlite::params![run.id],
             )
             .unwrap();
-            run.id
+            run.id.clone()
         };
 
         let config = crate::config::Config::default();
@@ -1938,7 +1993,7 @@ mod tests {
             rusqlite::params![run.id],
         )
         .unwrap();
-        run.id
+        run.id.clone()
     }
 
     #[test]
@@ -2078,7 +2133,7 @@ mod tests {
                 rusqlite::params![run.id],
             )
             .unwrap();
-            run.id
+            run.id.clone()
         };
 
         let config = crate::config::Config::default();
@@ -2147,7 +2202,7 @@ mod tests {
                 rusqlite::params![run.id],
             )
             .unwrap();
-            run.id
+            run.id.clone()
         };
 
         // Reopen via a shared_conn (as the coordinator does) and run the same

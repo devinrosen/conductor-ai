@@ -392,7 +392,7 @@ async fn main() -> Result<()> {
                 {
                     let run_by_id: std::collections::HashMap<
                         &str,
-                        &conductor_core::workflow::WorkflowRun,
+                        &conductor_core::workflow::ConductorWorkflowRun,
                     > = workflow_runs.iter().map(|r| (r.id.as_str(), r)).collect();
                     for t in &wf_transitions {
                         if t.succeeded && t.parent_workflow_run_id.is_none() {

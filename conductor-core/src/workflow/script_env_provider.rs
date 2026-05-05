@@ -91,23 +91,14 @@ impl ScriptEnvProvider for ConductorScriptEnvProvider {
 mod tests {
     use super::*;
 
-    struct NoopCtx;
-    impl RunContext for NoopCtx {
-        fn injected_variables(&self) -> HashMap<&'static str, String> {
-            HashMap::new()
-        }
-        fn working_dir(&self) -> &std::path::Path {
-            std::path::Path::new("/tmp")
-        }
-        fn repo_path(&self) -> &std::path::Path {
-            std::path::Path::new("/tmp")
-        }
+    fn noop_ctx() -> runkon_flow::traits::run_context::NoopRunContext {
+        runkon_flow::traits::run_context::NoopRunContext::default()
     }
 
     #[test]
     fn test_env_empty_when_no_bin_dir_and_no_bot() {
         let provider = ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()));
-        let env = provider.env(&NoopCtx, None);
+        let env = provider.env(&noop_ctx(), None);
         assert!(
             env.is_empty(),
             "expected empty env when no bin_dir and no bot, got: {env:?}"
@@ -119,7 +110,7 @@ mod tests {
         let bin_dir = std::path::PathBuf::from("/usr/local/bin/conductor-dir");
         let provider =
             ConductorScriptEnvProvider::new(Some(bin_dir), vec![], Arc::new(Config::default()));
-        let env = provider.env(&NoopCtx, None);
+        let env = provider.env(&noop_ctx(), None);
         let path = env.get("PATH").expect("PATH should be set");
         assert!(
             path.starts_with("/usr/local/bin/conductor-dir"),
@@ -135,7 +126,7 @@ mod tests {
             vec!["/opt/plugins".to_string(), "/home/user/plugins".to_string()],
             Arc::new(Config::default()),
         );
-        let env = provider.env(&NoopCtx, None);
+        let env = provider.env(&noop_ctx(), None);
         let path = env.get("PATH").expect("PATH should be set");
         let parts: Vec<&str> = path.splitn(4, ':').collect();
         assert_eq!(parts[0], "/bin/conductor");
@@ -149,7 +140,7 @@ mod tests {
         // Caller must NOT see a GH_TOKEN in the env (otherwise scripts
         // would inherit a stale or empty token).
         let provider = ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()));
-        let env = provider.env(&NoopCtx, Some("reviewer"));
+        let env = provider.env(&noop_ctx(), Some("reviewer"));
         assert!(
             !env.contains_key("GH_TOKEN"),
             "GH_TOKEN must not be set when the named bot is not configured"
@@ -159,7 +150,7 @@ mod tests {
     #[test]
     fn no_bot_name_omits_gh_token() {
         let provider = ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()));
-        let env = provider.env(&NoopCtx, None);
+        let env = provider.env(&noop_ctx(), None);
         assert!(!env.contains_key("GH_TOKEN"));
     }
 }

@@ -1,5 +1,6 @@
 use crate::agent::{AgentRun, AgentRunStatus};
-use crate::workflow::{WorkflowRun, WorkflowRunStatus};
+use crate::workflow::types::ConductorWorkflowRun;
+use crate::workflow::WorkflowRunStatus;
 
 use super::parse_target_label;
 
@@ -23,7 +24,7 @@ pub struct WorkflowTerminalTransition {
 /// `seen` is updated in-place, stale entries are pruned, and `initialized`
 /// prevents spurious notifications on the first call.
 pub fn detect_workflow_terminal_transitions<'a>(
-    runs: impl Iterator<Item = &'a WorkflowRun>,
+    runs: impl Iterator<Item = &'a ConductorWorkflowRun>,
     seen: &mut std::collections::HashMap<String, WorkflowRunStatus>,
     initialized: &mut bool,
 ) -> Vec<WorkflowTerminalTransition> {

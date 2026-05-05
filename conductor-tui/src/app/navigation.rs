@@ -1732,25 +1732,25 @@ mod tests {
     fn make_test_run_with_worktree(
         id: &str,
         worktree_id: &str,
-    ) -> conductor_core::workflow::WorkflowRun {
+    ) -> conductor_core::workflow::ConductorWorkflowRun {
         let mut run = crate::state::tests::make_wf_run_full(
             id,
             conductor_core::workflow::WorkflowRunStatus::Running,
             None,
         );
         run.worktree_id = Some(worktree_id.into());
-        run.parent_run_id = String::new();
+        run.run.parent_run_id = String::new();
         run
     }
 
-    fn make_test_run_without_worktree(id: &str) -> conductor_core::workflow::WorkflowRun {
+    fn make_test_run_without_worktree(id: &str) -> conductor_core::workflow::ConductorWorkflowRun {
         let mut run = crate::state::tests::make_wf_run_full(
             id,
             conductor_core::workflow::WorkflowRunStatus::Running,
             None,
         );
         run.worktree_id = None;
-        run.parent_run_id = String::new();
+        run.run.parent_run_id = String::new();
         run
     }
 

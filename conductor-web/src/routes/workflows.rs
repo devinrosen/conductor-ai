@@ -9,8 +9,8 @@ use conductor_core::error::ConductorError;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
     apply_workflow_input_defaults, estimation, execute_workflow_standalone,
-    validate_resume_preconditions, FanOutItemRow, GateAnalyticsRow, InputDecl,
-    PendingGateAnalyticsRow, RunIdSlot, StepFailureHeatmapRow, StepRetryAnalyticsRow,
+    validate_resume_preconditions, ConductorWorkflowRun, FanOutItemRow, GateAnalyticsRow,
+    InputDecl, PendingGateAnalyticsRow, RunIdSlot, StepFailureHeatmapRow, StepRetryAnalyticsRow,
     StepTokenHeatmapRow, TimeGranularity, WorkflowDef, WorkflowExecConfig, WorkflowExecStandalone,
     WorkflowFailureRateTrendRow, WorkflowPercentiles, WorkflowRegressionSignal,
     WorkflowResumeStandalone, WorkflowRun, WorkflowRunMetricsRow, WorkflowRunStatus,
@@ -110,7 +110,7 @@ fn fire_notification_via_state(state: &AppState, args: &WorkflowNotificationArgs
 #[derive(Serialize, utoipa::ToSchema)]
 pub struct WorkflowRunResponse {
     #[serde(flatten)]
-    run: WorkflowRun,
+    run: ConductorWorkflowRun,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     active_steps: Vec<WorkflowRunStep>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -462,7 +462,7 @@ pub async fn run_workflow(
             conductor_core::workflow::get_active_run_for_worktree(&db, &worktree_id)?
         {
             return Err(ApiError::Core(ConductorError::WorkflowRunAlreadyActive {
-                name: active.workflow_name,
+                name: active.workflow_name.clone(),
             }));
         }
 
@@ -607,7 +607,7 @@ pub async fn run_workflow(
 fn check_no_active_run(conn: &rusqlite::Connection, wt_id: &str) -> Result<(), ApiError> {
     if let Some(active) = conductor_core::workflow::get_active_run_for_worktree(conn, wt_id)? {
         return Err(ApiError::Core(ConductorError::WorkflowRunAlreadyActive {
-            name: active.workflow_name,
+            name: active.workflow_name.clone(),
         }));
     }
     Ok(())
@@ -1131,7 +1131,7 @@ pub async fn list_all_workflow_runs_handler(
         ("id" = String, Path, description = "Worktree ID"),
     ),
     responses(
-        (status = 200, description = "List of workflow runs for worktree", body = Vec<WorkflowRun>),
+        (status = 200, description = "List of workflow runs for worktree", body = Vec<ConductorWorkflowRun>),
     ),
     tag = "workflows",
 )]
@@ -1139,7 +1139,7 @@ pub async fn list_all_workflow_runs_handler(
 pub async fn list_workflow_runs(
     State(state): State<AppState>,
     Path(worktree_id): Path<String>,
-) -> Result<Json<Vec<WorkflowRun>>, ApiError> {
+) -> Result<Json<Vec<ConductorWorkflowRun>>, ApiError> {
     let db = state.db.lock().await;
     let runs = conductor_core::workflow::list_workflow_runs(&db, &worktree_id)?;
     Ok(Json(runs))
@@ -1152,7 +1152,7 @@ pub async fn list_workflow_runs(
         ("id" = String, Path, description = "Workflow run ID"),
     ),
     responses(
-        (status = 200, description = "Workflow run", body = WorkflowRun),
+        (status = 200, description = "Workflow run", body = ConductorWorkflowRun),
         (status = 404, description = "Workflow run not found"),
     ),
     tag = "workflows",
@@ -1161,7 +1161,7 @@ pub async fn list_workflow_runs(
 pub async fn get_workflow_run(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<WorkflowRun>, ApiError> {
+) -> Result<Json<ConductorWorkflowRun>, ApiError> {
     let db = state.db.lock().await;
     let run = conductor_core::workflow::get_workflow_run(&db, &id)?
         .ok_or_else(|| ApiError::Core(ConductorError::WorkflowRunNotFound { id: id.clone() }))?;
@@ -2850,6 +2850,7 @@ mod tests {
         )
         .unwrap()
         .id
+        .clone()
     }
 
     #[tokio::test]

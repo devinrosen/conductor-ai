@@ -174,10 +174,11 @@ workflow my-wf {
         conductor_core::workflow::WorkflowRunStatus::Running,
         None,
     );
-    run.workflow_name = "my-wf".to_string();
-    run.parent_run_id = String::new();
-    run.definition_snapshot = Some(snapshot.to_string());
-    run.inputs
+    run.run.workflow_name = "my-wf".to_string();
+    run.run.parent_run_id = String::new();
+    run.run.definition_snapshot = Some(snapshot.to_string());
+    run.run
+        .inputs
         .insert("pr_url".to_string(), "https://example.com".to_string());
 
     app.update(Action::WorkflowDataRefreshed(Box::new(
@@ -1777,13 +1778,13 @@ fn clear_workflow_filter_resets_all_filter_state() {
 // and visible_workflow_run_rows_len
 // ═══════════════════════════════════════════════════════════════════════
 
-fn make_wf_run_named(id: &str, name: &str) -> conductor_core::workflow::WorkflowRun {
+fn make_wf_run_named(id: &str, name: &str) -> conductor_core::workflow::ConductorWorkflowRun {
     let mut run = crate::state::tests::make_wf_run_full(
         id,
         conductor_core::workflow::WorkflowRunStatus::Running,
         None,
     );
-    run.workflow_name = name.to_string();
+    run.run.workflow_name = name.to_string();
     run
 }
 
@@ -1911,7 +1912,7 @@ fn workflow_name_filter_matching_parent_shows_child_even_when_child_name_differs
     // Parent matches filter; child does not match by name but is still shown as a child.
     let parent = make_wf_run_named("p1", "process-release");
     let mut child = make_wf_run_named("c1", "process-feature");
-    child.parent_workflow_run_id = Some("p1".to_string());
+    child.run.parent_workflow_run_id = Some("p1".to_string());
     app.state.data.workflow_runs = vec![parent, child];
     app.state.workflow_name_filter = Some("release".to_string());
     app.state.rebuild_workflow_run_rows();

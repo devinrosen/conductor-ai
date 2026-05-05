@@ -363,7 +363,7 @@ mod tests {
             conductor_core::workflow::update_workflow_status(&conn, &run.id, status, None, None)
                 .expect("update status");
         }
-        run.id
+        run.id.clone()
     }
 
     /// Helper: create an agent run and set its log_file in one shot. Returns the run id.
@@ -395,7 +395,7 @@ mod tests {
         let step_id =
             conductor_core::workflow::insert_step(&conn, &run.id, step_name, "actor", false, 0, 0)
                 .expect("insert step");
-        (run.id, step_id)
+        (run.id.clone(), step_id)
     }
 
     #[test]

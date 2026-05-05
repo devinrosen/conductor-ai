@@ -510,7 +510,7 @@ impl App {
                             .iter_mut()
                             .find(|r| r.id == run_id)
                         {
-                            run.dismissed = dismissed;
+                            run.run.dismissed = dismissed;
                         }
                         self.state.rebuild_workflow_run_rows();
                         self.clamp_workflow_indices();

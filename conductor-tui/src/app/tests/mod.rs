@@ -105,15 +105,15 @@ fn make_test_app() -> App {
     )
 }
 
-fn make_test_run(id: &str) -> conductor_core::workflow::WorkflowRun {
+fn make_test_run(id: &str) -> conductor_core::workflow::ConductorWorkflowRun {
     let mut run = crate::state::tests::make_wf_run_full(
         id,
         conductor_core::workflow::WorkflowRunStatus::Running,
         None,
     );
-    run.workflow_name = "test".into();
+    run.run.workflow_name = "test".into();
     run.worktree_id = Some("w1".into());
-    run.parent_run_id = String::new();
+    run.run.parent_run_id = String::new();
     run
 }
 

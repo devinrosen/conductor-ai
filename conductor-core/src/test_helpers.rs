@@ -39,6 +39,10 @@ pub fn make_ectx() -> ExecutionContext {
 
 /// Build a minimal `ActionParams` for unit tests.
 pub fn make_action_params(schema: Option<crate::schema_config::OutputSchema>) -> ActionParams {
+    let mut extensions = runkon_flow::Extensions::default();
+    if let Some(s) = schema {
+        extensions.insert(s);
+    }
     ActionParams {
         name: "test-agent".to_string(),
         inputs: std::collections::HashMap::new(),
@@ -47,7 +51,7 @@ pub fn make_action_params(schema: Option<crate::schema_config::OutputSchema>) ->
         snippets: vec![],
         dry_run: false,
         gate_feedback: None,
-        schema,
+        extensions,
     }
 }
 
@@ -65,7 +69,7 @@ pub fn make_params(name: &str) -> ActionParams {
         snippets: vec![],
         dry_run: false,
         gate_feedback: None,
-        schema: None,
+        extensions: runkon_flow::Extensions::default(),
     }
 }
 

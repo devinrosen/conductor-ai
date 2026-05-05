@@ -167,7 +167,7 @@ fn setup_standalone_run(
     )
     .unwrap();
     crate::workflow::update_workflow_status(&conn, &run.id, status, None, None).unwrap();
-    (_tmp, db_path, run.id, config)
+    (_tmp, db_path, run.id.clone(), config)
 }
 
 /// Build a `WorkflowResumeInput` with all-default optional fields.

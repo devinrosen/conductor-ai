@@ -5,7 +5,7 @@
 //!
 //! All items are `pub(super)` — visible to the parent `workflow` module only.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use runkon_flow::engine_error::EngineError;
@@ -45,13 +45,7 @@ pub(super) fn core_action_output_to_rk(
         context: core.context,
         result_text: core.result_text,
         structured_output: core.structured_output,
-        cost_usd: core.cost_usd,
-        num_turns: core.num_turns,
-        duration_ms: core.duration_ms,
-        input_tokens: core.input_tokens,
-        output_tokens: core.output_tokens,
-        cache_read_input_tokens: core.cache_read_input_tokens,
-        cache_creation_input_tokens: core.cache_creation_input_tokens,
+        metadata: core.metadata,
         child_run_id: None,
     }
 }
@@ -112,7 +106,8 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
 
     fn execute(
         &self,
-        ectx: &runkon_flow::traits::action_executor::ExecutionContext,
+        ctx: &dyn runkon_flow::traits::run_context::RunContext,
+        info: &runkon_flow::traits::action_executor::StepInfo,
         params: &runkon_flow::traits::action_executor::ActionParams,
     ) -> Result<runkon_flow::traits::action_executor::ActionOutput, EngineError> {
         // ClaudeAgentExecutor needs a pre-created agent_runs row ID as `run_id` so
@@ -125,11 +120,12 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             let agent_mgr = crate::agent::AgentManager::new(&conn);
             let child_run = agent_mgr
                 .create_child_run(
-                    ectx.worktree_id.as_deref(),
+                    ctx.get(runkon_flow::traits::run_context::keys::WORKTREE_ID)
+                        .as_deref(),
                     &format!("Workflow step: {}", params.name),
-                    ectx.model.as_deref(),
-                    &ectx.parent_run_id,
-                    ectx.bot_name.as_deref(),
+                    params.model.as_deref(),
+                    ctx.parent_run_id().unwrap_or(""),
+                    params.bot_name.as_deref(),
                 )
                 .map_err(|e| {
                     EngineError::Workflow(format!(
@@ -138,17 +134,17 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                     ))
                 })?;
 
-            if !ectx.step_id.is_empty() {
+            if !info.step_id.is_empty() {
                 // Best-effort pre-execution link so the TUI can show live agent output
                 // while the step is running. The ActionOutput written by the executor
                 // after execution completes is the authoritative source of child_run_id.
                 if let Err(e) =
-                    crate::workflow::update_step_child_run_id(&conn, &ectx.step_id, &child_run.id)
+                    crate::workflow::update_step_child_run_id(&conn, &info.step_id, &child_run.id)
                 {
                     tracing::warn!(
                         "step '{}' (step_id={}): failed to link child_run_id {}: {e}",
                         params.name,
-                        ectx.step_id,
+                        info.step_id,
                         child_run.id,
                     );
                 }
@@ -157,27 +153,28 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             child_run.id
         };
 
-        // Convert runkon-flow ExecutionContext → conductor-core ExecutionContext,
-        // injecting db_path which exists only in the conductor-core variant.
-        // run_id is the freshly-created agent_run ID (not the workflow step ID).
+        // Assemble conductor-core ExecutionContext from the three-input split:
+        // ctx (RunContext), info (StepInfo), params (ActionParams), plus db_path
+        // from the adapter. run_id is the freshly-created agent_run ID.
         let core_ectx = crate::workflow::action_executor::ExecutionContext {
             run_id: child_run_id.clone(),
-            working_dir: ectx.working_dir.clone(),
-            repo_path: ectx.repo_path.clone(),
+            working_dir: ctx.working_dir().to_path_buf(),
+            repo_path: ctx
+                .get(runkon_flow::traits::run_context::keys::REPO_PATH)
+                .unwrap_or_default(),
             db_path: self.db_path.clone(),
-            step_timeout: ectx.step_timeout,
-            shutdown: ectx.shutdown.clone(),
-            model: ectx.model.clone(),
-            bot_name: ectx.bot_name.clone(),
-            plugin_dirs: ectx.plugin_dirs.clone(),
-            workflow_name: ectx.workflow_name.clone(),
-            worktree_id: ectx.worktree_id.clone(),
-            parent_run_id: ectx.parent_run_id.clone(),
-            step_id: ectx.step_id.clone(),
+            step_timeout: info.step_timeout,
+            shutdown: ctx.shutdown().cloned(),
+            model: params.model.clone(),
+            bot_name: params.bot_name.clone(),
+            plugin_dirs: params.plugin_dirs.clone(),
+            workflow_name: ctx.workflow_name().to_string(),
+            worktree_id: ctx.get(runkon_flow::traits::run_context::keys::WORKTREE_ID),
+            parent_run_id: ctx.parent_run_id().unwrap_or("").to_string(),
+            step_id: info.step_id.clone(),
         };
 
         // Convert runkon-flow ActionParams → conductor-core ActionParams.
-        let core_schema = params.schema.clone();
         let core_params = crate::workflow::action_executor::ActionParams {
             name: params.name.clone(),
             inputs: (*params.inputs).clone(),
@@ -186,7 +183,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             snippets: params.snippets.clone(),
             dry_run: params.dry_run,
             gate_feedback: params.gate_feedback.clone(),
-            schema: core_schema,
+            extensions: params.extensions.clone(),
         };
 
         // Dispatch through the inner executor, then surface child_run_id so the
@@ -213,6 +210,7 @@ fn core_fan_out_item_to_rk(
         item_type: item.item_type,
         item_id: item.item_id,
         item_ref: item.item_ref,
+        context: item.context,
     }
 }
 
@@ -226,7 +224,6 @@ fn delegate_items<P: ItemProvider>(
     config: &crate::config::Config,
     scope: Option<&runkon_flow::dsl::ForeachScope>,
     filter: &HashMap<String, String>,
-    existing_set: &HashSet<String>,
     provider: P,
 ) -> Result<Vec<runkon_flow::traits::item_provider::FanOutItem>, EngineError> {
     let guard = conn.lock().map_err(bridge_lock_err)?;
@@ -235,7 +232,7 @@ fn delegate_items<P: ItemProvider>(
         config,
     };
     provider
-        .items(&core_ctx, scope, filter, existing_set)
+        .items(&core_ctx, scope, filter)
         .map(|items: Vec<crate::workflow::item_provider::FanOutItem>| {
             items.into_iter().map(core_fan_out_item_to_rk).collect()
         })
@@ -262,19 +259,12 @@ macro_rules! impl_rk_item_provider_trait {
             }
             fn items(
                 &self,
-                _ctx: &runkon_flow::traits::item_provider::ProviderContext,
+                _ctx: &dyn runkon_flow::traits::run_context::RunContext,
+                _info: &runkon_flow::traits::item_provider::ProviderInfo,
                 scope: Option<&runkon_flow::dsl::ForeachScope>,
                 filter: &HashMap<String, String>,
-                existing_set: &HashSet<String>,
             ) -> Result<Vec<runkon_flow::traits::item_provider::FanOutItem>, EngineError> {
-                delegate_items(
-                    &self.conn,
-                    &self.config,
-                    scope,
-                    filter,
-                    existing_set,
-                    self.provider(),
-                )
+                delegate_items(&self.conn, &self.config, scope, filter, self.provider())
             }
             fn supports_ordered(&self) -> bool {
                 self.provider().supports_ordered()
@@ -372,6 +362,9 @@ pub(super) struct ConductorChildWorkflowRunner {
     db_path: std::path::PathBuf,
     config: crate::config::Config,
     conn: Arc<Mutex<rusqlite::Connection>>,
+    /// Cached from the parent run at construction time to avoid a per-child DB round-trip.
+    target_label: Option<String>,
+    triggered_by_hook: bool,
 }
 
 impl ConductorChildWorkflowRunner {
@@ -379,11 +372,15 @@ impl ConductorChildWorkflowRunner {
         db_path: std::path::PathBuf,
         config: crate::config::Config,
         conn: Arc<Mutex<rusqlite::Connection>>,
+        target_label: Option<String>,
+        triggered_by_hook: bool,
     ) -> Self {
         Self {
             db_path,
             config,
             conn,
+            target_label,
+            triggered_by_hook,
         }
     }
 
@@ -423,9 +420,14 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
     ) -> runkon_flow::engine_error::Result<runkon_flow::types::WorkflowResult> {
         // Load the real workflow definition from disk. The runner resolves the
         // actual definition by name from the worktree/repo .conductor/workflows/ directory.
+        let parent_working_dir = parent_ctx.run_ctx.working_dir_str();
+        let parent_repo_path = parent_ctx
+            .run_ctx
+            .get(runkon_flow::traits::run_context::keys::REPO_PATH)
+            .unwrap_or_default();
         let core_def = runkon_flow::dsl::load_workflow_by_name(
-            &parent_ctx.worktree_ctx.working_dir,
-            &parent_ctx.worktree_ctx.repo_path,
+            &parent_working_dir,
+            &parent_repo_path,
             workflow_name,
         )
         .map_err(|e| {
@@ -440,26 +442,31 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             ..parent_ctx.exec_config.clone()
         };
 
+        let parent_target_label = self.target_label.clone();
+        let parent_triggered_by_hook = self.triggered_by_hook;
+
         // Route child workflows through execute_workflow_standalone so they use
         // FlowEngine::run() — keeping event emission and step tracking consistent
         // between parent and child runs.
         let standalone_params = crate::workflow::types::WorkflowExecStandalone {
             config: self.config.clone(),
             workflow: core_def,
-            worktree_id: parent_ctx.worktree_ctx.worktree_id.clone(),
-            working_dir: parent_ctx.worktree_ctx.working_dir.clone(),
-            repo_path: parent_ctx.worktree_ctx.repo_path.clone(),
+            worktree_id: parent_ctx
+                .run_ctx
+                .get(runkon_flow::traits::run_context::keys::WORKTREE_ID),
+            working_dir: parent_working_dir,
+            repo_path: parent_repo_path,
             ticket_id: parent_ctx.inputs.get("ticket_id").cloned(),
             repo_id: parent_ctx.inputs.get("repo_id").cloned(),
             model: parent_ctx.model.clone(),
             exec_config,
             inputs: params.inputs,
-            target_label: parent_ctx.target_label.clone(),
+            target_label: parent_target_label,
             run_id_notify: None,
-            triggered_by_hook: parent_ctx.triggered_by_hook,
+            triggered_by_hook: parent_triggered_by_hook,
             conductor_bin_dir: None,
             force: false,
-            extra_plugin_dirs: parent_ctx.worktree_ctx.extra_plugin_dirs.clone(),
+            extra_plugin_dirs: parent_ctx.extra_plugin_dirs.clone(),
             db_path: Some(self.db_path.clone()),
             parent_workflow_run_id: Some(parent_ctx.workflow_run_id.clone()),
             depth: params.depth,
@@ -589,7 +596,6 @@ mod tests {
 
     #[test]
     fn delegate_items_propagates_mutex_poison() {
-        use std::collections::HashSet;
         let conn = Arc::new(Mutex::new(
             rusqlite::Connection::open_in_memory().expect("in-memory db"),
         ));
@@ -607,7 +613,6 @@ mod tests {
             &config,
             None,
             &HashMap::new(),
-            &HashSet::new(),
             crate::workflow::item_provider::repos::ReposProvider,
         );
         match result {
@@ -690,6 +695,8 @@ mod tests {
             std::path::PathBuf::from("/tmp/test.db"),
             crate::config::Config::default(),
             conn,
+            None,
+            false,
         );
 
         let sinks: Arc<[Arc<dyn EventSink>]> = Arc::from(vec![
@@ -698,20 +705,13 @@ mod tests {
         ]);
 
         let parent_ctx = ChildWorkflowContext {
-            worktree_ctx: runkon_flow::engine::WorktreeContext {
-                worktree_id: None,
-                working_dir: String::new(),
-                repo_path: String::new(),
-                ticket_id: None,
-                repo_id: None,
-                extra_plugin_dirs: vec![],
-            },
+            run_ctx: std::sync::Arc::new(runkon_flow::traits::run_context::NoopRunContext::default())
+                as std::sync::Arc<dyn runkon_flow::traits::run_context::RunContext>,
+            extra_plugin_dirs: vec![],
             workflow_run_id: "parent-run".to_string(),
             model: None,
-            target_label: None,
             exec_config: crate::workflow::WorkflowExecConfig::default(),
             inputs: HashMap::new(),
-            triggered_by_hook: false,
             event_sinks: Arc::clone(&sinks),
         };
 
@@ -736,23 +736,18 @@ mod tests {
             std::path::PathBuf::from("/tmp/test.db"),
             crate::config::Config::default(),
             conn,
+            None,
+            false,
         );
 
         let parent_ctx = ChildWorkflowContext {
-            worktree_ctx: runkon_flow::engine::WorktreeContext {
-                worktree_id: None,
-                working_dir: String::new(),
-                repo_path: String::new(),
-                ticket_id: None,
-                repo_id: None,
-                extra_plugin_dirs: vec![],
-            },
+            run_ctx: std::sync::Arc::new(runkon_flow::traits::run_context::NoopRunContext::default())
+                as std::sync::Arc<dyn runkon_flow::traits::run_context::RunContext>,
+            extra_plugin_dirs: vec![],
             workflow_run_id: "parent-run".to_string(),
             model: None,
-            target_label: None,
             exec_config: crate::workflow::WorkflowExecConfig::default(),
             inputs: HashMap::new(),
-            triggered_by_hook: false,
             event_sinks: Arc::<[Arc<dyn EventSink>]>::from(vec![]),
         };
 

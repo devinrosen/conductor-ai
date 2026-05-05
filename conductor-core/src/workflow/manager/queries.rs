@@ -7,14 +7,16 @@ use crate::db::{query_collect, sql_placeholders};
 use crate::error::{ConductorError, Result};
 
 use super::helpers::{
-    pending_gate_row_mapper, row_to_workflow_run, row_to_workflow_step,
+    pending_gate_row_mapper, row_to_conductor_run, row_to_workflow_run, row_to_workflow_step,
     waiting_gate_step_row_mapper,
 };
 use crate::workflow::constants::{
-    REGRESSION_COST_THRESHOLD_PCT, REGRESSION_DURATION_THRESHOLD_PCT,
+    CONDUCTOR_RUN_EXTRA, REGRESSION_COST_THRESHOLD_PCT, REGRESSION_DURATION_THRESHOLD_PCT,
     REGRESSION_FAILURE_RATE_THRESHOLD_PP, RUN_COLUMNS, STEP_COLUMNS_WITH_PREFIX,
 };
 use rusqlite::Connection;
+
+type WorkflowRunQueryResult = (String, String, String, String, Option<String>);
 
 /// Pre-expanded SELECT clause for step queries with agent-run token/cost columns.
 /// Computed once to avoid re-allocating the same `String` on every query.
@@ -27,10 +29,10 @@ use crate::workflow::WorkflowRunStatus;
 const ACTIVE_WORKTREE_GUARD: &str =
     "workflow_runs.worktree_id IS NULL OR worktrees.status = 'active'";
 use crate::workflow::types::{
-    ActiveWorkflowCounts, GateAnalyticsRow, PendingGateAnalyticsRow, PendingGateRow,
-    StepFailureHeatmapRow, StepRetryAnalyticsRow, StepTokenHeatmapRow, TimeGranularity,
-    WorkflowFailureRateTrendRow, WorkflowPercentiles, WorkflowRegressionSignal, WorkflowRunContext,
-    WorkflowRunMetricsRow, WorkflowTokenAggregate, WorkflowTokenTrendRow,
+    ActiveWorkflowCounts, ConductorWorkflowRun, GateAnalyticsRow, PendingGateAnalyticsRow,
+    PendingGateRow, StepFailureHeatmapRow, StepRetryAnalyticsRow, StepTokenHeatmapRow,
+    TimeGranularity, WorkflowFailureRateTrendRow, WorkflowPercentiles, WorkflowRegressionSignal,
+    WorkflowRunContext, WorkflowRunMetricsRow, WorkflowTokenAggregate, WorkflowTokenTrendRow,
 };
 use crate::workflow::{WorkflowRun, WorkflowRunStep, WorkflowStepSummary};
 
@@ -128,12 +130,12 @@ pub fn get_workflow_run_status(conn: &Connection, run_id: &str) -> Result<Option
         .optional()?)
 }
 
-pub fn get_workflow_run(conn: &Connection, id: &str) -> Result<Option<WorkflowRun>> {
+pub fn get_workflow_run(conn: &Connection, id: &str) -> Result<Option<ConductorWorkflowRun>> {
     Ok(conn
         .query_row(
-            &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE id = :id"),
+            &format!("SELECT {RUN_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs WHERE id = :id"),
             named_params! { ":id": id },
-            row_to_workflow_run,
+            row_to_conductor_run,
         )
         .optional()?)
 }
@@ -142,7 +144,7 @@ pub fn list_runs_by_status(
     conn: &Connection,
     statuses: &[&str],
     workflow_name: Option<&str>,
-) -> Result<Vec<(String, String)>> {
+) -> Result<Vec<WorkflowRunQueryResult>> {
     let placeholders = sql_placeholders(statuses.len());
     let mut conditions = vec![format!("status IN ({placeholders})")];
     let mut param_values: Vec<String> = statuses.iter().map(|s| s.to_string()).collect();
@@ -153,7 +155,7 @@ pub fn list_runs_by_status(
     }
 
     let sql = format!(
-        "SELECT id, workflow_name FROM workflow_runs WHERE {} ORDER BY started_at ASC",
+        "SELECT id, workflow_name, status, started_at, ticket_id FROM workflow_runs WHERE {} ORDER BY started_at ASC",
         conditions.join(" AND ")
     );
 
@@ -161,7 +163,15 @@ pub fn list_runs_by_status(
         conn,
         &sql,
         rusqlite::params_from_iter(param_values.iter()),
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        },
     )
 }
 
@@ -368,11 +378,11 @@ pub fn find_step_by_name_and_iteration(
 pub fn get_active_run_for_worktree(
     conn: &Connection,
     worktree_id: &str,
-) -> Result<Option<WorkflowRun>> {
+) -> Result<Option<ConductorWorkflowRun>> {
     let placeholders = sql_placeholders(WorkflowRunStatus::ACTIVE.len());
     let active_strings = WorkflowRunStatus::active_strings();
     let sql = format!(
-        "SELECT {RUN_COLUMNS} FROM workflow_runs \
+        "SELECT {RUN_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
              WHERE worktree_id = ? AND status IN ({placeholders}) \
              LIMIT 1"
     );
@@ -387,36 +397,42 @@ pub fn get_active_run_for_worktree(
         .query_row(
             &sql,
             rusqlite::params_from_iter(all_params.iter()),
-            row_to_workflow_run,
+            row_to_conductor_run,
         )
         .optional()?)
 }
 
-pub fn list_workflow_runs(conn: &Connection, worktree_id: &str) -> Result<Vec<WorkflowRun>> {
+pub fn list_workflow_runs(
+    conn: &Connection,
+    worktree_id: &str,
+) -> Result<Vec<ConductorWorkflowRun>> {
     query_collect(
-            conn,
-            &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE worktree_id = :worktree_id ORDER BY started_at DESC"),
-            named_params! { ":worktree_id": worktree_id },
-            row_to_workflow_run,
-        )
+        conn,
+        &format!(
+            "SELECT {RUN_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
+             WHERE worktree_id = :worktree_id ORDER BY started_at DESC"
+        ),
+        named_params! { ":worktree_id": worktree_id },
+        row_to_conductor_run,
+    )
 }
 
 pub fn list_workflow_runs_filtered(
     conn: &Connection,
     worktree_id: &str,
     status: Option<WorkflowRunStatus>,
-) -> Result<Vec<WorkflowRun>> {
+) -> Result<Vec<ConductorWorkflowRun>> {
     if let Some(s) = status {
         let status_str = s.to_string();
         query_collect(
             conn,
             &format!(
-                "SELECT {RUN_COLUMNS} FROM workflow_runs \
+                "SELECT {RUN_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
                      WHERE worktree_id = :worktree_id AND status = :status \
                      ORDER BY started_at DESC"
             ),
             named_params! { ":worktree_id": worktree_id, ":status": status_str },
-            row_to_workflow_run,
+            row_to_conductor_run,
         )
     } else {
         list_workflow_runs(conn, worktree_id)
@@ -429,7 +445,7 @@ pub fn list_workflow_runs_by_repo_id_filtered(
     limit: usize,
     offset: usize,
     status: Option<WorkflowRunStatus>,
-) -> Result<Vec<WorkflowRun>> {
+) -> Result<Vec<ConductorWorkflowRun>> {
     if let Some(s) = status {
         let status_str = s.to_string();
         query_collect(
@@ -444,7 +460,7 @@ pub fn list_workflow_runs_by_repo_id_filtered(
                      ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
             ),
             named_params! { ":repo_id": repo_id, ":status": status_str, ":limit": limit as i64, ":offset": offset as i64 },
-            row_to_workflow_run,
+            row_to_conductor_run,
         )
     } else {
         list_workflow_runs_by_repo_id(conn, repo_id, limit, offset)
@@ -458,18 +474,18 @@ pub fn list_workflow_runs_filtered_paginated(
     status: Option<WorkflowRunStatus>,
     limit: usize,
     offset: usize,
-) -> Result<Vec<WorkflowRun>> {
+) -> Result<Vec<ConductorWorkflowRun>> {
     if let Some(s) = status {
         let status_str = s.to_string();
         query_collect(
             conn,
             &format!(
-                "SELECT {RUN_COLUMNS} FROM workflow_runs \
+                "SELECT {RUN_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
                      WHERE worktree_id = :worktree_id AND status = :status \
                      ORDER BY started_at DESC LIMIT :limit OFFSET :offset"
             ),
             named_params! { ":worktree_id": worktree_id, ":status": status_str, ":limit": limit as i64, ":offset": offset as i64 },
-            row_to_workflow_run,
+            row_to_conductor_run,
         )
     } else {
         list_workflow_runs_paginated(conn, worktree_id, limit, offset)
@@ -479,7 +495,10 @@ pub fn list_workflow_runs_filtered_paginated(
 /// List recent workflow runs across all worktrees, ordered by started_at DESC.
 /// Only includes runs whose associated worktree is `active` (or runs with no
 /// worktree, i.e. ephemeral/repo-targeted runs).
-pub fn list_all_workflow_runs(conn: &Connection, limit: usize) -> Result<Vec<WorkflowRun>> {
+pub fn list_all_workflow_runs(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<ConductorWorkflowRun>> {
     query_collect(
         conn,
         &format!(
@@ -490,7 +509,7 @@ pub fn list_all_workflow_runs(conn: &Connection, limit: usize) -> Result<Vec<Wor
                  ORDER BY workflow_runs.started_at DESC LIMIT :limit"
         ),
         named_params! { ":limit": limit as i64 },
-        row_to_workflow_run,
+        row_to_conductor_run,
     )
 }
 
@@ -510,7 +529,7 @@ fn effective_statuses(statuses: &[WorkflowRunStatus]) -> &[WorkflowRunStatus] {
 pub fn list_active_workflow_runs(
     conn: &Connection,
     statuses: &[WorkflowRunStatus],
-) -> Result<Vec<WorkflowRun>> {
+) -> Result<Vec<ConductorWorkflowRun>> {
     let effective = effective_statuses(statuses);
 
     let placeholders = sql_placeholders(effective.len());
@@ -529,7 +548,7 @@ pub fn list_active_workflow_runs(
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
         rusqlite::params_from_iter(status_strings.iter()),
-        row_to_workflow_run,
+        row_to_conductor_run,
     )?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
@@ -541,7 +560,7 @@ pub fn list_all_workflow_runs_filtered_paginated(
     status: Option<WorkflowRunStatus>,
     limit: usize,
     offset: usize,
-) -> Result<Vec<WorkflowRun>> {
+) -> Result<Vec<ConductorWorkflowRun>> {
     if let Some(s) = status {
         let status_str = s.to_string();
         query_collect(
@@ -555,7 +574,7 @@ pub fn list_all_workflow_runs_filtered_paginated(
                      ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
             ),
             named_params! { ":status": status_str, ":limit": limit as i64, ":offset": offset as i64 },
-            row_to_workflow_run,
+            row_to_conductor_run,
         )
     } else {
         query_collect(
@@ -568,7 +587,7 @@ pub fn list_all_workflow_runs_filtered_paginated(
                      ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
             ),
             named_params! { ":limit": limit as i64, ":offset": offset as i64 },
-            row_to_workflow_run,
+            row_to_conductor_run,
         )
     }
 }
@@ -582,7 +601,7 @@ pub fn list_workflow_runs_by_repo_id(
     repo_id: &str,
     limit: usize,
     offset: usize,
-) -> Result<Vec<WorkflowRun>> {
+) -> Result<Vec<ConductorWorkflowRun>> {
     query_collect(
         conn,
         &format!(
@@ -594,7 +613,7 @@ pub fn list_workflow_runs_by_repo_id(
                  ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
         ),
         named_params! { ":repo_id": repo_id, ":limit": limit as i64, ":offset": offset as i64 },
-        row_to_workflow_run,
+        row_to_conductor_run,
     )
 }
 
@@ -605,32 +624,35 @@ pub fn list_workflow_runs_paginated(
     worktree_id: &str,
     limit: usize,
     offset: usize,
-) -> Result<Vec<WorkflowRun>> {
+) -> Result<Vec<ConductorWorkflowRun>> {
     query_collect(
         conn,
         &format!(
-            "SELECT {RUN_COLUMNS} FROM workflow_runs \
+            "SELECT {RUN_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
                  WHERE worktree_id = :worktree_id \
                  ORDER BY started_at DESC LIMIT :limit OFFSET :offset"
         ),
         named_params! { ":worktree_id": worktree_id, ":limit": limit as i64, ":offset": offset as i64 },
-        row_to_workflow_run,
+        row_to_conductor_run,
     )
 }
 
 /// List recent root workflow runs (those with no parent workflow run) across all
 /// worktrees, ordered by started_at DESC.  Used in the TUI per-worktree slot so that
 /// the root run wins over any concurrently-active child run.
-pub fn list_root_workflow_runs(conn: &Connection, limit: usize) -> Result<Vec<WorkflowRun>> {
+pub fn list_root_workflow_runs(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<ConductorWorkflowRun>> {
     query_collect(
         conn,
         &format!(
-            "SELECT {RUN_COLUMNS} FROM workflow_runs \
+            "SELECT {RUN_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
                  WHERE parent_workflow_run_id IS NULL \
                  ORDER BY started_at DESC LIMIT :limit"
         ),
         named_params! { ":limit": limit as i64 },
-        row_to_workflow_run,
+        row_to_conductor_run,
     )
 }
 
@@ -645,11 +667,11 @@ pub fn list_root_workflow_runs(conn: &Connection, limit: usize) -> Result<Vec<Wo
 pub fn list_active_non_worktree_workflow_runs(
     conn: &Connection,
     limit: i64,
-) -> Result<Vec<WorkflowRun>> {
+) -> Result<Vec<ConductorWorkflowRun>> {
     query_collect(
         conn,
         &format!(
-            "SELECT {RUN_COLUMNS} FROM workflow_runs \
+            "SELECT {RUN_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
                  WHERE parent_workflow_run_id IS NULL \
                    AND worktree_id IS NULL \
                    AND (\
@@ -662,7 +684,7 @@ pub fn list_active_non_worktree_workflow_runs(
                  ORDER BY started_at DESC LIMIT :limit"
         ),
         named_params! { ":limit": limit },
-        row_to_workflow_run,
+        row_to_conductor_run,
     )
 }
 
@@ -709,7 +731,7 @@ pub fn list_workflow_runs_for_scope(
     conn: &Connection,
     worktree_id: Option<&str>,
     global_limit: usize,
-) -> Result<Vec<WorkflowRun>> {
+) -> Result<Vec<ConductorWorkflowRun>> {
     match worktree_id {
         Some(wt_id) => list_workflow_runs(conn, wt_id),
         None => list_all_workflow_runs(conn, global_limit),
@@ -724,7 +746,7 @@ pub fn list_workflow_runs_for_repo(
     conn: &Connection,
     repo_id: &str,
     limit: usize,
-) -> Result<Vec<WorkflowRun>> {
+) -> Result<Vec<ConductorWorkflowRun>> {
     query_collect(
         conn,
         "SELECT DISTINCT workflow_runs.* \
@@ -733,7 +755,7 @@ pub fn list_workflow_runs_for_repo(
              WHERE workflow_runs.repo_id = :repo_id OR worktrees.repo_id = :repo_id \
              ORDER BY workflow_runs.started_at DESC LIMIT :limit",
         named_params! { ":repo_id": repo_id, ":limit": limit as i64 },
-        row_to_workflow_run,
+        row_to_conductor_run,
     )
 }
 
@@ -747,7 +769,7 @@ pub fn list_active_workflow_runs_for_repo(
     conn: &Connection,
     repo_id: &str,
     statuses: &[WorkflowRunStatus],
-) -> Result<Vec<WorkflowRun>> {
+) -> Result<Vec<ConductorWorkflowRun>> {
     let effective = effective_statuses(statuses);
 
     let placeholders = sql_placeholders(effective.len());
@@ -772,7 +794,7 @@ pub fn list_active_workflow_runs_for_repo(
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
         rusqlite::params_from_iter(all_params.iter()),
-        row_to_workflow_run,
+        row_to_conductor_run,
     )?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
@@ -2089,14 +2111,27 @@ mod tests {
         )
         .unwrap();
 
-        let step = super::find_waiting_gate(&conn, "run-gate-1")
+        super::find_waiting_gate(&conn, "run-gate-1")
             .unwrap()
             .expect("should find a waiting gate step");
 
-        assert_eq!(step.input_tokens, Some(1000));
-        assert_eq!(step.output_tokens, Some(200));
-        assert_eq!(step.cache_read_input_tokens, Some(50));
-        assert_eq!(step.cache_creation_input_tokens, Some(75));
+        let (input_tokens, output_tokens, cache_read, cache_creation): (
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+        ) = conn
+            .query_row(
+                "SELECT input_tokens, output_tokens, cache_read_input_tokens, \
+                 cache_creation_input_tokens FROM workflow_run_steps WHERE id = 'step-gate-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(input_tokens, Some(1000));
+        assert_eq!(output_tokens, Some(200));
+        assert_eq!(cache_read, Some(50));
+        assert_eq!(cache_creation, Some(75));
     }
 
     #[test]
@@ -2227,20 +2262,33 @@ mod tests {
         )
         .unwrap();
 
-        let step = super::find_waiting_gate(&conn, "run-gate-2")
+        super::find_waiting_gate(&conn, "run-gate-2")
             .unwrap()
             .expect("should find a waiting gate step");
 
+        let (input_tokens, output_tokens, cache_read, cache_creation): (
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+        ) = conn
+            .query_row(
+                "SELECT input_tokens, output_tokens, cache_read_input_tokens, \
+                 cache_creation_input_tokens FROM workflow_run_steps WHERE id = 'step-gate-2'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
         assert_eq!(
-            step.input_tokens, None,
+            input_tokens, None,
             "no agent_run → input_tokens should be None"
         );
         assert_eq!(
-            step.output_tokens, None,
+            output_tokens, None,
             "no agent_run → output_tokens should be None"
         );
-        assert_eq!(step.cache_read_input_tokens, None);
-        assert_eq!(step.cache_creation_input_tokens, None);
+        assert_eq!(cache_read, None);
+        assert_eq!(cache_creation, None);
     }
 
     /// Regression test for #2757: `list_workflow_runs_for_repo` previously interpolated

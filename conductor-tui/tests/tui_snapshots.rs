@@ -297,46 +297,50 @@ fn snap_worktree_detail_log_focus() {
 
 #[test]
 fn snap_workflow_run_detail_with_steps() {
-    use conductor_core::workflow::{WorkflowRun, WorkflowRunStatus, WorkflowRunStep};
+    use conductor_core::workflow::{
+        ConductorWorkflowRun, WorkflowRun, WorkflowRunStatus, WorkflowRunStep,
+    };
     let mut state = make_state();
     let repos = make_repos();
     state.data.repos = repos;
     state.data.rebuild_maps();
 
-    let run = WorkflowRun {
-        id: "01RUN0000000000000000000001".into(),
-        workflow_name: "deploy".into(),
+    let run = ConductorWorkflowRun {
+        run: WorkflowRun {
+            id: "01RUN0000000000000000000001".into(),
+            workflow_name: "deploy".into(),
+            parent_run_id: String::new(),
+            status: WorkflowRunStatus::Running,
+            dry_run: false,
+            trigger: "manual".into(),
+            started_at: "2024-01-15T10:00:00Z".into(),
+            ended_at: None,
+            result_summary: None,
+            error: None,
+            definition_snapshot: None,
+            inputs: std::collections::HashMap::new(),
+            parent_workflow_run_id: None,
+            iteration: 0,
+            blocked_on: None,
+            workflow_title: None,
+            total_input_tokens: None,
+            total_output_tokens: None,
+            total_cache_read_input_tokens: None,
+            total_cache_creation_input_tokens: None,
+            total_turns: None,
+            total_cost_usd: None,
+            total_duration_ms: None,
+            model: None,
+            dismissed: false,
+            owner_token: None,
+            lease_until: None,
+            generation: 0,
+        },
         worktree_id: Some("01WT00000000000000000000A1".into()),
-        parent_run_id: String::new(),
-        status: WorkflowRunStatus::Running,
-        dry_run: false,
-        trigger: "manual".into(),
-        started_at: "2024-01-15T10:00:00Z".into(),
-        ended_at: None,
-        result_summary: None,
-        error: None,
-        definition_snapshot: None,
-        inputs: std::collections::HashMap::new(),
         ticket_id: None,
         repo_id: None,
-        parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
-        iteration: 0,
-        blocked_on: None,
-        workflow_title: None,
-        total_input_tokens: None,
-        total_output_tokens: None,
-        total_cache_read_input_tokens: None,
-        total_cache_creation_input_tokens: None,
-        total_turns: None,
-        total_cost_usd: None,
-        total_duration_ms: None,
-        model: None,
-        dismissed: false,
-        owner_token: None,
-        lease_until: None,
-        generation: 0,
     };
 
     let steps = vec![
@@ -369,18 +373,11 @@ fn snap_workflow_run_detail_with_steps() {
             output_file: None,
             gate_options: None,
             gate_selections: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
             fan_out_total: None,
             fan_out_completed: 0,
             fan_out_failed: 0,
             fan_out_skipped: 0,
             step_error: None,
-            cost_usd: None,
-            num_turns: None,
-            duration_ms: None,
         },
         WorkflowRunStep {
             id: "step2".into(),
@@ -411,18 +408,11 @@ fn snap_workflow_run_detail_with_steps() {
             output_file: None,
             gate_options: None,
             gate_selections: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
             fan_out_total: None,
             fan_out_completed: 0,
             fan_out_failed: 0,
             fan_out_skipped: 0,
             step_error: None,
-            cost_usd: None,
-            num_turns: None,
-            duration_ms: None,
         },
     ];
 

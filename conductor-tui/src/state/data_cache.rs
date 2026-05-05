@@ -6,7 +6,7 @@ use conductor_core::agent::{
 use conductor_core::repo::Repo;
 use conductor_core::tickets::{Ticket, TicketDependencies, TicketLabel};
 use conductor_core::workflow::{
-    FanOutItemRow, InputDecl, LiveEstimate, WorkflowDef, WorkflowRun, WorkflowRunStep,
+    ConductorWorkflowRun, FanOutItemRow, InputDecl, LiveEstimate, WorkflowDef, WorkflowRunStep,
     WorkflowStepSummary,
 };
 use conductor_core::worktree::Worktree;
@@ -45,18 +45,18 @@ pub struct DataCache {
     /// Pending feedback request for the currently viewed worktree (if any)
     pub pending_feedback: Option<FeedbackRequest>,
     /// Most recent workflow run per worktree (worktree_id → run), for inline indicators.
-    pub latest_workflow_runs_by_worktree: HashMap<String, WorkflowRun>,
+    pub latest_workflow_runs_by_worktree: HashMap<String, ConductorWorkflowRun>,
     /// Currently-running step summary per workflow_run_id, for inline step indicators.
     pub workflow_step_summaries: HashMap<String, WorkflowStepSummary>,
     /// Active root workflow runs with no associated worktree (repo/ticket-targeted).
-    pub active_non_worktree_workflow_runs: Vec<WorkflowRun>,
+    pub active_non_worktree_workflow_runs: Vec<ConductorWorkflowRun>,
     /// Workflow definitions for the currently viewed worktree
     pub workflow_defs: Vec<WorkflowDef>,
     /// Pre-computed repo slug per def (parallel to `workflow_defs`).
     /// Populated by the background thread in global mode; empty in worktree-scoped mode.
     pub workflow_def_slugs: Vec<String>,
     /// Workflow runs for the currently viewed worktree (or all worktrees in global mode)
-    pub workflow_runs: Vec<WorkflowRun>,
+    pub workflow_runs: Vec<ConductorWorkflowRun>,
     /// Steps for the currently viewed workflow run
     pub workflow_steps: Vec<WorkflowRunStep>,
     /// Agent events for the currently selected workflow step's child_run_id

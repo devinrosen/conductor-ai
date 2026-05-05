@@ -6,20 +6,104 @@ pub(in crate::workflow) use human_approval::{HumanApprovalGateResolver, HumanGat
 pub(in crate::workflow) use pr_approval::PrApprovalGateResolver;
 pub(in crate::workflow) use pr_checks::PrChecksGateResolver;
 
+use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use crate::workflow::executors::gate_resolver::{GateContext, GitHubTokenCache};
+use crate::config::Config;
+
+// ---------------------------------------------------------------------------
+// GitHubTokenCache (moved from gate_resolver.rs)
+// ---------------------------------------------------------------------------
+
+/// Thread-safe cache for GitHub App installation tokens.
+///
+/// One `gh auth token` shell-out per TTL window (55 min on success, 30 s on
+/// failure).  `token_override` short-circuits the shell-out for tests.
+pub(in crate::workflow) struct GitHubTokenCache {
+    cache: Mutex<Option<(Option<String>, Instant)>>,
+    override_token: Option<String>,
+}
+
+impl GitHubTokenCache {
+    pub(in crate::workflow) fn new(token_override: Option<String>) -> Self {
+        Self {
+            cache: Mutex::new(None),
+            override_token: token_override,
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::workflow) fn set_cache_for_test(
+        &self,
+        token: Option<String>,
+        fetched_at: Instant,
+    ) {
+        *self.cache.lock().expect("token cache mutex poisoned") = Some((token, fetched_at));
+    }
+
+    /// Return the current token, refreshing if stale.
+    ///
+    /// Returns `None` when no GitHub App is configured and no override is set.
+    /// Never sets `GH_TOKEN=""` — callers must only set the env var when `Some`.
+    pub(in crate::workflow) fn get(
+        &self,
+        config: &Config,
+        bot_name: Option<&str>,
+    ) -> Option<String> {
+        if let Some(ref t) = self.override_token {
+            return Some(t.clone());
+        }
+        if bot_name.is_none() && config.github.app.is_none() {
+            return None;
+        }
+        let mut cache = match self.cache.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                tracing::warn!("token cache mutex poisoned; skipping token cache");
+                return None;
+            }
+        };
+        let needs_refresh = cache
+            .as_ref()
+            .map(|(cached_token, fetched_at)| {
+                let ttl = if cached_token.is_some() {
+                    Duration::from_secs(55 * 60)
+                } else {
+                    Duration::from_secs(30)
+                };
+                fetched_at.elapsed() > ttl
+            })
+            .unwrap_or(true);
+        if needs_refresh {
+            let token = crate::github_app::resolve_named_app_token(config, bot_name, "gate")
+                .token()
+                .map(String::from);
+            *cache = Some((token.clone(), Instant::now()));
+            token
+        } else {
+            cache.as_ref().and_then(|(t, _)| t.clone())
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GhGateCommon
+// ---------------------------------------------------------------------------
 
 /// Shared state for gate resolvers that call `gh` on behalf of a bot account.
 ///
-/// Centralises the 3-field constructor and token resolution so concrete
+/// Centralises the constructor and token resolution so concrete
 /// resolver types stay thin and a single-point change (e.g. adding a timeout)
 /// applies to all of them.
 pub(super) struct GhGateCommon {
     pub(super) working_dir: String,
     default_bot_name: Option<String>,
     token_cache: Arc<GitHubTokenCache>,
+    pub(super) config: Config,
+    #[allow(dead_code)]
+    pub(super) db_path: PathBuf,
 }
 
 impl GhGateCommon {
@@ -27,11 +111,15 @@ impl GhGateCommon {
         working_dir: String,
         default_bot_name: Option<String>,
         token_cache: Arc<GitHubTokenCache>,
+        config: Config,
+        db_path: PathBuf,
     ) -> Self {
         Self {
             working_dir,
             default_bot_name,
             token_cache,
+            config,
+            db_path,
         }
     }
 
@@ -40,10 +128,9 @@ impl GhGateCommon {
         &self,
         args: &[&str],
         params_bot: Option<&str>,
-        ctx: &GateContext<'_>,
     ) -> Option<serde_json::Value> {
         let effective_bot = params_bot.or(self.default_bot_name.as_deref());
-        let token = self.token_cache.get(ctx.config, effective_bot);
+        let token = self.token_cache.get(&self.config, effective_bot);
         run_gh_json(args, &self.working_dir, token.as_deref())
     }
 }
@@ -148,5 +235,105 @@ mod tests {
         // Must not panic; result is None because success=false.
         let result = process_gh_output(false, b"", &stderr);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_token_cache_override_short_circuits_shell() {
+        let cache = GitHubTokenCache::new(Some("test-token-override".into()));
+        let config = Config::default();
+        let token = cache.get(&config, None);
+        assert_eq!(token.as_deref(), Some("test-token-override"));
+    }
+
+    #[test]
+    fn test_token_cache_none_when_no_app_configured() {
+        let cache = GitHubTokenCache::new(None);
+        let config = Config::default(); // no github.app configured
+        let token = cache.get(&config, None);
+        assert!(
+            token.is_none(),
+            "expected None when no GitHub App configured"
+        );
+    }
+
+    #[test]
+    fn test_token_cache_ttl_success_path_override() {
+        let cache = GitHubTokenCache::new(Some("my-override-token".into()));
+        let config = Config::default();
+
+        let first = cache.get(&config, None);
+        let second = cache.get(&config, None);
+
+        assert_eq!(first.as_deref(), Some("my-override-token"));
+        assert_eq!(
+            first, second,
+            "override token must be returned consistently on repeated calls"
+        );
+    }
+
+    #[test]
+    fn test_token_cache_bot_name_none_no_app_returns_none() {
+        let cache = GitHubTokenCache::new(None);
+        let config = Config::default();
+        let token = cache.get(&config, None);
+        assert!(
+            token.is_none(),
+            "expected None when bot_name is None and no GitHub App configured"
+        );
+    }
+
+    #[test]
+    fn test_token_cache_stale_success_triggers_refresh() {
+        let cache = GitHubTokenCache::new(None);
+        let config = Config::default();
+        let stale_instant = Instant::now() - Duration::from_secs(56 * 60);
+        cache.set_cache_for_test(Some("old-token".into()), stale_instant);
+        let token = cache.get(&config, Some("bot"));
+        assert!(
+            token.is_none(),
+            "stale success entry must trigger refresh; cached token must not be returned"
+        );
+    }
+
+    #[test]
+    fn test_token_cache_fresh_success_no_refresh() {
+        let cache = GitHubTokenCache::new(None);
+        let config = Config::default();
+        let fresh_instant = Instant::now() - Duration::from_secs(60);
+        cache.set_cache_for_test(Some("live-token".into()), fresh_instant);
+        let token = cache.get(&config, Some("bot"));
+        assert_eq!(
+            token.as_deref(),
+            Some("live-token"),
+            "fresh success entry must be returned from cache without refresh"
+        );
+    }
+
+    #[test]
+    fn test_token_cache_stale_failure_triggers_refresh() {
+        let cache = GitHubTokenCache::new(None);
+        let config = Config::default();
+        let stale_instant = Instant::now() - Duration::from_secs(31);
+        cache.set_cache_for_test(None, stale_instant);
+        let token = cache.get(&config, Some("bot"));
+        assert!(
+            token.is_none(),
+            "refresh after stale failure should return None"
+        );
+        let token2 = cache.get(&config, Some("bot"));
+        assert!(token2.is_none());
+    }
+
+    #[test]
+    fn test_token_cache_fresh_failure_no_refresh() {
+        let cache = GitHubTokenCache::new(None);
+        let config = Config::default();
+        let fresh_instant = Instant::now() - Duration::from_secs(15);
+        cache.set_cache_for_test(None, fresh_instant);
+        let token = cache.get(&config, Some("bot"));
+        assert!(
+            token.is_none(),
+            "fresh failure entry must be returned from cache (None) without refresh"
+        );
     }
 }

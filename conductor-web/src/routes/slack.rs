@@ -6,7 +6,7 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
-use conductor_core::workflow::{WorkflowRun, WorkflowRunStatus};
+use conductor_core::workflow::{ConductorWorkflowRun, WorkflowRunStatus};
 
 use crate::state::AppState;
 
@@ -181,7 +181,7 @@ async fn handle_active(state: &AppState) -> SlackResponse {
 }
 
 /// Format active workflow runs as a Slack mrkdwn message.
-fn format_active_runs_for_slack(runs: &[WorkflowRun]) -> String {
+fn format_active_runs_for_slack(runs: &[ConductorWorkflowRun]) -> String {
     if runs.is_empty() {
         return "No active workflow runs.".to_string();
     }
@@ -325,43 +325,45 @@ mod tests {
 
     #[test]
     fn format_active_runs_includes_fields() {
-        use conductor_core::workflow::WorkflowRun;
+        use conductor_core::workflow::{ConductorWorkflowRun, WorkflowRun};
         use std::collections::HashMap;
 
-        let runs = vec![WorkflowRun {
-            id: "run-1".into(),
-            workflow_name: "deploy".into(),
+        let runs = vec![ConductorWorkflowRun {
+            run: WorkflowRun {
+                id: "run-1".into(),
+                workflow_name: "deploy".into(),
+                parent_run_id: String::new(),
+                status: WorkflowRunStatus::Running,
+                dry_run: false,
+                trigger: "manual".into(),
+                started_at: "2025-01-15T10:30:00Z".into(),
+                ended_at: None,
+                result_summary: None,
+                error: None,
+                definition_snapshot: None,
+                inputs: HashMap::new(),
+                parent_workflow_run_id: None,
+                iteration: 0,
+                blocked_on: None,
+                workflow_title: None,
+                total_input_tokens: None,
+                total_output_tokens: None,
+                total_cache_read_input_tokens: None,
+                total_cache_creation_input_tokens: None,
+                total_turns: None,
+                total_cost_usd: None,
+                total_duration_ms: None,
+                model: None,
+                dismissed: false,
+                owner_token: None,
+                lease_until: None,
+                generation: 0,
+            },
             worktree_id: None,
-            parent_run_id: String::new(),
-            status: WorkflowRunStatus::Running,
-            dry_run: false,
-            trigger: "manual".into(),
-            started_at: "2025-01-15T10:30:00Z".into(),
-            ended_at: None,
-            result_summary: None,
-            error: None,
-            definition_snapshot: None,
-            inputs: HashMap::new(),
             ticket_id: None,
             repo_id: None,
-            parent_workflow_run_id: None,
             target_label: Some("my-repo/main".into()),
             default_bot_name: None,
-            iteration: 0,
-            blocked_on: None,
-            workflow_title: None,
-            total_input_tokens: None,
-            total_output_tokens: None,
-            total_cache_read_input_tokens: None,
-            total_cache_creation_input_tokens: None,
-            total_turns: None,
-            total_cost_usd: None,
-            total_duration_ms: None,
-            model: None,
-            dismissed: false,
-            owner_token: None,
-            lease_until: None,
-            generation: 0,
         }];
         let output = format_active_runs_for_slack(&runs);
         assert!(output.contains("Active workflow runs (1)"));

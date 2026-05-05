@@ -7,6 +7,7 @@ use serde_json;
 use crate::agent::AgentManager;
 use crate::error::{ConductorError, Result};
 
+use crate::workflow::types::ConductorWorkflowRun;
 use crate::workflow::{extract_workflow_title, WorkflowRun};
 use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
 
@@ -18,7 +19,7 @@ pub fn create_workflow_run(
     dry_run: bool,
     trigger: &str,
     definition_snapshot: Option<&str>,
-) -> Result<WorkflowRun> {
+) -> Result<ConductorWorkflowRun> {
     create_workflow_run_with_targets(
         conn,
         workflow_name,
@@ -47,7 +48,7 @@ pub fn create_workflow_run_with_targets(
     definition_snapshot: Option<&str>,
     parent_workflow_run_id: Option<&str>,
     target_label: Option<&str>,
-) -> Result<WorkflowRun> {
+) -> Result<ConductorWorkflowRun> {
     let id = crate::new_id();
     let now = Utc::now().to_rfc3339();
 
@@ -76,40 +77,42 @@ pub fn create_workflow_run_with_targets(
             ":workflow_title": workflow_title,
         ],
     )?;
-    Ok(WorkflowRun {
-        id,
-        workflow_name: workflow_name.to_string(),
+    Ok(ConductorWorkflowRun {
+        run: WorkflowRun {
+            id,
+            workflow_name: workflow_name.to_string(),
+            parent_run_id: parent_run_id.to_string(),
+            status: WorkflowRunStatus::Pending,
+            dry_run,
+            trigger: trigger.to_string(),
+            started_at: now,
+            ended_at: None,
+            result_summary: None,
+            error: None,
+            definition_snapshot: definition_snapshot.map(String::from),
+            inputs: HashMap::new(),
+            parent_workflow_run_id: parent_workflow_run_id.map(String::from),
+            iteration: 0,
+            blocked_on: None,
+            workflow_title,
+            total_input_tokens: None,
+            total_output_tokens: None,
+            total_cache_read_input_tokens: None,
+            total_cache_creation_input_tokens: None,
+            total_turns: None,
+            total_cost_usd: None,
+            total_duration_ms: None,
+            model: None,
+            dismissed: false,
+            owner_token: None,
+            lease_until: None,
+            generation: 0,
+        },
         worktree_id: worktree_id.map(String::from),
-        parent_run_id: parent_run_id.to_string(),
-        status: WorkflowRunStatus::Pending,
-        dry_run,
-        trigger: trigger.to_string(),
-        started_at: now,
-        ended_at: None,
-        result_summary: None,
-        error: None,
-        definition_snapshot: definition_snapshot.map(String::from),
-        inputs: HashMap::new(),
         ticket_id: ticket_id.map(String::from),
         repo_id: repo_id.map(String::from),
-        parent_workflow_run_id: parent_workflow_run_id.map(String::from),
         target_label: target_label.map(String::from),
         default_bot_name: None,
-        iteration: 0,
-        blocked_on: None,
-        workflow_title,
-        total_input_tokens: None,
-        total_output_tokens: None,
-        total_cache_read_input_tokens: None,
-        total_cache_creation_input_tokens: None,
-        total_turns: None,
-        total_cost_usd: None,
-        total_duration_ms: None,
-        model: None,
-        dismissed: false,
-        owner_token: None,
-        lease_until: None,
-        generation: 0,
     })
 }
 
@@ -295,6 +298,12 @@ pub fn cancel_run(conn: &Connection, run_id: &str, reason: &str) -> Result<()> {
     )
 }
 
+/// Writes accumulated metrics to the `workflow_runs` row.
+///
+/// Called from the conductor-core action-executor path (not the runkon-flow
+/// engine). The engine previously called `WorkflowPersistence::persist_metrics`
+/// which has been removed from the trait; this helper remains as the
+/// conductor-core API-layer write path for executor-side metric flushing.
 #[allow(clippy::too_many_arguments)]
 pub fn persist_workflow_metrics(
     conn: &Connection,
@@ -334,19 +343,6 @@ pub fn persist_workflow_metrics(
     Ok(())
 }
 
-// NOTE (#2731/#2796): lease refresh (FlowEngine's refresh_lease_loop) is now the
-// load-bearing ownership mechanism. This heartbeat write is retained only for UI
-// staleness display — detect_stuck_workflow_run_ids reads last_heartbeat.
-pub fn tick_heartbeat(conn: &Connection, run_id: &str) -> Result<()> {
-    let now = Utc::now().to_rfc3339();
-    conn.execute(
-        "UPDATE workflow_runs SET last_heartbeat = :now \
-             WHERE id = :id AND status = 'running'",
-        named_params![":now": now, ":id": run_id],
-    )?;
-    Ok(())
-}
-
 pub fn set_dismissed(conn: &Connection, run_id: &str, dismissed: bool) -> Result<()> {
     let val: i64 = if dismissed { 1 } else { 0 };
     conn.execute(
@@ -369,7 +365,7 @@ pub fn fail_workflow_run(
         Some(error_msg),
     )?;
     if let Ok(Some(run)) = super::queries::get_workflow_run(conn, workflow_run_id) {
-        Ok(run.parent_run_id)
+        Ok(run.parent_run_id.clone())
     } else {
         Err(ConductorError::InvalidInput(format!(
             "Workflow run not found: {workflow_run_id}"

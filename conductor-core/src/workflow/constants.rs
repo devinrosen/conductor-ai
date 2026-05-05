@@ -1,5 +1,11 @@
 pub(super) use runkon_flow::constants::{RUN_COLUMNS, STEP_COLUMNS};
-pub use runkon_flow::constants::{STEP_ROLE_FOREACH, STEP_ROLE_WORKFLOW, TERMINAL_STATUSES_SQL};
+
+/// Conductor-specific extra columns on `workflow_runs` that are not part of the
+/// harness-neutral `RUN_COLUMNS`. Appended to `RUN_COLUMNS` when conductor-core
+/// queries need to populate `ConductorWorkflowRun`.
+pub(super) const CONDUCTOR_RUN_EXTRA: &str =
+    ", worktree_id, ticket_id, repo_id, target_label, default_bot_name";
+pub use runkon_flow::constants::{STEP_ROLE_FOREACH, STEP_ROLE_WORKFLOW};
 
 /// Minimum number of recent runs required to emit a regression signal.
 pub const REGRESSION_MIN_RECENT_RUNS: i64 = 5;
@@ -29,9 +35,7 @@ mod tests {
              s.iteration, s.parallel_group_id, s.context_out, s.markers_out, s.retry_count, \
              s.gate_type, s.gate_prompt, s.gate_timeout, s.gate_approved_by, s.gate_approved_at, \
              s.gate_feedback, s.structured_output, s.output_file, s.gate_options, s.gate_selections, \
-             s.fan_out_total, s.fan_out_completed, s.fan_out_failed, s.fan_out_skipped, s.step_error, \
-             s.input_tokens, s.output_tokens, s.cache_read_input_tokens, s.cache_creation_input_tokens, \
-             s.cost_usd, s.num_turns, s.duration_ms"
+             s.fan_out_total, s.fan_out_completed, s.fan_out_failed, s.fan_out_skipped, s.step_error"
         );
 
         let cols: Vec<&str> = STEP_COLUMNS_WITH_PREFIX.split(", ").collect();
@@ -46,6 +50,6 @@ mod tests {
 
         // Spot-check first and last known columns.
         assert_eq!(cols.first().copied(), Some("s.id"));
-        assert_eq!(cols.last().copied(), Some("s.duration_ms"));
+        assert_eq!(cols.last().copied(), Some("s.step_error"));
     }
 }
