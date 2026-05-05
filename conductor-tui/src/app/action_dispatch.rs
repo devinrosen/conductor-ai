@@ -256,6 +256,7 @@ impl App {
             // CRUD
             Action::RegisterRepo => self.handle_register_repo(),
             Action::Create => self.handle_create(),
+            Action::AdoptWorktree => self.handle_adopt_worktree(),
             Action::Delete => self.handle_delete(),
             Action::ClearConversation => self.handle_clear_conversation(),
             Action::Push => self.handle_push(),

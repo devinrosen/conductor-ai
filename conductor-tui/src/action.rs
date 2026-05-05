@@ -99,6 +99,7 @@ pub enum Action {
     // CRUD triggers
     RegisterRepo,
     Create,
+    AdoptWorktree,
     Delete,
     #[allow(dead_code)]
     Push,

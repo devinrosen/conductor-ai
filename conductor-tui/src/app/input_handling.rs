@@ -667,6 +667,12 @@ impl App {
             InputAction::SettingsSetModel | InputAction::SettingsSetSyncInterval => {
                 self.handle_settings_input_submit(on_submit, value);
             }
+            InputAction::AdoptWorktree { repo_slug } => {
+                if value.trim().is_empty() {
+                    return;
+                }
+                self.spawn_worktree_adopt(repo_slug, value.trim().to_string());
+            }
         }
     }
 

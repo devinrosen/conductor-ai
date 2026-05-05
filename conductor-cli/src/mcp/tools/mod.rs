@@ -79,6 +79,32 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
             ]),
         ),
         Tool::new(
+            "conductor_adopt_worktree",
+            "Register an existing on-disk git worktree into conductor without recreating it. \
+             Validates the path is a real git worktree of the repo, derives branch and slug from \
+             on-disk state, and inserts the worktrees row. Refuses if a row already exists for \
+             the same slug.",
+            schema(&[
+                ("repo", "Repo slug", true),
+                ("path", "Absolute path to the existing worktree directory", true),
+                (
+                    "branch",
+                    "Branch name override (auto-detected from `git branch --show-current` if omitted)",
+                    false,
+                ),
+                (
+                    "base_branch",
+                    "Base branch to record (defaults to repo default branch)",
+                    false,
+                ),
+                (
+                    "ticket_id",
+                    "Ticket ID to link (optional) — accepts internal ULID or external source ID",
+                    false,
+                ),
+            ]),
+        ),
+        Tool::new(
             "conductor_set_base_branch",
             "Set the recorded base branch for a worktree. Validates that the new base is an ancestor of the worktree HEAD. \
              Pass rebase=true to rebase the branch onto the new base (blocked if the worktree has uncommitted changes). \
@@ -500,6 +526,7 @@ pub(super) fn dispatch_tool(
         "conductor_get_run" => runs::tool_get_run(conductor, args),
         "conductor_approve_gate" => gates::tool_approve_gate(conductor, args),
         "conductor_reject_gate" => gates::tool_reject_gate(conductor, args),
+        "conductor_adopt_worktree" => worktrees::tool_adopt_worktree(conductor, args),
         "conductor_push_worktree" => worktrees::tool_push_worktree(conductor, args),
         "conductor_set_base_branch" => worktrees::tool_set_base_branch(conductor, args),
         "conductor_cancel_run" => runs::tool_cancel_run(conductor, args),

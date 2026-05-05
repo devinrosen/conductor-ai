@@ -642,6 +642,59 @@ impl App {
         });
     }
 
+    pub(super) fn spawn_worktree_adopt(&mut self, repo_slug: String, path: String) {
+        let Some(bg_tx) = self.bg_tx.clone() else {
+            self.state.modal = Modal::Error {
+                message: super::BG_TX_NOT_READY.into(),
+            };
+            return;
+        };
+        self.state.modal = Modal::Progress {
+            message: "Adopting worktree…".to_string(),
+        };
+        let config = self.config.clone();
+        std::thread::spawn(move || {
+            let result = (|| -> anyhow::Result<_> {
+                let db = conductor_core::config::db_path();
+                let conn = conductor_core::db::open_database(&db)?;
+                let wt_mgr = WorktreeManager::new(&conn, &config);
+                let wt = wt_mgr.adopt(
+                    &repo_slug,
+                    std::path::Path::new(&path),
+                    conductor_core::worktree::WorktreeAdoptOptions::default(),
+                )?;
+                Ok(wt)
+            })();
+            match result {
+                Ok(wt) => {
+                    if !bg_tx.send(Action::WorktreeCreated {
+                        wt_id: wt.id,
+                        wt_path: wt.path,
+                        wt_slug: wt.slug,
+                        wt_repo_id: wt.repo_id,
+                        warnings: vec![],
+                        ticket_id: wt.ticket_id,
+                    }) {
+                        tracing::warn!(
+                            "worktree adopted but bg_tx.send failed; \
+                             Progress modal may remain visible until app exit"
+                        );
+                    }
+                }
+                Err(e) => {
+                    if !bg_tx.send(Action::WorktreeCreateFailed {
+                        message: format!("Adopt failed: {e}"),
+                    }) {
+                        tracing::warn!(
+                            "worktree adoption failed and bg_tx.send also failed; \
+                             Progress modal may remain visible until app exit"
+                        );
+                    }
+                }
+            }
+        });
+    }
+
     pub(super) fn maybe_start_agent_for_worktree(
         &mut self,
         worktree_id: String,

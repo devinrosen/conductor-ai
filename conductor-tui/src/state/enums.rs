@@ -534,4 +534,8 @@ pub enum InputAction {
     SettingsSetModel,
     /// Settings view: set the sync interval in minutes.
     SettingsSetSyncInterval,
+    /// Adopt an existing on-disk git worktree: user enters the path.
+    AdoptWorktree {
+        repo_slug: String,
+    },
 }

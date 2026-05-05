@@ -188,6 +188,17 @@ pub struct WorktreeCreateOptions {
     pub pre_health: Option<super::git_helpers::MainHealthStatus>,
 }
 
+/// Options for adopting an existing on-disk git worktree into conductor's DB.
+#[derive(Default)]
+pub struct WorktreeAdoptOptions {
+    /// Override the branch name (defaults to `git branch --show-current`).
+    pub branch: Option<String>,
+    /// Override the base branch (defaults to repo default branch).
+    pub base_branch: Option<String>,
+    /// Associate the adopted worktree with this ticket ID.
+    pub ticket_id: Option<String>,
+}
+
 /// Write `branch.<branch>.remote = origin` and `branch.<branch>.merge = refs/heads/<branch>`
 /// into the git config at `path`. This is the non-network equivalent of `git push -u origin <branch>`,
 /// ensuring bare `git push` inside the worktree always targets the correct remote branch.
@@ -428,6 +439,152 @@ impl<'a> WorktreeManager<'a> {
         )?;
 
         Ok((worktree, warnings))
+    }
+
+    /// Register an existing on-disk git worktree into conductor's DB without
+    /// creating new git branches or running `git worktree add`.
+    ///
+    /// Validates that `path` is a real git worktree of the repo (via
+    /// `git worktree list --porcelain`), derives `branch` and `slug` from
+    /// on-disk state, and inserts the `worktrees` row with `status = 'active'`.
+    ///
+    /// Refuses if an Active row already exists for `(repo_id, slug)`.
+    /// A completed (merged/abandoned) row is purged to allow re-adoption.
+    pub fn adopt(&self, repo_slug: &str, path: &Path, opts: WorktreeAdoptOptions) -> Result<Worktree> {
+        let WorktreeAdoptOptions {
+            branch: opt_branch,
+            base_branch: opt_base_branch,
+            ticket_id,
+        } = opts;
+
+        let repo_mgr = RepoManager::new(self.conn, self.config);
+        let repo = repo_mgr.get_by_slug(repo_slug)?;
+
+        // Canonicalize the path (resolve symlinks, must exist on disk).
+        let canonical_path = std::fs::canonicalize(path).map_err(|e| {
+            ConductorError::InvalidInput(format!(
+                "cannot resolve path '{}': {e}",
+                path.display()
+            ))
+        })?;
+
+        // Validate path appears in `git worktree list --porcelain` for this repo.
+        let output = check_output(
+            git_in(&repo.local_path).args(["worktree", "list", "--porcelain"]),
+        )?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let is_registered_worktree = stdout
+            .lines()
+            .filter_map(|line| line.strip_prefix("worktree "))
+            .any(|wt_path| {
+                std::fs::canonicalize(wt_path)
+                    .ok()
+                    .as_deref()
+                    == Some(canonical_path.as_path())
+            });
+
+        if !is_registered_worktree {
+            return Err(ConductorError::InvalidInput(format!(
+                "path '{}' is not a git worktree of repo '{repo_slug}'",
+                canonical_path.display()
+            )));
+        }
+
+        // Derive slug from the basename of the path (matches create() convention).
+        let slug = canonical_path
+            .file_name()
+            .ok_or_else(|| {
+                ConductorError::InvalidInput(format!(
+                    "cannot derive slug from path '{}'",
+                    canonical_path.display()
+                ))
+            })?
+            .to_string_lossy()
+            .to_string();
+
+        // Derive branch from on-disk state if not explicitly provided.
+        let branch = match opt_branch {
+            Some(b) => b,
+            None => {
+                let out = check_output(
+                    git_in(&canonical_path).args(["branch", "--show-current"]),
+                )?;
+                let b = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if b.is_empty() {
+                    return Err(ConductorError::InvalidInput(
+                        "worktree is in detached HEAD state; supply --branch to adopt it".into(),
+                    ));
+                }
+                b
+            }
+        };
+
+        // Derive base_branch using the same logic as create().
+        let base_branch =
+            Some(opt_base_branch.unwrap_or_else(|| {
+                resolve_base_branch(&repo.local_path, &repo.default_branch)
+            }));
+
+        // Check for an existing worktree row with the same (repo_id, slug).
+        let existing_status: Option<WorktreeStatus> = self
+            .conn
+            .query_row(
+                "SELECT status FROM worktrees WHERE repo_id = :repo_id AND slug = :slug",
+                named_params![":repo_id": repo.id, ":slug": slug],
+                |row| row.get("status"),
+            )
+            .optional()?;
+
+        match existing_status {
+            Some(WorktreeStatus::Active) => {
+                return Err(ConductorError::WorktreeAlreadyExists {
+                    slug: slug.clone(),
+                });
+            }
+            Some(_) => {
+                // Purge the completed record to allow slug reuse (mirrors create() behavior).
+                self.conn.execute(
+                    "DELETE FROM worktrees WHERE repo_id = :repo_id AND slug = :slug",
+                    named_params![":repo_id": repo.id, ":slug": slug],
+                )?;
+            }
+            None => {}
+        }
+
+        let id = crate::new_id();
+        let now = Utc::now().to_rfc3339();
+
+        let worktree = Worktree {
+            id: id.clone(),
+            repo_id: repo.id.clone(),
+            slug,
+            branch,
+            path: canonical_path.to_string_lossy().to_string(),
+            ticket_id,
+            status: WorktreeStatus::Active,
+            created_at: now,
+            completed_at: None,
+            model: None,
+            base_branch,
+        };
+
+        self.conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, ticket_id, status, created_at, base_branch)
+             VALUES (:id, :repo_id, :slug, :branch, :path, :ticket_id, :status, :created_at, :base_branch)",
+            named_params![
+                ":id": worktree.id,
+                ":repo_id": worktree.repo_id,
+                ":slug": worktree.slug,
+                ":branch": worktree.branch,
+                ":path": worktree.path,
+                ":ticket_id": worktree.ticket_id,
+                ":status": worktree.status,
+                ":created_at": worktree.created_at,
+                ":base_branch": worktree.base_branch,
+            ],
+        )?;
+
+        Ok(worktree)
     }
 
     /// Create a set of worktrees from a ticket dependency graph.

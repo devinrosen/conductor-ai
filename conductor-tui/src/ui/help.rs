@@ -44,6 +44,7 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
         Line::from(""),
         help_line("a", "Register repository", theme),
         help_line("c", "Create worktree", theme),
+        help_line("i", "Adopt existing worktree", theme),
         help_line("d", "Delete (worktree/repo)", theme),
         help_line("s", "Sync tickets", theme),
         help_line("S", "Manage issue sources", theme),
