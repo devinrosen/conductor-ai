@@ -257,6 +257,31 @@ impl<'a> WorktreeManager<'a> {
         Ok(check_main_health(&repo.local_path, &base))
     }
 
+    fn check_or_purge_existing_worktree(&self, repo_id: &str, slug: &str) -> Result<()> {
+        let existing_status: Option<WorktreeStatus> = self
+            .conn
+            .query_row(
+                "SELECT status FROM worktrees WHERE repo_id = :repo_id AND slug = :slug",
+                named_params![":repo_id": repo_id, ":slug": slug],
+                |row| row.get("status"),
+            )
+            .optional()?;
+
+        match existing_status {
+            Some(WorktreeStatus::Active) => Err(ConductorError::WorktreeAlreadyExists {
+                slug: slug.to_string(),
+            }),
+            Some(_) => {
+                self.conn.execute(
+                    "DELETE FROM worktrees WHERE repo_id = :repo_id AND slug = :slug",
+                    named_params![":repo_id": repo_id, ":slug": slug],
+                )?;
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
+
     /// Create a new worktree, ensuring the base branch is up to date first.
     ///
     /// Returns the created worktree and a list of non-fatal warnings
@@ -310,31 +335,7 @@ impl<'a> WorktreeManager<'a> {
                 (format!("feat-{name}"), format!("feat/{name}"))
             };
 
-        // Check for existing worktree with same slug
-        let existing_status: Option<WorktreeStatus> = self
-            .conn
-            .query_row(
-                "SELECT status FROM worktrees WHERE repo_id = :repo_id AND slug = :slug",
-                named_params![":repo_id": repo.id, ":slug": wt_slug],
-                |row| row.get("status"),
-            )
-            .optional()?;
-
-        match existing_status {
-            Some(WorktreeStatus::Active) => {
-                return Err(ConductorError::WorktreeAlreadyExists {
-                    slug: wt_slug.clone(),
-                });
-            }
-            Some(_) => {
-                // Purge the completed record to allow slug reuse
-                self.conn.execute(
-                    "DELETE FROM worktrees WHERE repo_id = :repo_id AND slug = :slug",
-                    named_params![":repo_id": repo.id, ":slug": wt_slug],
-                )?;
-            }
-            None => {}
-        }
+        self.check_or_purge_existing_worktree(&repo.id, &wt_slug)?;
 
         // Auto-clone if the local path doesn't exist on disk yet
         if !Path::new(&repo.local_path).exists() {
@@ -521,29 +522,7 @@ impl<'a> WorktreeManager<'a> {
                 .unwrap_or_else(|| resolve_base_branch(&repo.local_path, &repo.default_branch)),
         );
 
-        // Check for an existing worktree row with the same (repo_id, slug).
-        let existing_status: Option<WorktreeStatus> = self
-            .conn
-            .query_row(
-                "SELECT status FROM worktrees WHERE repo_id = :repo_id AND slug = :slug",
-                named_params![":repo_id": repo.id, ":slug": slug],
-                |row| row.get("status"),
-            )
-            .optional()?;
-
-        match existing_status {
-            Some(WorktreeStatus::Active) => {
-                return Err(ConductorError::WorktreeAlreadyExists { slug: slug.clone() });
-            }
-            Some(_) => {
-                // Purge the completed record to allow slug reuse (mirrors create() behavior).
-                self.conn.execute(
-                    "DELETE FROM worktrees WHERE repo_id = :repo_id AND slug = :slug",
-                    named_params![":repo_id": repo.id, ":slug": slug],
-                )?;
-            }
-            None => {}
-        }
+        self.check_or_purge_existing_worktree(&repo.id, &slug)?;
 
         let id = crate::new_id();
         let now = Utc::now().to_rfc3339();
