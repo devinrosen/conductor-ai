@@ -300,18 +300,27 @@ impl SqliteWorkflowPersistence {
                  AND status NOT IN ({TERMINAL_STATUSES_SQL})"
             );
 
-            let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(5 * n + 1);
-            for (step_id, status, _) in chunk {
-                params.push(Box::new(step_id.clone()));
-                params.push(Box::new(status.to_string()));
+            // Status enum needs owned String allocs (Display impl), but step_id
+            // and result_text are already owned in the chunk — borrow them across
+            // all three loops instead of cloning. For a full 199-item chunk this
+            // saves ~600 String allocations vs the previous Box<dyn ToSql> shape.
+            let status_strings: Vec<String> = chunk.iter().map(|(_, s, _)| s.to_string()).collect();
+
+            let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(5 * n + 1);
+            // Loop 1: (id, status) pairs feeding the status CASE arms.
+            for (i, (step_id, _, _)) in chunk.iter().enumerate() {
+                params.push(step_id);
+                params.push(&status_strings[i]);
             }
-            params.push(Box::new(ended_at.to_string()));
+            params.push(&ended_at);
+            // Loop 2: (id, result_text) pairs feeding the result_text CASE arms.
             for (step_id, _, result_text) in chunk {
-                params.push(Box::new(step_id.clone()));
-                params.push(Box::new(result_text.clone()));
+                params.push(step_id);
+                params.push(result_text);
             }
+            // Loop 3: ids for the WHERE id IN (...) clause.
             for (step_id, _, _) in chunk {
-                params.push(Box::new(step_id.clone()));
+                params.push(step_id);
             }
 
             sp.execute(&sql, rusqlite::params_from_iter(params))
