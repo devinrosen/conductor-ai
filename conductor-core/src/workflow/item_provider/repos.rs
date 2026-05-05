@@ -1,17 +1,30 @@
+use std::any::Any;
 use std::collections::HashMap;
 
-use crate::error::Result;
-use runkon_flow::dsl::ForeachScope;
+use crate::error::{ConductorError, Result};
 
 use super::{collect_fan_out_items, FanOutItem, ItemProvider, ProviderContext};
 
 pub struct ReposProvider;
 
 impl ItemProvider for ReposProvider {
+    fn name(&self) -> &str {
+        "repos"
+    }
+
+    fn validate_filter(&self, filter: &HashMap<String, String>) -> crate::error::Result<()> {
+        if !filter.is_empty() {
+            return Err(ConductorError::Workflow(
+                "filter has no effect when over = repos (not implemented in v1)".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     fn items(
         &self,
         ctx: &ProviderContext<'_>,
-        _scope: Option<&ForeachScope>,
+        _scope: Option<&dyn Any>,
         _filter: &HashMap<String, String>,
     ) -> Result<Vec<FanOutItem>> {
         use crate::repo::RepoManager;

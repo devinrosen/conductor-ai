@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-ERRORS=0
+FAILED_CHECKS=()
 
 # Build frontend if needed (required for conductor-web to compile)
 if [ ! -d conductor-web/frontend/dist ]; then
@@ -29,10 +29,10 @@ CHANGED_CRATES=$(git diff --name-only "$DIFF_TARGET" | grep '^conductor-' | cut 
 if [ -z "$CHANGED_CRATES" ]; then
   # No crate-level changes detected — fall back to full workspace (matches CI)
   if [ -d conductor-web/frontend/dist ]; then
-    cargo clippy --workspace --all-targets -- -D warnings 2>&1 || ERRORS=1
+    cargo clippy --workspace --all-targets -- -D warnings 2>&1 || FAILED_CHECKS+=("clippy:workspace")
   else
     echo "Warning: frontend not built, excluding conductor-web from clippy"
-    cargo clippy --workspace --all-targets --exclude conductor-web -- -D warnings 2>&1 || ERRORS=1
+    cargo clippy --workspace --all-targets --exclude conductor-web -- -D warnings 2>&1 || FAILED_CHECKS+=("clippy:workspace")
   fi
 else
   # Scope clippy to changed crates only
@@ -41,24 +41,25 @@ else
       echo "Warning: frontend not built, skipping conductor-web clippy"
       continue
     fi
-    cargo clippy -p "$crate" --all-targets -- -D warnings 2>&1 || ERRORS=1
+    cargo clippy -p "$crate" --all-targets -- -D warnings 2>&1 || FAILED_CHECKS+=("clippy:$crate")
   done
 fi
-cargo fmt --all --check 2>&1 || ERRORS=1
+cargo fmt --all --check 2>&1 || FAILED_CHECKS+=("fmt")
 
 # Validate changed or new .wf files
 for f in $(git diff --name-only "$DIFF_TARGET" -- '*.wf') $(git ls-files --others --exclude-standard -- '*.wf'); do
   [ -f "$f" ] || continue
   name=$(basename "$f" .wf)
-  conductor workflow validate "$name" --path . 2>&1 \
-    || cargo run --bin conductor -- workflow validate "$name" --path . 2>&1 \
-    || ERRORS=1
+  (conductor workflow validate "$name" --path . 2>&1 \
+    || cargo run --bin conductor -- workflow validate "$name" --path . 2>&1) \
+    || FAILED_CHECKS+=("wf:$name")
 done
 
-if [ "$ERRORS" -eq 1 ]; then
-  cat <<'EOF'
+if [ ${#FAILED_CHECKS[@]} -gt 0 ]; then
+  JOINED=$(IFS=','; echo "${FAILED_CHECKS[*]}")
+  cat <<EOF
 <<<FLOW_OUTPUT>>>
-{"markers": ["has_lint_errors"], "context": "Lint errors found"}
+{"markers": ["has_lint_errors"], "context": "Failing checks: ${JOINED}"}
 <<<END_FLOW_OUTPUT>>>
 EOF
 else

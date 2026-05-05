@@ -8,6 +8,7 @@ pub(crate) mod action_executor;
 pub(crate) mod api_call_executor;
 mod batch_validate;
 pub mod channel_event_sink;
+pub(crate) mod engine_keys;
 pub use channel_event_sink::ChannelEventSink;
 pub use runkon_flow::events::EventSink;
 pub(crate) mod claude_agent_executor;
@@ -51,7 +52,7 @@ pub use runkon_flow::constants::FLOW_OUTPUT_INSTRUCTION;
 ///
 /// Use this instead of importing `ENGINE_INJECTED_KEYS` directly.
 pub fn injected_variable_keys() -> &'static [&'static str] {
-    coordinator::ENGINE_INJECTED_KEYS
+    engine_keys::ENGINE_INJECTED_KEYS
 }
 
 pub use coordinator::{
@@ -140,11 +141,11 @@ pub use types::{
 // conductor-cli, etc.) import through `conductor_core::workflow`.
 pub use runkon_flow::dsl::{
     collect_agent_names, collect_workflow_refs, default_skills_dir, detect_workflow_cycles,
-    load_workflow_by_name, make_script_resolver, parse_workflow_str, resolve_script_path,
-    validate_script_steps, validate_workflow_semantics, AgentRef, AlwaysNode, CallNode,
-    CallWorkflowNode, Condition, DoNode, DoWhileNode, GateNode, GateType, IfNode, InputDecl,
-    InputType, OnFail, ParallelNode, UnlessNode, ValidationError, ValidationReport, WhileNode,
-    WorkflowDef, WorkflowNode, WorkflowTrigger, WorkflowWarning, MAX_WORKFLOW_DEPTH,
+    make_script_resolver, parse_workflow_str, resolve_script_path, validate_script_steps,
+    validate_workflow_semantics, AgentRef, AlwaysNode, CallNode, CallWorkflowNode, Condition,
+    DoNode, DoWhileNode, GateNode, GateType, IfNode, InputDecl, InputType, OnFail, ParallelNode,
+    UnlessNode, ValidationContext, ValidationError, ValidationReport, WhileNode, WorkflowDef,
+    WorkflowNode, WorkflowTrigger, WorkflowWarning, MAX_WORKFLOW_DEPTH,
 };
 
 // Re-export unified runkon-flow types so downstream crates can import them from

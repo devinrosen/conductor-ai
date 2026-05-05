@@ -6,7 +6,7 @@ use crate::prompt_config;
 use crate::schema_config;
 use runkon_flow::dsl::{
     default_skills_dir, detect_workflow_cycles, make_script_resolver, validate_script_steps,
-    validate_workflow_semantics, AgentRef, ValidationError, WorkflowDef,
+    validate_workflow_semantics, AgentRef, ValidationContext, ValidationError, WorkflowDef,
 };
 
 // ---------------------------------------------------------------------------
@@ -80,11 +80,16 @@ pub fn validate_workflows_batch<F>(
 where
     F: Fn(&str) -> std::result::Result<WorkflowDef, String>,
 {
-    let script_resolver = make_script_resolver(
-        wt_path.to_string(),
-        repo_path.to_string(),
-        default_skills_dir(),
-    );
+    let mut script_roots = vec![
+        std::path::PathBuf::from(wt_path),
+        std::path::PathBuf::from(wt_path).join(".conductor/scripts"),
+        std::path::PathBuf::from(repo_path),
+        std::path::PathBuf::from(repo_path).join(".conductor/scripts"),
+    ];
+    if let Some(skills) = default_skills_dir() {
+        script_roots.push(skills);
+    }
+    let script_resolver = make_script_resolver(script_roots);
 
     let make_error = |message: String, hint: Option<String>| -> ValidationError {
         ValidationError { message, hint }
@@ -178,6 +183,14 @@ where
         result
     };
 
+    // Build a validation-only registry and context once for the whole batch.
+    const CONDUCTOR_TARGETS: &[&str] = &["worktree", "ticket", "repo", "pr", "workflow_run"];
+    let validation_registry = super::runkon_bridge::build_rk_validation_registry();
+    let validation_ctx = ValidationContext {
+        registry: &validation_registry,
+        valid_targets: CONDUCTOR_TARGETS,
+    };
+
     let mut entries = Vec::new();
     for (workflow, wf_refs) in workflows.iter().zip(per_wf_refs.iter()) {
         let wf_name = &workflow.name;
@@ -230,7 +243,7 @@ where
         }
 
         // --- Semantic validation ---
-        let report = validate_workflow_semantics(workflow, &cached_loader);
+        let report = validate_workflow_semantics(workflow, &cached_loader, &validation_ctx);
         for err in report.errors {
             wf_errors.push(err);
         }
