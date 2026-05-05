@@ -307,9 +307,7 @@ fn poll_unix(
             let msg = format!("stall_timeout: no events for {}s", elapsed.as_secs());
             tracing::warn!("ClaudeRuntime: {msg} for run {run_id}");
             if let Err(e) = tracker.mark_failed_if_running(run_id, &msg) {
-                tracing::warn!(
-                    "ClaudeRuntime: failed to persist stall failure for {run_id}: {e}"
-                );
+                tracing::warn!("ClaudeRuntime: failed to persist stall failure for {run_id}: {e}");
             }
             Err(PollError::Failed(msg))
         }
