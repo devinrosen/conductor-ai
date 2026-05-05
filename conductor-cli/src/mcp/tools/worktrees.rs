@@ -6,11 +6,6 @@ use crate::mcp::helpers::{
     get_arg, get_arg_usize, get_bool_arg, pagination_hint, tool_err, tool_ok,
 };
 
-/// Returns `true` if `s` looks like a ULID: exactly 26 uppercase alphanumeric chars.
-/// Used to distinguish internal ULIDs (e.g. "01HXYZ...") from external source IDs (e.g. "680").
-fn looks_like_ulid(s: &str) -> bool {
-    s.len() == 26 && s.chars().all(|c| c.is_ascii_alphanumeric())
-}
 
 pub(super) fn tool_list_worktrees(
     conductor: &Conductor,
@@ -165,7 +160,7 @@ pub(super) fn tool_create_worktree(
     // it as an external source_id and look up the internal ULID.
     let resolved_ticket_id: Option<String> = match raw_ticket_id {
         None => None,
-        Some(id) if looks_like_ulid(id) => Some(id.to_string()),
+        Some(id) if crate::helpers::looks_like_ulid(id) => Some(id.to_string()),
         Some(source_id) => {
             let repo_mgr = RepoManager::new(conn, config);
             let repo = match repo_mgr.get_by_slug(repo_slug) {
@@ -269,7 +264,7 @@ pub(super) fn tool_adopt_worktree(
     // Resolve ticket_id: ULID passthrough or source_id lookup.
     let resolved_ticket_id: Option<String> = match raw_ticket_id {
         None => None,
-        Some(id) if looks_like_ulid(id) => Some(id.to_string()),
+        Some(id) if crate::helpers::looks_like_ulid(id) => Some(id.to_string()),
         Some(source_id) => {
             let repo = match RepoManager::new(conn, config).get_by_slug(repo_slug) {
                 Ok(r) => r,
@@ -422,14 +417,14 @@ mod tests {
     #[test]
     fn test_looks_like_ulid() {
         // Valid ULID: 26 uppercase alphanumeric chars
-        assert!(looks_like_ulid("01HXYZABCDEFGHJKMNPQRSTVWX"));
-        assert!(looks_like_ulid("01JRKBDR0B7W72V1EHNH78WKTF"));
+        assert!(crate::helpers::looks_like_ulid("01HXYZABCDEFGHJKMNPQRSTVWX"));
+        assert!(crate::helpers::looks_like_ulid("01JRKBDR0B7W72V1EHNH78WKTF"));
         // GitHub issue numbers should NOT look like ULIDs
-        assert!(!looks_like_ulid("680"));
-        assert!(!looks_like_ulid("42"));
+        assert!(!crate::helpers::looks_like_ulid("680"));
+        assert!(!crate::helpers::looks_like_ulid("42"));
         // Too short / too long
-        assert!(!looks_like_ulid("01HXYZ"));
-        assert!(!looks_like_ulid("01HXYZABCDEFGHJKMNPQRSTVWXYZ"));
+        assert!(!crate::helpers::looks_like_ulid("01HXYZ"));
+        assert!(!crate::helpers::looks_like_ulid("01HXYZABCDEFGHJKMNPQRSTVWXYZ"));
     }
 
     #[test]

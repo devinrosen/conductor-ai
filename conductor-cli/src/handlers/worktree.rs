@@ -218,7 +218,7 @@ pub fn handle_worktree(
             // Resolve ticket ID: ULID passthrough vs source-id lookup.
             let resolved_ticket_id: Option<String> = match &ticket {
                 None => None,
-                Some(id) if id.len() == 26 && id.chars().all(|c| c.is_ascii_alphanumeric()) => {
+                Some(id) if crate::helpers::looks_like_ulid(id) => {
                     Some(id.clone())
                 }
                 Some(source_id) => {

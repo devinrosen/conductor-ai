@@ -4,6 +4,12 @@ use conductor_core::agent::PlanStep;
 use conductor_core::error::ConductorError;
 use conductor_core::tickets::TicketInput;
 
+/// Returns `true` if `s` looks like a ULID: exactly 26 uppercase alphanumeric chars.
+/// Used to distinguish internal ULIDs (e.g. "01HXYZ...") from external source IDs (e.g. "680").
+pub(crate) fn looks_like_ulid(s: &str) -> bool {
+    s.len() == 26 && s.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
 pub(crate) fn check_prerequisites() {
     let mut missing = Vec::new();
     if Command::new("gh").arg("--version").output().is_err() {
