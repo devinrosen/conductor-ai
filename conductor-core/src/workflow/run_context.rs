@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{atomic::AtomicBool, Arc};
 
-use runkon_flow::traits::run_context::{keys, RunContext};
+use runkon_flow::traits::run_context::RunContext;
+
+use crate::workflow::engine_keys as keys;
 
 /// Production `RunContext` implementation for conductor worktree runs.
 ///
@@ -87,7 +89,7 @@ impl RunContext for WorktreeRunContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use runkon_flow::traits::run_context::keys;
+    use crate::workflow::engine_keys as keys;
 
     fn make_ctx() -> WorktreeRunContext {
         WorktreeRunContext::new(

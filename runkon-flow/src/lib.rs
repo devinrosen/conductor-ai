@@ -28,7 +28,6 @@ pub use cancellation::CancellationToken;
 pub use cancellation_reason::CancellationReason;
 pub use diagnostics::run_with_per_run_log;
 pub use dsl::ValidationError;
-pub use engine::ENGINE_INJECTED_KEYS;
 pub use events::{EngineEvent, EngineEventData, EventSink};
 pub use extensions::Extensions;
 pub use flow_engine::{FlowEngine, FlowEngineBuilder};
