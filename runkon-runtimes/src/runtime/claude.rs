@@ -270,9 +270,7 @@ mod tests {
         ClaudeRuntime::new(ClaudeRuntimeOptions {
             permission_mode: PermissionMode::default(),
             binary_path: std::path::PathBuf::from("/nonexistent/agent-bin"),
-            log_path_for_run: Arc::new(|run_id| {
-                std::env::temp_dir().join(format!("{run_id}.log"))
-            }),
+            log_path_for_run: Arc::new(|run_id| std::env::temp_dir().join(format!("{run_id}.log"))),
         })
     }
 
