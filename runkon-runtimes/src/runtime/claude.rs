@@ -21,16 +21,6 @@ pub struct ClaudeRuntimeOptions {
     pub log_path_for_run: Arc<dyn Fn(&str) -> PathBuf + Send + Sync>,
 }
 
-impl Default for ClaudeRuntimeOptions {
-    fn default() -> Self {
-        Self {
-            permission_mode: PermissionMode::default(),
-            binary_path: PathBuf::from(crate::headless::resolve_conductor_bin()),
-            log_path_for_run: Arc::new(|run_id| std::env::temp_dir().join(format!("{run_id}.log"))),
-        }
-    }
-}
-
 /// Runtime that spawns a `conductor agent run` subprocess (headless mode).
 pub struct ClaudeRuntime {
     options: ClaudeRuntimeOptions,
@@ -51,12 +41,6 @@ impl ClaudeRuntime {
             tracker: Arc::new(Mutex::new(None)),
             event_sink: Arc::new(Mutex::new(None)),
         }
-    }
-}
-
-impl Default for ClaudeRuntime {
-    fn default() -> Self {
-        Self::new(ClaudeRuntimeOptions::default())
     }
 }
 
@@ -282,6 +266,14 @@ mod tests {
     use crate::runtime::test_util::{make_test_run, NoopTracker};
     use crate::tracker::NoopEventSink;
 
+    fn make_test_runtime() -> ClaudeRuntime {
+        ClaudeRuntime::new(ClaudeRuntimeOptions {
+            permission_mode: PermissionMode::default(),
+            binary_path: std::path::PathBuf::from("/nonexistent/agent-bin"),
+            log_path_for_run: Arc::new(|run_id| std::env::temp_dir().join(format!("{run_id}.log"))),
+        })
+    }
+
     fn make_request(run_id: &str) -> RuntimeRequest {
         RuntimeRequest {
             run_id: run_id.to_string(),
@@ -306,7 +298,7 @@ mod tests {
 
     #[test]
     fn spawn_rejects_path_traversal_run_id() {
-        let runtime = ClaudeRuntime::default();
+        let runtime = make_test_runtime();
         let request = make_request("../../etc/cron.d/payload");
         let err = runtime
             .spawn_validated(&request)
@@ -319,7 +311,7 @@ mod tests {
 
     #[test]
     fn spawn_rejects_slash_in_run_id() {
-        let runtime = ClaudeRuntime::default();
+        let runtime = make_test_runtime();
         let request = make_request("run/id");
         assert!(runtime.spawn_validated(&request).is_err());
     }
@@ -327,7 +319,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn poll_before_spawn_returns_failed() {
-        let runtime = ClaudeRuntime::default();
+        let runtime = make_test_runtime();
         let result = runtime.poll("some-run-id", None, Duration::from_millis(10));
         assert!(
             matches!(result, Err(PollError::Failed(_))),
@@ -338,7 +330,7 @@ mod tests {
     #[cfg(not(unix))]
     #[test]
     fn poll_fails_on_non_unix() {
-        let runtime = ClaudeRuntime::default();
+        let runtime = make_test_runtime();
         let result = runtime.poll("some-run-id", None, Duration::from_millis(10));
         assert!(
             matches!(result, Err(PollError::Failed(_))),
@@ -348,7 +340,7 @@ mod tests {
 
     #[test]
     fn is_alive_returns_false_when_no_pid() {
-        let runtime = ClaudeRuntime::default();
+        let runtime = make_test_runtime();
         let run = make_test_run("claude", None);
         assert!(!runtime.is_alive(&run));
     }
@@ -356,7 +348,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn is_alive_returns_true_for_self() {
-        let runtime = ClaudeRuntime::default();
+        let runtime = make_test_runtime();
         let run = make_test_run("claude", Some(std::process::id() as i64));
         assert!(runtime.is_alive(&run));
     }
@@ -367,14 +359,14 @@ mod tests {
         let mut child = std::process::Command::new("true").spawn().unwrap();
         child.wait().unwrap();
         let dead_pid = child.id() as i64;
-        let runtime = ClaudeRuntime::default();
+        let runtime = make_test_runtime();
         let run = make_test_run("claude", Some(dead_pid));
         assert!(!runtime.is_alive(&run));
     }
 
     #[test]
     fn cancel_with_no_handle_and_no_pid() {
-        let runtime = ClaudeRuntime::default();
+        let runtime = make_test_runtime();
         let run = make_test_run("claude", None);
         assert!(runtime.cancel(&run).is_ok());
     }
@@ -385,7 +377,7 @@ mod tests {
         let mut child = std::process::Command::new("true").spawn().unwrap();
         child.wait().unwrap();
         let dead_pid = child.id() as i64;
-        let runtime = ClaudeRuntime::default();
+        let runtime = make_test_runtime();
         let run = make_test_run("claude", Some(dead_pid));
         assert!(runtime.cancel(&run).is_ok());
     }
@@ -425,7 +417,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn poll_kills_leaked_grandchildren_after_result() {
-        let runtime = ClaudeRuntime::default();
+        let runtime = make_test_runtime();
         let (pgid, _script) = inject_script_child(&runtime);
 
         // poll returns Err::Failed because NoopTracker.get_run returns None;
@@ -470,7 +462,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn poll_timeout_returns_no_result() {
-        let runtime = ClaudeRuntime::default();
+        let runtime = make_test_runtime();
         let _pid = inject_sleep_child(&runtime, 60);
         let result = runtime.poll("timeout-run", None, Duration::from_millis(100));
         assert!(
@@ -482,7 +474,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn poll_shutdown_flag_returns_cancelled() {
-        let runtime = ClaudeRuntime::default();
+        let runtime = make_test_runtime();
         let _pid = inject_sleep_child(&runtime, 60);
         let flag = Arc::new(AtomicBool::new(true));
         let result = runtime.poll("shutdown-run", Some(&flag), Duration::from_secs(300));

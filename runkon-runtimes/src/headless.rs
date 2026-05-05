@@ -11,24 +11,6 @@ use crate::tracker::{EventSink, RuntimeEvent};
 
 const DEFAULT_AGENT_ERROR_MSG: &str = "Claude reported an error";
 
-/// Resolve the path to the `conductor` binary.
-///
-/// Looks for a sibling `conductor` next to the current executable first,
-/// then falls back to the bare name (relying on `$PATH`).
-pub fn resolve_conductor_bin() -> String {
-    let resolved = std::env::current_exe()
-        .ok()
-        .and_then(|p| {
-            let sibling = p.parent()?.join("conductor");
-            sibling
-                .exists()
-                .then(|| sibling.to_string_lossy().into_owned())
-        })
-        .unwrap_or_else(|| "conductor".to_string());
-    tracing::debug!("[conductor] resolved binary: {resolved}");
-    resolved
-}
-
 /// Maximum number of CLI arguments produced by `build_headless_agent_args`.
 const AGENT_ARGS_CAPACITY: usize = 20;
 
