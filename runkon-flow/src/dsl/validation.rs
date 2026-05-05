@@ -206,11 +206,27 @@ fn validate_nodes<F>(
                 produced.extend(body_produced);
             }
             WorkflowNode::DoWhile(n) => {
-                validate_nodes(&n.body, produced, errors, warnings, loader, bool_inputs, ctx);
+                validate_nodes(
+                    &n.body,
+                    produced,
+                    errors,
+                    warnings,
+                    loader,
+                    bool_inputs,
+                    ctx,
+                );
                 check_condition_reachable(&n.step, produced, errors);
             }
             WorkflowNode::Do(n) => {
-                validate_nodes(&n.body, produced, errors, warnings, loader, bool_inputs, ctx);
+                validate_nodes(
+                    &n.body,
+                    produced,
+                    errors,
+                    warnings,
+                    loader,
+                    bool_inputs,
+                    ctx,
+                );
             }
             WorkflowNode::Gate(n) => {
                 if n.gate_type == GateType::QualityGate && n.quality_gate.is_none() {
@@ -241,7 +257,15 @@ fn validate_nodes<F>(
                 produced.insert(n.name.clone());
             }
             WorkflowNode::Always(n) => {
-                validate_nodes(&n.body, produced, errors, warnings, loader, bool_inputs, ctx);
+                validate_nodes(
+                    &n.body,
+                    produced,
+                    errors,
+                    warnings,
+                    loader,
+                    bool_inputs,
+                    ctx,
+                );
             }
             WorkflowNode::ForEach(n) => {
                 validate_foreach_node(n, errors, warnings, loader, ctx);
@@ -422,6 +446,7 @@ fn check_bool_input_declared(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_conditional_branch<F>(
     condition: &Condition,
     body: &[WorkflowNode],

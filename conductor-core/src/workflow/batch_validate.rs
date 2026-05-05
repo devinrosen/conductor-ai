@@ -184,8 +184,7 @@ where
     };
 
     // Build a validation-only registry and context once for the whole batch.
-    const CONDUCTOR_TARGETS: &[&str] =
-        &["worktree", "ticket", "repo", "pr", "workflow_run"];
+    const CONDUCTOR_TARGETS: &[&str] = &["worktree", "ticket", "repo", "pr", "workflow_run"];
     let validation_registry = super::runkon_bridge::build_rk_validation_registry();
     let validation_ctx = ValidationContext {
         registry: &validation_registry,

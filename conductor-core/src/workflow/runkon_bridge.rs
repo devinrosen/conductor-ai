@@ -261,23 +261,15 @@ macro_rules! impl_rk_item_provider_trait {
                 &self,
                 raw: Option<&HashMap<String, String>>,
             ) -> Result<Option<Box<dyn std::any::Any>>, String> {
-                self.provider()
-                    .parse_scope(raw)
-                    .map_err(|e| e.to_string())
+                self.provider().parse_scope(raw).map_err(|e| e.to_string())
             }
-            fn scope_warnings(
-                &self,
-                raw: Option<&HashMap<String, String>>,
-            ) -> Vec<String> {
+            fn scope_warnings(&self, raw: Option<&HashMap<String, String>>) -> Vec<String> {
                 self.provider().scope_warnings(raw)
             }
             fn requires_filter(&self) -> bool {
                 self.provider().requires_filter()
             }
-            fn validate_filter(
-                &self,
-                filter: &HashMap<String, String>,
-            ) -> Result<(), String> {
+            fn validate_filter(&self, filter: &HashMap<String, String>) -> Result<(), String> {
                 self.provider()
                     .validate_filter(filter)
                     .map_err(|e| e.to_string())

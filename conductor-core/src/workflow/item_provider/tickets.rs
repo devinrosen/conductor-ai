@@ -89,26 +89,23 @@ impl ItemProvider for TicketsProvider {
         let ts_opt = scope.and_then(|s| s.downcast_ref::<TicketScope>());
 
         let items = match ts_opt {
-            Some(TicketScope::TicketId(ticket_id)) => {
-                match syncer.get_by_id(ticket_id) {
-                    Ok(t) => vec![ticket_item(t)],
-                    Err(ConductorError::TicketNotFound { .. }) => {
-                        return Err(ConductorError::Workflow(format!(
-                            "foreach: ticket '{}' not found",
-                            ticket_id
-                        )));
-                    }
-                    Err(e) => return Err(e),
+            Some(TicketScope::TicketId(ticket_id)) => match syncer.get_by_id(ticket_id) {
+                Ok(t) => vec![ticket_item(t)],
+                Err(ConductorError::TicketNotFound { .. }) => {
+                    return Err(ConductorError::Workflow(format!(
+                        "foreach: ticket '{}' not found",
+                        ticket_id
+                    )));
                 }
-            }
+                Err(e) => return Err(e),
+            },
             Some(TicketScope::Label(label)) => {
                 let tickets = syncer
                     .list_filtered(Some(repo_id), &ticket_filter(vec![label.clone()], false))?;
                 collect_fan_out_items(tickets, ticket_item)
             }
             Some(TicketScope::Unlabeled) => {
-                let tickets =
-                    syncer.list_filtered(Some(repo_id), &ticket_filter(vec![], true))?;
+                let tickets = syncer.list_filtered(Some(repo_id), &ticket_filter(vec![], true))?;
                 collect_fan_out_items(tickets, ticket_item)
             }
             None => {
