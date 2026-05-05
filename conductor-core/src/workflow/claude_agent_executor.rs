@@ -62,6 +62,7 @@ impl ActionExecutor for ClaudeAgentExecutor {
             }),
             workspace_root: self.config.general.workspace_root.clone(),
             argv_builder: crate::agent_runtime::conductor_argv_builder(),
+            stall_threshold: Some(crate::agent_runtime::DEFAULT_STALL_THRESHOLD),
         };
 
         let runtime = crate::runtime::resolve_runtime(

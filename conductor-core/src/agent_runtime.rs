@@ -15,6 +15,14 @@ pub mod conductor_headless;
 
 use std::borrow::Cow;
 
+/// Default stall-detection threshold for agent JSONL streams.
+///
+/// If no output is received for this duration, the drain loop returns
+/// `DrainOutcome::StalledOut` and the run is marked failed with reason
+/// `"stall_timeout"`. Conservative (5 min) to avoid false positives from
+/// legitimate long-running tool calls or prompt-cache writes.
+pub const DEFAULT_STALL_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(300);
+
 // Re-export runtime-agnostic headless primitives from runkon-runtimes.
 pub use runkon_runtimes::headless::{DrainOutcome, HeadlessHandle};
 // Re-export conductor-CLI-specific argv builder from the local submodule.
@@ -94,12 +102,13 @@ pub fn conductor_argv_builder() -> runkon_runtimes::runtime::claude::ArgvBuilder
 /// callers in conductor-tui and conductor-web stay within the conductor-core
 /// abstraction layer rather than reaching into runkon-runtimes directly.
 pub fn drain_stream_json(
-    reader: impl std::io::Read,
+    reader: impl std::io::Read + Send + 'static,
     run_id: &str,
     log_path: &std::path::Path,
     sink: &impl runkon_runtimes::tracker::EventSink,
+    stall_threshold: Option<std::time::Duration>,
 ) -> DrainOutcome {
-    runkon_runtimes::headless::drain_stream_json(reader, run_id, log_path, sink)
+    runkon_runtimes::headless::drain_stream_json(reader, run_id, log_path, sink, stall_threshold)
 }
 
 /// `EventSink` that persists runtime events into [`AgentManager`] (model/session,
@@ -236,8 +245,13 @@ mod tests {
         let sink = CombinedSink::new(&mgr, |ev| {
             captured.borrow_mut().push(ev.clone());
         });
-        let outcome =
-            runkon_runtimes::headless::drain_stream_json(input.as_bytes(), run_id, &log, &sink);
+        let outcome = runkon_runtimes::headless::drain_stream_json(
+            std::io::Cursor::new(input.into_bytes()),
+            run_id,
+            &log,
+            &sink,
+            None,
+        );
         let _ = std::fs::remove_file(&log);
         (outcome, captured.into_inner())
     }

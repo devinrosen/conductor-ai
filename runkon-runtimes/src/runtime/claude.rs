@@ -49,6 +49,9 @@ pub struct ClaudeRuntimeOptions {
     pub binary_path: PathBuf,
     pub log_path_for_run: Arc<dyn Fn(&str) -> PathBuf + Send + Sync>,
     pub argv_builder: ArgvBuilder,
+    /// If `Some(t)`, `drain_stream_json` returns `StalledOut` when no output
+    /// is received for longer than `t`. `None` disables stall detection.
+    pub stall_threshold: Option<Duration>,
 }
 
 /// Runtime that spawns a headless agent subprocess via the injected argv builder.
@@ -210,6 +213,7 @@ fn poll_unix(
         tracing::warn!("ClaudeRuntime: failed to persist subprocess pid {pid}: {e}");
     }
 
+    let stall_threshold = rt.options.stall_threshold;
     let (stderr_pipe, stdout_pipe, finish) = handle.into_stderr_drain_parts();
 
     let run_id_owned = run_id.to_string();
@@ -239,6 +243,7 @@ fn poll_unix(
             &run_id_owned,
             &log_path,
             &*event_sink_for_drain,
+            stall_threshold,
         );
         if let Some(pf) = prompt_file {
             let _ = std::fs::remove_file(pf);
@@ -298,6 +303,14 @@ fn poll_unix(
             }
             Err(PollError::NoResult)
         }
+        DrainOutcome::StalledOut(elapsed) => {
+            let msg = format!("stall_timeout: no events for {}s", elapsed.as_secs());
+            tracing::warn!("ClaudeRuntime: {msg} for run {run_id}");
+            if let Err(e) = tracker.mark_failed_if_running(run_id, &msg) {
+                tracing::warn!("ClaudeRuntime: failed to persist stall failure for {run_id}: {e}");
+            }
+            Err(PollError::Failed(msg))
+        }
     }
 }
 
@@ -308,12 +321,13 @@ mod tests {
     use crate::runtime::test_util::{make_test_run, NoopTracker};
     use crate::tracker::NoopEventSink;
 
-    fn make_test_runtime() -> ClaudeRuntime {
+    fn make_test_runtime(stall_threshold: Option<Duration>) -> ClaudeRuntime {
         ClaudeRuntime::new(ClaudeRuntimeOptions {
             permission_mode: PermissionMode::default(),
             binary_path: std::path::PathBuf::from("/nonexistent/agent-bin"),
             log_path_for_run: Arc::new(|run_id| std::env::temp_dir().join(format!("{run_id}.log"))),
             argv_builder: Arc::new(|_| Err("test stub: no argv_builder configured".to_string())),
+            stall_threshold,
         })
     }
 
@@ -341,7 +355,7 @@ mod tests {
 
     #[test]
     fn spawn_rejects_path_traversal_run_id() {
-        let runtime = make_test_runtime();
+        let runtime = make_test_runtime(None);
         let request = make_request("../../etc/cron.d/payload");
         let err = runtime
             .spawn_validated(&request)
@@ -354,7 +368,7 @@ mod tests {
 
     #[test]
     fn spawn_rejects_slash_in_run_id() {
-        let runtime = make_test_runtime();
+        let runtime = make_test_runtime(None);
         let request = make_request("run/id");
         assert!(runtime.spawn_validated(&request).is_err());
     }
@@ -362,7 +376,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn poll_before_spawn_returns_failed() {
-        let runtime = make_test_runtime();
+        let runtime = make_test_runtime(None);
         let result = runtime.poll("some-run-id", None, Duration::from_millis(10));
         assert!(
             matches!(result, Err(PollError::Failed(_))),
@@ -373,7 +387,7 @@ mod tests {
     #[cfg(not(unix))]
     #[test]
     fn poll_fails_on_non_unix() {
-        let runtime = make_test_runtime();
+        let runtime = make_test_runtime(None);
         let result = runtime.poll("some-run-id", None, Duration::from_millis(10));
         assert!(
             matches!(result, Err(PollError::Failed(_))),
@@ -383,7 +397,7 @@ mod tests {
 
     #[test]
     fn is_alive_returns_false_when_no_pid() {
-        let runtime = make_test_runtime();
+        let runtime = make_test_runtime(None);
         let run = make_test_run("claude", None);
         assert!(!runtime.is_alive(&run));
     }
@@ -391,7 +405,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn is_alive_returns_true_for_self() {
-        let runtime = make_test_runtime();
+        let runtime = make_test_runtime(None);
         let run = make_test_run("claude", Some(std::process::id() as i64));
         assert!(runtime.is_alive(&run));
     }
@@ -402,14 +416,14 @@ mod tests {
         let mut child = std::process::Command::new("true").spawn().unwrap();
         child.wait().unwrap();
         let dead_pid = child.id() as i64;
-        let runtime = make_test_runtime();
+        let runtime = make_test_runtime(None);
         let run = make_test_run("claude", Some(dead_pid));
         assert!(!runtime.is_alive(&run));
     }
 
     #[test]
     fn cancel_with_no_handle_and_no_pid() {
-        let runtime = make_test_runtime();
+        let runtime = make_test_runtime(None);
         let run = make_test_run("claude", None);
         assert!(runtime.cancel(&run).is_ok());
     }
@@ -420,7 +434,7 @@ mod tests {
         let mut child = std::process::Command::new("true").spawn().unwrap();
         child.wait().unwrap();
         let dead_pid = child.id() as i64;
-        let runtime = make_test_runtime();
+        let runtime = make_test_runtime(None);
         let run = make_test_run("claude", Some(dead_pid));
         assert!(runtime.cancel(&run).is_ok());
     }
@@ -460,7 +474,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn poll_kills_leaked_grandchildren_after_result() {
-        let runtime = make_test_runtime();
+        let runtime = make_test_runtime(None);
         let (pgid, _script) = inject_script_child(&runtime);
 
         // poll returns Err::Failed because NoopTracker.get_run returns None;
@@ -505,7 +519,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn poll_timeout_returns_no_result() {
-        let runtime = make_test_runtime();
+        let runtime = make_test_runtime(None);
         let _pid = inject_sleep_child(&runtime, 60);
         let result = runtime.poll("timeout-run", None, Duration::from_millis(100));
         assert!(
@@ -517,13 +531,25 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn poll_shutdown_flag_returns_cancelled() {
-        let runtime = make_test_runtime();
+        let runtime = make_test_runtime(None);
         let _pid = inject_sleep_child(&runtime, 60);
         let flag = Arc::new(AtomicBool::new(true));
         let result = runtime.poll("shutdown-run", Some(&flag), Duration::from_secs(300));
         assert!(
             matches!(result, Err(PollError::Cancelled)),
             "expected Cancelled when shutdown flag is set, got: {result:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn poll_returns_failed_on_stall() {
+        let runtime = make_test_runtime(Some(Duration::from_millis(200)));
+        let _pid = inject_sleep_child(&runtime, 60);
+        let result = runtime.poll("stall-run", None, Duration::from_secs(30));
+        assert!(
+            matches!(result, Err(PollError::Failed(ref msg)) if msg.contains("stall_timeout")),
+            "expected Failed(stall_timeout), got: {result:?}"
         );
     }
 }
