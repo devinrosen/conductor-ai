@@ -20,7 +20,10 @@ pub struct ClaudeArgvRequest<'a> {
     pub prompt: &'a str,
     pub resume_session_id: Option<&'a str>,
     pub model: Option<&'a str>,
-    pub extra_cli_args: &'a [(std::borrow::Cow<'static, str>, std::borrow::Cow<'static, str>)],
+    pub extra_cli_args: &'a [(
+        std::borrow::Cow<'static, str>,
+        std::borrow::Cow<'static, str>,
+    )],
     pub permission_mode: Option<&'a PermissionMode>,
     pub plugin_dirs: &'a [String],
 }
@@ -30,7 +33,10 @@ pub type ArgvBuilder = Arc<
     dyn for<'a> Fn(
             &'a ClaudeArgvRequest<'a>,
         ) -> std::result::Result<
-            (Vec<std::borrow::Cow<'static, str>>, Option<std::path::PathBuf>),
+            (
+                Vec<std::borrow::Cow<'static, str>>,
+                Option<std::path::PathBuf>,
+            ),
             String,
         > + Send
         + Sync,
@@ -83,8 +89,8 @@ impl AgentRuntime for ClaudeRuntime {
                 permission_mode: Some(&self.options.permission_mode),
                 plugin_dirs: &request.plugin_dirs,
             };
-            let (args, prompt_file) = (self.options.argv_builder)(&argv_req)
-                .map_err(RuntimeError::Workflow)?;
+            let (args, prompt_file) =
+                (self.options.argv_builder)(&argv_req).map_err(RuntimeError::Workflow)?;
             let h = crate::headless::spawn_headless(
                 &args,
                 std::path::Path::new(wd),
