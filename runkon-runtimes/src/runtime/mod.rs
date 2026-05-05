@@ -132,6 +132,9 @@ pub struct RuntimeOptions {
     /// If `Some(t)`, the JSONL drain loop returns `StalledOut` when no output
     /// is received for longer than `t`. `None` disables stall detection.
     pub stall_threshold: Option<std::time::Duration>,
+    /// If `Some(n)`, the JSONL drain loop returns `TurnCapReached(n)` after
+    /// counting `n` `"assistant"` events. `None` disables the turn cap.
+    pub max_turns: Option<u32>,
 }
 
 /// Resolve a runtime name to a boxed `AgentRuntime` implementation.
@@ -148,6 +151,7 @@ pub fn resolve_runtime(
             log_path_for_run: options.log_path_for_run.clone(),
             argv_builder: options.argv_builder.clone(),
             stall_threshold: options.stall_threshold,
+            max_turns: options.max_turns,
         };
         return Ok(Box::new(claude::ClaudeRuntime::new(claude_options)));
     }

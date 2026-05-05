@@ -92,6 +92,8 @@ pub struct ExecutionContext {
     /// Workflow step ID for this invocation.
     #[allow(dead_code)]
     pub step_id: String,
+    /// Per-step host-enforced turn cap override. `None` means use `DEFAULT_MAX_TURNS`.
+    pub max_turns: Option<u32>,
 }
 
 #[cfg(test)]

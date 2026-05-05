@@ -166,6 +166,7 @@ fn test_script_runtime_resolve_via_config() {
         workspace_root: std::path::PathBuf::from("/tmp"),
         argv_builder: conductor_core::agent_runtime::conductor_argv_builder(),
         stall_threshold: None,
+        max_turns: None,
     };
 
     let runtime = conductor_core::runtime::resolve_runtime(
