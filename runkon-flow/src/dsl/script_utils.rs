@@ -12,10 +12,7 @@ fn path_is_within_dir(dir: &Path, file: &Path) -> bool {
 /// Returns the ordered list of `(search_root, candidate_path)` pairs for a
 /// script name. The caller must pass a relative `run`; absolute paths are
 /// rejected up-front by [`resolve_script_path`].
-pub(crate) fn script_search_paths(
-    run: &str,
-    search_roots: &[&Path],
-) -> Vec<(PathBuf, PathBuf)> {
+pub(crate) fn script_search_paths(run: &str, search_roots: &[&Path]) -> Vec<(PathBuf, PathBuf)> {
     search_roots
         .iter()
         .map(|root| (root.to_path_buf(), root.join(run)))

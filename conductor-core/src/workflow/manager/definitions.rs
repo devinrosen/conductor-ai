@@ -62,8 +62,7 @@ pub fn list_defs(
 )> {
     let dirs = workflow_dirs(worktree_path, repo_path);
     let dir_refs: Vec<&std::path::Path> = dirs.iter().map(|p| p.as_path()).collect();
-    workflow_dsl::load_workflow_defs(&dir_refs)
-        .map_err(crate::error::ConductorError::Workflow)
+    workflow_dsl::load_workflow_defs(&dir_refs).map_err(crate::error::ConductorError::Workflow)
 }
 
 /// Load a single workflow definition by name.

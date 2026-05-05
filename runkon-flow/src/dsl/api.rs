@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::parser::parse_workflow_file;
 use super::types::{collect_workflow_refs, WorkflowDef, WorkflowWarning};
@@ -122,10 +122,7 @@ pub fn validate_workflow_name(name: &str) -> Result<(), String> {
 ///
 /// Searches `workflow_dirs` in reverse order (highest-priority first), returning
 /// the first directory that contains `<name>.wf`.
-pub fn load_workflow_by_name(
-    workflow_dirs: &[&Path],
-    name: &str,
-) -> Result<WorkflowDef, String> {
+pub fn load_workflow_by_name(workflow_dirs: &[&Path], name: &str) -> Result<WorkflowDef, String> {
     validate_workflow_name(name)?;
 
     let filename = format!("{name}.wf");

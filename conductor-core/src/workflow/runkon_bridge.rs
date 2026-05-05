@@ -431,12 +431,12 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         );
         let wf_dir_refs: Vec<&std::path::Path> = wf_dirs.iter().map(|p| p.as_path()).collect();
         let core_def = runkon_flow::dsl::load_workflow_by_name(&wf_dir_refs, workflow_name)
-        .map_err(|e| {
-            EngineError::Workflow(format!(
-                "failed to load sub-workflow '{}': {e}",
-                workflow_name
-            ))
-        })?;
+            .map_err(|e| {
+                EngineError::Workflow(format!(
+                    "failed to load sub-workflow '{}': {e}",
+                    workflow_name
+                ))
+            })?;
 
         let exec_config = crate::workflow::WorkflowExecConfig {
             event_sinks: parent_ctx.event_sinks.iter().cloned().collect(),
