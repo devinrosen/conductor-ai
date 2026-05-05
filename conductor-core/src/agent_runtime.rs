@@ -12,10 +12,27 @@ use std::borrow::Cow;
 
 // Re-export unchanged headless primitives from runkon-runtimes.
 pub use runkon_runtimes::headless::{
-    build_headless_agent_args, resolve_conductor_bin, DrainOutcome, HeadlessHandle,
-    SpawnHeadlessParams,
+    build_headless_agent_args, DrainOutcome, HeadlessHandle, SpawnHeadlessParams,
 };
 pub use runkon_runtimes::tracker::EventSink;
+
+/// Resolve the path to the `conductor` binary.
+///
+/// Looks for a sibling `conductor` next to the current executable first,
+/// then falls back to the bare name (relying on `$PATH`).
+pub fn resolve_conductor_bin() -> String {
+    let resolved = std::env::current_exe()
+        .ok()
+        .and_then(|p| {
+            let sibling = p.parent()?.join("conductor");
+            sibling
+                .exists()
+                .then(|| sibling.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "conductor".to_string());
+    tracing::debug!("[conductor] resolved binary: {resolved}");
+    resolved
+}
 
 /// Spawn a headless conductor subprocess.
 ///
