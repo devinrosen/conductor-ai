@@ -103,6 +103,7 @@ pub(super) fn drive_headless_run(
                 .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")))
         }),
         workspace_root: PathBuf::from(&config.working_dir),
+        argv_builder: conductor_core::agent_runtime::conductor_argv_builder(),
     };
 
     let runtime =

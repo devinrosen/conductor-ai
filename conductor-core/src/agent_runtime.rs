@@ -1,22 +1,24 @@
 //! Shared runtime helpers for spawning agent runs and bridging
 //! `runkon-runtimes` events into `AgentManager` DB writes.
 //!
-//! - [`spawn_headless`] / [`try_spawn_headless_run`]: thin wrappers that resolve the
-//!   conductor binary internally and delegate to
-//!   `runkon_runtimes::runtime::conductor_headless`.
+//! - [`conductor_headless`]: owns the `conductor agent run` argv shape
+//!   (`SpawnHeadlessParams`, `build_headless_agent_args`, `try_spawn_headless_run`).
+//!   Lives here (not in `runkon-runtimes`) because the argv shape is conductor-CLI-specific.
+//! - [`conductor_argv_builder`]: factory that creates the [`runkon_runtimes::runtime::claude::ArgvBuilder`]
+//!   closure wired into `RuntimeOptions` at all conductor call sites.
 //! - [`CombinedSink`]: the [`runkon_runtimes::tracker::EventSink`] used by callers
 //!   to persist runtime events into `AgentManager` while also forwarding parsed
 //!   `AgentEvent`s to a UI/WebSocket callback. Construct it via
 //!   [`CombinedSink::new`] and pass it to [`drain_stream_json`].
 
+pub mod conductor_headless;
+
 use std::borrow::Cow;
 
 // Re-export runtime-agnostic headless primitives from runkon-runtimes.
 pub use runkon_runtimes::headless::{DrainOutcome, HeadlessHandle};
-// Re-export conductor-CLI-specific argv builder from its dedicated module.
-pub use runkon_runtimes::runtime::conductor_headless::{
-    build_headless_agent_args, SpawnHeadlessParams,
-};
+// Re-export conductor-CLI-specific argv builder from the local submodule.
+pub use conductor_headless::{build_headless_agent_args, SpawnHeadlessParams};
 pub use runkon_runtimes::tracker::EventSink;
 
 /// Resolve the path to the `conductor` binary.
@@ -53,13 +55,37 @@ pub fn spawn_headless(
 /// Build headless args and spawn the conductor subprocess in one step.
 ///
 /// Backward-compatible wrapper that resolves the conductor binary internally
-/// and delegates to `runkon_runtimes::runtime::conductor_headless::try_spawn_headless_run`.
+/// and delegates to [`conductor_headless::try_spawn_headless_run`].
 #[cfg(unix)]
 pub fn try_spawn_headless_run(
     params: &SpawnHeadlessParams<'_>,
 ) -> std::result::Result<(HeadlessHandle, std::path::PathBuf), String> {
     let binary_path = resolve_conductor_bin();
-    runkon_runtimes::runtime::conductor_headless::try_spawn_headless_run(params, &binary_path)
+    conductor_headless::try_spawn_headless_run(params, &binary_path)
+}
+
+/// Create the [`runkon_runtimes::runtime::claude::ArgvBuilder`] closure that
+/// translates a [`runkon_runtimes::runtime::claude::ClaudeArgvRequest`] into
+/// `conductor agent run` argv via [`build_headless_agent_args`].
+///
+/// Wire this into `RuntimeOptions::argv_builder` at every conductor call site.
+pub fn conductor_argv_builder() -> runkon_runtimes::runtime::claude::ArgvBuilder {
+    std::sync::Arc::new(
+        |req: &runkon_runtimes::runtime::claude::ClaudeArgvRequest<'_>| {
+            let params = conductor_headless::SpawnHeadlessParams {
+                run_id: req.run_id,
+                working_dir: req.working_dir,
+                prompt: req.prompt,
+                resume_session_id: req.resume_session_id,
+                model: req.model,
+                extra_cli_args: req.extra_cli_args,
+                permission_mode: req.permission_mode,
+                plugin_dirs: req.plugin_dirs,
+            };
+            let (args, pf) = conductor_headless::build_headless_agent_args(&params)?;
+            Ok((args, Some(pf)))
+        },
+    )
 }
 
 /// Drain a streaming JSON output from a headless agent subprocess.

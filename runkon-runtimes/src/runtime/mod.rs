@@ -2,7 +2,6 @@
 
 pub mod claude;
 pub mod cli;
-pub mod conductor_headless;
 pub mod script;
 
 use std::borrow::Cow;
@@ -128,6 +127,8 @@ pub struct RuntimeOptions {
     pub log_path_for_run: Arc<dyn Fn(&str) -> PathBuf + Send + Sync>,
     /// Where `CliRuntime` writes `<run_id>/output.json`.
     pub workspace_root: PathBuf,
+    /// Builds the argv (and optional prompt-file path) for a headless agent spawn.
+    pub argv_builder: claude::ArgvBuilder,
 }
 
 /// Resolve a runtime name to a boxed `AgentRuntime` implementation.
@@ -142,6 +143,7 @@ pub fn resolve_runtime(
             permission_mode,
             binary_path: options.binary_path.clone(),
             log_path_for_run: options.log_path_for_run.clone(),
+            argv_builder: options.argv_builder.clone(),
         };
         return Ok(Box::new(claude::ClaudeRuntime::new(claude_options)));
     }

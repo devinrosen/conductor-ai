@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::Duration;
 
-use super::conductor_headless::{try_spawn_headless_run, SpawnHeadlessParams};
 use crate::error::{Result, RuntimeError};
 use crate::headless::DrainOutcome;
 use crate::permission::PermissionMode;
@@ -14,15 +13,39 @@ use crate::tracker::{RunEventSink, RunTracker};
 
 use super::{AgentRuntime, PollError, RuntimeRequest};
 
+/// Per-spawn data passed to the injected argv builder.
+pub struct ClaudeArgvRequest<'a> {
+    pub run_id: &'a str,
+    pub working_dir: &'a str,
+    pub prompt: &'a str,
+    pub resume_session_id: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub extra_cli_args: &'a [(std::borrow::Cow<'static, str>, std::borrow::Cow<'static, str>)],
+    pub permission_mode: Option<&'a PermissionMode>,
+    pub plugin_dirs: &'a [String],
+}
+
+/// Injectable argv builder for [`ClaudeRuntime`].
+pub type ArgvBuilder = Arc<
+    dyn for<'a> Fn(
+            &'a ClaudeArgvRequest<'a>,
+        ) -> std::result::Result<
+            (Vec<std::borrow::Cow<'static, str>>, Option<std::path::PathBuf>),
+            String,
+        > + Send
+        + Sync,
+>;
+
 /// Claude-specific configuration captured at construction time.
 #[derive(Clone)]
 pub struct ClaudeRuntimeOptions {
     pub permission_mode: PermissionMode,
     pub binary_path: PathBuf,
     pub log_path_for_run: Arc<dyn Fn(&str) -> PathBuf + Send + Sync>,
+    pub argv_builder: ArgvBuilder,
 }
 
-/// Runtime that spawns a `conductor agent run` subprocess (headless mode).
+/// Runtime that spawns a headless agent subprocess via the injected argv builder.
 pub struct ClaudeRuntime {
     options: ClaudeRuntimeOptions,
     #[cfg(unix)]
@@ -49,9 +72,10 @@ impl AgentRuntime for ClaudeRuntime {
     fn spawn_impl(&self, request: &RuntimeRequest, _seal: super::private::Seal) -> Result<()> {
         #[cfg(unix)]
         {
-            let params = SpawnHeadlessParams {
+            let wd = request.working_dir.to_str().unwrap_or(".");
+            let argv_req = ClaudeArgvRequest {
                 run_id: &request.run_id,
-                working_dir: request.working_dir.to_str().unwrap_or("."),
+                working_dir: wd,
                 prompt: &request.prompt,
                 resume_session_id: request.resume_session_id.as_deref(),
                 model: request.resolved_model(),
@@ -59,11 +83,24 @@ impl AgentRuntime for ClaudeRuntime {
                 permission_mode: Some(&self.options.permission_mode),
                 plugin_dirs: &request.plugin_dirs,
             };
-            let (h, pf) =
-                try_spawn_headless_run(&params, &self.options.binary_path.to_string_lossy())
-                    .map_err(RuntimeError::Workflow)?;
+            let (args, prompt_file) = (self.options.argv_builder)(&argv_req)
+                .map_err(RuntimeError::Workflow)?;
+            let h = crate::headless::spawn_headless(
+                &args,
+                std::path::Path::new(wd),
+                &self.options.binary_path.to_string_lossy(),
+            )
+            .map_err(|e| {
+                if let Some(ref pf) = prompt_file {
+                    let _ = std::fs::remove_file(pf);
+                }
+                RuntimeError::Workflow(format!(
+                    "spawn failed for run {} (working_dir={}): {e}",
+                    &request.run_id, wd
+                ))
+            })?;
             *self.handle.lock().unwrap_or_else(|e| e.into_inner()) = Some(h);
-            *self.prompt_file.lock().unwrap_or_else(|e| e.into_inner()) = Some(pf);
+            *self.prompt_file.lock().unwrap_or_else(|e| e.into_inner()) = prompt_file;
             *self.tracker.lock().unwrap_or_else(|e| e.into_inner()) = Some(request.tracker.clone());
             *self.event_sink.lock().unwrap_or_else(|e| e.into_inner()) =
                 Some(request.event_sink.clone());
@@ -270,6 +307,7 @@ mod tests {
             permission_mode: PermissionMode::default(),
             binary_path: std::path::PathBuf::from("/nonexistent/agent-bin"),
             log_path_for_run: Arc::new(|run_id| std::env::temp_dir().join(format!("{run_id}.log"))),
+            argv_builder: Arc::new(|_| Err("test stub: no argv_builder configured".to_string())),
         })
     }
 

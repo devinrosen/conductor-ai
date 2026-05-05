@@ -61,6 +61,7 @@ impl ActionExecutor for ClaudeAgentExecutor {
                     .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")))
             }),
             workspace_root: self.config.general.workspace_root.clone(),
+            argv_builder: crate::agent_runtime::conductor_argv_builder(),
         };
 
         let runtime = crate::runtime::resolve_runtime(
