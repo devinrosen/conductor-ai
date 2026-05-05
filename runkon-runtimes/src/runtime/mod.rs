@@ -129,6 +129,9 @@ pub struct RuntimeOptions {
     pub workspace_root: PathBuf,
     /// Builds the argv (and optional prompt-file path) for a headless agent spawn.
     pub argv_builder: claude::ArgvBuilder,
+    /// If `Some(t)`, the JSONL drain loop returns `StalledOut` when no output
+    /// is received for longer than `t`. `None` disables stall detection.
+    pub stall_threshold: Option<std::time::Duration>,
 }
 
 /// Resolve a runtime name to a boxed `AgentRuntime` implementation.
@@ -144,6 +147,7 @@ pub fn resolve_runtime(
             binary_path: options.binary_path.clone(),
             log_path_for_run: options.log_path_for_run.clone(),
             argv_builder: options.argv_builder.clone(),
+            stall_threshold: options.stall_threshold,
         };
         return Ok(Box::new(claude::ClaudeRuntime::new(claude_options)));
     }

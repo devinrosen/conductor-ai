@@ -49,6 +49,9 @@ pub struct ClaudeRuntimeOptions {
     pub binary_path: PathBuf,
     pub log_path_for_run: Arc<dyn Fn(&str) -> PathBuf + Send + Sync>,
     pub argv_builder: ArgvBuilder,
+    /// If `Some(t)`, `drain_stream_json` returns `StalledOut` when no output
+    /// is received for longer than `t`. `None` disables stall detection.
+    pub stall_threshold: Option<Duration>,
 }
 
 /// Runtime that spawns a headless agent subprocess via the injected argv builder.
@@ -210,6 +213,7 @@ fn poll_unix(
         tracing::warn!("ClaudeRuntime: failed to persist subprocess pid {pid}: {e}");
     }
 
+    let stall_threshold = rt.options.stall_threshold;
     let (stderr_pipe, stdout_pipe, finish) = handle.into_stderr_drain_parts();
 
     let run_id_owned = run_id.to_string();
@@ -239,6 +243,7 @@ fn poll_unix(
             &run_id_owned,
             &log_path,
             &*event_sink_for_drain,
+            stall_threshold,
         );
         if let Some(pf) = prompt_file {
             let _ = std::fs::remove_file(pf);
@@ -298,6 +303,16 @@ fn poll_unix(
             }
             Err(PollError::NoResult)
         }
+        DrainOutcome::StalledOut(elapsed) => {
+            let msg = format!("stall_timeout: no events for {}s", elapsed.as_secs());
+            tracing::warn!("ClaudeRuntime: {msg} for run {run_id}");
+            if let Err(e) = tracker.mark_failed_if_running(run_id, &msg) {
+                tracing::warn!(
+                    "ClaudeRuntime: failed to persist stall failure for {run_id}: {e}"
+                );
+            }
+            Err(PollError::Failed(msg))
+        }
     }
 }
 
@@ -314,6 +329,18 @@ mod tests {
             binary_path: std::path::PathBuf::from("/nonexistent/agent-bin"),
             log_path_for_run: Arc::new(|run_id| std::env::temp_dir().join(format!("{run_id}.log"))),
             argv_builder: Arc::new(|_| Err("test stub: no argv_builder configured".to_string())),
+            stall_threshold: None,
+        })
+    }
+
+    #[cfg(unix)]
+    fn make_test_runtime_with_stall(threshold: Duration) -> ClaudeRuntime {
+        ClaudeRuntime::new(ClaudeRuntimeOptions {
+            permission_mode: PermissionMode::default(),
+            binary_path: std::path::PathBuf::from("/nonexistent/agent-bin"),
+            log_path_for_run: Arc::new(|run_id| std::env::temp_dir().join(format!("{run_id}.log"))),
+            argv_builder: Arc::new(|_| Err("test stub: no argv_builder configured".to_string())),
+            stall_threshold: Some(threshold),
         })
     }
 
@@ -524,6 +551,18 @@ mod tests {
         assert!(
             matches!(result, Err(PollError::Cancelled)),
             "expected Cancelled when shutdown flag is set, got: {result:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn poll_returns_failed_on_stall() {
+        let runtime = make_test_runtime_with_stall(Duration::from_millis(200));
+        let _pid = inject_sleep_child(&runtime, 60);
+        let result = runtime.poll("stall-run", None, Duration::from_secs(30));
+        assert!(
+            matches!(result, Err(PollError::Failed(ref msg)) if msg.contains("stall_timeout")),
+            "expected Failed(stall_timeout), got: {result:?}"
         );
     }
 }
