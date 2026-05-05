@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::Duration;
 
+use super::conductor_headless::{try_spawn_headless_run, SpawnHeadlessParams};
 use crate::error::{Result, RuntimeError};
 use crate::headless::DrainOutcome;
-use super::conductor_headless::{SpawnHeadlessParams, try_spawn_headless_run};
 use crate::permission::PermissionMode;
 use crate::process_utils;
 use crate::run::RunHandle;
@@ -59,11 +59,9 @@ impl AgentRuntime for ClaudeRuntime {
                 permission_mode: Some(&self.options.permission_mode),
                 plugin_dirs: &request.plugin_dirs,
             };
-            let (h, pf) = try_spawn_headless_run(
-                &params,
-                &self.options.binary_path.to_string_lossy(),
-            )
-            .map_err(RuntimeError::Workflow)?;
+            let (h, pf) =
+                try_spawn_headless_run(&params, &self.options.binary_path.to_string_lossy())
+                    .map_err(RuntimeError::Workflow)?;
             *self.handle.lock().unwrap_or_else(|e| e.into_inner()) = Some(h);
             *self.prompt_file.lock().unwrap_or_else(|e| e.into_inner()) = Some(pf);
             *self.tracker.lock().unwrap_or_else(|e| e.into_inner()) = Some(request.tracker.clone());
