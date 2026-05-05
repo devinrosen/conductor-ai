@@ -757,6 +757,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         // CRUD actions
         KeyCode::Char('a') => Action::RegisterRepo,
         KeyCode::Char('c') => Action::Create,
+        KeyCode::Char('i') => Action::AdoptWorktree,
         KeyCode::Char('d') => Action::Delete,
         KeyCode::Char('s') => Action::SyncTickets,
         KeyCode::Char('S') => Action::OpenSettings,

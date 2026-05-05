@@ -5,7 +5,7 @@ use conductor_core::agent::AgentManager;
 use conductor_core::config::Config;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
-use conductor_core::worktree::{WorktreeCreateOptions, WorktreeManager};
+use conductor_core::worktree::{WorktreeAdoptOptions, WorktreeCreateOptions, WorktreeManager};
 
 use crate::commands::WorktreeCommands;
 use crate::handlers::agent::run_agent;
@@ -197,6 +197,57 @@ pub fn handle_worktree(
                 Some(b) => println!("Base branch for {name} set to: {b}"),
                 None => println!("Base branch for {name} cleared (will use repo default)"),
             }
+        }
+        WorktreeCommands::Adopt {
+            repo,
+            path,
+            branch,
+            base_branch,
+            ticket,
+        } => {
+            // Resolve the path relative to cwd if it is not absolute.
+            let abs_path = {
+                let p = std::path::Path::new(&path);
+                if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    std::env::current_dir()?.join(p)
+                }
+            };
+
+            // Resolve ticket ID: ULID passthrough vs source-id lookup.
+            let resolved_ticket_id: Option<String> = match &ticket {
+                None => None,
+                Some(id) if crate::helpers::looks_like_ulid(id) => Some(id.clone()),
+                Some(source_id) => {
+                    let repo_obj = RepoManager::new(conn, config).get_by_slug(&repo)?;
+                    let syncer = TicketSyncer::new(conn);
+                    match syncer.get_by_source_id(&repo_obj.id, source_id) {
+                        Ok(t) => Some(t.id),
+                        Err(e) => {
+                            return Err(anyhow::anyhow!(
+                                "Could not resolve ticket ID '{source_id}': {e}"
+                            ))
+                        }
+                    }
+                }
+            };
+
+            let mgr = WorktreeManager::new(conn, config);
+            let wt = mgr.adopt(
+                &repo,
+                &abs_path,
+                WorktreeAdoptOptions {
+                    branch,
+                    base_branch,
+                    ticket_id: resolved_ticket_id,
+                },
+            )?;
+            println!(
+                "Adopted worktree '{}' (branch: {}) in repo '{}'",
+                wt.slug, wt.branch, repo
+            );
+            println!("  Path: {}", wt.path);
         }
         WorktreeCommands::CreateStack {
             repo,

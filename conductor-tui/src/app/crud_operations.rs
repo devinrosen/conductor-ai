@@ -75,6 +75,32 @@ impl App {
         }
     }
 
+    pub(super) fn handle_adopt_worktree(&mut self) {
+        match self.state.view {
+            View::Dashboard | View::RepoDetail => {
+                let repo_slug = self
+                    .state
+                    .selected_repo_id
+                    .as_ref()
+                    .and_then(|id| self.state.data.repo_slug_map.get(id))
+                    .cloned()
+                    .or_else(|| self.state.selected_repo().map(|r| r.slug.clone()));
+
+                if let Some(slug) = repo_slug {
+                    self.state.modal = Modal::Input {
+                        title: "Adopt Existing Worktree".to_string(),
+                        prompt: format!("Path to existing worktree for {slug}:"),
+                        value: String::new(),
+                        on_submit: InputAction::AdoptWorktree { repo_slug: slug },
+                    };
+                } else {
+                    self.state.status_message = Some("Select a repo first".to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn handle_register_repo(&mut self) {
         if self.state.view != View::Dashboard {
             return;
