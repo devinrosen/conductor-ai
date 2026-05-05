@@ -80,11 +80,16 @@ pub fn validate_workflows_batch<F>(
 where
     F: Fn(&str) -> std::result::Result<WorkflowDef, String>,
 {
-    let script_resolver = make_script_resolver(
-        wt_path.to_string(),
-        repo_path.to_string(),
-        default_skills_dir(),
-    );
+    let mut script_roots = vec![
+        std::path::PathBuf::from(wt_path),
+        std::path::PathBuf::from(wt_path).join(".conductor/scripts"),
+        std::path::PathBuf::from(repo_path),
+        std::path::PathBuf::from(repo_path).join(".conductor/scripts"),
+    ];
+    if let Some(skills) = default_skills_dir() {
+        script_roots.push(skills);
+    }
+    let script_resolver = make_script_resolver(script_roots);
 
     let make_error = |message: String, hint: Option<String>| -> ValidationError {
         ValidationError { message, hint }

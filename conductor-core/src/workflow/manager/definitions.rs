@@ -1,7 +1,24 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 use crate::error::Result;
 use runkon_flow::dsl as workflow_dsl;
+
+/// Build the ordered list of workflow directories for a worktree + repo pair.
+///
+/// Repo directory is listed first (lower priority); worktree directory is last
+/// (higher priority, overrides repo on name collision). Deduplicates when
+/// `wt == repo`.
+pub(crate) fn workflow_dirs(wt: &str, repo: &str) -> Vec<PathBuf> {
+    let mut dirs = vec![];
+    if !repo.is_empty() {
+        dirs.push(PathBuf::from(repo).join(".conductor/workflows"));
+    }
+    if !wt.is_empty() && wt != repo {
+        dirs.push(PathBuf::from(wt).join(".conductor/workflows"));
+    }
+    dirs
+}
 
 /// Build a workflow-by-name loader closure for batch validation.
 ///
@@ -12,9 +29,11 @@ fn make_workflow_loader(
     wt_path: &str,
     repo_path: &str,
 ) -> impl Fn(&str) -> std::result::Result<runkon_flow::dsl::WorkflowDef, String> {
-    let wt = wt_path.to_string();
-    let rp = repo_path.to_string();
-    move |name: &str| workflow_dsl::load_workflow_by_name(&wt, &rp, name).map_err(|e| e.to_string())
+    let dirs = workflow_dirs(wt_path, repo_path);
+    move |name: &str| {
+        let dir_refs: Vec<&std::path::Path> = dirs.iter().map(|p| p.as_path()).collect();
+        workflow_dsl::load_workflow_by_name(&dir_refs, name).map_err(|e| e.to_string())
+    }
 }
 
 /// Represents a workflow that failed to parse or failed post-parse validation.
@@ -41,8 +60,9 @@ pub fn list_defs(
     Vec<runkon_flow::dsl::WorkflowDef>,
     Vec<runkon_flow::dsl::WorkflowWarning>,
 )> {
-    workflow_dsl::load_workflow_defs(worktree_path, repo_path)
-        .map_err(crate::error::ConductorError::Workflow)
+    let dirs = workflow_dirs(worktree_path, repo_path);
+    let dir_refs: Vec<&std::path::Path> = dirs.iter().map(|p| p.as_path()).collect();
+    workflow_dsl::load_workflow_defs(&dir_refs).map_err(crate::error::ConductorError::Workflow)
 }
 
 /// Load a single workflow definition by name.
@@ -51,7 +71,9 @@ pub fn load_def_by_name(
     repo_path: &str,
     name: &str,
 ) -> Result<runkon_flow::dsl::WorkflowDef> {
-    workflow_dsl::load_workflow_by_name(worktree_path, repo_path, name)
+    let dirs = workflow_dirs(worktree_path, repo_path);
+    let dir_refs: Vec<&std::path::Path> = dirs.iter().map(|p| p.as_path()).collect();
+    workflow_dsl::load_workflow_by_name(&dir_refs, name)
         .map_err(crate::error::ConductorError::Workflow)
 }
 

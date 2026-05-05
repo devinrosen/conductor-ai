@@ -615,7 +615,7 @@ pub fn handle_workflow(
             // structurally identical but distinct Rust types — a From impl or re-export is required
             // before validate_workflows_batch can accept the runkon-flow resolver directly).
             let loader = |name: &str| {
-                conductor_core::workflow::load_workflow_by_name(&wt_ref, &repo_ref, name)
+                conductor_core::workflow::load_def_by_name(&wt_ref, &repo_ref, name)
                     .map_err(|e| e.to_string())
             };
             let result = conductor_core::workflow::validate_workflows_batch(
