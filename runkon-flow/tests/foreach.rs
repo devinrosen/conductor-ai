@@ -509,7 +509,6 @@ impl runkon_flow::engine::ChildWorkflowRunner for InputCapturingRunner {
         let item_id = params.inputs.get("item.id").cloned().unwrap_or_default();
         Ok(runkon_flow::types::WorkflowResult {
             workflow_run_id: format!("mock-run-{item_id}"),
-            worktree_id: None,
             workflow_name: workflow_name.to_string(),
             all_succeeded: true,
             total_cost: 0.0,

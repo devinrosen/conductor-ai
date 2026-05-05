@@ -553,7 +553,7 @@ pub async fn run_workflow(
                     res.workflow_run_id.clone(),
                     succeeded,
                     if succeeded { "completed" } else { "failed" },
-                    res.worktree_id.clone(),
+                    params.worktree_id.clone(),
                 )
             }
             Err(_) => {
@@ -805,7 +805,7 @@ pub async fn post_workflow_run(
                     res.workflow_run_id.clone(),
                     succeeded,
                     res.workflow_run_id.clone(),
-                    res.worktree_id.clone(),
+                    wt_id_clone.clone(),
                     if succeeded { "completed" } else { "failed" },
                 )
             }
@@ -1679,7 +1679,7 @@ pub async fn resume_workflow_endpoint(
                         res.workflow_run_id.clone(),
                         succeeded,
                         Some(res.workflow_run_id.clone()),
-                        res.worktree_id.clone(),
+                        run_worktree_id.clone(),
                         Some(if succeeded { "completed" } else { "failed" }),
                     )
                 }

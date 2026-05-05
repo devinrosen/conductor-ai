@@ -257,7 +257,6 @@ pub fn named_executors(
 fn mock_workflow_result(item_id: &str, wf_name: &str, succeeded: bool) -> WorkflowResult {
     WorkflowResult {
         workflow_run_id: format!("mock-run-{}", item_id),
-        worktree_id: None,
         workflow_name: wf_name.to_string(),
         all_succeeded: succeeded,
         total_cost: 0.0,

@@ -990,7 +990,6 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(800));
                 Ok(WorkflowResult {
                     workflow_run_id: "child-run".into(),
-                    worktree_id: None,
                     workflow_name: "child-wf".into(),
                     all_succeeded: true,
                     total_cost: 0.0,

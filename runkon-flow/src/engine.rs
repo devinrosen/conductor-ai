@@ -493,9 +493,6 @@ pub fn run_workflow_engine(
 
     Ok(WorkflowResult {
         workflow_run_id: wf_run_id,
-        // "worktree_id" is a conductor host-domain key; a later sub-ticket will
-        // remove this from WorkflowResult and let the host extract it directly.
-        worktree_id: state.run_ctx.get("worktree_id"),
         workflow_name: workflow.name.clone(),
         all_succeeded: state.all_succeeded,
         total_cost: state.total_cost,
