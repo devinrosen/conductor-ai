@@ -1,13 +1,13 @@
+use std::any::Any;
 use std::collections::HashMap;
 
 use rusqlite::Connection;
 
 use crate::error::{ConductorError, Result};
-use runkon_flow::dsl::{ForeachScope, TicketScope};
 
 use super::{
     collect_fan_out_items, dep_query_err, fetch_dep_item_ids, ids_to_set_and_refs, require_repo_id,
-    FanOutItem, ItemProvider, ProviderContext,
+    FanOutItem, ItemProvider, ProviderContext, TicketScope,
 };
 
 pub struct TicketsProvider {
@@ -21,10 +21,49 @@ impl TicketsProvider {
 }
 
 impl ItemProvider for TicketsProvider {
+    fn name(&self) -> &str {
+        "tickets"
+    }
+
+    fn parse_scope(
+        &self,
+        raw: Option<&HashMap<String, String>>,
+    ) -> crate::error::Result<Option<Box<dyn Any>>> {
+        let map = match raw {
+            None => {
+                return Err(ConductorError::Workflow(format!(
+                    "foreach '{}': `scope` is required when over = tickets",
+                    self.name()
+                )));
+            }
+            Some(m) => m,
+        };
+
+        let scope = if let Some(ticket_id) = map.get("ticket_id") {
+            TicketScope::TicketId(ticket_id.clone())
+        } else if let Some(label) = map.get("label") {
+            TicketScope::Label(label.clone())
+        } else if let Some(v) = map.get("unlabeled") {
+            if v == "true" {
+                TicketScope::Unlabeled
+            } else {
+                return Err(ConductorError::Workflow(
+                    "scope.unlabeled must be true".to_string(),
+                ));
+            }
+        } else {
+            return Err(ConductorError::Workflow(
+                "scope must contain ticket_id, label, or unlabeled".to_string(),
+            ));
+        };
+
+        Ok(Some(Box::new(scope)))
+    }
+
     fn items(
         &self,
         ctx: &ProviderContext<'_>,
-        scope: Option<&ForeachScope>,
+        scope: Option<&dyn Any>,
         _filter: &HashMap<String, String>,
     ) -> Result<Vec<FanOutItem>> {
         use crate::tickets::TicketSyncer;
@@ -47,9 +86,11 @@ impl ItemProvider for TicketsProvider {
             }
         };
 
-        let items = match scope {
-            Some(ForeachScope::Ticket(ts)) => match ts {
-                TicketScope::TicketId(ticket_id) => match syncer.get_by_id(ticket_id) {
+        let ts_opt = scope.and_then(|s| s.downcast_ref::<TicketScope>());
+
+        let items = match ts_opt {
+            Some(TicketScope::TicketId(ticket_id)) => {
+                match syncer.get_by_id(ticket_id) {
                     Ok(t) => vec![ticket_item(t)],
                     Err(ConductorError::TicketNotFound { .. }) => {
                         return Err(ConductorError::Workflow(format!(
@@ -58,22 +99,17 @@ impl ItemProvider for TicketsProvider {
                         )));
                     }
                     Err(e) => return Err(e),
-                },
-                TicketScope::Label(label) => {
-                    let tickets = syncer
-                        .list_filtered(Some(repo_id), &ticket_filter(vec![label.clone()], false))?;
-                    collect_fan_out_items(tickets, ticket_item)
                 }
-                TicketScope::Unlabeled => {
-                    let tickets =
-                        syncer.list_filtered(Some(repo_id), &ticket_filter(vec![], true))?;
-                    collect_fan_out_items(tickets, ticket_item)
-                }
-            },
-            Some(ForeachScope::Worktree(_)) => {
-                return Err(ConductorError::Workflow(
-                    "foreach over = tickets does not accept a worktree scope; use over = worktrees instead".to_string(),
-                ));
+            }
+            Some(TicketScope::Label(label)) => {
+                let tickets = syncer
+                    .list_filtered(Some(repo_id), &ticket_filter(vec![label.clone()], false))?;
+                collect_fan_out_items(tickets, ticket_item)
+            }
+            Some(TicketScope::Unlabeled) => {
+                let tickets =
+                    syncer.list_filtered(Some(repo_id), &ticket_filter(vec![], true))?;
+                collect_fan_out_items(tickets, ticket_item)
             }
             None => {
                 let tickets = syncer.list_filtered(Some(repo_id), &ticket_filter(vec![], false))?;
@@ -172,17 +208,18 @@ mod tests {
     }
 
     #[test]
-    fn test_tickets_items_worktree_scope_returns_error() {
-        let conn = test_helpers::setup_db();
-        let config = crate::config::Config::default();
-        let ctx = test_helpers::make_provider_ctx(&conn, &config);
-        let scope = ForeachScope::Worktree(runkon_flow::dsl::WorktreeScope {
-            base_branch: None,
-            has_open_pr: None,
-        });
-        let result =
-            TicketsProvider::new(Some("r1".into())).items(&ctx, Some(&scope), &HashMap::new());
+    fn test_tickets_parse_scope_rejects_worktree_keys() {
+        let mut raw = HashMap::new();
+        raw.insert("base_branch".to_string(), "main".to_string());
+        let result = TicketsProvider::new(Some("r1".into())).parse_scope(Some(&raw));
+        // "base_branch" is not ticket_id/label/unlabeled → error
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tickets_parse_scope_rejects_none() {
+        let result = TicketsProvider::new(Some("r1".into())).parse_scope(None);
+        assert!(result.is_err(), "tickets requires a scope");
     }
 
     #[test]
@@ -207,10 +244,10 @@ mod tests {
         assert_eq!(all.len(), 1);
         let internal_id = all[0].id.clone();
 
-        let scope = ForeachScope::Ticket(TicketScope::TicketId(internal_id.clone()));
+        let scope = TicketScope::TicketId(internal_id.clone());
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = TicketsProvider::new(Some("r1".into()))
-            .items(&ctx, Some(&scope), &HashMap::new())
+            .items(&ctx, Some(&scope as &dyn std::any::Any), &HashMap::new())
             .unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].item_id, internal_id);
@@ -233,10 +270,10 @@ mod tests {
             .upsert_tickets("r1", &[labeled, test_helpers::make_ticket("11", "Plain")])
             .unwrap();
 
-        let scope = ForeachScope::Ticket(TicketScope::Label("bug".to_string()));
+        let scope = TicketScope::Label("bug".to_string());
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = TicketsProvider::new(Some("r1".into()))
-            .items(&ctx, Some(&scope), &HashMap::new())
+            .items(&ctx, Some(&scope as &dyn std::any::Any), &HashMap::new())
             .unwrap();
         assert_eq!(items.len(), 1, "only the labeled ticket returned");
         assert_eq!(items[0].item_ref, "10");
@@ -262,10 +299,10 @@ mod tests {
             )
             .unwrap();
 
-        let scope = ForeachScope::Ticket(TicketScope::Unlabeled);
+        let scope = TicketScope::Unlabeled;
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = TicketsProvider::new(Some("r1".into()))
-            .items(&ctx, Some(&scope), &HashMap::new())
+            .items(&ctx, Some(&scope as &dyn std::any::Any), &HashMap::new())
             .unwrap();
         assert_eq!(items.len(), 1, "only unlabeled ticket returned");
         assert_eq!(items[0].item_ref, "21");

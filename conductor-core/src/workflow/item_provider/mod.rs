@@ -1,15 +1,37 @@
+use std::any::Any;
 use std::collections::{HashMap, HashSet};
 
 use rusqlite::Connection;
 
 use crate::config::Config;
 use crate::error::Result;
-use runkon_flow::dsl::ForeachScope;
 
 pub mod repos;
 pub mod tickets;
 pub mod workflow_runs;
 pub mod worktrees;
+
+// ---------------------------------------------------------------------------
+// Scope types (moved from runkon-flow)
+// ---------------------------------------------------------------------------
+
+/// Scope selector for ticket fan-outs.
+#[derive(Debug, Clone)]
+pub enum TicketScope {
+    /// Ticket with the given internal ID (and its children via parent_of edges).
+    TicketId(String),
+    /// All open tickets with the given label in the repo.
+    Label(String),
+    /// All open tickets with no entries in ticket_labels.
+    Unlabeled,
+}
+
+/// Scope selector for worktree fan-outs.
+#[derive(Debug, Clone, Default)]
+pub struct WorktreeScope {
+    pub base_branch: Option<String>,
+    pub has_open_pr: Option<bool>,
+}
 
 /// An item returned by an `ItemProvider` during fan-out.
 pub struct FanOutItem {
@@ -28,10 +50,41 @@ pub struct ProviderContext<'a> {
 
 /// Trait for a foreach item source registered with the engine.
 pub trait ItemProvider: Send + Sync {
+    fn name(&self) -> &str;
+
+    /// Parse a raw scope KV map into a provider-specific opaque value.
+    fn parse_scope(
+        &self,
+        raw: Option<&HashMap<String, String>>,
+    ) -> crate::error::Result<Option<Box<dyn Any>>> {
+        match raw {
+            None => Ok(None),
+            Some(_) => Err(crate::error::ConductorError::Workflow(format!(
+                "provider '{}' does not support scope",
+                self.name()
+            ))),
+        }
+    }
+
+    /// Return warnings about the scope (e.g. "no scope; falling back to context").
+    fn scope_warnings(&self, _raw: Option<&HashMap<String, String>>) -> Vec<String> {
+        vec![]
+    }
+
+    /// Whether a `filter` block is required.
+    fn requires_filter(&self) -> bool {
+        false
+    }
+
+    /// Validate filter key/value pairs.
+    fn validate_filter(&self, _filter: &HashMap<String, String>) -> crate::error::Result<()> {
+        Ok(())
+    }
+
     fn items(
         &self,
         ctx: &ProviderContext<'_>,
-        scope: Option<&ForeachScope>,
+        scope: Option<&dyn Any>,
         filter: &HashMap<String, String>,
     ) -> Result<Vec<FanOutItem>>;
 

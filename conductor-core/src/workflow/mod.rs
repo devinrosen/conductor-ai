@@ -144,8 +144,8 @@ pub use runkon_flow::dsl::{
     make_script_resolver, parse_workflow_str, resolve_script_path, validate_script_steps,
     validate_workflow_semantics, AgentRef, AlwaysNode, CallNode, CallWorkflowNode, Condition,
     DoNode, DoWhileNode, GateNode, GateType, IfNode, InputDecl, InputType, OnFail, ParallelNode,
-    UnlessNode, ValidationError, ValidationReport, WhileNode, WorkflowDef, WorkflowNode,
-    WorkflowTrigger, WorkflowWarning, MAX_WORKFLOW_DEPTH,
+    UnlessNode, ValidationContext, ValidationError, ValidationReport, WhileNode, WorkflowDef,
+    WorkflowNode, WorkflowTrigger, WorkflowWarning, MAX_WORKFLOW_DEPTH,
 };
 
 // Re-export unified runkon-flow types so downstream crates can import them from

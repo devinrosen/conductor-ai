@@ -216,13 +216,13 @@ fn core_fan_out_item_to_rk(
 
 /// Shared body for every `RkItemProvider::items()` implementation.
 ///
-/// Locks the connection, converts the scope, delegates to `provider`, and maps
-/// the result back into runkon-flow types.  All four adapters differ only in
-/// which `ItemProvider` implementation they pass here.
+/// Locks the connection, delegates to `provider`, and maps the result back into
+/// runkon-flow types.  All four adapters differ only in which `ItemProvider`
+/// implementation they pass here.
 fn delegate_items<P: ItemProvider>(
     conn: &Arc<Mutex<rusqlite::Connection>>,
     config: &crate::config::Config,
-    scope: Option<&runkon_flow::dsl::ForeachScope>,
+    scope: Option<&dyn std::any::Any>,
     filter: &HashMap<String, String>,
     provider: P,
 ) -> Result<Vec<runkon_flow::traits::item_provider::FanOutItem>, EngineError> {
@@ -257,11 +257,36 @@ macro_rules! impl_rk_item_provider_trait {
             fn name(&self) -> &str {
                 $provider_name
             }
+            fn parse_scope(
+                &self,
+                raw: Option<&HashMap<String, String>>,
+            ) -> Result<Option<Box<dyn std::any::Any>>, String> {
+                self.provider()
+                    .parse_scope(raw)
+                    .map_err(|e| e.to_string())
+            }
+            fn scope_warnings(
+                &self,
+                raw: Option<&HashMap<String, String>>,
+            ) -> Vec<String> {
+                self.provider().scope_warnings(raw)
+            }
+            fn requires_filter(&self) -> bool {
+                self.provider().requires_filter()
+            }
+            fn validate_filter(
+                &self,
+                filter: &HashMap<String, String>,
+            ) -> Result<(), String> {
+                self.provider()
+                    .validate_filter(filter)
+                    .map_err(|e| e.to_string())
+            }
             fn items(
                 &self,
                 _ctx: &dyn runkon_flow::traits::run_context::RunContext,
                 _info: &runkon_flow::traits::item_provider::ProviderInfo,
-                scope: Option<&runkon_flow::dsl::ForeachScope>,
+                scope: Option<&dyn std::any::Any>,
                 filter: &HashMap<String, String>,
             ) -> Result<Vec<runkon_flow::traits::item_provider::FanOutItem>, EngineError> {
                 delegate_items(&self.conn, &self.config, scope, filter, self.provider())
@@ -533,6 +558,21 @@ pub(super) fn build_rk_action_registry(
         HashMap::new(),
         Some(Box::new(adapter)),
     )
+}
+
+/// Build a validation-only `ItemProviderRegistry` with all four built-in providers.
+///
+/// Uses an in-memory SQLite connection so the providers can be instantiated for
+/// metadata queries (`parse_scope`, `requires_filter`, `validate_filter`,
+/// `supports_ordered`) without requiring a real database.  The `items()` method
+/// on these providers is never called during validation.
+pub(super) fn build_rk_validation_registry(
+) -> runkon_flow::traits::item_provider::ItemProviderRegistry {
+    let conn = Arc::new(Mutex::new(
+        rusqlite::Connection::open_in_memory().expect("validation registry in-memory db"),
+    ));
+    let config = crate::config::Config::default();
+    build_rk_item_provider_registry(conn, &config, None)
 }
 
 /// Build a runkon-flow `ItemProviderRegistry` with all four built-in providers.

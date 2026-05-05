@@ -1,17 +1,38 @@
+use std::any::Any;
 use std::collections::HashMap;
 
-use crate::error::Result;
-use runkon_flow::dsl::ForeachScope;
+use crate::error::{ConductorError, Result};
 
 use super::{collect_fan_out_items, FanOutItem, ItemProvider, ProviderContext};
 
 pub struct WorkflowRunsProvider;
 
 impl ItemProvider for WorkflowRunsProvider {
+    fn name(&self) -> &str {
+        "workflow_runs"
+    }
+
+    fn requires_filter(&self) -> bool {
+        true
+    }
+
+    fn validate_filter(&self, filter: &HashMap<String, String>) -> crate::error::Result<()> {
+        if let Some(status) = filter.get("status") {
+            if status == "running" || status == "paused" {
+                return Err(ConductorError::Workflow(format!(
+                    "filter.status = '{}' is not a terminal status — \
+                     only completed, failed, or cancelled are allowed",
+                    status
+                )));
+            }
+        }
+        Ok(())
+    }
+
     fn items(
         &self,
         ctx: &ProviderContext<'_>,
-        _scope: Option<&ForeachScope>,
+        _scope: Option<&dyn Any>,
         filter: &HashMap<String, String>,
     ) -> Result<Vec<FanOutItem>> {
         let status_filter = filter.get("status").map(|s| s.as_str()).unwrap_or("");
