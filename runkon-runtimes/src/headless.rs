@@ -90,7 +90,7 @@ impl Drop for HeadlessHandle {
     }
 }
 
-/// Spawn a headless `conductor agent run` subprocess.
+/// Spawn a headless agent subprocess.
 #[cfg(unix)]
 pub fn spawn_headless(
     args: &[Cow<'static, str>],
@@ -105,7 +105,7 @@ pub fn spawn_headless(
         .stderr(Stdio::piped())
         .process_group(0)
         .spawn()
-        .map_err(|e| format!("Failed to spawn conductor headless: {e}"))?;
+        .map_err(|e| format!("Failed to spawn headless agent: {e}"))?;
 
     HeadlessHandle::from_child(child)
 }

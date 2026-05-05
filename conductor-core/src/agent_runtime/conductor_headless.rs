@@ -1,13 +1,14 @@
 //! Conductor-headless CLI argv builder for `ClaudeRuntime`.
 //!
-//! This module owns the `conductor agent run` argv shape — not a generic
-//! primitive. Future runtimes construct their own argv (or HTTP body, etc.)
-//! without inheriting this conductor-CLI-specific shape.
+//! This module owns the `conductor agent run` argv shape and lives in
+//! `conductor-core` because that shape is conductor-CLI-specific. It is NOT
+//! part of `runkon-runtimes` (the portable runtime harness), which must remain
+//! publishable without any conductor dependency.
 
 use std::borrow::Cow;
 
-use crate::headless::{spawn_headless, HeadlessHandle};
-use crate::permission::PermissionMode;
+use runkon_runtimes::headless::{spawn_headless, HeadlessHandle};
+use runkon_runtimes::permission::PermissionMode;
 
 /// Maximum number of CLI arguments produced by `build_headless_agent_args`.
 const AGENT_ARGS_CAPACITY: usize = 20;
@@ -125,7 +126,7 @@ pub fn try_spawn_headless_run(
 pub fn build_headless_agent_args(
     params: &SpawnHeadlessParams<'_>,
 ) -> std::result::Result<(Vec<Cow<'static, str>>, std::path::PathBuf), String> {
-    crate::text_util::validate_run_id(params.run_id).map_err(|e| e.to_string())?;
+    runkon_runtimes::text_util::validate_run_id(params.run_id).map_err(|e| e.to_string())?;
 
     let run_id = params.run_id;
     let working_dir = params.working_dir;
