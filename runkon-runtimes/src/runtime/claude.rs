@@ -336,7 +336,10 @@ mod tests {
     use crate::runtime::test_util::{make_test_run, NoopTracker};
     use crate::tracker::NoopEventSink;
 
-    fn make_test_runtime(stall_threshold: Option<Duration>, max_turns: Option<u32>) -> ClaudeRuntime {
+    fn make_test_runtime(
+        stall_threshold: Option<Duration>,
+        max_turns: Option<u32>,
+    ) -> ClaudeRuntime {
         ClaudeRuntime::new(ClaudeRuntimeOptions {
             permission_mode: PermissionMode::default(),
             binary_path: std::path::PathBuf::from("/nonexistent/agent-bin"),

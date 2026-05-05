@@ -2241,6 +2241,7 @@ mod tests {
             bot_name: None,
             plugin_dirs: vec![],
             timeout: None,
+            max_turns: None,
         })
     }
 
