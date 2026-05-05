@@ -104,6 +104,8 @@ pub(super) fn drive_headless_run(
         }),
         workspace_root: PathBuf::from(&config.working_dir),
         argv_builder: conductor_core::agent_runtime::conductor_argv_builder(),
+        stall_threshold: Some(conductor_core::agent_runtime::DEFAULT_STALL_THRESHOLD),
+        max_turns: None,
     };
 
     let runtime =
