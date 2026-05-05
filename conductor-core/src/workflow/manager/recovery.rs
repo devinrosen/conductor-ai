@@ -185,10 +185,13 @@ fn fail_step_with_message(conn: &Connection, step_id: &str, error_message: &str)
 /// via `persistence`'s inherent `bulk_recover_steps` method (NOT a trait
 /// method — see #2853 disambiguation).
 ///
-/// Most callers should use `recover_stuck_steps_from_db` which opens its own
-/// write connection internally. This lower-level signature exists for callers
-/// that already hold a `SqliteWorkflowPersistence` (e.g. tests).
-pub fn recover_stuck_steps(
+/// `pub(crate)` — the only external entry point is `recover_stuck_steps_from_db`,
+/// which opens its own write connection internally. Keeping this function
+/// crate-private prevents binary crates that take `runkon-flow` as a direct
+/// dependency from constructing `SqliteWorkflowPersistence` themselves and
+/// bypassing the wrapper, which would undo the layer-boundary enforcement that
+/// `pub(crate) mod persistence_sqlite` provides.
+pub(crate) fn recover_stuck_steps(
     conn: &Connection,
     persistence: &SqliteWorkflowPersistence,
 ) -> Result<usize> {
@@ -1966,7 +1969,7 @@ mod tests {
 
         // Second connection for writes: shares the same file-based DB.
         let write_persistence = SqliteWorkflowPersistence::open(&db_path).unwrap();
-        let recovered = crate::workflow::recover_stuck_steps(&conn, &write_persistence).unwrap();
+        let recovered = super::recover_stuck_steps(&conn, &write_persistence).unwrap();
         assert_eq!(recovered, 2, "both stuck steps must be recovered");
 
         let (status_c, result_text_c, ended_at_c): (String, Option<String>, Option<String>) = conn
