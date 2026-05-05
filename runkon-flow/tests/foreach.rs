@@ -463,7 +463,10 @@ impl runkon_flow::traits::item_provider::ItemProvider for ContextItemProvider {
         _info: &runkon_flow::traits::item_provider::ProviderInfo,
         _scope: Option<&runkon_flow::dsl::ForeachScope>,
         _filter: &HashMap<String, String>,
-    ) -> Result<Vec<runkon_flow::traits::item_provider::FanOutItem>, runkon_flow::engine_error::EngineError> {
+    ) -> Result<
+        Vec<runkon_flow::traits::item_provider::FanOutItem>,
+        runkon_flow::engine_error::EngineError,
+    > {
         use runkon_flow::traits::item_provider::FanOutItem;
         Ok(self
             .items
@@ -485,7 +488,9 @@ struct InputCapturingRunner {
 
 impl InputCapturingRunner {
     fn new() -> Self {
-        Self { captured: std::sync::Mutex::new(vec![]) }
+        Self {
+            captured: std::sync::Mutex::new(vec![]),
+        }
     }
 
     fn captured_inputs(&self) -> Vec<HashMap<String, String>> {
@@ -545,14 +550,20 @@ fn test_foreach_item_context_injected_into_child_inputs() {
 
     let provider = ContextItemProvider {
         name: "tickets".to_string(),
-        items: vec![("ticket".to_string(), "t1".to_string(), "T-1".to_string(), ctx)],
+        items: vec![(
+            "ticket".to_string(),
+            "t1".to_string(),
+            "T-1".to_string(),
+            ctx,
+        )],
     };
 
     let runner = Arc::new(InputCapturingRunner::new());
     let persistence = make_persistence();
 
     let mut state = common::make_state("ctx-inject-test", Arc::clone(&persistence), HashMap::new());
-    state.child_runner = Some(Arc::clone(&runner) as Arc<dyn runkon_flow::engine::ChildWorkflowRunner>);
+    state.child_runner =
+        Some(Arc::clone(&runner) as Arc<dyn runkon_flow::engine::ChildWorkflowRunner>);
     state.exec_config.fail_fast = false;
     let mut registry = ItemProviderRegistry::new();
     registry.register(provider);

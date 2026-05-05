@@ -165,7 +165,13 @@ pub fn execute_foreach(
         if !existing_set.contains(&item.item_id) {
             state
                 .persistence
-                .insert_fan_out_item(&step_id, &item.item_type, &item.item_id, &item.item_ref, &item.context)
+                .insert_fan_out_item(
+                    &step_id,
+                    &item.item_type,
+                    &item.item_id,
+                    &item.item_ref,
+                    &item.context,
+                )
                 .map_err(p_err)?;
         }
     }
@@ -613,6 +619,7 @@ mod tests {
             status: status.to_string(),
             dispatched_at: None,
             completed_at: None,
+            context: std::collections::HashMap::new(),
         }
     }
 

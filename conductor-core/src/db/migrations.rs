@@ -1303,16 +1303,13 @@ pub fn run(conn: &Connection) -> Result<()> {
     // per-item metadata (ticket title, worktree branch, etc.) can be injected
     // into child workflow inputs as {{item.*}} template variables.
     if version < 86 {
-        let has_fan_out_items_table =
-            table_exists(conn, "workflow_run_step_fan_out_items")?;
+        let has_fan_out_items_table = table_exists(conn, "workflow_run_step_fan_out_items")?;
         if has_fan_out_items_table {
             let has_context: bool = conn
                 .prepare("SELECT context FROM workflow_run_step_fan_out_items LIMIT 0")
                 .is_ok();
             if !has_context {
-                conn.execute_batch(include_str!(
-                    "migrations/086_fan_out_item_context.sql"
-                ))?;
+                conn.execute_batch(include_str!("migrations/086_fan_out_item_context.sql"))?;
             }
         }
         bump_version(conn, 86)?;

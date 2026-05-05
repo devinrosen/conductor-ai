@@ -16,6 +16,8 @@ use crate::workflow::constants::{
 };
 use rusqlite::Connection;
 
+type WorkflowRunQueryResult = (String, String, String, String, Option<String>);
+
 /// Pre-expanded SELECT clause for step queries with agent-run token/cost columns.
 /// Computed once to avoid re-allocating the same `String` on every query.
 static STEP_SELECT_EXPANDED: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
@@ -142,7 +144,7 @@ pub fn list_runs_by_status(
     conn: &Connection,
     statuses: &[&str],
     workflow_name: Option<&str>,
-) -> Result<Vec<(String, String, String, String, Option<String>)>> {
+) -> Result<Vec<WorkflowRunQueryResult>> {
     let placeholders = sql_placeholders(statuses.len());
     let mut conditions = vec![format!("status IN ({placeholders})")];
     let mut param_values: Vec<String> = statuses.iter().map(|s| s.to_string()).collect();

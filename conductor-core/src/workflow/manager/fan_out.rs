@@ -34,7 +34,14 @@ pub fn insert_fan_out_item(
     item_id: &str,
     item_ref: &str,
 ) -> Result<String> {
-    insert_fan_out_item_with_context(conn, step_run_id, item_type, item_id, item_ref, &Default::default())
+    insert_fan_out_item_with_context(
+        conn,
+        step_run_id,
+        item_type,
+        item_id,
+        item_ref,
+        &Default::default(),
+    )
 }
 
 pub fn insert_fan_out_item_with_context(
