@@ -240,7 +240,11 @@ pub(crate) fn recover_stuck_steps(
     let n = stuck.len();
     persistence
         .bulk_recover_steps(&stuck, &ended_at)
-        .map_err(|e| crate::error::ConductorError::Workflow(e.to_string()))?;
+        .map_err(|e| {
+            crate::error::ConductorError::Workflow(format!(
+                "recover_stuck_steps: bulk_recover_steps for {n} stuck step(s) failed: {e}"
+            ))
+        })?;
     Ok(n)
 }
 
