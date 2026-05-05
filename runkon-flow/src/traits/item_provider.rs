@@ -6,10 +6,13 @@ use crate::engine_error::EngineError;
 use crate::traits::run_context::RunContext;
 
 /// An item returned by an `ItemProvider` during fan-out.
+#[derive(Default)]
 pub struct FanOutItem {
     pub item_type: String,
     pub item_id: String,
     pub item_ref: String,
+    /// Arbitrary per-item key/value data injected into child workflow inputs as `item.<key>`.
+    pub context: HashMap<String, String>,
 }
 
 /// Engine-populated per-call info for a foreach provider invocation.
@@ -88,6 +91,7 @@ mod tests {
                 item_type: "dummy".to_string(),
                 item_id: "d1".to_string(),
                 item_ref: "ref1".to_string(),
+                context: HashMap::new(),
             }])
         }
     }

@@ -285,9 +285,10 @@ impl crate::traits::persistence::WorkflowPersistence for CountingPersistence {
         item_type: &str,
         item_id: &str,
         item_ref: &str,
+        context: &std::collections::HashMap<String, String>,
     ) -> Result<String, crate::engine_error::EngineError> {
         self.inner
-            .insert_fan_out_item(step_run_id, item_type, item_id, item_ref)
+            .insert_fan_out_item(step_run_id, item_type, item_id, item_ref, context)
     }
     fn update_fan_out_item(
         &self,

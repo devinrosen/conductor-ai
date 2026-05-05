@@ -361,6 +361,7 @@ impl ItemProvider for MockItemProvider {
                 item_type: t.clone(),
                 item_id: i.clone(),
                 item_ref: r.clone(),
+                context: HashMap::new(),
             })
             .collect())
     }
@@ -495,6 +496,7 @@ impl ItemProvider for MockOrderedItemProvider {
                 item_type: t.clone(),
                 item_id: i.clone(),
                 item_ref: r.clone(),
+                context: HashMap::new(),
             })
             .collect())
     }

@@ -434,6 +434,22 @@ in v1 (validator emits a warning).
 | `{{item.local_path}}` | Absolute path to the local repo clone |
 | `{{item.remote_url}}` | Remote URL |
 
+**`over = worktrees`**
+
+Fans out over active worktrees that share the same base branch. The base
+branch is resolved from `scope.base_branch` if provided, otherwise from the
+worktree_id in the execution context. `ordered = true` respects ticket
+blocking edges: a worktree whose linked ticket is blocked waits until the
+blocker's child run completes.
+
+| `{{item.*}}` field | Description |
+|---|---|
+| `{{item.id}}` | Worktree ULID |
+| `{{item.slug}}` | Worktree slug identifier |
+| `{{item.branch}}` | Feature branch name |
+| `{{item.path}}` | Absolute filesystem path to the worktree |
+| `{{item.base_branch}}` | Base branch (omitted if not set) |
+
 **`over = workflow_runs`**
 
 Fans out over workflow runs. `filter` is required — without it the set is

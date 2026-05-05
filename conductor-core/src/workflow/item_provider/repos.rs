@@ -18,10 +18,17 @@ impl ItemProvider for ReposProvider {
 
         let mgr = RepoManager::new(ctx.conn, ctx.config);
         let repos = mgr.list()?;
-        Ok(collect_fan_out_items(repos, |r| FanOutItem {
-            item_type: "repo".to_string(),
-            item_id: r.id,
-            item_ref: r.slug,
+        Ok(collect_fan_out_items(repos, |r| {
+            let mut context = std::collections::HashMap::new();
+            context.insert("slug".to_string(), r.slug.clone());
+            context.insert("local_path".to_string(), r.local_path.clone());
+            context.insert("remote_url".to_string(), r.remote_url.clone());
+            FanOutItem {
+                item_type: "repo".to_string(),
+                item_id: r.id,
+                item_ref: r.slug,
+                context,
+            }
         }))
     }
 }

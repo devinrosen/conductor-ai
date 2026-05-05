@@ -211,6 +211,7 @@ fn core_fan_out_item_to_rk(
         item_type: item.item_type,
         item_id: item.item_id,
         item_ref: item.item_ref,
+        context: item.context,
     }
 }
 

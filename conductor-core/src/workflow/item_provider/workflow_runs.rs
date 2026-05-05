@@ -29,11 +29,24 @@ impl ItemProvider for WorkflowRunsProvider {
         };
         let rows = crate::workflow::list_runs_by_status(ctx.conn, &statuses, workflow_name_filter)?;
 
-        Ok(collect_fan_out_items(rows, |(id, wf_name)| FanOutItem {
-            item_type: "workflow_run".to_string(),
-            item_id: id,
-            item_ref: wf_name,
-        }))
+        Ok(collect_fan_out_items(
+            rows,
+            |(id, wf_name, status, started_at, ticket_id)| {
+                let mut context = std::collections::HashMap::new();
+                context.insert("workflow_name".to_string(), wf_name.clone());
+                context.insert("status".to_string(), status);
+                context.insert("started_at".to_string(), started_at);
+                if let Some(tid) = ticket_id {
+                    context.insert("ticket_id".to_string(), tid);
+                }
+                FanOutItem {
+                    item_type: "workflow_run".to_string(),
+                    item_id: id,
+                    item_ref: wf_name,
+                    context,
+                }
+            },
+        ))
     }
 }
 

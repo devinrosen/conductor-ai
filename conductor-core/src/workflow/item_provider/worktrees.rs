@@ -84,10 +84,20 @@ impl ItemProvider for WorktreesProvider {
 
         Ok(candidates
             .into_iter()
-            .map(|wt| FanOutItem {
-                item_type: "worktree".to_string(),
-                item_id: wt.id,
-                item_ref: wt.slug,
+            .map(|wt| {
+                let mut context = std::collections::HashMap::new();
+                context.insert("slug".to_string(), wt.slug.clone());
+                context.insert("branch".to_string(), wt.branch.clone());
+                context.insert("path".to_string(), wt.path.clone());
+                if let Some(ref bb) = wt.base_branch {
+                    context.insert("base_branch".to_string(), bb.clone());
+                }
+                FanOutItem {
+                    item_type: "worktree".to_string(),
+                    item_id: wt.id,
+                    item_ref: wt.slug,
+                    context,
+                }
             })
             .collect())
     }

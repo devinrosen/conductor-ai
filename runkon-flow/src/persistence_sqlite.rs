@@ -170,8 +170,13 @@ fn row_to_step(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRunStep> {
 }
 
 fn row_to_fan_out_item(row: &rusqlite::Row) -> rusqlite::Result<FanOutItemRow> {
+    let id: String = row.get("id")?;
+    let context_json: Option<String> = row.get("context")?;
+    let context = json_or_warn(context_json.as_deref(), || {
+        format!("Malformed context JSON in fan-out item {id}")
+    });
     Ok(FanOutItemRow {
-        id: row.get("id")?,
+        id,
         step_run_id: row.get("step_run_id")?,
         item_type: row.get("item_type")?,
         item_id: row.get("item_id")?,
@@ -180,6 +185,7 @@ fn row_to_fan_out_item(row: &rusqlite::Row) -> rusqlite::Result<FanOutItemRow> {
         status: row.get("status")?,
         dispatched_at: row.get("dispatched_at")?,
         completed_at: row.get("completed_at")?,
+        context,
     })
 }
 
@@ -730,19 +736,24 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
         item_type: &str,
         item_id: &str,
         item_ref: &str,
+        context: &std::collections::HashMap<String, String>,
     ) -> Result<String, EngineError> {
         let conn = self.lock()?;
         let id = new_id();
+        let context_json = serde_json::to_string(context).map_err(|e| {
+            EngineError::Persistence(format!("fan-out item context serialization failed: {e}"))
+        })?;
         conn.execute(
             "INSERT OR IGNORE INTO workflow_run_step_fan_out_items \
-             (id, step_run_id, item_type, item_id, item_ref, status) \
-             VALUES (:id, :step_run_id, :item_type, :item_id, :item_ref, 'pending')",
+             (id, step_run_id, item_type, item_id, item_ref, status, context) \
+             VALUES (:id, :step_run_id, :item_type, :item_id, :item_ref, 'pending', :context)",
             named_params![
                 ":id": id,
                 ":step_run_id": step_run_id,
                 ":item_type": item_type,
                 ":item_id": item_id,
                 ":item_ref": item_ref,
+                ":context": context_json,
             ],
         )
         .map_err(db_err)?;
@@ -841,7 +852,7 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
     ) -> Result<Vec<FanOutItemRow>, EngineError> {
         let conn = self.lock()?;
         let select = "SELECT id, step_run_id, item_type, item_id, item_ref, child_run_id, \
-                      status, dispatched_at, completed_at \
+                      status, dispatched_at, completed_at, context \
                       FROM workflow_run_step_fan_out_items";
         if let Some(status) = status_filter {
             let sql = format!(
@@ -1274,7 +1285,8 @@ mod tests {
                 child_run_id TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
                 dispatched_at TEXT,
-                completed_at TEXT
+                completed_at TEXT,
+                context TEXT
             );",
         )
         .unwrap();
@@ -1289,13 +1301,13 @@ mod tests {
         let (p, step_id) = make_fan_out_db();
 
         let id1 = p
-            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
+            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1", &Default::default())
             .unwrap();
         let id2 = p
-            .insert_fan_out_item(&step_id, "ticket", "t-2", "ref-2")
+            .insert_fan_out_item(&step_id, "ticket", "t-2", "ref-2", &Default::default())
             .unwrap();
         let id3 = p
-            .insert_fan_out_item(&step_id, "ticket", "t-3", "ref-3")
+            .insert_fan_out_item(&step_id, "ticket", "t-3", "ref-3", &Default::default())
             .unwrap();
 
         let updates = vec![
@@ -1343,7 +1355,7 @@ mod tests {
 
         let (p, step_id) = make_fan_out_db();
         let _id = p
-            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
+            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1", &Default::default())
             .unwrap();
 
         p.batch_update_fan_out_items(&[] as &[(String, FanOutItemUpdate)])
@@ -1359,7 +1371,7 @@ mod tests {
 
         let (p, step_id) = make_fan_out_db();
         let id1 = p
-            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
+            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1", &Default::default())
             .unwrap();
 
         let updates = vec![(
