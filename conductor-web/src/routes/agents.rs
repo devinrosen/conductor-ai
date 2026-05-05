@@ -1966,10 +1966,7 @@ mod tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
             let db = conductor_core::db::open_database(tmp.path()).expect("open db for poll");
-            let polled = AgentManager::new(&db)
-                .get_run(&run_id)
-                .unwrap()
-                .unwrap();
+            let polled = AgentManager::new(&db).get_run(&run_id).unwrap().unwrap();
             if polled.status == AgentRunStatus::Failed {
                 assert!(
                     polled
