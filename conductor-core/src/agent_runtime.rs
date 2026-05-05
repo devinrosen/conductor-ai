@@ -2,7 +2,8 @@
 //! `runkon-runtimes` events into `AgentManager` DB writes.
 //!
 //! - [`spawn_headless`] / [`try_spawn_headless_run`]: thin wrappers that resolve the
-//!   conductor binary internally and delegate to `runkon_runtimes::headless`.
+//!   conductor binary internally and delegate to
+//!   `runkon_runtimes::runtime::conductor_headless`.
 //! - [`CombinedSink`]: the [`runkon_runtimes::tracker::EventSink`] used by callers
 //!   to persist runtime events into `AgentManager` while also forwarding parsed
 //!   `AgentEvent`s to a UI/WebSocket callback. Construct it via
@@ -10,9 +11,11 @@
 
 use std::borrow::Cow;
 
-// Re-export unchanged headless primitives from runkon-runtimes.
-pub use runkon_runtimes::headless::{
-    build_headless_agent_args, DrainOutcome, HeadlessHandle, SpawnHeadlessParams,
+// Re-export runtime-agnostic headless primitives from runkon-runtimes.
+pub use runkon_runtimes::headless::{DrainOutcome, HeadlessHandle};
+// Re-export conductor-CLI-specific argv builder from its dedicated module.
+pub use runkon_runtimes::runtime::conductor_headless::{
+    build_headless_agent_args, SpawnHeadlessParams,
 };
 pub use runkon_runtimes::tracker::EventSink;
 
@@ -50,13 +53,13 @@ pub fn spawn_headless(
 /// Build headless args and spawn the conductor subprocess in one step.
 ///
 /// Backward-compatible wrapper that resolves the conductor binary internally
-/// and delegates to `runkon_runtimes::headless::try_spawn_headless_run`.
+/// and delegates to `runkon_runtimes::runtime::conductor_headless::try_spawn_headless_run`.
 #[cfg(unix)]
 pub fn try_spawn_headless_run(
     params: &SpawnHeadlessParams<'_>,
 ) -> std::result::Result<(HeadlessHandle, std::path::PathBuf), String> {
     let binary_path = resolve_conductor_bin();
-    runkon_runtimes::headless::try_spawn_headless_run(params, &binary_path)
+    runkon_runtimes::runtime::conductor_headless::try_spawn_headless_run(params, &binary_path)
 }
 
 /// Drain a streaming JSON output from a headless agent subprocess.

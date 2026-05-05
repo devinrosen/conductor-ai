@@ -2,6 +2,7 @@
 
 pub mod claude;
 pub mod cli;
+pub mod conductor_headless;
 pub mod script;
 
 use std::borrow::Cow;

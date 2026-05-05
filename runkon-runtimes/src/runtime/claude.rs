@@ -5,7 +5,8 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::Duration;
 
 use crate::error::{Result, RuntimeError};
-use crate::headless::{DrainOutcome, SpawnHeadlessParams};
+use crate::headless::DrainOutcome;
+use super::conductor_headless::{SpawnHeadlessParams, try_spawn_headless_run};
 use crate::permission::PermissionMode;
 use crate::process_utils;
 use crate::run::RunHandle;
@@ -58,7 +59,7 @@ impl AgentRuntime for ClaudeRuntime {
                 permission_mode: Some(&self.options.permission_mode),
                 plugin_dirs: &request.plugin_dirs,
             };
-            let (h, pf) = crate::headless::try_spawn_headless_run(
+            let (h, pf) = try_spawn_headless_run(
                 &params,
                 &self.options.binary_path.to_string_lossy(),
             )
@@ -180,7 +181,7 @@ fn poll_unix(
         let reader = BufReader::new(stderr_pipe);
         for line in reader.lines() {
             match line {
-                Ok(l) => tracing::trace!(target: "conductor::agent::stderr", "{l}"),
+                Ok(l) => tracing::trace!(target: "runkon::agent::stderr", "{l}"),
                 Err(e) => {
                     tracing::warn!(
                         "ClaudeRuntime: stderr read failed for run {stderr_run_id}, ending stderr drain: {e}"
