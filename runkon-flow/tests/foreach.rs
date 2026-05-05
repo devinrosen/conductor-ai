@@ -461,7 +461,7 @@ impl runkon_flow::traits::item_provider::ItemProvider for ContextItemProvider {
         &self,
         _ctx: &dyn runkon_flow::traits::run_context::RunContext,
         _info: &runkon_flow::traits::item_provider::ProviderInfo,
-        _scope: Option<&runkon_flow::dsl::ForeachScope>,
+        _scope: Option<&dyn std::any::Any>,
         _filter: &HashMap<String, String>,
     ) -> Result<
         Vec<runkon_flow::traits::item_provider::FanOutItem>,

@@ -151,10 +151,13 @@ pub fn execute_foreach(
         .map_err(p_err)?;
     let existing_set: HashSet<String> = existing_items.iter().map(|i| i.item_id.clone()).collect();
 
+    let parsed_scope = provider
+        .parse_scope(node.scope.as_ref())
+        .map_err(|e| EngineError::Workflow(format!("foreach '{}': {e}", node.name)))?;
     let provider_items = provider.items(
         &*state.run_ctx,
         &provider_info,
-        node.scope.as_ref(),
+        parsed_scope.as_deref(),
         &node.filter,
     )?;
 
@@ -967,7 +970,7 @@ mod tests {
                 &self,
                 _ctx: &dyn crate::traits::run_context::RunContext,
                 _info: &ProviderInfo,
-                _scope: Option<&crate::dsl::ForeachScope>,
+                _scope: Option<&dyn std::any::Any>,
                 _filter: &HashMap<String, String>,
             ) -> Result<Vec<FanOutItem>> {
                 Ok(vec![FanOutItem {

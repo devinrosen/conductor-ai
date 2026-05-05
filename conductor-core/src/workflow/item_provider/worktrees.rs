@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::collections::{HashMap, HashSet};
 
 use rusqlite::Connection;
@@ -5,11 +6,10 @@ use rusqlite::Connection;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::worktree::{Worktree, WorktreeManager};
-use runkon_flow::dsl::ForeachScope;
 
 use super::{
     dep_query_err, fetch_dep_item_ids, ids_to_set_and_refs, require_repo_id, FanOutItem,
-    ItemProvider, ProviderContext,
+    ItemProvider, ProviderContext, WorktreeScope,
 };
 
 pub struct WorktreesProvider {
@@ -29,18 +29,66 @@ impl WorktreesProvider {
 }
 
 impl ItemProvider for WorktreesProvider {
+    fn name(&self) -> &str {
+        "worktrees"
+    }
+
+    fn parse_scope(
+        &self,
+        raw: Option<&HashMap<String, String>>,
+    ) -> crate::error::Result<Option<Box<dyn Any>>> {
+        let map = match raw {
+            None => return Ok(None),
+            Some(m) => m,
+        };
+
+        let base_branch = map.get("base_branch").cloned();
+        let has_open_pr = match map.get("has_open_pr").map(|s| s.as_str()) {
+            None => None,
+            Some("true") => Some(true),
+            Some("false") => Some(false),
+            Some(v) => {
+                return Err(ConductorError::Workflow(format!(
+                    "scope.has_open_pr must be true or false, got '{v}'"
+                )));
+            }
+        };
+
+        Ok(Some(Box::new(WorktreeScope {
+            base_branch,
+            has_open_pr,
+        })))
+    }
+
+    fn scope_warnings(&self, raw: Option<&HashMap<String, String>>) -> Vec<String> {
+        if raw.is_none() {
+            vec![
+                "no scope specified; base_branch will be inferred from the execution context worktree at runtime"
+                    .to_string(),
+            ]
+        } else {
+            vec![]
+        }
+    }
+
+    fn validate_filter(&self, filter: &HashMap<String, String>) -> crate::error::Result<()> {
+        if !filter.is_empty() {
+            return Err(ConductorError::Workflow(
+                "filter has no effect when over = worktrees (use scope = { base_branch = \"...\" } instead)".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     fn items(
         &self,
         ctx: &ProviderContext<'_>,
-        scope: Option<&ForeachScope>,
+        scope: Option<&dyn Any>,
         _filter: &HashMap<String, String>,
     ) -> Result<Vec<FanOutItem>> {
         let repo_id = require_repo_id(&self.repo_id, "worktrees")?;
 
-        let wt_scope_opt = match scope {
-            Some(ForeachScope::Worktree(s)) => Some(s),
-            _ => None,
-        };
+        let wt_scope_opt = scope.and_then(|s| s.downcast_ref::<WorktreeScope>());
 
         let base_branch_owned: String;
         let base_branch: &str = match wt_scope_opt.and_then(|s| s.base_branch.as_deref()) {
@@ -185,7 +233,6 @@ fn dependencies_impl(
 mod tests {
     use super::*;
     use crate::test_helpers;
-    use runkon_flow::dsl::WorktreeScope;
 
     #[test]
     fn test_worktrees_items_missing_repo_id_returns_error() {
@@ -241,13 +288,13 @@ mod tests {
         let conn = test_helpers::setup_db();
         insert_worktree_with_base_branch(&conn, "w2", "r1", "feat-child", "main");
         let config = Config::default();
-        let scope = ForeachScope::Worktree(WorktreeScope {
+        let scope = WorktreeScope {
             base_branch: Some("main".to_string()),
             has_open_pr: None,
-        });
+        };
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = WorktreesProvider::new(Some("r1".into()), None)
-            .items(&ctx, Some(&scope), &HashMap::new())
+            .items(&ctx, Some(&scope as &dyn std::any::Any), &HashMap::new())
             .unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].item_id, "w2");
@@ -259,14 +306,14 @@ mod tests {
         let conn = test_helpers::setup_db();
         insert_worktree_with_base_branch(&conn, "w2", "r1", "feat-child", "main");
         let config = Config::default();
-        let scope = ForeachScope::Worktree(WorktreeScope {
+        let scope = WorktreeScope {
             base_branch: Some("main".to_string()),
             has_open_pr: None,
-        });
+        };
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         // Providers return ALL items; dedup is done by the foreach executor.
         let items = WorktreesProvider::new(Some("r1".into()), None)
-            .items(&ctx, Some(&scope), &HashMap::new())
+            .items(&ctx, Some(&scope as &dyn std::any::Any), &HashMap::new())
             .unwrap();
         assert_eq!(
             items.len(),
