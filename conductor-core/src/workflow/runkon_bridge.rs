@@ -120,7 +120,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             let agent_mgr = crate::agent::AgentManager::new(&conn);
             let child_run = agent_mgr
                 .create_child_run(
-                    ctx.get(runkon_flow::traits::run_context::keys::WORKTREE_ID)
+                    ctx.get(crate::workflow::engine_keys::WORKTREE_ID)
                         .as_deref(),
                     &format!("Workflow step: {}", params.name),
                     params.model.as_deref(),
@@ -160,7 +160,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             run_id: child_run_id.clone(),
             working_dir: ctx.working_dir().to_path_buf(),
             repo_path: ctx
-                .get(runkon_flow::traits::run_context::keys::REPO_PATH)
+                .get(crate::workflow::engine_keys::REPO_PATH)
                 .unwrap_or_default(),
             db_path: self.db_path.clone(),
             step_timeout: info.step_timeout,
@@ -169,7 +169,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             bot_name: params.bot_name.clone(),
             plugin_dirs: params.plugin_dirs.clone(),
             workflow_name: ctx.workflow_name().to_string(),
-            worktree_id: ctx.get(runkon_flow::traits::run_context::keys::WORKTREE_ID),
+            worktree_id: ctx.get(crate::workflow::engine_keys::WORKTREE_ID),
             parent_run_id: ctx.parent_run_id().unwrap_or("").to_string(),
             step_id: info.step_id.clone(),
         };
@@ -423,7 +423,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         let parent_working_dir = parent_ctx.run_ctx.working_dir_str();
         let parent_repo_path = parent_ctx
             .run_ctx
-            .get(runkon_flow::traits::run_context::keys::REPO_PATH)
+            .get(crate::workflow::engine_keys::REPO_PATH)
             .unwrap_or_default();
         let wf_dirs = crate::workflow::manager::definitions::workflow_dirs(
             &parent_working_dir,
@@ -454,7 +454,7 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             workflow: core_def,
             worktree_id: parent_ctx
                 .run_ctx
-                .get(runkon_flow::traits::run_context::keys::WORKTREE_ID),
+                .get(crate::workflow::engine_keys::WORKTREE_ID),
             working_dir: parent_working_dir,
             repo_path: parent_repo_path,
             ticket_id: parent_ctx.inputs.get("ticket_id").cloned(),

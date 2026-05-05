@@ -8,6 +8,7 @@ pub(crate) mod action_executor;
 pub(crate) mod api_call_executor;
 mod batch_validate;
 pub mod channel_event_sink;
+pub(crate) mod engine_keys;
 pub use channel_event_sink::ChannelEventSink;
 pub use runkon_flow::events::EventSink;
 pub(crate) mod claude_agent_executor;
@@ -51,7 +52,7 @@ pub use runkon_flow::constants::FLOW_OUTPUT_INSTRUCTION;
 ///
 /// Use this instead of importing `ENGINE_INJECTED_KEYS` directly.
 pub fn injected_variable_keys() -> &'static [&'static str] {
-    coordinator::ENGINE_INJECTED_KEYS
+    engine_keys::ENGINE_INJECTED_KEYS
 }
 
 pub use coordinator::{
