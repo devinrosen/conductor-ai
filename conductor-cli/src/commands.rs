@@ -518,6 +518,25 @@ pub enum WorktreeCommands {
         #[arg(long)]
         rebase: bool,
     },
+    /// Register an existing git worktree in conductor without recreating it
+    #[command(
+        after_help = "Examples:\n  conductor worktree adopt my-repo /path/to/existing/worktree\n  conductor worktree adopt my-repo /path/to/wt --base-branch release/1.0 --ticket 42"
+    )]
+    Adopt {
+        /// Repo slug
+        repo: String,
+        /// Absolute (or relative) path to the existing worktree directory
+        path: String,
+        /// Branch name (auto-detected from on-disk state if omitted)
+        #[arg(long)]
+        branch: Option<String>,
+        /// Base branch to record (defaults to repo default branch)
+        #[arg(long)]
+        base_branch: Option<String>,
+        /// Link this worktree to a ticket ID (ULID or source ID)
+        #[arg(long)]
+        ticket: Option<String>,
+    },
     /// Create a stack of worktrees from a ticket dependency graph
     #[command(
         after_help = "Examples:\n  conductor worktree create-stack my-repo --root-branch main --tickets 101,102,103\n  conductor worktree create-stack my-repo --root-branch release/0.6.0 --tickets t1ulid,t2ulid"

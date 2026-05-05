@@ -2507,3 +2507,308 @@ fn test_ensure_base_up_to_date_creates_local_tracking_branch_from_remote_only() 
         "branch should track origin/new-feature"
     );
 }
+
+// ---- adopt() tests ----
+
+/// Register a real repo in the DB and return (TempDir, remote, local) so the
+/// caller can create worktrees and call `adopt()`.
+fn setup_repo_and_register(
+    conn: &Connection,
+    config: &Config,
+    slug: &str,
+) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let (tmp, remote, local) = setup_repo_with_remote();
+    let workspace = tmp.path().join("workspaces").join(slug);
+    fs::create_dir_all(&workspace).unwrap();
+    crate::repo::RepoManager::new(conn, config)
+        .register(
+            slug,
+            local.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            Some(workspace.to_str().unwrap()),
+        )
+        .unwrap();
+    (tmp, remote, local)
+}
+
+#[test]
+fn test_adopt_succeeds_for_real_worktree() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    let (tmp, _remote, local) = setup_repo_and_register(&conn, &config, "test-adopt-repo");
+
+    // Create a branch and a git worktree manually.
+    git(&["branch", "feat/my-feature"], &local);
+    let workspace = tmp.path().join("workspaces/test-adopt-repo");
+    let wt_path = workspace.join("feat-my-feature");
+    git(
+        &[
+            "worktree",
+            "add",
+            wt_path.to_str().unwrap(),
+            "feat/my-feature",
+        ],
+        &local,
+    );
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let result = mgr.adopt("test-adopt-repo", &wt_path, WorktreeAdoptOptions::default());
+    assert!(result.is_ok(), "adopt should succeed: {:?}", result.err());
+    let wt = result.unwrap();
+    assert_eq!(wt.slug, "feat-my-feature");
+    assert_eq!(wt.branch, "feat/my-feature");
+    assert_eq!(wt.status, WorktreeStatus::Active);
+    assert!(
+        std::path::Path::new(&wt.path).exists(),
+        "path should exist: {}",
+        wt.path
+    );
+    // Verify row is in the DB by listing active worktrees for the repo.
+    let worktrees = WorktreeManager::new(&conn, &config)
+        .list(Some("test-adopt-repo"), true)
+        .unwrap();
+    assert!(
+        worktrees.iter().any(|w| w.slug == "feat-my-feature"),
+        "adopted worktree should appear in list"
+    );
+}
+
+#[test]
+fn test_adopt_rejects_nonexistent_path() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    let (_tmp, _remote, _local) = setup_repo_and_register(&conn, &config, "test-adopt-noexist");
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let result = mgr.adopt(
+        "test-adopt-noexist",
+        std::path::Path::new("/this/path/does/not/exist"),
+        WorktreeAdoptOptions::default(),
+    );
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("cannot resolve path"),
+        "error should mention path resolution: {msg}"
+    );
+}
+
+#[test]
+fn test_adopt_rejects_path_not_a_worktree() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    let (tmp, _remote, _local) = setup_repo_and_register(&conn, &config, "test-adopt-notwt");
+
+    // Create a directory that exists but is not a git worktree.
+    let not_a_wt = tmp.path().join("just-a-dir");
+    fs::create_dir_all(&not_a_wt).unwrap();
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let result = mgr.adopt(
+        "test-adopt-notwt",
+        &not_a_wt,
+        WorktreeAdoptOptions::default(),
+    );
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("not a git worktree"),
+        "error should mention worktree validation: {msg}"
+    );
+}
+
+#[test]
+fn test_adopt_rejects_slug_collision_active() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    let (tmp, _remote, local) = setup_repo_and_register(&conn, &config, "test-adopt-collision");
+
+    // Create a branch and a git worktree manually.
+    git(&["branch", "feat/collision-branch"], &local);
+    let workspace = tmp.path().join("workspaces/test-adopt-collision");
+    let wt_path = workspace.join("feat-collision-branch");
+    git(
+        &[
+            "worktree",
+            "add",
+            wt_path.to_str().unwrap(),
+            "feat/collision-branch",
+        ],
+        &local,
+    );
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    // First adopt should succeed.
+    mgr.adopt(
+        "test-adopt-collision",
+        &wt_path,
+        WorktreeAdoptOptions::default(),
+    )
+    .unwrap();
+
+    // Second adopt with same slug should fail.
+    let result = mgr.adopt(
+        "test-adopt-collision",
+        &wt_path,
+        WorktreeAdoptOptions::default(),
+    );
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, ConductorError::WorktreeAlreadyExists { .. }),
+        "expected WorktreeAlreadyExists, got: {err:?}"
+    );
+}
+
+#[test]
+fn test_adopt_replaces_completed_row() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    let (tmp, _remote, local) = setup_repo_and_register(&conn, &config, "test-adopt-replace");
+
+    // Create a branch and a git worktree manually.
+    git(&["branch", "feat/replace-branch"], &local);
+    let workspace = tmp.path().join("workspaces/test-adopt-replace");
+    let wt_path = workspace.join("feat-replace-branch");
+    git(
+        &[
+            "worktree",
+            "add",
+            wt_path.to_str().unwrap(),
+            "feat/replace-branch",
+        ],
+        &local,
+    );
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    // First adopt + mark as merged (completed).
+    let wt = mgr
+        .adopt(
+            "test-adopt-replace",
+            &wt_path,
+            WorktreeAdoptOptions::default(),
+        )
+        .unwrap();
+    mgr.update_status(&wt.id, WorktreeStatus::Merged).unwrap();
+
+    // Second adopt should succeed (purges the completed row first).
+    let result = mgr.adopt(
+        "test-adopt-replace",
+        &wt_path,
+        WorktreeAdoptOptions::default(),
+    );
+    assert!(
+        result.is_ok(),
+        "re-adopt after merge should succeed: {:?}",
+        result.err()
+    );
+    let wt2 = result.unwrap();
+    assert_eq!(wt2.status, WorktreeStatus::Active);
+}
+
+#[test]
+fn test_adopt_uses_explicit_branch_override() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    let (tmp, _remote, local) = setup_repo_and_register(&conn, &config, "test-adopt-branch");
+
+    git(&["branch", "feat/override-branch"], &local);
+    let workspace = tmp.path().join("workspaces/test-adopt-branch");
+    let wt_path = workspace.join("feat-override-branch");
+    git(
+        &[
+            "worktree",
+            "add",
+            wt_path.to_str().unwrap(),
+            "feat/override-branch",
+        ],
+        &local,
+    );
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let result = mgr.adopt(
+        "test-adopt-branch",
+        &wt_path,
+        WorktreeAdoptOptions {
+            branch: Some("feat/custom-override".into()),
+            ..Default::default()
+        },
+    );
+    assert!(result.is_ok(), "adopt should succeed: {:?}", result.err());
+    let wt = result.unwrap();
+    assert_eq!(wt.branch, "feat/custom-override");
+}
+
+#[test]
+fn test_adopt_uses_explicit_base_branch() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    let (tmp, _remote, local) = setup_repo_and_register(&conn, &config, "test-adopt-base");
+
+    git(&["branch", "feat/base-override"], &local);
+    let workspace = tmp.path().join("workspaces/test-adopt-base");
+    let wt_path = workspace.join("feat-base-override");
+    git(
+        &[
+            "worktree",
+            "add",
+            wt_path.to_str().unwrap(),
+            "feat/base-override",
+        ],
+        &local,
+    );
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let result = mgr.adopt(
+        "test-adopt-base",
+        &wt_path,
+        WorktreeAdoptOptions {
+            base_branch: Some("release/1.0".into()),
+            ..Default::default()
+        },
+    );
+    assert!(result.is_ok(), "adopt should succeed: {:?}", result.err());
+    let wt = result.unwrap();
+    assert_eq!(wt.base_branch.as_deref(), Some("release/1.0"));
+}
+
+#[test]
+fn test_adopt_rejects_detached_head() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    let (tmp, _remote, local) = setup_repo_and_register(&conn, &config, "test-adopt-detached");
+
+    // Get the HEAD commit hash to create a detached-HEAD worktree.
+    let head_out = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&local)
+        .output()
+        .unwrap();
+    let head_sha = String::from_utf8_lossy(&head_out.stdout).trim().to_string();
+
+    let workspace = tmp.path().join("workspaces/test-adopt-detached");
+    let wt_path = workspace.join("detached-wt");
+    git(
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            wt_path.to_str().unwrap(),
+            &head_sha,
+        ],
+        &local,
+    );
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let result = mgr.adopt(
+        "test-adopt-detached",
+        &wt_path,
+        WorktreeAdoptOptions::default(),
+    );
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("detached HEAD") || msg.contains("--branch"),
+        "error should mention detached HEAD: {msg}"
+    );
+}

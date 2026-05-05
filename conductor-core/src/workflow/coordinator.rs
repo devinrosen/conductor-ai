@@ -175,6 +175,14 @@ fn inject_repo_variables(repo: &crate::repo::Repo, merged_inputs: &mut HashMap<S
     set_input(merged_inputs, "repo_name", repo.slug.clone());
 }
 
+fn parent_run_id_opt(parent_run_id: &str) -> Option<String> {
+    if parent_run_id.is_empty() {
+        None
+    } else {
+        Some(parent_run_id.to_string())
+    }
+}
+
 fn deserialize_workflow_snapshot(snapshot: &str) -> Result<runkon_flow::dsl::WorkflowDef> {
     serde_json::from_str(snapshot).map_err(|e| {
         ConductorError::Workflow(format!("Failed to deserialize workflow definition: {e}"))
@@ -675,11 +683,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
             effective_repo_id_owned,
             wf_run_id.clone(),
             workflow.name.clone(),
-            if parent_run_id.is_empty() {
-                None
-            } else {
-                Some(parent_run_id.clone())
-            },
+            parent_run_id_opt(&parent_run_id),
             params.exec_config.shutdown.clone(),
         )) as std::sync::Arc<dyn runkon_flow::traits::run_context::RunContext>,
         extra_plugin_dirs: params.extra_plugin_dirs.clone(),
@@ -1178,11 +1182,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
             wf_run.repo_id.clone(),
             wf_run.id.clone(),
             wf_run.workflow_name.clone(),
-            if wf_run.parent_run_id.is_empty() {
-                None
-            } else {
-                Some(wf_run.parent_run_id.clone())
-            },
+            parent_run_id_opt(&wf_run.parent_run_id),
             input.shutdown.clone(),
         )) as std::sync::Arc<dyn runkon_flow::traits::run_context::RunContext>,
         extra_plugin_dirs: vec![],

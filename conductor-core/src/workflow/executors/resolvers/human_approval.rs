@@ -63,6 +63,7 @@ mod tests {
     use runkon_flow::dsl::ApprovalMode;
     use runkon_flow::traits::gate_resolver::GateParams;
     use runkon_flow::traits::persistence::WorkflowPersistence;
+    use runkon_flow::traits::run_context::NoopRunContext;
     use rusqlite::Connection;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -95,22 +96,6 @@ mod tests {
         }
     }
 
-    struct NoopCtx;
-    impl RunContext for NoopCtx {
-        fn injected_variables(&self) -> HashMap<&'static str, String> {
-            Default::default()
-        }
-        fn working_dir(&self) -> &std::path::Path {
-            std::path::Path::new("/tmp")
-        }
-        fn run_id(&self) -> &str {
-            "noop-run"
-        }
-        fn workflow_name(&self) -> &str {
-            "noop-wf"
-        }
-    }
-
     fn make_persistence(db_path: &std::path::Path) -> Arc<dyn WorkflowPersistence> {
         Arc::new(
             SqliteWorkflowPersistence::open(db_path)
@@ -136,7 +121,9 @@ mod tests {
         let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
         let params = make_test_params("step1");
 
-        let result = resolver.poll("run1", &params, &NoopCtx).unwrap();
+        let result = resolver
+            .poll("run1", &params, &NoopRunContext::default())
+            .unwrap();
         assert!(
             matches!(result, GatePoll::Approved(_)),
             "expected Approved when gate_approved_at is set"
@@ -161,7 +148,9 @@ mod tests {
         let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
         let params = make_test_params("step1");
 
-        let result = resolver.poll("run1", &params, &NoopCtx).unwrap();
+        let result = resolver
+            .poll("run1", &params, &NoopRunContext::default())
+            .unwrap();
         match result {
             GatePoll::Rejected(msg) => {
                 assert_eq!(msg, "Gate 'test-gate' rejected");
@@ -188,7 +177,9 @@ mod tests {
         let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
         let params = make_test_params("step1");
 
-        let result = resolver.poll("run1", &params, &NoopCtx).unwrap();
+        let result = resolver
+            .poll("run1", &params, &NoopRunContext::default())
+            .unwrap();
         match result {
             GatePoll::Rejected(msg) => {
                 assert_eq!(msg, "needs more work");
@@ -215,7 +206,9 @@ mod tests {
         let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
         let params = make_test_params("step1");
 
-        let result = resolver.poll("run1", &params, &NoopCtx).unwrap();
+        let result = resolver
+            .poll("run1", &params, &NoopRunContext::default())
+            .unwrap();
         assert!(
             matches!(result, GatePoll::Pending),
             "expected Pending when step is still waiting"
@@ -248,7 +241,9 @@ mod tests {
         let resolver = HumanApprovalGateResolver::new(persistence, HumanGateKind::HumanApproval);
         let params = make_test_params("nonexistent-step-id");
 
-        let result = resolver.poll("run1", &params, &NoopCtx).unwrap();
+        let result = resolver
+            .poll("run1", &params, &NoopRunContext::default())
+            .unwrap();
         assert!(
             matches!(result, GatePoll::Pending),
             "expected Pending when step_id does not exist in DB"
