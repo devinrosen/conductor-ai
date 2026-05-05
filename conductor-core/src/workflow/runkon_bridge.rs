@@ -172,6 +172,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             worktree_id: ctx.get(crate::workflow::engine_keys::WORKTREE_ID),
             parent_run_id: ctx.parent_run_id().unwrap_or("").to_string(),
             step_id: info.step_id.clone(),
+            max_turns: params.max_turns,
         };
 
         // Convert runkon-flow ActionParams → conductor-core ActionParams.

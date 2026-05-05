@@ -34,6 +34,7 @@ pub fn make_ectx() -> ExecutionContext {
         worktree_id: None,
         parent_run_id: "parent".to_string(),
         step_id: "step-1".to_string(),
+        max_turns: None,
     }
 }
 

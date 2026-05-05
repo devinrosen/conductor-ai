@@ -23,6 +23,13 @@ use std::borrow::Cow;
 /// legitimate long-running tool calls or prompt-cache writes.
 pub const DEFAULT_STALL_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(300);
 
+/// Default host-enforced turn cap for workflow-driven Claude steps.
+///
+/// Applied to all workflow-driven Claude steps. Covers complex coding steps
+/// (30–55 turns typical upper bound) with a 2× safety margin. Per-step
+/// `max_turns:` override in the `.wf` file can raise or lower this.
+pub const DEFAULT_MAX_TURNS: u32 = 100;
+
 // Re-export runtime-agnostic headless primitives from runkon-runtimes.
 pub use runkon_runtimes::headless::{DrainOutcome, HeadlessHandle};
 // Re-export conductor-CLI-specific argv builder from the local submodule.
@@ -107,8 +114,16 @@ pub fn drain_stream_json(
     log_path: &std::path::Path,
     sink: &impl runkon_runtimes::tracker::EventSink,
     stall_threshold: Option<std::time::Duration>,
+    max_turns: Option<u32>,
 ) -> DrainOutcome {
-    runkon_runtimes::headless::drain_stream_json(reader, run_id, log_path, sink, stall_threshold)
+    runkon_runtimes::headless::drain_stream_json(
+        reader,
+        run_id,
+        log_path,
+        sink,
+        stall_threshold,
+        max_turns,
+    )
 }
 
 /// `EventSink` that persists runtime events into [`AgentManager`] (model/session,
@@ -250,6 +265,7 @@ mod tests {
             run_id,
             &log,
             &sink,
+            None,
             None,
         );
         let _ = std::fs::remove_file(&log);

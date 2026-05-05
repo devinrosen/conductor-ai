@@ -121,6 +121,9 @@ pub enum DrainOutcome {
     /// No output received for longer than `stall_threshold`.
     /// The subprocess was NOT killed here; the caller is responsible.
     StalledOut(std::time::Duration),
+    /// The host-enforced turn cap was reached. `u32` is the number of turns counted.
+    /// The subprocess was NOT killed here; the caller is responsible.
+    TurnCapReached(u32),
 }
 
 /// Drain the stdout of a headless subprocess, persisting events to the DB.
@@ -128,6 +131,10 @@ pub enum DrainOutcome {
 /// When `stall_threshold` is `Some(t)`, returns `DrainOutcome::StalledOut` if
 /// no output is received for longer than `t`. The caller must then kill the
 /// subprocess; passing `None` disables stall detection and behaves as before.
+///
+/// When `max_turns` is `Some(n)`, returns `DrainOutcome::TurnCapReached(n)` after
+/// counting `n` `"assistant"` events. The caller must then kill the subprocess;
+/// passing `None` disables turn-cap enforcement.
 ///
 /// `stdout` must be `Send + 'static` because it is moved into an inner reader
 /// thread so that the blocking `BufReader::lines()` loop can be interrupted by
@@ -138,6 +145,7 @@ pub fn drain_stream_json<S: EventSink + ?Sized>(
     log_file: &std::path::Path,
     sink: &S,
     stall_threshold: Option<std::time::Duration>,
+    max_turns: Option<u32>,
 ) -> DrainOutcome {
     use std::io::{BufRead, BufReader, Write};
     use std::sync::mpsc;
@@ -170,6 +178,7 @@ pub fn drain_stream_json<S: EventSink + ?Sized>(
     });
 
     let mut last_event_at = Instant::now();
+    let mut turn_count = 0u32;
     loop {
         let recv_result = match stall_threshold {
             Some(t) => line_rx.recv_timeout(t),
@@ -253,6 +262,12 @@ pub fn drain_stream_json<S: EventSink + ?Sized>(
                             cache_create,
                         },
                     );
+                }
+                turn_count += 1;
+                if let Some(cap) = max_turns {
+                    if turn_count >= cap {
+                        return DrainOutcome::TurnCapReached(turn_count);
+                    }
                 }
             }
             "result" => {
@@ -350,6 +365,7 @@ mod tests {
             &log_file,
             &sink,
             None,
+            None,
         );
         let _ = std::fs::remove_file(&log_file);
         (outcome, sink)
@@ -426,7 +442,7 @@ mod tests {
             std::thread::current().id()
         ));
         let sink = RecordingSink::default();
-        let outcome = super::drain_stream_json(reader, "run-err", &log_file, &sink, None);
+        let outcome = super::drain_stream_json(reader, "run-err", &log_file, &sink, None, None);
         let _ = std::fs::remove_file(&log_file);
         assert_eq!(outcome, super::DrainOutcome::NoResult);
         // The init event from before the error should still have been emitted.
@@ -511,6 +527,7 @@ mod tests {
             &log_file,
             &sink,
             Some(std::time::Duration::from_millis(100)),
+            None,
         );
         let elapsed = start.elapsed();
         let _ = std::fs::remove_file(&log_file);
@@ -580,12 +597,44 @@ mod tests {
             &log_file,
             &sink,
             Some(std::time::Duration::from_millis(500)),
+            None,
         );
         let _ = std::fs::remove_file(&log_file);
         assert_eq!(
             outcome,
             super::DrainOutcome::Completed,
             "steady stream must not stall"
+        );
+    }
+
+    #[test]
+    fn drain_stream_json_turn_cap_reached() {
+        // Feed 4 assistant events with a cap of 3: drain must stop at turn 3.
+        let lines = [
+            r#"{"type":"assistant","usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}"#,
+            r#"{"type":"assistant","usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}"#,
+            r#"{"type":"assistant","usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}"#,
+            r#"{"type":"assistant","usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}"#,
+        ];
+        let input = lines.join("\n");
+        let log_file = std::env::temp_dir().join(format!(
+            "test-drain-turncap-{:?}.log",
+            std::thread::current().id()
+        ));
+        let sink = RecordingSink::default();
+        let outcome = super::drain_stream_json(
+            std::io::Cursor::new(input.into_bytes()),
+            "cap-run",
+            &log_file,
+            &sink,
+            None,
+            Some(3),
+        );
+        let _ = std::fs::remove_file(&log_file);
+        assert_eq!(
+            outcome,
+            super::DrainOutcome::TurnCapReached(3),
+            "expected TurnCapReached(3), got: {outcome:?}"
         );
     }
 }

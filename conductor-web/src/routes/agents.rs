@@ -139,19 +139,35 @@ async fn wire_headless_drain(
             &log_path,
             &sink,
             Some(stall_threshold),
+            None,
         );
-        if let conductor_core::agent_runtime::DrainOutcome::StalledOut(elapsed) = drain_outcome {
-            let msg = format!("stall_timeout: no events for {}s", elapsed.as_secs());
-            tracing::warn!(run_id = %run_id_owned, "{msg}");
-            // Kill the subprocess so that finish() (child.wait) does not block indefinitely.
-            #[cfg(unix)]
-            runkon_runtimes::process_utils::cancel_subprocess(subprocess_pid);
-            AgentManager::try_mark_run_failed_in_db(
-                &db_path,
-                &run_id_owned,
-                &msg,
-                "wire_headless_drain stall",
-            );
+        match drain_outcome {
+            conductor_core::agent_runtime::DrainOutcome::StalledOut(elapsed) => {
+                let msg = format!("stall_timeout: no events for {}s", elapsed.as_secs());
+                tracing::warn!(run_id = %run_id_owned, "{msg}");
+                // Kill the subprocess so that finish() (child.wait) does not block indefinitely.
+                #[cfg(unix)]
+                runkon_runtimes::process_utils::cancel_subprocess(subprocess_pid);
+                AgentManager::try_mark_run_failed_in_db(
+                    &db_path,
+                    &run_id_owned,
+                    &msg,
+                    "wire_headless_drain stall",
+                );
+            }
+            conductor_core::agent_runtime::DrainOutcome::TurnCapReached(count) => {
+                let msg = format!("turn_cap_reached: {} turns", count);
+                tracing::warn!(run_id = %run_id_owned, "{msg}");
+                #[cfg(unix)]
+                runkon_runtimes::process_utils::cancel_subprocess(subprocess_pid);
+                AgentManager::try_mark_run_failed_in_db(
+                    &db_path,
+                    &run_id_owned,
+                    &msg,
+                    "wire_headless_drain turn_cap",
+                );
+            }
+            _ => {}
         }
         if let Some(ref pf) = prompt_file {
             let _ = std::fs::remove_file(pf);
