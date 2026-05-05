@@ -7,8 +7,14 @@ use crate::error::{ConductorError, Result};
 use runkon_flow::types::FanOutItemRow;
 
 fn fan_out_item_from_row(row: &rusqlite::Row) -> rusqlite::Result<FanOutItemRow> {
+    let id: String = row.get("id")?;
+    let context_json: Option<String> = row.get("context")?;
+    let context: std::collections::HashMap<String, String> = context_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
     Ok(FanOutItemRow {
-        id: row.get("id")?,
+        id,
         step_run_id: row.get("step_run_id")?,
         item_type: row.get("item_type")?,
         item_id: row.get("item_id")?,
@@ -17,6 +23,7 @@ fn fan_out_item_from_row(row: &rusqlite::Row) -> rusqlite::Result<FanOutItemRow>
         status: row.get("status")?,
         dispatched_at: row.get("dispatched_at")?,
         completed_at: row.get("completed_at")?,
+        context,
     })
 }
 
@@ -27,12 +34,25 @@ pub fn insert_fan_out_item(
     item_id: &str,
     item_ref: &str,
 ) -> Result<String> {
+    insert_fan_out_item_with_context(conn, step_run_id, item_type, item_id, item_ref, &Default::default())
+}
+
+pub fn insert_fan_out_item_with_context(
+    conn: &Connection,
+    step_run_id: &str,
+    item_type: &str,
+    item_id: &str,
+    item_ref: &str,
+    context: &std::collections::HashMap<String, String>,
+) -> Result<String> {
     let id = crate::new_id();
+    let context_json = serde_json::to_string(context)
+        .map_err(|e| ConductorError::Workflow(format!("context serialization failed: {e}")))?;
     conn.execute(
             "INSERT OR IGNORE INTO workflow_run_step_fan_out_items \
-             (id, step_run_id, item_type, item_id, item_ref, status) \
-             VALUES (:id, :step_run_id, :item_type, :item_id, :item_ref, 'pending')",
-            named_params![":id": id, ":step_run_id": step_run_id, ":item_type": item_type, ":item_id": item_id, ":item_ref": item_ref],
+             (id, step_run_id, item_type, item_id, item_ref, status, context) \
+             VALUES (:id, :step_run_id, :item_type, :item_id, :item_ref, 'pending', :context)",
+            named_params![":id": id, ":step_run_id": step_run_id, ":item_type": item_type, ":item_id": item_id, ":item_ref": item_ref, ":context": context_json],
         )?;
     Ok(id)
 }
@@ -69,7 +89,7 @@ pub fn get_fan_out_items(
     };
     let sql = format!(
         "SELECT id, step_run_id, item_type, item_id, item_ref, child_run_id, \
-             status, dispatched_at, completed_at \
+             status, dispatched_at, completed_at, context \
              FROM workflow_run_step_fan_out_items \
              WHERE step_run_id = :step_run_id{status_clause} \
              ORDER BY id ASC"
@@ -92,7 +112,7 @@ pub fn get_fan_out_items_for_steps(
     }
     let sql = format!(
         "SELECT id, step_run_id, item_type, item_id, item_ref, child_run_id, \
-             status, dispatched_at, completed_at \
+             status, dispatched_at, completed_at, context \
              FROM workflow_run_step_fan_out_items \
              WHERE step_run_id IN ({}) \
              ORDER BY step_run_id, id ASC",

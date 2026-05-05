@@ -142,7 +142,7 @@ pub fn list_runs_by_status(
     conn: &Connection,
     statuses: &[&str],
     workflow_name: Option<&str>,
-) -> Result<Vec<(String, String)>> {
+) -> Result<Vec<(String, String, String, String, Option<String>)>> {
     let placeholders = sql_placeholders(statuses.len());
     let mut conditions = vec![format!("status IN ({placeholders})")];
     let mut param_values: Vec<String> = statuses.iter().map(|s| s.to_string()).collect();
@@ -153,7 +153,7 @@ pub fn list_runs_by_status(
     }
 
     let sql = format!(
-        "SELECT id, workflow_name FROM workflow_runs WHERE {} ORDER BY started_at ASC",
+        "SELECT id, workflow_name, status, started_at, ticket_id FROM workflow_runs WHERE {} ORDER BY started_at ASC",
         conditions.join(" AND ")
     );
 
@@ -161,7 +161,15 @@ pub fn list_runs_by_status(
         conn,
         &sql,
         rusqlite::params_from_iter(param_values.iter()),
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        },
     )
 }
 

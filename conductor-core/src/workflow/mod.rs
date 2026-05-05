@@ -66,8 +66,9 @@ pub use manager::definitions::{
 pub use manager::fan_out::{
     cancel_fan_out_items, get_existing_fan_out_item_ids, get_fan_out_items,
     get_fan_out_items_checked, get_fan_out_items_for_steps, insert_fan_out_item,
-    refresh_fan_out_counters, reset_running_items_without_child_run, set_fan_out_total,
-    skip_fan_out_items_by_item_ids, update_fan_out_item_running, update_fan_out_item_terminal,
+    insert_fan_out_item_with_context, refresh_fan_out_counters,
+    reset_running_items_without_child_run, set_fan_out_total, skip_fan_out_items_by_item_ids,
+    update_fan_out_item_running, update_fan_out_item_terminal,
 };
 pub use manager::lifecycle::{
     cancel_run, create_workflow_run, create_workflow_run_with_targets, fail_workflow_run,

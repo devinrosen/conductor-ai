@@ -16,6 +16,8 @@ pub struct FanOutItem {
     pub item_type: String,
     pub item_id: String,
     pub item_ref: String,
+    /// Per-item data that will be injected into the child workflow as `item.<key>`.
+    pub context: std::collections::HashMap<String, String>,
 }
 
 /// Context passed to providers during item collection.

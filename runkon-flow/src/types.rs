@@ -375,6 +375,9 @@ pub struct FanOutItemRow {
     pub status: String,
     pub dispatched_at: Option<String>,
     pub completed_at: Option<String>,
+    /// Per-item context map, merged into child workflow inputs as `item.<key>`.
+    #[serde(default)]
+    pub context: std::collections::HashMap<String, String>,
 }
 
 #[cfg(test)]

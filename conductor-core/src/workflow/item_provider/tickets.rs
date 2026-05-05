@@ -32,10 +32,19 @@ impl ItemProvider for TicketsProvider {
         let syncer = TicketSyncer::new(ctx.conn);
         let repo_id = require_repo_id(&self.repo_id, "tickets")?;
 
-        let ticket_item = |t: crate::tickets::Ticket| FanOutItem {
-            item_type: "ticket".to_string(),
-            item_id: t.id,
-            item_ref: t.source_id,
+        let ticket_item = |t: crate::tickets::Ticket| {
+            let mut context = std::collections::HashMap::new();
+            context.insert("title".to_string(), t.title.clone());
+            context.insert("url".to_string(), t.url.clone());
+            context.insert("source_id".to_string(), t.source_id.clone());
+            context.insert("state".to_string(), t.state.clone());
+            context.insert("labels".to_string(), t.labels.clone());
+            FanOutItem {
+                item_type: "ticket".to_string(),
+                item_id: t.id,
+                item_ref: t.source_id,
+                context,
+            }
         };
 
         let items = match scope {

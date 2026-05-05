@@ -447,6 +447,7 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         item_type: &str,
         item_id: &str,
         item_ref: &str,
+        context: &std::collections::HashMap<String, String>,
     ) -> Result<String, EngineError> {
         let mut store = self.lock()?;
         let dedup_key = (item_type.to_string(), item_id.to_string());
@@ -477,6 +478,7 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
                 status: "pending".to_string(),
                 dispatched_at: None,
                 completed_at: None,
+                context: context.clone(),
             },
         );
         Ok(id)
@@ -819,7 +821,7 @@ mod tests {
         let step_id = p.insert_step(make_new_step(&run.id, "foreach")).unwrap();
 
         let item_id = p
-            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
+            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1", &Default::default())
             .unwrap();
         assert!(!item_id.is_empty());
 
@@ -860,9 +862,9 @@ mod tests {
         let run = p.create_run(make_new_run("test")).unwrap();
         let step_id = p.insert_step(make_new_step(&run.id, "s")).unwrap();
 
-        p.insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
+        p.insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1", &Default::default())
             .unwrap();
-        p.insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
+        p.insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1", &Default::default())
             .unwrap();
 
         let items = p.get_fan_out_items(&step_id, None).unwrap();
@@ -876,9 +878,9 @@ mod tests {
         let step_id = p.insert_step(make_new_step(&run.id, "s")).unwrap();
 
         // same step_run_id + item_id, different item_type → two distinct items
-        p.insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
+        p.insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1", &Default::default())
             .unwrap();
-        p.insert_fan_out_item(&step_id, "worktree", "t-1", "ref-2")
+        p.insert_fan_out_item(&step_id, "worktree", "t-1", "ref-2", &Default::default())
             .unwrap();
 
         let items = p.get_fan_out_items(&step_id, None).unwrap();
@@ -889,9 +891,9 @@ mod tests {
         );
 
         // idempotency: re-inserting both should not change count
-        p.insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
+        p.insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1", &Default::default())
             .unwrap();
-        p.insert_fan_out_item(&step_id, "worktree", "t-1", "ref-2")
+        p.insert_fan_out_item(&step_id, "worktree", "t-1", "ref-2", &Default::default())
             .unwrap();
 
         let items = p.get_fan_out_items(&step_id, None).unwrap();
@@ -1013,13 +1015,13 @@ mod tests {
         let step_id = p.insert_step(make_new_step(&run.id, "foreach")).unwrap();
 
         let id1 = p
-            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
+            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1", &Default::default())
             .unwrap();
         let id2 = p
-            .insert_fan_out_item(&step_id, "ticket", "t-2", "ref-2")
+            .insert_fan_out_item(&step_id, "ticket", "t-2", "ref-2", &Default::default())
             .unwrap();
         let id3 = p
-            .insert_fan_out_item(&step_id, "ticket", "t-3", "ref-3")
+            .insert_fan_out_item(&step_id, "ticket", "t-3", "ref-3", &Default::default())
             .unwrap();
 
         let updates = vec![
@@ -1069,7 +1071,7 @@ mod tests {
         let run = p.create_run(make_new_run("test")).unwrap();
         let step_id = p.insert_step(make_new_step(&run.id, "foreach")).unwrap();
         let _id = p
-            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
+            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1", &Default::default())
             .unwrap();
 
         p.batch_update_fan_out_items(&[] as &[(String, FanOutItemUpdate)])
@@ -1087,7 +1089,7 @@ mod tests {
         let run = p.create_run(make_new_run("test")).unwrap();
         let step_id = p.insert_step(make_new_step(&run.id, "foreach")).unwrap();
         let id1 = p
-            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1")
+            .insert_fan_out_item(&step_id, "ticket", "t-1", "ref-1", &Default::default())
             .unwrap();
 
         let updates = vec![(

@@ -158,24 +158,21 @@ pub fn execute_foreach(
         &node.filter,
     )?;
 
-    let items: Vec<(String, String, String)> = provider_items
-        .into_iter()
-        .map(|i| (i.item_type, i.item_id, i.item_ref))
-        .collect();
+    let items = provider_items;
 
     // Write pending rows for newly discovered items.
-    for (item_type, item_id, item_ref) in &items {
-        if !existing_set.contains(item_id) {
+    for item in &items {
+        if !existing_set.contains(&item.item_id) {
             state
                 .persistence
-                .insert_fan_out_item(&step_id, item_type, item_id, item_ref)
+                .insert_fan_out_item(&step_id, &item.item_type, &item.item_id, &item.item_ref, &item.context)
                 .map_err(p_err)?;
         }
     }
 
     let new_item_count = items
         .iter()
-        .filter(|(_, id, _)| !existing_set.contains(id))
+        .filter(|i| !existing_set.contains(&i.item_id))
         .count();
     let total_items = existing_items.len() + new_item_count;
 
@@ -483,6 +480,10 @@ pub fn execute_foreach(
                     .map_err(p_err)?;
 
                 let mut child_inputs = base_inputs.clone();
+                // Inject context entries first so struct-level fields always win.
+                for (k, v) in &item.context {
+                    child_inputs.insert(format!("item.{k}"), v.clone());
+                }
                 child_inputs.insert("item.id".to_string(), item.item_id.clone());
                 child_inputs.insert("item.ref".to_string(), item.item_ref.clone());
 
@@ -966,6 +967,7 @@ mod tests {
                     item_type: "test".into(),
                     item_id: "item-1".into(),
                     item_ref: "ref-1".into(),
+                    context: HashMap::new(),
                 }])
             }
         }

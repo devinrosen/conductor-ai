@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::engine_error::EngineError;
 use crate::status::{WorkflowRunStatus, WorkflowStepStatus};
 use crate::types::{WorkflowRun, WorkflowRunStep};
@@ -181,12 +183,14 @@ pub trait WorkflowPersistence: GateApprovalStore + Send + Sync {
 
     // --- Fan-out ---
 
+    /// Insert a new fan-out item row. Backends serialize `context` as JSON.
     fn insert_fan_out_item(
         &self,
         step_run_id: &str,
         item_type: &str,
         item_id: &str,
         item_ref: &str,
+        context: &HashMap<String, String>,
     ) -> Result<String, EngineError>;
     fn update_fan_out_item(
         &self,
