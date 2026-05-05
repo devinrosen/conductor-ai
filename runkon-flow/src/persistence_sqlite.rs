@@ -257,6 +257,69 @@ impl SqliteWorkflowPersistence {
             EngineError::Persistence("SqliteWorkflowPersistence: mutex poisoned".into())
         })
     }
+
+    /// Bulk-update a list of stuck workflow steps to their resolved status.
+    ///
+    /// Inherent (NOT trait) method — `bulk_recover_steps` is a conductor-domain
+    /// recovery operation, not an engine-facing storage primitive. Keeping it
+    /// off the `WorkflowPersistence` trait prevents third-party harnesses from
+    /// inheriting conductor's recovery idiom (per #2853 disambiguation: route
+    /// raw-SQL bypasses through trait *primitives*, not new trait methods).
+    ///
+    /// Conductor-core's `recover_stuck_steps` calls this directly. Wraps the
+    /// chunked CASE-based UPDATE in a savepoint so the bulk write is atomic;
+    /// the `status NOT IN (terminal statuses)` predicate guards against
+    /// overwriting already-terminal rows.
+    pub fn bulk_recover_steps(
+        &self,
+        items: &[(String, WorkflowStepStatus, Option<String>)],
+        ended_at: &str,
+    ) -> Result<(), EngineError> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.lock()?;
+        let sp = conn.savepoint().map_err(db_err)?;
+        for chunk in items.chunks(199) {
+            let n = chunk.len();
+            let case_arms = (0..n)
+                .map(|_| "WHEN ? THEN ?")
+                .collect::<Vec<_>>()
+                .join(" ");
+            let in_placeholders = (1..=n).map(|_| "?").collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "UPDATE workflow_run_steps \
+                 SET status      = CASE id {case_arms} END, \
+                     ended_at    = ?, \
+                     result_text = CASE id {case_arms} END, \
+                     context_out = NULL, \
+                     markers_out = NULL, \
+                     structured_output = NULL, \
+                     step_error  = NULL \
+                 WHERE id IN ({in_placeholders}) \
+                 AND status NOT IN ({TERMINAL_STATUSES_SQL})"
+            );
+
+            let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(5 * n + 1);
+            for (step_id, status, _) in chunk {
+                params.push(Box::new(step_id.clone()));
+                params.push(Box::new(status.to_string()));
+            }
+            params.push(Box::new(ended_at.to_string()));
+            for (step_id, _, result_text) in chunk {
+                params.push(Box::new(step_id.clone()));
+                params.push(Box::new(result_text.clone()));
+            }
+            for (step_id, _, _) in chunk {
+                params.push(Box::new(step_id.clone()));
+            }
+
+            sp.execute(&sql, rusqlite::params_from_iter(params))
+                .map_err(db_err)?;
+        }
+        sp.commit().map_err(db_err)?;
+        Ok(())
+    }
 }
 
 fn db_err(e: rusqlite::Error) -> EngineError {
@@ -846,60 +909,6 @@ impl WorkflowPersistence for SqliteWorkflowPersistence {
             )
             .map_err(|e| EngineError::Persistence(format!("acquire_lease read generation: {e}")))?;
         Ok(Some(gen))
-    }
-
-    fn bulk_recover_steps(
-        &self,
-        items: &[(String, WorkflowStepStatus, Option<String>)],
-        ended_at: &str,
-    ) -> Result<(), EngineError> {
-        if items.is_empty() {
-            return Ok(());
-        }
-        let mut conn = self.lock()?;
-        // The caller cannot supply a savepoint (trait method), so we own one
-        // here to restore the all-or-nothing guarantee the old free-function
-        // caller provided via `with_savepoint(conn, "recover_stuck_steps", …)`.
-        let sp = conn.savepoint().map_err(db_err)?;
-        for chunk in items.chunks(199) {
-            let n = chunk.len();
-            let case_arms = (0..n)
-                .map(|_| "WHEN ? THEN ?")
-                .collect::<Vec<_>>()
-                .join(" ");
-            let in_placeholders = (1..=n).map(|_| "?").collect::<Vec<_>>().join(", ");
-            let sql = format!(
-                "UPDATE workflow_run_steps \
-                 SET status      = CASE id {case_arms} END, \
-                     ended_at    = ?, \
-                     result_text = CASE id {case_arms} END, \
-                     context_out = NULL, \
-                     markers_out = NULL, \
-                     structured_output = NULL, \
-                     step_error  = NULL \
-                 WHERE id IN ({in_placeholders}) \
-                 AND status NOT IN ({TERMINAL_STATUSES_SQL})"
-            );
-
-            let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(5 * n + 1);
-            for (step_id, status, _) in chunk {
-                params.push(Box::new(step_id.clone()));
-                params.push(Box::new(status.to_string()));
-            }
-            params.push(Box::new(ended_at.to_string()));
-            for (step_id, _, result_text) in chunk {
-                params.push(Box::new(step_id.clone()));
-                params.push(Box::new(result_text.clone()));
-            }
-            for (step_id, _, _) in chunk {
-                params.push(Box::new(step_id.clone()));
-            }
-
-            sp.execute(&sql, rusqlite::params_from_iter(params))
-                .map_err(db_err)?;
-        }
-        sp.commit().map_err(db_err)?;
-        Ok(())
     }
 }
 

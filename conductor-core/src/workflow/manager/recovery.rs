@@ -1,20 +1,22 @@
 use std::collections::HashSet;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use rusqlite::{named_params, Connection, OptionalExtension};
 
 use crate::agent::status::AgentRunStatus;
 use crate::config::Config;
-use crate::db::{query_collect, sql_placeholders};
+use crate::db::{open_database, query_collect, sql_placeholders};
 use crate::error::Result;
 
 use super::helpers::row_to_workflow_run;
 
 use crate::workflow::constants::RUN_COLUMNS;
+use crate::workflow::persistence_sqlite::SqliteWorkflowPersistence;
 use crate::workflow::types::StepKey;
 use crate::workflow::WorkflowRun;
 use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
-use runkon_flow::traits::persistence::WorkflowPersistence;
 
 const ORPHAN_BETWEEN_STEPS_MSG: &str =
     "Orphaned: executor died between steps \u{2014} auto-resumed by watchdog";
@@ -178,9 +180,17 @@ fn fail_step_with_message(conn: &Connection, step_id: &str, error_message: &str)
     )
 }
 
+/// Recover steps that are still `running` but whose child agent run has reached
+/// a terminal state. Conductor-domain operation: reads via `conn` and writes
+/// via `persistence`'s inherent `bulk_recover_steps` method (NOT a trait
+/// method — see #2853 disambiguation).
+///
+/// Most callers should use `recover_stuck_steps_from_db` which opens its own
+/// write connection internally. This lower-level signature exists for callers
+/// that already hold a `SqliteWorkflowPersistence` (e.g. tests).
 pub fn recover_stuck_steps(
     conn: &Connection,
-    persistence: &dyn WorkflowPersistence,
+    persistence: &SqliteWorkflowPersistence,
 ) -> Result<usize> {
     // Step 1: fetch running workflow steps that have a child_run_id.
     let running_steps: Vec<(String, String)> = query_collect(
@@ -229,6 +239,19 @@ pub fn recover_stuck_steps(
         .bulk_recover_steps(&stuck, &ended_at)
         .map_err(|e| crate::error::ConductorError::Workflow(e.to_string()))?;
     Ok(n)
+}
+
+/// Open a write connection from `db_path`, construct the SQLite persistence,
+/// and run `recover_stuck_steps`. Use this from binary crates (TUI, web)
+/// instead of constructing `SqliteWorkflowPersistence` directly.
+///
+/// The TUI background poll uses a separate write connection from the read
+/// `conn` to avoid mutex contention inside `SqliteWorkflowPersistence`.
+pub fn recover_stuck_steps_from_db(read_conn: &Connection, db_path: &Path) -> Result<usize> {
+    let write_conn = open_database(db_path)?;
+    let persistence =
+        SqliteWorkflowPersistence::from_shared_connection(Arc::new(Mutex::new(write_conn)));
+    recover_stuck_steps(read_conn, &persistence)
 }
 
 pub fn reap_orphaned_workflow_runs(conn: &Connection) -> Result<usize> {
@@ -1973,6 +1996,55 @@ mod tests {
             "failed step result_text must be NULL"
         );
         assert!(ended_at_f.is_some(), "ended_at must be set for failed step");
+    }
+
+    /// `recover_stuck_steps_from_db` is the binary-crate-facing wrapper that
+    /// opens its own write connection internally. Exercises the open →
+    /// construct → recover path end-to-end so binary crates don't have to
+    /// touch `SqliteWorkflowPersistence` directly. Mirrors the bulk-path test
+    /// above but goes through the wrapper.
+    #[test]
+    fn test_recover_stuck_steps_from_db_wrapper() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let conn = crate::db::open_database(&db_path).unwrap();
+
+        crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+        crate::test_helpers::insert_test_worktree(
+            &conn,
+            "w1",
+            "r1",
+            "feat-test",
+            "/tmp/ws/feat-test",
+        );
+        let parent_id = crate::agent::AgentManager::new(&conn)
+            .create_run(Some("w1"), "workflow", None)
+            .unwrap()
+            .id;
+        insert_workflow_run(&conn, "wfrun-wrapper", &parent_id);
+
+        let agent_run = crate::agent::AgentManager::new(&conn)
+            .create_run(Some("w1"), "prompt", None)
+            .unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET status = 'completed', result_text = 'wrapped' WHERE id = :id",
+            rusqlite::named_params![":id": agent_run.id],
+        )
+        .unwrap();
+        insert_running_agent_step(&conn, "wfrun-wrapper", "step-w", &agent_run.id, 0);
+
+        let recovered = crate::workflow::recover_stuck_steps_from_db(&conn, &db_path).unwrap();
+        assert_eq!(recovered, 1);
+
+        let (status, result_text): (String, Option<String>) = conn
+            .query_row(
+                "SELECT status, result_text FROM workflow_run_steps WHERE id = 'step-w'",
+                [],
+                |r| Ok((r.get("status")?, r.get("result_text")?)),
+            )
+            .unwrap();
+        assert_eq!(status, "completed");
+        assert_eq!(result_text.as_deref(), Some("wrapped"));
     }
 
     /// Regression test: terminate_subprocesses must complete without error even when

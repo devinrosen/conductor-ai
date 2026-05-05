@@ -619,34 +619,6 @@ impl WorkflowPersistence for InMemoryWorkflowPersistence {
         run.lease_until = Some((now + chrono::Duration::seconds(ttl_seconds)).to_rfc3339());
         Ok(Some(run.generation))
     }
-
-    fn bulk_recover_steps(
-        &self,
-        items: &[(String, WorkflowStepStatus, Option<String>)],
-        ended_at: &str,
-    ) -> Result<(), EngineError> {
-        let mut store = self.lock()?;
-        for (step_id, status, result_text) in items {
-            if let Some(step) = store.steps.get_mut(step_id) {
-                if !matches!(
-                    step.status,
-                    WorkflowStepStatus::Completed
-                        | WorkflowStepStatus::Failed
-                        | WorkflowStepStatus::Skipped
-                        | WorkflowStepStatus::TimedOut
-                ) {
-                    step.status = status.clone();
-                    step.ended_at = Some(ended_at.to_string());
-                    step.result_text = result_text.clone();
-                    step.context_out = None;
-                    step.markers_out = None;
-                    step.structured_output = None;
-                    step.step_error = None;
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]

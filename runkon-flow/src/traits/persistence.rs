@@ -225,20 +225,6 @@ pub trait WorkflowPersistence: GateApprovalStore + Send + Sync {
 
     /// Returns true if the run has been cancelled (e.g. via external request).
     fn is_run_cancelled(&self, run_id: &str) -> Result<bool, EngineError>;
-
-    // --- Bulk step recovery ---
-
-    /// Bulk-update a list of stuck workflow steps to their resolved status.
-    ///
-    /// Implementations should guard against overwriting already-terminal rows
-    /// using a `status NOT IN (terminal statuses)` predicate. Each invocation
-    /// is a complete, self-contained write; savepoint wrapping is the caller's
-    /// responsibility.
-    fn bulk_recover_steps(
-        &self,
-        items: &[(String, WorkflowStepStatus, Option<String>)],
-        ended_at: &str,
-    ) -> Result<(), EngineError>;
 }
 
 #[cfg(test)]

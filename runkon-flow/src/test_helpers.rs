@@ -309,11 +309,4 @@ impl crate::traits::persistence::WorkflowPersistence for CountingPersistence {
     ) -> Result<Vec<crate::types::FanOutItemRow>, crate::engine_error::EngineError> {
         self.inner.get_fan_out_items(step_run_id, f)
     }
-    fn bulk_recover_steps(
-        &self,
-        items: &[(String, crate::status::WorkflowStepStatus, Option<String>)],
-        ended_at: &str,
-    ) -> Result<(), crate::engine_error::EngineError> {
-        self.inner.bulk_recover_steps(items, ended_at)
-    }
 }
