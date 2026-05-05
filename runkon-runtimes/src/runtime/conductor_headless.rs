@@ -9,8 +9,6 @@ use std::borrow::Cow;
 use crate::headless::{spawn_headless, HeadlessHandle};
 use crate::permission::PermissionMode;
 
-pub const DEFAULT_AGENT_ERROR_MSG: &str = "Claude reported an error";
-
 /// Maximum number of CLI arguments produced by `build_headless_agent_args`.
 const AGENT_ARGS_CAPACITY: usize = 20;
 
