@@ -7,6 +7,7 @@ pub mod engine;
 pub mod engine_error;
 pub mod events;
 pub mod executors;
+pub mod extensions;
 pub mod flow_engine;
 pub mod helpers;
 pub mod output_schema;
@@ -24,6 +25,7 @@ pub mod workflow_resolver_directory;
 pub mod workflow_resolver_memory;
 
 pub use cancellation::CancellationToken;
+pub use extensions::Extensions;
 pub use cancellation_reason::CancellationReason;
 pub use diagnostics::run_with_per_run_log;
 pub use dsl::ValidationError;

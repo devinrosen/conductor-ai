@@ -122,8 +122,8 @@ impl ActionExecutor for ApiCallExecutor {
 
     fn execute(&self, ectx: &ExecutionContext, params: &ActionParams) -> Result<ActionOutput> {
         let schema = params
-            .schema
-            .as_ref()
+            .extensions
+            .get::<OutputSchema>()
             .ok_or_else(|| ConductorError::Workflow("ApiCallExecutor requires a schema".into()))?;
 
         let api_key = self.config.anthropic_api_key().ok_or_else(|| {
@@ -136,7 +136,7 @@ impl ActionExecutor for ApiCallExecutor {
 
         let result = execute_via_api(
             &prompt,
-            schema,
+            schema.as_ref(),
             model,
             ectx.step_timeout,
             &api_key,
@@ -146,7 +146,7 @@ impl ActionExecutor for ApiCallExecutor {
             ConductorError::Workflow(format!("API call for '{}' failed: {e}", params.name))
         })?;
 
-        let structured = crate::schema_config::derive_output_from_value(result.json, schema);
+        let structured = crate::schema_config::derive_output_from_value(result.json, schema.as_ref());
 
         use runkon_flow::constants::metadata_keys;
         let metadata = std::collections::HashMap::from([

@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::engine_error::EngineError;
-use crate::output_schema::OutputSchema;
 use crate::traits::run_context::RunContext;
 
 /// Trait for pluggable action execution.
@@ -40,7 +39,7 @@ pub struct ActionParams {
     pub dry_run: bool,
     #[allow(dead_code)]
     pub gate_feedback: Option<String>,
-    pub schema: Option<OutputSchema>,
+    pub extensions: crate::extensions::Extensions,
     pub model: Option<String>,
     pub bot_name: Option<String>,
     pub plugin_dirs: Vec<String>,
