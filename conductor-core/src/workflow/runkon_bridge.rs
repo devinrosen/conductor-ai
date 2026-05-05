@@ -401,6 +401,58 @@ impl ConductorChildWorkflowRunner {
         }
     }
 
+    /// Build the `WorkflowExecStandalone` params for a new child workflow run.
+    ///
+    /// Extracted for unit-testability: the regression test in
+    /// `tests::child_standalone_reads_ticket_repo_from_run_ctx` verifies that
+    /// `ticket_id` and `repo_id` are read from `run_ctx` (not `inputs`), so
+    /// resumed runs whose stored inputs no longer carry those keys still
+    /// propagate the right identity values to child workflows.
+    fn build_child_standalone_params(
+        &self,
+        workflow: runkon_flow::dsl::WorkflowDef,
+        parent_ctx: &runkon_flow::engine::ChildWorkflowContext,
+        params: &runkon_flow::engine::ChildWorkflowInput,
+    ) -> crate::workflow::types::WorkflowExecStandalone {
+        let exec_config = crate::workflow::WorkflowExecConfig {
+            event_sinks: parent_ctx.event_sinks.iter().cloned().collect(),
+            ..parent_ctx.exec_config.clone()
+        };
+        crate::workflow::types::WorkflowExecStandalone {
+            config: self.config.clone(),
+            workflow,
+            worktree_id: parent_ctx
+                .run_ctx
+                .get(crate::workflow::engine_keys::WORKTREE_ID),
+            working_dir: parent_ctx.run_ctx.working_dir_str(),
+            repo_path: parent_ctx
+                .run_ctx
+                .get(crate::workflow::engine_keys::REPO_PATH)
+                .unwrap_or_default(),
+            ticket_id: parent_ctx
+                .run_ctx
+                .get(crate::workflow::engine_keys::TICKET_ID),
+            repo_id: parent_ctx
+                .run_ctx
+                .get(crate::workflow::engine_keys::REPO_ID),
+            model: parent_ctx.model.clone(),
+            exec_config,
+            inputs: params.inputs.clone(),
+            target_label: self.target_label.clone(),
+            run_id_notify: None,
+            triggered_by_hook: self.triggered_by_hook,
+            conductor_bin_dir: None,
+            force: false,
+            extra_plugin_dirs: parent_ctx.extra_plugin_dirs.clone(),
+            db_path: Some(self.db_path.clone()),
+            parent_workflow_run_id: Some(parent_ctx.workflow_run_id.clone()),
+            depth: params.depth,
+            parent_step_id: params.parent_step_id.clone(),
+            default_bot_name: params.bot_name.clone(),
+            iteration: params.iteration,
+        }
+    }
+
     /// Project a parent's `ChildWorkflowContext` into the `WorkflowResumeInput`
     /// that `super::coordinator::resume_workflow` consumes.
     ///
@@ -455,43 +507,10 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
                 ))
             })?;
 
-        let exec_config = crate::workflow::WorkflowExecConfig {
-            event_sinks: parent_ctx.event_sinks.iter().cloned().collect(),
-            ..parent_ctx.exec_config.clone()
-        };
-
-        let parent_target_label = self.target_label.clone();
-        let parent_triggered_by_hook = self.triggered_by_hook;
-
         // Route child workflows through execute_workflow_standalone so they use
         // FlowEngine::run() — keeping event emission and step tracking consistent
         // between parent and child runs.
-        let standalone_params = crate::workflow::types::WorkflowExecStandalone {
-            config: self.config.clone(),
-            workflow: core_def,
-            worktree_id: parent_ctx
-                .run_ctx
-                .get(crate::workflow::engine_keys::WORKTREE_ID),
-            working_dir: parent_working_dir,
-            repo_path: parent_repo_path,
-            ticket_id: parent_ctx.inputs.get("ticket_id").cloned(),
-            repo_id: parent_ctx.inputs.get("repo_id").cloned(),
-            model: parent_ctx.model.clone(),
-            exec_config,
-            inputs: params.inputs,
-            target_label: parent_target_label,
-            run_id_notify: None,
-            triggered_by_hook: parent_triggered_by_hook,
-            conductor_bin_dir: None,
-            force: false,
-            extra_plugin_dirs: parent_ctx.extra_plugin_dirs.clone(),
-            db_path: Some(self.db_path.clone()),
-            parent_workflow_run_id: Some(parent_ctx.workflow_run_id.clone()),
-            depth: params.depth,
-            parent_step_id: params.parent_step_id,
-            default_bot_name: params.bot_name,
-            iteration: params.iteration,
-        };
+        let standalone_params = self.build_child_standalone_params(core_def, parent_ctx, &params);
 
         let core_result = super::coordinator::execute_workflow_standalone(&standalone_params)
             .map_err(|e| {
@@ -757,6 +776,70 @@ mod tests {
              regression check for prior `event_sinks: vec![]` bug"
         );
         assert_eq!(input.workflow_run_id, "child-run-1");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Regression test: build_child_standalone_params must read ticket_id and
+    // repo_id from run_ctx, NOT from parent_ctx.inputs.
+    //
+    // Bug: before the fix these two fields still used inputs.get("ticket_id") /
+    // inputs.get("repo_id"), so resumed workflows whose stored inputs no longer
+    // carried those keys would spawn children with ticket_id/repo_id = None.
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn child_standalone_reads_ticket_repo_from_run_ctx() {
+        use runkon_flow::engine::{ChildWorkflowContext, ChildWorkflowInput};
+        use runkon_flow::events::EventSink;
+
+        // run_ctx carries the identity values; inputs intentionally empty.
+        let mut vars = std::collections::HashMap::new();
+        vars.insert(crate::workflow::engine_keys::TICKET_ID, "t-abc".to_string());
+        vars.insert(crate::workflow::engine_keys::REPO_ID, "r-def".to_string());
+        let run_ctx = runkon_flow::traits::run_context::NoopRunContext::with_vars(vars);
+
+        let conn = Arc::new(Mutex::new(crate::test_helpers::setup_db()));
+        let runner = ConductorChildWorkflowRunner::new(
+            std::path::PathBuf::from("/tmp/test.db"),
+            crate::config::Config::default(),
+            conn,
+            None,
+            false,
+        );
+
+        let parent_ctx = ChildWorkflowContext {
+            run_ctx: std::sync::Arc::new(run_ctx)
+                as std::sync::Arc<dyn runkon_flow::traits::run_context::RunContext>,
+            extra_plugin_dirs: vec![],
+            workflow_run_id: "parent-run".to_string(),
+            model: None,
+            exec_config: crate::workflow::WorkflowExecConfig::default(),
+            inputs: HashMap::new(),
+            event_sinks: Arc::<[Arc<dyn EventSink>]>::from(vec![]),
+        };
+
+        let workflow = runkon_flow::test_helpers::make_def("test-child", vec![]);
+        let params = ChildWorkflowInput {
+            inputs: HashMap::new(),
+            iteration: 0,
+            bot_name: None,
+            depth: 1,
+            parent_step_id: None,
+            cancellation: runkon_flow::CancellationToken::new(),
+        };
+
+        let standalone = runner.build_child_standalone_params(workflow, &parent_ctx, &params);
+
+        assert_eq!(
+            standalone.ticket_id,
+            Some("t-abc".to_string()),
+            "ticket_id must come from run_ctx, not inputs"
+        );
+        assert_eq!(
+            standalone.repo_id,
+            Some("r-def".to_string()),
+            "repo_id must come from run_ctx, not inputs"
+        );
     }
 
     #[test]
