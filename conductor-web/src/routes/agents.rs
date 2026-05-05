@@ -60,6 +60,7 @@ async fn wire_headless_drain(
     handle: conductor_core::agent_runtime::HeadlessHandle,
     prompt_file: Option<std::path::PathBuf>,
     worktree_id: Option<&str>,
+    stall_threshold: std::time::Duration,
 ) -> Result<(), ApiError> {
     // Convert to owned so the value can be moved into the spawn_blocking closure.
     let worktree_id: Option<String> = worktree_id.map(str::to_owned);
@@ -137,7 +138,7 @@ async fn wire_headless_drain(
             &run_id_owned,
             &log_path,
             &sink,
-            Some(conductor_core::agent_runtime::DEFAULT_STALL_THRESHOLD),
+            Some(stall_threshold),
         );
         if let conductor_core::agent_runtime::DrainOutcome::StalledOut(elapsed) = drain_outcome {
             let msg = format!("stall_timeout: no events for {}s", elapsed.as_secs());
@@ -208,7 +209,15 @@ pub(super) async fn spawn_headless_agent(
         Ok(pair) => pair,
     };
 
-    wire_headless_drain(state, run_id, handle, Some(prompt_file), worktree_id).await
+    wire_headless_drain(
+        state,
+        run_id,
+        handle,
+        Some(prompt_file),
+        worktree_id,
+        conductor_core::agent_runtime::DEFAULT_STALL_THRESHOLD,
+    )
+    .await
 }
 
 // ── Agent stats (aggregates) ──────────────────────────────────────────
@@ -1627,9 +1636,16 @@ mod tests {
         };
 
         // wire_headless_drain returns Ok quickly (persists PID, spawns tasks).
-        super::wire_headless_drain(&state, &run_id, handle, None, None)
-            .await
-            .expect("wire_headless_drain should return Ok");
+        super::wire_headless_drain(
+            &state,
+            &run_id,
+            handle,
+            None,
+            None,
+            conductor_core::agent_runtime::DEFAULT_STALL_THRESHOLD,
+        )
+        .await
+        .expect("wire_headless_drain should return Ok");
 
         // Poll until the child process disappears from the process table.
         // `ps -p <pid>` exits 0 while the process exists (running or zombie),
@@ -1732,7 +1748,15 @@ mod tests {
         };
 
         // wire_headless_drain should return Err quickly (PID-persist fails).
-        let result = super::wire_headless_drain(&state, &run_id, handle, None, None).await;
+        let result = super::wire_headless_drain(
+            &state,
+            &run_id,
+            handle,
+            None,
+            None,
+            conductor_core::agent_runtime::DEFAULT_STALL_THRESHOLD,
+        )
+        .await;
         assert!(
             result.is_err(),
             "wire_headless_drain should return Err when PID persist fails"
@@ -1829,9 +1853,16 @@ mod tests {
         };
 
         // wire_headless_drain returns Ok quickly (persists PID, spawns tasks).
-        super::wire_headless_drain(&state, &run_id, handle, None, None)
-            .await
-            .expect("wire_headless_drain should return Ok");
+        super::wire_headless_drain(
+            &state,
+            &run_id,
+            handle,
+            None,
+            None,
+            conductor_core::agent_runtime::DEFAULT_STALL_THRESHOLD,
+        )
+        .await
+        .expect("wire_headless_drain should return Ok");
 
         // Poll until the child process disappears from the process table.
         // Without the fix the child fills its stderr pipe and handle.finish()
@@ -1852,6 +1883,128 @@ mod tests {
                 "child PID {child_pid} still in process table after 5 s \
                  — likely pipe-buffer deadlock in normal drain completion path \
                  (stderr not dropped before wait())"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let _ = tmp;
+    }
+
+    /// Integration test: stall detection marks the run failed and kills the subprocess.
+    ///
+    /// Verifies the `DrainOutcome::StalledOut` handler in `wire_headless_drain`:
+    ///   1. `cancel_subprocess` is called (subprocess dies).
+    ///   2. `try_mark_run_failed_in_db` marks the run Failed with "stall_timeout".
+    ///
+    /// A 100ms stall threshold is injected via the `stall_threshold` parameter
+    /// so the test completes in seconds rather than the production 5-minute default.
+    ///
+    /// `cancel_subprocess` sends SIGTERM to the child's process group and then polls
+    /// for up to 5 s before escalating to SIGKILL. Because a zombie process appears
+    /// alive to `kill(pid, 0)` until reaped, the full grace period always elapses
+    /// before `try_mark_run_failed_in_db` is called — the polling deadline is 10 s.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stall_detection_kills_subprocess_and_marks_run_failed() {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        // Spawn a subprocess that produces no stdout. `.process_group(0)` is
+        // required so that `cancel_subprocess` can signal the child's own
+        // process group via `kill(-child_pid, SIGTERM)`.
+        let child = Command::new("sleep")
+            .args(["60"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .expect("spawn sleep");
+
+        let child_pid = child.id();
+        let handle = conductor_core::agent_runtime::HeadlessHandle::from_child(child)
+            .expect("HeadlessHandle::from_child");
+
+        // Real on-disk DB: `try_mark_run_failed_in_db` opens its own connection.
+        let tmp = tempfile::NamedTempFile::new().expect("temp db");
+        let conn = conductor_core::db::open_database(tmp.path()).expect("open db");
+        conductor_core::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+        conductor_core::test_helpers::insert_test_worktree(
+            &conn,
+            "w1",
+            "r1",
+            "feat-test",
+            "/tmp/ws/feat-test",
+        );
+        let run = AgentManager::new(&conn)
+            .create_run(Some("w1"), "test prompt", None)
+            .expect("create run");
+        let run_id = run.id.clone();
+        let state = AppState {
+            db: Arc::new(Mutex::new(conn)),
+            config: Arc::new(RwLock::new(Config::default())),
+            web_config: Arc::new(RwLock::new(WebConfig::default())),
+            events: EventBus::new(8),
+            db_path: tmp.path().to_path_buf(),
+            workflow_done_notify: None,
+        };
+
+        // 100ms stall threshold so the stall fires almost immediately.
+        super::wire_headless_drain(
+            &state,
+            &run_id,
+            handle,
+            None,
+            None,
+            Duration::from_millis(100),
+        )
+        .await
+        .expect("wire_headless_drain should return Ok");
+
+        // Poll until the run is marked Failed with "stall_timeout" in result_text.
+        // `cancel_subprocess` has a 5s grace period before escalating to SIGKILL,
+        // so allow up to 10s total for the DB write to land.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let db = conductor_core::db::open_database(tmp.path()).expect("open db for poll");
+            let polled = AgentManager::new(&db)
+                .get_run(&run_id)
+                .unwrap()
+                .unwrap();
+            if polled.status == AgentRunStatus::Failed {
+                assert!(
+                    polled
+                        .result_text
+                        .as_deref()
+                        .unwrap_or("")
+                        .contains("stall_timeout"),
+                    "expected 'stall_timeout' in result_text, got: {:?}",
+                    polled.result_text
+                );
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "run not marked Failed within 10 s — stall handler did not fire"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // After `try_mark_run_failed_in_db`, the drain thread calls `finish()`
+        // which reaps the child. Poll until the subprocess is gone.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let alive = Command::new("ps")
+                .args(["-p", &child_pid.to_string()])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if !alive {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "subprocess PID {child_pid} still in process table after 5 s \
+                 — cancel_subprocess or finish() did not terminate the child"
             );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
