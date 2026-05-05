@@ -21,6 +21,11 @@ pub(crate) mod item_provider;
 pub(crate) mod manager;
 pub(crate) mod output;
 pub(crate) mod panic_db_sink;
+// `pub(crate)` so binary crates (TUI, web, desktop) cannot construct
+// `SqliteWorkflowPersistence` directly. They must use the higher-level
+// wrappers in this module (e.g. `recover_stuck_steps_from_db`).
+// Internal callers address the type via the full path
+// `crate::workflow::persistence_sqlite::SqliteWorkflowPersistence`.
 pub(crate) mod persistence_sqlite;
 pub(crate) mod prompt_builder;
 pub(crate) mod run_context;
@@ -68,7 +73,7 @@ pub use manager::lifecycle::{
     cancel_run, create_workflow_run, create_workflow_run_with_targets, fail_workflow_run,
     persist_workflow_metrics, set_dismissed, set_waiting_blocked_on,
     set_workflow_run_default_bot_name, set_workflow_run_inputs, set_workflow_run_iteration,
-    tick_heartbeat, update_workflow_status,
+    update_workflow_status,
 };
 pub use manager::queries::{
     active_run_counts_by_repo, find_step_by_name_and_iteration, find_waiting_gate,
@@ -96,8 +101,8 @@ pub use manager::recovery::{
     detect_stale_workflow_runs, detect_stuck_workflow_run_ids, find_resumable_child_run,
     get_completed_step_keys, purge, purge_count, reap_finalization_stuck_workflow_runs,
     reap_orphaned_script_steps, reap_orphaned_workflow_runs, reap_stale_workflow_runs,
-    recover_stuck_steps, reset_completed_steps, reset_failed_steps, reset_steps_from_position,
-    run_workflow_maintenance, ReapedStaleRun, StaleWorkflowRun,
+    recover_stuck_steps_from_db, reset_completed_steps, reset_failed_steps,
+    reset_steps_from_position, run_workflow_maintenance, ReapedStaleRun, StaleWorkflowRun,
 };
 // `count_live_subprocess_steps` is `pub(crate)` (internal-only), so it isn't
 // part of the public re-export above. Re-export it at crate-internal visibility

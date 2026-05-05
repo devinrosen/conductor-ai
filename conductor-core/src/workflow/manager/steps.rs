@@ -299,6 +299,11 @@ pub fn mirror_step_metrics_from_run(
         )
 }
 
+/// API-layer bypass: writes a gate approval directly to SQLite.
+///
+/// Called from conductor-core web/TUI handlers, not from within the engine.
+/// The engine-facing path is `GateApprovalStore::approve_gate` on the
+/// `WorkflowPersistence` trait in runkon-flow.
 pub fn approve_gate(
     conn: &Connection,
     step_id: &str,
@@ -333,6 +338,9 @@ pub fn approve_gate(
     )
 }
 
+/// API-layer bypass: writes a gate rejection directly to SQLite.
+///
+/// See `approve_gate` above — same boundary note applies.
 pub fn reject_gate(
     conn: &Connection,
     step_id: &str,
@@ -393,6 +401,11 @@ pub fn active_step_exists(
     Ok(exists)
 }
 
+/// API-layer bypass: reads gate approval state directly from SQLite.
+///
+/// See `approve_gate` above — same boundary note applies. The engine-facing
+/// path is `GateApprovalStore::get_gate_approval` on the `WorkflowPersistence`
+/// trait in runkon-flow.
 pub fn get_gate_approval_state(
     conn: &Connection,
     step_id: &str,

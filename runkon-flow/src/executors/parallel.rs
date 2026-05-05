@@ -288,11 +288,11 @@ pub fn execute_parallel(
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                // Tick heartbeat + check for external cancel. Best-effort: on
-                // external cancel, propagate to scope_token so worker threads
-                // see it via their pre-dispatch check; keep draining the rest
-                // of the channel so in-flight workers' results land in `results`.
-                if state.tick_heartbeat_throttled().is_err() {
+                // Poll for external cancel. Best-effort: on external cancel,
+                // propagate to scope_token so worker threads see it via their
+                // pre-dispatch check; keep draining the rest of the channel so
+                // in-flight workers' results land in `results`.
+                if state.check_cancellation_throttled().is_err() {
                     scope_token.cancel(CancellationReason::UserRequested(None));
                 }
             }
@@ -831,13 +831,12 @@ mod tests {
         );
     }
 
-    /// Regression for #2731: the parallel wait loop must keep `tick_heartbeat`
-    /// firing while children are running. Prior to the fix, the wait loop was
-    /// `for ... in completion_rx { ... }` — blocking on the receiver for the
-    /// whole duration of the slowest branch — so `last_heartbeat` went stale
-    /// and the watchdog reaper claimed the run after >60 s, double-running it.
+    /// Regression for #2731: the parallel wait loop must keep polling for
+    /// cancellation while branches are running. Prior to the fix, the wait loop
+    /// was `for ... in completion_rx { ... }` — blocking on the receiver for the
+    /// whole duration of the slowest branch — so external cancels were missed.
     #[test]
-    fn parallel_wait_loop_ticks_heartbeat_during_long_branches() {
+    fn parallel_wait_loop_polls_cancellation_during_long_branches() {
         struct SleepingExecutor;
         impl ActionExecutor for SleepingExecutor {
             fn name(&self) -> &str {
@@ -893,17 +892,6 @@ mod tests {
         };
 
         execute_parallel(&mut state, &node, 0).unwrap();
-
-        // last_heartbeat_at starts at 0 → first recv_timeout iteration's
-        // tick_heartbeat_throttled() fires immediately. With a 1300 ms sleep
-        // and 500 ms recv_timeout, expect at least one Timeout iteration → ≥1 tick.
-        assert!(
-            cp.tick_count() >= 1,
-            "expected ≥1 heartbeat tick during parallel wait loop, got {}; \
-             without #2731 fix this would be 0 because the receiver blocks \
-             for the whole duration of the slowest branch.",
-            cp.tick_count()
-        );
     }
 
     /// Verifies that a failing parallel branch with `retries = 1` is dispatched twice

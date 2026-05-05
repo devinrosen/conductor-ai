@@ -3463,7 +3463,14 @@ fn test_detect_stuck_skips_run_with_active_steps() {
 
 #[test]
 fn test_recover_stuck_steps_fixes_step_with_terminal_child() {
-    let conn = setup_db();
+    // File-based DB so the read connection (`conn`) and the write connection
+    // inside SqliteWorkflowPersistence see each other's commits.
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = crate::db::open_database(&db_path).unwrap();
+    crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
+    crate::test_helpers::insert_test_worktree(&conn, "w1", "r1", "feat-test", "/tmp/ws/feat-test");
+
     let agent_mgr = AgentManager::new(&conn);
     let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
     conn.execute(
@@ -3476,7 +3483,6 @@ fn test_recover_stuck_steps_fixes_step_with_terminal_child() {
     )
     .unwrap();
 
-    // Create a child agent run and mark it completed via SQL.
     let child = agent_mgr.create_run(None, "step prompt", None).unwrap();
     conn.execute(
         "UPDATE agent_runs SET status = 'completed' WHERE id = :id",
@@ -3484,7 +3490,6 @@ fn test_recover_stuck_steps_fixes_step_with_terminal_child() {
     )
     .unwrap();
 
-    // Insert a step still marked 'running' but whose child is terminal.
     conn.execute(
         "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, iteration, \
@@ -3494,7 +3499,10 @@ fn test_recover_stuck_steps_fixes_step_with_terminal_child() {
         named_params! { ":child_run_id": child.id },
     )
     .unwrap();
-    let recovered = crate::workflow::recover_stuck_steps(&conn).unwrap();
+
+    // recover_stuck_steps_from_db opens its own write connection internally;
+    // exercises the binary-crate-facing wrapper end-to-end.
+    let recovered = crate::workflow::recover_stuck_steps_from_db(&conn, &db_path).unwrap();
     assert_eq!(recovered, 1, "should recover the stuck step");
 }
 

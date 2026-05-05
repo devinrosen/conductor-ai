@@ -506,10 +506,14 @@ pub fn poll_data(
                     Err(e) => tracing::warn!("cleanup_merged_worktrees failed: {e}"),
                 }
             }
-            match conductor_core::workflow::recover_stuck_steps(&conn) {
+            // recover_stuck_steps_from_db opens its own write connection internally,
+            // so the read `conn` and the write path don't deadlock on the same mutex
+            // inside SqliteWorkflowPersistence. Surfaces open_database failures as
+            // tracing::warn! instead of swallowing them silently.
+            match conductor_core::workflow::recover_stuck_steps_from_db(&conn, &db) {
                 Ok(n) if n > 0 => tracing::debug!("Recovered {n} stuck workflow step(s)"),
                 Ok(_) => {}
-                Err(e) => tracing::warn!("recover_stuck_steps failed: {e}"),
+                Err(e) => tracing::warn!("recover_stuck_steps_from_db failed: {e}"),
             }
             match conductor_core::workflow::reap_orphaned_workflow_runs(&conn) {
                 Ok(n) if n > 0 => tracing::debug!("Reaped {n} orphaned workflow run(s)"),
