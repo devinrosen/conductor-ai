@@ -24,11 +24,6 @@ use super::types::{
 use super::WorkflowResult;
 use super::{WorkflowRunStatus, WorkflowStepStatus};
 
-/// Input keys that the workflow engine injects automatically from the run context
-/// (ticket and repo metadata). Consumers can use this slice to identify inputs
-/// that are read-only from the user's perspective.
-pub(crate) use crate::workflow::engine_keys::ENGINE_INJECTED_KEYS;
-
 /// Validate required workflow inputs are present and apply default values.
 ///
 /// Returns an error if a required input is missing.
@@ -441,8 +436,13 @@ fn make_schema_resolver(
 > {
     Arc::new(move |name| {
         let schema_ref = crate::schema_config::SchemaRef::from_str_value(name);
-        crate::schema_config::load_schema(&working_dir, &repo_path, &schema_ref, Some(&workflow_name))
-            .map_err(|e| runkon_flow::engine_error::EngineError::Workflow(e.to_string()))
+        crate::schema_config::load_schema(
+            &working_dir,
+            &repo_path,
+            &schema_ref,
+            Some(&workflow_name),
+        )
+        .map_err(|e| runkon_flow::engine_error::EngineError::Workflow(e.to_string()))
     })
 }
 
@@ -651,8 +651,11 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         Arc::new(config.clone()),
     );
 
-    let schema_resolver =
-        make_schema_resolver(workflow.name.clone(), params.working_dir.clone(), params.repo_path.clone());
+    let schema_resolver = make_schema_resolver(
+        workflow.name.clone(),
+        params.working_dir.clone(),
+        params.repo_path.clone(),
+    );
 
     let rk_exec_config = params.exec_config.clone();
     let event_sinks: Arc<[Arc<dyn runkon_flow::EventSink>]> =
@@ -1153,8 +1156,11 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         Arc::new(config.clone()),
     );
 
-    let schema_resolver =
-        make_schema_resolver(wf_run.workflow_name.clone(), worktree_path.clone(), repo_path.clone());
+    let schema_resolver = make_schema_resolver(
+        wf_run.workflow_name.clone(),
+        worktree_path.clone(),
+        repo_path.clone(),
+    );
 
     let event_sinks: Arc<[Arc<dyn runkon_flow::EventSink>]> = Arc::from(input.event_sinks.clone());
 

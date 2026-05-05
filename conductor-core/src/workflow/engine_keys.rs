@@ -6,8 +6,6 @@ pub const REPO_PATH: &str = "repo_path";
 pub const WORKTREE_ID: &str = "worktree_id";
 pub const TICKET_ID: &str = "ticket_id";
 pub const REPO_ID: &str = "repo_id";
-pub const WORKING_DIR: &str = "working_dir";
-pub const WORKFLOW_RUN_ID: &str = "workflow_run_id";
 
 /// Keys that conductor injects automatically from run context. Consumers can
 /// use this slice to identify inputs that are read-only from the user's perspective.

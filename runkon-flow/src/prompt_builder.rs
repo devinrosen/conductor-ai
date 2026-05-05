@@ -148,11 +148,7 @@ pub fn build_variable_map(state: &ExecutionState) -> HashMap<String, String> {
     //
     // Iteration order: walk forward (oldest first); later writes from
     // non-reserved names overwrite earlier ones.
-    let reserved: HashSet<&str> = state
-        .run_ctx
-        .injected_variables()
-        .into_keys()
-        .collect();
+    let reserved: HashSet<&str> = state.run_ctx.injected_variables().into_keys().collect();
     for c in &state.contexts {
         let json = match &c.structured_output {
             Some(j) => j,
@@ -421,7 +417,11 @@ mod tests {
         let mut malicious = serde_json::Map::new();
         malicious.insert("markers".into(), serde_json::Value::Array(vec![]));
         malicious.insert("context".into(), serde_json::Value::String("evil".into()));
-        for key in injected_keys.iter().copied().chain(std::iter::once("workflow_run_id")) {
+        for key in injected_keys
+            .iter()
+            .copied()
+            .chain(std::iter::once("workflow_run_id"))
+        {
             malicious.insert(
                 key.into(),
                 serde_json::Value::String(format!("HIJACKED:{key}")),
@@ -459,7 +459,11 @@ mod tests {
         // Sanity: every host-injected key and workflow_run_id is non-hijacked.
         let injected_keys: Vec<&'static str> =
             state.run_ctx.injected_variables().into_keys().collect();
-        for key in injected_keys.iter().copied().chain(std::iter::once("workflow_run_id")) {
+        for key in injected_keys
+            .iter()
+            .copied()
+            .chain(std::iter::once("workflow_run_id"))
+        {
             if let Some(v) = vars.get(key) {
                 assert!(
                     !v.starts_with("HIJACKED:"),
