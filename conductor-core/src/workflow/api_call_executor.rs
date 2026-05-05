@@ -146,7 +146,8 @@ impl ActionExecutor for ApiCallExecutor {
             ConductorError::Workflow(format!("API call for '{}' failed: {e}", params.name))
         })?;
 
-        let structured = crate::schema_config::derive_output_from_value(result.json, schema.as_ref());
+        let structured =
+            crate::schema_config::derive_output_from_value(result.json, schema.as_ref());
 
         use runkon_flow::constants::metadata_keys;
         let metadata = std::collections::HashMap::from([
