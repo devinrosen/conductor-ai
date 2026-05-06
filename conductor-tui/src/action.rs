@@ -401,7 +401,9 @@ pub enum Action {
         items: Vec<crate::state::BranchPickerItem>,
     },
     /// Background result: failed to enumerate base branches.
-    BaseBranchesFailed { error: String },
+    BaseBranchesFailed {
+        error: String,
+    },
 
     /// Select a list-picker item by number-key shortcut (0-indexed).
     /// Used by both WorkflowPicker and TemplatePicker modals.

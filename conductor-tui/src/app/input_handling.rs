@@ -805,17 +805,15 @@ impl App {
             let result = (|| {
                 let conn = open_database(&db_path())
                     .map_err(|e| format!("Failed to open database: {e}"))?;
-                let config =
-                    load_config().map_err(|e| format!("Failed to load config: {e}"))?;
+                let config = load_config().map_err(|e| format!("Failed to load config: {e}"))?;
                 let repo = RepoManager::new(&conn, &config)
                     .get_by_slug(&repo_slug)
                     .map_err(|e| format!("Failed to get repo '{repo_slug}': {e}"))?;
                 let local_path = std::path::PathBuf::from(&repo.local_path);
                 let default_branch = repo.default_branch.clone();
 
-                let all_branches =
-                    conductor_core::worktree::list_remote_branches(&local_path)
-                        .map_err(|e| format!("Failed to list remote branches: {e}"))?;
+                let all_branches = conductor_core::worktree::list_remote_branches(&local_path)
+                    .map_err(|e| format!("Failed to list remote branches: {e}"))?;
 
                 // Drop the default branch (shown as sentinel) and the worktree's
                 // own branch (selecting self as base is nonsensical and would fail
