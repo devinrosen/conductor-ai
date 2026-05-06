@@ -10,10 +10,15 @@ use crate::error::Result;
 
 /// Open (or create) the SQLite database with WAL mode enabled.
 pub fn open_database(path: &Path) -> Result<Connection> {
-    let conn = Connection::open(path)?;
+    let mut conn = Connection::open(path)?;
     conn.pragma_update(None, "journal_mode", "wal")?;
     conn.pragma_update(None, "foreign_keys", "on")?;
     conn.pragma_update(None, "busy_timeout", 5000)?;
+
+    // runkon-flow owns its own schema. Idempotent on existing DBs.
+    runkon_flow::migrations::run(&mut conn)
+        .map_err(|e| crate::error::ConductorError::Migration(e.to_string()))?;
+
     migrations::run(&conn)?;
     Ok(conn)
 }
@@ -25,10 +30,15 @@ pub fn open_database(path: &Path) -> Result<Connection> {
 /// error.  Use this in headless subprocesses and drain threads that must keep
 /// running after an `implement` agent step has applied a newer migration.
 pub fn open_database_compat(path: &Path) -> Result<Connection> {
-    let conn = Connection::open(path)?;
+    let mut conn = Connection::open(path)?;
     conn.pragma_update(None, "journal_mode", "wal")?;
     conn.pragma_update(None, "foreign_keys", "on")?;
     conn.pragma_update(None, "busy_timeout", 5000)?;
+
+    // runkon-flow migrations run first (idempotent)
+    runkon_flow::migrations::run(&mut conn)
+        .map_err(|e| crate::error::ConductorError::Migration(e.to_string()))?;
+
     migrations::run_compat(&conn)?;
     Ok(conn)
 }
@@ -160,5 +170,65 @@ mod tests {
     fn open_database_compat_error_on_bad_path() {
         let bad = std::path::Path::new("/tmp/conductor_no_such_dir_xyz/test.db");
         assert!(open_database_compat(bad).is_err());
+    }
+
+    #[test]
+    fn combined_schema_has_both_runkon_flow_and_conductor_tables() {
+        let tmp = NamedTempFile::new().unwrap();
+        let conn = open_database(tmp.path()).expect("open_database should succeed");
+
+        // Verify runkon-flow tables exist
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN (?, ?, ?)")
+            .unwrap();
+        let tables: Vec<String> = stmt
+            .query_map(["workflow_runs", "workflow_run_steps", "runkon_flow_schema_history"], |row| {
+                row.get(0)
+            })
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert!(
+            tables.contains(&"workflow_runs".to_string()),
+            "workflow_runs table should exist after runkon-flow migrations"
+        );
+        assert!(
+            tables.contains(&"workflow_run_steps".to_string()),
+            "workflow_run_steps table should exist after runkon-flow migrations"
+        );
+        assert!(
+            tables.contains(&"runkon_flow_schema_history".to_string()),
+            "runkon_flow_schema_history table should exist after runkon-flow migrations"
+        );
+
+        // Verify conductor tables exist
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
+            .unwrap();
+        let has_repos: bool = stmt
+            .query_map(["repos"], |row| row.get::<_, i64>(0))
+            .unwrap()
+            .count() > 0;
+        assert!(has_repos, "repos table should exist after conductor migrations");
+
+        // Verify conductor extension columns from migration #87 exist on workflow_runs
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(workflow_runs)")
+            .unwrap();
+        let columns: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert!(
+            columns.contains(&"pr_number".to_string()),
+            "workflow_runs should have pr_number column from migration #87"
+        );
+        assert!(
+            columns.contains(&"target_branch".to_string()),
+            "workflow_runs should have target_branch column from migration #87"
+        );
     }
 }

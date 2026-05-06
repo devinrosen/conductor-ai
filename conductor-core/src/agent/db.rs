@@ -351,8 +351,9 @@ mod tests {
     /// Create an in-memory database with the full production schema.
     /// Foreign keys are disabled so tests can insert rows without full parent chains.
     fn test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        runkon_flow::migrations::run(&mut conn).unwrap();
         crate::db::migrations::run(&conn).unwrap();
         conn
     }

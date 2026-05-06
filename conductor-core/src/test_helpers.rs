@@ -19,8 +19,12 @@ pub static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Opens an in-memory SQLite database with migrations applied. No seed data is inserted.
 pub fn create_test_conn() -> Connection {
-    let conn = Connection::open_in_memory().unwrap();
+    let mut conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+
+    // runkon-flow migrations first (idempotent)
+    runkon_flow::migrations::run(&mut conn).unwrap();
+
     db::migrations::run(&conn).unwrap();
     conn
 }
