@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 86;
+pub const LATEST_SCHEMA_VERSION: u32 = 87;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1313,6 +1313,42 @@ pub fn run(conn: &Connection) -> Result<()> {
             }
         }
         bump_version(conn, 86)?;
+    }
+
+    // Migration 087: drop FK constraints on worktree_id/ticket_id/repo_id/parent_run_id
+    // from workflow_runs (SQLite cannot drop FKs in-place; table-swap required), add the
+    // last_position_advanced_at column, reinstall indexes, and install AFTER DELETE
+    // cascade triggers on worktrees and agent_runs to replace the dropped FKs.
+    //
+    // Two guards (matches the pattern in migrations 079/080):
+    // - has_full_schema: only swap when the existing workflow_runs DDL still carries the
+    //   `parent_run_id REFERENCES agent_runs` FK marker — i.e. it's the real production
+    //   schema. Stripped-down test fixtures without that FK have nothing to drop and would
+    //   fail the SELECT due to missing intermediate columns.
+    // - already_migrated: idempotent — skip when last_position_advanced_at already exists.
+    if version < 87 {
+        let has_full_schema: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='table' AND name='workflow_runs' \
+                 AND sql LIKE '%parent_run_id%REFERENCES agent_runs%'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        let already_migrated: bool = conn
+            .prepare("SELECT last_position_advanced_at FROM workflow_runs LIMIT 0")
+            .is_ok();
+        if has_full_schema && !already_migrated {
+            with_foreign_keys_off(conn, || {
+                conn.execute_batch(include_str!(
+                    "migrations/087_workflow_runs_conductor_extensions.sql"
+                ))?;
+                Ok(())
+            })?;
+        }
+        bump_version(conn, 87)?;
     }
 
     Ok(())
@@ -2928,5 +2964,294 @@ mod tests {
             version, LATEST_SCHEMA_VERSION as i64,
             "schema_version must still be bumped to LATEST_SCHEMA_VERSION"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Migration 087 tests
+    // -----------------------------------------------------------------------
+
+    /// Builds the v86 pre-migration schema used by the 087 swap-path tests:
+    /// workflow_runs with the four FKs that 087 drops (worktrees, agent_runs,
+    /// tickets, repos), the step/fan_out_items cascade chain, and supporting
+    /// stub tables. Caller must have foreign_keys OFF; the helper sets
+    /// `_conductor_meta.schema_version = 86`.
+    fn build_pre_087_v86_fixture(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE worktrees (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+             CREATE TABLE agent_runs (id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'running');
+             CREATE TABLE workflow_runs (
+                 id            TEXT PRIMARY KEY,
+                 workflow_name TEXT NOT NULL,
+                 worktree_id   TEXT REFERENCES worktrees(id) ON DELETE CASCADE,
+                 parent_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+                 ticket_id     TEXT REFERENCES tickets(id),
+                 repo_id       TEXT REFERENCES repos(id),
+                 parent_workflow_run_id TEXT,
+                 target_label  TEXT,
+                 default_bot_name TEXT,
+                 status        TEXT NOT NULL DEFAULT 'pending'
+                               CHECK (status IN ('pending','running','waiting','completed','failed','cancelled','needs_resume','cancelling')),
+                 dry_run       INTEGER NOT NULL DEFAULT 0,
+                 trigger       TEXT NOT NULL DEFAULT 'manual'
+                               CHECK (trigger IN ('manual','pr','scheduled','hook')),
+                 started_at    TEXT NOT NULL,
+                 ended_at      TEXT,
+                 result_summary TEXT,
+                 definition_snapshot TEXT,
+                 inputs        TEXT,
+                 iteration     INTEGER NOT NULL DEFAULT 0,
+                 blocked_on    TEXT,
+                 total_input_tokens INTEGER,
+                 total_output_tokens INTEGER,
+                 total_cache_read_input_tokens INTEGER,
+                 total_cache_creation_input_tokens INTEGER,
+                 total_turns   INTEGER,
+                 total_cost_usd REAL,
+                 total_duration_ms INTEGER,
+                 model         TEXT,
+                 error         TEXT,
+                 last_heartbeat TEXT,
+                 dismissed     INTEGER NOT NULL DEFAULT 0,
+                 workflow_title TEXT,
+                 owner_token   TEXT,
+                 lease_until   TEXT,
+                 generation    INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE workflow_run_steps (
+                 id              TEXT PRIMARY KEY,
+                 workflow_run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+                 step_name       TEXT NOT NULL,
+                 role            TEXT NOT NULL,
+                 status          TEXT NOT NULL DEFAULT 'pending',
+                 position        INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE workflow_run_step_fan_out_items (
+                 id          TEXT PRIMARY KEY,
+                 step_run_id TEXT NOT NULL REFERENCES workflow_run_steps(id) ON DELETE CASCADE,
+                 item_type   TEXT NOT NULL,
+                 item_id     TEXT NOT NULL,
+                 item_ref    TEXT NOT NULL,
+                 status      TEXT NOT NULL DEFAULT 'pending'
+             );
+             INSERT INTO _conductor_meta VALUES ('schema_version', '86');",
+        )
+        .unwrap();
+    }
+
+    /// Asserts schema_version equals the expected value via _conductor_meta.
+    fn assert_schema_version(conn: &Connection, expected: i64) {
+        let version: i64 = conn
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM _conductor_meta WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, expected, "schema_version must be {expected}");
+    }
+
+    /// Verifies that migration 087 drops the FKs, adds last_position_advanced_at,
+    /// and installs both cascade triggers.
+    #[test]
+    fn test_migration_087_drops_fks_and_installs_triggers() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        build_pre_087_v86_fixture(&conn);
+
+        run(&conn).expect("migration 087 must succeed");
+
+        // FKs on worktree_id and agent_runs must be gone from the DDL.
+        let ddl: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='workflow_runs'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            !ddl.contains("REFERENCES worktrees"),
+            "FK to worktrees must be dropped: {ddl}"
+        );
+        assert!(
+            !ddl.contains("REFERENCES agent_runs"),
+            "FK to agent_runs must be dropped: {ddl}"
+        );
+
+        // last_position_advanced_at column must exist.
+        conn.prepare("SELECT last_position_advanced_at FROM workflow_runs LIMIT 0")
+            .expect("last_position_advanced_at column must exist after migration 087");
+
+        // Both cascade triggers must be installed.
+        let trigger_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='trigger' AND name LIKE 'trg_%cascade_workflow_runs'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(trigger_count, 2, "both cascade triggers must be installed");
+
+        assert_schema_version(&conn, 87);
+    }
+
+    /// Verifies the full cascade chain: deleting a worktrees row fires the AFTER DELETE
+    /// trigger which deletes workflow_runs rows, and the FK CASCADE on workflow_run_steps
+    /// then removes child rows, and the FK CASCADE on workflow_run_step_fan_out_items
+    /// removes grandchild rows.
+    #[test]
+    fn test_migration_087_cascade_chain_via_worktree() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        build_pre_087_v86_fixture(&conn);
+
+        run(&conn).expect("migration 087 must succeed");
+
+        // Insert the cascade chain: worktree → agent_run → workflow_run → step → fan_out_item.
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        conn.execute_batch(
+            "INSERT INTO worktrees VALUES ('wt1', 'my-worktree');
+             INSERT INTO agent_runs VALUES ('ar1', 'running');
+             INSERT INTO workflow_runs (id, workflow_name, worktree_id, parent_run_id, started_at)
+                 VALUES ('wfr1', 'my-flow', 'wt1', 'ar1', '2024-01-01T00:00:00Z');
+             INSERT INTO workflow_run_steps (id, workflow_run_id, step_name, role, position)
+                 VALUES ('wfrs1', 'wfr1', 'step1', 'actor', 0);
+             INSERT INTO workflow_run_step_fan_out_items (id, step_run_id, item_type, item_id, item_ref)
+                 VALUES ('foi1', 'wfrs1', 'ticket', 'tkt1', 'ref1');",
+        )
+        .unwrap();
+
+        // Deleting the worktree must cascade through the full chain.
+        conn.execute_batch("DELETE FROM worktrees WHERE id = 'wt1';")
+            .unwrap();
+
+        let wfr_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM workflow_runs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(wfr_count, 0, "workflow_runs must be deleted via trigger");
+
+        let step_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM workflow_run_steps", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            step_count, 0,
+            "workflow_run_steps must be deleted via FK CASCADE"
+        );
+
+        let foi_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM workflow_run_step_fan_out_items",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(foi_count, 0, "fan_out_items must be deleted via FK CASCADE");
+    }
+
+    /// Verifies that deleting an agent_runs row fires the AFTER DELETE trigger
+    /// and cascades through the full workflow_runs → steps → fan_out_items chain.
+    #[test]
+    fn test_migration_087_cascade_via_agent_run() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        build_pre_087_v86_fixture(&conn);
+
+        run(&conn).expect("migration 087 must succeed");
+
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        conn.execute_batch(
+            "INSERT INTO agent_runs VALUES ('ar1', 'running');
+             INSERT INTO workflow_runs (id, workflow_name, parent_run_id, started_at)
+                 VALUES ('wfr1', 'my-flow', 'ar1', '2024-01-01T00:00:00Z');
+             INSERT INTO workflow_run_steps (id, workflow_run_id, step_name, role, position)
+                 VALUES ('wfrs1', 'wfr1', 'step1', 'actor', 0);
+             INSERT INTO workflow_run_step_fan_out_items (id, step_run_id, item_type, item_id, item_ref)
+                 VALUES ('foi1', 'wfrs1', 'ticket', 'tkt1', 'ref1');",
+        )
+        .unwrap();
+
+        conn.execute_batch("DELETE FROM agent_runs WHERE id = 'ar1';")
+            .unwrap();
+
+        let wfr_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM workflow_runs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            wfr_count, 0,
+            "workflow_runs must be deleted via agent_run trigger"
+        );
+
+        let step_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM workflow_run_steps", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(step_count, 0, "steps must be deleted via FK CASCADE");
+
+        let foi_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM workflow_run_step_fan_out_items",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(foi_count, 0, "fan_out_items must be deleted via FK CASCADE");
+    }
+
+    /// Verifies that migration 087 is idempotent: if last_position_advanced_at already
+    /// exists on workflow_runs (table already swapped), the migration skips the swap
+    /// but still bumps schema_version to 87.
+    #[test]
+    fn test_migration_087_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE worktrees (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+             CREATE TABLE agent_runs (id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'running');
+             CREATE TABLE workflow_runs (
+                 id                        TEXT PRIMARY KEY,
+                 workflow_name             TEXT NOT NULL,
+                 worktree_id               TEXT,
+                 parent_run_id             TEXT NOT NULL,
+                 status                    TEXT NOT NULL DEFAULT 'pending',
+                 dry_run                   INTEGER NOT NULL DEFAULT 0,
+                 trigger                   TEXT NOT NULL DEFAULT 'manual',
+                 started_at                TEXT NOT NULL,
+                 ended_at                  TEXT,
+                 result_summary            TEXT,
+                 definition_snapshot       TEXT,
+                 inputs                    TEXT,
+                 ticket_id                 TEXT,
+                 repo_id                   TEXT,
+                 parent_workflow_run_id    TEXT,
+                 target_label              TEXT,
+                 default_bot_name          TEXT,
+                 iteration                 INTEGER NOT NULL DEFAULT 0,
+                 blocked_on                TEXT,
+                 total_input_tokens        INTEGER,
+                 total_output_tokens       INTEGER,
+                 total_cache_read_input_tokens INTEGER,
+                 total_cache_creation_input_tokens INTEGER,
+                 total_turns               INTEGER,
+                 total_cost_usd            REAL,
+                 total_duration_ms         INTEGER,
+                 model                     TEXT,
+                 error                     TEXT,
+                 last_heartbeat            TEXT,
+                 dismissed                 INTEGER NOT NULL DEFAULT 0,
+                 workflow_title            TEXT,
+                 owner_token               TEXT,
+                 lease_until               TEXT,
+                 generation                INTEGER NOT NULL DEFAULT 0,
+                 last_position_advanced_at TEXT
+             );
+             INSERT INTO _conductor_meta VALUES ('schema_version', '86');",
+        )
+        .unwrap();
+
+        run(&conn).expect("migration 087 must be idempotent when last_position_advanced_at exists");
+
+        assert_schema_version(&conn, 87);
     }
 }
