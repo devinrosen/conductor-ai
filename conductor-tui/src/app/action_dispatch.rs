@@ -415,6 +415,14 @@ impl App {
             // Base branch change
             Action::SetBaseBranch => self.handle_set_base_branch(),
             Action::SelectBaseBranch(index) => self.handle_base_branch_pick(index),
+            Action::BaseBranchesLoaded {
+                repo_slug,
+                wt_slug,
+                items,
+            } => self.handle_base_branches_loaded(repo_slug, wt_slug, items),
+            Action::BaseBranchesFailed { error } => {
+                self.state.modal = Modal::Error { message: error };
+            }
 
             // Theme picker
             Action::ShowThemePicker => self.handle_show_theme_picker(),

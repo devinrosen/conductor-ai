@@ -748,7 +748,8 @@ impl App {
     /// Handle branch selection from the BranchPicker modal.
     /// `index = None` means use the modal's `selected` field (Enter key);
     /// `index = Some(i)` means a direct numeric pick.
-    /// Trigger the base branch change flow: open picker with empty items list.
+    /// Trigger the base branch change flow: enumerate remote branches off-thread,
+    /// then open the picker via Action::BaseBranchesLoaded.
     pub(super) fn handle_set_base_branch(&mut self) {
         // Only valid in WorktreeDetail view
         if self.state.view != crate::state::View::WorktreeDetail {
@@ -772,8 +773,117 @@ impl App {
             .cloned()
             .unwrap_or_default();
 
-        // No feature branches — open picker with empty items (just the default branch sentinel).
-        self.handle_base_branches_loaded(repo_slug, wt.slug, vec![]);
+        let Some(tx) = self.bg_tx.clone() else {
+            self.state.modal = Modal::Error {
+                message: "Cannot load branches: background sender not ready.".into(),
+            };
+            return;
+        };
+
+        // Snapshot open-PR head branches from already-fetched state (no extra gh call needed).
+        let pr_head_branches: Vec<String> = self
+            .state
+            .detail_prs
+            .iter()
+            .map(|pr| pr.head_ref_name.clone())
+            .collect();
+
+        let wt_branch = wt.branch.clone();
+        let wt_slug = wt.slug.clone();
+
+        self.state.modal = Modal::Progress {
+            message: "Loading branches…".into(),
+        };
+
+        std::thread::spawn(move || {
+            use crate::action::Action;
+            use crate::state::BranchPickerItem;
+            use conductor_core::config::{db_path, load_config};
+            use conductor_core::db::open_database;
+            use conductor_core::repo::RepoManager;
+
+            let result = (|| {
+                let conn = open_database(&db_path())
+                    .map_err(|e| format!("Failed to open database: {e}"))?;
+                let config =
+                    load_config().map_err(|e| format!("Failed to load config: {e}"))?;
+                let repo = RepoManager::new(&conn, &config)
+                    .get_by_slug(&repo_slug)
+                    .map_err(|e| format!("Failed to get repo '{repo_slug}': {e}"))?;
+                let local_path = std::path::PathBuf::from(&repo.local_path);
+                let default_branch = repo.default_branch.clone();
+
+                let all_branches =
+                    conductor_core::worktree::list_remote_branches(&local_path)
+                        .map_err(|e| format!("Failed to list remote branches: {e}"))?;
+
+                // Drop the default branch (shown as sentinel) and the worktree's
+                // own branch (selecting self as base is nonsensical and would fail
+                // the ancestry check in set_base_branch).
+                let filtered: Vec<String> = all_branches
+                    .into_iter()
+                    .filter(|b| b != &default_branch && b != &wt_branch)
+                    .collect();
+
+                // Preferred candidate set: release/* + open-PR heads.
+                let pr_set: std::collections::HashSet<&str> =
+                    pr_head_branches.iter().map(|s| s.as_str()).collect();
+                let has_release = filtered.iter().any(|b| b.starts_with("release/"));
+                let has_pr = filtered.iter().any(|b| pr_set.contains(b.as_str()));
+
+                let mut selected: Vec<String> = if !has_release && !has_pr {
+                    // Fallback: show everything so the picker is never empty.
+                    filtered
+                } else {
+                    let mut out: Vec<String> = filtered
+                        .iter()
+                        .filter(|b| b.starts_with("release/") || pr_set.contains(b.as_str()))
+                        .cloned()
+                        .collect();
+                    out.sort();
+                    out.dedup();
+                    out
+                };
+
+                // Sort: release/* first, then alphabetical within each group.
+                selected.sort_by(|a, b| {
+                    let a_rel = a.starts_with("release/");
+                    let b_rel = b.starts_with("release/");
+                    match (a_rel, b_rel) {
+                        (true, false) => std::cmp::Ordering::Less,
+                        (false, true) => std::cmp::Ordering::Greater,
+                        _ => a.cmp(b),
+                    }
+                });
+
+                let items = selected
+                    .into_iter()
+                    .map(|branch| BranchPickerItem {
+                        branch: Some(branch),
+                        worktree_count: 0,
+                        ticket_count: 0,
+                        base_branch: None,
+                        stale_days: None,
+                        inferred_from: None,
+                    })
+                    .collect();
+
+                Ok::<Vec<BranchPickerItem>, String>(items)
+            })();
+
+            match result {
+                Ok(items) => {
+                    let _ = tx.send(Action::BaseBranchesLoaded {
+                        repo_slug,
+                        wt_slug,
+                        items,
+                    });
+                }
+                Err(error) => {
+                    let _ = tx.send(Action::BaseBranchesFailed { error });
+                }
+            }
+        });
     }
 
     /// Handle the result of loading branches for base branch change.

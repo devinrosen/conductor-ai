@@ -5,7 +5,7 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-pub use git_helpers::MainHealthStatus;
+pub use git_helpers::{list_remote_branches, MainHealthStatus};
 pub use manager::{
     get_ticket_id_by_branch, label_to_branch_prefix, SetBaseBranchOptions, WorktreeAdoptOptions,
     WorktreeCreateOptions, WorktreeManager,

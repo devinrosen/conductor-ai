@@ -192,6 +192,42 @@ pub(super) fn branch_exists(repo_path: &str, branch: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Enumerate remote branches from `refs/remotes/origin/`.
+///
+/// Returns branch names with the `origin/` prefix stripped, excluding `HEAD`.
+pub fn list_remote_branches(repo_path: &Path) -> Result<Vec<String>> {
+    let output = git_in(repo_path)
+        .args([
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/remotes/origin/",
+        ])
+        .output()
+        .map_err(|e| {
+            ConductorError::Git(SubprocessFailure::from_message(
+                "git for-each-ref",
+                e.to_string(),
+            ))
+        })?;
+    if !output.status.success() {
+        return Err(ConductorError::Git(SubprocessFailure::from_message(
+            "git for-each-ref",
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        )));
+    }
+    let branches = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let name = line.trim().strip_prefix("origin/")?;
+            if name == "HEAD" || name.is_empty() {
+                return None;
+            }
+            Some(name.to_string())
+        })
+        .collect();
+    Ok(branches)
+}
+
 /// Detect the default branch from the remote's HEAD ref.
 pub(super) fn detect_remote_head(repo_path: &str) -> Option<String> {
     let output = git_in(repo_path)
