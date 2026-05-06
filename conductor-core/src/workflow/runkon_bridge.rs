@@ -86,7 +86,9 @@ impl RkActionExecutorAdapter {
         db_path: std::path::PathBuf,
     ) -> Self {
         let api_executor: Box<dyn crate::workflow::action_executor::ActionExecutor> = Box::new(
-            crate::workflow::api_call_executor::ApiCallExecutor::new(config.clone()),
+            crate::workflow::api_call_executor::ApiCallExecutor::new(
+                config.anthropic_api_key().unwrap_or_default(),
+            ),
         );
         Self {
             inner: crate::workflow::claude_agent_executor::ClaudeAgentExecutor::new(

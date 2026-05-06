@@ -60,36 +60,23 @@ pub(super) fn load_agent_and_build_prompt(
     params: &ActionParams,
 ) -> crate::error::Result<(crate::agent_config::AgentDef, String)> {
     let working_dir_str = ectx.working_dir.to_string_lossy();
-    let agent_def = crate::agent_config::load_agent(
+    let schema = params
+        .extensions
+        .get::<crate::schema_config::OutputSchema>();
+
+    runkon_flow_executors::agent_loader::load_agent_and_build_prompt(
         &working_dir_str,
         &ectx.repo_path,
-        &crate::agent_config::AgentSpec::Name(params.name.clone()),
-        Some(&ectx.workflow_name),
         &ectx.plugin_dirs,
-    )?;
-
-    // The runkon-flow engine passes snippet refs as names (from the DSL `with` field).
-    // Resolve them to actual file contents before building the prompt.
-    let mut resolved_params = params.clone();
-    if !params.snippets.is_empty() {
-        let snippet_text = crate::prompt_config::load_and_concat_snippets(
-            &working_dir_str,
-            &ectx.repo_path,
-            &params.snippets,
-            Some(&ectx.workflow_name),
-        )?;
-        resolved_params.snippets = if snippet_text.is_empty() {
-            Vec::new()
-        } else {
-            vec![snippet_text]
-        };
-    }
-
-    let prompt = crate::workflow::prompt_builder::build_agent_prompt_from_params(
-        &agent_def,
-        &resolved_params,
-    );
-    Ok((agent_def, prompt))
+        &ectx.workflow_name,
+        &params.name,
+        &params.inputs,
+        &params.snippets,
+        params.retry_error.as_deref(),
+        params.dry_run,
+        schema.as_deref(),
+    )
+    .map_err(crate::error::ConductorError::Workflow)
 }
 
 #[cfg(test)]
