@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 description = "Portable executor implementations for runkon-flow — event sinks, env providers, and step utilities without conductor dependencies"
 
+[features]
+test-utils = ["runkon-flow/test-utils"]
+
 [dependencies]
 runkon-flow = { path = "../runkon-flow" }
 runkon-runtimes = { path = "../runkon-runtimes" }
@@ -18,3 +21,7 @@ tracing = "0.1"
 [dev-dependencies]
 runkon-flow = { path = "../runkon-flow", features = ["test-utils"] }
 tempfile = "3"
+
+[[example]]
+name = "standalone_flow"
+required-features = ["test-utils"]

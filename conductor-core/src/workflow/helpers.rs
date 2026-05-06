@@ -1,5 +1,3 @@
-use super::action_executor::{ActionParams, ExecutionContext};
-
 /// Parse a gate timeout string (e.g. `"1h"`, `"30m"`) into seconds.
 ///
 /// Wraps `runkon_flow::dsl::parse_duration_str` so callers outside the bridge
@@ -53,34 +51,6 @@ pub fn parse_gate_options(json: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-pub(super) fn load_agent_and_build_prompt(
-    ectx: &ExecutionContext,
-    params: &ActionParams,
-) -> crate::error::Result<(crate::agent_config::AgentDef, String)> {
-    let working_dir_str = ectx.working_dir.to_string_lossy();
-    let schema = params
-        .extensions
-        .get::<crate::schema_config::OutputSchema>();
-
-    let prompt_params = runkon_flow_executors::agent_loader::BuildPromptParams {
-        inputs: &params.inputs,
-        snippet_refs: &params.snippets,
-        retry_error: params.retry_error.as_deref(),
-        dry_run: params.dry_run,
-        schema: schema.as_deref(),
-    };
-
-    runkon_flow_executors::agent_loader::load_agent_and_build_prompt(
-        &working_dir_str,
-        &ectx.repo_path,
-        &ectx.plugin_dirs,
-        &ectx.workflow_name,
-        &params.name,
-        &prompt_params,
-    )
-    .map_err(crate::error::ConductorError::Workflow)
 }
 
 #[cfg(test)]
