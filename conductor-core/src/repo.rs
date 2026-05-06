@@ -262,7 +262,8 @@ mod tests {
     use rusqlite::Connection;
 
     fn setup_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
+        runkon_flow::migrations::run(&mut conn).unwrap();
         crate::db::migrations::run(&conn).unwrap();
         conn
     }

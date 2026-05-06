@@ -924,7 +924,11 @@ mod tests {
         let worktree_dir = TempDir::new().unwrap();
         check_output(
             Command::new("git")
-                .args(["clone", bare_dir.path().to_str().unwrap(), worktree_dir.path().to_str().unwrap()])
+                .args([
+                    "clone",
+                    bare_dir.path().to_str().unwrap(),
+                    worktree_dir.path().to_str().unwrap(),
+                ])
                 .current_dir(repo_path),
         )
         .unwrap();
@@ -979,7 +983,11 @@ mod tests {
 
         // Now test list_remote_branches on the worktree
         let result = list_remote_branches(worktree_dir.path());
-        assert!(result.is_ok(), "list_remote_branches should succeed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "list_remote_branches should succeed: {:?}",
+            result
+        );
         let branches = result.unwrap();
         assert!(branches.contains(&"main".to_string()));
         assert!(branches.contains(&"release/0.16.0".to_string()));

@@ -69,6 +69,9 @@ pub enum ConductorError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
+    #[error("migration error: {0}")]
+    Migration(String),
+
     #[error("ticket sync error: {0}")]
     TicketSync(String),
 
@@ -177,6 +180,7 @@ impl ConductorError {
         match self {
             Self::Database(_) => 10,
             Self::Io(_) => 11,
+            Self::Migration(_) => 12,
             Self::RepoNotFound { .. } => 20,
             Self::RepoAlreadyExists { .. } => 21,
             Self::WorktreeNotFound { .. } => 22,
@@ -223,6 +227,7 @@ mod tests {
         vec![
             ConductorError::Database(rusqlite::Error::InvalidQuery),
             ConductorError::Io(std::io::Error::other("io")),
+            ConductorError::Migration("migration".into()),
             ConductorError::RepoNotFound { slug: "r".into() },
             ConductorError::RepoAlreadyExists { slug: "r".into() },
             ConductorError::WorktreeNotFound { slug: "w".into() },

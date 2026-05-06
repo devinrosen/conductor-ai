@@ -1935,8 +1935,9 @@ mod tests {
     use rusqlite::Connection;
 
     fn setup_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        runkon_flow::migrations::run(&mut conn).unwrap();
         migrations::run(&conn).unwrap();
         conn
     }
