@@ -4,14 +4,14 @@
 //! Builds on top of the existing `AgentManager` and orchestrator infrastructure,
 //! adding workflow-level tracking in `workflow_runs` / `workflow_run_steps`.
 
-pub(crate) mod action_executor;
-pub(crate) mod api_call_executor;
+pub mod action_executor;
+pub mod api_call_executor;
 mod batch_validate;
 pub mod channel_event_sink;
 pub(crate) mod engine_keys;
 pub use channel_event_sink::ChannelEventSink;
 pub use runkon_flow::events::EventSink;
-pub(crate) mod claude_agent_executor;
+pub mod claude_agent_executor;
 pub(crate) mod constants;
 pub(crate) mod coordinator;
 pub(crate) mod engine_error;

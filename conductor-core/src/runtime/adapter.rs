@@ -126,6 +126,31 @@ impl EventSink for SqliteHostAdapter {
     }
 }
 
+/// Thin `RuntimeResolver` adapter that wraps `runkon_runtimes::runtime::resolve_runtime`.
+///
+/// Bakes in `permission_mode`, `runtimes`, and `RuntimeOptions` (including per-step
+/// `max_turns`) at construction time, so the one-argument `resolve(&name)` call stays
+/// clean without needing to thread `Config` into `runkon-flow-executors`.
+pub struct ConductorRuntimeResolver {
+    pub permission_mode: runkon_runtimes::PermissionMode,
+    pub runtimes: std::collections::HashMap<String, runkon_runtimes::RuntimeConfig>,
+    pub options: runkon_runtimes::RuntimeOptions,
+}
+
+impl runkon_runtimes::RuntimeResolver for ConductorRuntimeResolver {
+    fn resolve(
+        &self,
+        name: &str,
+    ) -> runkon_runtimes::Result<Box<dyn runkon_runtimes::AgentRuntime>> {
+        runkon_runtimes::runtime::resolve_runtime(
+            name,
+            self.permission_mode.clone(),
+            &self.runtimes,
+            &self.options,
+        )
+    }
+}
+
 fn event_label(event: &RuntimeEvent) -> &'static str {
     match event {
         RuntimeEvent::Init { .. } => "Init",

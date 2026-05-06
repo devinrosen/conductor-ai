@@ -11,7 +11,6 @@ use std::sync::{Arc, Mutex};
 use runkon_flow::engine_error::EngineError;
 
 use crate::error::ConductorError;
-use crate::workflow::action_executor::ActionExecutor;
 use crate::workflow::item_provider::ItemProvider;
 
 /// Convert `ConductorError` to `EngineError`, preserving the cancellation
@@ -30,28 +29,7 @@ impl From<ConductorError> for EngineError {
 }
 
 // ---------------------------------------------------------------------------
-// 2. ActionOutput conversion helper (conductor-core → runkon-flow)
-// ---------------------------------------------------------------------------
-
-/// Convert a conductor-core `ActionOutput` into a `runkon_flow` `ActionOutput`.
-///
-/// The `child_run_id` field exists only in the runkon-flow type; it is set to
-/// `None` because the conductor-core executor does not produce it directly.
-pub(super) fn core_action_output_to_rk(
-    core: crate::workflow::action_executor::ActionOutput,
-) -> runkon_flow::traits::action_executor::ActionOutput {
-    runkon_flow::traits::action_executor::ActionOutput {
-        markers: core.markers,
-        context: core.context,
-        result_text: core.result_text,
-        structured_output: core.structured_output,
-        metadata: core.metadata,
-        child_run_id: None,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 3. RkActionExecutorAdapter
+// 2. RkActionExecutorAdapter
 // ---------------------------------------------------------------------------
 
 /// Wraps conductor-core's `ClaudeAgentExecutor` behind the runkon-flow
@@ -72,9 +50,9 @@ fn wrap_child_workflow_err(e: ConductorError, ctx: String) -> EngineError {
 
 ///
 /// The runkon-flow `ExecutionContext` does not carry `db_path`, so we store it
-/// in the adapter and inject it when constructing the core `ExecutionContext`.
+/// in the adapter and inject it when constructing the portable `ClaudeAgentContext`.
 pub(super) struct RkActionExecutorAdapter {
-    inner: crate::workflow::claude_agent_executor::ClaudeAgentExecutor,
+    config: crate::config::Config,
     conn: Arc<Mutex<rusqlite::Connection>>,
     db_path: std::path::PathBuf,
 }
@@ -85,18 +63,7 @@ impl RkActionExecutorAdapter {
         conn: Arc<Mutex<rusqlite::Connection>>,
         db_path: std::path::PathBuf,
     ) -> Self {
-        let api_executor: Box<dyn crate::workflow::action_executor::ActionExecutor> =
-            Box::new(crate::workflow::api_call_executor::ApiCallExecutor::new(
-                config.anthropic_api_key().unwrap_or_default(),
-            ));
-        Self {
-            inner: crate::workflow::claude_agent_executor::ClaudeAgentExecutor::new(
-                config,
-                Some(api_executor),
-            ),
-            conn,
-            db_path,
-        }
+        Self { config, conn, db_path }
     }
 }
 
@@ -154,47 +121,72 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             child_run.id
         };
 
-        // Assemble conductor-core ExecutionContext from the three-input split:
-        // ctx (RunContext), info (StepInfo), params (ActionParams), plus db_path
-        // from the adapter. run_id is the freshly-created agent_run ID.
-        let core_ectx = crate::workflow::action_executor::ExecutionContext {
+        // Build per-step RuntimeOptions — max_turns is step-level so the resolver is fresh per call.
+        let options = runkon_runtimes::RuntimeOptions {
+            binary_path: crate::agent_runtime::resolve_conductor_bin().into(),
+            log_path_for_run: std::sync::Arc::new(|run_id: &str| {
+                crate::config::agent_log_path(run_id)
+                    .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")))
+            }),
+            workspace_root: self.config.general.workspace_root.clone(),
+            argv_builder: crate::agent_runtime::conductor_argv_builder(),
+            stall_threshold: Some(crate::agent_runtime::DEFAULT_STALL_THRESHOLD),
+            max_turns: Some(
+                params
+                    .max_turns
+                    .unwrap_or(crate::agent_runtime::DEFAULT_MAX_TURNS),
+            ),
+        };
+        let resolver = std::sync::Arc::new(crate::runtime::adapter::ConductorRuntimeResolver {
+            permission_mode: self
+                .config
+                .general
+                .agent_permission_mode
+                .to_runtime_permission_mode(),
+            runtimes: self.config.runtimes.clone(),
+            options,
+        });
+
+        let host_adapter = std::sync::Arc::new(
+            crate::runtime::adapter::SqliteHostAdapter::new(self.db_path.clone())
+                .map_err(|e| EngineError::Workflow(e.to_string()))?,
+        );
+
+        let agent_ctx = runkon_flow_executors::claude_agent::ClaudeAgentContext {
             run_id: child_run_id.clone(),
             working_dir: ctx.working_dir().to_path_buf(),
             repo_path: ctx
                 .get(crate::workflow::engine_keys::REPO_PATH)
                 .unwrap_or_default(),
-            db_path: self.db_path.clone(),
             step_timeout: info.step_timeout,
             shutdown: ctx.shutdown().cloned(),
             model: params.model.clone(),
             bot_name: params.bot_name.clone(),
             plugin_dirs: params.plugin_dirs.clone(),
             workflow_name: ctx.workflow_name().to_string(),
-            worktree_id: ctx.get(crate::workflow::engine_keys::WORKTREE_ID),
-            parent_run_id: ctx.parent_run_id().unwrap_or("").to_string(),
-            step_id: info.step_id.clone(),
             max_turns: params.max_turns,
+            tracker: host_adapter.clone() as std::sync::Arc<dyn runkon_runtimes::RunTracker>,
+            event_sink: host_adapter as std::sync::Arc<dyn runkon_runtimes::RunEventSink>,
         };
-
-        // Convert runkon-flow ActionParams → conductor-core ActionParams.
-        let core_params = crate::workflow::action_executor::ActionParams {
-            name: params.name.clone(),
-            inputs: (*params.inputs).clone(),
-            retries_remaining: params.retries_remaining,
-            retry_error: params.retry_error.clone(),
-            snippets: params.snippets.clone(),
+        let schema_arc = params
+            .extensions
+            .get::<crate::schema_config::OutputSchema>();
+        let agent_params = runkon_flow_executors::claude_agent::ClaudeAgentParams {
+            name: &params.name,
+            inputs: &*params.inputs,
+            snippet_refs: &params.snippets,
             dry_run: params.dry_run,
-            gate_feedback: params.gate_feedback.clone(),
-            extensions: params.extensions.clone(),
+            retry_error: params.retry_error.as_deref(),
+            schema: schema_arc.as_deref(),
         };
 
-        // Dispatch through the inner executor, then surface child_run_id so the
-        // engine writes the step↔run link via update_step() post-execution.
-        let mut output = self
-            .inner
-            .execute(&core_ectx, &core_params)
-            .map(core_action_output_to_rk)
-            .map_err(EngineError::from)?;
+        let inner = runkon_flow_executors::claude_agent::ClaudeAgentExecutor::new(
+            resolver,
+            self.config.anthropic_api_key(),
+        );
+        let mut output = inner
+            .execute(&agent_ctx, &agent_params)
+            .map_err(EngineError::Workflow)?;
         output.child_run_id = Some(child_run_id);
         Ok(output)
     }
