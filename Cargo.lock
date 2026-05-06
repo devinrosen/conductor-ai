@@ -654,6 +654,7 @@ dependencies = [
  "notify",
  "regex-lite",
  "runkon-flow",
+ "runkon-flow-executors",
  "runkon-runtimes",
  "rusqlite",
  "rust-embed",
@@ -4361,6 +4362,14 @@ dependencies = [
  "ulid",
  "utoipa",
  "wait-timeout",
+]
+
+[[package]]
+name = "runkon-flow-executors"
+version = "0.1.0-alpha"
+dependencies = [
+ "runkon-flow",
+ "utoipa",
 ]
 
 [[package]]
