@@ -1,5 +1,3 @@
-use super::action_executor::{ActionParams, ExecutionContext};
-
 /// Parse a gate timeout string (e.g. `"1h"`, `"30m"`) into seconds.
 ///
 /// Wraps `runkon_flow::dsl::parse_duration_str` so callers outside the bridge
@@ -53,43 +51,6 @@ pub fn parse_gate_options(json: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-pub(super) fn load_agent_and_build_prompt(
-    ectx: &ExecutionContext,
-    params: &ActionParams,
-) -> crate::error::Result<(crate::agent_config::AgentDef, String)> {
-    let working_dir_str = ectx.working_dir.to_string_lossy();
-    let agent_def = crate::agent_config::load_agent(
-        &working_dir_str,
-        &ectx.repo_path,
-        &crate::agent_config::AgentSpec::Name(params.name.clone()),
-        Some(&ectx.workflow_name),
-        &ectx.plugin_dirs,
-    )?;
-
-    // The runkon-flow engine passes snippet refs as names (from the DSL `with` field).
-    // Resolve them to actual file contents before building the prompt.
-    let mut resolved_params = params.clone();
-    if !params.snippets.is_empty() {
-        let snippet_text = crate::prompt_config::load_and_concat_snippets(
-            &working_dir_str,
-            &ectx.repo_path,
-            &params.snippets,
-            Some(&ectx.workflow_name),
-        )?;
-        resolved_params.snippets = if snippet_text.is_empty() {
-            Vec::new()
-        } else {
-            vec![snippet_text]
-        };
-    }
-
-    let prompt = crate::workflow::prompt_builder::build_agent_prompt_from_params(
-        &agent_def,
-        &resolved_params,
-    );
-    Ok((agent_def, prompt))
 }
 
 #[cfg(test)]

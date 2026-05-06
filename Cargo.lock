@@ -624,7 +624,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-cli"
-version = "0.14.2"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -645,7 +645,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-core"
-version = "0.14.2"
+version = "0.15.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -654,6 +654,7 @@ dependencies = [
  "notify",
  "regex-lite",
  "runkon-flow",
+ "runkon-flow-executors",
  "runkon-runtimes",
  "rusqlite",
  "rust-embed",
@@ -672,7 +673,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-desktop"
-version = "0.14.2"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -690,7 +691,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-tui"
-version = "0.14.2"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -713,7 +714,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-web"
-version = "0.14.2"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4361,6 +4362,20 @@ dependencies = [
  "ulid",
  "utoipa",
  "wait-timeout",
+]
+
+[[package]]
+name = "runkon-flow-executors"
+version = "0.1.0-alpha"
+dependencies = [
+ "runkon-flow",
+ "runkon-runtimes",
+ "serde",
+ "serde_json",
+ "serde_yml",
+ "tempfile",
+ "tracing",
+ "ureq",
 ]
 
 [[package]]

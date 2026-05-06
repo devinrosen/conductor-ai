@@ -1,15 +1,16 @@
-use crate::config::Config;
-use crate::error::{ConductorError, Result};
-use crate::schema_config::{schema_to_tool_json, OutputSchema};
-use crate::workflow::action_executor::{
-    ActionExecutor, ActionOutput, ActionParams, ExecutionContext,
-};
+use std::collections::HashMap;
+
+use runkon_flow::constants::metadata_keys;
+use runkon_flow::output_schema::OutputSchema;
+
+use crate::output::{derive_output_from_value, schema_to_tool_json};
 
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_API_VERSION: &str = "2023-06-01";
 const MAX_TOKENS: u64 = 8192;
 
-const DEFAULT_API_MODEL: &str = "claude-sonnet-4-6";
+/// Default model used when the step does not specify a model override.
+pub const DEFAULT_API_MODEL: &str = "claude-sonnet-4-6";
 
 #[derive(Debug)]
 struct ApiCallResult {
@@ -26,7 +27,7 @@ fn execute_via_api(
     timeout: std::time::Duration,
     api_key: &str,
     url: &str,
-) -> std::result::Result<ApiCallResult, String> {
+) -> Result<ApiCallResult, String> {
     let tool_json = schema_to_tool_json(schema);
     let body = serde_json::json!({
         "model": model,
@@ -83,9 +84,7 @@ fn execute_via_api(
     })
 }
 
-fn extract_tool_use_input(
-    response_value: &serde_json::Value,
-) -> std::result::Result<serde_json::Value, String> {
+fn extract_tool_use_input(response_value: &serde_json::Value) -> Result<serde_json::Value, String> {
     let content = response_value
         .get("content")
         .and_then(|c| c.as_array())
@@ -100,57 +99,58 @@ fn extract_tool_use_input(
         .cloned()
 }
 
-/// Wraps `execute_via_api` behind the `ActionExecutor` trait for schema-constrained steps.
+/// Portable output from a successful API call execution.
+#[derive(Debug)]
+pub struct ApiCallExecutorOutput {
+    /// The JSON string of the tool_use input (same value as `structured_output`).
+    pub result_text: String,
+    /// The JSON string of the structured output.
+    pub structured_output: String,
+    /// Derived markers from the structured output.
+    pub markers: Vec<String>,
+    /// Context string from the structured output.
+    pub context: String,
+    /// Execution metadata (token counts, turn count).
+    pub metadata: HashMap<String, String>,
+}
+
+/// Stateless executor that calls the Anthropic Messages API with `tool_use` enforcement.
 ///
-/// Routes to the Anthropic Messages API using `tool_use` enforcement, which makes
-/// schema field mismatches impossible at the API level. Stateless: no subprocess
-/// lifecycle, no pre-warmed pool. Hot-reloads the agent definition at execute time.
+/// Takes an API key directly rather than a `Config` struct, keeping this type
+/// free of `conductor-core` dependencies.
 pub struct ApiCallExecutor {
-    config: Config,
+    api_key: String,
 }
 
 impl ApiCallExecutor {
-    pub fn new(config: Config) -> Self {
-        Self { config }
-    }
-}
-
-impl ActionExecutor for ApiCallExecutor {
-    fn name(&self) -> &str {
-        "__api_call__"
+    pub fn new(api_key: String) -> Self {
+        Self { api_key }
     }
 
-    fn execute(&self, ectx: &ExecutionContext, params: &ActionParams) -> Result<ActionOutput> {
-        let schema = params
-            .extensions
-            .get::<OutputSchema>()
-            .ok_or_else(|| ConductorError::Workflow("ApiCallExecutor requires a schema".into()))?;
+    /// Execute the API call with the given prompt and schema.
+    pub fn execute(
+        &self,
+        prompt: &str,
+        schema: &OutputSchema,
+        model: &str,
+        timeout: std::time::Duration,
+    ) -> Result<ApiCallExecutorOutput, String> {
+        self.execute_at(prompt, schema, model, timeout, ANTHROPIC_API_URL)
+    }
 
-        let api_key = self.config.anthropic_api_key().ok_or_else(|| {
-            ConductorError::Workflow("ApiCallExecutor requires ANTHROPIC_API_KEY".into())
-        })?;
+    fn execute_at(
+        &self,
+        prompt: &str,
+        schema: &OutputSchema,
+        model: &str,
+        timeout: std::time::Duration,
+        url: &str,
+    ) -> Result<ApiCallExecutorOutput, String> {
+        let result = execute_via_api(prompt, schema, model, timeout, &self.api_key, url)?;
 
-        let (_agent_def, prompt) = super::helpers::load_agent_and_build_prompt(ectx, params)?;
+        let structured = derive_output_from_value(result.json, schema);
 
-        let model = ectx.model.as_deref().unwrap_or(DEFAULT_API_MODEL);
-
-        let result = execute_via_api(
-            &prompt,
-            schema.as_ref(),
-            model,
-            ectx.step_timeout,
-            &api_key,
-            ANTHROPIC_API_URL,
-        )
-        .map_err(|e| {
-            ConductorError::Workflow(format!("API call for '{}' failed: {e}", params.name))
-        })?;
-
-        let structured =
-            crate::schema_config::derive_output_from_value(result.json, schema.as_ref());
-
-        use runkon_flow::constants::metadata_keys;
-        let metadata = std::collections::HashMap::from([
+        let metadata = HashMap::from([
             (metadata_keys::NUM_TURNS.to_string(), "1".to_string()),
             (
                 metadata_keys::INPUT_TOKENS.to_string(),
@@ -161,21 +161,39 @@ impl ActionExecutor for ApiCallExecutor {
                 result.output_tokens.to_string(),
             ),
         ]);
-        Ok(ActionOutput {
-            result_text: Some(result.json_string),
-            structured_output: Some(structured.json_string),
+
+        Ok(ApiCallExecutorOutput {
+            result_text: result.json_string.clone(),
+            structured_output: structured.json_string,
             markers: structured.markers,
-            context: Some(structured.context),
+            context: structured.context,
             metadata,
         })
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
-    use crate::test_helpers::{make_action_params, make_ectx, ENV_MUTEX};
+    use runkon_flow::output_schema::{FieldDef, FieldType, OutputSchema};
+
+    fn make_schema() -> OutputSchema {
+        OutputSchema {
+            name: "test".to_string(),
+            fields: vec![FieldDef {
+                name: "ok".to_string(),
+                required: true,
+                field_type: FieldType::Boolean,
+                desc: None,
+                examples: None,
+            }],
+            markers: None,
+        }
+    }
 
     #[test]
     fn test_extract_tool_use_input_success() {
@@ -213,32 +231,101 @@ mod tests {
         assert!(err.contains("missing 'input' field"), "got: {err}");
     }
 
-    #[test]
-    fn missing_schema_returns_error() {
-        let executor = ApiCallExecutor::new(Config::default());
-        let result = executor.execute(&make_ectx(), &make_action_params(None));
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("requires a schema"), "got: {msg}");
+    fn serve_json_response(body: serde_json::Value) -> std::net::SocketAddr {
+        use std::io::{BufRead, Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body_str = body.to_string();
+
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream);
+
+            let mut content_length = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                let lower = line.to_ascii_lowercase();
+                if lower.starts_with("content-length:") {
+                    if let Some(v) = lower.split(':').nth(1) {
+                        content_length = v.trim().parse().unwrap_or(0);
+                    }
+                }
+            }
+            if content_length > 0 {
+                let mut buf = vec![0u8; content_length];
+                let _ = reader.read_exact(&mut buf);
+            }
+
+            let mut stream = reader.into_inner();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
+                body_str.len(),
+                body_str
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        addr
     }
 
     #[test]
-    fn missing_api_key_returns_error() {
-        // _guard (not _) keeps the mutex alive for the full test body to prevent env-var races.
-        let _guard = ENV_MUTEX.lock().unwrap();
-        let prev = std::env::var("ANTHROPIC_API_KEY").ok();
-        unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
+    fn execute_derives_token_metadata_markers_and_context() {
+        let api_response = serde_json::json!({
+            "content": [{
+                "type": "tool_use",
+                "input": {"approved": true, "summary": "all good"}
+            }],
+            "usage": {"input_tokens": 123, "output_tokens": 45}
+        });
+        let addr = serve_json_response(api_response);
 
-        let schema =
-            crate::schema_config::parse_schema_content("fields:\n  ok: boolean\n", "test").unwrap();
-        let executor = ApiCallExecutor::new(Config::default());
-        let result = executor.execute(&make_ectx(), &make_action_params(Some(schema)));
+        let schema = OutputSchema {
+            name: "review".to_string(),
+            fields: vec![
+                FieldDef {
+                    name: "approved".to_string(),
+                    required: true,
+                    field_type: FieldType::Boolean,
+                    desc: None,
+                    examples: None,
+                },
+                FieldDef {
+                    name: "summary".to_string(),
+                    required: true,
+                    field_type: FieldType::String,
+                    desc: None,
+                    examples: None,
+                },
+            ],
+            markers: None,
+        };
 
-        if let Some(key) = prev {
-            unsafe { std::env::set_var("ANTHROPIC_API_KEY", key) };
-        }
+        let executor = ApiCallExecutor::new("test-key".to_string());
+        let output = executor
+            .execute_at(
+                "review this",
+                &schema,
+                "claude-sonnet-4-6",
+                std::time::Duration::from_secs(5),
+                &format!("http://{addr}"),
+            )
+            .unwrap();
 
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("ANTHROPIC_API_KEY"), "got: {msg}");
+        assert_eq!(output.metadata[metadata_keys::INPUT_TOKENS], "123");
+        assert_eq!(output.metadata[metadata_keys::OUTPUT_TOKENS], "45");
+        assert_eq!(output.metadata[metadata_keys::NUM_TURNS], "1");
+        assert_eq!(output.context, "all good");
+        assert!(
+            output.structured_output.contains("approved"),
+            "got: {}",
+            output.structured_output
+        );
     }
 
     #[test]
@@ -253,8 +340,6 @@ mod tests {
             let (stream, _) = listener.accept().unwrap();
             let mut reader = std::io::BufReader::new(stream);
 
-            // Drain request headers and find Content-Length so ureq can finish
-            // sending the request body before we respond — avoids Broken pipe.
             let mut content_length = 0usize;
             loop {
                 let mut line = String::new();
@@ -279,8 +364,7 @@ mod tests {
             stream.write_all(response.as_bytes()).unwrap();
         });
 
-        let schema =
-            crate::schema_config::parse_schema_content("fields:\n  ok: boolean\n", "test").unwrap();
+        let schema = make_schema();
         let url = format!("http://{addr}");
 
         let err_string = execute_via_api(
