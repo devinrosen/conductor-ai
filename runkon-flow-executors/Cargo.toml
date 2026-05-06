@@ -1,0 +1,13 @@
+[package]
+name = "runkon-flow-executors"
+version = "0.1.0-alpha"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Portable executor implementations for runkon-flow — event sinks, env providers, and step utilities without conductor dependencies"
+
+[dependencies]
+runkon-flow = { path = "../runkon-flow" }
+
+[dev-dependencies]
+runkon-flow = { path = "../runkon-flow", features = ["test-utils"] }
