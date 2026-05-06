@@ -335,8 +335,7 @@ mod tests {
         use std::os::unix::ffi::OsStringExt;
 
         // 0xFF is never valid UTF-8, so PathBuf::to_str() returns None.
-        let invalid_path =
-            std::path::PathBuf::from(OsString::from_vec(vec![b'/', 0xFF, 0xFE]));
+        let invalid_path = std::path::PathBuf::from(OsString::from_vec(vec![b'/', 0xFF, 0xFE]));
 
         let resolver = Arc::new(TrackingResolver::new());
         let ctx = ClaudeAgentContext {
@@ -364,7 +363,10 @@ mod tests {
         let executor = ClaudeAgentExecutor::new(resolver, None);
         let result = executor.execute(&ctx, &params);
 
-        assert!(result.is_err(), "expected Err for invalid UTF-8 working_dir");
+        assert!(
+            result.is_err(),
+            "expected Err for invalid UTF-8 working_dir"
+        );
         let err = result.unwrap_err();
         assert!(
             err.contains("contains invalid UTF-8"),
