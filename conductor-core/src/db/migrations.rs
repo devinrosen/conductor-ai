@@ -1320,31 +1320,33 @@ pub fn run(conn: &Connection) -> Result<()> {
     // last_position_advanced_at column, reinstall indexes, and install AFTER DELETE
     // cascade triggers on worktrees and agent_runs to replace the dropped FKs.
     //
-    // Idempotency guard: skip the swap if last_position_advanced_at already exists
-    // (which means the table has already been swapped by this migration).
+    // Two guards (matches the pattern in migrations 079/080):
+    // - has_full_schema: only swap when the existing workflow_runs DDL still carries the
+    //   `parent_run_id REFERENCES agent_runs` FK marker — i.e. it's the real production
+    //   schema. Stripped-down test fixtures without that FK have nothing to drop and would
+    //   fail the SELECT due to missing intermediate columns.
+    // - already_migrated: idempotent — skip when last_position_advanced_at already exists.
     if version < 87 {
-        let has_workflow_runs = table_exists(conn, "workflow_runs")?;
-        if has_workflow_runs {
-            let has_new_col: bool = conn
-                .prepare("SELECT last_position_advanced_at FROM workflow_runs LIMIT 0")
-                .is_ok();
-            // Check that the schema has all columns needed for the migration 087 swap.
-            // Migration 087 expects columns from migrations 020–086. We check a few key columns:
-            // - worktree_id (from 020/021)
-            // - generation (from 084)
-            // If either is missing, the schema isn't ready for this migration yet; skip it.
-            let has_required_cols: bool = conn
-                .prepare("SELECT worktree_id, generation FROM workflow_runs LIMIT 0")
-                .is_ok();
-            // Only run the migration if the new column doesn't exist AND we have the required columns
-            if !has_new_col && has_required_cols {
-                with_foreign_keys_off(conn, || {
-                    conn.execute_batch(include_str!(
-                        "migrations/087_workflow_runs_conductor_extensions.sql"
-                    ))?;
-                    Ok(())
-                })?;
-            }
+        let has_full_schema: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='table' AND name='workflow_runs' \
+                 AND sql LIKE '%parent_run_id%REFERENCES agent_runs%'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        let already_migrated: bool = conn
+            .prepare("SELECT last_position_advanced_at FROM workflow_runs LIMIT 0")
+            .is_ok();
+        if has_full_schema && !already_migrated {
+            with_foreign_keys_off(conn, || {
+                conn.execute_batch(include_str!(
+                    "migrations/087_workflow_runs_conductor_extensions.sql"
+                ))?;
+                Ok(())
+            })?;
         }
         bump_version(conn, 87)?;
     }
@@ -1937,9 +1939,6 @@ mod tests {
         // Minimal pre-058 schema: only the tables migration 058 touches.
         conn.execute_batch(
             "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-             CREATE TABLE worktrees (
-                 id TEXT PRIMARY KEY, name TEXT NOT NULL
-             );
              CREATE TABLE workflow_runs (
                  id TEXT PRIMARY KEY,
                  workflow_name TEXT NOT NULL,

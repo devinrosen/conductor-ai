@@ -77,7 +77,7 @@ INSERT INTO workflow_runs_new (
     model, error, last_heartbeat, dismissed,
     workflow_title, owner_token, lease_until, generation
 ) SELECT
-    id, workflow_name, worktree_id, COALESCE(parent_run_id, ''), status, dry_run, trigger,
+    id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger,
     started_at, ended_at, result_summary, definition_snapshot, inputs,
     ticket_id, repo_id, parent_workflow_run_id, target_label, default_bot_name,
     iteration, blocked_on,
