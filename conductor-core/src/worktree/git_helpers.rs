@@ -192,6 +192,49 @@ pub(super) fn branch_exists(repo_path: &str, branch: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Enumerate remote branches from `refs/remotes/origin/`.
+///
+/// Returns branch names with the `origin/` prefix stripped, excluding `HEAD`.
+pub fn list_remote_branches(repo_path: &Path) -> Result<Vec<String>> {
+    let output = git_in(repo_path)
+        .args([
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/remotes/origin/",
+        ])
+        .output()
+        .map_err(|e| {
+            ConductorError::Git(SubprocessFailure::from_message(
+                "git for-each-ref",
+                e.to_string(),
+            ))
+        })?;
+    if !output.status.success() {
+        return Err(ConductorError::Git(SubprocessFailure::from_message(
+            "git for-each-ref",
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_remote_branch_output(&stdout))
+}
+
+/// Parse the stdout of `git for-each-ref --format=%(refname:short) refs/remotes/origin/`.
+///
+/// Strips the `origin/` prefix and filters out `HEAD` and blank lines.
+fn parse_remote_branch_output(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let name = line.trim().strip_prefix("origin/")?;
+            if name == "HEAD" || name.is_empty() {
+                return None;
+            }
+            Some(name.to_string())
+        })
+        .collect()
+}
+
 /// Detect the default branch from the remote's HEAD ref.
 pub(super) fn detect_remote_head(repo_path: &str) -> Option<String> {
     let output = git_in(repo_path)
@@ -808,5 +851,139 @@ mod tests {
     fn has_installable_deps_invalid_json() {
         // Malformed JSON → treated as "no deps" (install skipped).
         assert!(!has_installable_deps("not json"));
+    }
+
+    // --- list_remote_branches / parse_remote_branch_output ---
+
+    #[test]
+    fn parse_remote_branches_nominal() {
+        let raw = "origin/main\norigin/release/0.16.0\norigin/feat/something\n";
+        let got = parse_remote_branch_output(raw);
+        assert_eq!(got, vec!["main", "release/0.16.0", "feat/something"]);
+    }
+
+    #[test]
+    fn parse_remote_branches_filters_head() {
+        let raw = "origin/HEAD\norigin/main\n";
+        let got = parse_remote_branch_output(raw);
+        assert_eq!(got, vec!["main"]);
+    }
+
+    #[test]
+    fn parse_remote_branches_filters_blank_lines() {
+        let raw = "origin/main\n\norigin/release/0.16.0\n";
+        let got = parse_remote_branch_output(raw);
+        assert_eq!(got, vec!["main", "release/0.16.0"]);
+    }
+
+    #[test]
+    fn parse_remote_branches_empty_stdout() {
+        let got = parse_remote_branch_output("");
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn parse_remote_branches_strips_origin_prefix() {
+        // Lines without the "origin/" prefix are silently dropped (strip_prefix returns None).
+        let raw = "origin/main\nrefs/heads/local\norigin/dev\n";
+        let got = parse_remote_branch_output(raw);
+        assert_eq!(got, vec!["main", "dev"]);
+    }
+
+    #[test]
+    fn list_remote_branches_non_git_dir_returns_err() {
+        // A plain temp directory is not a git repo; git exits non-zero.
+        let dir = TempDir::new().unwrap();
+        let result = list_remote_branches(dir.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn list_remote_branches_nonexistent_dir_returns_err() {
+        // Passing a path that does not exist triggers a spawn failure (current_dir missing).
+        let result = list_remote_branches(Path::new("/nonexistent/conductor/test/path"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn list_remote_branches_happy_path() {
+        // Create a temp git repo with remote branches
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path();
+
+        // Initialize bare remote repo
+        let bare_dir = TempDir::new().unwrap();
+        check_output(
+            Command::new("git")
+                .args(["init", "--bare", bare_dir.path().to_str().unwrap()])
+                .current_dir(repo_path),
+        )
+        .unwrap();
+
+        // Create a temp worktree to simulate a real repo
+        let worktree_dir = TempDir::new().unwrap();
+        check_output(
+            Command::new("git")
+                .args(["clone", bare_dir.path().to_str().unwrap(), worktree_dir.path().to_str().unwrap()])
+                .current_dir(repo_path),
+        )
+        .unwrap();
+
+        // Create branches in the worktree
+        check_output(
+            Command::new("git")
+                .args(["checkout", "-b", "main"])
+                .current_dir(worktree_dir.path()),
+        )
+        .unwrap();
+        // Create a commit
+        std::fs::write(worktree_dir.path().join("README.md"), "test").unwrap();
+        check_output(
+            Command::new("git")
+                .args(["add", "."])
+                .current_dir(worktree_dir.path()),
+        )
+        .unwrap();
+        check_output(
+            Command::new("git")
+                .args(["commit", "-m", "initial"])
+                .current_dir(worktree_dir.path())
+                .env("GIT_AUTHOR_NAME", "Test")
+                .env("GIT_AUTHOR_EMAIL", "test@test.com")
+                .env("GIT_COMMITTER_NAME", "Test")
+                .env("GIT_COMMITTER_EMAIL", "test@test.com"),
+        )
+        .unwrap();
+
+        // Create additional branches
+        check_output(
+            Command::new("git")
+                .args(["checkout", "-b", "release/0.16.0"])
+                .current_dir(worktree_dir.path()),
+        )
+        .unwrap();
+        check_output(
+            Command::new("git")
+                .args(["checkout", "-b", "feat/test"])
+                .current_dir(worktree_dir.path()),
+        )
+        .unwrap();
+
+        // Push all branches to remote
+        check_output(
+            Command::new("git")
+                .args(["push", "-u", "origin", "--all"])
+                .current_dir(worktree_dir.path()),
+        )
+        .unwrap();
+
+        // Now test list_remote_branches on the worktree
+        let result = list_remote_branches(worktree_dir.path());
+        assert!(result.is_ok(), "list_remote_branches should succeed: {:?}", result);
+        let branches = result.unwrap();
+        assert!(branches.contains(&"main".to_string()));
+        assert!(branches.contains(&"release/0.16.0".to_string()));
+        assert!(branches.contains(&"feat/test".to_string()));
+        assert!(!branches.contains(&"HEAD".to_string()));
     }
 }
