@@ -143,10 +143,10 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         // between parent and child runs.
         let standalone_params = self.build_child_standalone_params(core_def, parent_ctx, params);
 
-        let core_result = super::super::coordinator::execute_workflow_standalone(&standalone_params)
-            .map_err(|e| {
-                wrap_child_workflow_err(e, format!("child workflow '{workflow_name}' failed"))
-            })?;
+        let core_result =
+            super::super::coordinator::execute_workflow_standalone(&standalone_params).map_err(
+                |e| wrap_child_workflow_err(e, format!("child workflow '{workflow_name}' failed")),
+            )?;
 
         Ok(core_result)
     }
@@ -159,13 +159,12 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
     ) -> runkon_flow::engine_error::Result<runkon_flow::types::WorkflowResult> {
         let input = self.build_resume_input(workflow_run_id, model, parent_ctx);
 
-        let core_result =
-            super::super::coordinator::resume_workflow(&input).map_err(|e| {
-                wrap_child_workflow_err(
-                    e,
-                    format!("failed to resume child workflow run '{workflow_run_id}'"),
-                )
-            })?;
+        let core_result = super::super::coordinator::resume_workflow(&input).map_err(|e| {
+            wrap_child_workflow_err(
+                e,
+                format!("failed to resume child workflow run '{workflow_run_id}'"),
+            )
+        })?;
 
         Ok(core_result)
     }

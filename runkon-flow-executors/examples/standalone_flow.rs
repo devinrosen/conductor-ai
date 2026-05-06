@@ -60,9 +60,8 @@ fn main() {
     let (tx, _rx) = std::sync::mpsc::channel();
     let sink = ChannelEventSink(tx);
     let _persistence = InMemoryWorkflowPersistence::new();
-    let resolver = InMemoryWorkflowResolver::new(
-        std::iter::empty::<(&str, runkon_flow::dsl::WorkflowDef)>(),
-    );
+    let resolver =
+        InMemoryWorkflowResolver::new(std::iter::empty::<(&str, runkon_flow::dsl::WorkflowDef)>());
 
     let executor = StandaloneExecutor {
         _agent: agent,

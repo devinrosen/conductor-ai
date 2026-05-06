@@ -19,8 +19,7 @@ mod script_env;
 pub(super) use action_executor_adapter::RkActionExecutorAdapter;
 pub(super) use child_workflow_runner::ConductorChildWorkflowRunner;
 pub(super) use item_providers::{
-    RkReposItemProvider, RkTicketsItemProvider, RkWorkflowRunsItemProvider,
-    RkWorktreesItemProvider,
+    RkReposItemProvider, RkTicketsItemProvider, RkWorkflowRunsItemProvider, RkWorktreesItemProvider,
 };
 pub(super) use script_env::ConductorScriptEnvProvider;
 
