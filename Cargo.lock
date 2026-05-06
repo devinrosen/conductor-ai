@@ -4369,6 +4369,12 @@ name = "runkon-flow-executors"
 version = "0.1.0-alpha"
 dependencies = [
  "runkon-flow",
+ "runkon-runtimes",
+ "serde",
+ "serde_json",
+ "serde_yml",
+ "tracing",
+ "ureq",
 ]
 
 [[package]]

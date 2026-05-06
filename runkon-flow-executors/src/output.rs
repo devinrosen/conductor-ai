@@ -95,7 +95,10 @@ pub fn parse_structured_output(
 ///
 /// Used by the direct API path where the Anthropic API has already enforced schema
 /// conformance via `tool_use`.
-pub fn derive_output_from_value(value: serde_json::Value, schema: &OutputSchema) -> StructuredOutput {
+pub fn derive_output_from_value(
+    value: serde_json::Value,
+    schema: &OutputSchema,
+) -> StructuredOutput {
     let markers = derive_markers(&value, schema);
     let context = derive_context(&value, schema);
     let json_string = serde_json::to_string(&value)
@@ -596,7 +599,10 @@ mod tests {
 
     #[test]
     fn test_boolean_field() {
-        let schema = make_schema("approval", vec![make_field("approved", true, FieldType::Boolean)]);
+        let schema = make_schema(
+            "approval",
+            vec![make_field("approved", true, FieldType::Boolean)],
+        );
         let tool = schema_to_tool_json(&schema);
         assert_eq!(tool["input_schema"]["properties"]["approved"]["type"], "boolean");
     }
@@ -680,7 +686,8 @@ mod tests {
     #[test]
     fn interpret_no_schema_uses_flow_output_parser() {
         let text = "<<<FLOW_OUTPUT>>>\n{\"markers\":[\"done\"],\"context\":\"ok\"}\n<<<END_FLOW_OUTPUT>>>";
-        let (markers, context, structured) = interpret_agent_output(Some(text), None, true).unwrap();
+        let (markers, context, structured) =
+            interpret_agent_output(Some(text), None, true).unwrap();
         assert_eq!(markers, vec!["done"]);
         assert_eq!(context, "ok");
         assert!(structured.is_none());

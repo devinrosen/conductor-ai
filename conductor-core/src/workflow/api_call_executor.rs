@@ -49,10 +49,7 @@ impl ActionExecutor for ApiCallExecutor {
         let output = rk_executor
             .execute(&prompt, schema.as_ref(), model, ectx.step_timeout)
             .map_err(|e| {
-                ConductorError::Workflow(format!(
-                    "API call for '{}' failed: {e}",
-                    params.name
-                ))
+                ConductorError::Workflow(format!("API call for '{}' failed: {e}", params.name))
             })?;
 
         Ok(ActionOutput {

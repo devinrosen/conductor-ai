@@ -64,17 +64,21 @@ pub(super) fn load_agent_and_build_prompt(
         .extensions
         .get::<crate::schema_config::OutputSchema>();
 
+    let prompt_params = runkon_flow_executors::agent_loader::BuildPromptParams {
+        inputs: &params.inputs,
+        snippet_refs: &params.snippets,
+        retry_error: params.retry_error.as_deref(),
+        dry_run: params.dry_run,
+        schema: schema.as_deref(),
+    };
+
     runkon_flow_executors::agent_loader::load_agent_and_build_prompt(
         &working_dir_str,
         &ectx.repo_path,
         &ectx.plugin_dirs,
         &ectx.workflow_name,
         &params.name,
-        &params.inputs,
-        &params.snippets,
-        params.retry_error.as_deref(),
-        params.dry_run,
-        schema.as_deref(),
+        &prompt_params,
     )
     .map_err(crate::error::ConductorError::Workflow)
 }

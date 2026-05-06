@@ -105,9 +105,9 @@ fn validate_path_within_base(path: &Path, base: &str) -> Result<PathBuf, String>
     let canonical = path
         .canonicalize()
         .map_err(|_| format!("Agent file not found: '{}'", path.display()))?;
-    let canonical_base = PathBuf::from(base).canonicalize().map_err(|e| {
-        format!("Failed to canonicalize base '{base}': {e}")
-    })?;
+    let canonical_base = PathBuf::from(base)
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize base '{base}': {e}"))?;
     if !canonical.starts_with(&canonical_base) {
         return Err(format!(
             "Agent path '{}' escapes the base directory — path traversal is not allowed",
@@ -268,9 +268,7 @@ fn load_snippet_by_path(repo_path: &str, rel_path: &str) -> Result<String, Strin
 
     let joined = PathBuf::from(repo_path).join(rel_path);
     let Ok(canonical) = joined.canonicalize() else {
-        return Err(format!(
-            "Prompt snippet file not found: '{rel_path}'"
-        ));
+        return Err(format!("Prompt snippet file not found: '{rel_path}'"));
     };
 
     let canonical_repo = PathBuf::from(repo_path)
@@ -590,6 +588,23 @@ fn build_prompt_core(
 // Public entry point
 // ---------------------------------------------------------------------------
 
+/// Prompt-building parameters for [`load_agent_and_build_prompt`].
+///
+/// Groups the prompt-building inputs to keep `load_agent_and_build_prompt`'s
+/// parameter count under clippy's limit.
+pub struct BuildPromptParams<'a> {
+    /// Resolved template variable map.
+    pub inputs: &'a HashMap<String, String>,
+    /// Raw snippet names/paths from the DSL `with` field (unresolved).
+    pub snippet_refs: &'a [String],
+    /// Error from the previous failed attempt, if any.
+    pub retry_error: Option<&'a str>,
+    /// If true and the agent has `can_commit: true`, prefix with dry-run notice.
+    pub dry_run: bool,
+    /// Optional output schema for structured output enforcement.
+    pub schema: Option<&'a OutputSchema>,
+}
+
 /// Load an agent and build the fully-substituted prompt.
 ///
 /// - `working_dir` — worktree root path (used for agent file search)
@@ -597,22 +612,14 @@ fn build_prompt_core(
 /// - `plugin_dirs` — extra directories to search for agent definitions
 /// - `workflow_name` — parent workflow name (for workflow-local agent/snippet overrides)
 /// - `agent_name` — short agent name (e.g. `"plan"`)
-/// - `inputs` — resolved template variable map
-/// - `snippet_refs` — raw snippet names/paths from the DSL `with` field (unresolved)
-/// - `retry_error` — error from the previous failed attempt, if any
-/// - `dry_run` — if true and the agent has `can_commit: true`, prefix with dry-run notice
-/// - `schema` — optional output schema for structured output enforcement
+/// - `params` — prompt-building parameters (inputs, snippets, schema, flags)
 pub fn load_agent_and_build_prompt(
     working_dir: &str,
     repo_path: &str,
     plugin_dirs: &[String],
     workflow_name: &str,
     agent_name: &str,
-    inputs: &HashMap<String, String>,
-    snippet_refs: &[String],
-    retry_error: Option<&str>,
-    dry_run: bool,
-    schema: Option<&OutputSchema>,
+    params: &BuildPromptParams<'_>,
 ) -> Result<(AgentDef, String), String> {
     let agent_def = load_agent(
         working_dir,
@@ -622,11 +629,11 @@ pub fn load_agent_and_build_prompt(
         plugin_dirs,
     )?;
 
-    let resolved_snippets = if !snippet_refs.is_empty() {
+    let resolved_snippets = if !params.snippet_refs.is_empty() {
         let text = load_and_concat_snippets(
             working_dir,
             repo_path,
-            snippet_refs,
+            params.snippet_refs,
             Some(workflow_name),
         )?;
         if text.is_empty() {
@@ -638,21 +645,22 @@ pub fn load_agent_and_build_prompt(
         vec![]
     };
 
-    let vars: HashMap<&str, &str> = inputs
+    let vars: HashMap<&str, &str> = params
+        .inputs
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
     let snippet_refs_str: Vec<&str> = resolved_snippets.iter().map(String::as_str).collect();
 
-    let effective_dry_run = agent_def.can_commit && dry_run;
+    let effective_dry_run = agent_def.can_commit && params.dry_run;
 
     let prompt = build_prompt_core(
         &agent_def,
         &vars,
-        schema,
+        params.schema,
         &snippet_refs_str,
-        retry_error,
+        params.retry_error,
         effective_dry_run,
     );
 

@@ -150,14 +150,8 @@ impl ApiCallExecutor {
 
         let metadata = HashMap::from([
             (metadata_keys::NUM_TURNS.to_string(), "1".to_string()),
-            (
-                metadata_keys::INPUT_TOKENS.to_string(),
-                result.input_tokens.to_string(),
-            ),
-            (
-                metadata_keys::OUTPUT_TOKENS.to_string(),
-                result.output_tokens.to_string(),
-            ),
+            (metadata_keys::INPUT_TOKENS.to_string(), result.input_tokens.to_string()),
+            (metadata_keys::OUTPUT_TOKENS.to_string(), result.output_tokens.to_string()),
         ]);
 
         Ok(ApiCallExecutorOutput {
