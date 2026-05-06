@@ -821,8 +821,7 @@ mod tests {
 
         write_file(&tmp, ".conductor/prompts/intro.md", "Hello world.");
 
-        let result =
-            load_and_concat_snippets(&dir, &dir, &["intro".to_string()], None).unwrap();
+        let result = load_and_concat_snippets(&dir, &dir, &["intro".to_string()], None).unwrap();
         assert_eq!(result, "Hello world.");
     }
 
@@ -849,8 +848,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path().to_str().unwrap().to_string();
 
-        let err =
-            load_and_concat_snippets(&dir, &dir, &["missing".to_string()], None).unwrap_err();
+        let err = load_and_concat_snippets(&dir, &dir, &["missing".to_string()], None).unwrap_err();
         assert!(err.contains("missing"), "got: {err}");
     }
 
