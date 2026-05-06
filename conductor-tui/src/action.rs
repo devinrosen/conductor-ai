@@ -394,6 +394,17 @@ pub enum Action {
         error: String,
     },
 
+    /// Background result: candidate base-branches loaded for BaseBranchPicker.
+    BaseBranchesLoaded {
+        repo_slug: String,
+        wt_slug: String,
+        items: Vec<crate::state::BranchPickerItem>,
+    },
+    /// Background result: failed to enumerate base branches.
+    BaseBranchesFailed {
+        error: String,
+    },
+
     /// Select a list-picker item by number-key shortcut (0-indexed).
     /// Used by both WorkflowPicker and TemplatePicker modals.
     SelectListItem(usize),

@@ -143,7 +143,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
 
         let inner = runkon_flow_executors::claude_agent::ClaudeAgentExecutor::new(
             resolver,
-            self.config.anthropic_api_key(),
+            None, // Always use runtime resolver; API key path bypasses runtime selection
         );
         let mut output = inner
             .execute(&agent_ctx, &agent_params)
