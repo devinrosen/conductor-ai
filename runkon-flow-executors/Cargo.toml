@@ -6,12 +6,8 @@ license.workspace = true
 repository.workspace = true
 description = "Portable executor implementations for runkon-flow — event sinks, env providers, and step utilities without conductor dependencies"
 
-[features]
-utoipa = ["dep:utoipa"]
-
 [dependencies]
 runkon-flow = { path = "../runkon-flow" }
-utoipa = { version = "5", optional = true }
 
 [dev-dependencies]
 runkon-flow = { path = "../runkon-flow", features = ["test-utils"] }
