@@ -10,11 +10,11 @@ pub mod executors;
 pub mod extensions;
 pub mod flow_engine;
 pub mod helpers;
+#[cfg(feature = "rusqlite")]
+pub mod migrations;
 pub mod output_schema;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod persistence_memory;
-#[cfg(feature = "rusqlite")]
-pub mod migrations;
 #[cfg(feature = "rusqlite")]
 pub mod persistence_sqlite;
 pub mod prompt_builder;
