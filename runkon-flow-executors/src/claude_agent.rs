@@ -24,7 +24,6 @@ pub struct ClaudeAgentContext {
     pub bot_name: Option<String>,
     pub plugin_dirs: Vec<String>,
     pub workflow_name: String,
-    pub max_turns: Option<u32>,
     pub tracker: Arc<dyn RunTracker>,
     pub event_sink: Arc<dyn RunEventSink>,
 }
@@ -62,7 +61,12 @@ impl ClaudeAgentExecutor {
         ctx: &ClaudeAgentContext,
         params: &ClaudeAgentParams<'_>,
     ) -> Result<ActionOutput, String> {
-        let working_dir = ctx.working_dir.to_str().unwrap_or("");
+        let working_dir = ctx.working_dir.to_str().ok_or_else(|| {
+            format!(
+                "working_dir '{}' contains invalid UTF-8",
+                ctx.working_dir.display()
+            )
+        })?;
         let build_params = BuildPromptParams {
             inputs: params.inputs,
             snippet_refs: params.snippet_refs,
@@ -258,7 +262,6 @@ mod tests {
             bot_name: None,
             plugin_dirs: vec![],
             workflow_name: "test-wf".to_string(),
-            max_turns: None,
             tracker: Arc::new(runkon_runtimes::tracker::NoopTracker),
             event_sink: Arc::new(runkon_runtimes::NoopEventSink),
         }

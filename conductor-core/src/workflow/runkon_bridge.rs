@@ -168,7 +168,6 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             bot_name: params.bot_name.clone(),
             plugin_dirs: params.plugin_dirs.clone(),
             workflow_name: ctx.workflow_name().to_string(),
-            max_turns: params.max_turns,
             tracker: host_adapter.clone() as std::sync::Arc<dyn runkon_runtimes::RunTracker>,
             event_sink: host_adapter as std::sync::Arc<dyn runkon_runtimes::RunEventSink>,
         };
