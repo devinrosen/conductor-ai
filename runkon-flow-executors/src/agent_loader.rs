@@ -544,9 +544,8 @@ fn build_prompt_core(
             prompt.push_str(
                 "This file defines the state machine that governs your behavior in this workflow. ",
             );
-            prompt.push_str(
-                "You MUST read and understand it before proceeding with any other work.",
-            );
+            prompt
+                .push_str("You MUST read and understand it before proceeding with any other work.");
         }
     }
 

@@ -73,8 +73,8 @@ pub fn parse_structured_output(
     let cleaned = strip_trailing_commas(&cleaned);
     let cleaned = fix_backslash_escapes(&cleaned);
 
-    let value: serde_json::Value = serde_json::from_str(&cleaned)
-        .map_err(|e| format!("Invalid JSON in FLOW_OUTPUT: {e}"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&cleaned).map_err(|e| format!("Invalid JSON in FLOW_OUTPUT: {e}"))?;
 
     validate_value(&value, &schema.fields)?;
 
@@ -128,9 +128,7 @@ pub fn interpret_agent_output(
                 structured.context,
                 Some(structured.json_string),
             )),
-            Some(Err(e)) if succeeded => {
-                Err(format!("structured output validation: {e}"))
-            }
+            Some(Err(e)) if succeeded => Err(format!("structured output validation: {e}")),
             _ => {
                 let fallback = result_text.and_then(parse_flow_output).unwrap_or_default();
                 Ok((fallback.markers, fallback.context, None))
@@ -318,9 +316,8 @@ fn validate_field_value(value: &serde_json::Value, field: &FieldDef) -> Result<(
                 }
                 ArrayItems::Object(sub_fields) if !sub_fields.is_empty() => {
                     for (i, elem) in arr.iter().enumerate() {
-                        validate_value(elem, sub_fields).map_err(|e| {
-                            format!("In '{}[{}]': {e}", field.name, i)
-                        })?;
+                        validate_value(elem, sub_fields)
+                            .map_err(|e| format!("In '{}[{}]': {e}", field.name, i))?;
                     }
                 }
                 _ => {}
@@ -593,7 +590,10 @@ mod tests {
         let schema = make_schema("test", vec![make_field("summary", true, FieldType::String)]);
         let tool = schema_to_tool_json(&schema);
         assert_eq!(tool["name"], "test");
-        assert_eq!(tool["input_schema"]["properties"]["summary"]["type"], "string");
+        assert_eq!(
+            tool["input_schema"]["properties"]["summary"]["type"],
+            "string"
+        );
         assert_eq!(tool["input_schema"]["required"][0], "summary");
     }
 
@@ -604,7 +604,10 @@ mod tests {
             vec![make_field("approved", true, FieldType::Boolean)],
         );
         let tool = schema_to_tool_json(&schema);
-        assert_eq!(tool["input_schema"]["properties"]["approved"]["type"], "boolean");
+        assert_eq!(
+            tool["input_schema"]["properties"]["approved"]["type"],
+            "boolean"
+        );
     }
 
     #[test]
@@ -618,8 +621,14 @@ mod tests {
             )],
         );
         let tool = schema_to_tool_json(&schema);
-        assert_eq!(tool["input_schema"]["properties"]["level"]["type"], "string");
-        assert_eq!(tool["input_schema"]["properties"]["level"]["enum"][0], "low");
+        assert_eq!(
+            tool["input_schema"]["properties"]["level"]["type"],
+            "string"
+        );
+        assert_eq!(
+            tool["input_schema"]["properties"]["level"]["enum"][0],
+            "low"
+        );
     }
 
     #[test]
@@ -636,7 +645,10 @@ mod tests {
         );
         let tool = schema_to_tool_json(&schema);
         assert_eq!(tool["input_schema"]["properties"]["tags"]["type"], "array");
-        assert_eq!(tool["input_schema"]["properties"]["tags"]["items"]["type"], "string");
+        assert_eq!(
+            tool["input_schema"]["properties"]["tags"]["items"]["type"],
+            "string"
+        );
         let required = tool["input_schema"]["required"].as_array().unwrap();
         assert!(!required.iter().any(|v| v == "tags"));
     }
@@ -685,7 +697,8 @@ mod tests {
 
     #[test]
     fn interpret_no_schema_uses_flow_output_parser() {
-        let text = "<<<FLOW_OUTPUT>>>\n{\"markers\":[\"done\"],\"context\":\"ok\"}\n<<<END_FLOW_OUTPUT>>>";
+        let text =
+            "<<<FLOW_OUTPUT>>>\n{\"markers\":[\"done\"],\"context\":\"ok\"}\n<<<END_FLOW_OUTPUT>>>";
         let (markers, context, structured) =
             interpret_agent_output(Some(text), None, true).unwrap();
         assert_eq!(markers, vec!["done"]);

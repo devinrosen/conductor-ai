@@ -78,8 +78,7 @@ mod tests {
     #[test]
     fn missing_api_key_returns_error() {
         let schema =
-            crate::schema_config::parse_schema_content("fields:\n  ok: boolean\n", "test")
-                .unwrap();
+            crate::schema_config::parse_schema_content("fields:\n  ok: boolean\n", "test").unwrap();
         let executor = ApiCallExecutor::new("".to_string());
         let result = executor.execute(&make_ectx(), &make_action_params(Some(schema)));
         let msg = result.unwrap_err().to_string();
