@@ -1328,7 +1328,16 @@ pub fn run(conn: &Connection) -> Result<()> {
             let has_new_col: bool = conn
                 .prepare("SELECT last_position_advanced_at FROM workflow_runs LIMIT 0")
                 .is_ok();
-            if !has_new_col {
+            // Check that the schema has all columns needed for the migration 087 swap.
+            // Migration 087 expects columns from migrations 020–086. We check a few key columns:
+            // - worktree_id (from 020/021)
+            // - generation (from 084)
+            // If either is missing, the schema isn't ready for this migration yet; skip it.
+            let has_required_cols: bool = conn
+                .prepare("SELECT worktree_id, generation FROM workflow_runs LIMIT 0")
+                .is_ok();
+            // Only run the migration if the new column doesn't exist AND we have the required columns
+            if !has_new_col && has_required_cols {
                 with_foreign_keys_off(conn, || {
                     conn.execute_batch(include_str!(
                         "migrations/087_workflow_runs_conductor_extensions.sql"
@@ -1928,6 +1937,9 @@ mod tests {
         // Minimal pre-058 schema: only the tables migration 058 touches.
         conn.execute_batch(
             "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE worktrees (
+                 id TEXT PRIMARY KEY, name TEXT NOT NULL
+             );
              CREATE TABLE workflow_runs (
                  id TEXT PRIMARY KEY,
                  workflow_name TEXT NOT NULL,
@@ -3148,7 +3160,8 @@ mod tests {
         .unwrap();
 
         // Deleting the worktree must cascade through the full chain.
-        conn.execute_batch("DELETE FROM worktrees WHERE id = 'wt1';").unwrap();
+        conn.execute_batch("DELETE FROM worktrees WHERE id = 'wt1';")
+            .unwrap();
 
         let wfr_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM workflow_runs", [], |r| r.get(0))
@@ -3158,7 +3171,10 @@ mod tests {
         let step_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM workflow_run_steps", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(step_count, 0, "workflow_run_steps must be deleted via FK CASCADE");
+        assert_eq!(
+            step_count, 0,
+            "workflow_run_steps must be deleted via FK CASCADE"
+        );
 
         let foi_count: i64 = conn
             .query_row(
@@ -3253,12 +3269,16 @@ mod tests {
         )
         .unwrap();
 
-        conn.execute_batch("DELETE FROM agent_runs WHERE id = 'ar1';").unwrap();
+        conn.execute_batch("DELETE FROM agent_runs WHERE id = 'ar1';")
+            .unwrap();
 
         let wfr_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM workflow_runs", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(wfr_count, 0, "workflow_runs must be deleted via agent_run trigger");
+        assert_eq!(
+            wfr_count, 0,
+            "workflow_runs must be deleted via agent_run trigger"
+        );
 
         let step_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM workflow_run_steps", [], |r| r.get(0))
@@ -3337,6 +3357,9 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 87, "schema_version must be bumped to 87 even when swap is skipped");
+        assert_eq!(
+            version, 87,
+            "schema_version must be bumped to 87 even when swap is skipped"
+        );
     }
 }
