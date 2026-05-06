@@ -780,14 +780,6 @@ impl App {
             return;
         };
 
-        // Snapshot open-PR head branches from already-fetched state (no extra gh call needed).
-        let pr_head_branches: Vec<String> = self
-            .state
-            .detail_prs
-            .iter()
-            .map(|pr| pr.head_ref_name.clone())
-            .collect();
-
         let wt_branch = wt.branch.clone();
         let wt_slug = wt.slug.clone();
 
@@ -801,6 +793,7 @@ impl App {
             use conductor_core::config::{db_path, load_config};
             use conductor_core::db::open_database;
             use conductor_core::repo::RepoManager;
+            use conductor_core::worktree::WorktreeManager;
 
             let result = (|| {
                 let conn = open_database(&db_path())
@@ -809,52 +802,30 @@ impl App {
                 let repo = RepoManager::new(&conn, &config)
                     .get_by_slug(&repo_slug)
                     .map_err(|e| format!("Failed to get repo '{repo_slug}': {e}"))?;
-                let local_path = std::path::PathBuf::from(&repo.local_path);
                 let default_branch = repo.default_branch.clone();
 
-                let all_branches = conductor_core::worktree::list_remote_branches(&local_path)
-                    .map_err(|e| format!("Failed to list remote branches: {e}"))?;
+                // Get active worktrees for this repo.
+                let active_worktrees = WorktreeManager::new(&conn, &config)
+                    .list_by_repo_id(&repo.id, true)
+                    .map_err(|e| format!("Failed to list worktrees: {e}"))?;
 
-                // Drop the default branch (shown as sentinel) and the worktree's
-                // own branch (selecting self as base is nonsensical and would fail
-                // the ancestry check in set_base_branch).
-                let filtered: Vec<String> = all_branches
-                    .into_iter()
-                    .filter(|b| b != &default_branch && b != &wt_branch)
+                // Build the candidate set: active worktree branches + repo default branch.
+                // Exclude the worktree's own branch (selecting self as base is nonsensical).
+                let mut branches: Vec<String> = active_worktrees
+                    .iter()
+                    .filter(|wt| wt.branch != wt_branch)
+                    .map(|wt| wt.branch.clone())
                     .collect();
 
-                // Preferred candidate set: release/* + open-PR heads.
-                let pr_set: std::collections::HashSet<&str> =
-                    pr_head_branches.iter().map(|s| s.as_str()).collect();
-                let has_release = filtered.iter().any(|b| b.starts_with("release/"));
-                let has_pr = filtered.iter().any(|b| pr_set.contains(b.as_str()));
+                // Add the default branch if it's not already included and not the current branch.
+                if default_branch != wt_branch && !branches.contains(&default_branch) {
+                    branches.push(default_branch);
+                }
 
-                let mut selected: Vec<String> = if !has_release && !has_pr {
-                    // Fallback: show everything so the picker is never empty.
-                    filtered
-                } else {
-                    let mut out: Vec<String> = filtered
-                        .iter()
-                        .filter(|b| b.starts_with("release/") || pr_set.contains(b.as_str()))
-                        .cloned()
-                        .collect();
-                    out.sort();
-                    out.dedup();
-                    out
-                };
+                // Sort alphabetically.
+                branches.sort();
 
-                // Sort: release/* first, then alphabetical within each group.
-                selected.sort_by(|a, b| {
-                    let a_rel = a.starts_with("release/");
-                    let b_rel = b.starts_with("release/");
-                    match (a_rel, b_rel) {
-                        (true, false) => std::cmp::Ordering::Less,
-                        (false, true) => std::cmp::Ordering::Greater,
-                        _ => a.cmp(b),
-                    }
-                });
-
-                let items = selected
+                let items = branches
                     .into_iter()
                     .map(|branch| BranchPickerItem {
                         branch: Some(branch),
