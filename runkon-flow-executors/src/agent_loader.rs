@@ -665,3 +665,408 @@ pub fn load_agent_and_build_prompt(
 
     Ok((agent_def, prompt))
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use runkon_flow::output_schema::{ArrayItems, FieldDef, FieldType, OutputSchema};
+    use tempfile::TempDir;
+
+    fn make_field(name: &str, required: bool, field_type: FieldType) -> FieldDef {
+        FieldDef {
+            name: name.to_string(),
+            required,
+            field_type,
+            desc: None,
+            examples: None,
+        }
+    }
+
+    fn make_schema(name: &str, fields: Vec<FieldDef>) -> OutputSchema {
+        OutputSchema {
+            name: name.to_string(),
+            fields,
+            markers: None,
+        }
+    }
+
+    fn write_file(dir: &TempDir, rel: &str, content: &str) {
+        let path = dir.path().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+
+    // ── load_agent ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn load_agent_from_conductor_agents() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap().to_string();
+
+        write_file(&tmp, ".conductor/agents/worker.md", "Do the work.");
+
+        let agent = load_agent(&dir, &dir, "worker", None, &[]).unwrap();
+        assert_eq!(agent.name, "worker");
+        assert_eq!(agent.prompt, "Do the work.");
+        assert_eq!(agent.role, runkon_runtimes::AgentRole::Reviewer);
+    }
+
+    #[test]
+    fn load_agent_with_frontmatter_actor_role() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap().to_string();
+
+        write_file(
+            &tmp,
+            ".conductor/agents/committer.md",
+            "---\nrole: actor\ncan_commit: true\n---\nMake changes.",
+        );
+
+        let agent = load_agent(&dir, &dir, "committer", None, &[]).unwrap();
+        assert_eq!(agent.role, runkon_runtimes::AgentRole::Actor);
+        assert!(agent.can_commit);
+        assert_eq!(agent.prompt, "Make changes.");
+    }
+
+    #[test]
+    fn load_agent_workflow_local_takes_priority_over_shared() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap().to_string();
+
+        write_file(&tmp, ".conductor/agents/worker.md", "Shared agent.");
+        write_file(
+            &tmp,
+            ".conductor/workflows/my-wf/agents/worker.md",
+            "Workflow-local agent.",
+        );
+
+        let agent = load_agent(&dir, &dir, "worker", Some("my-wf"), &[]).unwrap();
+        assert_eq!(agent.prompt, "Workflow-local agent.");
+    }
+
+    #[test]
+    fn load_agent_falls_back_to_claude_agents() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap().to_string();
+
+        write_file(&tmp, ".claude/agents/fallback.md", "Claude fallback.");
+
+        let agent = load_agent(&dir, &dir, "fallback", None, &[]).unwrap();
+        assert_eq!(agent.prompt, "Claude fallback.");
+    }
+
+    #[test]
+    fn load_agent_missing_returns_descriptive_error() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap().to_string();
+
+        let err = load_agent(&dir, &dir, "ghost", None, &[]).unwrap_err();
+        assert!(err.contains("ghost"), "got: {err}");
+        assert!(err.contains("not found"), "got: {err}");
+    }
+
+    #[test]
+    fn load_agent_malformed_frontmatter_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap().to_string();
+
+        // Unclosed bracket → invalid YAML
+        write_file(
+            &tmp,
+            ".conductor/agents/bad.md",
+            "---\nrole: [unclosed\n---\nPrompt.",
+        );
+
+        let err = load_agent(&dir, &dir, "bad", None, &[]).unwrap_err();
+        assert!(
+            err.contains("Invalid YAML") || err.contains("frontmatter"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn load_agent_can_commit_without_actor_role_is_error() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap().to_string();
+
+        write_file(
+            &tmp,
+            ".conductor/agents/bad.md",
+            "---\nrole: reviewer\ncan_commit: true\n---\nPrompt.",
+        );
+
+        let err = load_agent(&dir, &dir, "bad", None, &[]).unwrap_err();
+        assert!(err.contains("can_commit"), "got: {err}");
+    }
+
+    // ── load_and_concat_snippets ─────────────────────────────────────────────
+
+    #[test]
+    fn load_and_concat_snippets_empty_list_returns_empty() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap().to_string();
+
+        let result = load_and_concat_snippets(&dir, &dir, &[], None).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn load_and_concat_snippets_single_snippet() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap().to_string();
+
+        write_file(&tmp, ".conductor/prompts/intro.md", "Hello world.");
+
+        let result =
+            load_and_concat_snippets(&dir, &dir, &["intro".to_string()], None).unwrap();
+        assert_eq!(result, "Hello world.");
+    }
+
+    #[test]
+    fn load_and_concat_snippets_preserves_order() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap().to_string();
+
+        write_file(&tmp, ".conductor/prompts/first.md", "First.");
+        write_file(&tmp, ".conductor/prompts/second.md", "Second.");
+
+        let result = load_and_concat_snippets(
+            &dir,
+            &dir,
+            &["first".to_string(), "second".to_string()],
+            None,
+        )
+        .unwrap();
+        assert_eq!(result, "First.\n\nSecond.");
+    }
+
+    #[test]
+    fn load_and_concat_snippets_missing_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap().to_string();
+
+        let err =
+            load_and_concat_snippets(&dir, &dir, &["missing".to_string()], None).unwrap_err();
+        assert!(err.contains("missing"), "got: {err}");
+    }
+
+    #[test]
+    fn load_and_concat_snippets_workflow_local_overrides_shared() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap().to_string();
+
+        write_file(&tmp, ".conductor/prompts/ctx.md", "Shared.");
+        write_file(
+            &tmp,
+            ".conductor/workflows/my-wf/prompts/ctx.md",
+            "Workflow-local.",
+        );
+
+        let result =
+            load_and_concat_snippets(&dir, &dir, &["ctx".to_string()], Some("my-wf")).unwrap();
+        assert_eq!(result, "Workflow-local.");
+    }
+
+    // ── generate_prompt_instructions ─────────────────────────────────────────
+
+    #[test]
+    fn generate_prompt_instructions_contains_flow_output_markers() {
+        let schema = make_schema("test", vec![make_field("status", true, FieldType::String)]);
+        let out = generate_prompt_instructions(&schema);
+        assert!(out.contains("<<<FLOW_OUTPUT>>>"), "got: {out}");
+        assert!(out.contains("<<<END_FLOW_OUTPUT>>>"), "got: {out}");
+        assert!(out.contains("\"status\""), "got: {out}");
+    }
+
+    #[test]
+    fn generate_prompt_instructions_optional_field_is_labeled() {
+        let schema = make_schema(
+            "test",
+            vec![
+                make_field("required_field", true, FieldType::String),
+                make_field("opt_field", false, FieldType::String),
+            ],
+        );
+        let out = generate_prompt_instructions(&schema);
+        assert!(out.contains("opt_field"), "got: {out}");
+        assert!(out.contains("optional"), "got: {out}");
+    }
+
+    #[test]
+    fn generate_prompt_instructions_array_field() {
+        let schema = make_schema(
+            "test",
+            vec![make_field(
+                "tags",
+                true,
+                FieldType::Array {
+                    items: ArrayItems::Scalar(Box::new(FieldType::String)),
+                },
+            )],
+        );
+        let out = generate_prompt_instructions(&schema);
+        assert!(out.contains("\"tags\""), "got: {out}");
+        assert!(out.contains("["), "got: {out}");
+    }
+
+    #[test]
+    fn generate_prompt_instructions_nested_object() {
+        let schema = make_schema(
+            "test",
+            vec![FieldDef {
+                name: "meta".to_string(),
+                required: true,
+                field_type: FieldType::Object {
+                    fields: vec![make_field("count", true, FieldType::Number)],
+                },
+                desc: None,
+                examples: None,
+            }],
+        );
+        let out = generate_prompt_instructions(&schema);
+        assert!(out.contains("\"meta\""), "got: {out}");
+        assert!(out.contains("\"count\""), "got: {out}");
+    }
+
+    #[test]
+    fn generate_prompt_instructions_enum_field_shows_variants() {
+        let schema = make_schema(
+            "test",
+            vec![make_field(
+                "status",
+                true,
+                FieldType::Enum(vec!["open".to_string(), "closed".to_string()]),
+            )],
+        );
+        let out = generate_prompt_instructions(&schema);
+        assert!(out.contains("open|closed"), "got: {out}");
+    }
+
+    // ── load_agent_and_build_prompt ──────────────────────────────────────────
+
+    #[test]
+    fn load_agent_and_build_prompt_substitutes_template_vars() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap().to_string();
+
+        write_file(&tmp, ".conductor/agents/worker.md", "Process {{task}}.");
+
+        let mut inputs = HashMap::new();
+        inputs.insert("task".to_string(), "build".to_string());
+
+        let params = BuildPromptParams {
+            inputs: &inputs,
+            snippet_refs: &[],
+            retry_error: None,
+            dry_run: false,
+            schema: None,
+        };
+
+        let (agent_def, prompt) =
+            load_agent_and_build_prompt(&dir, &dir, &[], "my-wf", "worker", &params).unwrap();
+
+        assert_eq!(agent_def.name, "worker");
+        assert!(prompt.contains("Process build."), "got: {prompt}");
+    }
+
+    #[test]
+    fn load_agent_and_build_prompt_appends_snippet() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap().to_string();
+
+        write_file(&tmp, ".conductor/agents/worker.md", "Main prompt.");
+        write_file(&tmp, ".conductor/prompts/extra.md", "Extra context.");
+
+        let inputs = HashMap::new();
+        let snippet_refs = vec!["extra".to_string()];
+        let params = BuildPromptParams {
+            inputs: &inputs,
+            snippet_refs: &snippet_refs,
+            retry_error: None,
+            dry_run: false,
+            schema: None,
+        };
+
+        let (_, prompt) =
+            load_agent_and_build_prompt(&dir, &dir, &[], "my-wf", "worker", &params).unwrap();
+
+        assert!(prompt.contains("Main prompt."), "got: {prompt}");
+        assert!(prompt.contains("Extra context."), "got: {prompt}");
+    }
+
+    #[test]
+    fn load_agent_and_build_prompt_with_schema_adds_flow_output_block() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap().to_string();
+
+        write_file(&tmp, ".conductor/agents/reviewer.md", "Review the code.");
+
+        let schema = make_schema(
+            "review",
+            vec![make_field("approved", true, FieldType::Boolean)],
+        );
+        let inputs = HashMap::new();
+        let params = BuildPromptParams {
+            inputs: &inputs,
+            snippet_refs: &[],
+            retry_error: None,
+            dry_run: false,
+            schema: Some(&schema),
+        };
+
+        let (_, prompt) =
+            load_agent_and_build_prompt(&dir, &dir, &[], "my-wf", "reviewer", &params).unwrap();
+
+        assert!(prompt.contains("<<<FLOW_OUTPUT>>>"), "got: {prompt}");
+        assert!(prompt.contains("\"approved\""), "got: {prompt}");
+    }
+
+    #[test]
+    fn load_agent_and_build_prompt_dry_run_prefix_for_actor() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap().to_string();
+
+        write_file(
+            &tmp,
+            ".conductor/agents/committer.md",
+            "---\nrole: actor\ncan_commit: true\n---\nMake changes.",
+        );
+
+        let inputs = HashMap::new();
+        let params = BuildPromptParams {
+            inputs: &inputs,
+            snippet_refs: &[],
+            retry_error: None,
+            dry_run: true,
+            schema: None,
+        };
+
+        let (_, prompt) =
+            load_agent_and_build_prompt(&dir, &dir, &[], "my-wf", "committer", &params).unwrap();
+
+        assert!(prompt.contains("dry run"), "got: {prompt}");
+    }
+
+    #[test]
+    fn load_agent_and_build_prompt_missing_agent_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap().to_string();
+
+        let inputs = HashMap::new();
+        let params = BuildPromptParams {
+            inputs: &inputs,
+            snippet_refs: &[],
+            retry_error: None,
+            dry_run: false,
+            schema: None,
+        };
+
+        let err =
+            load_agent_and_build_prompt(&dir, &dir, &[], "my-wf", "ghost", &params).unwrap_err();
+        assert!(err.contains("ghost"), "got: {err}");
+    }
+}

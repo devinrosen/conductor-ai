@@ -135,14 +135,18 @@ impl ApiCallExecutor {
         model: &str,
         timeout: std::time::Duration,
     ) -> Result<ApiCallExecutorOutput, String> {
-        let result = execute_via_api(
-            prompt,
-            schema,
-            model,
-            timeout,
-            &self.api_key,
-            ANTHROPIC_API_URL,
-        )?;
+        self.execute_at(prompt, schema, model, timeout, ANTHROPIC_API_URL)
+    }
+
+    fn execute_at(
+        &self,
+        prompt: &str,
+        schema: &OutputSchema,
+        model: &str,
+        timeout: std::time::Duration,
+        url: &str,
+    ) -> Result<ApiCallExecutorOutput, String> {
+        let result = execute_via_api(prompt, schema, model, timeout, &self.api_key, url)?;
 
         let structured = derive_output_from_value(result.json, schema);
 
@@ -225,6 +229,103 @@ mod tests {
         });
         let err = extract_tool_use_input(&response).unwrap_err();
         assert!(err.contains("missing 'input' field"), "got: {err}");
+    }
+
+    fn serve_json_response(body: serde_json::Value) -> std::net::SocketAddr {
+        use std::io::{BufRead, Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body_str = body.to_string();
+
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream);
+
+            let mut content_length = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                let lower = line.to_ascii_lowercase();
+                if lower.starts_with("content-length:") {
+                    if let Some(v) = lower.split(':').nth(1) {
+                        content_length = v.trim().parse().unwrap_or(0);
+                    }
+                }
+            }
+            if content_length > 0 {
+                let mut buf = vec![0u8; content_length];
+                let _ = reader.read_exact(&mut buf);
+            }
+
+            let mut stream = reader.into_inner();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
+                body_str.len(),
+                body_str
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        addr
+    }
+
+    #[test]
+    fn execute_derives_token_metadata_markers_and_context() {
+        let api_response = serde_json::json!({
+            "content": [{
+                "type": "tool_use",
+                "input": {"approved": true, "summary": "all good"}
+            }],
+            "usage": {"input_tokens": 123, "output_tokens": 45}
+        });
+        let addr = serve_json_response(api_response);
+
+        let schema = OutputSchema {
+            name: "review".to_string(),
+            fields: vec![
+                FieldDef {
+                    name: "approved".to_string(),
+                    required: true,
+                    field_type: FieldType::Boolean,
+                    desc: None,
+                    examples: None,
+                },
+                FieldDef {
+                    name: "summary".to_string(),
+                    required: true,
+                    field_type: FieldType::String,
+                    desc: None,
+                    examples: None,
+                },
+            ],
+            markers: None,
+        };
+
+        let executor = ApiCallExecutor::new("test-key".to_string());
+        let output = executor
+            .execute_at(
+                "review this",
+                &schema,
+                "claude-sonnet-4-6",
+                std::time::Duration::from_secs(5),
+                &format!("http://{addr}"),
+            )
+            .unwrap();
+
+        assert_eq!(output.metadata[metadata_keys::INPUT_TOKENS], "123");
+        assert_eq!(output.metadata[metadata_keys::OUTPUT_TOKENS], "45");
+        assert_eq!(output.metadata[metadata_keys::NUM_TURNS], "1");
+        assert_eq!(output.context, "all good");
+        assert!(
+            output.structured_output.contains("approved"),
+            "got: {}",
+            output.structured_output
+        );
     }
 
     #[test]
