@@ -328,6 +328,50 @@ mod tests {
         assert!(result.is_err(), "expected Err from mock resolver, got Ok");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn returns_error_for_invalid_utf8_working_dir() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        // 0xFF is never valid UTF-8, so PathBuf::to_str() returns None.
+        let invalid_path =
+            std::path::PathBuf::from(OsString::from_vec(vec![b'/', 0xFF, 0xFE]));
+
+        let resolver = Arc::new(TrackingResolver::new());
+        let ctx = ClaudeAgentContext {
+            run_id: "test-run".to_string(),
+            working_dir: invalid_path,
+            repo_path: "/tmp".to_string(),
+            step_timeout: Duration::from_millis(200),
+            shutdown: None,
+            model: None,
+            bot_name: None,
+            plugin_dirs: vec![],
+            workflow_name: "test-wf".to_string(),
+            tracker: Arc::new(runkon_runtimes::tracker::NoopTracker),
+            event_sink: Arc::new(runkon_runtimes::NoopEventSink),
+        };
+        let params = ClaudeAgentParams {
+            name: "test-agent",
+            inputs: &HashMap::new(),
+            snippet_refs: &[],
+            dry_run: false,
+            retry_error: None,
+            schema: None,
+        };
+
+        let executor = ClaudeAgentExecutor::new(resolver, None);
+        let result = executor.execute(&ctx, &params);
+
+        assert!(result.is_err(), "expected Err for invalid UTF-8 working_dir");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("contains invalid UTF-8"),
+            "error should mention invalid UTF-8, got: {err}"
+        );
+    }
+
     #[test]
     fn skips_api_executor_when_api_key_absent() {
         let tmp = TempDir::new().unwrap();
