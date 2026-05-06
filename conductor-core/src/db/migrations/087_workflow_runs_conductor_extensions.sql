@@ -75,7 +75,7 @@ INSERT INTO workflow_runs_new (
     total_input_tokens, total_output_tokens, total_cache_read_input_tokens,
     total_cache_creation_input_tokens, total_turns, total_cost_usd, total_duration_ms,
     model, error, last_heartbeat, dismissed,
-    workflow_title, owner_token, lease_until, generation
+    workflow_title, owner_token, lease_until, generation, last_position_advanced_at
 ) SELECT
     id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger,
     started_at, ended_at, result_summary, definition_snapshot, inputs,
@@ -84,7 +84,8 @@ INSERT INTO workflow_runs_new (
     total_input_tokens, total_output_tokens, total_cache_read_input_tokens,
     total_cache_creation_input_tokens, total_turns, total_cost_usd, total_duration_ms,
     model, error, last_heartbeat, dismissed,
-    workflow_title, owner_token, lease_until, generation
+    workflow_title, owner_token, lease_until, generation,
+    NULL  -- last_position_advanced_at is new; initialize to NULL
   FROM workflow_runs;
 
 DROP TABLE workflow_runs;

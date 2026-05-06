@@ -56,6 +56,10 @@ fn table_exists(conn: &Connection, table_name: &str) -> Result<bool> {
     .map_err(Into::into)
 }
 
+fn has_workflow_runs_table(conn: &Connection) -> bool {
+    conn.prepare("SELECT id FROM workflow_runs LIMIT 0").is_ok()
+}
+
 /// Migration 45 helper: copy `default_branch` and `model` column values from
 /// the repos table into per-repo `.conductor/config.toml` files before the
 /// columns are dropped. Errors are logged but do not abort the migration — the
@@ -363,8 +367,13 @@ pub fn run(conn: &Connection) -> Result<()> {
 
     // Migration 020: workflow_runs and workflow_run_steps tables.
     if version < 20 {
-        let has_workflow_runs: bool = conn.prepare("SELECT id FROM workflow_runs LIMIT 0").is_ok();
-        if !has_workflow_runs {
+        // Check for the worktree_id column, not just table existence.
+        // Runkon's V001 may have created workflow_runs without worktree_id;
+        // in that case we need to recreate the table with the full conductor schema.
+        let has_worktree_id: bool = conn
+            .prepare("SELECT worktree_id FROM workflow_runs LIMIT 0")
+            .is_ok();
+        if !has_workflow_runs_table(conn) || !has_worktree_id {
             conn.execute_batch(include_str!("migrations/020_workflow_runs.sql"))?;
         }
         bump_version(conn, 20)?;
@@ -373,12 +382,51 @@ pub fn run(conn: &Connection) -> Result<()> {
     // Migration 021: workflow redesign — add structured output, iteration,
     // parallel, retry, gate, and snapshot columns.
     if version < 21 {
-        let has_definition_snapshot: bool = conn
-            .prepare("SELECT definition_snapshot FROM workflow_runs LIMIT 0")
-            .is_ok();
-        if !has_definition_snapshot {
-            conn.execute_batch(include_str!("migrations/021_workflow_redesign.sql"))?;
+        // Runkon's V001 may have pre-created these tables with a superset of columns.
+        // Only add columns that don't already exist.
+        fn column_exists(conn: &Connection, table: &str, column: &str) -> bool {
+            conn.prepare(&format!(
+                "SELECT 1 FROM pragma_table_info('{}') WHERE name='{}'",
+                table, column
+            ))
+            .is_ok()
+            && conn
+                .prepare(&format!(
+                    "SELECT {} FROM {} LIMIT 0",
+                    column, table
+                ))
+                .is_ok()
         }
+
+        // Add columns to workflow_runs
+        if !column_exists(conn, "workflow_runs", "definition_snapshot") {
+            conn.execute_batch("ALTER TABLE workflow_runs ADD COLUMN definition_snapshot TEXT;")?;
+        }
+
+        // Add columns to workflow_run_steps
+        let steps_columns = [
+            ("iteration", "INTEGER NOT NULL DEFAULT 0"),
+            ("parallel_group_id", "TEXT"),
+            ("context_out", "TEXT"),
+            ("markers_out", "TEXT"),
+            ("retry_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("gate_type", "TEXT"),
+            ("gate_prompt", "TEXT"),
+            ("gate_timeout", "TEXT"),
+            ("gate_approved_by", "TEXT"),
+            ("gate_approved_at", "TEXT"),
+            ("gate_feedback", "TEXT"),
+        ];
+
+        for (col, typ) in steps_columns {
+            if !column_exists(conn, "workflow_run_steps", col) {
+                conn.execute_batch(&format!(
+                    "ALTER TABLE workflow_run_steps ADD COLUMN {} {};",
+                    col, typ
+                ))?;
+            }
+        }
+
         // Recreate tables to update CHECK constraints (add 'waiting' status).
         with_foreign_keys_off(conn, || {
             conn.execute_batch(include_str!("migrations/021_workflow_runs_table_swap.sql"))?;

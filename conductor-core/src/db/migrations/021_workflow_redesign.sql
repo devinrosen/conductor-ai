@@ -1,5 +1,7 @@
 -- Workflow redesign: add new columns for structured output, iterations,
 -- parallel groups, retries, gates, and workflow snapshots.
+-- Note: Column existence checks are handled in Rust (migrations.rs) to skip
+-- columns that already exist (e.g., when runkon's V001 created these tables).
 
 -- Store serialized WorkflowDef JSON so in-flight runs are not affected by
 -- edits to the .wf source file.
