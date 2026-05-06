@@ -904,4 +904,86 @@ mod tests {
         let result = list_remote_branches(Path::new("/nonexistent/conductor/test/path"));
         assert!(result.is_err());
     }
+
+    #[test]
+    fn list_remote_branches_happy_path() {
+        // Create a temp git repo with remote branches
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path();
+
+        // Initialize bare remote repo
+        let bare_dir = TempDir::new().unwrap();
+        check_output(
+            Command::new("git")
+                .args(["init", "--bare", bare_dir.path().to_str().unwrap()])
+                .current_dir(repo_path),
+        )
+        .unwrap();
+
+        // Create a temp worktree to simulate a real repo
+        let worktree_dir = TempDir::new().unwrap();
+        check_output(
+            Command::new("git")
+                .args(["clone", bare_dir.path().to_str().unwrap(), worktree_dir.path().to_str().unwrap()])
+                .current_dir(repo_path),
+        )
+        .unwrap();
+
+        // Create branches in the worktree
+        check_output(
+            Command::new("git")
+                .args(["checkout", "-b", "main"])
+                .current_dir(worktree_dir.path()),
+        )
+        .unwrap();
+        // Create a commit
+        std::fs::write(worktree_dir.path().join("README.md"), "test").unwrap();
+        check_output(
+            Command::new("git")
+                .args(["add", "."])
+                .current_dir(worktree_dir.path()),
+        )
+        .unwrap();
+        check_output(
+            Command::new("git")
+                .args(["commit", "-m", "initial"])
+                .current_dir(worktree_dir.path())
+                .env("GIT_AUTHOR_NAME", "Test")
+                .env("GIT_AUTHOR_EMAIL", "test@test.com")
+                .env("GIT_COMMITTER_NAME", "Test")
+                .env("GIT_COMMITTER_EMAIL", "test@test.com"),
+        )
+        .unwrap();
+
+        // Create additional branches
+        check_output(
+            Command::new("git")
+                .args(["checkout", "-b", "release/0.16.0"])
+                .current_dir(worktree_dir.path()),
+        )
+        .unwrap();
+        check_output(
+            Command::new("git")
+                .args(["checkout", "-b", "feat/test"])
+                .current_dir(worktree_dir.path()),
+        )
+        .unwrap();
+
+        // Push all branches to remote
+        check_output(
+            Command::new("git")
+                .args(["push", "-u", "origin", "--all"])
+                .current_dir(worktree_dir.path()),
+        )
+        .unwrap();
+
+        // Now test list_remote_branches on the worktree
+        let result = list_remote_branches(worktree_dir.path());
+        assert!(result.is_ok(), "list_remote_branches should succeed: {:?}", result);
+        let branches = result.unwrap();
+        assert!(branches.contains(&"main".to_string()));
+        assert!(branches.contains(&"release/0.16.0".to_string()));
+        assert!(branches.contains(&"feat/test".to_string()));
+        assert!(!branches.contains(&"HEAD".to_string()));
+    }
 }

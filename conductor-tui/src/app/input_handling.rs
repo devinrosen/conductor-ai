@@ -829,11 +829,7 @@ impl App {
                     .into_iter()
                     .map(|branch| BranchPickerItem {
                         branch: Some(branch),
-                        worktree_count: 0,
-                        ticket_count: 0,
-                        base_branch: None,
-                        stale_days: None,
-                        inferred_from: None,
+                        ..Default::default()
                     })
                     .collect();
 
@@ -1017,7 +1013,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{InputAction, Modal};
+    use crate::state::{InputAction, Modal, View};
     use crate::theme::Theme;
     use conductor_core::{config::Config, models::KNOWN_MODELS};
 
@@ -1369,5 +1365,130 @@ mod tests {
             }
             other => panic!("expected BranchPicker modal, got {:?}", other),
         }
+    }
+
+    // ---------- handle_set_base_branch tests ----------
+
+    #[test]
+    fn set_base_branch_not_in_worktree_detail_returns_early() {
+        let mut app = make_app();
+        app.state.view = View::Dashboard; // Not WorktreeDetail
+        app.handle_set_base_branch();
+        // Should return early without showing any modal
+        assert!(matches!(app.state.modal, Modal::None));
+    }
+
+    #[test]
+    fn set_base_branch_no_selected_worktree_returns_early() {
+        let mut app = make_app();
+        app.state.view = View::WorktreeDetail;
+        app.state.selected_worktree_id = None;
+        app.handle_set_base_branch();
+        // Should return early without showing any modal
+        assert!(matches!(app.state.modal, Modal::None));
+    }
+
+    #[test]
+    fn set_base_branch_shows_progress_modal_and_spawns_thread() {
+        let mut app = make_app();
+        let (bg_tx, rx) = crate::event::BackgroundSender::channel_for_test();
+        app.bg_tx = Some(bg_tx);
+        app.state.view = View::WorktreeDetail;
+        app.state.selected_worktree_id = Some("w1".to_string());
+
+        // Populate in-memory data (the DB has the worktree, but state.data.worktrees is empty)
+        app.state.data.worktrees.push(conductor_core::worktree::Worktree {
+            id: "w1".to_string(),
+            repo_id: "r1".to_string(),
+            slug: "feat-test".to_string(),
+            branch: "feat/test".to_string(),
+            path: "/tmp/ws/feat-test".to_string(),
+            ticket_id: None,
+            status: conductor_core::worktree::WorktreeStatus::Active,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            completed_at: None,
+            model: None,
+            base_branch: None,
+        });
+        app.state.data.repos.push(conductor_core::repo::Repo {
+            id: "r1".to_string(),
+            slug: "test-repo".to_string(),
+            remote_url: "https://github.com/test/repo.git".to_string(),
+            local_path: "/tmp/repo".to_string(),
+            default_branch: "main".to_string(),
+            workspace_dir: "/tmp/ws".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            model: None,
+            allow_agent_issue_creation: true,
+            runtime_overrides: None,
+        });
+        app.state.data.repo_slug_map.insert("r1".to_string(), "test-repo".to_string());
+
+        app.handle_set_base_branch();
+
+        // Progress modal should be shown
+        assert!(
+            matches!(app.state.modal, Modal::Progress { .. }),
+            "expected Progress modal, got {:?}",
+            app.state.modal
+        );
+
+        // Background thread should send either BaseBranchesLoaded or BaseBranchesFailed
+        let action = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("expected action from background thread within 5s");
+        assert!(
+            matches!(
+                action,
+                crate::action::Action::BaseBranchesLoaded { .. }
+                    | crate::action::Action::BaseBranchesFailed { .. }
+            ),
+            "expected BaseBranchesLoaded or BaseBranchesFailed, got {:?}",
+            action
+        );
+    }
+
+    #[test]
+    fn set_base_branch_bg_tx_none_shows_error_modal() {
+        let mut app = make_app();
+        app.state.view = View::WorktreeDetail;
+        app.state.selected_worktree_id = Some("w1".to_string());
+
+        // Populate in-memory data
+        app.state.data.worktrees.push(conductor_core::worktree::Worktree {
+            id: "w1".to_string(),
+            repo_id: "r1".to_string(),
+            slug: "feat-test".to_string(),
+            branch: "feat/test".to_string(),
+            path: "/tmp/ws/feat-test".to_string(),
+            ticket_id: None,
+            status: conductor_core::worktree::WorktreeStatus::Active,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            completed_at: None,
+            model: None,
+            base_branch: None,
+        });
+        app.state.data.repos.push(conductor_core::repo::Repo {
+            id: "r1".to_string(),
+            slug: "test-repo".to_string(),
+            remote_url: "https://github.com/test/repo.git".to_string(),
+            local_path: "/tmp/repo".to_string(),
+            default_branch: "main".to_string(),
+            workspace_dir: "/tmp/ws".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            model: None,
+            allow_agent_issue_creation: true,
+            runtime_overrides: None,
+        });
+        app.state.data.repo_slug_map.insert("r1".to_string(), "test-repo".to_string());
+
+        // bg_tx is None (fresh app)
+        app.handle_set_base_branch();
+
+        assert!(
+            matches!(app.state.modal, Modal::Error { .. }),
+            "expected Error modal when bg_tx is None, got {:?}",
+            app.state.modal
+        );
     }
 }

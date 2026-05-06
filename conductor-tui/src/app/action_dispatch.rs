@@ -1640,4 +1640,54 @@ mod tests {
             "status message should not be set on failure"
         );
     }
+
+    #[test]
+    fn base_branches_loaded_shows_picker() {
+        let mut app = make_test_app();
+        let items = vec![
+            crate::state::BranchPickerItem {
+                branch: Some("main".to_string()),
+                ..Default::default()
+            },
+            crate::state::BranchPickerItem {
+                branch: Some("release/0.16.0".to_string()),
+                ..Default::default()
+            },
+        ];
+        app.handle_action(Action::BaseBranchesLoaded {
+            repo_slug: "test-repo".to_string(),
+            wt_slug: "feat-test".to_string(),
+            items,
+        });
+        match &app.state.modal {
+            Modal::BaseBranchPicker {
+                repo_slug,
+                wt_slug,
+                items: picker_items,
+                ..
+            } => {
+                assert_eq!(repo_slug, "test-repo");
+                assert_eq!(wt_slug, "feat-test");
+                // First item should be the sentinel (default branch)
+                assert!(picker_items[0].branch.is_none());
+                // Should have sentinel + 2 branches
+                assert_eq!(picker_items.len(), 3);
+            }
+            other => panic!("expected BaseBranchPicker modal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn base_branches_failed_shows_error_modal() {
+        let mut app = make_test_app();
+        app.handle_action(Action::BaseBranchesFailed {
+            error: "database connection failed".to_string(),
+        });
+        match &app.state.modal {
+            Modal::Error { message } => {
+                assert_eq!(message, "database connection failed");
+            }
+            other => panic!("expected Error modal, got {:?}", other),
+        }
+    }
 }
