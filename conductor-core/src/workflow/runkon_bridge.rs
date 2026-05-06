@@ -63,7 +63,11 @@ impl RkActionExecutorAdapter {
         conn: Arc<Mutex<rusqlite::Connection>>,
         db_path: std::path::PathBuf,
     ) -> Self {
-        Self { config, conn, db_path }
+        Self {
+            config,
+            conn,
+            db_path,
+        }
     }
 }
 
@@ -173,7 +177,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             .get::<crate::schema_config::OutputSchema>();
         let agent_params = runkon_flow_executors::claude_agent::ClaudeAgentParams {
             name: &params.name,
-            inputs: &*params.inputs,
+            inputs: &params.inputs,
             snippet_refs: &params.snippets,
             dry_run: params.dry_run,
             retry_error: params.retry_error.as_deref(),

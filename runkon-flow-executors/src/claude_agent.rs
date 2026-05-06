@@ -5,7 +5,9 @@ use std::sync::Arc;
 use runkon_flow::constants::metadata_keys;
 use runkon_flow::output_schema::OutputSchema;
 use runkon_flow::traits::action_executor::ActionOutput;
-use runkon_runtimes::{PollError, RunEventSink, RunStatus, RunTracker, RuntimeRequest, RuntimeResolver};
+use runkon_runtimes::{
+    PollError, RunEventSink, RunStatus, RunTracker, RuntimeRequest, RuntimeResolver,
+};
 
 use crate::agent_loader::{self, BuildPromptParams};
 use crate::anthropic_api::ApiCallExecutor;
@@ -193,8 +195,8 @@ impl ClaudeAgentExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use runkon_runtimes::{Result as RkResult, RuntimeError};
     use runkon_flow::output_schema::{FieldDef, FieldType};
+    use runkon_runtimes::{Result as RkResult, RuntimeError};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
     use tempfile::TempDir;
