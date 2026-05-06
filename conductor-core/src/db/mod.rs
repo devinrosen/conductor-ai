@@ -182,9 +182,14 @@ mod tests {
             .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN (?, ?, ?)")
             .unwrap();
         let tables: Vec<String> = stmt
-            .query_map(["workflow_runs", "workflow_run_steps", "runkon_flow_schema_history"], |row| {
-                row.get(0)
-            })
+            .query_map(
+                [
+                    "workflow_runs",
+                    "workflow_run_steps",
+                    "runkon_flow_schema_history",
+                ],
+                |row| row.get(0),
+            )
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -209,13 +214,15 @@ mod tests {
         let has_repos: bool = stmt
             .query_map(["repos"], |row| row.get::<_, i64>(0))
             .unwrap()
-            .count() > 0;
-        assert!(has_repos, "repos table should exist after conductor migrations");
+            .count()
+            > 0;
+        assert!(
+            has_repos,
+            "repos table should exist after conductor migrations"
+        );
 
         // Verify conductor extension columns from migration #87 exist on workflow_runs
-        let mut stmt = conn
-            .prepare("PRAGMA table_info(workflow_runs)")
-            .unwrap();
+        let mut stmt = conn.prepare("PRAGMA table_info(workflow_runs)").unwrap();
         let columns: Vec<String> = stmt
             .query_map([], |row| row.get::<_, String>(1))
             .unwrap()
