@@ -85,9 +85,10 @@ impl RkActionExecutorAdapter {
         conn: Arc<Mutex<rusqlite::Connection>>,
         db_path: std::path::PathBuf,
     ) -> Self {
-        let api_executor: Box<dyn crate::workflow::action_executor::ActionExecutor> = Box::new(
-            crate::workflow::api_call_executor::ApiCallExecutor::new(config.clone()),
-        );
+        let api_executor: Box<dyn crate::workflow::action_executor::ActionExecutor> =
+            Box::new(crate::workflow::api_call_executor::ApiCallExecutor::new(
+                config.anthropic_api_key().unwrap_or_default(),
+            ));
         Self {
             inner: crate::workflow::claude_agent_executor::ClaudeAgentExecutor::new(
                 config,
@@ -545,10 +546,13 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         workflow_name: &str,
     ) -> runkon_flow::engine_error::Result<Option<runkon_flow::types::WorkflowRun>> {
         let conn = self.conn.lock().map_err(bridge_lock_err)?;
-        let core_run = crate::workflow::find_resumable_child_run(&conn, parent_run_id, workflow_name)
-            .map_err(|e| EngineError::Workflow(format!(
-                "failed to find resumable child run for parent='{parent_run_id}' workflow='{workflow_name}': {e}"
-            )))?;
+        let core_run =
+            crate::workflow::find_resumable_child_run(&conn, parent_run_id, workflow_name)
+                .map_err(|e| {
+                    EngineError::Workflow(format!(
+                        "failed to find resumable child run for parent='{parent_run_id}' workflow='{workflow_name}': {e}"
+                    ))
+                })?;
 
         Ok(core_run)
     }
