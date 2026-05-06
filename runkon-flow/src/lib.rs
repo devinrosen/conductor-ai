@@ -14,6 +14,8 @@ pub mod output_schema;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod persistence_memory;
 #[cfg(feature = "rusqlite")]
+pub mod migrations;
+#[cfg(feature = "rusqlite")]
 pub mod persistence_sqlite;
 pub mod prompt_builder;
 pub mod status;
