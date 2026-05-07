@@ -216,6 +216,24 @@ pub struct NotifyConfig {
     pub hooks: Vec<HookConfig>,
 }
 
+/// Per-agent execution settings (global, not per-run).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentsConfig {
+    /// Seconds without JSONL output before the agent run is marked failed with
+    /// `stall_timeout`. When unset, falls back to
+    /// [`crate::agent_runtime::DEFAULT_STALL_THRESHOLD`] (300 s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall_threshold_secs: Option<u64>,
+}
+
+impl AgentsConfig {
+    pub fn stall_threshold(&self) -> std::time::Duration {
+        self.stall_threshold_secs
+            .map(std::time::Duration::from_secs)
+            .unwrap_or(crate::agent_runtime::DEFAULT_STALL_THRESHOLD)
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -228,6 +246,8 @@ pub struct Config {
     pub notifications: NotificationConfig,
     #[serde(default)]
     pub notify: NotifyConfig,
+    #[serde(default)]
+    pub agents: AgentsConfig,
     /// Named runtime configurations for non-Claude agent runtimes (RFC 007).
     /// The built-in "claude" runtime does not require an entry here.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

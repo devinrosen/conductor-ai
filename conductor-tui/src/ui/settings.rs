@@ -14,8 +14,9 @@ pub mod general_row {
     pub const SYNC_INTERVAL: usize = 3;
     pub const AUTO_CLEANUP: usize = 4;
     pub const ISSUE_SOURCES: usize = 5;
+    pub const STALL_TIMEOUT: usize = 6;
     #[allow(dead_code)]
-    pub const COUNT: usize = 6;
+    pub const COUNT: usize = 7;
 }
 
 /// Named row indices for Appearance settings (right pane).
@@ -189,6 +190,11 @@ fn render_general(frame: &mut Frame, area: Rect, block: Block, state: &AppState,
             "Issue sources",
             "[Enter] manage \u{2192}",
             row_style(general_row::ISSUE_SOURCES, sel, focused, state),
+        ),
+        setting_line(
+            "Stall timeout (sec)",
+            &d.stall_timeout,
+            row_style(general_row::STALL_TIMEOUT, sel, focused, state),
         ),
         Line::from(""),
         hint_line,

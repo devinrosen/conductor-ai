@@ -27,6 +27,7 @@ pub(super) struct HeadlessRunConfig {
     pub model: Option<String>,
     pub bot_name: Option<String>,
     pub permission_mode: Option<conductor_core::config::AgentPermissionMode>,
+    pub stall_threshold: std::time::Duration,
 }
 
 fn synthesize_tui_agent_def(model: Option<&str>) -> AgentDef {
@@ -104,7 +105,7 @@ pub(super) fn drive_headless_run(
         }),
         workspace_root: PathBuf::from(&config.working_dir),
         argv_builder: conductor_core::agent_runtime::conductor_argv_builder(),
-        stall_threshold: Some(conductor_core::agent_runtime::DEFAULT_STALL_THRESHOLD),
+        stall_threshold: Some(config.stall_threshold),
         max_turns: None,
     };
 
@@ -850,6 +851,7 @@ impl App {
     ) {
         let Some(ref tx) = self.bg_tx else { return };
         let tx = tx.clone();
+        let stall_threshold = self.config.agents.stall_threshold();
 
         self.state.modal = Modal::Progress {
             message: "Launching agent…".into(),
@@ -887,6 +889,7 @@ impl App {
                     model,
                     bot_name: None,
                     permission_mode: None,
+                    stall_threshold,
                 },
                 &tx,
                 |result| Action::AgentLaunchComplete { result },
@@ -917,6 +920,7 @@ impl App {
     ) {
         let Some(ref tx) = self.bg_tx else { return };
         let tx = tx.clone();
+        let stall_threshold = self.config.agents.stall_threshold();
 
         self.state.modal = Modal::Progress {
             message: "Launching repo agent…".into(),
@@ -954,6 +958,7 @@ impl App {
                     model: None,
                     bot_name: None,
                     permission_mode: Some(conductor_core::config::AgentPermissionMode::RepoSafe),
+                    stall_threshold,
                 },
                 &tx,
                 |result| Action::RepoAgentLaunched { result },
@@ -997,6 +1002,7 @@ impl App {
         let Some(ref tx) = self.bg_tx else { return };
         let tx = tx.clone();
         let run_id = run.id.clone();
+        let stall_threshold = self.config.agents.stall_threshold();
 
         self.state.modal = crate::state::Modal::Progress {
             message: "Restarting agent…".into(),
@@ -1037,6 +1043,7 @@ impl App {
                     model,
                     bot_name,
                     permission_mode: None,
+                    stall_threshold,
                 },
                 &tx,
                 |result| Action::AgentRestartComplete { result },

@@ -51,6 +51,10 @@ impl App {
             "off"
         }
         .to_string();
+        let stall_timeout = match cfg.agents.stall_threshold_secs {
+            None => "300 (default)".to_string(),
+            Some(n) => n.to_string(),
+        };
         let theme = self
             .tui_config
             .theme
@@ -80,6 +84,7 @@ impl App {
             auto_start,
             sync_interval,
             auto_cleanup,
+            stall_timeout,
             theme,
             hooks,
             custom_models,
@@ -112,6 +117,20 @@ impl App {
                 }
                 general_row::ISSUE_SOURCES => {
                     self.handle_manage_issue_sources();
+                }
+                general_row::STALL_TIMEOUT => {
+                    let current = self
+                        .config
+                        .agents
+                        .stall_threshold_secs
+                        .map(|s| s.to_string())
+                        .unwrap_or_default();
+                    self.state.modal = Modal::Input {
+                        title: "Set stall timeout".into(),
+                        prompt: "Stall timeout (seconds, blank to reset to default):".into(),
+                        value: current,
+                        on_submit: InputAction::SettingsSetStallTimeout,
+                    };
                 }
                 _ => {}
             },
@@ -372,6 +391,25 @@ impl App {
                     self.save_config_background();
                     self.refresh_settings_display();
                 }
+            }
+            InputAction::SettingsSetStallTimeout => {
+                if value.trim().is_empty() {
+                    self.config.agents.stall_threshold_secs = None;
+                } else {
+                    match value.trim().parse::<u64>() {
+                        Ok(n) if n > 0 => {
+                            self.config.agents.stall_threshold_secs = Some(n);
+                        }
+                        _ => {
+                            self.state.modal = Modal::Error {
+                                message: "Stall timeout must be a positive integer or blank to reset.".into(),
+                            };
+                            return;
+                        }
+                    }
+                }
+                self.save_config_background();
+                self.refresh_settings_display();
             }
             _ => {}
         }
