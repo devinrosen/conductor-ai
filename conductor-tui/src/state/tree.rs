@@ -209,22 +209,9 @@ pub fn build_worktree_tree(
     (ordered, positions)
 }
 
-/// Tree-order tickets by parent/child relationships from `ticket_dependencies`, returning
-/// indices into the input slice, parallel `TreePosition`s, and the child→parent reverse map
-/// (so callers can reuse it without rebuilding).
-///
-/// The `deps` map is keyed by ticket ID; each entry's `.children` field lists child tickets.
-/// Tickets whose parent is not present in the input slice are treated as roots.
-#[allow(dead_code)]
-pub fn build_ticket_tree_indices<'a>(
-    tickets: &'a [Ticket],
-    deps: &'a HashMap<String, TicketDependencies>,
-) -> (Vec<usize>, Vec<TreePosition>, HashMap<&'a str, &'a str>) {
-    build_ticket_tree_indices_sorted_by(tickets, deps, TicketSort::Default)
-}
-
-/// Like `build_ticket_tree_indices` but with an explicit sort order applied within each
-/// tree level (roots among themselves, siblings within their parent).
+/// Tree-order tickets by parent/child relationships, returning indices into the input slice,
+/// parallel `TreePosition`s, and the child→parent reverse map. Sort order is applied within
+/// each level (roots among themselves, siblings within their parent).
 pub fn build_ticket_tree_indices_sorted_by<'a>(
     tickets: &'a [Ticket],
     deps: &'a HashMap<String, TicketDependencies>,
@@ -343,7 +330,8 @@ mod tests {
     fn test_build_ticket_tree_indices_flat() {
         let tickets = vec![make_ticket("a"), make_ticket("b"), make_ticket("c")];
         let deps = HashMap::new();
-        let (indices, positions, child_to_parent) = build_ticket_tree_indices(&tickets, &deps);
+        let (indices, positions, child_to_parent) =
+            build_ticket_tree_indices_sorted_by(&tickets, &deps, TicketSort::Default);
 
         assert_eq!(indices.len(), 3);
         assert_eq!(positions.len(), 3);
@@ -362,7 +350,8 @@ mod tests {
         let mut deps = HashMap::new();
         deps.insert("a".to_string(), make_child_dep(&["b"]));
 
-        let (indices, positions, child_to_parent) = build_ticket_tree_indices(&tickets, &deps);
+        let (indices, positions, child_to_parent) =
+            build_ticket_tree_indices_sorted_by(&tickets, &deps, TicketSort::Default);
 
         assert_eq!(indices.len(), 2);
         assert_eq!(child_to_parent.get("b"), Some(&"a"));
@@ -400,7 +389,8 @@ mod tests {
         deps.insert("root".to_string(), make_child_dep(&["a", "b"]));
         deps.insert("a".to_string(), make_child_dep(&["c"]));
 
-        let (indices, positions, _) = build_ticket_tree_indices(&tickets, &deps);
+        let (indices, positions, _) =
+            build_ticket_tree_indices_sorted_by(&tickets, &deps, TicketSort::Default);
 
         let id_order: Vec<&str> = indices.iter().map(|&i| tickets[i].id.as_str()).collect();
         // DFS descending: root, b, a, c (children sorted z→a, so b before a)
@@ -431,7 +421,8 @@ mod tests {
         let mut deps = HashMap::new();
         deps.insert("parent".to_string(), make_child_dep(&["child1", "child2"]));
 
-        let (_, _, child_to_parent) = build_ticket_tree_indices(&tickets, &deps);
+        let (_, _, child_to_parent) =
+            build_ticket_tree_indices_sorted_by(&tickets, &deps, TicketSort::Default);
 
         assert_eq!(child_to_parent.get("child1"), Some(&"parent"));
         assert_eq!(child_to_parent.get("child2"), Some(&"parent"));
