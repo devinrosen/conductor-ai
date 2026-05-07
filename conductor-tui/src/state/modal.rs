@@ -6,8 +6,8 @@ use conductor_core::tickets::Ticket;
 use tui_textarea::TextArea;
 
 use super::{
-    BranchPickerItem, ConfirmAction, FormAction, FormField, InputAction, TreePosition,
-    WorkflowPickerItem, WorkflowPickerTarget,
+    BranchPickerItem, ConfirmAction, FormAction, FormField, InputAction, RuntimeSection,
+    TreePosition, WorkflowPickerItem, WorkflowPickerTarget,
 };
 
 pub use crate::ui::graph::{GraphData, GraphNavState, GraphNodeType};
@@ -76,12 +76,8 @@ pub enum Modal {
         effective_default: Option<String>,
         /// Where the effective default came from (e.g. "global config", "repo", "worktree")
         effective_source: String,
-        /// Index of the currently selected item in the list (0..=KNOWN_MODELS.len() for custom)
+        /// Index of the currently selected item in the flat selectable list
         selected: usize,
-        /// Custom model input text (when user selects "custom…")
-        custom_input: String,
-        /// Whether the custom input line is active
-        custom_active: bool,
         /// Suggested model alias based on prompt keywords (e.g. "haiku", "opus"), if any
         suggested: Option<String>,
         /// What to do when a model is selected
@@ -89,6 +85,9 @@ pub enum Modal {
         /// When true, show a "Default (per-agent frontmatter)" row at index 0.
         /// Used for run-time pickers (agent + workflow) where the user can opt out of overriding.
         allow_default: bool,
+        /// Runtime sections shown in the picker. The built-in "claude" section is
+        /// first; additional user runtimes follow in sorted order.
+        runtime_sections: Vec<RuntimeSection>,
     },
     /// Gate action modal for approving/rejecting a workflow gate step.
     GateAction {

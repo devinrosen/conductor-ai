@@ -4,7 +4,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::state::{AppState, SettingsCategory, SettingsFocus};
+use crate::state::{
+    is_secret_env_key, AppState, RuntimeDetailFocus, SettingsCategory, SettingsFocus,
+};
 
 /// Named row indices for General settings (right pane).
 pub mod general_row {
@@ -14,8 +16,9 @@ pub mod general_row {
     pub const SYNC_INTERVAL: usize = 3;
     pub const AUTO_CLEANUP: usize = 4;
     pub const ISSUE_SOURCES: usize = 5;
+    pub const STALL_TIMEOUT: usize = 6;
     #[allow(dead_code)]
-    pub const COUNT: usize = 6;
+    pub const COUNT: usize = 7;
 }
 
 /// Named row indices for Appearance settings (right pane).
@@ -23,6 +26,13 @@ pub mod appearance_row {
     pub const THEME: usize = 0;
     #[allow(dead_code)]
     pub const COUNT: usize = 1;
+}
+
+/// Row count helper for Runtimes settings (right pane).
+/// One row per runtime (claude built-in always rendered first, then user runtimes).
+pub mod runtimes_row {
+    #[allow(dead_code)]
+    pub const COUNT_PER_RUNTIME: usize = 1;
 }
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -92,7 +102,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         Style::default().fg(theme.label_secondary)
     };
 
-    let category_title = format!(" {} ", state.settings_category.label());
+    let category_title = match (state.settings_category, &state.settings_runtime_detail) {
+        (SettingsCategory::Runtimes, Some(detail)) => format!(" Runtime: {} ", detail.name),
+        _ => format!(" {} ", state.settings_category.label()),
+    };
     let right_block = Block::default()
         .title(category_title)
         .borders(Borders::ALL)
@@ -107,6 +120,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         }
         SettingsCategory::Notifications => {
             render_notifications(frame, right_area, right_block, state, right_focused)
+        }
+        SettingsCategory::Runtimes => {
+            render_runtimes(frame, right_area, right_block, state, right_focused)
         }
     }
 }
@@ -179,6 +195,11 @@ fn render_general(frame: &mut Frame, area: Rect, block: Block, state: &AppState,
             "Issue sources",
             "[Enter] manage \u{2192}",
             row_style(general_row::ISSUE_SOURCES, sel, focused, state),
+        ),
+        setting_line(
+            "Stall timeout (sec)",
+            &d.stall_timeout,
+            row_style(general_row::STALL_TIMEOUT, sel, focused, state),
         ),
         Line::from(""),
         hint_line,
@@ -328,6 +349,249 @@ fn render_notifications(
 
     lines.push(Line::from(""));
     lines.push(hint_line);
+
+    let para = Paragraph::new(lines);
+    frame.render_widget(para, inner);
+}
+
+fn render_runtimes(frame: &mut Frame, area: Rect, block: Block, state: &AppState, focused: bool) {
+    if state.settings_runtime_detail.is_some() {
+        render_runtime_detail(frame, area, block, state, focused);
+    } else {
+        render_runtimes_list(frame, area, block, state, focused);
+    }
+}
+
+fn render_runtimes_list(
+    frame: &mut Frame,
+    area: Rect,
+    block: Block,
+    state: &AppState,
+    focused: bool,
+) {
+    let theme = &state.theme;
+    let sel = state.settings_row_index;
+    let d = &state.settings_display;
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let hint_line = if focused {
+        Line::from(Span::styled(
+            "  [Enter/e] edit  [a] add  [d] delete  [Esc] back",
+            Style::default().fg(theme.label_secondary),
+        ))
+    } else {
+        Line::from(Span::styled(
+            "  [Tab] switch pane",
+            Style::default().fg(theme.label_secondary),
+        ))
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(""));
+
+    if d.runtimes.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No runtimes configured",
+            Style::default().fg(theme.label_secondary),
+        )));
+    } else {
+        for (i, row) in d.runtimes.iter().enumerate() {
+            let is_selected = i == sel && focused;
+            let style = if is_selected {
+                Style::default()
+                    .fg(theme.label_primary)
+                    .bg(theme.highlight_bg)
+            } else {
+                Style::default().fg(theme.label_secondary)
+            };
+            let prefix = if is_selected { "\u{25b8} " } else { "  " };
+            let suffix = if row.is_built_in {
+                "  (built-in)".to_string()
+            } else {
+                format!(
+                    "  type={} models={} env={}",
+                    row.type_hint, row.model_count, row.env_count
+                )
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {prefix}"), style),
+                Span::styled(row.name.clone(), style.add_modifier(Modifier::BOLD)),
+                Span::styled(suffix, Style::default().fg(theme.label_secondary)),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(hint_line);
+
+    let para = Paragraph::new(lines);
+    frame.render_widget(para, inner);
+}
+
+fn render_runtime_detail(
+    frame: &mut Frame,
+    area: Rect,
+    block: Block,
+    state: &AppState,
+    focused: bool,
+) {
+    let theme = &state.theme;
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let Some(detail) = state.settings_runtime_detail.as_ref() else {
+        return;
+    };
+    let runtime = state
+        .settings_display
+        .runtimes
+        .iter()
+        .find(|r| r.name == detail.name);
+    let type_hint = runtime
+        .map(|r| r.type_hint.clone())
+        .unwrap_or_else(|| "claude".to_string());
+    let is_built_in = runtime.map(|r| r.is_built_in).unwrap_or(false);
+    let models: Vec<String> = runtime.map(|r| r.models.clone()).unwrap_or_default();
+    let env_pairs: Vec<(String, String)> = runtime.map(|r| r.env.clone()).unwrap_or_default();
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  Type:        ",
+            Style::default().fg(theme.label_secondary),
+        ),
+        Span::styled(
+            type_hint,
+            Style::default()
+                .fg(theme.label_primary)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  Built-in:    ",
+            Style::default().fg(theme.label_secondary),
+        ),
+        Span::styled(
+            if is_built_in { "yes" } else { "no" },
+            Style::default().fg(theme.label_primary),
+        ),
+    ]));
+    lines.push(Line::from(""));
+
+    // ── Models section ─────────────────────────────────────────────────
+    let models_focused = focused && detail.focus == RuntimeDetailFocus::Models;
+    let models_header_style = if models_focused {
+        Style::default()
+            .fg(theme.label_accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.label_secondary)
+    };
+    lines.push(Line::from(Span::styled(
+        format!("  ── Models ({}) ────────────────────", models.len()),
+        models_header_style,
+    )));
+    if models.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "    (no models — press a to add)",
+            Style::default().fg(theme.label_secondary),
+        )));
+    } else {
+        for (i, m) in models.iter().enumerate() {
+            let is_selected = i == detail.model_index && models_focused;
+            let style = if is_selected {
+                Style::default()
+                    .fg(theme.label_primary)
+                    .bg(theme.highlight_bg)
+            } else {
+                Style::default().fg(theme.label_primary)
+            };
+            let prefix = if is_selected { "\u{25b8} " } else { "  " };
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {prefix}"), style),
+                Span::styled(m.clone(), style),
+            ]));
+        }
+    }
+    lines.push(Line::from(""));
+
+    // ── Environment section ────────────────────────────────────────────
+    let env_focused = focused && detail.focus == RuntimeDetailFocus::Environment;
+    let env_header_style = if env_focused {
+        Style::default()
+            .fg(theme.label_accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.label_secondary)
+    };
+    lines.push(Line::from(Span::styled(
+        format!("  ── Environment ({}) ───────────────", env_pairs.len()),
+        env_header_style,
+    )));
+    if env_pairs.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "    (no env vars — press a to add)",
+            Style::default().fg(theme.label_secondary),
+        )));
+    } else {
+        let key_w = env_pairs.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+        for (i, (k, v)) in env_pairs.iter().enumerate() {
+            let is_selected = i == detail.env_index && env_focused;
+            let style = if is_selected {
+                Style::default()
+                    .fg(theme.label_primary)
+                    .bg(theme.highlight_bg)
+            } else {
+                Style::default().fg(theme.label_primary)
+            };
+            let prefix = if is_selected { "\u{25b8} " } else { "  " };
+            let secret = is_secret_env_key(k);
+            let revealed = detail.revealed_env_keys.contains(k);
+            let display_value = if secret && !revealed {
+                "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}".to_string()
+            } else {
+                v.clone()
+            };
+            let mut spans = vec![
+                Span::styled(format!("  {prefix}"), style),
+                Span::styled(format!("{:<key_w$}", k, key_w = key_w), style),
+                Span::styled("  ", style),
+                Span::styled(display_value, style),
+            ];
+            if secret {
+                let tag = if revealed { "  [shown]" } else { "  [hidden]" };
+                spans.push(Span::styled(
+                    tag.to_string(),
+                    Style::default().fg(theme.label_secondary),
+                ));
+            }
+            lines.push(Line::from(spans));
+        }
+    }
+    lines.push(Line::from(""));
+
+    // Hint line — section-aware.
+    let hint = if focused {
+        match detail.focus {
+            RuntimeDetailFocus::Models => {
+                "  [a] add  [Enter/e] edit  [d] delete  [J/K] reorder  [Tab] env  [Esc] back"
+            }
+            RuntimeDetailFocus::Environment => {
+                "  [a] add  [Enter/e] edit  [d] delete  [r] reveal  [Tab] models  [Esc] back"
+            }
+        }
+    } else {
+        "  [Tab] switch pane"
+    };
+    lines.push(Line::from(Span::styled(
+        hint,
+        Style::default().fg(theme.label_secondary),
+    )));
 
     let para = Paragraph::new(lines);
     frame.render_widget(para, inner);

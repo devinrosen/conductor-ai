@@ -94,17 +94,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
-        Modal::ModelPicker { custom_active, .. } => {
-            if *custom_active {
-                // In custom input mode: type characters, backspace, enter to confirm, esc to leave custom mode
-                return match key.code {
-                    KeyCode::Enter => Action::InputSubmit,
-                    KeyCode::Esc => Action::DismissModal,
-                    KeyCode::Backspace => Action::InputBackspace,
-                    KeyCode::Char(c) => Action::InputChar(c),
-                    _ => Action::None,
-                };
-            }
+        Modal::ModelPicker { .. } => {
             return match key.code {
                 KeyCode::Esc => Action::DismissModal,
                 KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
@@ -460,30 +450,66 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char(' ') if state.column_focus == crate::state::ColumnFocus::Content => {
                 return Action::ToggleTicketCollapse;
             }
+            KeyCode::Char('#') => return Action::CycleTicketSort,
             _ => {}
         }
     }
 
     // View-specific keybindings (Settings view)
     if state.view == View::Settings {
+        use crate::state::{RuntimeDetailFocus, SettingsCategory, SettingsFocus};
+        let in_runtime_detail = state.settings_focus == SettingsFocus::SettingsList
+            && state.settings_category == SettingsCategory::Runtimes
+            && state.settings_runtime_detail.is_some();
+        let in_runtimes_list = state.settings_focus == SettingsFocus::SettingsList
+            && state.settings_category == SettingsCategory::Runtimes
+            && state.settings_runtime_detail.is_none();
+        let env_focused = state
+            .settings_runtime_detail
+            .as_ref()
+            .is_some_and(|d| d.focus == RuntimeDetailFocus::Environment);
+        let models_focused = state
+            .settings_runtime_detail
+            .as_ref()
+            .is_some_and(|d| d.focus == RuntimeDetailFocus::Models);
+
         return match key.code {
             KeyCode::Esc => Action::Back,
-            KeyCode::Tab => Action::NextPanel,
-            KeyCode::BackTab => Action::PrevPanel,
+            KeyCode::Tab => {
+                if in_runtime_detail {
+                    Action::RuntimeDetailToggleSection
+                } else {
+                    Action::NextPanel
+                }
+            }
+            KeyCode::BackTab => {
+                if in_runtime_detail {
+                    Action::RuntimeDetailToggleSection
+                } else {
+                    Action::PrevPanel
+                }
+            }
+            KeyCode::Char('J') if in_runtime_detail && models_focused => {
+                Action::RuntimeDetailModelMoveDown
+            }
+            KeyCode::Char('K') if in_runtime_detail && models_focused => {
+                Action::RuntimeDetailModelMoveUp
+            }
             KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
             KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
             KeyCode::Enter => {
-                use crate::state::SettingsFocus;
-                if state.settings_focus == SettingsFocus::SettingsList {
+                if in_runtime_detail && models_focused {
+                    Action::RuntimeDetailModelEdit
+                } else if in_runtime_detail && env_focused {
+                    Action::RuntimeDetailEnvEdit
+                } else if state.settings_focus == SettingsFocus::SettingsList {
                     Action::SettingsEditSetting
                 } else {
-                    // Enter on category list focuses the right pane
                     Action::NextPanel
                 }
             }
             KeyCode::Char('c') => Action::SettingsCycleValue,
             KeyCode::Char('t') => {
-                use crate::state::SettingsCategory;
                 if state.settings_category == SettingsCategory::Notifications {
                     if let Some(idx) = state.settings_selected_hook_index() {
                         Action::SettingsTestHook { hook_index: idx }
@@ -495,13 +521,52 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 }
             }
             KeyCode::Char('o') => {
-                use crate::state::SettingsCategory;
                 if state.settings_category == SettingsCategory::Notifications {
                     if let Some(idx) = state.settings_selected_hook_index() {
                         Action::SettingsOpenHookScript { hook_index: idx }
                     } else {
                         Action::None
                     }
+                } else {
+                    Action::None
+                }
+            }
+            KeyCode::Char('a') => {
+                if in_runtime_detail && models_focused {
+                    Action::RuntimeDetailModelAdd
+                } else if in_runtime_detail && env_focused {
+                    Action::RuntimeDetailEnvAdd
+                } else if in_runtimes_list {
+                    Action::RuntimesAdd
+                } else {
+                    Action::None
+                }
+            }
+            KeyCode::Char('d') => {
+                if in_runtime_detail && models_focused {
+                    Action::RuntimeDetailModelDelete
+                } else if in_runtime_detail && env_focused {
+                    Action::RuntimeDetailEnvDelete
+                } else if in_runtimes_list {
+                    Action::RuntimesDelete
+                } else {
+                    Action::None
+                }
+            }
+            KeyCode::Char('e') => {
+                if in_runtime_detail && models_focused {
+                    Action::RuntimeDetailModelEdit
+                } else if in_runtime_detail && env_focused {
+                    Action::RuntimeDetailEnvEdit
+                } else if in_runtimes_list {
+                    Action::RuntimesEdit
+                } else {
+                    Action::None
+                }
+            }
+            KeyCode::Char('r') => {
+                if in_runtime_detail && env_focused {
+                    Action::RuntimeDetailEnvToggleReveal
                 } else {
                     Action::None
                 }

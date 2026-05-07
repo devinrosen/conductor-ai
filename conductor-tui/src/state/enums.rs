@@ -25,6 +25,7 @@ pub enum SettingsCategory {
     General,
     Appearance,
     Notifications,
+    Runtimes,
 }
 
 impl SettingsCategory {
@@ -33,6 +34,7 @@ impl SettingsCategory {
             SettingsCategory::General,
             SettingsCategory::Appearance,
             SettingsCategory::Notifications,
+            SettingsCategory::Runtimes,
         ]
     }
 
@@ -41,8 +43,81 @@ impl SettingsCategory {
             Self::General => "General",
             Self::Appearance => "Appearance",
             Self::Notifications => "Notifications",
+            Self::Runtimes => "Runtimes",
         }
     }
+}
+
+/// One section in the runtime-aware model picker.
+/// `name` is the runtime key (e.g. `"claude"`, `"gemini"`).
+/// `models` is the ordered list of model strings for that runtime.
+#[derive(Debug, Clone)]
+pub struct RuntimeSection {
+    pub name: String,
+    pub models: Vec<String>,
+}
+
+/// Total number of selectable rows in the model picker (model entries + optional Default row).
+pub fn model_picker_total(sections: &[RuntimeSection], allow_default: bool) -> usize {
+    sections.iter().map(|s| s.models.len()).sum::<usize>() + usize::from(allow_default)
+}
+
+/// A display row for a runtime entry in the Settings → Runtimes pane.
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeDisplayRow {
+    pub name: String,
+    pub type_hint: String,
+    pub model_count: usize,
+    pub env_count: usize,
+    pub is_built_in: bool,
+    /// Full ordered model list (used by the detail view).
+    pub models: Vec<String>,
+    /// Env vars sorted alphabetically by key (used by the detail view).
+    pub env: Vec<(String, String)>,
+}
+
+/// Which sub-section of the Runtime detail view has focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RuntimeDetailFocus {
+    #[default]
+    Models,
+    Environment,
+}
+
+impl RuntimeDetailFocus {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Models => Self::Environment,
+            Self::Environment => Self::Models,
+        }
+    }
+}
+
+/// In-memory state for the Settings → Runtimes drill-in detail view.
+///
+/// `revealed_env_keys` is intentionally session-only: secrets are masked by
+/// default and the reveal state is never persisted.
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeDetailState {
+    pub name: String,
+    pub focus: RuntimeDetailFocus,
+    pub model_index: usize,
+    pub env_index: usize,
+    pub revealed_env_keys: std::collections::HashSet<String>,
+}
+
+/// Iterate over user-defined runtimes (excluding the built-in `"claude"` entry)
+/// in name-sorted order. Used by both the picker and Settings → Runtimes so
+/// they agree on iteration order.
+pub fn user_runtimes_sorted(
+    runtimes: &std::collections::HashMap<String, conductor_core::config::RuntimeConfig>,
+) -> Vec<(&String, &conductor_core::config::RuntimeConfig)> {
+    let mut other: Vec<_> = runtimes
+        .iter()
+        .filter(|(k, _)| k.as_str() != "claude")
+        .collect();
+    other.sort_by_key(|(k, _)| k.as_str());
+    other
 }
 
 /// A row in the unified dashboard list — repo header or worktree entry.
@@ -438,7 +513,42 @@ pub enum ConfirmAction {
         wt_slug: String,
         wt_id: String,
     },
+    DeleteRuntime {
+        name: String,
+    },
+    /// Settings → Runtimes detail: remove the model at `index` from `runtime`.
+    DeleteRuntimeModel {
+        runtime: String,
+        index: usize,
+    },
+    /// Settings → Runtimes detail: remove env var `key` from `runtime`.
+    DeleteRuntimeEnvVar {
+        runtime: String,
+        key: String,
+    },
     Quit,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TicketSort {
+    NumberAsc,
+    #[default]
+    NumberDesc,
+}
+
+impl TicketSort {
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::NumberAsc => Self::NumberDesc,
+            Self::NumberDesc => Self::NumberAsc,
+        }
+    }
+    pub fn title_fragment(self) -> Option<&'static str> {
+        match self {
+            Self::NumberAsc => Some("sort: #\u{2191}"),
+            Self::NumberDesc => Some("sort: #\u{2193}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -476,6 +586,10 @@ pub enum FormAction {
         remote_url: String,
     },
     RunWorkflow(Box<RunWorkflowAction>),
+    /// Settings → Runtimes detail: add a new env var (key + value).
+    AddRuntimeEnvVar {
+        runtime: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -502,6 +616,8 @@ pub enum InputAction {
     },
     /// Second step: optionally override the model for this run.
     /// `resolved_default` is the already-resolved model (worktree → repo → global config).
+    /// `runtime` is the runtime chosen in the picker (`Some("qwen-local")`, `Some("claude")`, …);
+    /// `None` means the user picked the "Default" row and no override is applied.
     AgentModelOverride {
         prompt: String,
         worktree_id: String,
@@ -509,6 +625,7 @@ pub enum InputAction {
         worktree_slug: String,
         resume_session_id: Option<String>,
         resolved_default: Option<String>,
+        runtime: Option<String>,
     },
     /// Set (or clear) the default model for a worktree.
     SetWorktreeModel {
@@ -526,16 +643,41 @@ pub enum InputAction {
     },
     /// Second step: model picker for workflow runs.
     /// Carries the workflow target + inputs through the modal roundtrip.
+    /// `runtime` is set when the picker selection came from a non-default
+    /// runtime section; the executor uses it to override the agent file's
+    /// `runtime:` frontmatter so env vars from `[runtimes.<name>]` reach the
+    /// spawned subprocess.
     WorkflowModelOverride {
         action: Box<RunWorkflowAction>,
         inputs: std::collections::HashMap<String, String>,
+        runtime: Option<String>,
     },
     /// Settings view: set the global model string (blank to clear).
     SettingsSetModel,
     /// Settings view: set the sync interval in minutes.
     SettingsSetSyncInterval,
+    /// Settings view: set the stall timeout in seconds (blank to reset to default).
+    SettingsSetStallTimeout,
     /// Adopt an existing on-disk git worktree: user enters the path.
     AdoptWorktree {
         repo_slug: String,
+    },
+    /// Settings → Runtimes: add a new runtime entry (first step: name).
+    SettingsAddRuntime,
+    /// Settings → Runtimes detail: append a single model to a runtime's
+    /// `supported_models` list.
+    SettingsAddModel {
+        runtime: String,
+    },
+    /// Settings → Runtimes detail: replace the model at `index` with a new value.
+    SettingsEditModel {
+        runtime: String,
+        index: usize,
+    },
+    /// Settings → Runtimes detail: edit the value of an existing env var.
+    /// The key is fixed; only the value changes.
+    SettingsEditEnvValue {
+        runtime: String,
+        key: String,
     },
 }

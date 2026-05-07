@@ -213,6 +213,7 @@ pub(super) fn tool_resume_run(
         config,
         workflow_run_id: run_id.to_string(),
         model,
+        runtime: None,
         from_step,
         restart: false,
         db_path: Some(Conductor::db_path()),

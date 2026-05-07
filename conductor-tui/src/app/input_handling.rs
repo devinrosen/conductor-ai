@@ -6,10 +6,130 @@ use conductor_core::worktree::WorktreeManager;
 
 use crate::state::{
     BranchPickerItem, ConfirmAction, FormAction, FormField, FormFieldType, InputAction, Modal,
+    RuntimeSection,
 };
 
 use super::helpers::advance_form_field;
 use super::App;
+
+/// Build the `Vec<RuntimeSection>` shown in the model picker from the current config.
+///
+/// The built-in `"claude"` section is always first, combining `KNOWN_MODELS` aliases
+/// with any models in `config.runtimes["claude"].supported_models`. Additional
+/// user-defined runtimes follow in sorted order by name.
+pub(crate) fn build_runtime_sections(config: &Config) -> Vec<RuntimeSection> {
+    use conductor_core::models::KNOWN_MODELS;
+
+    // Build "claude" section: KNOWN_MODELS aliases + migrated custom models
+    let mut claude_models: Vec<String> = KNOWN_MODELS.iter().map(|m| m.alias.to_string()).collect();
+    if let Some(claude_rt) = config.runtimes.get("claude") {
+        for m in &claude_rt.supported_models {
+            let already_known = KNOWN_MODELS
+                .iter()
+                .any(|km| km.alias == m.as_str() || km.id == m.as_str());
+            if !already_known && !claude_models.contains(m) {
+                claude_models.push(m.clone());
+            }
+        }
+    }
+
+    let mut sections = vec![RuntimeSection {
+        name: "claude".to_string(),
+        models: claude_models,
+    }];
+
+    // Additional user runtimes sorted by name (skip "claude" — already handled)
+    for (name, rt) in crate::state::user_runtimes_sorted(&config.runtimes) {
+        if !rt.supported_models.is_empty() {
+            sections.push(RuntimeSection {
+                name: name.clone(),
+                models: rt.supported_models.clone(),
+            });
+        }
+    }
+
+    sections
+}
+
+/// Resolve flat selectable index → `(runtime_name, model_string)`.
+///
+/// `offset` is 1 when `allow_default` is true (Default row at index 0).
+/// Returns `None` when the index is out of range.
+pub(crate) fn resolve_picker_selection(
+    sections: &[RuntimeSection],
+    selected: usize,
+    allow_default: bool,
+) -> Option<(String, String)> {
+    let offset = usize::from(allow_default);
+    if allow_default && selected == 0 {
+        return None; // "Default" row
+    }
+    let mut flat = offset;
+    for section in sections {
+        for model in &section.models {
+            if flat == selected {
+                return Some((section.name.clone(), model.clone()));
+            }
+            flat += 1;
+        }
+    }
+    None
+}
+
+/// Compute the initial `selected` index for the picker given an effective default.
+pub(crate) fn picker_initial_selected(
+    sections: &[RuntimeSection],
+    effective_default: Option<&str>,
+    suggested: Option<&str>,
+    allow_default: bool,
+) -> usize {
+    use conductor_core::models::KNOWN_MODELS;
+
+    let offset = usize::from(allow_default);
+
+    // Try to pre-select based on effective_default
+    if let Some(default) = effective_default {
+        let mut flat = offset;
+        for section in sections {
+            for model in &section.models {
+                let matches = model == default
+                    || KNOWN_MODELS
+                        .iter()
+                        .any(|km| (km.id == default || km.alias == default) && km.alias == model);
+                if matches {
+                    return flat;
+                }
+                flat += 1;
+            }
+        }
+    }
+
+    // Fall back to suggested model in claude section
+    if let Some(sug) = suggested {
+        let mut flat = offset;
+        if let Some(claude_section) = sections.iter().find(|s| s.name == "claude") {
+            for model in &claude_section.models {
+                if model == sug {
+                    return flat;
+                }
+                flat += 1;
+            }
+        }
+    }
+
+    // Default: sonnet (alias) if present in claude section, otherwise offset
+    let mut flat = offset;
+    if let Some(claude_section) = sections.iter().find(|s| s.name == "claude") {
+        for model in &claude_section.models {
+            if model == "sonnet" {
+                return flat;
+            }
+            flat += 1;
+        }
+    }
+
+    offset // fallback to first selectable row
+}
 
 /// Build the "From PR (optional)" input modal used to transition into the PR step
 /// of worktree creation. Centralised here to avoid duplicating the title/prompt strings.
@@ -58,6 +178,7 @@ impl App {
                 }
                 FormAction::AddIssueSource { .. } => {}
                 FormAction::RunWorkflow(_) => {}
+                FormAction::AddRuntimeEnvVar { .. } => {}
             }
         }
     }
@@ -89,6 +210,7 @@ impl App {
                 }
                 FormAction::AddIssueSource { .. } => {}
                 FormAction::RunWorkflow(_) => {}
+                FormAction::AddRuntimeEnvVar { .. } => {}
             }
         }
     }
@@ -201,6 +323,9 @@ impl App {
                         action.workflow_def,
                     );
                 }
+                FormAction::AddRuntimeEnvVar { runtime } => {
+                    self.submit_add_runtime_env_var(fields, &runtime);
+                }
             }
         }
     }
@@ -284,42 +409,40 @@ impl App {
                 (value, on_submit)
             }
             Modal::ModelPicker {
-                context_label,
-                effective_default,
-                effective_source,
                 selected,
-                custom_input,
-                custom_active,
-                suggested,
-                on_submit,
+                runtime_sections,
+                mut on_submit,
                 allow_default,
+                ..
             } => {
-                let models = conductor_core::models::KNOWN_MODELS;
-                let offset = usize::from(allow_default);
-                let value = if custom_active {
-                    custom_input
-                } else if allow_default && selected == 0 {
+                let (runtime_opt, value) = if allow_default && selected == 0 {
                     // "Default" row selected — empty string maps to model: None
-                    String::new()
-                } else if selected < offset + models.len() {
-                    // Selected a known model — use its alias
-                    models[selected - offset].alias.to_string()
+                    (None, String::new())
                 } else {
-                    // "custom…" was highlighted but Enter pressed without typing:
-                    // re-open the picker with custom mode active
-                    self.state.modal = Modal::ModelPicker {
-                        context_label,
-                        effective_default,
-                        effective_source,
-                        selected,
-                        custom_input,
-                        custom_active: true,
-                        suggested,
-                        on_submit,
-                        allow_default,
-                    };
-                    return;
+                    match resolve_picker_selection(&runtime_sections, selected, allow_default) {
+                        Some((rt, model)) => (Some(rt), model),
+                        None => (None, String::new()),
+                    }
                 };
+                // Inject the picker's runtime selection into model-bearing variants
+                // that persist runtime context. SetWorktreeModel/SetRepoModel are
+                // intentionally model-only; per-scope runtime persistence is
+                // deferred per #2960.
+                match on_submit {
+                    InputAction::AgentModelOverride {
+                        runtime: ref mut rt_field,
+                        ..
+                    } => {
+                        *rt_field = runtime_opt;
+                    }
+                    InputAction::WorkflowModelOverride {
+                        runtime: ref mut rt_field,
+                        ..
+                    } => {
+                        *rt_field = runtime_opt;
+                    }
+                    _ => {}
+                }
                 (value, on_submit)
             }
             _ => return,
@@ -519,12 +642,6 @@ impl App {
                 // Suggest a model based on the prompt text
                 let suggested = conductor_core::models::suggest_model(&value);
 
-                // Pre-select the suggested model in the picker
-                let initial_selected = conductor_core::models::KNOWN_MODELS
-                    .iter()
-                    .position(|m| m.alias == suggested)
-                    .unwrap_or(1); // default to sonnet
-
                 let (effective_default, effective_source) = match &resolved_default {
                     Some(m) => {
                         let source = if wt_model.is_some() {
@@ -539,13 +656,23 @@ impl App {
                     None => (None, "not set".to_string()),
                 };
 
+                // Build runtime sections from config
+                let runtime_sections = build_runtime_sections(&self.config);
+
+                // Pre-select the suggested model in the picker
+                let initial_selected = picker_initial_selected(
+                    &runtime_sections,
+                    effective_default.as_deref(),
+                    Some(suggested),
+                    true,
+                );
+
                 self.state.modal = Modal::ModelPicker {
                     context_label: "agent run".to_string(),
                     effective_default,
                     effective_source,
                     selected: initial_selected,
-                    custom_input: String::new(),
-                    custom_active: false,
+                    runtime_sections,
                     suggested: Some(suggested.to_string()),
                     allow_default: true,
                     on_submit: InputAction::AgentModelOverride {
@@ -555,6 +682,7 @@ impl App {
                         worktree_slug,
                         resume_session_id,
                         resolved_default,
+                        runtime: None, // Filled in from picker selection at submit time
                     },
                 };
             }
@@ -565,6 +693,7 @@ impl App {
                 worktree_slug,
                 resume_session_id,
                 resolved_default,
+                runtime,
             } => {
                 // Empty value means "use the resolved default"
                 let model = if value.trim().is_empty() {
@@ -579,16 +708,27 @@ impl App {
                     worktree_slug,
                     resume_session_id,
                     model,
+                    runtime,
                 );
             }
-            InputAction::WorkflowModelOverride { action, inputs } => {
+            InputAction::WorkflowModelOverride {
+                action,
+                inputs,
+                runtime,
+            } => {
                 // Empty value means "Default" — use per-agent frontmatter / no override
                 let model = if value.trim().is_empty() {
                     None
                 } else {
                     Some(value)
                 };
-                self.do_dispatch_workflow(action.target, action.workflow_def, inputs, model);
+                self.do_dispatch_workflow(
+                    action.target,
+                    action.workflow_def,
+                    inputs,
+                    model,
+                    runtime,
+                );
             }
             InputAction::SetWorktreeModel {
                 worktree_id,
@@ -664,7 +804,13 @@ impl App {
                     }
                 }
             }
-            InputAction::SettingsSetModel | InputAction::SettingsSetSyncInterval => {
+            InputAction::SettingsSetModel
+            | InputAction::SettingsSetSyncInterval
+            | InputAction::SettingsSetStallTimeout
+            | InputAction::SettingsAddRuntime
+            | InputAction::SettingsAddModel { .. }
+            | InputAction::SettingsEditModel { .. }
+            | InputAction::SettingsEditEnvValue { .. } => {
                 self.handle_settings_input_submit(on_submit, value);
             }
             InputAction::AdoptWorktree { repo_slug } => {
@@ -723,6 +869,7 @@ impl App {
                 worktree_slug,
                 resume_session_id,
                 resolved_default,
+                runtime,
             } => {
                 let model = if value.trim().is_empty() {
                     resolved_default
@@ -736,6 +883,7 @@ impl App {
                     worktree_slug,
                     resume_session_id,
                     model,
+                    runtime,
                 );
             }
             InputAction::SettingsSetModel | InputAction::SettingsSetSyncInterval => {
@@ -748,7 +896,8 @@ impl App {
     /// Handle branch selection from the BranchPicker modal.
     /// `index = None` means use the modal's `selected` field (Enter key);
     /// `index = Some(i)` means a direct numeric pick.
-    /// Trigger the base branch change flow: open picker with empty items list.
+    /// Trigger the base branch change flow: enumerate remote branches off-thread,
+    /// then open the picker via Action::BaseBranchesLoaded.
     pub(super) fn handle_set_base_branch(&mut self) {
         // Only valid in WorktreeDetail view
         if self.state.view != crate::state::View::WorktreeDetail {
@@ -772,8 +921,82 @@ impl App {
             .cloned()
             .unwrap_or_default();
 
-        // No feature branches — open picker with empty items (just the default branch sentinel).
-        self.handle_base_branches_loaded(repo_slug, wt.slug, vec![]);
+        let Some(tx) = self.bg_tx.clone() else {
+            self.state.modal = Modal::Error {
+                message: "Cannot load branches: background sender not ready.".into(),
+            };
+            return;
+        };
+
+        let wt_branch = wt.branch.clone();
+        let wt_slug = wt.slug.clone();
+
+        self.state.modal = Modal::Progress {
+            message: "Loading branches…".into(),
+        };
+
+        std::thread::spawn(move || {
+            use crate::action::Action;
+            use crate::state::BranchPickerItem;
+            use conductor_core::config::{db_path, load_config};
+            use conductor_core::db::open_database;
+            use conductor_core::repo::RepoManager;
+            use conductor_core::worktree::WorktreeManager;
+
+            let result = (|| {
+                let conn = open_database(&db_path())
+                    .map_err(|e| format!("Failed to open database: {e}"))?;
+                let config = load_config().map_err(|e| format!("Failed to load config: {e}"))?;
+                let repo = RepoManager::new(&conn, &config)
+                    .get_by_slug(&repo_slug)
+                    .map_err(|e| format!("Failed to get repo '{repo_slug}': {e}"))?;
+                let default_branch = repo.default_branch.clone();
+
+                // Get active worktrees for this repo.
+                let active_worktrees = WorktreeManager::new(&conn, &config)
+                    .list_by_repo_id(&repo.id, true)
+                    .map_err(|e| format!("Failed to list worktrees: {e}"))?;
+
+                // Build the candidate set: active worktree branches + repo default branch.
+                // Exclude the worktree's own branch (selecting self as base is nonsensical).
+                let mut branches: Vec<String> = active_worktrees
+                    .iter()
+                    .filter(|wt| wt.branch != wt_branch)
+                    .map(|wt| wt.branch.clone())
+                    .collect();
+
+                // Add the default branch if it's not already included and not the current branch.
+                if default_branch != wt_branch && !branches.contains(&default_branch) {
+                    branches.push(default_branch);
+                }
+
+                // Sort alphabetically.
+                branches.sort();
+
+                let items = branches
+                    .into_iter()
+                    .map(|branch| BranchPickerItem {
+                        branch: Some(branch),
+                        ..Default::default()
+                    })
+                    .collect();
+
+                Ok::<Vec<BranchPickerItem>, String>(items)
+            })();
+
+            match result {
+                Ok(items) => {
+                    let _ = tx.send(Action::BaseBranchesLoaded {
+                        repo_slug,
+                        wt_slug,
+                        items,
+                    });
+                }
+                Err(error) => {
+                    let _ = tx.send(Action::BaseBranchesFailed { error });
+                }
+            }
+        });
     }
 
     /// Handle the result of loading branches for base branch change.
@@ -938,7 +1161,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{InputAction, Modal};
+    use crate::state::{InputAction, Modal, View};
     use crate::theme::Theme;
     use conductor_core::{config::Config, models::KNOWN_MODELS};
 
@@ -946,6 +1169,7 @@ mod tests {
     /// - repo `r1` (slug `test-repo`)
     /// - worktree `w1` (slug `feat-test`, branch `feat/test`, status `active`)
     fn make_app() -> App {
+        crate::test_support::isolate_conductor_home();
         let conn = conductor_core::test_helpers::setup_db();
         App::new(
             conn,
@@ -964,14 +1188,43 @@ mod tests {
         }
     }
 
+    fn claude_only_sections() -> Vec<crate::state::RuntimeSection> {
+        vec![crate::state::RuntimeSection {
+            name: "claude".to_string(),
+            models: KNOWN_MODELS.iter().map(|m| m.alias.to_string()).collect(),
+        }]
+    }
+
     fn model_picker(selected: usize, allow_default: bool) -> Modal {
         Modal::ModelPicker {
             context_label: "test".to_string(),
             effective_default: None,
             effective_source: "not set".to_string(),
             selected,
-            custom_input: String::new(),
-            custom_active: false,
+            runtime_sections: claude_only_sections(),
+            suggested: None,
+            on_submit: set_wt_model_action(),
+            allow_default,
+        }
+    }
+
+    fn model_picker_with_custom(
+        selected: usize,
+        allow_default: bool,
+        custom: Vec<String>,
+    ) -> Modal {
+        // Custom models live inside the built-in claude section after KNOWN_MODELS aliases.
+        let mut models: Vec<String> = KNOWN_MODELS.iter().map(|m| m.alias.to_string()).collect();
+        models.extend(custom);
+        Modal::ModelPicker {
+            context_label: "test".to_string(),
+            effective_default: None,
+            effective_source: "not set".to_string(),
+            selected,
+            runtime_sections: vec![crate::state::RuntimeSection {
+                name: "claude".to_string(),
+                models,
+            }],
             suggested: None,
             on_submit: set_wt_model_action(),
             allow_default,
@@ -1020,46 +1273,101 @@ mod tests {
         assert_eq!(app.state.status_message.as_deref(), Some(expected.as_str()));
     }
 
-    // selected at the "custom…" row → re-opens picker with custom_active=true
+    // The picker injects the resolved runtime into AgentModelOverride so non-claude
+    // selections aren't silently dropped. Default row leaves runtime as None.
     #[test]
-    fn model_picker_custom_row_reopens_picker_with_custom_active() {
-        let mut app = make_app();
-        let offset = 1_usize; // allow_default=true
-        let custom_row_index = offset + KNOWN_MODELS.len();
-        app.state.modal = model_picker(custom_row_index, true);
-        app.handle_input_submit();
-        assert!(
-            matches!(
-                app.state.modal,
-                Modal::ModelPicker {
-                    custom_active: true,
-                    ..
-                }
-            ),
-            "expected picker to re-open with custom_active=true, got {:?}",
-            app.state.modal
+    fn model_picker_injects_runtime_into_agent_model_override() {
+        use crate::state::RuntimeSection;
+        let sections = vec![
+            RuntimeSection {
+                name: "claude".to_string(),
+                models: vec!["opus".to_string(), "sonnet".to_string()],
+            },
+            RuntimeSection {
+                name: "qwen-local".to_string(),
+                models: vec!["qwen-72b".to_string()],
+            },
+        ];
+        // selected=2 with allow_default=false → second section, first model (qwen-72b)
+        let extracted = pick_and_extract_runtime(sections.clone(), 2, false);
+        assert_eq!(
+            extracted,
+            Some("qwen-local".to_string()),
+            "non-claude selection must surface the runtime name"
+        );
+        // selected=0 with allow_default=true → "Default" row → runtime stays None
+        let extracted_default = pick_and_extract_runtime(sections, 0, true);
+        assert_eq!(
+            extracted_default, None,
+            "Default row must leave runtime unset"
         );
     }
 
-    // custom_active=true → value comes from custom_input, not the selected index
-    #[test]
-    fn model_picker_custom_active_submits_custom_input_value() {
-        let mut app = make_app();
-        app.state.modal = Modal::ModelPicker {
-            context_label: "test".to_string(),
-            effective_default: None,
-            effective_source: "not set".to_string(),
-            selected: 99, // index is irrelevant when custom_active=true
-            custom_input: "my-custom-model".to_string(),
-            custom_active: true,
-            suggested: None,
-            on_submit: set_wt_model_action(),
-            allow_default: false,
+    /// Helper: simulate the ModelPicker submission shape and return the runtime
+    /// field that was injected into the resulting `AgentModelOverride`.
+    fn pick_and_extract_runtime(
+        runtime_sections: Vec<crate::state::RuntimeSection>,
+        selected: usize,
+        allow_default: bool,
+    ) -> Option<String> {
+        use crate::state::InputAction;
+        let mut on_submit = InputAction::AgentModelOverride {
+            prompt: String::new(),
+            worktree_id: "w1".into(),
+            worktree_path: "/tmp/wt".into(),
+            worktree_slug: "feat-test".into(),
+            resume_session_id: None,
+            resolved_default: None,
+            runtime: None,
         };
+        let runtime_opt = if allow_default && selected == 0 {
+            None
+        } else {
+            resolve_picker_selection(&runtime_sections, selected, allow_default).map(|(rt, _)| rt)
+        };
+        if let InputAction::AgentModelOverride {
+            runtime: ref mut rt_field,
+            ..
+        } = on_submit
+        {
+            *rt_field = runtime_opt;
+        }
+        match on_submit {
+            InputAction::AgentModelOverride { runtime, .. } => runtime,
+            _ => panic!("expected AgentModelOverride"),
+        }
+    }
+
+    // selecting the first custom model row submits its value
+    #[test]
+    fn model_picker_custom_model_row_submits_value() {
+        let mut app = make_app();
+        let offset = 1_usize; // allow_default=true
+        let custom_row_index = offset + KNOWN_MODELS.len(); // first custom model
+        app.state.modal =
+            model_picker_with_custom(custom_row_index, true, vec!["my-custom-model".to_string()]);
         app.handle_input_submit();
         assert_eq!(
             app.state.status_message.as_deref(),
             Some("Model for feat-test set to: my-custom-model")
+        );
+    }
+
+    // selecting the second custom model row submits its value
+    #[test]
+    fn model_picker_second_custom_model_submits_correct_value() {
+        let mut app = make_app();
+        let offset = 0_usize; // allow_default=false
+        let custom_row_index = offset + KNOWN_MODELS.len() + 1; // second custom model
+        app.state.modal = model_picker_with_custom(
+            custom_row_index,
+            false,
+            vec!["first-model".to_string(), "second-model".to_string()],
+        );
+        app.handle_input_submit();
+        assert_eq!(
+            app.state.status_message.as_deref(),
+            Some("Model for feat-test set to: second-model")
         );
     }
 
@@ -1167,6 +1475,218 @@ mod tests {
         app.handle_branch_pick(Some(0));
         // Modal should stay None (no-op).
         assert!(matches!(app.state.modal, Modal::None));
+    }
+
+    // ---------- build_runtime_sections tests ----------
+
+    fn config_with_custom_runtimes(
+        claude_custom: Vec<&str>,
+        other: Vec<(&str, Vec<&str>)>,
+    ) -> Config {
+        use conductor_core::config::RuntimeConfig;
+        crate::test_support::isolate_conductor_home();
+        let mut config = Config::default();
+        if !claude_custom.is_empty() {
+            config.runtimes.insert(
+                "claude".to_string(),
+                RuntimeConfig {
+                    supported_models: claude_custom.into_iter().map(String::from).collect(),
+                    ..Default::default()
+                },
+            );
+        }
+        for (name, models) in other {
+            config.runtimes.insert(
+                name.to_string(),
+                RuntimeConfig {
+                    supported_models: models.into_iter().map(String::from).collect(),
+                    ..Default::default()
+                },
+            );
+        }
+        config
+    }
+
+    #[test]
+    fn build_runtime_sections_empty_config_returns_claude_with_known_models() {
+        crate::test_support::isolate_conductor_home();
+        let config = Config::default();
+        let sections = build_runtime_sections(&config);
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].name, "claude");
+        for km in KNOWN_MODELS {
+            assert!(
+                sections[0].models.contains(&km.alias.to_string()),
+                "expected alias {} in claude section",
+                km.alias
+            );
+        }
+        assert_eq!(sections[0].models.len(), KNOWN_MODELS.len());
+    }
+
+    #[test]
+    fn build_runtime_sections_claude_custom_models_appended_without_duplicates() {
+        let config = config_with_custom_runtimes(vec!["sonnet", "my-custom-model"], vec![]);
+        let sections = build_runtime_sections(&config);
+        assert_eq!(sections.len(), 1);
+        let models = &sections[0].models;
+        assert!(models.contains(&"my-custom-model".to_string()));
+        assert_eq!(
+            models.iter().filter(|m| m.as_str() == "sonnet").count(),
+            1,
+            "sonnet should appear exactly once (no duplicate from custom list)"
+        );
+        assert_eq!(models.len(), KNOWN_MODELS.len() + 1);
+    }
+
+    #[test]
+    fn build_runtime_sections_custom_runtimes_appear_after_claude_sorted() {
+        let config = config_with_custom_runtimes(
+            vec![],
+            vec![("zebra-rt", vec!["z-model"]), ("alpha-rt", vec!["a-model"])],
+        );
+        let sections = build_runtime_sections(&config);
+        assert_eq!(sections.len(), 3);
+        assert_eq!(sections[0].name, "claude");
+        assert_eq!(sections[1].name, "alpha-rt");
+        assert_eq!(sections[2].name, "zebra-rt");
+    }
+
+    #[test]
+    fn build_runtime_sections_empty_custom_runtime_excluded() {
+        let config = config_with_custom_runtimes(vec![], vec![("empty-rt", vec![])]);
+        let sections = build_runtime_sections(&config);
+        assert_eq!(
+            sections.len(),
+            1,
+            "runtime with no supported_models should be excluded"
+        );
+    }
+
+    // ---------- resolve_picker_selection tests ----------
+
+    fn two_section_sections() -> Vec<crate::state::RuntimeSection> {
+        vec![
+            crate::state::RuntimeSection {
+                name: "claude".to_string(),
+                models: vec!["opus".to_string(), "sonnet".to_string()],
+            },
+            crate::state::RuntimeSection {
+                name: "gemini".to_string(),
+                models: vec!["gemini-pro".to_string()],
+            },
+        ]
+    }
+
+    #[test]
+    fn resolve_picker_no_default_idx0_returns_first_model() {
+        let sections = two_section_sections();
+        assert_eq!(
+            resolve_picker_selection(&sections, 0, false),
+            Some(("claude".to_string(), "opus".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_picker_no_default_idx1_returns_second_model() {
+        let sections = two_section_sections();
+        assert_eq!(
+            resolve_picker_selection(&sections, 1, false),
+            Some(("claude".to_string(), "sonnet".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_picker_no_default_idx2_crosses_section_boundary() {
+        let sections = two_section_sections();
+        assert_eq!(
+            resolve_picker_selection(&sections, 2, false),
+            Some(("gemini".to_string(), "gemini-pro".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_picker_with_default_idx0_returns_none() {
+        let sections = two_section_sections();
+        assert_eq!(resolve_picker_selection(&sections, 0, true), None);
+    }
+
+    #[test]
+    fn resolve_picker_with_default_idx1_returns_first_model_with_offset() {
+        let sections = two_section_sections();
+        assert_eq!(
+            resolve_picker_selection(&sections, 1, true),
+            Some(("claude".to_string(), "opus".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_picker_out_of_range_returns_none() {
+        let sections = two_section_sections();
+        assert_eq!(resolve_picker_selection(&sections, 999, false), None);
+    }
+
+    // ---------- picker_initial_selected tests ----------
+
+    fn sonnet_flat_idx(sections: &[crate::state::RuntimeSection], allow_default: bool) -> usize {
+        let offset = usize::from(allow_default);
+        let mut flat = offset;
+        for s in sections {
+            for m in &s.models {
+                if m == "sonnet" {
+                    return flat;
+                }
+                flat += 1;
+            }
+        }
+        panic!("sonnet not found in sections");
+    }
+
+    #[test]
+    fn picker_initial_selected_effective_default_alias_selects_correct_row() {
+        let sections = claude_only_sections();
+        let expected = sonnet_flat_idx(&sections, false);
+        assert_eq!(
+            picker_initial_selected(&sections, Some("sonnet"), None, false),
+            expected
+        );
+    }
+
+    #[test]
+    fn picker_initial_selected_suggested_sonnet_selects_correct_row() {
+        let sections = claude_only_sections();
+        let expected = sonnet_flat_idx(&sections, false);
+        assert_eq!(
+            picker_initial_selected(&sections, None, Some("sonnet"), false),
+            expected
+        );
+    }
+
+    #[test]
+    fn picker_initial_selected_no_hint_defaults_to_sonnet() {
+        let sections = claude_only_sections();
+        let expected = sonnet_flat_idx(&sections, false);
+        assert_eq!(
+            picker_initial_selected(&sections, None, None, false),
+            expected
+        );
+    }
+
+    #[test]
+    fn picker_initial_selected_allow_default_adds_offset_to_sonnet() {
+        let sections = claude_only_sections();
+        let expected = sonnet_flat_idx(&sections, true);
+        assert_eq!(
+            picker_initial_selected(&sections, None, None, true),
+            expected
+        );
+    }
+
+    #[test]
+    fn picker_initial_selected_empty_sections_returns_offset() {
+        let empty: Vec<crate::state::RuntimeSection> = vec![];
+        assert_eq!(picker_initial_selected(&empty, None, None, false), 0);
+        assert_eq!(picker_initial_selected(&empty, None, None, true), 1);
     }
 
     // ---------- Base branch picker tests ----------
@@ -1290,5 +1810,142 @@ mod tests {
             }
             other => panic!("expected BranchPicker modal, got {:?}", other),
         }
+    }
+
+    // ---------- handle_set_base_branch tests ----------
+
+    #[test]
+    fn set_base_branch_not_in_worktree_detail_returns_early() {
+        let mut app = make_app();
+        app.state.view = View::Dashboard; // Not WorktreeDetail
+        app.handle_set_base_branch();
+        // Should return early without showing any modal
+        assert!(matches!(app.state.modal, Modal::None));
+    }
+
+    #[test]
+    fn set_base_branch_no_selected_worktree_returns_early() {
+        let mut app = make_app();
+        app.state.view = View::WorktreeDetail;
+        app.state.selected_worktree_id = None;
+        app.handle_set_base_branch();
+        // Should return early without showing any modal
+        assert!(matches!(app.state.modal, Modal::None));
+    }
+
+    #[test]
+    fn set_base_branch_shows_progress_modal_and_spawns_thread() {
+        let mut app = make_app();
+        let (bg_tx, rx) = crate::event::BackgroundSender::channel_for_test();
+        app.bg_tx = Some(bg_tx);
+        app.state.view = View::WorktreeDetail;
+        app.state.selected_worktree_id = Some("w1".to_string());
+
+        // Populate in-memory data (the DB has the worktree, but state.data.worktrees is empty)
+        app.state
+            .data
+            .worktrees
+            .push(conductor_core::worktree::Worktree {
+                id: "w1".to_string(),
+                repo_id: "r1".to_string(),
+                slug: "feat-test".to_string(),
+                branch: "feat/test".to_string(),
+                path: "/tmp/ws/feat-test".to_string(),
+                ticket_id: None,
+                status: conductor_core::worktree::WorktreeStatus::Active,
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                completed_at: None,
+                model: None,
+                base_branch: None,
+            });
+        app.state.data.repos.push(conductor_core::repo::Repo {
+            id: "r1".to_string(),
+            slug: "test-repo".to_string(),
+            remote_url: "https://github.com/test/repo.git".to_string(),
+            local_path: "/tmp/repo".to_string(),
+            default_branch: "main".to_string(),
+            workspace_dir: "/tmp/ws".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            model: None,
+            allow_agent_issue_creation: true,
+            runtime_overrides: None,
+        });
+        app.state
+            .data
+            .repo_slug_map
+            .insert("r1".to_string(), "test-repo".to_string());
+
+        app.handle_set_base_branch();
+
+        // Progress modal should be shown
+        assert!(
+            matches!(app.state.modal, Modal::Progress { .. }),
+            "expected Progress modal, got {:?}",
+            app.state.modal
+        );
+
+        // Background thread should send either BaseBranchesLoaded or BaseBranchesFailed
+        let action = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("expected action from background thread within 5s");
+        assert!(
+            matches!(
+                action,
+                crate::action::Action::BaseBranchesLoaded { .. }
+                    | crate::action::Action::BaseBranchesFailed { .. }
+            ),
+            "expected BaseBranchesLoaded or BaseBranchesFailed, got {:?}",
+            action
+        );
+    }
+
+    #[test]
+    fn set_base_branch_bg_tx_none_shows_error_modal() {
+        let mut app = make_app();
+        app.state.view = View::WorktreeDetail;
+        app.state.selected_worktree_id = Some("w1".to_string());
+
+        // Populate in-memory data
+        app.state
+            .data
+            .worktrees
+            .push(conductor_core::worktree::Worktree {
+                id: "w1".to_string(),
+                repo_id: "r1".to_string(),
+                slug: "feat-test".to_string(),
+                branch: "feat/test".to_string(),
+                path: "/tmp/ws/feat-test".to_string(),
+                ticket_id: None,
+                status: conductor_core::worktree::WorktreeStatus::Active,
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                completed_at: None,
+                model: None,
+                base_branch: None,
+            });
+        app.state.data.repos.push(conductor_core::repo::Repo {
+            id: "r1".to_string(),
+            slug: "test-repo".to_string(),
+            remote_url: "https://github.com/test/repo.git".to_string(),
+            local_path: "/tmp/repo".to_string(),
+            default_branch: "main".to_string(),
+            workspace_dir: "/tmp/ws".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            model: None,
+            allow_agent_issue_creation: true,
+            runtime_overrides: None,
+        });
+        app.state
+            .data
+            .repo_slug_map
+            .insert("r1".to_string(), "test-repo".to_string());
+
+        // bg_tx is None (fresh app)
+        app.handle_set_base_branch();
+
+        assert!(
+            matches!(app.state.modal, Modal::Error { .. }),
+            "expected Error modal when bg_tx is None, got {:?}",
+            app.state.modal
+        );
     }
 }

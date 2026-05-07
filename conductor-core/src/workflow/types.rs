@@ -146,6 +146,12 @@ pub struct WorkflowExecInput<'a> {
     pub working_dir: &'a str,
     pub repo_path: &'a str,
     pub model: Option<&'a str>,
+    /// Workflow-run-level runtime override. When `Some`, the executor uses
+    /// this runtime regardless of the agent file's `runtime:` frontmatter.
+    /// Set when the host explicitly chose a runtime (e.g. from the model
+    /// picker); `None` lets the adapter derive a runtime from `model` or fall
+    /// back to the agent file.
+    pub runtime: Option<&'a str>,
     pub exec_config: &'a runkon_flow::types::WorkflowExecConfig,
     pub inputs: HashMap<String, String>,
     pub ticket_id: Option<&'a str>,
@@ -203,6 +209,8 @@ pub struct WorkflowExecStandalone {
     pub ticket_id: Option<String>,
     pub repo_id: Option<String>,
     pub model: Option<String>,
+    /// Workflow-run-level runtime override (see `WorkflowExecInput::runtime`).
+    pub runtime: Option<String>,
     pub exec_config: runkon_flow::types::WorkflowExecConfig,
     pub inputs: HashMap<String, String>,
     /// Human-readable label for the target (e.g. `repo_slug/wt_slug`, `owner/repo#N`).
@@ -259,6 +267,8 @@ pub struct WorkflowResumeStandalone {
     pub config: crate::config::Config,
     pub workflow_run_id: String,
     pub model: Option<String>,
+    /// Workflow-run-level runtime override (see `WorkflowExecInput::runtime`).
+    pub runtime: Option<String>,
     pub from_step: Option<String>,
     pub restart: bool,
     /// Override the database path. Uses the default conductor db when `None`.
@@ -282,6 +292,9 @@ pub struct WorkflowResumeInput<'a> {
     pub workflow_run_id: &'a str,
     /// Optional model override for agent steps.
     pub model: Option<&'a str>,
+    /// Optional workflow-run-level runtime override
+    /// (see `WorkflowExecInput::runtime`).
+    pub runtime: Option<&'a str>,
     /// Resume from a specific step name (re-runs steps from that point).
     pub from_step: Option<&'a str>,
     /// Restart from the beginning (clear all step results).

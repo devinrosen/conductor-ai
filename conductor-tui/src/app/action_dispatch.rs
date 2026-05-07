@@ -1,10 +1,9 @@
 use std::time::Duration;
 
-use conductor_core::models;
 use conductor_core::workflow::parse_workflow_str;
 
 use crate::action::Action;
-use crate::state::{Modal, View, WorkflowDefFocus};
+use crate::state::{model_picker_total, Modal, View, WorkflowDefFocus};
 
 use super::helpers::{collapse_loop_iterations, max_scroll, workflow_parse_warning_message};
 use super::App;
@@ -194,32 +193,14 @@ impl App {
                 Modal::Input { ref mut value, .. } | Modal::ConfirmByName { ref mut value, .. } => {
                     value.push(c);
                 }
-                Modal::ModelPicker {
-                    ref mut custom_input,
-                    custom_active: true,
-                    ..
-                } => {
-                    custom_input.push(c);
-                }
                 _ => {}
             },
             Action::InputBackspace => match self.state.modal {
                 Modal::Input { ref mut value, .. } | Modal::ConfirmByName { ref mut value, .. } => {
                     value.pop();
                 }
-                Modal::ModelPicker {
-                    ref mut custom_input,
-                    custom_active: true,
-                    ..
-                } => {
-                    custom_input.pop();
-                }
-                Modal::ModelPicker {
-                    custom_active: false,
-                    ref on_submit,
-                    ..
-                } => {
-                    // Backspace in non-custom mode: clear the model (submit empty value)
+                Modal::ModelPicker { ref on_submit, .. } => {
+                    // Backspace: clear the model (submit empty value)
                     let on_submit = on_submit.clone();
                     self.state.modal = Modal::None;
                     self.handle_input_submit_with_value(String::new(), on_submit);
@@ -399,6 +380,19 @@ impl App {
             Action::ManageIssueSources => self.handle_manage_issue_sources(),
             Action::IssueSourceAdd => self.handle_issue_source_add(),
             Action::IssueSourceDelete => self.handle_issue_source_delete(),
+            Action::RuntimesAdd => self.handle_runtimes_add(),
+            Action::RuntimesEdit => self.handle_runtimes_edit(),
+            Action::RuntimesDelete => self.handle_runtimes_delete(),
+            Action::RuntimeDetailToggleSection => self.handle_runtime_detail_toggle_section(),
+            Action::RuntimeDetailModelAdd => self.handle_runtime_detail_model_add(),
+            Action::RuntimeDetailModelEdit => self.handle_runtime_detail_model_edit(),
+            Action::RuntimeDetailModelDelete => self.handle_runtime_detail_model_delete(),
+            Action::RuntimeDetailModelMoveUp => self.handle_runtime_detail_model_move_up(),
+            Action::RuntimeDetailModelMoveDown => self.handle_runtime_detail_model_move_down(),
+            Action::RuntimeDetailEnvAdd => self.handle_runtime_detail_env_add(),
+            Action::RuntimeDetailEnvEdit => self.handle_runtime_detail_env_edit(),
+            Action::RuntimeDetailEnvDelete => self.handle_runtime_detail_env_delete(),
+            Action::RuntimeDetailEnvToggleReveal => self.handle_runtime_detail_env_toggle_reveal(),
             Action::DiscoverGithubOrgs => self.handle_discover_github_orgs(),
             Action::GithubOrgsLoaded { orgs } => self.handle_github_orgs_loaded(orgs),
             Action::GithubOrgsFailed { error } => self.handle_github_orgs_failed(error),
@@ -415,6 +409,14 @@ impl App {
             // Base branch change
             Action::SetBaseBranch => self.handle_set_base_branch(),
             Action::SelectBaseBranch(index) => self.handle_base_branch_pick(index),
+            Action::BaseBranchesLoaded {
+                repo_slug,
+                wt_slug,
+                items,
+            } => self.handle_base_branches_loaded(repo_slug, wt_slug, items),
+            Action::BaseBranchesFailed { error } => {
+                self.state.modal = Modal::Error { message: error };
+            }
 
             // Theme picker
             Action::ShowThemePicker => self.handle_show_theme_picker(),
@@ -440,6 +442,16 @@ impl App {
 
             // Agent issue creation toggle
             Action::ToggleAgentIssues => self.handle_toggle_agent_issues(),
+
+            // Ticket sort cycle (#: default → #↑ → #↓ → default)
+            Action::CycleTicketSort => {
+                self.state.detail_ticket_sort = self.state.detail_ticket_sort.cycle();
+                self.state.rebuild_filtered_tickets();
+                let len = self.state.filtered_detail_tickets.len();
+                if len > 0 && self.state.detail_ticket_index >= len {
+                    self.state.detail_ticket_index = len - 1;
+                }
+            }
 
             // Ticket tree collapse/expand toggle
             Action::ToggleTicketCollapse => {
@@ -621,12 +633,9 @@ impl App {
                     *cursor = 0;
                 }
                 Modal::ModelPicker {
-                    ref mut selected,
-                    ref mut custom_active,
-                    ..
+                    ref mut selected, ..
                 } => {
                     *selected = 0;
-                    *custom_active = false;
                 }
                 Modal::BranchPicker {
                     ref mut selected, ..
@@ -678,13 +687,12 @@ impl App {
                 }
                 Modal::ModelPicker {
                     ref mut selected,
-                    ref mut custom_active,
+                    ref runtime_sections,
                     allow_default,
                     ..
                 } => {
-                    let total = models::KNOWN_MODELS.len() + 1 + usize::from(allow_default);
-                    *selected = total.saturating_sub(1);
-                    *custom_active = false;
+                    *selected =
+                        model_picker_total(runtime_sections, allow_default).saturating_sub(1);
                 }
                 Modal::BranchPicker {
                     ref items,
@@ -1584,6 +1592,7 @@ mod tests {
     use crate::state::Modal;
 
     fn make_test_app() -> App {
+        crate::test_support::isolate_conductor_home();
         let conn = conductor_core::test_helpers::create_test_conn();
         App::new(
             conn,
@@ -1631,5 +1640,55 @@ mod tests {
             app.state.status_message.is_none(),
             "status message should not be set on failure"
         );
+    }
+
+    #[test]
+    fn base_branches_loaded_shows_picker() {
+        let mut app = make_test_app();
+        let items = vec![
+            crate::state::BranchPickerItem {
+                branch: Some("main".to_string()),
+                ..Default::default()
+            },
+            crate::state::BranchPickerItem {
+                branch: Some("release/0.16.0".to_string()),
+                ..Default::default()
+            },
+        ];
+        app.handle_action(Action::BaseBranchesLoaded {
+            repo_slug: "test-repo".to_string(),
+            wt_slug: "feat-test".to_string(),
+            items,
+        });
+        match &app.state.modal {
+            Modal::BaseBranchPicker {
+                repo_slug,
+                wt_slug,
+                items: picker_items,
+                ..
+            } => {
+                assert_eq!(repo_slug, "test-repo");
+                assert_eq!(wt_slug, "feat-test");
+                // First item should be the sentinel (default branch)
+                assert!(picker_items[0].branch.is_none());
+                // Should have sentinel + 2 branches
+                assert_eq!(picker_items.len(), 3);
+            }
+            other => panic!("expected BaseBranchPicker modal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn base_branches_failed_shows_error_modal() {
+        let mut app = make_test_app();
+        app.handle_action(Action::BaseBranchesFailed {
+            error: "database connection failed".to_string(),
+        });
+        match &app.state.modal {
+            Modal::Error { message } => {
+                assert_eq!(message, "database connection failed");
+            }
+            other => panic!("expected Error modal, got {:?}", other),
+        }
     }
 }

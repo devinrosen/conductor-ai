@@ -911,6 +911,37 @@ pub fn render_agent_prompt(
     frame.render_widget(hint, chunks[2]);
 }
 
+/// Render a plain (no tier badge) model row used for custom claude models and non-claude runtimes.
+fn plain_model_row(
+    model_str: &str,
+    flat_idx: usize,
+    selected: usize,
+    effective_default: Option<&str>,
+    dim: Style,
+    theme: &Theme,
+) -> Line<'static> {
+    let is_selected = flat_idx == selected;
+    let is_current = effective_default.is_some_and(|d| d == model_str);
+    let prefix = if is_selected { "\u{25b8} " } else { "  " };
+    let current_marker = if is_current { " (current)" } else { "" };
+    let style = if is_selected {
+        Style::default()
+            .fg(theme.label_warning)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.label_primary)
+    };
+    Line::from(vec![
+        Span::styled(format!("  {prefix}"), style),
+        Span::styled("\u{00b7} ", dim),
+        Span::styled(model_str.to_string(), style),
+        Span::styled(
+            current_marker.to_string(),
+            Style::default().fg(theme.label_secondary),
+        ),
+    ])
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn render_model_picker(
     frame: &mut Frame,
@@ -919,15 +950,14 @@ pub fn render_model_picker(
     effective_default: Option<&str>,
     effective_source: &str,
     selected: usize,
-    custom_input: &str,
-    custom_active: bool,
+    runtime_sections: &[crate::state::RuntimeSection],
     suggested: Option<&str>,
     allow_default: bool,
     theme: &Theme,
 ) {
     use conductor_core::models::KNOWN_MODELS;
 
-    let popup = centered_rect(55, 55, area);
+    let popup = centered_rect(55, 65, area);
     frame.render_widget(Clear, popup);
 
     let dim = Style::default().fg(theme.label_secondary);
@@ -962,7 +992,7 @@ pub fn render_model_picker(
     // "Default" row — only shown in run-time pickers (allow_default: true)
     let offset = if allow_default { 1 } else { 0 };
     if allow_default {
-        let is_selected = !custom_active && selected == 0;
+        let is_selected = selected == 0;
         let style = if is_selected {
             Style::default()
                 .fg(theme.label_warning)
@@ -981,85 +1011,92 @@ pub fn render_model_picker(
         ]));
     }
 
-    // Known models list
-    for (i, model) in KNOWN_MODELS.iter().enumerate() {
-        let is_selected = !custom_active && i + offset == selected;
-        let is_current = effective_default.is_some_and(|d| d == model.id || d == model.alias);
+    // Render sections: built-in "claude" first, then user runtimes
+    let mut flat_idx = offset; // index into selectable rows (excluding headers + Default)
 
-        let prefix = if is_selected { "\u{25b8} " } else { "  " };
+    for section in runtime_sections {
+        let is_claude = section.name == "claude";
 
-        let current_marker = if is_current { " (current)" } else { "" };
-
-        let suggested_marker = if suggested == Some(model.alias) && !is_current {
-            " [Suggested]"
+        // Section header (non-selectable)
+        let header_label = if is_claude {
+            " claude (built-in) ".to_string()
         } else {
-            ""
+            format!(" {} ", section.name)
         };
+        lines.push(Line::from(Span::styled(header_label, cyan_bold)));
 
-        let style = if is_selected {
-            Style::default()
-                .fg(theme.label_warning)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.label_primary)
-        };
+        for model_str in &section.models {
+            if is_claude {
+                // Look up the KNOWN_MODELS entry by alias or id
+                let known = KNOWN_MODELS
+                    .iter()
+                    .find(|m| m.alias == model_str.as_str() || m.id == model_str.as_str());
 
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {prefix}"), style),
-            Span::styled(
-                format!("{} ", model.tier_stars()),
-                Style::default().fg(match model.tier {
-                    conductor_core::models::ModelTier::Powerful => theme.status_waiting,
-                    conductor_core::models::ModelTier::Balanced => theme.label_accent,
-                    conductor_core::models::ModelTier::Fast => theme.status_completed,
-                }),
-            ),
-            Span::styled(format!("{:<7}", model.alias), style),
-            Span::styled(format!(" \u{2014} {}", model.description), dim),
-            Span::styled(current_marker, Style::default().fg(theme.label_secondary)),
-            Span::styled(
-                suggested_marker,
-                Style::default()
-                    .fg(theme.status_completed)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
+                if let Some(model) = known {
+                    let is_selected = flat_idx == selected;
+                    let is_current =
+                        effective_default.is_some_and(|d| d == model.id || d == model.alias);
+                    let prefix = if is_selected { "\u{25b8} " } else { "  " };
+                    let current_marker = if is_current { " (current)" } else { "" };
+                    let suggested_marker = if suggested == Some(model.alias) && !is_current {
+                        " [Suggested]"
+                    } else {
+                        ""
+                    };
+                    let style = if is_selected {
+                        Style::default()
+                            .fg(theme.label_warning)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(theme.label_primary)
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("  {prefix}"), style),
+                        Span::styled(
+                            format!("{} ", model.tier_stars()),
+                            Style::default().fg(match model.tier {
+                                conductor_core::models::ModelTier::Powerful => theme.status_waiting,
+                                conductor_core::models::ModelTier::Balanced => theme.label_accent,
+                                conductor_core::models::ModelTier::Fast => theme.status_completed,
+                            }),
+                        ),
+                        Span::styled(format!("{:<7}", model.alias), style),
+                        Span::styled(format!(" \u{2014} {}", model.description), dim),
+                        Span::styled(current_marker, Style::default().fg(theme.label_secondary)),
+                        Span::styled(
+                            suggested_marker,
+                            Style::default()
+                                .fg(theme.status_completed)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+                } else {
+                    // Custom model string inside claude section (from migration)
+                    lines.push(plain_model_row(
+                        model_str,
+                        flat_idx,
+                        selected,
+                        effective_default,
+                        dim,
+                        theme,
+                    ));
+                }
+            } else {
+                // Non-claude runtime: plain string, no tier badges
+                lines.push(plain_model_row(
+                    model_str,
+                    flat_idx,
+                    selected,
+                    effective_default,
+                    dim,
+                    theme,
+                ));
+            }
+            flat_idx += 1;
+        }
+
+        lines.push(Line::from(""));
     }
-
-    // Custom input option
-    let custom_idx = KNOWN_MODELS.len() + offset;
-    let custom_selected = !custom_active && selected == custom_idx;
-    let custom_prefix = if custom_selected || custom_active {
-        "\u{25b8} "
-    } else {
-        "  "
-    };
-    let custom_style = if custom_selected || custom_active {
-        Style::default()
-            .fg(theme.label_warning)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme.label_primary)
-    };
-
-    if custom_active {
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {custom_prefix}"), custom_style),
-            Span::styled("custom: ", custom_style),
-            Span::styled(
-                custom_input,
-                Style::default().add_modifier(Modifier::UNDERLINED),
-            ),
-            Span::styled("_", Style::default().fg(theme.border_focused)),
-        ]));
-    } else {
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {custom_prefix}"), custom_style),
-            Span::styled("custom\u{2026}", custom_style),
-        ]));
-    }
-
-    lines.push(Line::from(""));
 
     // Clear option
     lines.push(Line::from(Span::styled(
@@ -1075,7 +1112,7 @@ pub fn render_model_picker(
                 .fg(theme.label_warning)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" navigate  ", dim),
+        Span::styled(" navigate sections  ", dim),
         Span::styled(
             "Enter",
             Style::default()

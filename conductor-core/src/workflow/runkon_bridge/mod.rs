@@ -56,12 +56,22 @@ pub(super) fn wrap_child_workflow_err(e: ConductorError, ctx: String) -> EngineE
 
 /// Build a runkon-flow `ActionRegistry` backed by a `RkActionExecutorAdapter`
 /// as the catch-all fallback executor.
+///
+/// `runtime_override` is the workflow-run-level explicit runtime selection
+/// (e.g. from the host's model picker). When `None`, the adapter falls back
+/// to deriving a runtime from each step's `params.model`.
 pub(super) fn build_rk_action_registry(
     config: &crate::config::Config,
     conn: Arc<Mutex<rusqlite::Connection>>,
     db_path: &std::path::Path,
+    runtime_override: Option<String>,
 ) -> runkon_flow::traits::action_executor::ActionRegistry {
-    let adapter = RkActionExecutorAdapter::new(config.clone(), conn, db_path.to_path_buf());
+    let adapter = RkActionExecutorAdapter::new(
+        config.clone(),
+        conn,
+        db_path.to_path_buf(),
+        runtime_override,
+    );
     runkon_flow::traits::action_executor::ActionRegistry::from_executors(
         std::collections::HashMap::new(),
         Some(Box::new(adapter)),

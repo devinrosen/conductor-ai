@@ -394,6 +394,17 @@ pub enum Action {
         error: String,
     },
 
+    /// Background result: candidate base-branches loaded for BaseBranchPicker.
+    BaseBranchesLoaded {
+        repo_slug: String,
+        wt_slug: String,
+        items: Vec<crate::state::BranchPickerItem>,
+    },
+    /// Background result: failed to enumerate base branches.
+    BaseBranchesFailed {
+        error: String,
+    },
+
     /// Select a list-picker item by number-key shortcut (0-indexed).
     /// Used by both WorkflowPicker and TemplatePicker modals.
     SelectListItem(usize),
@@ -412,6 +423,8 @@ pub enum Action {
     ToggleForeachStepExpand,
     /// Toggle collapse/expand for the selected parent ticket row.
     ToggleTicketCollapse,
+    /// Cycle the ticket sort order (default → #↑ → #↓ → default).
+    CycleTicketSort,
     /// Toggle expand/collapse for the hovered parent run row.
     ToggleWorkflowRunCollapse,
     /// Toggle collapse/expand for the workflow definitions pane (Space key on Defs focus).
@@ -476,6 +489,35 @@ pub enum Action {
         defs: Vec<WorkflowDef>,
         warnings: Vec<WorkflowWarning>,
     },
+
+    // Settings → Runtimes
+    /// Open Input modal to add a new runtime entry (step 1: name).
+    RuntimesAdd,
+    /// Drill into the selected runtime's detail view.
+    RuntimesEdit,
+    /// Open Confirm modal to delete the selected runtime.
+    RuntimesDelete,
+    /// Toggle the focused section (Models ↔ Environment) inside the runtime
+    /// detail view.
+    RuntimeDetailToggleSection,
+    /// Open Input modal to add a single model to the focused runtime.
+    RuntimeDetailModelAdd,
+    /// Open Input modal to edit the focused model row.
+    RuntimeDetailModelEdit,
+    /// Open Confirm modal to delete the focused model row.
+    RuntimeDetailModelDelete,
+    /// Move the focused model up by one position.
+    RuntimeDetailModelMoveUp,
+    /// Move the focused model down by one position.
+    RuntimeDetailModelMoveDown,
+    /// Open Form modal to add a new env var (key + value).
+    RuntimeDetailEnvAdd,
+    /// Open Input modal to edit the focused env var's value.
+    RuntimeDetailEnvEdit,
+    /// Open Confirm modal to delete the focused env var.
+    RuntimeDetailEnvDelete,
+    /// Toggle reveal/mask for the focused env var (session-only).
+    RuntimeDetailEnvToggleReveal,
 
     // Settings view
     /// Navigate to View::Settings.

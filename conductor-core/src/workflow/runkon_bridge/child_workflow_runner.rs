@@ -67,6 +67,14 @@ impl ConductorChildWorkflowRunner {
                 .run_ctx
                 .get(crate::workflow::engine_keys::REPO_ID),
             model: parent_ctx.model.clone(),
+            // Child workflows inherit no explicit runtime override from the
+            // parent — the adapter's derive-from-model fallback in
+            // `RkActionExecutorAdapter` routes the inherited `model` to the
+            // owning runtime. Propagating an explicit override across child
+            // boundaries would require a parallel field on
+            // `runkon_flow::engine::ChildWorkflowContext`, which is intentionally
+            // host-neutral.
+            runtime: None,
             exec_config,
             inputs: params.inputs,
             target_label: self.target_label.clone(),
@@ -101,6 +109,9 @@ impl ConductorChildWorkflowRunner {
             config: &self.config,
             workflow_run_id,
             model,
+            // See `build_child_standalone_params` for the runtime-propagation
+            // rationale: child resumes also rely on derive-from-model.
+            runtime: None,
             from_step: None,
             restart: false,
             conductor_bin_dir: None,

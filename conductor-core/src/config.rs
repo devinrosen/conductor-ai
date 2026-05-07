@@ -216,6 +216,24 @@ pub struct NotifyConfig {
     pub hooks: Vec<HookConfig>,
 }
 
+/// Per-agent execution settings (global, not per-run).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentsConfig {
+    /// Seconds without JSONL output before the agent run is marked failed with
+    /// `stall_timeout`. When unset, falls back to
+    /// [`crate::agent_runtime::DEFAULT_STALL_THRESHOLD`] (300 s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall_threshold_secs: Option<u64>,
+}
+
+impl AgentsConfig {
+    pub fn stall_threshold(&self) -> std::time::Duration {
+        self.stall_threshold_secs
+            .map(std::time::Duration::from_secs)
+            .unwrap_or(crate::agent_runtime::DEFAULT_STALL_THRESHOLD)
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -228,6 +246,8 @@ pub struct Config {
     pub notifications: NotificationConfig,
     #[serde(default)]
     pub notify: NotifyConfig,
+    #[serde(default)]
+    pub agents: AgentsConfig,
     /// Named runtime configurations for non-Claude agent runtimes (RFC 007).
     /// The built-in "claude" runtime does not require an entry here.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -315,6 +335,15 @@ pub struct GeneralConfig {
     /// after orphan detection. Set to 0 to disable automatic resume. Defaults to 3.
     #[serde(default = "default_auto_resume_limit")]
     pub auto_resume_limit: u32,
+    /// User-defined custom model IDs stored in insertion order.
+    /// Displayed in the model picker after built-in models.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_models: Vec<String>,
+    /// Default runtime for workflow agent steps when the agent frontmatter omits `runtime:`.
+    /// Must be "claude" (built-in) or a key in the `[runtimes]` table.
+    /// When unset, runkon-flow-executors falls back to its own system default ("claude").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_runtime: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -373,6 +402,8 @@ impl Default for GeneralConfig {
             stale_workflow_minutes: default_stale_workflow_minutes(),
             claude_config_dir: None,
             auto_resume_limit: default_auto_resume_limit(),
+            custom_models: Vec::new(),
+            default_runtime: None,
         }
     }
 }
@@ -539,12 +570,50 @@ pub fn load_config() -> Result<Config> {
     load_config_from(&config_path())
 }
 
+/// Migrate `general.custom_models` into `runtimes.claude.supported_models`.
+///
+/// Returns `true` when the config was modified and must be re-saved.
+///
+/// - Case 1: `custom_models` non-empty + claude entry absent/empty → move + clear source.
+/// - Case 2: both non-empty → warn, union (target order first, then source), dedupe, clear source.
+/// - Case 3: `custom_models` empty → no-op (returns false).
+fn migrate_custom_models_into_claude_runtime(config: &mut Config) -> bool {
+    if config.general.custom_models.is_empty() {
+        return false;
+    }
+
+    let source: Vec<String> = std::mem::take(&mut config.general.custom_models);
+    let claude_entry = config.runtimes.entry("claude".to_string()).or_default();
+
+    if claude_entry.supported_models.is_empty() {
+        // Case 1: clean move
+        claude_entry.supported_models = source;
+    } else {
+        // Case 2: union; target order preserved first, then source
+        tracing::warn!(
+            "Both general.custom_models and runtimes.claude.supported_models are non-empty; \
+             merging into runtimes.claude.supported_models (target order first)"
+        );
+        let mut seen = std::collections::HashSet::new();
+        for m in claude_entry.supported_models.iter() {
+            seen.insert(m.clone());
+        }
+        for m in source {
+            if seen.insert(m.clone()) {
+                claude_entry.supported_models.push(m);
+            }
+        }
+    }
+
+    true
+}
+
 fn load_config_from(path: &std::path::Path) -> Result<Config> {
     if !path.exists() {
         return Ok(Config::default());
     }
     let contents = std::fs::read_to_string(path)?;
-    let config: Config =
+    let mut config: Config =
         toml::from_str(&contents).map_err(|e| ConductorError::Config(e.to_string()))?;
 
     // Parse raw TOML once for migration checks and github.app validation.
@@ -613,6 +682,16 @@ fn load_config_from(path: &std::path::Path) -> Result<Config> {
                         })?;
                 }
             }
+        }
+    }
+
+    // Migrate legacy general.custom_models → runtimes.claude.supported_models.
+    if migrate_custom_models_into_claude_runtime(&mut config) {
+        if let Err(e) = save_config_to(&config, path) {
+            tracing::warn!(
+                "failed to persist custom_models migration to {}: {e}",
+                path.display()
+            );
         }
     }
 
@@ -780,6 +859,40 @@ mod tests {
     fn test_auto_start_agent_default() {
         let config: Config = toml::from_str("").unwrap();
         assert_eq!(config.general.auto_start_agent, AutoStartAgent::Ask);
+    }
+
+    #[test]
+    fn test_custom_models_default_empty_and_omitted_on_serialize() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.general.custom_models.is_empty());
+
+        let serialized = toml::to_string(&config).unwrap();
+        assert!(
+            !serialized.contains("custom_models"),
+            "empty custom_models should be skipped on serialize, got:\n{serialized}"
+        );
+    }
+
+    #[test]
+    fn test_custom_models_roundtrip_preserves_insertion_order() {
+        let mut config: Config = toml::from_str("").unwrap();
+        config.general.custom_models = vec![
+            "claude-opus-4-7".to_string(),
+            "my-finetune-v2".to_string(),
+            "claude-haiku-4-5-20251001".to_string(),
+        ];
+
+        let serialized = toml::to_string(&config).unwrap();
+        let roundtripped: Config = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(
+            roundtripped.general.custom_models,
+            vec![
+                "claude-opus-4-7".to_string(),
+                "my-finetune-v2".to_string(),
+                "claude-haiku-4-5-20251001".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -1889,5 +2002,118 @@ vapid_subject = "mailto:test@example.com"
             Some("mailto:test@example.com"),
             "vapid_subject should be preserved verbatim"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Migration tests: general.custom_models → runtimes.claude.supported_models
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_migrate_custom_models_case1_moves_to_runtimes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[general]
+custom_models = ["my-model-v1", "my-model-v2"]
+"#,
+        )
+        .unwrap();
+
+        let config = load_config_from(&path).unwrap();
+        // Source cleared
+        assert!(
+            config.general.custom_models.is_empty(),
+            "custom_models should be cleared after migration"
+        );
+        // Target populated
+        let claude = config.runtimes.get("claude").expect("claude entry created");
+        assert_eq!(
+            claude.supported_models,
+            vec!["my-model-v1".to_string(), "my-model-v2".to_string()]
+        );
+
+        // Idempotency: re-load should not change anything
+        let config2 = load_config_from(&path).unwrap();
+        assert!(config2.general.custom_models.is_empty());
+        let claude2 = config2.runtimes.get("claude").unwrap();
+        assert_eq!(claude2.supported_models, claude.supported_models);
+    }
+
+    #[test]
+    fn test_migrate_custom_models_case2_union_dedup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[general]
+custom_models = ["my-model-v1", "shared-model"]
+
+[runtimes.claude]
+supported_models = ["existing-model", "shared-model"]
+"#,
+        )
+        .unwrap();
+
+        let config = load_config_from(&path).unwrap();
+        // Source cleared
+        assert!(config.general.custom_models.is_empty());
+        // Target: target order first, then source additions (deduplicated)
+        let claude = config.runtimes.get("claude").unwrap();
+        // "existing-model" first, "shared-model" second (target order),
+        // then "my-model-v1" from source (shared-model already seen)
+        assert_eq!(
+            claude.supported_models,
+            vec![
+                "existing-model".to_string(),
+                "shared-model".to_string(),
+                "my-model-v1".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_migrate_custom_models_case3_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[runtimes.claude]
+supported_models = ["existing-model"]
+"#,
+        )
+        .unwrap();
+
+        let config = load_config_from(&path).unwrap();
+        // No custom_models → no migration
+        let claude = config.runtimes.get("claude").unwrap();
+        assert_eq!(claude.supported_models, vec!["existing-model".to_string()]);
+    }
+
+    #[test]
+    fn test_migrate_custom_models_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[general]
+custom_models = ["model-a"]
+"#,
+        )
+        .unwrap();
+
+        // First load triggers migration
+        let config1 = load_config_from(&path).unwrap();
+        assert!(config1.general.custom_models.is_empty());
+
+        // Second load: file was saved without custom_models, so no migration
+        let config2 = load_config_from(&path).unwrap();
+        assert!(config2.general.custom_models.is_empty());
+        let claude2 = config2.runtimes.get("claude").unwrap();
+        assert_eq!(claude2.supported_models, vec!["model-a".to_string()]);
     }
 }

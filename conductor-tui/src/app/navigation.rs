@@ -1,8 +1,8 @@
 use ratatui::widgets::ListState;
 
 use crate::state::{
-    info_row, repo_info_row, workflow_run_info_row, DashboardRow, FormField, Modal,
-    RepoDetailFocus, View, WorkflowDefFocus, WorkflowPickerItem, WorkflowRunDetailFocus,
+    info_row, model_picker_total, repo_info_row, workflow_run_info_row, DashboardRow, FormField,
+    Modal, RepoDetailFocus, View, WorkflowDefFocus, WorkflowPickerItem, WorkflowRunDetailFocus,
     WorkflowsFocus, WorktreeDetailFocus,
 };
 
@@ -156,7 +156,11 @@ impl App {
         match self.state.view {
             View::Dashboard => self.show_confirm_quit(),
             View::Settings => {
-                self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
+                if self.state.settings_runtime_detail.is_some() {
+                    self.exit_runtime_detail();
+                } else {
+                    self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
+                }
             }
             View::RepoDetail => {
                 self.state.view = View::Dashboard;
@@ -479,15 +483,14 @@ impl App {
             }
             Modal::ModelPicker {
                 ref mut selected,
-                ref mut custom_active,
+                ref runtime_sections,
                 allow_default,
                 ..
             } => {
-                *custom_active = false;
-                // +1 for custom, +1 if allow_default adds a "Default" row
-                let total =
-                    conductor_core::models::KNOWN_MODELS.len() + 1 + usize::from(allow_default);
-                wrap_decrement(selected, total);
+                wrap_decrement(
+                    selected,
+                    model_picker_total(runtime_sections, allow_default),
+                );
                 return;
             }
             Modal::BranchPicker {
@@ -641,15 +644,14 @@ impl App {
             }
             Modal::ModelPicker {
                 ref mut selected,
-                ref mut custom_active,
+                ref runtime_sections,
                 allow_default,
                 ..
             } => {
-                *custom_active = false;
-                // +1 for custom, +1 if allow_default adds a "Default" row
-                let total =
-                    conductor_core::models::KNOWN_MODELS.len() + 1 + usize::from(allow_default);
-                wrap_increment(selected, total);
+                wrap_increment(
+                    selected,
+                    model_picker_total(runtime_sections, allow_default),
+                );
                 return;
             }
             Modal::BranchPicker {
@@ -1071,6 +1073,7 @@ mod tests {
     use crate::state::{ColumnFocus, View, WorkflowDefFocus, WorkflowPickerTarget, WorkflowsFocus};
 
     fn make_test_app() -> App {
+        crate::test_support::isolate_conductor_home();
         let conn = conductor_core::test_helpers::create_test_conn();
         App::new(
             conn,

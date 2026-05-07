@@ -63,6 +63,7 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
         Line::from(""),
         help_line("Space", "Collapse/expand parent ticket (tree view)", theme),
         help_line("I", "Toggle agent-issues filter", theme),
+        help_line("#", "Toggle ticket # sort (#\u{2191} / #\u{2193})", theme),
         Line::from(""),
         Line::from(Span::styled(
             "Repo Detail — Repo Agent",

@@ -631,6 +631,7 @@ mod tests {
     use crate::state::{FormAction, InputAction, Modal, View};
 
     fn make_test_app() -> App {
+        crate::test_support::isolate_conductor_home();
         let conn = conductor_core::test_helpers::create_test_conn();
         App::new(
             conn,
