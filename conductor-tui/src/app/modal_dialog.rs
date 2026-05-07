@@ -114,6 +114,7 @@ impl App {
                         config,
                         workflow_run_id: run_id,
                         model: None,
+                        runtime: None,
                         from_step: None,
                         restart: false,
                         db_path: None,

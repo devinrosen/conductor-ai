@@ -31,6 +31,12 @@ pub struct ClaudeAgentContext {
     pub runtimes: std::collections::HashMap<String, runkon_runtimes::config::RuntimeConfig>,
     /// Default runtime name applied when agent frontmatter omits `runtime:`.
     pub default_runtime: Option<String>,
+    /// Per-invocation runtime override. When `Some`, the executor resolves and
+    /// validates against this runtime instead of `agent_def.runtime`. Used by
+    /// the host (e.g. when a workflow's model picker explicitly selects a
+    /// non-default runtime, or when the host derives a runtime from the
+    /// requested model name).
+    pub runtime_override: Option<String>,
 }
 
 /// Agent step parameters passed to [`ClaudeAgentExecutor::execute`].
@@ -90,9 +96,17 @@ impl ClaudeAgentExecutor {
             &build_params,
         )?;
 
+        // The host can override the runtime resolved from `agent_def.runtime`
+        // (e.g. when a workflow's model picker explicitly chose a non-default
+        // runtime, or when the host derived a runtime from the requested model).
+        let effective_runtime: &str = ctx
+            .runtime_override
+            .as_deref()
+            .unwrap_or(&agent_def.runtime);
+
         // Validate supported_models before spawning — catches misconfiguration early.
         check_supported_models(
-            &agent_def.runtime,
+            effective_runtime,
             &agent_def.name,
             agent_def.model.as_deref(),
             ctx.model.as_deref(),
@@ -122,8 +136,8 @@ impl ClaudeAgentExecutor {
         // Subprocess path: resolve the runtime and spawn the agent.
         let runtime = self
             .runtime_resolver
-            .resolve(&agent_def.runtime)
-            .map_err(|e| format!("failed to resolve runtime '{}': {e}", agent_def.runtime))?;
+            .resolve(effective_runtime)
+            .map_err(|e| format!("failed to resolve runtime '{effective_runtime}': {e}"))?;
 
         let extra_cli_args: Vec<(Cow<'static, str>, Cow<'static, str>)> = match &ctx.bot_name {
             Some(name) => vec![(Cow::Borrowed("--bot-name"), Cow::Owned(name.clone()))],
@@ -316,6 +330,7 @@ mod tests {
             event_sink: Arc::new(runkon_runtimes::NoopEventSink),
             runtimes: std::collections::HashMap::new(),
             default_runtime: None,
+            runtime_override: None,
         }
     }
 
@@ -404,6 +419,7 @@ mod tests {
             event_sink: Arc::new(runkon_runtimes::NoopEventSink),
             runtimes: std::collections::HashMap::new(),
             default_runtime: None,
+            runtime_override: None,
         };
         let params = ClaudeAgentParams {
             name: "test-agent",
@@ -564,5 +580,96 @@ mod tests {
             &runtimes
         )
         .is_ok());
+    }
+
+    // ── runtime_override on ClaudeAgentContext ────────────────────────────────
+
+    use std::sync::Mutex;
+
+    /// Records the name passed to `resolve()` so tests can assert which
+    /// runtime the executor selected.
+    struct RecordingResolver {
+        captured_name: Mutex<Option<String>>,
+    }
+
+    impl RecordingResolver {
+        fn new() -> Self {
+            Self {
+                captured_name: Mutex::new(None),
+            }
+        }
+
+        fn captured(&self) -> Option<String> {
+            self.captured_name.lock().unwrap().clone()
+        }
+    }
+
+    impl RuntimeResolver for RecordingResolver {
+        fn resolve(&self, name: &str) -> RkResult<Box<dyn runkon_runtimes::AgentRuntime>> {
+            *self.captured_name.lock().unwrap() = Some(name.to_string());
+            Err(RuntimeError::Config(
+                "recording resolver — does not actually spawn".to_string(),
+            ))
+        }
+    }
+
+    #[test]
+    fn execute_uses_runtime_override_when_set() {
+        // Agent file with no `runtime:` frontmatter falls back to "claude".
+        // When `runtime_override` is set, the executor should resolve against
+        // that name, not "claude".
+        let tmp = TempDir::new().unwrap();
+        write_agent(&tmp);
+
+        let resolver = Arc::new(RecordingResolver::new());
+        let mut ctx = make_ctx(&tmp);
+        ctx.runtime_override = Some("qwen-local".to_string());
+        // Register the runtime so check_supported_models doesn't reject it.
+        ctx.runtimes.insert(
+            "qwen-local".to_string(),
+            runkon_runtimes::config::RuntimeConfig::default(),
+        );
+
+        let params = ClaudeAgentParams {
+            name: "test-agent",
+            inputs: &HashMap::new(),
+            snippet_refs: &[],
+            dry_run: false,
+            retry_error: None,
+            schema: None,
+        };
+
+        let executor = ClaudeAgentExecutor::new(resolver.clone(), None);
+        let _ = executor.execute(&ctx, &params); // resolver returns Err — fine
+
+        assert_eq!(
+            resolver.captured(),
+            Some("qwen-local".to_string()),
+            "executor should resolve against runtime_override, not agent_def.runtime"
+        );
+    }
+
+    #[test]
+    fn execute_falls_back_to_agent_def_runtime_when_override_none() {
+        let tmp = TempDir::new().unwrap();
+        write_agent(&tmp);
+
+        let resolver = Arc::new(RecordingResolver::new());
+        let ctx = make_ctx(&tmp); // runtime_override: None
+
+        let params = ClaudeAgentParams {
+            name: "test-agent",
+            inputs: &HashMap::new(),
+            snippet_refs: &[],
+            dry_run: false,
+            retry_error: None,
+            schema: None,
+        };
+
+        let executor = ClaudeAgentExecutor::new(resolver.clone(), None);
+        let _ = executor.execute(&ctx, &params);
+
+        // The bare agent file produces `agent_def.runtime = "claude"`.
+        assert_eq!(resolver.captured(), Some("claude".to_string()));
     }
 }

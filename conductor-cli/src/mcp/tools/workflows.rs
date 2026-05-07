@@ -272,6 +272,7 @@ pub(super) fn tool_run_workflow(
         ticket_id: None,
         repo_id: Some(repo.id),
         model: None,
+        runtime: None,
         exec_config: WorkflowExecConfig {
             dry_run,
             ..WorkflowExecConfig::default()
