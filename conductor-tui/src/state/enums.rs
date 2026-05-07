@@ -542,6 +542,8 @@ pub enum InputAction {
     SettingsSetSyncInterval,
     /// Settings → Models: add a new custom model entry.
     SettingsAddCustomModel,
+    /// Settings view: set the stall timeout in seconds (blank to reset to default).
+    SettingsSetStallTimeout,
     /// Adopt an existing on-disk git worktree: user enters the path.
     AdoptWorktree {
         repo_slug: String,

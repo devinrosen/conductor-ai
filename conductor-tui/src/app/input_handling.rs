@@ -648,7 +648,8 @@ impl App {
             }
             InputAction::SettingsSetModel
             | InputAction::SettingsSetSyncInterval
-            | InputAction::SettingsAddCustomModel => {
+            | InputAction::SettingsAddCustomModel
+            | InputAction::SettingsSetStallTimeout => {
                 self.handle_settings_input_submit(on_submit, value);
             }
             InputAction::AdoptWorktree { repo_slug } => {
