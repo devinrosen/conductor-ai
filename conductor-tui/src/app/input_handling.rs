@@ -6,10 +6,136 @@ use conductor_core::worktree::WorktreeManager;
 
 use crate::state::{
     BranchPickerItem, ConfirmAction, FormAction, FormField, FormFieldType, InputAction, Modal,
+    RuntimeSection,
 };
 
 use super::helpers::advance_form_field;
 use super::App;
+
+/// Build the `Vec<RuntimeSection>` shown in the model picker from the current config.
+///
+/// The built-in `"claude"` section is always first, combining `KNOWN_MODELS` aliases
+/// with any models in `config.runtimes["claude"].supported_models`. Additional
+/// user-defined runtimes follow in sorted order by name.
+pub(crate) fn build_runtime_sections(config: &Config) -> Vec<RuntimeSection> {
+    use conductor_core::models::KNOWN_MODELS;
+
+    // Build "claude" section: KNOWN_MODELS aliases + migrated custom models
+    let mut claude_models: Vec<String> = KNOWN_MODELS.iter().map(|m| m.alias.to_string()).collect();
+    if let Some(claude_rt) = config.runtimes.get("claude") {
+        for m in &claude_rt.supported_models {
+            let already_known = KNOWN_MODELS
+                .iter()
+                .any(|km| km.alias == m.as_str() || km.id == m.as_str());
+            if !already_known && !claude_models.contains(m) {
+                claude_models.push(m.clone());
+            }
+        }
+    }
+
+    let mut sections = vec![RuntimeSection {
+        name: "claude".to_string(),
+        models: claude_models,
+    }];
+
+    // Additional user runtimes sorted by name (skip "claude" — already handled)
+    let mut other: Vec<(&String, &conductor_core::config::RuntimeConfig)> = config
+        .runtimes
+        .iter()
+        .filter(|(k, _)| k.as_str() != "claude")
+        .collect();
+    other.sort_by_key(|(k, _)| k.as_str());
+    for (name, rt) in other {
+        if !rt.supported_models.is_empty() {
+            sections.push(RuntimeSection {
+                name: name.clone(),
+                models: rt.supported_models.clone(),
+            });
+        }
+    }
+
+    sections
+}
+
+/// Resolve flat selectable index → `(runtime_name, model_string)`.
+///
+/// `offset` is 1 when `allow_default` is true (Default row at index 0).
+/// Returns `None` when the index is out of range.
+pub(crate) fn resolve_picker_selection(
+    sections: &[RuntimeSection],
+    selected: usize,
+    allow_default: bool,
+) -> Option<(String, String)> {
+    let offset = usize::from(allow_default);
+    if allow_default && selected == 0 {
+        return None; // "Default" row
+    }
+    let mut flat = offset;
+    for section in sections {
+        for model in &section.models {
+            if flat == selected {
+                return Some((section.name.clone(), model.clone()));
+            }
+            flat += 1;
+        }
+    }
+    None
+}
+
+/// Compute the initial `selected` index for the picker given an effective default.
+pub(crate) fn picker_initial_selected(
+    sections: &[RuntimeSection],
+    effective_default: Option<&str>,
+    suggested: Option<&str>,
+    allow_default: bool,
+) -> usize {
+    use conductor_core::models::KNOWN_MODELS;
+
+    let offset = usize::from(allow_default);
+
+    // Try to pre-select based on effective_default
+    if let Some(default) = effective_default {
+        let mut flat = offset;
+        for section in sections {
+            for model in &section.models {
+                let matches = model == default
+                    || KNOWN_MODELS
+                        .iter()
+                        .any(|km| (km.id == default || km.alias == default) && km.alias == model);
+                if matches {
+                    return flat;
+                }
+                flat += 1;
+            }
+        }
+    }
+
+    // Fall back to suggested model in claude section
+    if let Some(sug) = suggested {
+        let mut flat = offset;
+        if let Some(claude_section) = sections.iter().find(|s| s.name == "claude") {
+            for model in &claude_section.models {
+                if model == sug {
+                    return flat;
+                }
+                flat += 1;
+            }
+        }
+    }
+
+    // Default: sonnet (alias) if present in claude section, otherwise offset
+    let mut flat = offset;
+    if let Some(claude_section) = sections.iter().find(|s| s.name == "claude") {
+        for model in &claude_section.models {
+            if model == "sonnet" {
+                return flat;
+            }
+            flat += 1;
+        }
+    }
+
+    offset // fallback to first selectable row
+}
 
 /// Build the "From PR (optional)" input modal used to transition into the PR step
 /// of worktree creation. Centralised here to avoid duplicating the title/prompt strings.
@@ -285,23 +411,18 @@ impl App {
             }
             Modal::ModelPicker {
                 selected,
-                custom_models,
+                runtime_sections,
                 on_submit,
                 allow_default,
                 ..
             } => {
-                let models = conductor_core::models::KNOWN_MODELS;
-                let offset = usize::from(allow_default);
                 let value = if allow_default && selected == 0 {
                     // "Default" row selected — empty string maps to model: None
                     String::new()
-                } else if selected < offset + models.len() {
-                    // Selected a known model — use its alias
-                    models[selected - offset].alias.to_string()
                 } else {
-                    // Selected a saved custom model
-                    let custom_idx = selected - offset - models.len();
-                    custom_models.get(custom_idx).cloned().unwrap_or_default()
+                    resolve_picker_selection(&runtime_sections, selected, allow_default)
+                        .map(|(_, model)| model)
+                        .unwrap_or_default()
                 };
                 (value, on_submit)
             }
@@ -502,12 +623,6 @@ impl App {
                 // Suggest a model based on the prompt text
                 let suggested = conductor_core::models::suggest_model(&value);
 
-                // Pre-select the suggested model in the picker
-                let initial_selected = conductor_core::models::KNOWN_MODELS
-                    .iter()
-                    .position(|m| m.alias == suggested)
-                    .unwrap_or(1); // default to sonnet
-
                 let (effective_default, effective_source) = match &resolved_default {
                     Some(m) => {
                         let source = if wt_model.is_some() {
@@ -522,12 +637,23 @@ impl App {
                     None => (None, "not set".to_string()),
                 };
 
+                // Build runtime sections from config
+                let runtime_sections = build_runtime_sections(&self.config);
+
+                // Pre-select the suggested model in the picker
+                let initial_selected = picker_initial_selected(
+                    &runtime_sections,
+                    effective_default.as_deref(),
+                    Some(suggested),
+                    true,
+                );
+
                 self.state.modal = Modal::ModelPicker {
                     context_label: "agent run".to_string(),
                     effective_default,
                     effective_source,
                     selected: initial_selected,
-                    custom_models: self.config.general.custom_models.clone(),
+                    runtime_sections,
                     suggested: Some(suggested.to_string()),
                     allow_default: true,
                     on_submit: InputAction::AgentModelOverride {
@@ -649,7 +775,10 @@ impl App {
             InputAction::SettingsSetModel
             | InputAction::SettingsSetSyncInterval
             | InputAction::SettingsAddCustomModel
-            | InputAction::SettingsSetStallTimeout => {
+            | InputAction::SettingsSetStallTimeout
+            | InputAction::SettingsAddRuntime
+            | InputAction::SettingsAddRuntimeModels { .. }
+            | InputAction::SettingsEditRuntimeModels { .. } => {
                 self.handle_settings_input_submit(on_submit, value);
             }
             InputAction::AdoptWorktree { repo_slug } => {
@@ -1024,13 +1153,20 @@ mod tests {
         }
     }
 
+    fn claude_only_sections() -> Vec<crate::state::RuntimeSection> {
+        vec![crate::state::RuntimeSection {
+            name: "claude".to_string(),
+            models: KNOWN_MODELS.iter().map(|m| m.alias.to_string()).collect(),
+        }]
+    }
+
     fn model_picker(selected: usize, allow_default: bool) -> Modal {
         Modal::ModelPicker {
             context_label: "test".to_string(),
             effective_default: None,
             effective_source: "not set".to_string(),
             selected,
-            custom_models: vec![],
+            runtime_sections: claude_only_sections(),
             suggested: None,
             on_submit: set_wt_model_action(),
             allow_default,
@@ -1042,12 +1178,18 @@ mod tests {
         allow_default: bool,
         custom: Vec<String>,
     ) -> Modal {
+        // Custom models live inside the built-in claude section after KNOWN_MODELS aliases.
+        let mut models: Vec<String> = KNOWN_MODELS.iter().map(|m| m.alias.to_string()).collect();
+        models.extend(custom);
         Modal::ModelPicker {
             context_label: "test".to_string(),
             effective_default: None,
             effective_source: "not set".to_string(),
             selected,
-            custom_models: custom,
+            runtime_sections: vec![crate::state::RuntimeSection {
+                name: "claude".to_string(),
+                models,
+            }],
             suggested: None,
             on_submit: set_wt_model_action(),
             allow_default,

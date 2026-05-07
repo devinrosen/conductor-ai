@@ -1,4 +1,5 @@
 use crate::action::Action;
+use crate::app::input_handling::{build_runtime_sections, picker_initial_selected};
 use crate::state::{DashboardRow, InputAction, Modal, View};
 
 use super::App;
@@ -141,18 +142,12 @@ impl App {
                 }
             };
 
+        // Build runtime sections once for all pickers in this handler
+        let runtime_sections_cache = build_runtime_sections(&self.config);
+
         // Helper to find the initial selected index matching current model
         let initial_selected = |current: &Option<String>| -> usize {
-            match current {
-                Some(m) => conductor_core::models::KNOWN_MODELS
-                    .iter()
-                    .position(|km| km.id == m.as_str() || km.alias == m.as_str())
-                    .unwrap_or(conductor_core::models::KNOWN_MODELS.len()),
-                None => {
-                    // Default to sonnet (index 1)
-                    1
-                }
-            }
+            picker_initial_selected(&runtime_sections_cache, current.as_deref(), None, false)
         };
 
         match self.state.view {
@@ -178,7 +173,7 @@ impl App {
                             effective_default: effective,
                             effective_source: source,
                             selected,
-                            custom_models: self.config.general.custom_models.clone(),
+                            runtime_sections: runtime_sections_cache.clone(),
                             suggested: None,
                             allow_default: false,
                             on_submit: InputAction::SetWorktreeModel {
@@ -205,7 +200,7 @@ impl App {
                             effective_default: effective,
                             effective_source: source,
                             selected,
-                            custom_models: self.config.general.custom_models.clone(),
+                            runtime_sections: runtime_sections_cache.clone(),
                             suggested: None,
                             allow_default: false,
                             on_submit: InputAction::SetRepoModel {
@@ -241,7 +236,7 @@ impl App {
                     effective_default: effective,
                     effective_source: source,
                     selected,
-                    custom_models: self.config.general.custom_models.clone(),
+                    runtime_sections: runtime_sections_cache.clone(),
                     suggested: None,
                     allow_default: false,
                     on_submit: InputAction::SetWorktreeModel {
@@ -274,7 +269,7 @@ impl App {
                     effective_default: effective,
                     effective_source: source,
                     selected,
-                    custom_models: self.config.general.custom_models.clone(),
+                    runtime_sections: runtime_sections_cache.clone(),
                     suggested: None,
                     allow_default: false,
                     on_submit: InputAction::SetRepoModel {

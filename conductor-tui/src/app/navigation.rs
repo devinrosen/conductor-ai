@@ -479,12 +479,14 @@ impl App {
             }
             Modal::ModelPicker {
                 ref mut selected,
-                ref custom_models,
+                ref runtime_sections,
                 allow_default,
                 ..
             } => {
-                let total = conductor_core::models::KNOWN_MODELS.len()
-                    + custom_models.len()
+                let total = runtime_sections
+                    .iter()
+                    .map(|s| s.models.len())
+                    .sum::<usize>()
                     + usize::from(allow_default);
                 wrap_decrement(selected, total);
                 return;
@@ -640,12 +642,14 @@ impl App {
             }
             Modal::ModelPicker {
                 ref mut selected,
-                ref custom_models,
+                ref runtime_sections,
                 allow_default,
                 ..
             } => {
-                let total = conductor_core::models::KNOWN_MODELS.len()
-                    + custom_models.len()
+                let total = runtime_sections
+                    .iter()
+                    .map(|s| s.models.len())
+                    .sum::<usize>()
                     + usize::from(allow_default);
                 wrap_increment(selected, total);
                 return;

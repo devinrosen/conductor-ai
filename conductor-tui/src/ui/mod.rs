@@ -130,7 +130,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             effective_default,
             effective_source,
             selected,
-            custom_models,
+            runtime_sections,
             suggested,
             allow_default,
             ..
@@ -141,7 +141,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             effective_default.as_deref(),
             effective_source,
             *selected,
-            custom_models,
+            runtime_sections,
             suggested.as_deref(),
             *allow_default,
             &state.theme,

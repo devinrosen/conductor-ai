@@ -1375,7 +1375,10 @@ fn input_backspace_on_model_picker_non_custom_clears_model() {
         effective_default: Some("claude-sonnet-4-5-20250514".into()),
         effective_source: "global config".into(),
         selected: 0,
-        custom_models: vec![],
+        runtime_sections: vec![crate::state::RuntimeSection {
+            name: "claude".into(),
+            models: vec!["opus".into(), "sonnet".into(), "haiku".into()],
+        }],
         suggested: None,
         on_submit: InputAction::SetRepoModel {
             slug: "test-repo".into(),

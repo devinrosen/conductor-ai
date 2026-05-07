@@ -26,6 +26,7 @@ pub enum SettingsCategory {
     Appearance,
     Notifications,
     Models,
+    Runtimes,
 }
 
 impl SettingsCategory {
@@ -35,6 +36,7 @@ impl SettingsCategory {
             SettingsCategory::Appearance,
             SettingsCategory::Notifications,
             SettingsCategory::Models,
+            SettingsCategory::Runtimes,
         ]
     }
 
@@ -44,8 +46,18 @@ impl SettingsCategory {
             Self::Appearance => "Appearance",
             Self::Notifications => "Notifications",
             Self::Models => "Models",
+            Self::Runtimes => "Runtimes",
         }
     }
+}
+
+/// One section in the runtime-aware model picker.
+/// `name` is the runtime key (e.g. `"claude"`, `"gemini"`).
+/// `models` is the ordered list of model strings for that runtime.
+#[derive(Debug, Clone)]
+pub struct RuntimeSection {
+    pub name: String,
+    pub models: Vec<String>,
 }
 
 /// A row in the unified dashboard list — repo header or worktree entry.
@@ -444,6 +456,9 @@ pub enum ConfirmAction {
     DeleteCustomModel {
         model: String,
     },
+    DeleteRuntime {
+        name: String,
+    },
     Quit,
 }
 
@@ -569,5 +584,15 @@ pub enum InputAction {
     /// Adopt an existing on-disk git worktree: user enters the path.
     AdoptWorktree {
         repo_slug: String,
+    },
+    /// Settings → Runtimes: add a new runtime entry (first step: name).
+    SettingsAddRuntime,
+    /// Settings → Runtimes: add models for a newly-named runtime (second step).
+    SettingsAddRuntimeModels {
+        name: String,
+    },
+    /// Settings → Runtimes: edit models for an existing runtime.
+    SettingsEditRuntimeModels {
+        name: String,
     },
 }

@@ -907,12 +907,14 @@ impl App {
             },
         };
 
+        let runtime_sections = crate::app::input_handling::build_runtime_sections(&self.config);
+
         self.state.modal = Modal::ModelPicker {
             context_label: format!("workflow: {}", def.name),
             effective_default,
             effective_source,
             selected: 0, // "Default" row pre-selected
-            custom_models: self.config.general.custom_models.clone(),
+            runtime_sections,
             suggested: None,
             allow_default: true,
             on_submit: crate::state::InputAction::WorkflowModelOverride {

@@ -208,6 +208,8 @@ pub struct SettingsDisplayCache {
     pub hooks: Vec<(String, String)>,
     /// Saved custom model IDs (mirrors config so render_models doesn't borrow config).
     pub custom_models: Vec<String>,
+    /// Runtime display rows: (name, type_hint, model_count, env_count, is_built_in).
+    pub runtimes: Vec<(String, String, usize, usize, bool)>,
 }
 
 impl Default for AppState {

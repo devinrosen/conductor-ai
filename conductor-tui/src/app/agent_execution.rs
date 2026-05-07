@@ -383,11 +383,6 @@ impl App {
         }
 
         // Otherwise, show the model picker (current behavior)
-        let initial_selected = conductor_core::models::KNOWN_MODELS
-            .iter()
-            .position(|m| m.alias == suggested)
-            .unwrap_or(1);
-
         let (effective_default, effective_source) = match &resolved_default {
             Some(m) => {
                 let source = if wt_model.is_some() {
@@ -402,12 +397,22 @@ impl App {
             None => (None, "not set".to_string()),
         };
 
+        // Build runtime sections from config
+        let runtime_sections = crate::app::input_handling::build_runtime_sections(&self.config);
+
+        let initial_selected = crate::app::input_handling::picker_initial_selected(
+            &runtime_sections,
+            effective_default.as_deref(),
+            Some(suggested),
+            true,
+        );
+
         self.state.modal = Modal::ModelPicker {
             context_label: "agent run".to_string(),
             effective_default,
             effective_source,
             selected: initial_selected,
-            custom_models: self.config.general.custom_models.clone(),
+            runtime_sections,
             suggested: Some(suggested.to_string()),
             allow_default: true,
             on_submit: InputAction::AgentModelOverride {
