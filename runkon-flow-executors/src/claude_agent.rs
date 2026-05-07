@@ -91,20 +91,13 @@ impl ClaudeAgentExecutor {
         )?;
 
         // Validate supported_models before spawning — catches misconfiguration early.
-        if let Some(rt_config) = ctx.runtimes.get(&agent_def.runtime) {
-            if !rt_config.supported_models.is_empty() {
-                let effective_model = ctx.model.as_deref().or(agent_def.model.as_deref());
-                if let Some(m) = effective_model {
-                    if !rt_config.supported_models.iter().any(|s| s == m) {
-                        return Err(format!(
-                            "runtime '{}' only accepts models {:?}; \
-                             agent '{}' resolved model is '{m}'",
-                            agent_def.runtime, rt_config.supported_models, agent_def.name
-                        ));
-                    }
-                }
-            }
-        }
+        check_supported_models(
+            &agent_def.runtime,
+            &agent_def.name,
+            agent_def.model.as_deref(),
+            ctx.model.as_deref(),
+            &ctx.runtimes,
+        )?;
 
         // API fast path: schema + key both present.
         if let (Some(schema), Some(api_key)) = (params.schema, self.api_key.as_deref()) {
@@ -216,6 +209,41 @@ impl ClaudeAgentExecutor {
             Err(detail)
         }
     }
+}
+
+/// Validate that the resolved model is allowed by the runtime's `supported_models`.
+///
+/// The built-in `claude` runtime always returns `Ok` — its `supported_models` are
+/// additive picker entries (alongside the host's known Claude models), not a strict
+/// allowlist. Non-claude runtimes enforce `supported_models` as a strict allowlist
+/// when the field is non-empty.
+fn check_supported_models(
+    runtime: &str,
+    agent_name: &str,
+    agent_default_model: Option<&str>,
+    request_model: Option<&str>,
+    runtimes: &HashMap<String, runkon_runtimes::config::RuntimeConfig>,
+) -> Result<(), String> {
+    if runtime == "claude" {
+        return Ok(());
+    }
+    let Some(rt_config) = runtimes.get(runtime) else {
+        return Ok(());
+    };
+    if rt_config.supported_models.is_empty() {
+        return Ok(());
+    }
+    let effective_model = request_model.or(agent_default_model);
+    if let Some(m) = effective_model {
+        if !rt_config.supported_models.iter().any(|s| s == m) {
+            return Err(format!(
+                "runtime '{}' only accepts models {:?}; \
+                 agent '{}' resolved model is '{m}'",
+                runtime, rt_config.supported_models, agent_name
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -428,5 +456,113 @@ mod tests {
             "runtime resolver must be called when api_key is absent"
         );
         assert!(result.is_err(), "expected Err from mock resolver, got Ok");
+    }
+
+    // ---------- check_supported_models ----------
+
+    fn rt_config_with_models(models: &[&str]) -> runkon_runtimes::config::RuntimeConfig {
+        runkon_runtimes::config::RuntimeConfig {
+            supported_models: models.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn check_supported_models_claude_runtime_ignores_supported_models() {
+        // Regression: when `runtimes.claude.supported_models` is populated, the
+        // built-in claude runtime must NOT enforce it as a strict allowlist —
+        // KNOWN_MODELS aliases/IDs (sonnet, haiku, claude-sonnet-4-6, etc.) must
+        // still be accepted. See workflow run 01KR1T8FXPEJ4KPWHEWWN6BY5M.
+        let mut runtimes = HashMap::new();
+        runtimes.insert(
+            "claude".to_string(),
+            rt_config_with_models(&["claude-opus-4-7", "QuantTrio/Qwen3.5-122B-A10B-AWQ"]),
+        );
+        assert!(check_supported_models(
+            "claude",
+            "review-architecture",
+            None,
+            Some("claude-sonnet-4-6"),
+            &runtimes
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn check_supported_models_non_claude_strict_allowlist_rejects_unlisted() {
+        let mut runtimes = HashMap::new();
+        runtimes.insert(
+            "qwen-local".to_string(),
+            rt_config_with_models(&["qwen-72b"]),
+        );
+        let err = check_supported_models(
+            "qwen-local",
+            "my-agent",
+            None,
+            Some("disallowed-model"),
+            &runtimes,
+        )
+        .unwrap_err();
+        assert!(err.contains("disallowed-model"), "{err}");
+        assert!(err.contains("qwen-72b"), "{err}");
+    }
+
+    #[test]
+    fn check_supported_models_non_claude_listed_model_ok() {
+        let mut runtimes = HashMap::new();
+        runtimes.insert(
+            "qwen-local".to_string(),
+            rt_config_with_models(&["qwen-72b"]),
+        );
+        assert!(check_supported_models(
+            "qwen-local",
+            "my-agent",
+            None,
+            Some("qwen-72b"),
+            &runtimes
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn check_supported_models_empty_supported_models_accepts_any() {
+        let mut runtimes = HashMap::new();
+        runtimes.insert(
+            "qwen-local".to_string(),
+            runkon_runtimes::config::RuntimeConfig::default(),
+        );
+        assert!(check_supported_models(
+            "qwen-local",
+            "my-agent",
+            None,
+            Some("any-model"),
+            &runtimes
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn check_supported_models_no_resolved_model_skips_check() {
+        let mut runtimes = HashMap::new();
+        runtimes.insert(
+            "qwen-local".to_string(),
+            rt_config_with_models(&["qwen-72b"]),
+        );
+        // No model on agent_def, no request model — defer to host default.
+        assert!(check_supported_models("qwen-local", "my-agent", None, None, &runtimes).is_ok());
+    }
+
+    #[test]
+    fn check_supported_models_unknown_runtime_skips_check() {
+        // No matching runtime entry — skip; the spawn step will fail with a clearer error.
+        let runtimes = HashMap::new();
+        assert!(check_supported_models(
+            "missing-rt",
+            "my-agent",
+            None,
+            Some("any-model"),
+            &runtimes
+        )
+        .is_ok());
     }
 }
