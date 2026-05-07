@@ -65,7 +65,7 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
         help_line("I", "Toggle agent-issues filter", theme),
         help_line(
             "#",
-            "Cycle ticket # sort (default / #\u{2191} / #\u{2193})",
+            "Toggle ticket # sort (#\u{2191} / #\u{2193})",
             theme,
         ),
         Line::from(""),

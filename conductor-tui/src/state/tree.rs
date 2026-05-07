@@ -233,7 +233,6 @@ pub fn build_ticket_tree_indices_sorted_by<'a>(
             .unwrap_or("")
     };
     let sort_fn = |a: usize, b: usize| match sort {
-        TicketSort::Default => tickets[b].id.cmp(&tickets[a].id),
         TicketSort::NumberAsc => ticket_number_ord(&tickets[a].source_id, &tickets[b].source_id),
         TicketSort::NumberDesc => {
             ticket_number_ord(&tickets[a].source_id, &tickets[b].source_id).reverse()
@@ -331,7 +330,7 @@ mod tests {
         let tickets = vec![make_ticket("a"), make_ticket("b"), make_ticket("c")];
         let deps = HashMap::new();
         let (indices, positions, child_to_parent) =
-            build_ticket_tree_indices_sorted_by(&tickets, &deps, TicketSort::Default);
+            build_ticket_tree_indices_sorted_by(&tickets, &deps, TicketSort::NumberDesc);
 
         assert_eq!(indices.len(), 3);
         assert_eq!(positions.len(), 3);
@@ -351,7 +350,7 @@ mod tests {
         deps.insert("a".to_string(), make_child_dep(&["b"]));
 
         let (indices, positions, child_to_parent) =
-            build_ticket_tree_indices_sorted_by(&tickets, &deps, TicketSort::Default);
+            build_ticket_tree_indices_sorted_by(&tickets, &deps, TicketSort::NumberDesc);
 
         assert_eq!(indices.len(), 2);
         assert_eq!(child_to_parent.get("b"), Some(&"a"));
@@ -390,7 +389,7 @@ mod tests {
         deps.insert("a".to_string(), make_child_dep(&["c"]));
 
         let (indices, positions, _) =
-            build_ticket_tree_indices_sorted_by(&tickets, &deps, TicketSort::Default);
+            build_ticket_tree_indices_sorted_by(&tickets, &deps, TicketSort::NumberDesc);
 
         let id_order: Vec<&str> = indices.iter().map(|&i| tickets[i].id.as_str()).collect();
         // DFS descending: root, b, a, c (children sorted z→a, so b before a)
@@ -422,7 +421,7 @@ mod tests {
         deps.insert("parent".to_string(), make_child_dep(&["child1", "child2"]));
 
         let (_, _, child_to_parent) =
-            build_ticket_tree_indices_sorted_by(&tickets, &deps, TicketSort::Default);
+            build_ticket_tree_indices_sorted_by(&tickets, &deps, TicketSort::NumberDesc);
 
         assert_eq!(child_to_parent.get("child1"), Some(&"parent"));
         assert_eq!(child_to_parent.get("child2"), Some(&"parent"));
