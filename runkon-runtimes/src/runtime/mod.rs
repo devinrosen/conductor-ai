@@ -131,6 +131,10 @@ impl std::fmt::Display for PollError {
 pub struct RuntimeOptions {
     /// Binary to spawn for headless re-invocation.
     pub binary_path: PathBuf,
+    /// Per-runtime environment variable overrides injected into the spawned
+    /// subprocess via `Command::envs()` (overlay — parent env is preserved).
+    /// Use this for endpoint/auth vars like `ANTHROPIC_BASE_URL`.
+    pub env: HashMap<String, String>,
     /// Where to write the per-run JSONL log of the agent's stdout stream.
     pub log_path_for_run: Arc<dyn Fn(&str) -> PathBuf + Send + Sync>,
     /// Where `CliRuntime` writes `<run_id>/output.json`.
@@ -156,6 +160,7 @@ pub fn resolve_runtime(
         let claude_options = claude::ClaudeRuntimeOptions {
             permission_mode,
             binary_path: options.binary_path.clone(),
+            env: options.env.clone(),
             log_path_for_run: options.log_path_for_run.clone(),
             argv_builder: options.argv_builder.clone(),
             stall_threshold: options.stall_threshold,
