@@ -1234,6 +1234,27 @@ Implement the plan written in PLAN.md.
     }
 
     #[test]
+    fn validate_agent_runtime_claude_ignores_supported_models() {
+        // Regression: when `runtimes.claude.supported_models` is populated (e.g. from
+        // a custom_models migration or user-configured custom Claude models), the
+        // built-in claude runtime must NOT enforce that list as a strict allowlist —
+        // those entries are additive picker rows, not a replacement for KNOWN_MODELS.
+        let mut runtimes = HashMap::new();
+        runtimes.insert(
+            "claude".to_string(),
+            RuntimeConfig {
+                supported_models: vec!["claude-opus-4-7".to_string()],
+                ..RuntimeConfig::default()
+            },
+        );
+        let def = make_def("claude", None);
+        assert!(
+            validate_agent_runtime(&def, &runtimes, Some("claude-sonnet-4-6")).is_ok(),
+            "claude runtime must accept built-in models even when supported_models is set"
+        );
+    }
+
+    #[test]
     fn validate_agent_runtime_missing_named_runtime_is_error() {
         let runtimes = HashMap::new();
         let def = make_def("my-local", None);

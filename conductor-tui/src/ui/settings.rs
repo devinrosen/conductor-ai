@@ -33,6 +33,13 @@ pub mod models_row {
     pub const COUNT_PER_MODEL: usize = 1;
 }
 
+/// Row count helper for Runtimes settings (right pane).
+/// One row per runtime (claude built-in always rendered first, then user runtimes).
+pub mod runtimes_row {
+    #[allow(dead_code)]
+    pub const COUNT_PER_RUNTIME: usize = 1;
+}
+
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     let theme = &state.theme;
 
@@ -118,6 +125,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         }
         SettingsCategory::Models => {
             render_models(frame, right_area, right_block, state, right_focused)
+        }
+        SettingsCategory::Runtimes => {
+            render_runtimes(frame, right_area, right_block, state, right_focused)
         }
     }
 }
@@ -395,6 +405,73 @@ fn render_models(frame: &mut Frame, area: Rect, block: Block, state: &AppState, 
         }
     }
 
+    lines.push(Line::from(""));
+    lines.push(hint_line);
+
+    let para = Paragraph::new(lines);
+    frame.render_widget(para, inner);
+}
+
+fn render_runtimes(frame: &mut Frame, area: Rect, block: Block, state: &AppState, focused: bool) {
+    let theme = &state.theme;
+    let sel = state.settings_row_index;
+    let d = &state.settings_display;
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let hint_line = if focused {
+        Line::from(Span::styled(
+            "  [a] add  [e] edit models  [d] delete  [Esc] back",
+            Style::default().fg(theme.label_secondary),
+        ))
+    } else {
+        Line::from(Span::styled(
+            "  [Tab] switch pane",
+            Style::default().fg(theme.label_secondary),
+        ))
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(""));
+
+    if d.runtimes.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No runtimes configured",
+            Style::default().fg(theme.label_secondary),
+        )));
+    } else {
+        for (i, row) in d.runtimes.iter().enumerate() {
+            let is_selected = i == sel && focused;
+            let style = if is_selected {
+                Style::default()
+                    .fg(theme.label_primary)
+                    .bg(theme.highlight_bg)
+            } else {
+                Style::default().fg(theme.label_secondary)
+            };
+            let prefix = if is_selected { "\u{25b8} " } else { "  " };
+            let suffix = if row.is_built_in {
+                "  (built-in)".to_string()
+            } else {
+                format!(
+                    "  type={} models={} env={}",
+                    row.type_hint, row.model_count, row.env_count
+                )
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {prefix}"), style),
+                Span::styled(row.name.clone(), style.add_modifier(Modifier::BOLD)),
+                Span::styled(suffix, Style::default().fg(theme.label_secondary)),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Note: edit env via ~/.conductor/config.toml directly",
+        Style::default().fg(theme.label_secondary),
+    )));
     lines.push(Line::from(""));
     lines.push(hint_line);
 

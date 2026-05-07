@@ -26,6 +26,7 @@ pub enum SettingsCategory {
     Appearance,
     Notifications,
     Models,
+    Runtimes,
 }
 
 impl SettingsCategory {
@@ -35,6 +36,7 @@ impl SettingsCategory {
             SettingsCategory::Appearance,
             SettingsCategory::Notifications,
             SettingsCategory::Models,
+            SettingsCategory::Runtimes,
         ]
     }
 
@@ -44,8 +46,47 @@ impl SettingsCategory {
             Self::Appearance => "Appearance",
             Self::Notifications => "Notifications",
             Self::Models => "Models",
+            Self::Runtimes => "Runtimes",
         }
     }
+}
+
+/// One section in the runtime-aware model picker.
+/// `name` is the runtime key (e.g. `"claude"`, `"gemini"`).
+/// `models` is the ordered list of model strings for that runtime.
+#[derive(Debug, Clone)]
+pub struct RuntimeSection {
+    pub name: String,
+    pub models: Vec<String>,
+}
+
+/// Total number of selectable rows in the model picker (model entries + optional Default row).
+pub fn model_picker_total(sections: &[RuntimeSection], allow_default: bool) -> usize {
+    sections.iter().map(|s| s.models.len()).sum::<usize>() + usize::from(allow_default)
+}
+
+/// A display row for a runtime entry in the Settings → Runtimes pane.
+#[derive(Debug, Clone)]
+pub struct RuntimeDisplayRow {
+    pub name: String,
+    pub type_hint: String,
+    pub model_count: usize,
+    pub env_count: usize,
+    pub is_built_in: bool,
+}
+
+/// Iterate over user-defined runtimes (excluding the built-in `"claude"` entry)
+/// in name-sorted order. Used by both the picker and Settings → Runtimes so
+/// they agree on iteration order.
+pub fn user_runtimes_sorted(
+    runtimes: &std::collections::HashMap<String, conductor_core::config::RuntimeConfig>,
+) -> Vec<(&String, &conductor_core::config::RuntimeConfig)> {
+    let mut other: Vec<_> = runtimes
+        .iter()
+        .filter(|(k, _)| k.as_str() != "claude")
+        .collect();
+    other.sort_by_key(|(k, _)| k.as_str());
+    other
 }
 
 /// A row in the unified dashboard list — repo header or worktree entry.
@@ -444,6 +485,9 @@ pub enum ConfirmAction {
     DeleteCustomModel {
         model: String,
     },
+    DeleteRuntime {
+        name: String,
+    },
     Quit,
 }
 
@@ -530,6 +574,8 @@ pub enum InputAction {
     },
     /// Second step: optionally override the model for this run.
     /// `resolved_default` is the already-resolved model (worktree → repo → global config).
+    /// `runtime` is the runtime chosen in the picker (`Some("qwen-local")`, `Some("claude")`, …);
+    /// `None` means the user picked the "Default" row and no override is applied.
     AgentModelOverride {
         prompt: String,
         worktree_id: String,
@@ -537,6 +583,7 @@ pub enum InputAction {
         worktree_slug: String,
         resume_session_id: Option<String>,
         resolved_default: Option<String>,
+        runtime: Option<String>,
     },
     /// Set (or clear) the default model for a worktree.
     SetWorktreeModel {
@@ -569,5 +616,15 @@ pub enum InputAction {
     /// Adopt an existing on-disk git worktree: user enters the path.
     AdoptWorktree {
         repo_slug: String,
+    },
+    /// Settings → Runtimes: add a new runtime entry (first step: name).
+    SettingsAddRuntime,
+    /// Settings → Runtimes: add models for a newly-named runtime (second step).
+    SettingsAddRuntimeModels {
+        name: String,
+    },
+    /// Settings → Runtimes: edit models for an existing runtime.
+    SettingsEditRuntimeModels {
+        name: String,
     },
 }

@@ -4,8 +4,8 @@ use conductor_core::notification_hooks::HookRunner;
 
 use crate::action::Action;
 use crate::state::{
-    AppState, ConfirmAction, InputAction, Modal, SettingsCategory, SettingsDisplayCache,
-    SettingsFocus, View,
+    AppState, ConfirmAction, InputAction, Modal, RuntimeDisplayRow, SettingsCategory,
+    SettingsDisplayCache, SettingsFocus, View,
 };
 use crate::ui::settings::{appearance_row, general_row};
 
@@ -78,6 +78,35 @@ impl App {
 
         let custom_models = self.config.general.custom_models.clone();
 
+        // Build the runtimes display list. The built-in `claude` runtime is always
+        // shown first; user-defined runtimes follow in sorted order by name.
+        let mut runtimes: Vec<RuntimeDisplayRow> = Vec::new();
+        let claude_entry = self.config.runtimes.get("claude");
+        let claude_models = claude_entry
+            .map(|rt| rt.supported_models.len())
+            .unwrap_or(0);
+        let claude_env = claude_entry.map(|rt| rt.env.len()).unwrap_or(0);
+        runtimes.push(RuntimeDisplayRow {
+            name: "claude".to_string(),
+            type_hint: "claude".to_string(),
+            model_count: claude_models,
+            env_count: claude_env,
+            is_built_in: true,
+        });
+        for (name, rt) in crate::state::user_runtimes_sorted(&self.config.runtimes) {
+            let type_hint = rt
+                .runtime_type
+                .clone()
+                .unwrap_or_else(|| "claude".to_string());
+            runtimes.push(RuntimeDisplayRow {
+                name: name.clone(),
+                type_hint,
+                model_count: rt.supported_models.len(),
+                env_count: rt.env.len(),
+                is_built_in: false,
+            });
+        }
+
         self.state.settings_display = SettingsDisplayCache {
             model,
             permission_mode,
@@ -88,6 +117,7 @@ impl App {
             theme,
             hooks,
             custom_models,
+            runtimes,
         };
     }
 
@@ -144,6 +174,9 @@ impl App {
             }
             SettingsCategory::Models => {
                 // Enter in Models pane is a no-op; [a]/[d] are the actions.
+            }
+            SettingsCategory::Runtimes => {
+                // Enter in Runtimes pane is a no-op; [a]/[e]/[d] are the actions.
             }
         }
     }
@@ -353,6 +386,7 @@ impl App {
             SettingsCategory::Appearance => appearance_row::COUNT,
             SettingsCategory::Notifications => self.state.settings_display.hooks.len().max(1),
             SettingsCategory::Models => self.state.settings_display.custom_models.len().max(1),
+            SettingsCategory::Runtimes => self.state.settings_display.runtimes.len().max(1),
         }
     }
 
@@ -392,6 +426,60 @@ impl App {
                     self.refresh_settings_display();
                 }
             }
+            InputAction::SettingsAddRuntime => {
+                let name = value.trim().to_string();
+                if name.is_empty() {
+                    self.state.modal = Modal::None;
+                    return;
+                }
+                if name == "claude" {
+                    self.state.modal = Modal::Error {
+                        message: "\"claude\" is the built-in runtime and cannot be added manually."
+                            .into(),
+                    };
+                    return;
+                }
+                if self.config.runtimes.contains_key(&name) {
+                    self.state.modal = Modal::Error {
+                        message: format!("Runtime \"{name}\" already exists."),
+                    };
+                    return;
+                }
+                // Step 2: prompt for comma-separated supported models
+                self.state.modal = Modal::Input {
+                    title: format!("Add runtime: {name}"),
+                    prompt: "Supported models (comma-separated):".into(),
+                    value: String::new(),
+                    on_submit: InputAction::SettingsAddRuntimeModels { name },
+                };
+                return;
+            }
+            InputAction::SettingsAddRuntimeModels { name } => {
+                let models = parse_comma_models(&value);
+                let rt = conductor_core::config::RuntimeConfig {
+                    runtime_type: Some("claude".to_string()),
+                    supported_models: models,
+                    ..Default::default()
+                };
+                self.config.runtimes.insert(name, rt);
+                self.save_config_background();
+                self.refresh_settings_display();
+            }
+            InputAction::SettingsEditRuntimeModels { name } => {
+                let models = parse_comma_models(&value);
+                if let Some(rt) = self.config.runtimes.get_mut(&name) {
+                    rt.supported_models = models;
+                } else {
+                    let rt = conductor_core::config::RuntimeConfig {
+                        runtime_type: Some("claude".to_string()),
+                        supported_models: models,
+                        ..Default::default()
+                    };
+                    self.config.runtimes.insert(name, rt);
+                }
+                self.save_config_background();
+                self.refresh_settings_display();
+            }
             InputAction::SettingsSetStallTimeout => {
                 if value.trim().is_empty() {
                     self.config.agents.stall_threshold_secs = None;
@@ -428,6 +516,73 @@ impl App {
         };
     }
 
+    /// Open the Input modal to add a new runtime entry (step 1: name).
+    pub(super) fn handle_runtimes_add(&mut self) {
+        self.state.modal = Modal::Input {
+            title: "Add runtime".into(),
+            prompt: "Runtime name (e.g. claude-qwen-local):".into(),
+            value: String::new(),
+            on_submit: InputAction::SettingsAddRuntime,
+        };
+    }
+
+    /// Open the Input modal to edit the currently selected runtime's models.
+    pub(super) fn handle_runtimes_edit(&mut self) {
+        let runtimes = &self.state.settings_display.runtimes;
+        if runtimes.is_empty() {
+            return;
+        }
+        let idx = self
+            .state
+            .settings_row_index
+            .min(runtimes.len().saturating_sub(1));
+        let row = &runtimes[idx];
+        if row.is_built_in {
+            self.state.status_message = Some(
+                "Built-in claude runtime is read-only \u{2014} use Models pane to add custom models"
+                    .into(),
+            );
+            return;
+        }
+        let current = self
+            .config
+            .runtimes
+            .get(&row.name)
+            .map(|rt| rt.supported_models.join(", "))
+            .unwrap_or_default();
+        self.state.modal = Modal::Input {
+            title: format!("Edit models: {}", row.name),
+            prompt: "Supported models (comma-separated):".into(),
+            value: current,
+            on_submit: InputAction::SettingsEditRuntimeModels {
+                name: row.name.clone(),
+            },
+        };
+    }
+
+    /// Open the Confirm modal to delete the currently selected runtime.
+    pub(super) fn handle_runtimes_delete(&mut self) {
+        let runtimes = &self.state.settings_display.runtimes;
+        if runtimes.is_empty() {
+            return;
+        }
+        let idx = self
+            .state
+            .settings_row_index
+            .min(runtimes.len().saturating_sub(1));
+        let row = &runtimes[idx];
+        if row.is_built_in {
+            self.state.status_message = Some("Cannot delete built-in claude runtime".into());
+            return;
+        }
+        let name = row.name.clone();
+        self.state.modal = Modal::Confirm {
+            title: "Delete runtime".into(),
+            message: format!("Remove runtime \"{name}\" from config?"),
+            on_confirm: ConfirmAction::DeleteRuntime { name },
+        };
+    }
+
     /// Open the Confirm modal to delete the currently selected custom model entry.
     pub(super) fn handle_models_delete(&mut self) {
         let models = &self.state.settings_display.custom_models;
@@ -453,6 +608,15 @@ impl App {
             SettingsFocus::SettingsList => SettingsFocus::CategoryList,
         };
     }
+}
+
+/// Parse a comma-separated list of model strings into a `Vec<String>`,
+/// trimming whitespace and dropping empty entries.
+fn parse_comma_models(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty())
+        .collect()
 }
 
 impl AppState {

@@ -578,7 +578,10 @@ fn snap_modal_model_picker() {
         effective_default: Some("claude-sonnet-4-6".into()),
         effective_source: "global config".into(),
         selected: 1,
-        custom_models: vec![],
+        runtime_sections: vec![conductor_tui::state::RuntimeSection {
+            name: "claude".into(),
+            models: vec!["opus".into(), "sonnet".into(), "haiku".into()],
+        }],
         suggested: None,
         on_submit: InputAction::SetWorktreeModel {
             worktree_id: "w1".into(),

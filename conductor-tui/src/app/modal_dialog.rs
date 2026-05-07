@@ -200,6 +200,11 @@ impl App {
                 self.save_config_background();
                 self.refresh_settings_display();
             }
+            ConfirmAction::DeleteRuntime { name } => {
+                self.config.runtimes.remove(&name);
+                self.save_config_background();
+                self.refresh_settings_display();
+            }
             ConfirmAction::Quit => {
                 self.state.should_quit = true;
             }

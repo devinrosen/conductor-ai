@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -20,6 +19,10 @@ use super::App;
 /// of inputs the three TUI launch flows (`start_agent_headless`,
 /// `start_repo_agent_headless`, `handle_restart_agent`) need to pass into
 /// [`drive_headless_run`].
+///
+/// All fields are captured on the main thread so `drive_headless_run` runs
+/// purely off-thread without re-reading process-wide state — see the
+/// [TUI threading rule](../../../../docs/tui-threading.md).
 pub(super) struct HeadlessRunConfig {
     pub working_dir: String,
     pub prompt: String,
@@ -28,15 +31,22 @@ pub(super) struct HeadlessRunConfig {
     pub bot_name: Option<String>,
     pub permission_mode: Option<conductor_core::config::AgentPermissionMode>,
     pub stall_threshold: std::time::Duration,
+    /// Runtime name resolved from the picker (`Some("qwen-local")`, …) or `None`
+    /// to use the built-in `"claude"` runtime.
+    pub runtime: Option<String>,
+    /// Snapshot of `[runtimes.*]` from the host config (cloned from `self.config`
+    /// on the main thread). Used by `resolve_runtime` to look up `env` overlays
+    /// and binary paths for non-claude runtimes.
+    pub runtimes: std::collections::HashMap<String, conductor_core::config::RuntimeConfig>,
 }
 
-fn synthesize_tui_agent_def(model: Option<&str>) -> AgentDef {
+fn synthesize_tui_agent_def(model: Option<&str>, runtime: &str) -> AgentDef {
     AgentDef {
         name: "tui-ad-hoc".to_string(),
         role: AgentRole::Actor,
         can_commit: true,
         model: model.map(String::from),
-        runtime: "claude".to_string(),
+        runtime: runtime.to_string(),
         prompt: String::new(),
     }
 }
@@ -110,14 +120,19 @@ pub(super) fn drive_headless_run(
         max_turns: None,
     };
 
-    let runtime =
-        match resolve_runtime("claude", permission_mode, &HashMap::new(), &runtime_options) {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = tx.send(on_launched(Err(e.to_string())));
-                return;
-            }
-        };
+    let runtime_name: &str = config.runtime.as_deref().unwrap_or("claude");
+    let runtime = match resolve_runtime(
+        runtime_name,
+        permission_mode,
+        &config.runtimes,
+        &runtime_options,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = tx.send(on_launched(Err(e.to_string())));
+            return;
+        }
+    };
 
     let db = conductor_core::config::db_path();
     let adapter = match SqliteHostAdapter::new(db) {
@@ -136,7 +151,7 @@ pub(super) fn drive_headless_run(
 
     let request = RuntimeRequest {
         run_id: run.id.clone(),
-        agent_def: synthesize_tui_agent_def(config.model.as_deref()),
+        agent_def: synthesize_tui_agent_def(config.model.as_deref(), runtime_name),
         prompt: config.prompt.clone(),
         working_dir: PathBuf::from(&config.working_dir),
         model: config.model.clone(),
@@ -378,16 +393,12 @@ impl App {
                 wt.slug.clone(),
                 resume_session_id,
                 selected_model,
+                None, // Auto-suggest path uses the default claude runtime
             );
             return;
         }
 
         // Otherwise, show the model picker (current behavior)
-        let initial_selected = conductor_core::models::KNOWN_MODELS
-            .iter()
-            .position(|m| m.alias == suggested)
-            .unwrap_or(1);
-
         let (effective_default, effective_source) = match &resolved_default {
             Some(m) => {
                 let source = if wt_model.is_some() {
@@ -402,12 +413,22 @@ impl App {
             None => (None, "not set".to_string()),
         };
 
+        // Build runtime sections from config
+        let runtime_sections = crate::app::input_handling::build_runtime_sections(&self.config);
+
+        let initial_selected = crate::app::input_handling::picker_initial_selected(
+            &runtime_sections,
+            effective_default.as_deref(),
+            Some(suggested),
+            true,
+        );
+
         self.state.modal = Modal::ModelPicker {
             context_label: "agent run".to_string(),
             effective_default,
             effective_source,
             selected: initial_selected,
-            custom_models: self.config.general.custom_models.clone(),
+            runtime_sections,
             suggested: Some(suggested.to_string()),
             allow_default: true,
             on_submit: InputAction::AgentModelOverride {
@@ -417,6 +438,7 @@ impl App {
                 worktree_slug: wt.slug.clone(),
                 resume_session_id,
                 resolved_default,
+                runtime: None, // Filled in from picker selection at submit time
             },
         };
     }
@@ -841,6 +863,7 @@ impl App {
         };
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn start_agent_headless(
         &mut self,
         prompt: String,
@@ -849,10 +872,14 @@ impl App {
         _worktree_slug: String,
         resume_session_id: Option<String>,
         model: Option<String>,
+        runtime: Option<String>,
     ) {
         let Some(ref tx) = self.bg_tx else { return };
         let tx = tx.clone();
         let stall_threshold = self.config.agents.stall_threshold();
+        // Capture runtimes on the main thread per the TUI threading rule —
+        // drive_headless_run runs off-thread and must not re-read process state.
+        let runtimes = self.config.runtimes.clone();
 
         self.state.modal = Modal::Progress {
             message: "Launching agent…".into(),
@@ -881,6 +908,17 @@ impl App {
                 }
             };
 
+            // Persist the runtime selection on the run so list/detail views show
+            // which runtime serviced the request.
+            if let Some(ref rt_name) = runtime {
+                if let Err(e) = mgr.update_run_runtime(&run.id, rt_name) {
+                    tracing::warn!(
+                        "failed to persist runtime '{rt_name}' on run {}: {e}",
+                        run.id
+                    );
+                }
+            }
+
             drive_headless_run(
                 run,
                 HeadlessRunConfig {
@@ -891,6 +929,8 @@ impl App {
                     bot_name: None,
                     permission_mode: None,
                     stall_threshold,
+                    runtime,
+                    runtimes,
                 },
                 &tx,
                 |result| Action::AgentLaunchComplete { result },
@@ -922,6 +962,7 @@ impl App {
         let Some(ref tx) = self.bg_tx else { return };
         let tx = tx.clone();
         let stall_threshold = self.config.agents.stall_threshold();
+        let runtimes = self.config.runtimes.clone();
 
         self.state.modal = Modal::Progress {
             message: "Launching repo agent…".into(),
@@ -960,6 +1001,8 @@ impl App {
                     bot_name: None,
                     permission_mode: Some(conductor_core::config::AgentPermissionMode::RepoSafe),
                     stall_threshold,
+                    runtime: None,
+                    runtimes,
                 },
                 &tx,
                 |result| Action::RepoAgentLaunched { result },
@@ -1004,6 +1047,7 @@ impl App {
         let tx = tx.clone();
         let run_id = run.id.clone();
         let stall_threshold = self.config.agents.stall_threshold();
+        let runtimes = self.config.runtimes.clone();
 
         self.state.modal = crate::state::Modal::Progress {
             message: "Restarting agent…".into(),
@@ -1035,6 +1079,8 @@ impl App {
             let prompt = new_run.prompt.clone();
             let model = new_run.model.clone();
             let bot_name = new_run.bot_name.clone();
+            // Restart inherits the previous run's runtime (already on the row).
+            let runtime = new_run.runtime.clone();
             drive_headless_run(
                 new_run,
                 HeadlessRunConfig {
@@ -1045,6 +1091,8 @@ impl App {
                     bot_name,
                     permission_mode: None,
                     stall_threshold,
+                    runtime: Some(runtime),
+                    runtimes,
                 },
                 &tx,
                 |result| Action::AgentRestartComplete { result },

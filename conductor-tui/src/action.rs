@@ -496,6 +496,14 @@ pub enum Action {
     /// Open Confirm modal to delete the selected custom model entry.
     ModelsDelete,
 
+    // Settings → Runtimes
+    /// Open Input modal to add a new runtime entry (step 1: name).
+    RuntimesAdd,
+    /// Open Input modal to edit the selected runtime's supported models.
+    RuntimesEdit,
+    /// Open Confirm modal to delete the selected runtime.
+    RuntimesDelete,
+
     // Settings view
     /// Navigate to View::Settings.
     OpenSettings,

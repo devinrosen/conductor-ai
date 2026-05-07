@@ -13,8 +13,9 @@ use super::workflow_rows::max_iteration_for_run;
 use super::{
     build_ticket_tree_indices_sorted_by, build_worktree_tree, build_worktree_tree_indices,
     parse_target_label, push_children, push_steps_for_run, ColumnFocus, DashboardRow, DataCache,
-    FilterState, Modal, RepoDetailFocus, SettingsCategory, SettingsFocus, TargetType, TicketSort,
-    TreePosition, View, WorkflowDefFocus, WorkflowRunDetailFocus, WorkflowRunRow, WorkflowsFocus,
+    FilterState, Modal, RepoDetailFocus, RuntimeDisplayRow, SettingsCategory, SettingsFocus,
+    TargetType, TicketSort, TreePosition, View, WorkflowDefFocus, WorkflowRunDetailFocus,
+    WorkflowRunRow, WorkflowsFocus,
 };
 use crate::theme::Theme;
 
@@ -208,6 +209,7 @@ pub struct SettingsDisplayCache {
     pub hooks: Vec<(String, String)>,
     /// Saved custom model IDs (mirrors config so render_models doesn't borrow config).
     pub custom_models: Vec<String>,
+    pub runtimes: Vec<RuntimeDisplayRow>,
 }
 
 impl Default for AppState {
