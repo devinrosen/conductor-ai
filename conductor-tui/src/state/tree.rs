@@ -186,7 +186,13 @@ pub fn build_worktree_tree_indices<W: std::borrow::Borrow<Worktree>>(
         get_branch,
         get_parent,
         default_branch,
-        |a, b| worktrees[a].borrow().branch.as_str().cmp(worktrees[b].borrow().branch.as_str()),
+        |a, b| {
+            worktrees[a]
+                .borrow()
+                .branch
+                .as_str()
+                .cmp(worktrees[b].borrow().branch.as_str())
+        },
     )
 }
 
@@ -284,9 +290,14 @@ pub fn build_branch_picker_tree(
 
     let get_branch = |i: usize| rest[i].branch.as_deref().unwrap_or("");
     let get_parent = |i: usize| rest[i].base_branch.as_deref().unwrap_or("");
-    let (rest_indices, rest_positions) = dfs_tree_order(rest.len(), get_branch, get_parent, "", |a, b| {
-        rest[a].branch.as_deref().unwrap_or("").cmp(rest[b].branch.as_deref().unwrap_or(""))
-    });
+    let (rest_indices, rest_positions) =
+        dfs_tree_order(rest.len(), get_branch, get_parent, "", |a, b| {
+            rest[a]
+                .branch
+                .as_deref()
+                .unwrap_or("")
+                .cmp(rest[b].branch.as_deref().unwrap_or(""))
+        });
 
     for (idx, pos) in rest_indices.into_iter().zip(rest_positions) {
         result.push(rest[idx].clone());
@@ -496,8 +507,10 @@ mod tests {
 
         let (indices, _, _) =
             build_ticket_tree_indices_sorted_by(&tickets, &deps, TicketSort::NumberAsc);
-        let src_order: Vec<&str> =
-            indices.iter().map(|&i| tickets[i].source_id.as_str()).collect();
+        let src_order: Vec<&str> = indices
+            .iter()
+            .map(|&i| tickets[i].source_id.as_str())
+            .collect();
         // Lex order: PROJ-1 < PROJ-10 < PROJ-2
         assert_eq!(src_order, vec!["PROJ-1", "PROJ-10", "PROJ-2"]);
     }
