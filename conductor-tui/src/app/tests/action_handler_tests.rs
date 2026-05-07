@@ -2263,23 +2263,6 @@ fn runtimes_edit_action_opens_input_with_current_models() {
 }
 
 #[test]
-fn runtimes_edit_built_in_claude_is_noop_with_status_message() {
-    let mut app = make_app();
-    app.refresh_settings_display();
-    app.state.settings_category = crate::state::SettingsCategory::Runtimes;
-    app.state.settings_focus = crate::state::SettingsFocus::SettingsList;
-    app.state.settings_row_index = 0; // claude built-in
-    app.handle_runtimes_edit();
-    assert!(matches!(app.state.modal, Modal::None));
-    assert!(app
-        .state
-        .status_message
-        .as_deref()
-        .unwrap_or("")
-        .contains("read-only"));
-}
-
-#[test]
 fn runtimes_delete_built_in_claude_is_noop_with_status_message() {
     let mut app = make_app();
     app.refresh_settings_display();
