@@ -441,6 +441,31 @@ pub enum ConfirmAction {
     Quit,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TicketSort {
+    #[default]
+    Default,
+    NumberAsc,
+    NumberDesc,
+}
+
+impl TicketSort {
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Default => Self::NumberAsc,
+            Self::NumberAsc => Self::NumberDesc,
+            Self::NumberDesc => Self::Default,
+        }
+    }
+    pub fn title_fragment(self) -> Option<&'static str> {
+        match self {
+            Self::Default => None,
+            Self::NumberAsc => Some("sort: #\u{2191}"),
+            Self::NumberDesc => Some("sort: #\u{2193}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub enum FormFieldType {
     #[default]

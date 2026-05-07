@@ -1,9 +1,10 @@
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use conductor_core::tickets::{Ticket, TicketDependencies};
 use conductor_core::worktree::Worktree;
 
-use super::BranchPickerItem;
+use super::{BranchPickerItem, TicketSort};
 
 #[derive(Debug, Default, Clone)]
 pub struct FilterState {
@@ -80,7 +81,7 @@ fn dfs_tree_order<'a>(
     get_branch: impl Fn(usize) -> &'a str,
     get_parent: impl Fn(usize) -> &'a str,
     default_branch: &str,
-    reverse: bool,
+    sort_fn: impl Fn(usize, usize) -> Ordering,
 ) -> (Vec<usize>, Vec<TreePosition>) {
     if n == 0 {
         return (Vec::new(), Vec::new());
@@ -101,19 +102,10 @@ fn dfs_tree_order<'a>(
             roots.push(i);
         }
     }
-    let sort_fn = |a: &usize, b: &usize| {
-        let ord = get_branch(*a).cmp(get_branch(*b));
-        if reverse {
-            ord.reverse()
-        } else {
-            ord
-        }
-    };
-
-    roots.sort_by(|a, b| sort_fn(a, b));
+    roots.sort_by(|&a, &b| sort_fn(a, b));
 
     for children in children_of.values_mut() {
-        children.sort_by(|a, b| sort_fn(a, b));
+        children.sort_by(|&a, &b| sort_fn(a, b));
     }
 
     let mut indices: Vec<usize> = Vec::with_capacity(n);
@@ -194,7 +186,7 @@ pub fn build_worktree_tree_indices<W: std::borrow::Borrow<Worktree>>(
         get_branch,
         get_parent,
         default_branch,
-        false,
+        |a, b| worktrees[a].borrow().branch.as_str().cmp(worktrees[b].borrow().branch.as_str()),
     )
 }
 
@@ -217,9 +209,20 @@ pub fn build_worktree_tree(
 ///
 /// The `deps` map is keyed by ticket ID; each entry's `.children` field lists child tickets.
 /// Tickets whose parent is not present in the input slice are treated as roots.
+#[allow(dead_code)]
 pub fn build_ticket_tree_indices<'a>(
     tickets: &'a [Ticket],
     deps: &'a HashMap<String, TicketDependencies>,
+) -> (Vec<usize>, Vec<TreePosition>, HashMap<&'a str, &'a str>) {
+    build_ticket_tree_indices_sorted_by(tickets, deps, TicketSort::Default)
+}
+
+/// Like `build_ticket_tree_indices` but with an explicit sort order applied within each
+/// tree level (roots among themselves, siblings within their parent).
+pub fn build_ticket_tree_indices_sorted_by<'a>(
+    tickets: &'a [Ticket],
+    deps: &'a HashMap<String, TicketDependencies>,
+    sort: TicketSort,
 ) -> (Vec<usize>, Vec<TreePosition>, HashMap<&'a str, &'a str>) {
     // Build a child_id → parent_id reverse map.
     let mut child_to_parent: HashMap<&'a str, &'a str> = HashMap::new();
@@ -236,8 +239,22 @@ pub fn build_ticket_tree_indices<'a>(
             .copied()
             .unwrap_or("")
     };
-    let (indices, positions) = dfs_tree_order(tickets.len(), get_branch, get_parent, "", true);
+    let sort_fn = |a: usize, b: usize| match sort {
+        TicketSort::Default => tickets[b].id.cmp(&tickets[a].id),
+        TicketSort::NumberAsc => ticket_number_ord(&tickets[a].source_id, &tickets[b].source_id),
+        TicketSort::NumberDesc => {
+            ticket_number_ord(&tickets[a].source_id, &tickets[b].source_id).reverse()
+        }
+    };
+    let (indices, positions) = dfs_tree_order(tickets.len(), get_branch, get_parent, "", sort_fn);
     (indices, positions, child_to_parent)
+}
+
+fn ticket_number_ord(a: &str, b: &str) -> Ordering {
+    match (a.parse::<u64>(), b.parse::<u64>()) {
+        (Ok(na), Ok(nb)) => na.cmp(&nb),
+        _ => a.cmp(b),
+    }
 }
 
 /// Reorder branch picker items into tree order based on `base_branch` parent-child relationships.
@@ -267,8 +284,9 @@ pub fn build_branch_picker_tree(
 
     let get_branch = |i: usize| rest[i].branch.as_deref().unwrap_or("");
     let get_parent = |i: usize| rest[i].base_branch.as_deref().unwrap_or("");
-    let (rest_indices, rest_positions) =
-        dfs_tree_order(rest.len(), get_branch, get_parent, "", false);
+    let (rest_indices, rest_positions) = dfs_tree_order(rest.len(), get_branch, get_parent, "", |a, b| {
+        rest[a].branch.as_deref().unwrap_or("").cmp(rest[b].branch.as_deref().unwrap_or(""))
+    });
 
     for (idx, pos) in rest_indices.into_iter().zip(rest_positions) {
         result.push(rest[idx].clone());
@@ -407,5 +425,80 @@ mod tests {
         assert_eq!(child_to_parent.get("child1"), Some(&"parent"));
         assert_eq!(child_to_parent.get("child2"), Some(&"parent"));
         assert_eq!(child_to_parent.get("parent"), None);
+    }
+
+    fn make_ticket_with_source(id: &str, source_id: &str) -> Ticket {
+        let mut t = make_ticket(id);
+        t.source_id = source_id.to_string();
+        t
+    }
+
+    #[test]
+    fn test_ticket_sort_number_asc() {
+        // root id1 (source_id=100) with child id3 (source_id=200); root id2 (source_id=50)
+        let tickets = vec![
+            make_ticket_with_source("id1", "100"),
+            make_ticket_with_source("id2", "50"),
+            make_ticket_with_source("id3", "200"),
+        ];
+        let mut deps = HashMap::new();
+        deps.insert("id1".to_string(), make_child_dep(&["id3"]));
+
+        let (indices, positions, _) =
+            build_ticket_tree_indices_sorted_by(&tickets, &deps, TicketSort::NumberAsc);
+        let id_order: Vec<&str> = indices.iter().map(|&i| tickets[i].id.as_str()).collect();
+        // Roots sorted by number asc: id2 (50) before id1 (100); id3 stays under id1.
+        assert_eq!(id_order, vec!["id2", "id1", "id3"]);
+        // id3 must remain at depth 1 under id1.
+        let pos_id3 = positions
+            .iter()
+            .zip(indices.iter())
+            .find(|(_, &i)| tickets[i].id == "id3")
+            .map(|(p, _)| p)
+            .unwrap();
+        assert_eq!(pos_id3.depth, 1);
+    }
+
+    #[test]
+    fn test_ticket_sort_number_desc() {
+        let tickets = vec![
+            make_ticket_with_source("id1", "100"),
+            make_ticket_with_source("id2", "50"),
+            make_ticket_with_source("id3", "200"),
+        ];
+        let mut deps = HashMap::new();
+        deps.insert("id1".to_string(), make_child_dep(&["id3"]));
+
+        let (indices, positions, _) =
+            build_ticket_tree_indices_sorted_by(&tickets, &deps, TicketSort::NumberDesc);
+        let id_order: Vec<&str> = indices.iter().map(|&i| tickets[i].id.as_str()).collect();
+        // Roots sorted by number desc: id1 (100) before id2 (50); DFS: id1, id3, id2.
+        assert_eq!(id_order, vec!["id1", "id3", "id2"]);
+        // id3 must remain at depth 1 under id1.
+        let pos_id3 = positions
+            .iter()
+            .zip(indices.iter())
+            .find(|(_, &i)| tickets[i].id == "id3")
+            .map(|(p, _)| p)
+            .unwrap();
+        assert_eq!(pos_id3.depth, 1);
+    }
+
+    #[test]
+    fn test_ticket_sort_non_numeric_fallback() {
+        // Jira-style source_ids: non-numeric, falls back to lexicographic order.
+        let tickets = vec![
+            make_ticket_with_source("id1", "PROJ-10"),
+            make_ticket_with_source("id2", "PROJ-2"),
+            make_ticket_with_source("id3", "PROJ-1"),
+        ];
+        let deps = HashMap::new();
+
+        let (indices, _, _) =
+            build_ticket_tree_indices_sorted_by(&tickets, &deps, TicketSort::NumberAsc);
+        let src_order: Vec<&str> =
+            indices.iter().map(|&i| tickets[i].source_id.as_str()).collect();
+        // Lex order: PROJ-1 < PROJ-10 < PROJ-2
+        assert_eq!(src_order, vec!["PROJ-1", "PROJ-10", "PROJ-2"]);
     }
 }

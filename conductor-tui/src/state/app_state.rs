@@ -11,10 +11,10 @@ use ratatui::widgets::ListState;
 
 use super::workflow_rows::max_iteration_for_run;
 use super::{
-    build_ticket_tree_indices, build_worktree_tree, build_worktree_tree_indices,
+    build_ticket_tree_indices_sorted_by, build_worktree_tree, build_worktree_tree_indices,
     parse_target_label, push_children, push_steps_for_run, ColumnFocus, DashboardRow, DataCache,
-    FilterState, Modal, RepoDetailFocus, SettingsCategory, SettingsFocus, TargetType, TreePosition,
-    View, WorkflowDefFocus, WorkflowRunDetailFocus, WorkflowRunRow, WorkflowsFocus,
+    FilterState, Modal, RepoDetailFocus, SettingsCategory, SettingsFocus, TargetType, TicketSort,
+    TreePosition, View, WorkflowDefFocus, WorkflowRunDetailFocus, WorkflowRunRow, WorkflowsFocus,
 };
 use crate::theme::Theme;
 
@@ -84,6 +84,9 @@ pub struct AppState {
     pub filter: FilterState,
     pub detail_ticket_filter: FilterState,
     pub label_filter: FilterState,
+
+    /// Current sort order for the Tickets pane; session-only, resets on TUI restart.
+    pub detail_ticket_sort: TicketSort,
 
     // Status bar message
     pub status_message: Option<String>,
@@ -247,6 +250,7 @@ impl AppState {
             filter: FilterState::default(),
             detail_ticket_filter: FilterState::default(),
             label_filter: FilterState::default(),
+            detail_ticket_sort: TicketSort::default(),
             status_message: None,
             status_message_at: None,
             github_orgs_cache: Vec::new(),
@@ -403,8 +407,11 @@ impl AppState {
 
         // Build DFS tree order for detail tickets; also get child→parent map for
         // ancestor promotion during text filter (reuse instead of rebuilding).
-        let (dfs_indices, dfs_positions, child_to_parent) =
-            build_ticket_tree_indices(&self.detail_tickets, &self.data.ticket_dependencies);
+        let (dfs_indices, dfs_positions, child_to_parent) = build_ticket_tree_indices_sorted_by(
+            &self.detail_tickets,
+            &self.data.ticket_dependencies,
+            self.detail_ticket_sort,
+        );
 
         // When a text filter is active, find all ticket IDs that match plus their ancestors.
         let include_set: Option<std::collections::HashSet<&str>> =

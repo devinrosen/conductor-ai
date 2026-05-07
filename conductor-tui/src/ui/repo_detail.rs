@@ -359,21 +359,22 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         .collect();
 
     let hiding = !state.show_closed_tickets;
-    let ticket_title = match detail_filter.as_deref() {
-        Some(f) if !f.is_empty() => {
-            if hiding {
-                format!(" Tickets (filter: {f}, hiding closed) ")
-            } else {
-                format!(" Tickets (filter: {f}) ")
-            }
-        }
-        _ => {
-            if hiding {
-                " Tickets (hiding closed) ".to_string()
-            } else {
-                " Tickets ".to_string()
-            }
-        }
+    let filter_part;
+    let mut parts: Vec<&str> = Vec::new();
+    if let Some(f) = detail_filter.as_deref().filter(|f| !f.is_empty()) {
+        filter_part = format!("filter: {f}");
+        parts.push(&filter_part);
+    }
+    if hiding {
+        parts.push("hiding closed");
+    }
+    if let Some(s) = state.detail_ticket_sort.title_fragment() {
+        parts.push(s);
+    }
+    let ticket_title = if parts.is_empty() {
+        " Tickets ".to_string()
+    } else {
+        format!(" Tickets ({}) ", parts.join(", "))
     };
 
     let ticket_list = List::new(ticket_items)
