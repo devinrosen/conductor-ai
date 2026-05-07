@@ -11,11 +11,13 @@
 //! Explicit paths (`AgentSpec::Path`) are resolved directly relative to the
 //! repository root and bypass the search order.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::config::RuntimeConfig;
 use crate::error::{ConductorError, Result};
 use crate::text_util::parse_frontmatter;
 
@@ -54,20 +56,19 @@ struct AgentFrontmatter {
     can_commit: bool,
     #[serde(default)]
     model: Option<String>,
-    #[serde(default = "default_runtime")]
-    runtime: String,
+    #[serde(default)]
+    runtime: Option<String>,
 }
 
 pub fn default_role() -> String {
     "reviewer".to_string()
 }
 
-fn default_runtime() -> String {
-    "cli".to_string()
-}
-
 /// Parse an agent `.md` file into an `AgentDef`.
-fn parse_agent_file(path: &Path) -> Result<AgentDef> {
+///
+/// `default_runtime` is applied when the frontmatter omits `runtime:`.
+/// Falls back to `"cli"` when both are absent (conductor-core system default).
+fn parse_agent_file(path: &Path, default_runtime: Option<&str>) -> Result<AgentDef> {
     let content = fs::read_to_string(path).map_err(|e| {
         ConductorError::AgentConfig(format!("Failed to read agent file {}: {e}", path.display()))
     })?;
@@ -87,7 +88,7 @@ fn parse_agent_file(path: &Path) -> Result<AgentDef> {
                 role: AgentRole::Reviewer,
                 can_commit: false,
                 model: None,
-                runtime: default_runtime(),
+                runtime: default_runtime.unwrap_or("cli").to_string(),
                 prompt: content.trim().to_string(),
             });
         }
@@ -112,14 +113,59 @@ fn parse_agent_file(path: &Path) -> Result<AgentDef> {
         )));
     }
 
+    let runtime = fm
+        .runtime
+        .as_deref()
+        .or(default_runtime)
+        .unwrap_or("cli")
+        .to_string();
+
     Ok(AgentDef {
         name: file_stem,
         role,
         can_commit: fm.can_commit,
         model: fm.model,
-        runtime: fm.runtime,
+        runtime,
         prompt: body.trim().to_string(),
     })
+}
+
+/// Validate that `def.runtime` is compatible with the provided `runtimes` config.
+///
+/// - Built-in `"claude"` is always valid.
+/// - Any other name must be a key in `runtimes`.
+/// - When the matching runtime has `supported_models`, `request_model` (or the
+///   agent's own `model:`) must be listed; if neither is set the check is skipped
+///   (the subprocess will use the host default).
+pub fn validate_agent_runtime(
+    def: &AgentDef,
+    runtimes: &HashMap<String, RuntimeConfig>,
+    request_model: Option<&str>,
+) -> Result<()> {
+    if def.runtime == "claude" {
+        return Ok(());
+    }
+    let rt_config = runtimes.get(&def.runtime).ok_or_else(|| {
+        ConductorError::AgentConfig(format!(
+            "agent '{}' specifies runtime '{}' which is not defined in config; \
+             add a `[runtimes.{}]` section or use the built-in \"claude\"",
+            def.name, def.runtime, def.runtime
+        ))
+    })?;
+    if rt_config.supported_models.is_empty() {
+        return Ok(());
+    }
+    let effective_model = request_model.or(def.model.as_deref());
+    if let Some(m) = effective_model {
+        if !rt_config.supported_models.iter().any(|s| s == m) {
+            return Err(ConductorError::AgentConfig(format!(
+                "runtime '{}' only accepts models {:?}; \
+                 agent '{}' resolved model is '{m}'",
+                def.runtime, rt_config.supported_models, def.name
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Load an agent definition from an `AgentSpec`.
@@ -201,20 +247,20 @@ fn load_agent_by_name(
             .join("agents");
         if let Some(path) = find_agent_path(&bases, &subdir, &filename) {
             validate_path_within_either_base(&path, worktree_path, repo_path)?;
-            return parse_agent_file(&path);
+            return parse_agent_file(&path, None);
         }
     }
 
     // 2. Shared conductor agents (worktree, then repo)
     if let Some(path) = find_agent_path(&bases, Path::new(".conductor/agents"), &filename) {
         validate_path_within_either_base(&path, worktree_path, repo_path)?;
-        return parse_agent_file(&path);
+        return parse_agent_file(&path, None);
     }
 
     // 3. Claude Code agents fallback (worktree, then repo)
     if let Some(path) = find_agent_path(&bases, Path::new(".claude/agents"), &filename) {
         validate_path_within_either_base(&path, worktree_path, repo_path)?;
-        return parse_agent_file(&path);
+        return parse_agent_file(&path, None);
     }
 
     // 4. Extra plugin directories (lowest priority)
@@ -222,7 +268,7 @@ fn load_agent_by_name(
         let path = Path::new(dir).join("agents").join(&filename);
         if path.is_file() {
             validate_path_within_base(&path, dir)?;
-            return parse_agent_file(&path);
+            return parse_agent_file(&path, None);
         }
     }
 
@@ -261,7 +307,7 @@ fn load_agent_by_path(repo_path: &str, rel_path: &str) -> Result<AgentDef> {
         )));
     }
 
-    parse_agent_file(&canonical)
+    parse_agent_file(&canonical, None)
 }
 
 /// Validate that all agents in `specs` can be resolved, returning the labels of
@@ -333,7 +379,7 @@ pub fn load_all_agents(worktree_path: &str, repo_path: &str) -> Result<Vec<Agent
 
     for dir in search_dirs {
         for entry in collect_md_entries(dir)? {
-            let def = parse_agent_file(&entry.path())?;
+            let def = parse_agent_file(&entry.path(), None)?;
             if seen_names.insert(def.name.clone()) {
                 defs.push(def);
             }
@@ -369,7 +415,7 @@ Implement the plan written in PLAN.md.
         let file = tmp.path().join("implement.md");
         fs::write(&file, TEST_AGENT).unwrap();
 
-        let def = parse_agent_file(&file).unwrap();
+        let def = parse_agent_file(&file, None).unwrap();
         assert_eq!(def.name, "implement");
         assert_eq!(def.role, AgentRole::Actor);
         assert!(def.can_commit);
@@ -385,7 +431,7 @@ Implement the plan written in PLAN.md.
         let file = tmp.path().join("review.md");
         fs::write(&file, "---\nrole: reviewer\n---\nYou are a code reviewer.").unwrap();
 
-        let def = parse_agent_file(&file).unwrap();
+        let def = parse_agent_file(&file, None).unwrap();
         assert_eq!(def.name, "review");
         assert_eq!(def.role, AgentRole::Reviewer);
         assert!(!def.can_commit);
@@ -400,7 +446,7 @@ Implement the plan written in PLAN.md.
         let file = tmp.path().join("simple.md");
         fs::write(&file, "Just a plain prompt with no frontmatter.").unwrap();
 
-        let def = parse_agent_file(&file).unwrap();
+        let def = parse_agent_file(&file, None).unwrap();
         assert_eq!(def.name, "simple");
         assert_eq!(def.role, AgentRole::Reviewer);
         assert_eq!(def.prompt, "Just a plain prompt with no frontmatter.");
@@ -417,7 +463,7 @@ Implement the plan written in PLAN.md.
         )
         .unwrap();
 
-        let def = parse_agent_file(&file).unwrap();
+        let def = parse_agent_file(&file, None).unwrap();
         assert_eq!(def.runtime, "claude");
     }
 
@@ -427,7 +473,7 @@ Implement the plan written in PLAN.md.
         let file = tmp.path().join("agent.md");
         fs::write(&file, "---\nrole: actor\nruntime: cli\n---\nPrompt body.").unwrap();
 
-        let def = parse_agent_file(&file).unwrap();
+        let def = parse_agent_file(&file, None).unwrap();
         assert_eq!(def.runtime, "cli");
     }
 
@@ -437,7 +483,7 @@ Implement the plan written in PLAN.md.
         let file = tmp.path().join("agent.md");
         fs::write(&file, "---\nrole: reviewer\n---\nPrompt body.").unwrap();
 
-        let def = parse_agent_file(&file).unwrap();
+        let def = parse_agent_file(&file, None).unwrap();
         assert_eq!(def.runtime, "cli");
     }
 
@@ -447,7 +493,7 @@ Implement the plan written in PLAN.md.
         let file = tmp.path().join("agent.md");
         fs::write(&file, "Prompt body with no frontmatter at all.").unwrap();
 
-        let def = parse_agent_file(&file).unwrap();
+        let def = parse_agent_file(&file, None).unwrap();
         assert_eq!(def.runtime, "cli");
     }
 
@@ -462,7 +508,7 @@ Implement the plan written in PLAN.md.
         .unwrap();
 
         // Unknown runtime names are stored as-is; validation is deferred to resolve_runtime
-        let def = parse_agent_file(&file).unwrap();
+        let def = parse_agent_file(&file, None).unwrap();
         assert_eq!(def.runtime, "custom-plugin");
     }
 
@@ -472,7 +518,7 @@ Implement the plan written in PLAN.md.
         let file = tmp.path().join("bad.md");
         fs::write(&file, "---\nrole: reviewer\ncan_commit: true\n---\nPrompt.").unwrap();
 
-        let result = parse_agent_file(&file);
+        let result = parse_agent_file(&file, None);
         assert!(result.is_err());
         let err = format!("{}", result.unwrap_err());
         assert!(err.contains("can_commit requires role: actor"));
@@ -1165,5 +1211,89 @@ Implement the plan written in PLAN.md.
             err.contains("path traversal") || err.contains("escapes"),
             "Expected path traversal error, got: {err}"
         );
+    }
+
+    // ── validate_agent_runtime ───────────────────────────────────────────────
+
+    fn make_def(runtime: &str, model: Option<&str>) -> AgentDef {
+        AgentDef {
+            name: "test-agent".to_string(),
+            role: AgentRole::Reviewer,
+            can_commit: false,
+            model: model.map(String::from),
+            runtime: runtime.to_string(),
+            prompt: String::new(),
+        }
+    }
+
+    #[test]
+    fn validate_agent_runtime_builtin_claude_always_ok() {
+        let runtimes = HashMap::new();
+        let def = make_def("claude", None);
+        assert!(validate_agent_runtime(&def, &runtimes, None).is_ok());
+    }
+
+    #[test]
+    fn validate_agent_runtime_missing_named_runtime_is_error() {
+        let runtimes = HashMap::new();
+        let def = make_def("my-local", None);
+        let err = validate_agent_runtime(&def, &runtimes, None).unwrap_err();
+        assert!(
+            err.to_string().contains("my-local"),
+            "error must mention runtime name, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_agent_runtime_empty_supported_models_ok_for_any_model() {
+        let mut runtimes = HashMap::new();
+        runtimes.insert("my-rt".to_string(), RuntimeConfig::default());
+        let def = make_def("my-rt", Some("any-model"));
+        assert!(validate_agent_runtime(&def, &runtimes, None).is_ok());
+    }
+
+    #[test]
+    fn validate_agent_runtime_model_in_list_ok() {
+        let mut runtimes = HashMap::new();
+        let rt = RuntimeConfig {
+            supported_models: vec!["allowed-model".to_string()],
+            ..RuntimeConfig::default()
+        };
+        runtimes.insert("my-rt".to_string(), rt);
+        let def = make_def("my-rt", None);
+        assert!(validate_agent_runtime(&def, &runtimes, Some("allowed-model")).is_ok());
+    }
+
+    #[test]
+    fn validate_agent_runtime_model_not_in_list_is_error() {
+        let mut runtimes = HashMap::new();
+        let rt = RuntimeConfig {
+            supported_models: vec!["allowed-model".to_string()],
+            ..RuntimeConfig::default()
+        };
+        runtimes.insert("my-rt".to_string(), rt);
+        let def = make_def("my-rt", None);
+        let err = validate_agent_runtime(&def, &runtimes, Some("disallowed-model")).unwrap_err();
+        assert!(
+            err.to_string().contains("allowed-model"),
+            "error must list accepted models, got: {err}"
+        );
+        assert!(
+            err.to_string().contains("disallowed-model"),
+            "error must name the rejected model, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_agent_runtime_no_model_set_skips_check() {
+        let mut runtimes = HashMap::new();
+        let rt = RuntimeConfig {
+            supported_models: vec!["allowed-model".to_string()],
+            ..RuntimeConfig::default()
+        };
+        runtimes.insert("my-rt".to_string(), rt);
+        // No model on def, no request_model → subprocess picks host default; check is skipped.
+        let def = make_def("my-rt", None);
+        assert!(validate_agent_runtime(&def, &runtimes, None).is_ok());
     }
 }

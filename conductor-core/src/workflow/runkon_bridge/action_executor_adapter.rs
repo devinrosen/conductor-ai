@@ -129,6 +129,8 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             workflow_name: ctx.workflow_name().to_string(),
             tracker: host_adapter.clone() as std::sync::Arc<dyn runkon_runtimes::RunTracker>,
             event_sink: host_adapter as std::sync::Arc<dyn runkon_runtimes::RunEventSink>,
+            runtimes: self.config.runtimes.clone(),
+            default_runtime: self.config.general.default_runtime.clone(),
         };
         let schema_arc = params
             .extensions
