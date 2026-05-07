@@ -9,6 +9,9 @@ mod state;
 mod theme;
 mod ui;
 
+#[cfg(test)]
+mod test_support;
+
 use anyhow::Result;
 
 use conductor_core::Conductor;

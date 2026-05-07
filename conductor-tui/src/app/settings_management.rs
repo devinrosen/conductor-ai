@@ -232,17 +232,7 @@ impl App {
     }
 
     /// Spawn a background thread to save the current config (non-blocking).
-    ///
-    /// Skipped under `cfg(test)`: `save_config` writes to the user's real
-    /// `~/.conductor/config.toml` (the global path resolved by
-    /// `conductor_dir()`), and unit tests construct an in-memory `Config`
-    /// with fixture data — running them would clobber the developer's
-    /// actual config. Production builds (the `conductor-tui` binary) do
-    /// not set `cfg(test)` and persist normally.
     pub(super) fn save_config_background(&mut self) {
-        if cfg!(test) {
-            return;
-        }
         let config = self.config.clone();
         std::thread::spawn(move || {
             if let Err(e) = conductor_core::config::save_config(&config) {

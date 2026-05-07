@@ -2155,6 +2155,7 @@ mod tests {
     use conductor_core::{config::Config, repo::Repo, worktree::Worktree};
 
     fn make_app() -> App {
+        crate::test_support::isolate_conductor_home();
         let conn = conductor_core::test_helpers::create_test_conn();
         App::new(
             conn,
