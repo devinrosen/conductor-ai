@@ -339,6 +339,11 @@ pub struct GeneralConfig {
     /// Displayed in the model picker after built-in models.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_models: Vec<String>,
+    /// Default runtime for workflow agent steps when the agent frontmatter omits `runtime:`.
+    /// Must be "claude" (built-in) or a key in the `[runtimes]` table.
+    /// When unset, runkon-flow-executors falls back to its own system default ("claude").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_runtime: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -398,6 +403,7 @@ impl Default for GeneralConfig {
             claude_config_dir: None,
             auto_resume_limit: default_auto_resume_limit(),
             custom_models: Vec::new(),
+            default_runtime: None,
         }
     }
 }

@@ -26,6 +26,11 @@ pub struct ClaudeAgentContext {
     pub workflow_name: String,
     pub tracker: Arc<dyn RunTracker>,
     pub event_sink: Arc<dyn RunEventSink>,
+    /// Named runtime configs (from `[runtimes.*]` in host config).
+    /// Used to validate `supported_models` before spawning.
+    pub runtimes: std::collections::HashMap<String, runkon_runtimes::config::RuntimeConfig>,
+    /// Default runtime name applied when agent frontmatter omits `runtime:`.
+    pub default_runtime: Option<String>,
 }
 
 /// Agent step parameters passed to [`ClaudeAgentExecutor::execute`].
@@ -73,6 +78,7 @@ impl ClaudeAgentExecutor {
             retry_error: params.retry_error,
             dry_run: params.dry_run,
             schema: params.schema,
+            default_runtime: ctx.default_runtime.as_deref(),
         };
 
         let (agent_def, prompt) = agent_loader::load_agent_and_build_prompt(
@@ -83,6 +89,22 @@ impl ClaudeAgentExecutor {
             params.name,
             &build_params,
         )?;
+
+        // Validate supported_models before spawning — catches misconfiguration early.
+        if let Some(rt_config) = ctx.runtimes.get(&agent_def.runtime) {
+            if !rt_config.supported_models.is_empty() {
+                let effective_model = ctx.model.as_deref().or(agent_def.model.as_deref());
+                if let Some(m) = effective_model {
+                    if !rt_config.supported_models.iter().any(|s| s == m) {
+                        return Err(format!(
+                            "runtime '{}' only accepts models {:?}; \
+                             agent '{}' resolved model is '{m}'",
+                            agent_def.runtime, rt_config.supported_models, agent_def.name
+                        ));
+                    }
+                }
+            }
+        }
 
         // API fast path: schema + key both present.
         if let (Some(schema), Some(api_key)) = (params.schema, self.api_key.as_deref()) {
@@ -264,6 +286,8 @@ mod tests {
             workflow_name: "test-wf".to_string(),
             tracker: Arc::new(runkon_runtimes::tracker::NoopTracker),
             event_sink: Arc::new(runkon_runtimes::NoopEventSink),
+            runtimes: std::collections::HashMap::new(),
+            default_runtime: None,
         }
     }
 
@@ -350,6 +374,8 @@ mod tests {
             workflow_name: "test-wf".to_string(),
             tracker: Arc::new(runkon_runtimes::tracker::NoopTracker),
             event_sink: Arc::new(runkon_runtimes::NoopEventSink),
+            runtimes: std::collections::HashMap::new(),
+            default_runtime: None,
         };
         let params = ClaudeAgentParams {
             name: "test-agent",

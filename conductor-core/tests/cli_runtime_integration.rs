@@ -41,12 +41,9 @@ fn make_runtime(script_path: &str, result_field: &str, token_fields: Option<&str
             runtime_type: Some("cli".to_string()),
             binary: Some("sh".to_string()),
             args: Some(vec![script_path.to_string()]),
-            prompt_via: None,
-            default_model: None,
             result_field: Some(result_field.to_string()),
             token_fields: token_fields.map(|s| s.to_string()),
-            api_key_env: None,
-            command: None,
+            ..RuntimeConfig::default()
         },
         PathBuf::from("/tmp"),
     )
