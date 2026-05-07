@@ -4,7 +4,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::state::{AppState, SettingsCategory, SettingsFocus};
+use crate::state::{
+    is_secret_env_key, AppState, RuntimeDetailFocus, SettingsCategory, SettingsFocus,
+};
 
 /// Named row indices for General settings (right pane).
 pub mod general_row {
@@ -100,7 +102,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         Style::default().fg(theme.label_secondary)
     };
 
-    let category_title = format!(" {} ", state.settings_category.label());
+    let category_title = match (state.settings_category, &state.settings_runtime_detail) {
+        (SettingsCategory::Runtimes, Some(detail)) => format!(" Runtime: {} ", detail.name),
+        _ => format!(" {} ", state.settings_category.label()),
+    };
     let right_block = Block::default()
         .title(category_title)
         .borders(Borders::ALL)
@@ -350,6 +355,20 @@ fn render_notifications(
 }
 
 fn render_runtimes(frame: &mut Frame, area: Rect, block: Block, state: &AppState, focused: bool) {
+    if state.settings_runtime_detail.is_some() {
+        render_runtime_detail(frame, area, block, state, focused);
+    } else {
+        render_runtimes_list(frame, area, block, state, focused);
+    }
+}
+
+fn render_runtimes_list(
+    frame: &mut Frame,
+    area: Rect,
+    block: Block,
+    state: &AppState,
+    focused: bool,
+) {
     let theme = &state.theme;
     let sel = state.settings_row_index;
     let d = &state.settings_display;
@@ -359,7 +378,7 @@ fn render_runtimes(frame: &mut Frame, area: Rect, block: Block, state: &AppState
 
     let hint_line = if focused {
         Line::from(Span::styled(
-            "  [a] add  [e] edit models  [d] delete  [Esc] back",
+            "  [Enter/e] edit  [a] add  [d] delete  [Esc] back",
             Style::default().fg(theme.label_secondary),
         ))
     } else {
@@ -405,12 +424,174 @@ fn render_runtimes(frame: &mut Frame, area: Rect, block: Block, state: &AppState
     }
 
     lines.push(Line::from(""));
+    lines.push(hint_line);
+
+    let para = Paragraph::new(lines);
+    frame.render_widget(para, inner);
+}
+
+fn render_runtime_detail(
+    frame: &mut Frame,
+    area: Rect,
+    block: Block,
+    state: &AppState,
+    focused: bool,
+) {
+    let theme = &state.theme;
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let Some(detail) = state.settings_runtime_detail.as_ref() else {
+        return;
+    };
+    let runtime = state
+        .settings_display
+        .runtimes
+        .iter()
+        .find(|r| r.name == detail.name);
+    let type_hint = runtime
+        .map(|r| r.type_hint.clone())
+        .unwrap_or_else(|| "claude".to_string());
+    let is_built_in = runtime.map(|r| r.is_built_in).unwrap_or(false);
+    let models: Vec<String> = runtime.map(|r| r.models.clone()).unwrap_or_default();
+    let env_pairs: Vec<(String, String)> = runtime.map(|r| r.env.clone()).unwrap_or_default();
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  Type:        ",
+            Style::default().fg(theme.label_secondary),
+        ),
+        Span::styled(
+            type_hint,
+            Style::default()
+                .fg(theme.label_primary)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  Built-in:    ",
+            Style::default().fg(theme.label_secondary),
+        ),
+        Span::styled(
+            if is_built_in { "yes" } else { "no" },
+            Style::default().fg(theme.label_primary),
+        ),
+    ]));
+    lines.push(Line::from(""));
+
+    // ── Models section ─────────────────────────────────────────────────
+    let models_focused = focused && detail.focus == RuntimeDetailFocus::Models;
+    let models_header_style = if models_focused {
+        Style::default()
+            .fg(theme.label_accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.label_secondary)
+    };
     lines.push(Line::from(Span::styled(
-        "  Note: edit env via ~/.conductor/config.toml directly",
+        format!("  ── Models ({}) ────────────────────", models.len()),
+        models_header_style,
+    )));
+    if models.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "    (no models — press a to add)",
+            Style::default().fg(theme.label_secondary),
+        )));
+    } else {
+        for (i, m) in models.iter().enumerate() {
+            let is_selected = i == detail.model_index && models_focused;
+            let style = if is_selected {
+                Style::default()
+                    .fg(theme.label_primary)
+                    .bg(theme.highlight_bg)
+            } else {
+                Style::default().fg(theme.label_primary)
+            };
+            let prefix = if is_selected { "\u{25b8} " } else { "  " };
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {prefix}"), style),
+                Span::styled(m.clone(), style),
+            ]));
+        }
+    }
+    lines.push(Line::from(""));
+
+    // ── Environment section ────────────────────────────────────────────
+    let env_focused = focused && detail.focus == RuntimeDetailFocus::Environment;
+    let env_header_style = if env_focused {
+        Style::default()
+            .fg(theme.label_accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.label_secondary)
+    };
+    lines.push(Line::from(Span::styled(
+        format!("  ── Environment ({}) ───────────────", env_pairs.len()),
+        env_header_style,
+    )));
+    if env_pairs.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "    (no env vars — press a to add)",
+            Style::default().fg(theme.label_secondary),
+        )));
+    } else {
+        let key_w = env_pairs.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+        for (i, (k, v)) in env_pairs.iter().enumerate() {
+            let is_selected = i == detail.env_index && env_focused;
+            let style = if is_selected {
+                Style::default()
+                    .fg(theme.label_primary)
+                    .bg(theme.highlight_bg)
+            } else {
+                Style::default().fg(theme.label_primary)
+            };
+            let prefix = if is_selected { "\u{25b8} " } else { "  " };
+            let secret = is_secret_env_key(k);
+            let revealed = detail.revealed_env_keys.contains(k);
+            let display_value = if secret && !revealed {
+                "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}".to_string()
+            } else {
+                v.clone()
+            };
+            let mut spans = vec![
+                Span::styled(format!("  {prefix}"), style),
+                Span::styled(format!("{:<key_w$}", k, key_w = key_w), style),
+                Span::styled("  ", style),
+                Span::styled(display_value, style),
+            ];
+            if secret {
+                let tag = if revealed { "  [shown]" } else { "  [hidden]" };
+                spans.push(Span::styled(
+                    tag.to_string(),
+                    Style::default().fg(theme.label_secondary),
+                ));
+            }
+            lines.push(Line::from(spans));
+        }
+    }
+    lines.push(Line::from(""));
+
+    // Hint line — section-aware.
+    let hint = if focused {
+        match detail.focus {
+            RuntimeDetailFocus::Models => {
+                "  [a] add  [Enter/e] edit  [d] delete  [J/K] reorder  [Tab] env  [Esc] back"
+            }
+            RuntimeDetailFocus::Environment => {
+                "  [a] add  [Enter/e] edit  [d] delete  [r] reveal  [Tab] models  [Esc] back"
+            }
+        }
+    } else {
+        "  [Tab] switch pane"
+    };
+    lines.push(Line::from(Span::styled(
+        hint,
         Style::default().fg(theme.label_secondary),
     )));
-    lines.push(Line::from(""));
-    lines.push(hint_line);
 
     let para = Paragraph::new(lines);
     frame.render_widget(para, inner);

@@ -178,6 +178,7 @@ impl App {
                 }
                 FormAction::AddIssueSource { .. } => {}
                 FormAction::RunWorkflow(_) => {}
+                FormAction::AddRuntimeEnvVar { .. } => {}
             }
         }
     }
@@ -209,6 +210,7 @@ impl App {
                 }
                 FormAction::AddIssueSource { .. } => {}
                 FormAction::RunWorkflow(_) => {}
+                FormAction::AddRuntimeEnvVar { .. } => {}
             }
         }
     }
@@ -320,6 +322,9 @@ impl App {
                         action.target,
                         action.workflow_def,
                     );
+                }
+                FormAction::AddRuntimeEnvVar { runtime } => {
+                    self.submit_add_runtime_env_var(fields, &runtime);
                 }
             }
         }
@@ -785,8 +790,9 @@ impl App {
             | InputAction::SettingsSetSyncInterval
             | InputAction::SettingsSetStallTimeout
             | InputAction::SettingsAddRuntime
-            | InputAction::SettingsAddRuntimeModels { .. }
-            | InputAction::SettingsEditRuntimeModels { .. } => {
+            | InputAction::SettingsAddModel { .. }
+            | InputAction::SettingsEditModel { .. }
+            | InputAction::SettingsEditEnvValue { .. } => {
                 self.handle_settings_input_submit(on_submit, value);
             }
             InputAction::AdoptWorktree { repo_slug } => {
