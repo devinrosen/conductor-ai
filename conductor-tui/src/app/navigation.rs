@@ -156,7 +156,11 @@ impl App {
         match self.state.view {
             View::Dashboard => self.show_confirm_quit(),
             View::Settings => {
-                self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
+                if self.state.settings_runtime_detail.is_some() {
+                    self.exit_runtime_detail();
+                } else {
+                    self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
+                }
             }
             View::RepoDetail => {
                 self.state.view = View::Dashboard;

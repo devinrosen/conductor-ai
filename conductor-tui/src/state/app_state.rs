@@ -13,9 +13,9 @@ use super::workflow_rows::max_iteration_for_run;
 use super::{
     build_ticket_tree_indices_sorted_by, build_worktree_tree, build_worktree_tree_indices,
     parse_target_label, push_children, push_steps_for_run, ColumnFocus, DashboardRow, DataCache,
-    FilterState, Modal, RepoDetailFocus, RuntimeDisplayRow, SettingsCategory, SettingsFocus,
-    TargetType, TicketSort, TreePosition, View, WorkflowDefFocus, WorkflowRunDetailFocus,
-    WorkflowRunRow, WorkflowsFocus,
+    FilterState, Modal, RepoDetailFocus, RuntimeDetailState, RuntimeDisplayRow, SettingsCategory,
+    SettingsFocus, TargetType, TicketSort, TreePosition, View, WorkflowDefFocus,
+    WorkflowRunDetailFocus, WorkflowRunRow, WorkflowsFocus,
 };
 use crate::theme::Theme;
 
@@ -193,6 +193,9 @@ pub struct AppState {
     /// Snapshot of config values for display in the Settings view.
     /// Refreshed whenever Settings is opened or a value is changed.
     pub settings_display: SettingsDisplayCache,
+    /// When `Some`, the Runtimes pane is showing the drill-in detail view
+    /// for the named runtime instead of the list.
+    pub settings_runtime_detail: Option<RuntimeDetailState>,
 }
 
 /// Displayable snapshot of conductor config values for the Settings view.
@@ -298,6 +301,7 @@ impl AppState {
             settings_row_index: 0,
             settings_hook_test_results: HashMap::new(),
             settings_display: SettingsDisplayCache::default(),
+            settings_runtime_detail: None,
         }
     }
 

@@ -493,10 +493,31 @@ pub enum Action {
     // Settings → Runtimes
     /// Open Input modal to add a new runtime entry (step 1: name).
     RuntimesAdd,
-    /// Open Input modal to edit the selected runtime's supported models.
+    /// Drill into the selected runtime's detail view.
     RuntimesEdit,
     /// Open Confirm modal to delete the selected runtime.
     RuntimesDelete,
+    /// Toggle the focused section (Models ↔ Environment) inside the runtime
+    /// detail view.
+    RuntimeDetailToggleSection,
+    /// Open Input modal to add a single model to the focused runtime.
+    RuntimeDetailModelAdd,
+    /// Open Input modal to edit the focused model row.
+    RuntimeDetailModelEdit,
+    /// Open Confirm modal to delete the focused model row.
+    RuntimeDetailModelDelete,
+    /// Move the focused model up by one position.
+    RuntimeDetailModelMoveUp,
+    /// Move the focused model down by one position.
+    RuntimeDetailModelMoveDown,
+    /// Open Form modal to add a new env var (key + value).
+    RuntimeDetailEnvAdd,
+    /// Open Input modal to edit the focused env var's value.
+    RuntimeDetailEnvEdit,
+    /// Open Confirm modal to delete the focused env var.
+    RuntimeDetailEnvDelete,
+    /// Toggle reveal/mask for the focused env var (session-only).
+    RuntimeDetailEnvToggleReveal,
 
     // Settings view
     /// Navigate to View::Settings.

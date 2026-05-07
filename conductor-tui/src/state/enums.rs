@@ -63,13 +63,47 @@ pub fn model_picker_total(sections: &[RuntimeSection], allow_default: bool) -> u
 }
 
 /// A display row for a runtime entry in the Settings → Runtimes pane.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RuntimeDisplayRow {
     pub name: String,
     pub type_hint: String,
     pub model_count: usize,
     pub env_count: usize,
     pub is_built_in: bool,
+    /// Full ordered model list (used by the detail view).
+    pub models: Vec<String>,
+    /// Env vars sorted alphabetically by key (used by the detail view).
+    pub env: Vec<(String, String)>,
+}
+
+/// Which sub-section of the Runtime detail view has focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RuntimeDetailFocus {
+    #[default]
+    Models,
+    Environment,
+}
+
+impl RuntimeDetailFocus {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Models => Self::Environment,
+            Self::Environment => Self::Models,
+        }
+    }
+}
+
+/// In-memory state for the Settings → Runtimes drill-in detail view.
+///
+/// `revealed_env_keys` is intentionally session-only: secrets are masked by
+/// default and the reveal state is never persisted.
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeDetailState {
+    pub name: String,
+    pub focus: RuntimeDetailFocus,
+    pub model_index: usize,
+    pub env_index: usize,
+    pub revealed_env_keys: std::collections::HashSet<String>,
 }
 
 /// Iterate over user-defined runtimes (excluding the built-in `"claude"` entry)
@@ -482,6 +516,16 @@ pub enum ConfirmAction {
     DeleteRuntime {
         name: String,
     },
+    /// Settings → Runtimes detail: remove the model at `index` from `runtime`.
+    DeleteRuntimeModel {
+        runtime: String,
+        index: usize,
+    },
+    /// Settings → Runtimes detail: remove env var `key` from `runtime`.
+    DeleteRuntimeEnvVar {
+        runtime: String,
+        key: String,
+    },
     Quit,
 }
 
@@ -542,6 +586,10 @@ pub enum FormAction {
         remote_url: String,
     },
     RunWorkflow(Box<RunWorkflowAction>),
+    /// Settings → Runtimes detail: add a new env var (key + value).
+    AddRuntimeEnvVar {
+        runtime: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -611,12 +659,20 @@ pub enum InputAction {
     },
     /// Settings → Runtimes: add a new runtime entry (first step: name).
     SettingsAddRuntime,
-    /// Settings → Runtimes: add models for a newly-named runtime (second step).
-    SettingsAddRuntimeModels {
-        name: String,
+    /// Settings → Runtimes detail: append a single model to a runtime's
+    /// `supported_models` list.
+    SettingsAddModel {
+        runtime: String,
     },
-    /// Settings → Runtimes: edit models for an existing runtime.
-    SettingsEditRuntimeModels {
-        name: String,
+    /// Settings → Runtimes detail: replace the model at `index` with a new value.
+    SettingsEditModel {
+        runtime: String,
+        index: usize,
+    },
+    /// Settings → Runtimes detail: edit the value of an existing env var.
+    /// The key is fixed; only the value changes.
+    SettingsEditEnvValue {
+        runtime: String,
+        key: String,
     },
 }

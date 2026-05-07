@@ -200,6 +200,37 @@ impl App {
                 self.save_config_background();
                 self.refresh_settings_display();
             }
+            ConfirmAction::DeleteRuntimeModel { runtime, index } => {
+                if let Some(rt) = self.config.runtimes.get_mut(&runtime) {
+                    if index < rt.supported_models.len() {
+                        rt.supported_models.remove(index);
+                        let new_len = rt.supported_models.len();
+                        self.save_config_background();
+                        self.refresh_settings_display();
+                        if let Some(detail) = self.state.settings_runtime_detail.as_mut() {
+                            if detail.name == runtime {
+                                detail.model_index =
+                                    detail.model_index.min(new_len.saturating_sub(1));
+                            }
+                        }
+                    }
+                }
+            }
+            ConfirmAction::DeleteRuntimeEnvVar { runtime, key } => {
+                if let Some(rt) = self.config.runtimes.get_mut(&runtime) {
+                    if rt.env.remove(&key).is_some() {
+                        let new_len = rt.env.len();
+                        self.save_config_background();
+                        self.refresh_settings_display();
+                        if let Some(detail) = self.state.settings_runtime_detail.as_mut() {
+                            if detail.name == runtime {
+                                detail.revealed_env_keys.remove(&key);
+                                detail.env_index = detail.env_index.min(new_len.saturating_sub(1));
+                            }
+                        }
+                    }
+                }
+            }
             ConfirmAction::Quit => {
                 self.state.should_quit = true;
             }
