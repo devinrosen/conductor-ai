@@ -1025,10 +1025,6 @@ pub fn render_model_picker(
         };
         lines.push(Line::from(Span::styled(header_label, cyan_bold)));
 
-        // When a runtime has only one model skip the per-section "Default" row.
-        let show_section_default = allow_default && section.models.len() != 1 && is_claude;
-        // (For now only claude section gets its own default row when multi-model)
-
         for model_str in &section.models {
             if is_claude {
                 // Look up the KNOWN_MODELS entry by alias or id
@@ -1099,8 +1095,6 @@ pub fn render_model_picker(
             flat_idx += 1;
         }
 
-        // Suppress unused warning for show_section_default (future use)
-        let _ = show_section_default;
         lines.push(Line::from(""));
     }
 

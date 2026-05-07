@@ -93,14 +93,7 @@ impl App {
             env_count: claude_env,
             is_built_in: true,
         });
-        let mut other: Vec<(&String, &conductor_core::config::RuntimeConfig)> = self
-            .config
-            .runtimes
-            .iter()
-            .filter(|(k, _)| k.as_str() != "claude")
-            .collect();
-        other.sort_by_key(|(k, _)| k.as_str());
-        for (name, rt) in other {
+        for (name, rt) in crate::state::user_runtimes_sorted(&self.config.runtimes) {
             let type_hint = rt
                 .runtime_type
                 .clone()

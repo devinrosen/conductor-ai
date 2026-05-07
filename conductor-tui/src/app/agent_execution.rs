@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -28,15 +27,18 @@ pub(super) struct HeadlessRunConfig {
     pub bot_name: Option<String>,
     pub permission_mode: Option<conductor_core::config::AgentPermissionMode>,
     pub stall_threshold: std::time::Duration,
+    /// Runtime name resolved from the picker (`Some("qwen-local")`, …) or `None`
+    /// to use the built-in `"claude"` runtime.
+    pub runtime: Option<String>,
 }
 
-fn synthesize_tui_agent_def(model: Option<&str>) -> AgentDef {
+fn synthesize_tui_agent_def(model: Option<&str>, runtime: &str) -> AgentDef {
     AgentDef {
         name: "tui-ad-hoc".to_string(),
         role: AgentRole::Actor,
         can_commit: true,
         model: model.map(String::from),
-        runtime: "claude".to_string(),
+        runtime: runtime.to_string(),
         prompt: String::new(),
     }
 }
@@ -97,6 +99,11 @@ pub(super) fn drive_headless_run(
         None => vec![],
     };
 
+    // Load the host config so non-claude runtimes resolve with their `[runtimes.*]`
+    // env overlay and binary path. Falls back to an empty config on failure (which
+    // means non-claude runtimes will fail to resolve with a clearer error).
+    let host_config = conductor_core::config::load_config().unwrap_or_default();
+
     let runtime_options = RuntimeOptions {
         binary_path: conductor_core::agent_runtime::resolve_conductor_bin().into(),
         env: Default::default(),
@@ -110,14 +117,19 @@ pub(super) fn drive_headless_run(
         max_turns: None,
     };
 
-    let runtime =
-        match resolve_runtime("claude", permission_mode, &HashMap::new(), &runtime_options) {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = tx.send(on_launched(Err(e.to_string())));
-                return;
-            }
-        };
+    let runtime_name: &str = config.runtime.as_deref().unwrap_or("claude");
+    let runtime = match resolve_runtime(
+        runtime_name,
+        permission_mode,
+        &host_config.runtimes,
+        &runtime_options,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = tx.send(on_launched(Err(e.to_string())));
+            return;
+        }
+    };
 
     let db = conductor_core::config::db_path();
     let adapter = match SqliteHostAdapter::new(db) {
@@ -136,7 +148,7 @@ pub(super) fn drive_headless_run(
 
     let request = RuntimeRequest {
         run_id: run.id.clone(),
-        agent_def: synthesize_tui_agent_def(config.model.as_deref()),
+        agent_def: synthesize_tui_agent_def(config.model.as_deref(), runtime_name),
         prompt: config.prompt.clone(),
         working_dir: PathBuf::from(&config.working_dir),
         model: config.model.clone(),
@@ -378,6 +390,7 @@ impl App {
                 wt.slug.clone(),
                 resume_session_id,
                 selected_model,
+                None, // Auto-suggest path uses the default claude runtime
             );
             return;
         }
@@ -422,6 +435,7 @@ impl App {
                 worktree_slug: wt.slug.clone(),
                 resume_session_id,
                 resolved_default,
+                runtime: None, // Filled in from picker selection at submit time
             },
         };
     }
@@ -846,6 +860,7 @@ impl App {
         };
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn start_agent_headless(
         &mut self,
         prompt: String,
@@ -854,6 +869,7 @@ impl App {
         _worktree_slug: String,
         resume_session_id: Option<String>,
         model: Option<String>,
+        runtime: Option<String>,
     ) {
         let Some(ref tx) = self.bg_tx else { return };
         let tx = tx.clone();
@@ -886,6 +902,17 @@ impl App {
                 }
             };
 
+            // Persist the runtime selection on the run so list/detail views show
+            // which runtime serviced the request.
+            if let Some(ref rt_name) = runtime {
+                if let Err(e) = mgr.update_run_runtime(&run.id, rt_name) {
+                    tracing::warn!(
+                        "failed to persist runtime '{rt_name}' on run {}: {e}",
+                        run.id
+                    );
+                }
+            }
+
             drive_headless_run(
                 run,
                 HeadlessRunConfig {
@@ -896,6 +923,7 @@ impl App {
                     bot_name: None,
                     permission_mode: None,
                     stall_threshold,
+                    runtime,
                 },
                 &tx,
                 |result| Action::AgentLaunchComplete { result },
@@ -965,6 +993,7 @@ impl App {
                     bot_name: None,
                     permission_mode: Some(conductor_core::config::AgentPermissionMode::RepoSafe),
                     stall_threshold,
+                    runtime: None,
                 },
                 &tx,
                 |result| Action::RepoAgentLaunched { result },
@@ -1040,6 +1069,8 @@ impl App {
             let prompt = new_run.prompt.clone();
             let model = new_run.model.clone();
             let bot_name = new_run.bot_name.clone();
+            // Restart inherits the previous run's runtime (already on the row).
+            let runtime = new_run.runtime.clone();
             drive_headless_run(
                 new_run,
                 HeadlessRunConfig {
@@ -1050,6 +1081,7 @@ impl App {
                     bot_name,
                     permission_mode: None,
                     stall_threshold,
+                    runtime: Some(runtime),
                 },
                 &tx,
                 |result| Action::AgentRestartComplete { result },

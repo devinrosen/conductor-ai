@@ -75,6 +75,20 @@ pub struct RuntimeDisplayRow {
     pub is_built_in: bool,
 }
 
+/// Iterate over user-defined runtimes (excluding the built-in `"claude"` entry)
+/// in name-sorted order. Used by both the picker and Settings → Runtimes so
+/// they agree on iteration order.
+pub fn user_runtimes_sorted(
+    runtimes: &std::collections::HashMap<String, conductor_core::config::RuntimeConfig>,
+) -> Vec<(&String, &conductor_core::config::RuntimeConfig)> {
+    let mut other: Vec<_> = runtimes
+        .iter()
+        .filter(|(k, _)| k.as_str() != "claude")
+        .collect();
+    other.sort_by_key(|(k, _)| k.as_str());
+    other
+}
+
 /// A row in the unified dashboard list — repo header or worktree entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DashboardRow {
@@ -560,6 +574,8 @@ pub enum InputAction {
     },
     /// Second step: optionally override the model for this run.
     /// `resolved_default` is the already-resolved model (worktree → repo → global config).
+    /// `runtime` is the runtime chosen in the picker (`Some("qwen-local")`, `Some("claude")`, …);
+    /// `None` means the user picked the "Default" row and no override is applied.
     AgentModelOverride {
         prompt: String,
         worktree_id: String,
@@ -567,6 +583,7 @@ pub enum InputAction {
         worktree_slug: String,
         resume_session_id: Option<String>,
         resolved_default: Option<String>,
+        runtime: Option<String>,
     },
     /// Set (or clear) the default model for a worktree.
     SetWorktreeModel {

@@ -39,13 +39,7 @@ pub(crate) fn build_runtime_sections(config: &Config) -> Vec<RuntimeSection> {
     }];
 
     // Additional user runtimes sorted by name (skip "claude" — already handled)
-    let mut other: Vec<(&String, &conductor_core::config::RuntimeConfig)> = config
-        .runtimes
-        .iter()
-        .filter(|(k, _)| k.as_str() != "claude")
-        .collect();
-    other.sort_by_key(|(k, _)| k.as_str());
-    for (name, rt) in other {
+    for (name, rt) in crate::state::user_runtimes_sorted(&config.runtimes) {
         if !rt.supported_models.is_empty() {
             sections.push(RuntimeSection {
                 name: name.clone(),
@@ -412,18 +406,30 @@ impl App {
             Modal::ModelPicker {
                 selected,
                 runtime_sections,
-                on_submit,
+                mut on_submit,
                 allow_default,
                 ..
             } => {
-                let value = if allow_default && selected == 0 {
+                let (runtime_opt, value) = if allow_default && selected == 0 {
                     // "Default" row selected — empty string maps to model: None
-                    String::new()
+                    (None, String::new())
                 } else {
-                    resolve_picker_selection(&runtime_sections, selected, allow_default)
-                        .map(|(_, model)| model)
-                        .unwrap_or_default()
+                    match resolve_picker_selection(&runtime_sections, selected, allow_default) {
+                        Some((rt, model)) => (Some(rt), model),
+                        None => (None, String::new()),
+                    }
                 };
+                // Inject the picker's runtime selection into model-bearing variants
+                // that persist runtime context. SetWorktreeModel/SetRepoModel are
+                // intentionally model-only; per-scope runtime persistence is
+                // deferred per #2960.
+                if let InputAction::AgentModelOverride {
+                    runtime: ref mut rt_field,
+                    ..
+                } = on_submit
+                {
+                    *rt_field = runtime_opt;
+                }
                 (value, on_submit)
             }
             _ => return,
@@ -663,6 +669,7 @@ impl App {
                         worktree_slug,
                         resume_session_id,
                         resolved_default,
+                        runtime: None, // Filled in from picker selection at submit time
                     },
                 };
             }
@@ -673,6 +680,7 @@ impl App {
                 worktree_slug,
                 resume_session_id,
                 resolved_default,
+                runtime,
             } => {
                 // Empty value means "use the resolved default"
                 let model = if value.trim().is_empty() {
@@ -687,6 +695,7 @@ impl App {
                     worktree_slug,
                     resume_session_id,
                     model,
+                    runtime,
                 );
             }
             InputAction::WorkflowModelOverride { action, inputs } => {
@@ -837,6 +846,7 @@ impl App {
                 worktree_slug,
                 resume_session_id,
                 resolved_default,
+                runtime,
             } => {
                 let model = if value.trim().is_empty() {
                     resolved_default
@@ -850,6 +860,7 @@ impl App {
                     worktree_slug,
                     resume_session_id,
                     model,
+                    runtime,
                 );
             }
             InputAction::SettingsSetModel | InputAction::SettingsSetSyncInterval => {
@@ -1236,6 +1247,71 @@ mod tests {
         app.handle_input_submit();
         let expected = format!("Model for feat-test set to: {}", KNOWN_MODELS[0].alias);
         assert_eq!(app.state.status_message.as_deref(), Some(expected.as_str()));
+    }
+
+    // The picker injects the resolved runtime into AgentModelOverride so non-claude
+    // selections aren't silently dropped. Default row leaves runtime as None.
+    #[test]
+    fn model_picker_injects_runtime_into_agent_model_override() {
+        use crate::state::RuntimeSection;
+        let sections = vec![
+            RuntimeSection {
+                name: "claude".to_string(),
+                models: vec!["opus".to_string(), "sonnet".to_string()],
+            },
+            RuntimeSection {
+                name: "qwen-local".to_string(),
+                models: vec!["qwen-72b".to_string()],
+            },
+        ];
+        // selected=2 with allow_default=false → second section, first model (qwen-72b)
+        let extracted = pick_and_extract_runtime(sections.clone(), 2, false);
+        assert_eq!(
+            extracted,
+            Some("qwen-local".to_string()),
+            "non-claude selection must surface the runtime name"
+        );
+        // selected=0 with allow_default=true → "Default" row → runtime stays None
+        let extracted_default = pick_and_extract_runtime(sections, 0, true);
+        assert_eq!(
+            extracted_default, None,
+            "Default row must leave runtime unset"
+        );
+    }
+
+    /// Helper: simulate the ModelPicker submission shape and return the runtime
+    /// field that was injected into the resulting `AgentModelOverride`.
+    fn pick_and_extract_runtime(
+        runtime_sections: Vec<crate::state::RuntimeSection>,
+        selected: usize,
+        allow_default: bool,
+    ) -> Option<String> {
+        use crate::state::InputAction;
+        let mut on_submit = InputAction::AgentModelOverride {
+            prompt: String::new(),
+            worktree_id: "w1".into(),
+            worktree_path: "/tmp/wt".into(),
+            worktree_slug: "feat-test".into(),
+            resume_session_id: None,
+            resolved_default: None,
+            runtime: None,
+        };
+        let runtime_opt = if allow_default && selected == 0 {
+            None
+        } else {
+            resolve_picker_selection(&runtime_sections, selected, allow_default).map(|(rt, _)| rt)
+        };
+        if let InputAction::AgentModelOverride {
+            runtime: ref mut rt_field,
+            ..
+        } = on_submit
+        {
+            *rt_field = runtime_opt;
+        }
+        match on_submit {
+            InputAction::AgentModelOverride { runtime, .. } => runtime,
+            _ => panic!("expected AgentModelOverride"),
+        }
     }
 
     // selecting the first custom model row submits its value
