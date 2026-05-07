@@ -315,6 +315,10 @@ pub struct GeneralConfig {
     /// after orphan detection. Set to 0 to disable automatic resume. Defaults to 3.
     #[serde(default = "default_auto_resume_limit")]
     pub auto_resume_limit: u32,
+    /// User-defined custom model IDs stored in insertion order.
+    /// Displayed in the model picker after built-in models.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_models: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -373,6 +377,7 @@ impl Default for GeneralConfig {
             stale_workflow_minutes: default_stale_workflow_minutes(),
             claude_config_dir: None,
             auto_resume_limit: default_auto_resume_limit(),
+            custom_models: Vec::new(),
         }
     }
 }
@@ -780,6 +785,40 @@ mod tests {
     fn test_auto_start_agent_default() {
         let config: Config = toml::from_str("").unwrap();
         assert_eq!(config.general.auto_start_agent, AutoStartAgent::Ask);
+    }
+
+    #[test]
+    fn test_custom_models_default_empty_and_omitted_on_serialize() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.general.custom_models.is_empty());
+
+        let serialized = toml::to_string(&config).unwrap();
+        assert!(
+            !serialized.contains("custom_models"),
+            "empty custom_models should be skipped on serialize, got:\n{serialized}"
+        );
+    }
+
+    #[test]
+    fn test_custom_models_roundtrip_preserves_insertion_order() {
+        let mut config: Config = toml::from_str("").unwrap();
+        config.general.custom_models = vec![
+            "claude-opus-4-7".to_string(),
+            "my-finetune-v2".to_string(),
+            "claude-haiku-4-5-20251001".to_string(),
+        ];
+
+        let serialized = toml::to_string(&config).unwrap();
+        let roundtripped: Config = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(
+            roundtripped.general.custom_models,
+            vec![
+                "claude-opus-4-7".to_string(),
+                "my-finetune-v2".to_string(),
+                "claude-haiku-4-5-20251001".to_string(),
+            ]
+        );
     }
 
     #[test]

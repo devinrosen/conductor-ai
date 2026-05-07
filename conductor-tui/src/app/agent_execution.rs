@@ -405,8 +405,7 @@ impl App {
             effective_default,
             effective_source,
             selected: initial_selected,
-            custom_input: String::new(),
-            custom_active: false,
+            custom_models: self.config.general.custom_models.clone(),
             suggested: Some(suggested.to_string()),
             allow_default: true,
             on_submit: InputAction::AgentModelOverride {

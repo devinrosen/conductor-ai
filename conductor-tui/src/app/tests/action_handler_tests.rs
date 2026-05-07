@@ -1375,8 +1375,7 @@ fn input_backspace_on_model_picker_non_custom_clears_model() {
         effective_default: Some("claude-sonnet-4-5-20250514".into()),
         effective_source: "global config".into(),
         selected: 0,
-        custom_input: String::new(),
-        custom_active: false,
+        custom_models: vec![],
         suggested: None,
         on_submit: InputAction::SetRepoModel {
             slug: "test-repo".into(),
@@ -1389,7 +1388,7 @@ fn input_backspace_on_model_picker_non_custom_clears_model() {
     // Modal should be dismissed (not ModelPicker anymore)
     assert!(
         !matches!(app.state.modal, Modal::ModelPicker { .. }),
-        "ModelPicker should be dismissed after Backspace in non-custom mode"
+        "ModelPicker should be dismissed after Backspace"
     );
 }
 

@@ -912,8 +912,7 @@ impl App {
             effective_default,
             effective_source,
             selected: 0, // "Default" row pre-selected
-            custom_input: String::new(),
-            custom_active: false,
+            custom_models: self.config.general.custom_models.clone(),
             suggested: None,
             allow_default: true,
             on_submit: crate::state::InputAction::WorkflowModelOverride {

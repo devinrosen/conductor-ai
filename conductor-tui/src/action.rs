@@ -488,6 +488,12 @@ pub enum Action {
         warnings: Vec<WorkflowWarning>,
     },
 
+    // Settings → Models
+    /// Open Input modal to add a new custom model entry.
+    ModelsAdd,
+    /// Open Confirm modal to delete the selected custom model entry.
+    ModelsDelete,
+
     // Settings view
     /// Navigate to View::Settings.
     OpenSettings,

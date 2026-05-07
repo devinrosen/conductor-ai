@@ -94,17 +94,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
-        Modal::ModelPicker { custom_active, .. } => {
-            if *custom_active {
-                // In custom input mode: type characters, backspace, enter to confirm, esc to leave custom mode
-                return match key.code {
-                    KeyCode::Enter => Action::InputSubmit,
-                    KeyCode::Esc => Action::DismissModal,
-                    KeyCode::Backspace => Action::InputBackspace,
-                    KeyCode::Char(c) => Action::InputChar(c),
-                    _ => Action::None,
-                };
-            }
+        Modal::ModelPicker { .. } => {
             return match key.code {
                 KeyCode::Esc => Action::DismissModal,
                 KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
@@ -502,6 +492,26 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                     } else {
                         Action::None
                     }
+                } else {
+                    Action::None
+                }
+            }
+            KeyCode::Char('a') => {
+                use crate::state::{SettingsCategory, SettingsFocus};
+                if state.settings_category == SettingsCategory::Models
+                    && state.settings_focus == SettingsFocus::SettingsList
+                {
+                    Action::ModelsAdd
+                } else {
+                    Action::None
+                }
+            }
+            KeyCode::Char('d') => {
+                use crate::state::{SettingsCategory, SettingsFocus};
+                if state.settings_category == SettingsCategory::Models
+                    && state.settings_focus == SettingsFocus::SettingsList
+                {
+                    Action::ModelsDelete
                 } else {
                     Action::None
                 }
