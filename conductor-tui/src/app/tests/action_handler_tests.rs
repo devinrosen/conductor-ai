@@ -2144,7 +2144,10 @@ fn prompt_repo_agent_focuses_prompt_input() {
 fn settings_add_custom_model_appends_new_entry() {
     use crate::state::InputAction;
     let mut app = make_app();
-    app.handle_settings_input_submit(InputAction::SettingsAddCustomModel, "claude-opus-4-7".into());
+    app.handle_settings_input_submit(
+        InputAction::SettingsAddCustomModel,
+        "claude-opus-4-7".into(),
+    );
     assert_eq!(app.config.general.custom_models, vec!["claude-opus-4-7"]);
     assert!(matches!(app.state.modal, Modal::None));
 }
@@ -2154,7 +2157,10 @@ fn settings_add_custom_model_dedup_does_not_add_duplicate() {
     use crate::state::InputAction;
     let mut app = make_app();
     app.config.general.custom_models = vec!["claude-opus-4-7".into()];
-    app.handle_settings_input_submit(InputAction::SettingsAddCustomModel, "claude-opus-4-7".into());
+    app.handle_settings_input_submit(
+        InputAction::SettingsAddCustomModel,
+        "claude-opus-4-7".into(),
+    );
     assert_eq!(app.config.general.custom_models.len(), 1);
 }
 

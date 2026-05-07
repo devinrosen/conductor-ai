@@ -1387,19 +1387,22 @@ mod tests {
         app.state.selected_worktree_id = Some("w1".to_string());
 
         // Populate in-memory data (the DB has the worktree, but state.data.worktrees is empty)
-        app.state.data.worktrees.push(conductor_core::worktree::Worktree {
-            id: "w1".to_string(),
-            repo_id: "r1".to_string(),
-            slug: "feat-test".to_string(),
-            branch: "feat/test".to_string(),
-            path: "/tmp/ws/feat-test".to_string(),
-            ticket_id: None,
-            status: conductor_core::worktree::WorktreeStatus::Active,
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            completed_at: None,
-            model: None,
-            base_branch: None,
-        });
+        app.state
+            .data
+            .worktrees
+            .push(conductor_core::worktree::Worktree {
+                id: "w1".to_string(),
+                repo_id: "r1".to_string(),
+                slug: "feat-test".to_string(),
+                branch: "feat/test".to_string(),
+                path: "/tmp/ws/feat-test".to_string(),
+                ticket_id: None,
+                status: conductor_core::worktree::WorktreeStatus::Active,
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                completed_at: None,
+                model: None,
+                base_branch: None,
+            });
         app.state.data.repos.push(conductor_core::repo::Repo {
             id: "r1".to_string(),
             slug: "test-repo".to_string(),
@@ -1412,7 +1415,10 @@ mod tests {
             allow_agent_issue_creation: true,
             runtime_overrides: None,
         });
-        app.state.data.repo_slug_map.insert("r1".to_string(), "test-repo".to_string());
+        app.state
+            .data
+            .repo_slug_map
+            .insert("r1".to_string(), "test-repo".to_string());
 
         app.handle_set_base_branch();
 
@@ -1445,19 +1451,22 @@ mod tests {
         app.state.selected_worktree_id = Some("w1".to_string());
 
         // Populate in-memory data
-        app.state.data.worktrees.push(conductor_core::worktree::Worktree {
-            id: "w1".to_string(),
-            repo_id: "r1".to_string(),
-            slug: "feat-test".to_string(),
-            branch: "feat/test".to_string(),
-            path: "/tmp/ws/feat-test".to_string(),
-            ticket_id: None,
-            status: conductor_core::worktree::WorktreeStatus::Active,
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            completed_at: None,
-            model: None,
-            base_branch: None,
-        });
+        app.state
+            .data
+            .worktrees
+            .push(conductor_core::worktree::Worktree {
+                id: "w1".to_string(),
+                repo_id: "r1".to_string(),
+                slug: "feat-test".to_string(),
+                branch: "feat/test".to_string(),
+                path: "/tmp/ws/feat-test".to_string(),
+                ticket_id: None,
+                status: conductor_core::worktree::WorktreeStatus::Active,
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                completed_at: None,
+                model: None,
+                base_branch: None,
+            });
         app.state.data.repos.push(conductor_core::repo::Repo {
             id: "r1".to_string(),
             slug: "test-repo".to_string(),
@@ -1470,7 +1479,10 @@ mod tests {
             allow_agent_issue_creation: true,
             runtime_overrides: None,
         });
-        app.state.data.repo_slug_map.insert("r1".to_string(), "test-repo".to_string());
+        app.state
+            .data
+            .repo_slug_map
+            .insert("r1".to_string(), "test-repo".to_string());
 
         // bg_tx is None (fresh app)
         app.handle_set_base_branch();
