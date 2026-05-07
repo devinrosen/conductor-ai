@@ -413,11 +413,9 @@ impl App {
         if len == 0 {
             return true;
         }
-        let detail = self
-            .state
-            .settings_runtime_detail
-            .as_mut()
-            .expect("checked");
+        let Some(detail) = self.state.settings_runtime_detail.as_mut() else {
+            return false;
+        };
         let current = match focus {
             RuntimeDetailFocus::Models => detail.model_index,
             RuntimeDetailFocus::Environment => detail.env_index,
@@ -516,12 +514,12 @@ impl App {
                         return;
                     }
                     rt.supported_models.push(model);
+                    let new_index = rt.supported_models.len().saturating_sub(1);
                     self.save_config_background();
                     self.refresh_settings_display();
                     if let Some(detail) = self.state.settings_runtime_detail.as_mut() {
                         if detail.name == runtime {
-                            detail.model_index =
-                                self.config.runtimes[&runtime].supported_models.len() - 1;
+                            detail.model_index = new_index;
                         }
                     }
                 }
@@ -686,29 +684,19 @@ impl App {
 
     /// Move the focused model up one position. No-op if already at the top.
     pub(super) fn handle_runtime_detail_model_move_up(&mut self) {
-        let Some(detail) = self.state.settings_runtime_detail.as_mut() else {
-            return;
-        };
-        let runtime = detail.name.clone();
-        let index = detail.model_index;
-        if index == 0 {
-            return;
-        }
-        let Some(rt) = self.config.runtimes.get_mut(&runtime) else {
-            return;
-        };
-        if index >= rt.supported_models.len() {
-            return;
-        }
-        rt.supported_models.swap(index, index - 1);
-        detail.model_index = index - 1;
-        self.save_config_background();
-        self.refresh_settings_display();
+        self.move_focused_model(-1);
     }
 
     /// Move the focused model down one position. No-op if already at the bottom.
     pub(super) fn handle_runtime_detail_model_move_down(&mut self) {
-        let Some(detail) = self.state.settings_runtime_detail.as_mut() else {
+        self.move_focused_model(1);
+    }
+
+    /// Swap the focused model with its neighbor in `delta` direction (-1 = up,
+    /// +1 = down). No-op when there is no detail view, no such runtime, or the
+    /// resulting index would be out of bounds.
+    fn move_focused_model(&mut self, delta: isize) {
+        let Some(detail) = self.state.settings_runtime_detail.as_ref() else {
             return;
         };
         let runtime = detail.name.clone();
@@ -716,11 +704,17 @@ impl App {
         let Some(rt) = self.config.runtimes.get_mut(&runtime) else {
             return;
         };
-        if index + 1 >= rt.supported_models.len() {
+        let len = rt.supported_models.len();
+        if index >= len {
             return;
         }
-        rt.supported_models.swap(index, index + 1);
-        detail.model_index = index + 1;
+        let Some(target) = index.checked_add_signed(delta).filter(|&t| t < len) else {
+            return;
+        };
+        rt.supported_models.swap(index, target);
+        if let Some(detail) = self.state.settings_runtime_detail.as_mut() {
+            detail.model_index = target;
+        }
         self.save_config_background();
         self.refresh_settings_display();
     }
@@ -843,12 +837,19 @@ impl App {
 
     /// Returns `(runtime_name, env_key)` for the focused env row, or `None`
     /// when there are no env vars or no detail view is active.
+    ///
+    /// Sourced from `settings_display.runtimes` so the env ordering matches
+    /// what the UI currently renders — `env_index` would otherwise depend on
+    /// two independent sorts that could drift apart.
     fn focused_env_key_pair(&self) -> Option<(String, String)> {
         let detail = self.state.settings_runtime_detail.as_ref()?;
-        let rt = self.config.runtimes.get(&detail.name)?;
-        let mut keys: Vec<&String> = rt.env.keys().collect();
-        keys.sort();
-        let key = keys.get(detail.env_index)?.to_string();
+        let row = self
+            .state
+            .settings_display
+            .runtimes
+            .iter()
+            .find(|r| r.name == detail.name)?;
+        let key = row.env.get(detail.env_index)?.0.clone();
         Some((detail.name.clone(), key))
     }
 

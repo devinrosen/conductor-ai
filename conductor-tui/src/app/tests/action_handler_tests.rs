@@ -2423,6 +2423,27 @@ fn runtime_detail_model_move_down_at_bottom_is_noop() {
 }
 
 #[test]
+fn runtime_detail_model_move_down_swaps_with_next() {
+    let mut app = make_app_with_runtime("qwen-local", vec!["a", "b", "c"]);
+    app.enter_runtime_detail("qwen-local");
+    // Focus the first row, then move it down.
+    app.handle_runtime_detail_model_move_down();
+    let rt = app.config.runtimes.get("qwen-local").unwrap();
+    assert_eq!(
+        rt.supported_models,
+        vec!["b".to_string(), "a".to_string(), "c".to_string()]
+    );
+    assert_eq!(
+        app.state
+            .settings_runtime_detail
+            .as_ref()
+            .unwrap()
+            .model_index,
+        1
+    );
+}
+
+#[test]
 fn runtime_detail_model_delete_removes_and_clamps_focus() {
     let mut app = make_app_with_runtime("qwen-local", vec!["a", "b", "c"]);
     app.enter_runtime_detail("qwen-local");
@@ -2591,6 +2612,129 @@ fn runtime_detail_env_delete_removes_pair_and_reveal_state() {
         .unwrap()
         .revealed_env_keys
         .contains("FOO_TOKEN"));
+}
+
+#[test]
+fn runtime_detail_env_toggle_reveal_flips_state() {
+    let mut app = make_app_with_runtime("qwen-local", vec![]);
+    app.config
+        .runtimes
+        .get_mut("qwen-local")
+        .unwrap()
+        .env
+        .insert("FOO_TOKEN".into(), "secret".into());
+    app.refresh_settings_display();
+    app.enter_runtime_detail("qwen-local");
+    app.state.settings_runtime_detail.as_mut().unwrap().focus =
+        crate::state::RuntimeDetailFocus::Environment;
+
+    app.handle_runtime_detail_env_toggle_reveal();
+    assert!(app
+        .state
+        .settings_runtime_detail
+        .as_ref()
+        .unwrap()
+        .revealed_env_keys
+        .contains("FOO_TOKEN"));
+
+    app.handle_runtime_detail_env_toggle_reveal();
+    assert!(!app
+        .state
+        .settings_runtime_detail
+        .as_ref()
+        .unwrap()
+        .revealed_env_keys
+        .contains("FOO_TOKEN"));
+}
+
+#[test]
+fn runtime_detail_env_toggle_reveal_noop_when_no_env_vars() {
+    let mut app = make_app_with_runtime("qwen-local", vec![]);
+    app.enter_runtime_detail("qwen-local");
+    app.handle_runtime_detail_env_toggle_reveal();
+    assert!(app
+        .state
+        .settings_runtime_detail
+        .as_ref()
+        .unwrap()
+        .revealed_env_keys
+        .is_empty());
+}
+
+fn env_form_fields(key: &str, value: &str) -> Vec<FormField> {
+    vec![
+        FormField {
+            label: "Key".into(),
+            value: key.into(),
+            placeholder: String::new(),
+            manually_edited: true,
+            required: true,
+            readonly: false,
+            field_type: crate::state::FormFieldType::Text,
+        },
+        FormField {
+            label: "Value".into(),
+            value: value.into(),
+            placeholder: String::new(),
+            manually_edited: true,
+            required: false,
+            readonly: false,
+            field_type: crate::state::FormFieldType::Text,
+        },
+    ]
+}
+
+#[test]
+fn submit_add_runtime_env_var_rejects_empty_key() {
+    let mut app = make_app_with_runtime("qwen-local", vec![]);
+    app.enter_runtime_detail("qwen-local");
+    app.submit_add_runtime_env_var(env_form_fields("   ", "v"), "qwen-local");
+    assert!(matches!(app.state.modal, Modal::Error { .. }));
+    assert!(app
+        .config
+        .runtimes
+        .get("qwen-local")
+        .unwrap()
+        .env
+        .is_empty());
+}
+
+#[test]
+fn submit_add_runtime_env_var_rejects_key_with_equals_sign() {
+    let mut app = make_app_with_runtime("qwen-local", vec![]);
+    app.enter_runtime_detail("qwen-local");
+    app.submit_add_runtime_env_var(env_form_fields("FOO=BAR", "v"), "qwen-local");
+    assert!(matches!(app.state.modal, Modal::Error { .. }));
+    assert!(app
+        .config
+        .runtimes
+        .get("qwen-local")
+        .unwrap()
+        .env
+        .is_empty());
+}
+
+#[test]
+fn submit_add_runtime_env_var_rejects_key_with_whitespace() {
+    let mut app = make_app_with_runtime("qwen-local", vec![]);
+    app.enter_runtime_detail("qwen-local");
+    app.submit_add_runtime_env_var(env_form_fields("FOO BAR", "v"), "qwen-local");
+    assert!(matches!(app.state.modal, Modal::Error { .. }));
+    assert!(app
+        .config
+        .runtimes
+        .get("qwen-local")
+        .unwrap()
+        .env
+        .is_empty());
+}
+
+#[test]
+fn submit_add_runtime_env_var_rejects_missing_runtime() {
+    let mut app = make_app_with_runtime("qwen-local", vec![]);
+    app.enter_runtime_detail("qwen-local");
+    app.submit_add_runtime_env_var(env_form_fields("FOO", "v"), "ghost-runtime");
+    assert!(matches!(app.state.modal, Modal::Error { .. }));
 }
 
 #[test]
