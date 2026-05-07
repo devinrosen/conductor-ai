@@ -360,7 +360,11 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let hiding = !state.show_closed_tickets;
     let sort_frag = state.detail_ticket_sort.title_fragment();
-    let ticket_title = match (detail_filter.as_deref().filter(|f| !f.is_empty()), hiding, sort_frag) {
+    let ticket_title = match (
+        detail_filter.as_deref().filter(|f| !f.is_empty()),
+        hiding,
+        sort_frag,
+    ) {
         (None, false, None) => " Tickets ".to_string(),
         (None, false, Some(s)) => format!(" Tickets ({s}) "),
         (None, true, None) => " Tickets (hiding closed) ".to_string(),

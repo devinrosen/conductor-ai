@@ -381,7 +381,10 @@ mod tests {
     #[test]
     fn claude_runtime_options_env_field_round_trips() {
         let mut env = std::collections::HashMap::new();
-        env.insert("ANTHROPIC_BASE_URL".to_string(), "https://proxy.example.com".to_string());
+        env.insert(
+            "ANTHROPIC_BASE_URL".to_string(),
+            "https://proxy.example.com".to_string(),
+        );
         env.insert("ANTHROPIC_AUTH_TOKEN".to_string(), "test-token".to_string());
 
         let options = ClaudeRuntimeOptions {
@@ -394,8 +397,14 @@ mod tests {
             max_turns: None,
         };
 
-        assert_eq!(options.env.get("ANTHROPIC_BASE_URL").map(String::as_str), Some("https://proxy.example.com"));
-        assert_eq!(options.env.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str), Some("test-token"));
+        assert_eq!(
+            options.env.get("ANTHROPIC_BASE_URL").map(String::as_str),
+            Some("https://proxy.example.com")
+        );
+        assert_eq!(
+            options.env.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str),
+            Some("test-token")
+        );
         assert_eq!(options.env.len(), 2);
     }
 

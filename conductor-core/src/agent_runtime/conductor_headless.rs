@@ -111,14 +111,19 @@ pub fn try_spawn_headless_run(
             params.run_id, params.working_dir
         )
     })?;
-    let h = spawn_headless(&args, std::path::Path::new(params.working_dir), binary_path, env)
-        .map_err(|e| {
-            let _ = std::fs::remove_file(&pf);
-            format!(
-                "spawn failed for run {} (working_dir={}): {e}",
-                params.run_id, params.working_dir
-            )
-        })?;
+    let h = spawn_headless(
+        &args,
+        std::path::Path::new(params.working_dir),
+        binary_path,
+        env,
+    )
+    .map_err(|e| {
+        let _ = std::fs::remove_file(&pf);
+        format!(
+            "spawn failed for run {} (working_dir={}): {e}",
+            params.run_id, params.working_dir
+        )
+    })?;
     Ok((h, pf))
 }
 
