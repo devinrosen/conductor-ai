@@ -688,7 +688,10 @@ fn load_config_from(path: &std::path::Path) -> Result<Config> {
     // Migrate legacy general.custom_models → runtimes.claude.supported_models.
     if migrate_custom_models_into_claude_runtime(&mut config) {
         if let Err(e) = save_config_to(&config, path) {
-            tracing::warn!("failed to persist custom_models migration: {e}");
+            tracing::warn!(
+                "failed to persist custom_models migration to {}: {e}",
+                path.display()
+            );
         }
     }
 

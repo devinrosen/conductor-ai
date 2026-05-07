@@ -4,8 +4,8 @@ use conductor_core::notification_hooks::HookRunner;
 
 use crate::action::Action;
 use crate::state::{
-    AppState, ConfirmAction, InputAction, Modal, SettingsCategory, SettingsDisplayCache,
-    SettingsFocus, View,
+    AppState, ConfirmAction, InputAction, Modal, RuntimeDisplayRow, SettingsCategory,
+    SettingsDisplayCache, SettingsFocus, View,
 };
 use crate::ui::settings::{appearance_row, general_row};
 
@@ -80,19 +80,19 @@ impl App {
 
         // Build the runtimes display list. The built-in `claude` runtime is always
         // shown first; user-defined runtimes follow in sorted order by name.
-        let mut runtimes: Vec<(String, String, usize, usize, bool)> = Vec::new();
+        let mut runtimes: Vec<RuntimeDisplayRow> = Vec::new();
         let claude_entry = self.config.runtimes.get("claude");
         let claude_models = claude_entry
             .map(|rt| rt.supported_models.len())
             .unwrap_or(0);
         let claude_env = claude_entry.map(|rt| rt.env.len()).unwrap_or(0);
-        runtimes.push((
-            "claude".to_string(),
-            "claude".to_string(),
-            claude_models,
-            claude_env,
-            true,
-        ));
+        runtimes.push(RuntimeDisplayRow {
+            name: "claude".to_string(),
+            type_hint: "claude".to_string(),
+            model_count: claude_models,
+            env_count: claude_env,
+            is_built_in: true,
+        });
         let mut other: Vec<(&String, &conductor_core::config::RuntimeConfig)> = self
             .config
             .runtimes
@@ -105,13 +105,13 @@ impl App {
                 .runtime_type
                 .clone()
                 .unwrap_or_else(|| "claude".to_string());
-            runtimes.push((
-                name.clone(),
+            runtimes.push(RuntimeDisplayRow {
+                name: name.clone(),
                 type_hint,
-                rt.supported_models.len(),
-                rt.env.len(),
-                false,
-            ));
+                model_count: rt.supported_models.len(),
+                env_count: rt.env.len(),
+                is_built_in: false,
+            });
         }
 
         self.state.settings_display = SettingsDisplayCache {
@@ -543,8 +543,8 @@ impl App {
             .state
             .settings_row_index
             .min(runtimes.len().saturating_sub(1));
-        let (name, _, _, _, is_built_in) = &runtimes[idx];
-        if *is_built_in {
+        let row = &runtimes[idx];
+        if row.is_built_in {
             self.state.status_message = Some(
                 "Built-in claude runtime is read-only \u{2014} use Models pane to add custom models"
                     .into(),
@@ -554,14 +554,16 @@ impl App {
         let current = self
             .config
             .runtimes
-            .get(name)
+            .get(&row.name)
             .map(|rt| rt.supported_models.join(", "))
             .unwrap_or_default();
         self.state.modal = Modal::Input {
-            title: format!("Edit models: {name}"),
+            title: format!("Edit models: {}", row.name),
             prompt: "Supported models (comma-separated):".into(),
             value: current,
-            on_submit: InputAction::SettingsEditRuntimeModels { name: name.clone() },
+            on_submit: InputAction::SettingsEditRuntimeModels {
+                name: row.name.clone(),
+            },
         };
     }
 
@@ -575,12 +577,12 @@ impl App {
             .state
             .settings_row_index
             .min(runtimes.len().saturating_sub(1));
-        let (name, _, _, _, is_built_in) = &runtimes[idx];
-        if *is_built_in {
+        let row = &runtimes[idx];
+        if row.is_built_in {
             self.state.status_message = Some("Cannot delete built-in claude runtime".into());
             return;
         }
-        let name = name.clone();
+        let name = row.name.clone();
         self.state.modal = Modal::Confirm {
             title: "Delete runtime".into(),
             message: format!("Remove runtime \"{name}\" from config?"),

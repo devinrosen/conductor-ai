@@ -1,8 +1,8 @@
 use ratatui::widgets::ListState;
 
 use crate::state::{
-    info_row, repo_info_row, workflow_run_info_row, DashboardRow, FormField, Modal,
-    RepoDetailFocus, View, WorkflowDefFocus, WorkflowPickerItem, WorkflowRunDetailFocus,
+    info_row, model_picker_total, repo_info_row, workflow_run_info_row, DashboardRow, FormField,
+    Modal, RepoDetailFocus, View, WorkflowDefFocus, WorkflowPickerItem, WorkflowRunDetailFocus,
     WorkflowsFocus, WorktreeDetailFocus,
 };
 
@@ -483,12 +483,10 @@ impl App {
                 allow_default,
                 ..
             } => {
-                let total = runtime_sections
-                    .iter()
-                    .map(|s| s.models.len())
-                    .sum::<usize>()
-                    + usize::from(allow_default);
-                wrap_decrement(selected, total);
+                wrap_decrement(
+                    selected,
+                    model_picker_total(runtime_sections, allow_default),
+                );
                 return;
             }
             Modal::BranchPicker {
@@ -646,12 +644,10 @@ impl App {
                 allow_default,
                 ..
             } => {
-                let total = runtime_sections
-                    .iter()
-                    .map(|s| s.models.len())
-                    .sum::<usize>()
-                    + usize::from(allow_default);
-                wrap_increment(selected, total);
+                wrap_increment(
+                    selected,
+                    model_picker_total(runtime_sections, allow_default),
+                );
                 return;
             }
             Modal::BranchPicker {

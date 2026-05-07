@@ -441,9 +441,7 @@ fn render_runtimes(frame: &mut Frame, area: Rect, block: Block, state: &AppState
             Style::default().fg(theme.label_secondary),
         )));
     } else {
-        for (i, (name, type_hint, model_count, env_count, is_built_in)) in
-            d.runtimes.iter().enumerate()
-        {
+        for (i, row) in d.runtimes.iter().enumerate() {
             let is_selected = i == sel && focused;
             let style = if is_selected {
                 Style::default()
@@ -453,14 +451,17 @@ fn render_runtimes(frame: &mut Frame, area: Rect, block: Block, state: &AppState
                 Style::default().fg(theme.label_secondary)
             };
             let prefix = if is_selected { "\u{25b8} " } else { "  " };
-            let suffix = if *is_built_in {
+            let suffix = if row.is_built_in {
                 "  (built-in)".to_string()
             } else {
-                format!("  type={type_hint} models={model_count} env={env_count}")
+                format!(
+                    "  type={} models={} env={}",
+                    row.type_hint, row.model_count, row.env_count
+                )
             };
             lines.push(Line::from(vec![
                 Span::styled(format!("  {prefix}"), style),
-                Span::styled(name.clone(), style.add_modifier(Modifier::BOLD)),
+                Span::styled(row.name.clone(), style.add_modifier(Modifier::BOLD)),
                 Span::styled(suffix, Style::default().fg(theme.label_secondary)),
             ]));
         }

@@ -3,7 +3,7 @@ use std::time::Duration;
 use conductor_core::workflow::parse_workflow_str;
 
 use crate::action::Action;
-use crate::state::{Modal, View, WorkflowDefFocus};
+use crate::state::{model_picker_total, Modal, View, WorkflowDefFocus};
 
 use super::helpers::{collapse_loop_iterations, max_scroll, workflow_parse_warning_message};
 use super::App;
@@ -683,12 +683,8 @@ impl App {
                     allow_default,
                     ..
                 } => {
-                    let total = runtime_sections
-                        .iter()
-                        .map(|s| s.models.len())
-                        .sum::<usize>()
-                        + usize::from(allow_default);
-                    *selected = total.saturating_sub(1);
+                    *selected =
+                        model_picker_total(runtime_sections, allow_default).saturating_sub(1);
                 }
                 Modal::BranchPicker {
                     ref items,

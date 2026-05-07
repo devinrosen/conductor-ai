@@ -60,6 +60,21 @@ pub struct RuntimeSection {
     pub models: Vec<String>,
 }
 
+/// Total number of selectable rows in the model picker (model entries + optional Default row).
+pub fn model_picker_total(sections: &[RuntimeSection], allow_default: bool) -> usize {
+    sections.iter().map(|s| s.models.len()).sum::<usize>() + usize::from(allow_default)
+}
+
+/// A display row for a runtime entry in the Settings → Runtimes pane.
+#[derive(Debug, Clone)]
+pub struct RuntimeDisplayRow {
+    pub name: String,
+    pub type_hint: String,
+    pub model_count: usize,
+    pub env_count: usize,
+    pub is_built_in: bool,
+}
+
 /// A row in the unified dashboard list — repo header or worktree entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DashboardRow {

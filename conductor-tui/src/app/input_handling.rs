@@ -1377,6 +1377,216 @@ mod tests {
         assert!(matches!(app.state.modal, Modal::None));
     }
 
+    // ---------- build_runtime_sections tests ----------
+
+    fn config_with_custom_runtimes(
+        claude_custom: Vec<&str>,
+        other: Vec<(&str, Vec<&str>)>,
+    ) -> Config {
+        use conductor_core::config::RuntimeConfig;
+        let mut config = Config::default();
+        if !claude_custom.is_empty() {
+            config.runtimes.insert(
+                "claude".to_string(),
+                RuntimeConfig {
+                    supported_models: claude_custom.into_iter().map(String::from).collect(),
+                    ..Default::default()
+                },
+            );
+        }
+        for (name, models) in other {
+            config.runtimes.insert(
+                name.to_string(),
+                RuntimeConfig {
+                    supported_models: models.into_iter().map(String::from).collect(),
+                    ..Default::default()
+                },
+            );
+        }
+        config
+    }
+
+    #[test]
+    fn build_runtime_sections_empty_config_returns_claude_with_known_models() {
+        let config = Config::default();
+        let sections = build_runtime_sections(&config);
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].name, "claude");
+        for km in KNOWN_MODELS {
+            assert!(
+                sections[0].models.contains(&km.alias.to_string()),
+                "expected alias {} in claude section",
+                km.alias
+            );
+        }
+        assert_eq!(sections[0].models.len(), KNOWN_MODELS.len());
+    }
+
+    #[test]
+    fn build_runtime_sections_claude_custom_models_appended_without_duplicates() {
+        let config = config_with_custom_runtimes(vec!["sonnet", "my-custom-model"], vec![]);
+        let sections = build_runtime_sections(&config);
+        assert_eq!(sections.len(), 1);
+        let models = &sections[0].models;
+        assert!(models.contains(&"my-custom-model".to_string()));
+        assert_eq!(
+            models.iter().filter(|m| m.as_str() == "sonnet").count(),
+            1,
+            "sonnet should appear exactly once (no duplicate from custom list)"
+        );
+        assert_eq!(models.len(), KNOWN_MODELS.len() + 1);
+    }
+
+    #[test]
+    fn build_runtime_sections_custom_runtimes_appear_after_claude_sorted() {
+        let config = config_with_custom_runtimes(
+            vec![],
+            vec![("zebra-rt", vec!["z-model"]), ("alpha-rt", vec!["a-model"])],
+        );
+        let sections = build_runtime_sections(&config);
+        assert_eq!(sections.len(), 3);
+        assert_eq!(sections[0].name, "claude");
+        assert_eq!(sections[1].name, "alpha-rt");
+        assert_eq!(sections[2].name, "zebra-rt");
+    }
+
+    #[test]
+    fn build_runtime_sections_empty_custom_runtime_excluded() {
+        let config = config_with_custom_runtimes(vec![], vec![("empty-rt", vec![])]);
+        let sections = build_runtime_sections(&config);
+        assert_eq!(
+            sections.len(),
+            1,
+            "runtime with no supported_models should be excluded"
+        );
+    }
+
+    // ---------- resolve_picker_selection tests ----------
+
+    fn two_section_sections() -> Vec<crate::state::RuntimeSection> {
+        vec![
+            crate::state::RuntimeSection {
+                name: "claude".to_string(),
+                models: vec!["opus".to_string(), "sonnet".to_string()],
+            },
+            crate::state::RuntimeSection {
+                name: "gemini".to_string(),
+                models: vec!["gemini-pro".to_string()],
+            },
+        ]
+    }
+
+    #[test]
+    fn resolve_picker_no_default_idx0_returns_first_model() {
+        let sections = two_section_sections();
+        assert_eq!(
+            resolve_picker_selection(&sections, 0, false),
+            Some(("claude".to_string(), "opus".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_picker_no_default_idx1_returns_second_model() {
+        let sections = two_section_sections();
+        assert_eq!(
+            resolve_picker_selection(&sections, 1, false),
+            Some(("claude".to_string(), "sonnet".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_picker_no_default_idx2_crosses_section_boundary() {
+        let sections = two_section_sections();
+        assert_eq!(
+            resolve_picker_selection(&sections, 2, false),
+            Some(("gemini".to_string(), "gemini-pro".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_picker_with_default_idx0_returns_none() {
+        let sections = two_section_sections();
+        assert_eq!(resolve_picker_selection(&sections, 0, true), None);
+    }
+
+    #[test]
+    fn resolve_picker_with_default_idx1_returns_first_model_with_offset() {
+        let sections = two_section_sections();
+        assert_eq!(
+            resolve_picker_selection(&sections, 1, true),
+            Some(("claude".to_string(), "opus".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_picker_out_of_range_returns_none() {
+        let sections = two_section_sections();
+        assert_eq!(resolve_picker_selection(&sections, 999, false), None);
+    }
+
+    // ---------- picker_initial_selected tests ----------
+
+    fn sonnet_flat_idx(sections: &[crate::state::RuntimeSection], allow_default: bool) -> usize {
+        let offset = usize::from(allow_default);
+        let mut flat = offset;
+        for s in sections {
+            for m in &s.models {
+                if m == "sonnet" {
+                    return flat;
+                }
+                flat += 1;
+            }
+        }
+        panic!("sonnet not found in sections");
+    }
+
+    #[test]
+    fn picker_initial_selected_effective_default_alias_selects_correct_row() {
+        let sections = claude_only_sections();
+        let expected = sonnet_flat_idx(&sections, false);
+        assert_eq!(
+            picker_initial_selected(&sections, Some("sonnet"), None, false),
+            expected
+        );
+    }
+
+    #[test]
+    fn picker_initial_selected_suggested_sonnet_selects_correct_row() {
+        let sections = claude_only_sections();
+        let expected = sonnet_flat_idx(&sections, false);
+        assert_eq!(
+            picker_initial_selected(&sections, None, Some("sonnet"), false),
+            expected
+        );
+    }
+
+    #[test]
+    fn picker_initial_selected_no_hint_defaults_to_sonnet() {
+        let sections = claude_only_sections();
+        let expected = sonnet_flat_idx(&sections, false);
+        assert_eq!(
+            picker_initial_selected(&sections, None, None, false),
+            expected
+        );
+    }
+
+    #[test]
+    fn picker_initial_selected_allow_default_adds_offset_to_sonnet() {
+        let sections = claude_only_sections();
+        let expected = sonnet_flat_idx(&sections, true);
+        assert_eq!(
+            picker_initial_selected(&sections, None, None, true),
+            expected
+        );
+    }
+
+    #[test]
+    fn picker_initial_selected_empty_sections_returns_offset() {
+        let empty: Vec<crate::state::RuntimeSection> = vec![];
+        assert_eq!(picker_initial_selected(&empty, None, None, false), 0);
+        assert_eq!(picker_initial_selected(&empty, None, None, true), 1);
+    }
+
     // ---------- Base branch picker tests ----------
 
     fn base_branch_picker_modal(selected: usize) -> Modal {

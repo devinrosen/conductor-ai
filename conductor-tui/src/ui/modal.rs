@@ -911,6 +911,37 @@ pub fn render_agent_prompt(
     frame.render_widget(hint, chunks[2]);
 }
 
+/// Render a plain (no tier badge) model row used for custom claude models and non-claude runtimes.
+fn plain_model_row(
+    model_str: &str,
+    flat_idx: usize,
+    selected: usize,
+    effective_default: Option<&str>,
+    dim: Style,
+    theme: &Theme,
+) -> Line<'static> {
+    let is_selected = flat_idx == selected;
+    let is_current = effective_default.is_some_and(|d| d == model_str);
+    let prefix = if is_selected { "\u{25b8} " } else { "  " };
+    let current_marker = if is_current { " (current)" } else { "" };
+    let style = if is_selected {
+        Style::default()
+            .fg(theme.label_warning)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.label_primary)
+    };
+    Line::from(vec![
+        Span::styled(format!("  {prefix}"), style),
+        Span::styled("\u{00b7} ", dim),
+        Span::styled(model_str.to_string(), style),
+        Span::styled(
+            current_marker.to_string(),
+            Style::default().fg(theme.label_secondary),
+        ),
+    ])
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn render_model_picker(
     frame: &mut Frame,
@@ -1045,43 +1076,25 @@ pub fn render_model_picker(
                     ]));
                 } else {
                     // Custom model string inside claude section (from migration)
-                    let is_selected = flat_idx == selected;
-                    let is_current = effective_default.is_some_and(|d| d == model_str.as_str());
-                    let prefix = if is_selected { "\u{25b8} " } else { "  " };
-                    let current_marker = if is_current { " (current)" } else { "" };
-                    let style = if is_selected {
-                        Style::default()
-                            .fg(theme.label_warning)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(theme.label_primary)
-                    };
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("  {prefix}"), style),
-                        Span::styled("\u{00b7} ", dim),
-                        Span::styled(model_str.clone(), style),
-                        Span::styled(current_marker, Style::default().fg(theme.label_secondary)),
-                    ]));
+                    lines.push(plain_model_row(
+                        model_str,
+                        flat_idx,
+                        selected,
+                        effective_default,
+                        dim,
+                        theme,
+                    ));
                 }
             } else {
                 // Non-claude runtime: plain string, no tier badges
-                let is_selected = flat_idx == selected;
-                let is_current = effective_default.is_some_and(|d| d == model_str.as_str());
-                let prefix = if is_selected { "\u{25b8} " } else { "  " };
-                let current_marker = if is_current { " (current)" } else { "" };
-                let style = if is_selected {
-                    Style::default()
-                        .fg(theme.label_warning)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(theme.label_primary)
-                };
-                lines.push(Line::from(vec![
-                    Span::styled(format!("  {prefix}"), style),
-                    Span::styled("\u{00b7} ", dim),
-                    Span::styled(model_str.clone(), style),
-                    Span::styled(current_marker, Style::default().fg(theme.label_secondary)),
-                ]));
+                lines.push(plain_model_row(
+                    model_str,
+                    flat_idx,
+                    selected,
+                    effective_default,
+                    dim,
+                    theme,
+                ));
             }
             flat_idx += 1;
         }
