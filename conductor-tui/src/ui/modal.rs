@@ -919,8 +919,7 @@ pub fn render_model_picker(
     effective_default: Option<&str>,
     effective_source: &str,
     selected: usize,
-    custom_input: &str,
-    custom_active: bool,
+    custom_models: &[String],
     suggested: Option<&str>,
     allow_default: bool,
     theme: &Theme,
@@ -962,7 +961,7 @@ pub fn render_model_picker(
     // "Default" row — only shown in run-time pickers (allow_default: true)
     let offset = if allow_default { 1 } else { 0 };
     if allow_default {
-        let is_selected = !custom_active && selected == 0;
+        let is_selected = selected == 0;
         let style = if is_selected {
             Style::default()
                 .fg(theme.label_warning)
@@ -983,7 +982,7 @@ pub fn render_model_picker(
 
     // Known models list
     for (i, model) in KNOWN_MODELS.iter().enumerate() {
-        let is_selected = !custom_active && i + offset == selected;
+        let is_selected = i + offset == selected;
         let is_current = effective_default.is_some_and(|d| d == model.id || d == model.alias);
 
         let prefix = if is_selected { "\u{25b8} " } else { "  " };
@@ -1026,37 +1025,33 @@ pub fn render_model_picker(
         ]));
     }
 
-    // Custom input option
-    let custom_idx = KNOWN_MODELS.len() + offset;
-    let custom_selected = !custom_active && selected == custom_idx;
-    let custom_prefix = if custom_selected || custom_active {
-        "\u{25b8} "
-    } else {
-        "  "
-    };
-    let custom_style = if custom_selected || custom_active {
-        Style::default()
-            .fg(theme.label_warning)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme.label_primary)
-    };
+    // Saved custom models
+    for (j, model_id) in custom_models.iter().enumerate() {
+        let idx = offset + KNOWN_MODELS.len() + j;
+        let is_selected = idx == selected;
+        let is_current = effective_default.is_some_and(|d| d == model_id.as_str());
+        let prefix = if is_selected { "\u{25b8} " } else { "  " };
+        let current_marker = if is_current { " (current)" } else { "" };
+        let style = if is_selected {
+            Style::default()
+                .fg(theme.label_warning)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.label_primary)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {prefix}"), style),
+            Span::styled("\u{00b7} ", dim),
+            Span::styled(model_id.clone(), style),
+            Span::styled(current_marker, Style::default().fg(theme.label_secondary)),
+        ]));
+    }
 
-    if custom_active {
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {custom_prefix}"), custom_style),
-            Span::styled("custom: ", custom_style),
-            Span::styled(
-                custom_input,
-                Style::default().add_modifier(Modifier::UNDERLINED),
-            ),
-            Span::styled("_", Style::default().fg(theme.border_focused)),
-        ]));
-    } else {
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {custom_prefix}"), custom_style),
-            Span::styled("custom\u{2026}", custom_style),
-        ]));
+    if custom_models.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (Add custom models in Settings \u{2192} Models)",
+            dim,
+        )));
     }
 
     lines.push(Line::from(""));

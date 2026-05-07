@@ -25,6 +25,7 @@ pub enum SettingsCategory {
     General,
     Appearance,
     Notifications,
+    Models,
 }
 
 impl SettingsCategory {
@@ -33,6 +34,7 @@ impl SettingsCategory {
             SettingsCategory::General,
             SettingsCategory::Appearance,
             SettingsCategory::Notifications,
+            SettingsCategory::Models,
         ]
     }
 
@@ -41,6 +43,7 @@ impl SettingsCategory {
             Self::General => "General",
             Self::Appearance => "Appearance",
             Self::Notifications => "Notifications",
+            Self::Models => "Models",
         }
     }
 }
@@ -438,6 +441,9 @@ pub enum ConfirmAction {
         wt_slug: String,
         wt_id: String,
     },
+    DeleteCustomModel {
+        model: String,
+    },
     Quit,
 }
 
@@ -534,6 +540,8 @@ pub enum InputAction {
     SettingsSetModel,
     /// Settings view: set the sync interval in minutes.
     SettingsSetSyncInterval,
+    /// Settings → Models: add a new custom model entry.
+    SettingsAddCustomModel,
     /// Adopt an existing on-disk git worktree: user enters the path.
     AdoptWorktree {
         repo_slug: String,

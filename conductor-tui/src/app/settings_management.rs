@@ -4,7 +4,8 @@ use conductor_core::notification_hooks::HookRunner;
 
 use crate::action::Action;
 use crate::state::{
-    AppState, InputAction, Modal, SettingsCategory, SettingsDisplayCache, SettingsFocus, View,
+    AppState, ConfirmAction, InputAction, Modal, SettingsCategory, SettingsDisplayCache,
+    SettingsFocus, View,
 };
 use crate::ui::settings::{appearance_row, general_row};
 
@@ -71,6 +72,8 @@ impl App {
             })
             .collect();
 
+        let custom_models = self.config.general.custom_models.clone();
+
         self.state.settings_display = SettingsDisplayCache {
             model,
             permission_mode,
@@ -79,6 +82,7 @@ impl App {
             auto_cleanup,
             theme,
             hooks,
+            custom_models,
         };
     }
 
@@ -118,6 +122,9 @@ impl App {
             }
             SettingsCategory::Notifications => {
                 // Enter on a hook row — no edit modal for hooks; [t] fires test.
+            }
+            SettingsCategory::Models => {
+                // Enter in Models pane is a no-op; [a]/[d] are the actions.
             }
         }
     }
@@ -163,7 +170,7 @@ impl App {
     }
 
     /// Spawn a background thread to save the current config (non-blocking).
-    fn save_config_background(&mut self) {
+    pub(super) fn save_config_background(&mut self) {
         let config = self.config.clone();
         std::thread::spawn(move || {
             if let Err(e) = conductor_core::config::save_config(&config) {
@@ -326,6 +333,7 @@ impl App {
             SettingsCategory::General => general_row::COUNT,
             SettingsCategory::Appearance => appearance_row::COUNT,
             SettingsCategory::Notifications => self.state.settings_display.hooks.len().max(1),
+            SettingsCategory::Models => self.state.settings_display.custom_models.len().max(1),
         }
     }
 
@@ -353,9 +361,49 @@ impl App {
                     return;
                 }
             }
+            InputAction::SettingsAddCustomModel => {
+                let trimmed = value.trim().to_string();
+                if trimmed.is_empty() {
+                    self.state.modal = Modal::None;
+                    return;
+                }
+                if !self.config.general.custom_models.contains(&trimmed) {
+                    self.config.general.custom_models.push(trimmed);
+                    self.save_config_background();
+                    self.refresh_settings_display();
+                }
+            }
             _ => {}
         }
         self.state.modal = Modal::None;
+    }
+
+    /// Open the Input modal to add a new custom model entry.
+    pub(super) fn handle_models_add(&mut self) {
+        self.state.modal = Modal::Input {
+            title: "Add custom model".into(),
+            prompt: "Model ID (e.g. claude-opus-4-7):".into(),
+            value: String::new(),
+            on_submit: InputAction::SettingsAddCustomModel,
+        };
+    }
+
+    /// Open the Confirm modal to delete the currently selected custom model entry.
+    pub(super) fn handle_models_delete(&mut self) {
+        let models = &self.state.settings_display.custom_models;
+        if models.is_empty() {
+            return;
+        }
+        let idx = self
+            .state
+            .settings_row_index
+            .min(models.len().saturating_sub(1));
+        let model = models[idx].clone();
+        self.state.modal = Modal::Confirm {
+            title: "Delete custom model".into(),
+            message: format!("Remove \"{model}\" from saved models?"),
+            on_confirm: ConfirmAction::DeleteCustomModel { model },
+        };
     }
 
     /// Toggle pane focus within the Settings view.

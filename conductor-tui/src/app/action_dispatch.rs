@@ -194,32 +194,14 @@ impl App {
                 Modal::Input { ref mut value, .. } | Modal::ConfirmByName { ref mut value, .. } => {
                     value.push(c);
                 }
-                Modal::ModelPicker {
-                    ref mut custom_input,
-                    custom_active: true,
-                    ..
-                } => {
-                    custom_input.push(c);
-                }
                 _ => {}
             },
             Action::InputBackspace => match self.state.modal {
                 Modal::Input { ref mut value, .. } | Modal::ConfirmByName { ref mut value, .. } => {
                     value.pop();
                 }
-                Modal::ModelPicker {
-                    ref mut custom_input,
-                    custom_active: true,
-                    ..
-                } => {
-                    custom_input.pop();
-                }
-                Modal::ModelPicker {
-                    custom_active: false,
-                    ref on_submit,
-                    ..
-                } => {
-                    // Backspace in non-custom mode: clear the model (submit empty value)
+                Modal::ModelPicker { ref on_submit, .. } => {
+                    // Backspace: clear the model (submit empty value)
                     let on_submit = on_submit.clone();
                     self.state.modal = Modal::None;
                     self.handle_input_submit_with_value(String::new(), on_submit);
@@ -399,6 +381,8 @@ impl App {
             Action::ManageIssueSources => self.handle_manage_issue_sources(),
             Action::IssueSourceAdd => self.handle_issue_source_add(),
             Action::IssueSourceDelete => self.handle_issue_source_delete(),
+            Action::ModelsAdd => self.handle_models_add(),
+            Action::ModelsDelete => self.handle_models_delete(),
             Action::DiscoverGithubOrgs => self.handle_discover_github_orgs(),
             Action::GithubOrgsLoaded { orgs } => self.handle_github_orgs_loaded(orgs),
             Action::GithubOrgsFailed { error } => self.handle_github_orgs_failed(error),
@@ -629,12 +613,9 @@ impl App {
                     *cursor = 0;
                 }
                 Modal::ModelPicker {
-                    ref mut selected,
-                    ref mut custom_active,
-                    ..
+                    ref mut selected, ..
                 } => {
                     *selected = 0;
-                    *custom_active = false;
                 }
                 Modal::BranchPicker {
                     ref mut selected, ..
@@ -686,13 +667,14 @@ impl App {
                 }
                 Modal::ModelPicker {
                     ref mut selected,
-                    ref mut custom_active,
+                    ref custom_models,
                     allow_default,
                     ..
                 } => {
-                    let total = models::KNOWN_MODELS.len() + 1 + usize::from(allow_default);
+                    let total = models::KNOWN_MODELS.len()
+                        + custom_models.len()
+                        + usize::from(allow_default);
                     *selected = total.saturating_sub(1);
-                    *custom_active = false;
                 }
                 Modal::BranchPicker {
                     ref items,

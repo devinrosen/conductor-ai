@@ -578,8 +578,7 @@ fn snap_modal_model_picker() {
         effective_default: Some("claude-sonnet-4-6".into()),
         effective_source: "global config".into(),
         selected: 1,
-        custom_input: String::new(),
-        custom_active: false,
+        custom_models: vec![],
         suggested: None,
         on_submit: InputAction::SetWorktreeModel {
             worktree_id: "w1".into(),

@@ -195,6 +195,11 @@ impl App {
                     });
                 });
             }
+            ConfirmAction::DeleteCustomModel { model } => {
+                self.config.general.custom_models.retain(|m| m != &model);
+                self.save_config_background();
+                self.refresh_settings_display();
+            }
             ConfirmAction::Quit => {
                 self.state.should_quit = true;
             }

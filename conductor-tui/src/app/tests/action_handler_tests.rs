@@ -1375,8 +1375,7 @@ fn input_backspace_on_model_picker_non_custom_clears_model() {
         effective_default: Some("claude-sonnet-4-5-20250514".into()),
         effective_source: "global config".into(),
         selected: 0,
-        custom_input: String::new(),
-        custom_active: false,
+        custom_models: vec![],
         suggested: None,
         on_submit: InputAction::SetRepoModel {
             slug: "test-repo".into(),
@@ -1389,7 +1388,7 @@ fn input_backspace_on_model_picker_non_custom_clears_model() {
     // Modal should be dismissed (not ModelPicker anymore)
     assert!(
         !matches!(app.state.modal, Modal::ModelPicker { .. }),
-        "ModelPicker should be dismissed after Backspace in non-custom mode"
+        "ModelPicker should be dismissed after Backspace"
     );
 }
 
@@ -2135,4 +2134,93 @@ fn prompt_repo_agent_focuses_prompt_input() {
         crate::state::RepoDetailFocus::RepoAgentPromptInput
     );
     assert_eq!(app.state.column_focus, crate::state::ColumnFocus::Content);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Custom model add / delete tests (settings_management.rs)
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn settings_add_custom_model_appends_new_entry() {
+    use crate::state::InputAction;
+    let mut app = make_app();
+    app.handle_settings_input_submit(
+        InputAction::SettingsAddCustomModel,
+        "claude-opus-4-7".into(),
+    );
+    assert_eq!(app.config.general.custom_models, vec!["claude-opus-4-7"]);
+    assert!(matches!(app.state.modal, Modal::None));
+}
+
+#[test]
+fn settings_add_custom_model_dedup_does_not_add_duplicate() {
+    use crate::state::InputAction;
+    let mut app = make_app();
+    app.config.general.custom_models = vec!["claude-opus-4-7".into()];
+    app.handle_settings_input_submit(
+        InputAction::SettingsAddCustomModel,
+        "claude-opus-4-7".into(),
+    );
+    assert_eq!(app.config.general.custom_models.len(), 1);
+}
+
+#[test]
+fn settings_add_custom_model_trims_whitespace_before_dedup() {
+    use crate::state::InputAction;
+    let mut app = make_app();
+    app.config.general.custom_models = vec!["claude-opus-4-7".into()];
+    app.handle_settings_input_submit(
+        InputAction::SettingsAddCustomModel,
+        "  claude-opus-4-7  ".into(),
+    );
+    assert_eq!(app.config.general.custom_models.len(), 1);
+}
+
+#[test]
+fn settings_add_custom_model_empty_input_is_noop() {
+    use crate::state::InputAction;
+    let mut app = make_app();
+    app.handle_settings_input_submit(InputAction::SettingsAddCustomModel, "   ".into());
+    assert!(app.config.general.custom_models.is_empty());
+    assert!(matches!(app.state.modal, Modal::None));
+}
+
+#[test]
+fn settings_delete_custom_model_removes_entry() {
+    let mut app = make_app();
+    app.config.general.custom_models = vec!["model-a".into(), "model-b".into()];
+    app.execute_confirm_action(crate::state::ConfirmAction::DeleteCustomModel {
+        model: "model-a".into(),
+    });
+    assert_eq!(app.config.general.custom_models, vec!["model-b"]);
+}
+
+#[test]
+fn settings_handle_models_delete_empty_list_is_noop() {
+    let mut app = make_app();
+    app.config.general.custom_models = vec![];
+    app.state.settings_display.custom_models = vec![];
+    app.handle_models_delete();
+    assert!(matches!(app.state.modal, Modal::None));
+}
+
+#[test]
+fn settings_handle_models_delete_opens_confirm_modal() {
+    let mut app = make_app();
+    app.config.general.custom_models = vec!["my-model".into()];
+    app.state.settings_display.custom_models = vec!["my-model".into()];
+    app.state.settings_row_index = 0;
+    app.handle_models_delete();
+    if let Modal::Confirm { message, .. } = &app.state.modal {
+        assert!(message.contains("my-model"));
+    } else {
+        panic!("expected Confirm modal");
+    }
+}
+
+#[test]
+fn settings_handle_models_add_opens_input_modal() {
+    let mut app = make_app();
+    app.handle_models_add();
+    assert!(matches!(app.state.modal, Modal::Input { .. }));
 }

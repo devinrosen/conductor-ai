@@ -202,6 +202,8 @@ pub struct SettingsDisplayCache {
     pub theme: String,
     /// (on_pattern, run_or_url) pairs for each configured hook.
     pub hooks: Vec<(String, String)>,
+    /// Saved custom model IDs (mirrors config so render_models doesn't borrow config).
+    pub custom_models: Vec<String>,
 }
 
 impl Default for AppState {

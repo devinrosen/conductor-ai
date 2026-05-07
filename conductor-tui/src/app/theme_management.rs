@@ -178,8 +178,7 @@ impl App {
                             effective_default: effective,
                             effective_source: source,
                             selected,
-                            custom_input: String::new(),
-                            custom_active: false,
+                            custom_models: self.config.general.custom_models.clone(),
                             suggested: None,
                             allow_default: false,
                             on_submit: InputAction::SetWorktreeModel {
@@ -206,8 +205,7 @@ impl App {
                             effective_default: effective,
                             effective_source: source,
                             selected,
-                            custom_input: String::new(),
-                            custom_active: false,
+                            custom_models: self.config.general.custom_models.clone(),
                             suggested: None,
                             allow_default: false,
                             on_submit: InputAction::SetRepoModel {
@@ -243,8 +241,7 @@ impl App {
                     effective_default: effective,
                     effective_source: source,
                     selected,
-                    custom_input: String::new(),
-                    custom_active: false,
+                    custom_models: self.config.general.custom_models.clone(),
                     suggested: None,
                     allow_default: false,
                     on_submit: InputAction::SetWorktreeModel {
@@ -277,8 +274,7 @@ impl App {
                     effective_default: effective,
                     effective_source: source,
                     selected,
-                    custom_input: String::new(),
-                    custom_active: false,
+                    custom_models: self.config.general.custom_models.clone(),
                     suggested: None,
                     allow_default: false,
                     on_submit: InputAction::SetRepoModel {

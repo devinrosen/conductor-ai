@@ -284,41 +284,24 @@ impl App {
                 (value, on_submit)
             }
             Modal::ModelPicker {
-                context_label,
-                effective_default,
-                effective_source,
                 selected,
-                custom_input,
-                custom_active,
-                suggested,
+                custom_models,
                 on_submit,
                 allow_default,
+                ..
             } => {
                 let models = conductor_core::models::KNOWN_MODELS;
                 let offset = usize::from(allow_default);
-                let value = if custom_active {
-                    custom_input
-                } else if allow_default && selected == 0 {
+                let value = if allow_default && selected == 0 {
                     // "Default" row selected — empty string maps to model: None
                     String::new()
                 } else if selected < offset + models.len() {
                     // Selected a known model — use its alias
                     models[selected - offset].alias.to_string()
                 } else {
-                    // "custom…" was highlighted but Enter pressed without typing:
-                    // re-open the picker with custom mode active
-                    self.state.modal = Modal::ModelPicker {
-                        context_label,
-                        effective_default,
-                        effective_source,
-                        selected,
-                        custom_input,
-                        custom_active: true,
-                        suggested,
-                        on_submit,
-                        allow_default,
-                    };
-                    return;
+                    // Selected a saved custom model
+                    let custom_idx = selected - offset - models.len();
+                    custom_models.get(custom_idx).cloned().unwrap_or_default()
                 };
                 (value, on_submit)
             }
@@ -544,8 +527,7 @@ impl App {
                     effective_default,
                     effective_source,
                     selected: initial_selected,
-                    custom_input: String::new(),
-                    custom_active: false,
+                    custom_models: self.config.general.custom_models.clone(),
                     suggested: Some(suggested.to_string()),
                     allow_default: true,
                     on_submit: InputAction::AgentModelOverride {
@@ -664,7 +646,9 @@ impl App {
                     }
                 }
             }
-            InputAction::SettingsSetModel | InputAction::SettingsSetSyncInterval => {
+            InputAction::SettingsSetModel
+            | InputAction::SettingsSetSyncInterval
+            | InputAction::SettingsAddCustomModel => {
                 self.handle_settings_input_submit(on_submit, value);
             }
             InputAction::AdoptWorktree { repo_slug } => {
@@ -1045,8 +1029,24 @@ mod tests {
             effective_default: None,
             effective_source: "not set".to_string(),
             selected,
-            custom_input: String::new(),
-            custom_active: false,
+            custom_models: vec![],
+            suggested: None,
+            on_submit: set_wt_model_action(),
+            allow_default,
+        }
+    }
+
+    fn model_picker_with_custom(
+        selected: usize,
+        allow_default: bool,
+        custom: Vec<String>,
+    ) -> Modal {
+        Modal::ModelPicker {
+            context_label: "test".to_string(),
+            effective_default: None,
+            effective_source: "not set".to_string(),
+            selected,
+            custom_models: custom,
             suggested: None,
             on_submit: set_wt_model_action(),
             allow_default,
@@ -1095,46 +1095,36 @@ mod tests {
         assert_eq!(app.state.status_message.as_deref(), Some(expected.as_str()));
     }
 
-    // selected at the "custom…" row → re-opens picker with custom_active=true
+    // selecting the first custom model row submits its value
     #[test]
-    fn model_picker_custom_row_reopens_picker_with_custom_active() {
+    fn model_picker_custom_model_row_submits_value() {
         let mut app = make_app();
         let offset = 1_usize; // allow_default=true
-        let custom_row_index = offset + KNOWN_MODELS.len();
-        app.state.modal = model_picker(custom_row_index, true);
-        app.handle_input_submit();
-        assert!(
-            matches!(
-                app.state.modal,
-                Modal::ModelPicker {
-                    custom_active: true,
-                    ..
-                }
-            ),
-            "expected picker to re-open with custom_active=true, got {:?}",
-            app.state.modal
-        );
-    }
-
-    // custom_active=true → value comes from custom_input, not the selected index
-    #[test]
-    fn model_picker_custom_active_submits_custom_input_value() {
-        let mut app = make_app();
-        app.state.modal = Modal::ModelPicker {
-            context_label: "test".to_string(),
-            effective_default: None,
-            effective_source: "not set".to_string(),
-            selected: 99, // index is irrelevant when custom_active=true
-            custom_input: "my-custom-model".to_string(),
-            custom_active: true,
-            suggested: None,
-            on_submit: set_wt_model_action(),
-            allow_default: false,
-        };
+        let custom_row_index = offset + KNOWN_MODELS.len(); // first custom model
+        app.state.modal =
+            model_picker_with_custom(custom_row_index, true, vec!["my-custom-model".to_string()]);
         app.handle_input_submit();
         assert_eq!(
             app.state.status_message.as_deref(),
             Some("Model for feat-test set to: my-custom-model")
+        );
+    }
+
+    // selecting the second custom model row submits its value
+    #[test]
+    fn model_picker_second_custom_model_submits_correct_value() {
+        let mut app = make_app();
+        let offset = 0_usize; // allow_default=false
+        let custom_row_index = offset + KNOWN_MODELS.len() + 1; // second custom model
+        app.state.modal = model_picker_with_custom(
+            custom_row_index,
+            false,
+            vec!["first-model".to_string(), "second-model".to_string()],
+        );
+        app.handle_input_submit();
+        assert_eq!(
+            app.state.status_message.as_deref(),
+            Some("Model for feat-test set to: second-model")
         );
     }
 
@@ -1397,19 +1387,22 @@ mod tests {
         app.state.selected_worktree_id = Some("w1".to_string());
 
         // Populate in-memory data (the DB has the worktree, but state.data.worktrees is empty)
-        app.state.data.worktrees.push(conductor_core::worktree::Worktree {
-            id: "w1".to_string(),
-            repo_id: "r1".to_string(),
-            slug: "feat-test".to_string(),
-            branch: "feat/test".to_string(),
-            path: "/tmp/ws/feat-test".to_string(),
-            ticket_id: None,
-            status: conductor_core::worktree::WorktreeStatus::Active,
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            completed_at: None,
-            model: None,
-            base_branch: None,
-        });
+        app.state
+            .data
+            .worktrees
+            .push(conductor_core::worktree::Worktree {
+                id: "w1".to_string(),
+                repo_id: "r1".to_string(),
+                slug: "feat-test".to_string(),
+                branch: "feat/test".to_string(),
+                path: "/tmp/ws/feat-test".to_string(),
+                ticket_id: None,
+                status: conductor_core::worktree::WorktreeStatus::Active,
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                completed_at: None,
+                model: None,
+                base_branch: None,
+            });
         app.state.data.repos.push(conductor_core::repo::Repo {
             id: "r1".to_string(),
             slug: "test-repo".to_string(),
@@ -1422,7 +1415,10 @@ mod tests {
             allow_agent_issue_creation: true,
             runtime_overrides: None,
         });
-        app.state.data.repo_slug_map.insert("r1".to_string(), "test-repo".to_string());
+        app.state
+            .data
+            .repo_slug_map
+            .insert("r1".to_string(), "test-repo".to_string());
 
         app.handle_set_base_branch();
 
@@ -1455,19 +1451,22 @@ mod tests {
         app.state.selected_worktree_id = Some("w1".to_string());
 
         // Populate in-memory data
-        app.state.data.worktrees.push(conductor_core::worktree::Worktree {
-            id: "w1".to_string(),
-            repo_id: "r1".to_string(),
-            slug: "feat-test".to_string(),
-            branch: "feat/test".to_string(),
-            path: "/tmp/ws/feat-test".to_string(),
-            ticket_id: None,
-            status: conductor_core::worktree::WorktreeStatus::Active,
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            completed_at: None,
-            model: None,
-            base_branch: None,
-        });
+        app.state
+            .data
+            .worktrees
+            .push(conductor_core::worktree::Worktree {
+                id: "w1".to_string(),
+                repo_id: "r1".to_string(),
+                slug: "feat-test".to_string(),
+                branch: "feat/test".to_string(),
+                path: "/tmp/ws/feat-test".to_string(),
+                ticket_id: None,
+                status: conductor_core::worktree::WorktreeStatus::Active,
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                completed_at: None,
+                model: None,
+                base_branch: None,
+            });
         app.state.data.repos.push(conductor_core::repo::Repo {
             id: "r1".to_string(),
             slug: "test-repo".to_string(),
@@ -1480,7 +1479,10 @@ mod tests {
             allow_agent_issue_creation: true,
             runtime_overrides: None,
         });
-        app.state.data.repo_slug_map.insert("r1".to_string(), "test-repo".to_string());
+        app.state
+            .data
+            .repo_slug_map
+            .insert("r1".to_string(), "test-repo".to_string());
 
         // bg_tx is None (fresh app)
         app.handle_set_base_branch();
