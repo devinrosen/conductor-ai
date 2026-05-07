@@ -19,6 +19,10 @@ use super::App;
 /// of inputs the three TUI launch flows (`start_agent_headless`,
 /// `start_repo_agent_headless`, `handle_restart_agent`) need to pass into
 /// [`drive_headless_run`].
+///
+/// All fields are captured on the main thread so `drive_headless_run` runs
+/// purely off-thread without re-reading process-wide state — see the
+/// [TUI threading rule](../../../../docs/tui-threading.md).
 pub(super) struct HeadlessRunConfig {
     pub working_dir: String,
     pub prompt: String,
@@ -30,6 +34,10 @@ pub(super) struct HeadlessRunConfig {
     /// Runtime name resolved from the picker (`Some("qwen-local")`, …) or `None`
     /// to use the built-in `"claude"` runtime.
     pub runtime: Option<String>,
+    /// Snapshot of `[runtimes.*]` from the host config (cloned from `self.config`
+    /// on the main thread). Used by `resolve_runtime` to look up `env` overlays
+    /// and binary paths for non-claude runtimes.
+    pub runtimes: std::collections::HashMap<String, conductor_core::config::RuntimeConfig>,
 }
 
 fn synthesize_tui_agent_def(model: Option<&str>, runtime: &str) -> AgentDef {
@@ -99,11 +107,6 @@ pub(super) fn drive_headless_run(
         None => vec![],
     };
 
-    // Load the host config so non-claude runtimes resolve with their `[runtimes.*]`
-    // env overlay and binary path. Falls back to an empty config on failure (which
-    // means non-claude runtimes will fail to resolve with a clearer error).
-    let host_config = conductor_core::config::load_config().unwrap_or_default();
-
     let runtime_options = RuntimeOptions {
         binary_path: conductor_core::agent_runtime::resolve_conductor_bin().into(),
         env: Default::default(),
@@ -121,7 +124,7 @@ pub(super) fn drive_headless_run(
     let runtime = match resolve_runtime(
         runtime_name,
         permission_mode,
-        &host_config.runtimes,
+        &config.runtimes,
         &runtime_options,
     ) {
         Ok(r) => r,
@@ -874,6 +877,9 @@ impl App {
         let Some(ref tx) = self.bg_tx else { return };
         let tx = tx.clone();
         let stall_threshold = self.config.agents.stall_threshold();
+        // Capture runtimes on the main thread per the TUI threading rule —
+        // drive_headless_run runs off-thread and must not re-read process state.
+        let runtimes = self.config.runtimes.clone();
 
         self.state.modal = Modal::Progress {
             message: "Launching agent…".into(),
@@ -924,6 +930,7 @@ impl App {
                     permission_mode: None,
                     stall_threshold,
                     runtime,
+                    runtimes,
                 },
                 &tx,
                 |result| Action::AgentLaunchComplete { result },
@@ -955,6 +962,7 @@ impl App {
         let Some(ref tx) = self.bg_tx else { return };
         let tx = tx.clone();
         let stall_threshold = self.config.agents.stall_threshold();
+        let runtimes = self.config.runtimes.clone();
 
         self.state.modal = Modal::Progress {
             message: "Launching repo agent…".into(),
@@ -994,6 +1002,7 @@ impl App {
                     permission_mode: Some(conductor_core::config::AgentPermissionMode::RepoSafe),
                     stall_threshold,
                     runtime: None,
+                    runtimes,
                 },
                 &tx,
                 |result| Action::RepoAgentLaunched { result },
@@ -1038,6 +1047,7 @@ impl App {
         let tx = tx.clone();
         let run_id = run.id.clone();
         let stall_threshold = self.config.agents.stall_threshold();
+        let runtimes = self.config.runtimes.clone();
 
         self.state.modal = crate::state::Modal::Progress {
             message: "Restarting agent…".into(),
@@ -1082,6 +1092,7 @@ impl App {
                     permission_mode: None,
                     stall_threshold,
                     runtime: Some(runtime),
+                    runtimes,
                 },
                 &tx,
                 |result| Action::AgentRestartComplete { result },
