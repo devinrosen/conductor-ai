@@ -433,6 +433,16 @@ impl App {
             // Agent issue creation toggle
             Action::ToggleAgentIssues => self.handle_toggle_agent_issues(),
 
+            // Ticket sort cycle (#: default → #↑ → #↓ → default)
+            Action::CycleTicketSort => {
+                self.state.detail_ticket_sort = self.state.detail_ticket_sort.cycle();
+                self.state.rebuild_filtered_tickets();
+                let len = self.state.filtered_detail_tickets.len();
+                if len > 0 && self.state.detail_ticket_index >= len {
+                    self.state.detail_ticket_index = len - 1;
+                }
+            }
+
             // Ticket tree collapse/expand toggle
             Action::ToggleTicketCollapse => {
                 let idx = self.state.detail_ticket_index;

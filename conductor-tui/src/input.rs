@@ -450,6 +450,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char(' ') if state.column_focus == crate::state::ColumnFocus::Content => {
                 return Action::ToggleTicketCollapse;
             }
+            KeyCode::Char('#') => return Action::CycleTicketSort,
             _ => {}
         }
     }

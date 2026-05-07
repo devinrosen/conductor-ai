@@ -359,21 +359,16 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         .collect();
 
     let hiding = !state.show_closed_tickets;
-    let ticket_title = match detail_filter.as_deref() {
-        Some(f) if !f.is_empty() => {
-            if hiding {
-                format!(" Tickets (filter: {f}, hiding closed) ")
-            } else {
-                format!(" Tickets (filter: {f}) ")
-            }
-        }
-        _ => {
-            if hiding {
-                " Tickets (hiding closed) ".to_string()
-            } else {
-                " Tickets ".to_string()
-            }
-        }
+    let sort_frag = state.detail_ticket_sort.title_fragment();
+    let ticket_title = match (detail_filter.as_deref().filter(|f| !f.is_empty()), hiding, sort_frag) {
+        (None, false, None) => " Tickets ".to_string(),
+        (None, false, Some(s)) => format!(" Tickets ({s}) "),
+        (None, true, None) => " Tickets (hiding closed) ".to_string(),
+        (None, true, Some(s)) => format!(" Tickets (hiding closed, {s}) "),
+        (Some(f), false, None) => format!(" Tickets (filter: {f}) "),
+        (Some(f), false, Some(s)) => format!(" Tickets (filter: {f}, {s}) "),
+        (Some(f), true, None) => format!(" Tickets (filter: {f}, hiding closed) "),
+        (Some(f), true, Some(s)) => format!(" Tickets (filter: {f}, hiding closed, {s}) "),
     };
 
     let ticket_list = List::new(ticket_items)

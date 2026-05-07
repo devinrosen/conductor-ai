@@ -423,6 +423,8 @@ pub enum Action {
     ToggleForeachStepExpand,
     /// Toggle collapse/expand for the selected parent ticket row.
     ToggleTicketCollapse,
+    /// Cycle the ticket sort order (default → #↑ → #↓ → default).
+    CycleTicketSort,
     /// Toggle expand/collapse for the hovered parent run row.
     ToggleWorkflowRunCollapse,
     /// Toggle collapse/expand for the workflow definitions pane (Space key on Defs focus).
