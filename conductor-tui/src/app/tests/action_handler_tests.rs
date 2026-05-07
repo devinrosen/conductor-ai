@@ -2766,6 +2766,60 @@ fn submit_add_runtime_env_var_rejects_missing_runtime() {
 }
 
 #[test]
+fn runtime_detail_move_empty_models_section_is_noop() {
+    let mut app = make_app_with_runtime("qwen-local", vec![]);
+    app.state.settings_focus = crate::state::SettingsFocus::SettingsList;
+    app.enter_runtime_detail("qwen-local");
+    // No models — both directions should leave model_index alone (and not panic).
+    app.settings_move_up();
+    assert_eq!(
+        app.state
+            .settings_runtime_detail
+            .as_ref()
+            .unwrap()
+            .model_index,
+        0
+    );
+    app.settings_move_down();
+    assert_eq!(
+        app.state
+            .settings_runtime_detail
+            .as_ref()
+            .unwrap()
+            .model_index,
+        0
+    );
+}
+
+#[test]
+fn runtime_detail_move_empty_env_section_is_noop() {
+    let mut app = make_app_with_runtime("qwen-local", vec!["a"]);
+    app.state.settings_focus = crate::state::SettingsFocus::SettingsList;
+    app.enter_runtime_detail("qwen-local");
+    app.state.settings_runtime_detail.as_mut().unwrap().focus =
+        crate::state::RuntimeDetailFocus::Environment;
+    // No env vars — both directions should leave env_index alone (and not panic).
+    app.settings_move_up();
+    assert_eq!(
+        app.state
+            .settings_runtime_detail
+            .as_ref()
+            .unwrap()
+            .env_index,
+        0
+    );
+    app.settings_move_down();
+    assert_eq!(
+        app.state
+            .settings_runtime_detail
+            .as_ref()
+            .unwrap()
+            .env_index,
+        0
+    );
+}
+
+#[test]
 fn runtime_detail_move_wraps_models_top_to_bottom() {
     let mut app = make_app_with_runtime("qwen-local", vec!["a", "b", "c"]);
     app.state.settings_focus = crate::state::SettingsFocus::SettingsList;
