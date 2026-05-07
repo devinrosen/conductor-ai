@@ -428,12 +428,20 @@ impl App {
                 // that persist runtime context. SetWorktreeModel/SetRepoModel are
                 // intentionally model-only; per-scope runtime persistence is
                 // deferred per #2960.
-                if let InputAction::AgentModelOverride {
-                    runtime: ref mut rt_field,
-                    ..
-                } = on_submit
-                {
-                    *rt_field = runtime_opt;
+                match on_submit {
+                    InputAction::AgentModelOverride {
+                        runtime: ref mut rt_field,
+                        ..
+                    } => {
+                        *rt_field = runtime_opt;
+                    }
+                    InputAction::WorkflowModelOverride {
+                        runtime: ref mut rt_field,
+                        ..
+                    } => {
+                        *rt_field = runtime_opt;
+                    }
+                    _ => {}
                 }
                 (value, on_submit)
             }
@@ -703,14 +711,24 @@ impl App {
                     runtime,
                 );
             }
-            InputAction::WorkflowModelOverride { action, inputs } => {
+            InputAction::WorkflowModelOverride {
+                action,
+                inputs,
+                runtime,
+            } => {
                 // Empty value means "Default" — use per-agent frontmatter / no override
                 let model = if value.trim().is_empty() {
                     None
                 } else {
                     Some(value)
                 };
-                self.do_dispatch_workflow(action.target, action.workflow_def, inputs, model);
+                self.do_dispatch_workflow(
+                    action.target,
+                    action.workflow_def,
+                    inputs,
+                    model,
+                    runtime,
+                );
             }
             InputAction::SetWorktreeModel {
                 worktree_id,

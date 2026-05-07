@@ -401,6 +401,7 @@ fn build_rk_engine_components(
     db: &std::path::Path,
     target_label: Option<String>,
     triggered_by_hook: bool,
+    runtime_override: Option<String>,
 ) -> RkEngineComponents {
     let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> = Arc::new(
         super::persistence_sqlite::SqliteWorkflowPersistence::from_shared_connection(Arc::clone(
@@ -411,6 +412,7 @@ fn build_rk_engine_components(
         config,
         Arc::clone(shared_conn),
         db,
+        runtime_override,
     ));
     let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> =
         Arc::new(super::runkon_bridge::ConductorChildWorkflowRunner::new(
@@ -645,6 +647,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         &db,
         params.target_label.clone(),
         params.triggered_by_hook,
+        params.runtime.clone(),
     );
 
     let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(
@@ -809,6 +812,7 @@ pub fn resume_workflow_standalone(params: &WorkflowResumeStandalone) -> Result<W
         config: &params.config,
         workflow_run_id: &params.workflow_run_id,
         model: params.model.as_deref(),
+        runtime: params.runtime.as_deref(),
         from_step: params.from_step.as_deref(),
         restart: params.restart,
         conductor_bin_dir: params.conductor_bin_dir.clone(),
@@ -834,6 +838,7 @@ fn make_resume_params(
         config,
         workflow_run_id: run_id,
         model: None,
+        runtime: None,
         from_step: None,
         restart: false,
         db_path,
@@ -1146,6 +1151,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         &db,
         wf_run.target_label.clone(),
         wf_run.is_triggered_by_hook(),
+        input.runtime.map(String::from),
     );
 
     let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(
@@ -1710,6 +1716,7 @@ mod tests {
             ticket_id,
             repo_id: None,
             model: None,
+            runtime: None,
             exec_config: crate::workflow::WorkflowExecConfig {
                 dry_run: false,
                 ..Default::default()
@@ -1778,6 +1785,7 @@ mod tests {
             config,
             workflow_run_id: run_id,
             model: None,
+            runtime: None,
             from_step,
             restart,
             conductor_bin_dir: None,
@@ -1961,6 +1969,7 @@ mod tests {
             config: crate::config::Config::default(),
             workflow_run_id: run_id.to_string(),
             model: None,
+            runtime: None,
             from_step,
             restart,
             db_path: Some(db_path),

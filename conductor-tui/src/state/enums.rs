@@ -643,9 +643,14 @@ pub enum InputAction {
     },
     /// Second step: model picker for workflow runs.
     /// Carries the workflow target + inputs through the modal roundtrip.
+    /// `runtime` is set when the picker selection came from a non-default
+    /// runtime section; the executor uses it to override the agent file's
+    /// `runtime:` frontmatter so env vars from `[runtimes.<name>]` reach the
+    /// spawned subprocess.
     WorkflowModelOverride {
         action: Box<RunWorkflowAction>,
         inputs: std::collections::HashMap<String, String>,
+        runtime: Option<String>,
     },
     /// Settings view: set the global model string (blank to clear).
     SettingsSetModel,

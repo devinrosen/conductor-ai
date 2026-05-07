@@ -519,6 +519,7 @@ pub async fn run_workflow(
             ticket_id: wt_ticket_id,
             repo_id: None,
             model,
+            runtime: None,
             exec_config: WorkflowExecConfig {
                 dry_run,
                 ..Default::default()
@@ -769,6 +770,7 @@ pub async fn post_workflow_run(
             ticket_id: wt_ticket_id,
             repo_id: repo_id_for_exec,
             model,
+            runtime: None,
             exec_config,
             inputs,
             depth: 0,
@@ -1654,6 +1656,7 @@ pub async fn resume_workflow_endpoint(
             config,
             workflow_run_id: run_id,
             model,
+            runtime: None,
             from_step,
             restart,
             db_path: None,

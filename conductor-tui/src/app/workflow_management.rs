@@ -77,6 +77,9 @@ pub(super) struct SpawnWorkflowParams {
     pub repo_path: String,
     pub inputs: std::collections::HashMap<String, String>,
     pub model: Option<String>,
+    /// Workflow-run-level runtime override (e.g. set by the model picker).
+    /// `None` lets the executor adapter derive a runtime from `model`.
+    pub runtime: Option<String>,
     /// Worktree context (`spawn_workflow_in_background`)
     pub worktree_id: Option<String>,
     pub worktree_path: Option<String>,
@@ -923,6 +926,10 @@ impl App {
                     workflow_def: def,
                 }),
                 inputs,
+                // Filled in at picker submit time from the selected runtime
+                // section. Constructed `None` here because the picker has not
+                // yet been shown.
+                runtime: None,
             },
         };
     }
@@ -935,6 +942,7 @@ impl App {
         def: conductor_core::workflow::WorkflowDef,
         inputs: std::collections::HashMap<String, String>,
         model: Option<String>,
+        runtime: Option<String>,
     ) {
         use crate::state::WorkflowPickerTarget;
 
@@ -1007,6 +1015,7 @@ impl App {
                     inputs,
                     target_label: wt_target_label,
                     model,
+                    runtime,
                     repo_id: None,
                     extra_plugin_dirs: vec![],
                 });
@@ -1043,7 +1052,7 @@ impl App {
                     repo,
                     number: pr_number as u64,
                 };
-                self.spawn_pr_workflow_in_background(pr_ref, def, inputs, model);
+                self.spawn_pr_workflow_in_background(pr_ref, def, inputs, model, runtime);
             }
             WorkflowPickerTarget::Ticket {
                 ticket_id,
@@ -1062,6 +1071,7 @@ impl App {
                     target_label: Some(ticket_title),
                     inputs,
                     model,
+                    runtime,
                     extra_plugin_dirs: extra_dirs,
                     worktree_id: None,
                     worktree_path: None,
@@ -1080,6 +1090,7 @@ impl App {
                     target_label: Some(repo_name),
                     inputs,
                     model,
+                    runtime,
                     extra_plugin_dirs: extra_dirs,
                     worktree_id: None,
                     worktree_path: None,
@@ -1113,6 +1124,7 @@ impl App {
                         inputs: run_inputs,
                         target_label: Some(format!("workflow_run:{workflow_run_id}")),
                         model,
+                        runtime,
                         repo_id: None,
                         extra_plugin_dirs: vec![],
                     });
@@ -1123,6 +1135,7 @@ impl App {
                         run_inputs,
                         workflow_run_id,
                         model,
+                        runtime,
                     );
                 }
             }
@@ -1140,6 +1153,7 @@ impl App {
             inputs,
             target_label,
             model,
+            runtime,
             ..
         } = p;
         let config = self.config.clone();
@@ -1173,6 +1187,7 @@ impl App {
                 ticket_id,
                 repo_id: None,
                 model,
+                runtime,
                 exec_config: WorkflowExecConfig {
                     shutdown: Some(shutdown),
                     ..WorkflowExecConfig::default()
@@ -1210,6 +1225,7 @@ impl App {
             target_label,
             inputs,
             model,
+            runtime,
             extra_plugin_dirs,
             ..
         } = p;
@@ -1234,6 +1250,7 @@ impl App {
                 ticket_id,
                 repo_id,
                 model,
+                runtime,
                 exec_config: WorkflowExecConfig {
                     shutdown: Some(shutdown),
                     ..WorkflowExecConfig::default()
@@ -1272,6 +1289,7 @@ impl App {
             target_label,
             inputs,
             model,
+            runtime,
             extra_plugin_dirs,
             ..
         } = p;
@@ -1294,6 +1312,7 @@ impl App {
                 ticket_id: None,
                 repo_id,
                 model,
+                runtime,
                 exec_config: WorkflowExecConfig {
                     shutdown: Some(shutdown),
                     ..WorkflowExecConfig::default()
@@ -1331,6 +1350,7 @@ impl App {
         inputs: std::collections::HashMap<String, String>,
         target_label: String,
         model: Option<String>,
+        runtime: Option<String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -1351,6 +1371,7 @@ impl App {
                 ticket_id: None,
                 repo_id: None,
                 model,
+                runtime,
                 exec_config: WorkflowExecConfig {
                     shutdown: Some(shutdown),
                     ..WorkflowExecConfig::default()
@@ -1461,6 +1482,7 @@ impl App {
         def: conductor_core::workflow::WorkflowDef,
         inputs: std::collections::HashMap<String, String>,
         model: Option<String>,
+        runtime: Option<String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -1486,6 +1508,7 @@ impl App {
                 &pr_ref,
                 &def.name,
                 model.as_deref(),
+                runtime.as_deref(),
                 exec_config,
                 inputs,
                 false,
@@ -2530,6 +2553,7 @@ mod tests {
             inputs: std::collections::HashMap::new(),
             target_label: None,
             model: None,
+            runtime: None,
             repo_id: None,
             extra_plugin_dirs: vec![],
         });
