@@ -350,9 +350,7 @@ mod tests {
         RuntimeOptions {
             binary_path: PathBuf::from("/bin/sh"),
             env,
-            log_path_for_run: Arc::new(|run_id: &str| {
-                PathBuf::from(format!("/tmp/{run_id}.log"))
-            }),
+            log_path_for_run: Arc::new(|run_id: &str| PathBuf::from(format!("/tmp/{run_id}.log"))),
             workspace_root: PathBuf::from("/tmp"),
             argv_builder: Arc::new(|_req| Ok((vec![], None))),
             stall_threshold: None,
@@ -364,8 +362,13 @@ mod tests {
     fn resolve_runtime_builtin_claude_regression() {
         let runtimes = HashMap::new();
         let options = make_test_options(HashMap::new());
-        let result = resolve_runtime("claude", crate::permission::PermissionMode::Default, &runtimes, &options);
-        assert!(result.is_ok(), "built-in 'claude' runtime must resolve: {result:?}");
+        let result = resolve_runtime(
+            "claude",
+            crate::permission::PermissionMode::Default,
+            &runtimes,
+            &options,
+        );
+        assert!(result.is_ok(), "built-in 'claude' runtime must resolve");
     }
 
     #[test]
@@ -377,8 +380,13 @@ mod tests {
         };
         runtimes.insert("claude-local".to_string(), rt);
         let options = make_test_options(HashMap::new());
-        let result = resolve_runtime("claude-local", crate::permission::PermissionMode::Default, &runtimes, &options);
-        assert!(result.is_ok(), "named 'claude' type runtime must resolve: {result:?}");
+        let result = resolve_runtime(
+            "claude-local",
+            crate::permission::PermissionMode::Default,
+            &runtimes,
+            &options,
+        );
+        assert!(result.is_ok(), "named 'claude' type runtime must resolve");
     }
 
     #[test]
@@ -397,9 +405,13 @@ mod tests {
         let mut base_env = HashMap::new();
         base_env.insert("X".to_string(), "base".to_string());
         let options = make_test_options(base_env);
-        // Resolve must succeed; env merge logic tested by verifying the call succeeds.
-        let result = resolve_runtime("claude-local", crate::permission::PermissionMode::Default, &runtimes, &options);
-        assert!(result.is_ok(), "named claude with env overlay must resolve: {result:?}");
+        let result = resolve_runtime(
+            "claude-local",
+            crate::permission::PermissionMode::Default,
+            &runtimes,
+            &options,
+        );
+        assert!(result.is_ok(), "named claude with env overlay must resolve");
     }
 
     #[test]
@@ -412,18 +424,34 @@ mod tests {
         };
         runtimes.insert("my-cli".to_string(), rt);
         let options = make_test_options(HashMap::new());
-        let result = resolve_runtime("my-cli", crate::permission::PermissionMode::Default, &runtimes, &options);
-        assert!(result.is_ok(), "named 'cli' type runtime must resolve: {result:?}");
+        let result = resolve_runtime(
+            "my-cli",
+            crate::permission::PermissionMode::Default,
+            &runtimes,
+            &options,
+        );
+        assert!(result.is_ok(), "named 'cli' type runtime must resolve");
     }
 
     #[test]
     fn resolve_runtime_unknown_name_is_error() {
         let runtimes = HashMap::new();
         let options = make_test_options(HashMap::new());
-        let result = resolve_runtime("nonexistent", crate::permission::PermissionMode::Default, &runtimes, &options);
+        let result = resolve_runtime(
+            "nonexistent",
+            crate::permission::PermissionMode::Default,
+            &runtimes,
+            &options,
+        );
         assert!(result.is_err(), "unknown runtime name must return Err");
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("nonexistent"), "error must mention runtime name, got: {msg}");
+        let msg = match result {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("expected error, got ok"),
+        };
+        assert!(
+            msg.contains("nonexistent"),
+            "error must mention runtime name"
+        );
     }
 }
 
