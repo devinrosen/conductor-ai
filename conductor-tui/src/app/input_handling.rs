@@ -1151,6 +1151,7 @@ mod tests {
     /// - repo `r1` (slug `test-repo`)
     /// - worktree `w1` (slug `feat-test`, branch `feat/test`, status `active`)
     fn make_app() -> App {
+        crate::test_support::isolate_conductor_home();
         let conn = conductor_core::test_helpers::setup_db();
         App::new(
             conn,
@@ -1465,6 +1466,7 @@ mod tests {
         other: Vec<(&str, Vec<&str>)>,
     ) -> Config {
         use conductor_core::config::RuntimeConfig;
+        crate::test_support::isolate_conductor_home();
         let mut config = Config::default();
         if !claude_custom.is_empty() {
             config.runtimes.insert(
@@ -1489,6 +1491,7 @@ mod tests {
 
     #[test]
     fn build_runtime_sections_empty_config_returns_claude_with_known_models() {
+        crate::test_support::isolate_conductor_home();
         let config = Config::default();
         let sections = build_runtime_sections(&config);
         assert_eq!(sections.len(), 1);

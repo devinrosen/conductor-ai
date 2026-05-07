@@ -6,6 +6,7 @@ use crate::theme::Theme;
 use conductor_core::config::Config;
 
 fn make_app() -> App {
+    crate::test_support::isolate_conductor_home();
     let conn = conductor_core::db::open_database(std::path::Path::new(":memory:")).unwrap();
     App::new(
         conn,
