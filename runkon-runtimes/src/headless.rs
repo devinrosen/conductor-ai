@@ -377,22 +377,24 @@ mod tests {
 
     /// An env var set in the `env` map must override a same-named var inherited
     /// from the parent process (overlay semantics, not replacement).
+    ///
+    /// Uses HOME, which is reliably set on Unix, as the "pre-existing parent var"
+    /// so no unsafe set_var mutation is needed.
     #[cfg(unix)]
     #[test]
     fn spawn_headless_env_overlay_wins_over_parent() {
         use std::io::Read;
 
-        // Set the variable on the parent process.
-        unsafe { std::env::set_var("CONDUCTOR_TEST_PARENT_VAR_2929", "parent-value") };
-
+        // HOME is always set in the parent on Unix. Override it with a synthetic
+        // value to confirm that the env map entry beats the inherited parent var.
         let env = std::collections::HashMap::from([(
-            "CONDUCTOR_TEST_PARENT_VAR_2929".to_string(),
-            "child-value".to_string(),
+            "HOME".to_string(),
+            "/conductor-overlay-test".to_string(),
         )]);
 
         let args: Vec<std::borrow::Cow<'static, str>> = vec![
             std::borrow::Cow::Borrowed("-c"),
-            std::borrow::Cow::Borrowed("printf '%s' \"$CONDUCTOR_TEST_PARENT_VAR_2929\""),
+            std::borrow::Cow::Borrowed("printf '%s' \"$HOME\""),
         ];
 
         let handle =
@@ -402,16 +404,9 @@ mod tests {
         stdout.read_to_string(&mut output).unwrap();
         finish();
 
-        // Restore parent env regardless of test outcome.
-        unsafe { std::env::remove_var("CONDUCTOR_TEST_PARENT_VAR_2929") };
-
         assert!(
-            output.contains("child-value"),
-            "expected 'child-value' (overlay wins), got: {output:?}"
-        );
-        assert!(
-            !output.contains("parent-value"),
-            "parent value should be overridden, got: {output:?}"
+            output.contains("/conductor-overlay-test"),
+            "expected '/conductor-overlay-test' (overlay wins), got: {output:?}"
         );
     }
 
