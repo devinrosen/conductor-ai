@@ -402,7 +402,9 @@ impl App {
                         }
                         _ => {
                             self.state.modal = Modal::Error {
-                                message: "Stall timeout must be a positive integer or blank to reset.".into(),
+                                message:
+                                    "Stall timeout must be a positive integer or blank to reset."
+                                        .into(),
                             };
                             return;
                         }

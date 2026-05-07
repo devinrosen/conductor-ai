@@ -226,15 +226,7 @@ pub(super) async fn spawn_headless_agent(
     };
 
     let stall = state.config.read().await.agents.stall_threshold();
-    wire_headless_drain(
-        state,
-        run_id,
-        handle,
-        Some(prompt_file),
-        worktree_id,
-        stall,
-    )
-    .await
+    wire_headless_drain(state, run_id, handle, Some(prompt_file), worktree_id, stall).await
 }
 
 // ── Agent stats (aggregates) ──────────────────────────────────────────
