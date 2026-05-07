@@ -2738,6 +2738,93 @@ fn submit_add_runtime_env_var_rejects_missing_runtime() {
 }
 
 #[test]
+fn runtime_detail_move_wraps_models_top_to_bottom() {
+    let mut app = make_app_with_runtime("qwen-local", vec!["a", "b", "c"]);
+    app.state.settings_focus = crate::state::SettingsFocus::SettingsList;
+    app.enter_runtime_detail("qwen-local");
+    // model_index defaults to 0; pressing up should wrap to last index.
+    app.settings_move_up();
+    assert_eq!(
+        app.state
+            .settings_runtime_detail
+            .as_ref()
+            .unwrap()
+            .model_index,
+        2
+    );
+}
+
+#[test]
+fn runtime_detail_move_wraps_models_bottom_to_top() {
+    let mut app = make_app_with_runtime("qwen-local", vec!["a", "b", "c"]);
+    app.state.settings_focus = crate::state::SettingsFocus::SettingsList;
+    app.enter_runtime_detail("qwen-local");
+    app.state
+        .settings_runtime_detail
+        .as_mut()
+        .unwrap()
+        .model_index = 2;
+    // Pressing down at the last row should wrap to 0.
+    app.settings_move_down();
+    assert_eq!(
+        app.state
+            .settings_runtime_detail
+            .as_ref()
+            .unwrap()
+            .model_index,
+        0
+    );
+}
+
+#[test]
+fn runtime_detail_move_wraps_env_top_to_bottom() {
+    let mut app = make_app_with_runtime("qwen-local", vec![]);
+    let rt = app.config.runtimes.get_mut("qwen-local").unwrap();
+    rt.env.insert("AAA".into(), "1".into());
+    rt.env.insert("BBB".into(), "2".into());
+    rt.env.insert("CCC".into(), "3".into());
+    app.refresh_settings_display();
+    app.state.settings_focus = crate::state::SettingsFocus::SettingsList;
+    app.enter_runtime_detail("qwen-local");
+    app.state.settings_runtime_detail.as_mut().unwrap().focus =
+        crate::state::RuntimeDetailFocus::Environment;
+    // env_index defaults to 0; pressing up should wrap to last env index.
+    app.settings_move_up();
+    assert_eq!(
+        app.state
+            .settings_runtime_detail
+            .as_ref()
+            .unwrap()
+            .env_index,
+        2
+    );
+}
+
+#[test]
+fn runtime_detail_move_wraps_env_bottom_to_top() {
+    let mut app = make_app_with_runtime("qwen-local", vec![]);
+    let rt = app.config.runtimes.get_mut("qwen-local").unwrap();
+    rt.env.insert("AAA".into(), "1".into());
+    rt.env.insert("BBB".into(), "2".into());
+    rt.env.insert("CCC".into(), "3".into());
+    app.refresh_settings_display();
+    app.state.settings_focus = crate::state::SettingsFocus::SettingsList;
+    app.enter_runtime_detail("qwen-local");
+    let detail = app.state.settings_runtime_detail.as_mut().unwrap();
+    detail.focus = crate::state::RuntimeDetailFocus::Environment;
+    detail.env_index = 2;
+    app.settings_move_down();
+    assert_eq!(
+        app.state
+            .settings_runtime_detail
+            .as_ref()
+            .unwrap()
+            .env_index,
+        0
+    );
+}
+
+#[test]
 fn runtime_detail_back_returns_to_list_not_dashboard() {
     let mut app = make_app_with_runtime("qwen-local", vec![]);
     app.update(Action::OpenSettings);
@@ -2754,7 +2841,7 @@ fn runtime_detail_back_returns_to_list_not_dashboard() {
 
 #[test]
 fn is_secret_env_key_classifies_common_secret_names() {
-    use crate::ui::settings::is_secret_env_key;
+    use crate::state::is_secret_env_key;
     assert!(is_secret_env_key("ANTHROPIC_AUTH_TOKEN"));
     assert!(is_secret_env_key("OPENAI_API_KEY"));
     assert!(is_secret_env_key("FOO_SECRET"));

@@ -2,6 +2,7 @@ mod app_state;
 mod data_cache;
 mod enums;
 mod modal;
+mod secrets;
 mod tree;
 mod workflow_rows;
 
@@ -9,6 +10,7 @@ pub use app_state::*;
 pub use data_cache::*;
 pub use enums::*;
 pub use modal::*;
+pub use secrets::is_secret_env_key;
 pub use tree::*;
 pub use workflow_rows::*;
 

@@ -4,7 +4,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::state::{AppState, RuntimeDetailFocus, SettingsCategory, SettingsFocus};
+use crate::state::{
+    is_secret_env_key, AppState, RuntimeDetailFocus, SettingsCategory, SettingsFocus,
+};
 
 /// Named row indices for General settings (right pane).
 pub mod general_row {
@@ -426,19 +428,6 @@ fn render_runtimes_list(
 
     let para = Paragraph::new(lines);
     frame.render_widget(para, inner);
-}
-
-/// Returns true when `key` looks like it stores a secret and its value should
-/// be masked by default. Conservative case-insensitive match on common
-/// substrings; users can still toggle reveal with `r`.
-pub fn is_secret_env_key(key: &str) -> bool {
-    let upper = key.to_ascii_uppercase();
-    upper.contains("TOKEN")
-        || upper.contains("SECRET")
-        || upper.contains("PASSWORD")
-        || upper.contains("PASSWD")
-        || upper.ends_with("_KEY")
-        || upper.ends_with("KEY")
 }
 
 fn render_runtime_detail(
