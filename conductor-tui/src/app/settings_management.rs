@@ -401,9 +401,8 @@ impl App {
         let Some(detail) = self.state.settings_runtime_detail.as_ref() else {
             return false;
         };
-        let runtime_name = detail.name.clone();
         let focus = detail.focus;
-        let Some(rt) = self.config.runtimes.get(&runtime_name) else {
+        let Some(rt) = self.config.runtimes.get(&detail.name) else {
             return false;
         };
         let len = match focus {
@@ -699,9 +698,8 @@ impl App {
         let Some(detail) = self.state.settings_runtime_detail.as_ref() else {
             return;
         };
-        let runtime = detail.name.clone();
         let index = detail.model_index;
-        let Some(rt) = self.config.runtimes.get_mut(&runtime) else {
+        let Some(rt) = self.config.runtimes.get_mut(&detail.name) else {
             return;
         };
         let len = rt.supported_models.len();

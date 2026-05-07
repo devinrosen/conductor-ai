@@ -2615,6 +2615,34 @@ fn runtime_detail_env_delete_removes_pair_and_reveal_state() {
 }
 
 #[test]
+fn runtime_detail_toggle_section_cycles_focus() {
+    use crate::state::RuntimeDetailFocus;
+    let mut app = make_app_with_runtime("qwen-local", vec!["a"]);
+    app.enter_runtime_detail("qwen-local");
+    assert!(matches!(
+        app.state.settings_runtime_detail.as_ref().unwrap().focus,
+        RuntimeDetailFocus::Models
+    ));
+    app.handle_runtime_detail_toggle_section();
+    assert!(matches!(
+        app.state.settings_runtime_detail.as_ref().unwrap().focus,
+        RuntimeDetailFocus::Environment
+    ));
+    app.handle_runtime_detail_toggle_section();
+    assert!(matches!(
+        app.state.settings_runtime_detail.as_ref().unwrap().focus,
+        RuntimeDetailFocus::Models
+    ));
+}
+
+#[test]
+fn runtime_detail_toggle_section_noop_without_detail() {
+    let mut app = make_app();
+    app.handle_runtime_detail_toggle_section();
+    assert!(app.state.settings_runtime_detail.is_none());
+}
+
+#[test]
 fn runtime_detail_env_toggle_reveal_flips_state() {
     let mut app = make_app_with_runtime("qwen-local", vec![]);
     app.config
