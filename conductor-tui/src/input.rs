@@ -498,25 +498,21 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 }
             }
             KeyCode::Char('a') => {
-                use crate::state::{SettingsCategory, SettingsFocus};
-                if state.settings_focus == SettingsFocus::SettingsList {
-                    match state.settings_category {
-                        SettingsCategory::Models => Action::ModelsAdd,
-                        SettingsCategory::Runtimes => Action::RuntimesAdd,
-                        _ => Action::None,
-                    }
+                use crate::state::SettingsFocus;
+                if state.settings_focus == SettingsFocus::SettingsList
+                    && state.settings_category == crate::state::SettingsCategory::Runtimes
+                {
+                    Action::RuntimesAdd
                 } else {
                     Action::None
                 }
             }
             KeyCode::Char('d') => {
-                use crate::state::{SettingsCategory, SettingsFocus};
-                if state.settings_focus == SettingsFocus::SettingsList {
-                    match state.settings_category {
-                        SettingsCategory::Models => Action::ModelsDelete,
-                        SettingsCategory::Runtimes => Action::RuntimesDelete,
-                        _ => Action::None,
-                    }
+                use crate::state::SettingsFocus;
+                if state.settings_focus == SettingsFocus::SettingsList
+                    && state.settings_category == crate::state::SettingsCategory::Runtimes
+                {
+                    Action::RuntimesDelete
                 } else {
                     Action::None
                 }

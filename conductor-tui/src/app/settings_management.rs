@@ -76,8 +76,6 @@ impl App {
             })
             .collect();
 
-        let custom_models = self.config.general.custom_models.clone();
-
         // Build the runtimes display list. The built-in `claude` runtime is always
         // shown first; user-defined runtimes follow in sorted order by name.
         let mut runtimes: Vec<RuntimeDisplayRow> = Vec::new();
@@ -116,7 +114,6 @@ impl App {
             stall_timeout,
             theme,
             hooks,
-            custom_models,
             runtimes,
         };
     }
@@ -171,9 +168,6 @@ impl App {
             }
             SettingsCategory::Notifications => {
                 // Enter on a hook row — no edit modal for hooks; [t] fires test.
-            }
-            SettingsCategory::Models => {
-                // Enter in Models pane is a no-op; [a]/[d] are the actions.
             }
             SettingsCategory::Runtimes => {
                 // Enter in Runtimes pane is a no-op; [a]/[e]/[d] are the actions.
@@ -385,7 +379,6 @@ impl App {
             SettingsCategory::General => general_row::COUNT,
             SettingsCategory::Appearance => appearance_row::COUNT,
             SettingsCategory::Notifications => self.state.settings_display.hooks.len().max(1),
-            SettingsCategory::Models => self.state.settings_display.custom_models.len().max(1),
             SettingsCategory::Runtimes => self.state.settings_display.runtimes.len().max(1),
         }
     }
@@ -412,18 +405,6 @@ impl App {
                         message: format!("Invalid interval: \"{}\" — must be a number.", value),
                     };
                     return;
-                }
-            }
-            InputAction::SettingsAddCustomModel => {
-                let trimmed = value.trim().to_string();
-                if trimmed.is_empty() {
-                    self.state.modal = Modal::None;
-                    return;
-                }
-                if !self.config.general.custom_models.contains(&trimmed) {
-                    self.config.general.custom_models.push(trimmed);
-                    self.save_config_background();
-                    self.refresh_settings_display();
                 }
             }
             InputAction::SettingsAddRuntime => {
@@ -506,16 +487,6 @@ impl App {
         self.state.modal = Modal::None;
     }
 
-    /// Open the Input modal to add a new custom model entry.
-    pub(super) fn handle_models_add(&mut self) {
-        self.state.modal = Modal::Input {
-            title: "Add custom model".into(),
-            prompt: "Model ID (e.g. claude-opus-4-7):".into(),
-            value: String::new(),
-            on_submit: InputAction::SettingsAddCustomModel,
-        };
-    }
-
     /// Open the Input modal to add a new runtime entry (step 1: name).
     pub(super) fn handle_runtimes_add(&mut self) {
         self.state.modal = Modal::Input {
@@ -537,13 +508,6 @@ impl App {
             .settings_row_index
             .min(runtimes.len().saturating_sub(1));
         let row = &runtimes[idx];
-        if row.is_built_in {
-            self.state.status_message = Some(
-                "Built-in claude runtime is read-only \u{2014} use Models pane to add custom models"
-                    .into(),
-            );
-            return;
-        }
         let current = self
             .config
             .runtimes
@@ -580,24 +544,6 @@ impl App {
             title: "Delete runtime".into(),
             message: format!("Remove runtime \"{name}\" from config?"),
             on_confirm: ConfirmAction::DeleteRuntime { name },
-        };
-    }
-
-    /// Open the Confirm modal to delete the currently selected custom model entry.
-    pub(super) fn handle_models_delete(&mut self) {
-        let models = &self.state.settings_display.custom_models;
-        if models.is_empty() {
-            return;
-        }
-        let idx = self
-            .state
-            .settings_row_index
-            .min(models.len().saturating_sub(1));
-        let model = models[idx].clone();
-        self.state.modal = Modal::Confirm {
-            title: "Delete custom model".into(),
-            message: format!("Remove \"{model}\" from saved models?"),
-            on_confirm: ConfirmAction::DeleteCustomModel { model },
         };
     }
 

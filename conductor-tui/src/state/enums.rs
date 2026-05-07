@@ -25,7 +25,6 @@ pub enum SettingsCategory {
     General,
     Appearance,
     Notifications,
-    Models,
     Runtimes,
 }
 
@@ -35,7 +34,6 @@ impl SettingsCategory {
             SettingsCategory::General,
             SettingsCategory::Appearance,
             SettingsCategory::Notifications,
-            SettingsCategory::Models,
             SettingsCategory::Runtimes,
         ]
     }
@@ -45,7 +43,6 @@ impl SettingsCategory {
             Self::General => "General",
             Self::Appearance => "Appearance",
             Self::Notifications => "Notifications",
-            Self::Models => "Models",
             Self::Runtimes => "Runtimes",
         }
     }
@@ -482,9 +479,6 @@ pub enum ConfirmAction {
         wt_slug: String,
         wt_id: String,
     },
-    DeleteCustomModel {
-        model: String,
-    },
     DeleteRuntime {
         name: String,
     },
@@ -609,8 +603,6 @@ pub enum InputAction {
     SettingsSetModel,
     /// Settings view: set the sync interval in minutes.
     SettingsSetSyncInterval,
-    /// Settings → Models: add a new custom model entry.
-    SettingsAddCustomModel,
     /// Settings view: set the stall timeout in seconds (blank to reset to default).
     SettingsSetStallTimeout,
     /// Adopt an existing on-disk git worktree: user enters the path.

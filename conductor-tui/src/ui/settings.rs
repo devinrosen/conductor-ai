@@ -26,13 +26,6 @@ pub mod appearance_row {
     pub const COUNT: usize = 1;
 }
 
-/// Row count helper for Models settings (right pane).
-/// The list is dynamic — one row per saved custom model, minimum 1 (for the empty state).
-pub mod models_row {
-    #[allow(dead_code)]
-    pub const COUNT_PER_MODEL: usize = 1;
-}
-
 /// Row count helper for Runtimes settings (right pane).
 /// One row per runtime (claude built-in always rendered first, then user runtimes).
 pub mod runtimes_row {
@@ -122,9 +115,6 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         }
         SettingsCategory::Notifications => {
             render_notifications(frame, right_area, right_block, state, right_focused)
-        }
-        SettingsCategory::Models => {
-            render_models(frame, right_area, right_block, state, right_focused)
         }
         SettingsCategory::Runtimes => {
             render_runtimes(frame, right_area, right_block, state, right_focused)
@@ -349,59 +339,6 @@ fn render_notifications(
                 ),
                 test_span,
             ]));
-        }
-    }
-
-    lines.push(Line::from(""));
-    lines.push(hint_line);
-
-    let para = Paragraph::new(lines);
-    frame.render_widget(para, inner);
-}
-
-fn render_models(frame: &mut Frame, area: Rect, block: Block, state: &AppState, focused: bool) {
-    let theme = &state.theme;
-    let sel = state.settings_row_index;
-    let d = &state.settings_display;
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let hint_line = if focused {
-        Line::from(Span::styled(
-            "  [a] add  [d] delete  [Esc] back",
-            Style::default().fg(theme.label_secondary),
-        ))
-    } else {
-        Line::from(Span::styled(
-            "  [Tab] switch pane",
-            Style::default().fg(theme.label_secondary),
-        ))
-    };
-
-    let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(""));
-
-    if d.custom_models.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  No saved models \u{2014} press [a] to add",
-            Style::default().fg(theme.label_secondary),
-        )));
-    } else {
-        for (i, model_id) in d.custom_models.iter().enumerate() {
-            let is_selected = i == sel && focused;
-            let style = if is_selected {
-                Style::default()
-                    .fg(theme.label_primary)
-                    .bg(theme.highlight_bg)
-            } else {
-                Style::default().fg(theme.label_secondary)
-            };
-            let prefix = if is_selected { "\u{25b8} " } else { "  " };
-            lines.push(Line::from(Span::styled(
-                format!("  {prefix}{model_id}"),
-                style,
-            )));
         }
     }
 

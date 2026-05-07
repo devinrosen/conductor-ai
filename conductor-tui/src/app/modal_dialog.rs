@@ -195,11 +195,6 @@ impl App {
                     });
                 });
             }
-            ConfirmAction::DeleteCustomModel { model } => {
-                self.config.general.custom_models.retain(|m| m != &model);
-                self.save_config_background();
-                self.refresh_settings_display();
-            }
             ConfirmAction::DeleteRuntime { name } => {
                 self.config.runtimes.remove(&name);
                 self.save_config_background();

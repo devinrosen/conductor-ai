@@ -783,7 +783,6 @@ impl App {
             }
             InputAction::SettingsSetModel
             | InputAction::SettingsSetSyncInterval
-            | InputAction::SettingsAddCustomModel
             | InputAction::SettingsSetStallTimeout
             | InputAction::SettingsAddRuntime
             | InputAction::SettingsAddRuntimeModels { .. }

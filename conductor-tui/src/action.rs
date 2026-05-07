@@ -490,12 +490,6 @@ pub enum Action {
         warnings: Vec<WorkflowWarning>,
     },
 
-    // Settings → Models
-    /// Open Input modal to add a new custom model entry.
-    ModelsAdd,
-    /// Open Confirm modal to delete the selected custom model entry.
-    ModelsDelete,
-
     // Settings → Runtimes
     /// Open Input modal to add a new runtime entry (step 1: name).
     RuntimesAdd,

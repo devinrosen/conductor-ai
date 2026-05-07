@@ -380,8 +380,6 @@ impl App {
             Action::ManageIssueSources => self.handle_manage_issue_sources(),
             Action::IssueSourceAdd => self.handle_issue_source_add(),
             Action::IssueSourceDelete => self.handle_issue_source_delete(),
-            Action::ModelsAdd => self.handle_models_add(),
-            Action::ModelsDelete => self.handle_models_delete(),
             Action::RuntimesAdd => self.handle_runtimes_add(),
             Action::RuntimesEdit => self.handle_runtimes_edit(),
             Action::RuntimesDelete => self.handle_runtimes_delete(),
