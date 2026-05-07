@@ -86,6 +86,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
         // Build per-step RuntimeOptions — max_turns is step-level so the resolver is fresh per call.
         let options = runkon_runtimes::RuntimeOptions {
             binary_path: crate::agent_runtime::resolve_conductor_bin().into(),
+            env: Default::default(),
             log_path_for_run: std::sync::Arc::new(|run_id: &str| {
                 crate::config::agent_log_path(run_id)
                     .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")))

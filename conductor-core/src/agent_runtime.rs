@@ -56,27 +56,27 @@ pub fn resolve_conductor_bin() -> String {
 
 /// Spawn a headless conductor subprocess.
 ///
-/// Backward-compatible wrapper that resolves the conductor binary internally
-/// and delegates to `runkon_runtimes::headless::spawn_headless`.
+/// `env` is applied via `Command::envs()` (overlay — parent env is preserved).
 #[cfg(unix)]
 pub fn spawn_headless(
     args: &[Cow<'static, str>],
     working_dir: &std::path::Path,
+    env: &std::collections::HashMap<String, String>,
 ) -> std::result::Result<HeadlessHandle, String> {
     let binary_path = resolve_conductor_bin();
-    runkon_runtimes::headless::spawn_headless(args, working_dir, &binary_path)
+    runkon_runtimes::headless::spawn_headless(args, working_dir, &binary_path, env)
 }
 
 /// Build headless args and spawn the conductor subprocess in one step.
 ///
-/// Backward-compatible wrapper that resolves the conductor binary internally
-/// and delegates to [`conductor_headless::try_spawn_headless_run`].
+/// `env` is applied via `Command::envs()` (overlay — parent env is preserved).
 #[cfg(unix)]
 pub fn try_spawn_headless_run(
     params: &SpawnHeadlessParams<'_>,
+    env: &std::collections::HashMap<String, String>,
 ) -> std::result::Result<(HeadlessHandle, std::path::PathBuf), String> {
     let binary_path = resolve_conductor_bin();
-    conductor_headless::try_spawn_headless_run(params, &binary_path)
+    conductor_headless::try_spawn_headless_run(params, &binary_path, env)
 }
 
 /// Create the [`runkon_runtimes::runtime::claude::ArgvBuilder`] closure that

@@ -211,7 +211,8 @@ pub(super) async fn spawn_headless_agent(
     worktree_id: Option<&str>,
 ) -> Result<(), ApiError> {
     let run_id = params.run_id;
-    let spawn_result = conductor_core::agent_runtime::try_spawn_headless_run(params);
+    let spawn_result =
+        conductor_core::agent_runtime::try_spawn_headless_run(params, &Default::default());
 
     let (handle, prompt_file) = match spawn_result {
         Err(err) => {

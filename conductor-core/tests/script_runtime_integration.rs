@@ -159,6 +159,7 @@ fn test_script_runtime_resolve_via_config() {
 
     let options = RuntimeOptions {
         binary_path: std::path::PathBuf::from("conductor"),
+        env: Default::default(),
         log_path_for_run: Arc::new(|run_id| {
             conductor_core::config::agent_log_path(run_id)
                 .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")))

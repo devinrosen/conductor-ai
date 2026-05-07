@@ -99,6 +99,7 @@ pub(super) fn drive_headless_run(
 
     let runtime_options = RuntimeOptions {
         binary_path: conductor_core::agent_runtime::resolve_conductor_bin().into(),
+        env: Default::default(),
         log_path_for_run: Arc::new(|run_id: &str| {
             conductor_core::config::agent_log_path(run_id)
                 .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")))
