@@ -41,7 +41,18 @@ pub struct ActionParams {
     pub gate_feedback: Option<String>,
     pub extensions: crate::extensions::Extensions,
     pub model: Option<String>,
-    pub bot_name: Option<String>,
+    /// When `Some`, names the identity this step's action should act as.
+    /// Executor implementations resolve it into harness-defined auth
+    /// material — typically credentials threaded into the spawned agent.
+    /// Examples:
+    ///
+    /// - GitHub App installation name → `GH_TOKEN`
+    /// - AWS service account ID → `AWS_ACCESS_KEY_ID` / related vars
+    /// - Slack bot user ID → `SLACK_BOT_TOKEN`
+    /// - Agent persona key → API key scoped to that persona
+    ///
+    /// Executors that don't model named identities ignore the field.
+    pub as_identity: Option<String>,
     pub plugin_dirs: Vec<String>,
 }
 
