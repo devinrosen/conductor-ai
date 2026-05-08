@@ -41,7 +41,7 @@ impl ConductorScriptEnvProvider {
 }
 
 impl ScriptEnvProvider for ConductorScriptEnvProvider {
-    fn env(&self, _ctx: &dyn RunContext, bot_name: Option<&str>) -> HashMap<String, String> {
+    fn env(&self, _ctx: &dyn RunContext, as_identity: Option<&str>) -> HashMap<String, String> {
         let mut env = HashMap::new();
         if let Some(ref bin_dir) = self.conductor_bin_dir {
             let existing = std::env::var("PATH").unwrap_or_default();
@@ -56,7 +56,7 @@ impl ScriptEnvProvider for ConductorScriptEnvProvider {
         // Resolve a GitHub App installation token for the requested bot
         // identity. NotConfigured / Fallback both leave GH_TOKEN unset so
         // the script falls back to the user's `gh auth` credentials.
-        if let Some(name) = bot_name {
+        if let Some(name) = as_identity {
             match resolve_named_app_token(&self.config, Some(name), "script") {
                 TokenResolution::AppToken(token) => {
                     env.insert("GH_TOKEN".to_string(), token);
