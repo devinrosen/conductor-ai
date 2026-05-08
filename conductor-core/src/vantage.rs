@@ -8,11 +8,24 @@ use crate::error::{ConductorError, Result};
 use crate::issue_source::{IssueSourceManager, VantageConfig};
 use crate::tickets::TicketInput;
 
-/// Conductor pipeline statuses that should be synced into Conductor.
-/// Pre-ready states (pending_audit, audited, enriching) are excluded —
+/// Conductor pipeline statuses that should be synced into Conductor as open
+/// tickets. Pre-ready states (pending_audit, audited, enriching) are excluded —
 /// those deliverables aren't actionable yet.
-const ACTIONABLE_CONDUCTOR_STATUSES: &[&str] =
-    &["ready", "dispatched", "running", "completed", "failed"];
+const ACTIONABLE_CONDUCTOR_STATUSES: &[&str] = &[
+    "ready",
+    "dispatched",
+    "running",
+    "in_progress",
+    "completed",
+    "failed",
+];
+
+/// Terminal conductor statuses that are synced as closed tickets so that
+/// `close_missing_tickets` can reconcile stale DB rows.
+///
+/// Keep in sync with `VANTAGE_APPROVED_STATUSES` in
+/// `conductor-web/frontend/src/utils/ticketDeps.ts`.
+const TERMINAL_CONDUCTOR_STATUSES: &[&str] = &["merged", "pr_approved", "released"];
 
 /// Sync deliverables from a Vantage SDLC project, filtered to those whose
 /// `codebase` field matches the given `repo_slug`.
@@ -56,13 +69,13 @@ pub fn sync_vantage_deliverables(
             tracing::debug!("Vantage sync: skipping {id} (codebase={codebase:?} != {repo_slug:?})");
             continue;
         }
-        // Only sync conductor-mode deliverables in actionable pipeline states.
-        // The sdlc CLI may not include these fields in JSON output, so fall back
-        // to the pre-loaded YAML frontmatter cache.
+        // Only sync conductor-mode deliverables in actionable or terminal pipeline
+        // states. The sdlc CLI may not include these fields in JSON output, so
+        // fall back to the pre-loaded YAML frontmatter cache.
         let (exec_mode, conductor_status) = resolve_conductor_fields(item, id, &frontmatter_cache);
-        if exec_mode != "conductor"
-            || !ACTIONABLE_CONDUCTOR_STATUSES.contains(&conductor_status.as_str())
-        {
+        let is_actionable = ACTIONABLE_CONDUCTOR_STATUSES.contains(&conductor_status.as_str());
+        let is_terminal = TERMINAL_CONDUCTOR_STATUSES.contains(&conductor_status.as_str());
+        if exec_mode != "conductor" || (!is_actionable && !is_terminal) {
             skipped_mode_or_status += 1;
             tracing::debug!(
                 "Vantage sync: skipping {id} (execution_mode={exec_mode:?}, conductor.status={conductor_status:?})"
@@ -72,7 +85,7 @@ pub fn sync_vantage_deliverables(
         let status = item["status"].as_str().unwrap_or("");
         tracing::debug!("Vantage sync: matched {id} (codebase={codebase:?}, status={status:?}, conductor.status={conductor_status:?})");
         // Use list data directly when body is present; fetch full detail only if missing.
-        let ticket = if item["body"].as_str().is_some_and(|b| !b.is_empty()) {
+        let mut ticket = if item["body"].as_str().is_some_and(|b| !b.is_empty()) {
             parse_vantage_deliverable(item)
         } else {
             match fetch_vantage_deliverable(id, sdlc_root) {
@@ -83,6 +96,11 @@ pub fn sync_vantage_deliverables(
                 }
             }
         };
+        // Terminal-state deliverables are synced as closed so that
+        // close_missing_tickets can reconcile the DB.
+        if is_terminal {
+            ticket.state = "closed".to_string();
+        }
         tickets.push(ticket);
     }
 
@@ -283,7 +301,11 @@ fn notify_dispatched(deliverable_id: &str, sdlc_root: &str, workflow_run_id: &st
     Ok(())
 }
 
-/// Update Vantage conductor status to "completed" when a workflow succeeds.
+/// Update Vantage conductor status to "pr_approved" when a workflow succeeds.
+///
+/// The ticket-to-pr workflow completion means conductor has reviewed and approved
+/// the PR — the deliverable is ready for merge. This status is used by dependent
+/// tickets to determine when they are unblocked.
 fn notify_completed(
     deliverable_id: &str,
     sdlc_root: &str,
@@ -296,7 +318,7 @@ fn notify_completed(
         "set",
         "--",
         deliverable_id,
-        "conductor.status=completed",
+        "conductor.status=pr_approved",
     ];
     let completed_at = format!("conductor.completed_at={now}");
     args.push(&completed_at);
@@ -311,7 +333,7 @@ fn notify_completed(
         args.push(&wt_arg);
     }
     run_sdlc(sdlc_root, &args)?;
-    tracing::info!("Vantage: marked {deliverable_id} as completed");
+    tracing::info!("Vantage: marked {deliverable_id} as pr_approved");
     Ok(())
 }
 
@@ -421,7 +443,7 @@ impl VantageLifecycle {
         notify_dispatched(&self.deliverable_id, &self.sdlc_root, workflow_run_id)
     }
 
-    /// Notify Vantage that the workflow completed successfully (best-effort).
+    /// Notify Vantage that the workflow completed and the PR is approved (best-effort).
     pub fn on_completed(&self, pr_url: Option<&str>, worktree_slug: Option<&str>) -> Result<()> {
         notify_completed(&self.deliverable_id, &self.sdlc_root, pr_url, worktree_slug)
     }
@@ -751,6 +773,40 @@ mod tests {
                 assert!(tickets[0].labels.contains(&"my-repo".to_string()));
                 assert!(tickets[0].labels.contains(&"feature".to_string()));
             });
+        }
+
+        #[test]
+        fn test_sync_terminal_conductor_status_synced_as_closed() {
+            // Regression: deliverables with terminal conductor.status (pr_approved,
+            // merged, released) must be returned with state="closed" so that
+            // close_missing_tickets can reconcile stale DB rows.
+            // Mirrors TERMINAL_CONDUCTOR_STATUSES and VANTAGE_APPROVED_STATUSES in
+            // conductor-web/frontend/src/utils/ticketDeps.ts.
+            for terminal_status in &["pr_approved", "merged", "released"] {
+                let list = serde_json::json!([
+                    {
+                        "id": "D-T01", "title": "Terminal", "status": "complete",
+                        "codebase": "my-repo",
+                        "execution_mode": "conductor",
+                        "conductor": { "status": terminal_status },
+                        "body": "some body",
+                    },
+                ]);
+                let dir = tempfile::tempdir().unwrap();
+                write_fake_sdlc(dir.path(), &format!("echo '{list}'"));
+                with_sdlc_on_path(dir.path(), || {
+                    let tickets = sync_vantage_deliverables("PROJ-1", "", "my-repo").unwrap();
+                    assert_eq!(
+                        tickets.len(),
+                        1,
+                        "terminal status={terminal_status} should be included (as closed)"
+                    );
+                    assert_eq!(
+                        tickets[0].state, "closed",
+                        "terminal conductor.status={terminal_status} must produce state=closed"
+                    );
+                });
+            }
         }
 
         #[test]
