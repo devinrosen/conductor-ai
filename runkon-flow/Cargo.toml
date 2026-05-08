@@ -9,7 +9,7 @@ description = "Portable workflow execution engine — DSL, traits, and in-memory
 [features]
 test-utils = []
 utoipa = ["dep:utoipa"]
-rusqlite = ["dep:rusqlite"]
+sqlite = ["dep:rusqlite"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

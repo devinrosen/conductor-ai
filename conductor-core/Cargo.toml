@@ -7,7 +7,7 @@ repository.workspace = true
 description = "Core library for Conductor — multi-repo orchestration"
 
 [dependencies]
-runkon-flow = { path = "../runkon-flow", features = ["rusqlite"] }
+runkon-flow = { path = "../runkon-flow", features = ["sqlite"] }
 runkon-flow-executors = { path = "../runkon-flow-executors" }
 runkon-runtimes = { path = "../runkon-runtimes" }
 rusqlite = { version = "0.32", features = ["bundled"] }

@@ -1,8 +1,8 @@
 //! SQLite-backed implementation of [`WorkflowPersistence`] (Phase 4 step 4.3).
 //!
-//! Gated on the `rusqlite` cargo feature. The module is fully self-contained:
+//! Gated on the `sqlite` cargo feature. The module is fully self-contained:
 //! row mappers, column constants, and the small set of gate / json helpers
-//! all live here so a harness only needs to enable `rusqlite` to get a
+//! all live here so a harness only needs to enable `sqlite` to get a
 //! production-ready persistence backend without writing any SQL itself.
 
 use std::collections::{HashMap, HashSet};
