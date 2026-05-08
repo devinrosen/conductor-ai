@@ -274,14 +274,14 @@ pub(super) fn skip_if_already_completed(
 mod tests {
     use super::*;
     use crate::extensions::ClaudeActionParams;
+    use crate::traits::action_executor::ActionParams;
 
     fn make_inputs() -> Arc<HashMap<String, String>> {
         Arc::new(HashMap::new())
     }
 
-    #[test]
-    fn build_action_params_inserts_claude_action_params_when_max_turns_some() {
-        let params = build_action_params(
+    fn make_test_params(max_turns: Option<u32>) -> ActionParams {
+        build_action_params(
             "test",
             make_inputs(),
             vec![],
@@ -293,8 +293,13 @@ mod tests {
             None,
             None,
             vec![],
-            Some(50),
-        );
+            max_turns,
+        )
+    }
+
+    #[test]
+    fn build_action_params_inserts_claude_action_params_when_max_turns_some() {
+        let params = make_test_params(Some(50));
         let cap = params
             .extensions
             .get::<ClaudeActionParams>()
@@ -304,20 +309,7 @@ mod tests {
 
     #[test]
     fn build_action_params_no_claude_action_params_when_max_turns_none() {
-        let params = build_action_params(
-            "test",
-            make_inputs(),
-            vec![],
-            false,
-            None,
-            None,
-            0,
-            None,
-            None,
-            None,
-            vec![],
-            None,
-        );
+        let params = make_test_params(None);
         assert!(params.extensions.get::<ClaudeActionParams>().is_none());
     }
 }
