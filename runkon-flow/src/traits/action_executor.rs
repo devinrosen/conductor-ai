@@ -40,6 +40,20 @@ pub struct ActionParams {
     #[allow(dead_code)]
     pub gate_feedback: Option<String>,
     pub extensions: crate::extensions::Extensions,
+    /// Optional named variant of the executor's underlying tool/agent.
+    ///
+    /// Cross-runtime convention — every major terminal AI tool uses `--model`:
+    /// Claude (`claude-opus-4-7`), OpenAI Codex (`gpt-5.4`, `gpt-5.3-codex`),
+    /// Moonshot Kimi (`k2.5`), Google Gemini (`gemini-2.5-flash`), Simon
+    /// Willison's `llm` CLI, `aichat`, image-gen tools, etc.
+    ///
+    /// Conductor's `CliRuntime` substitutes `{{model}}` into a configurable arg
+    /// template so any of these tools can be driven by a runkon-flow workflow
+    /// (`runkon-runtimes/src/runtime/cli.rs`).
+    ///
+    /// Executors that have no concept of named variants (e.g. `SendEmailExecutor`,
+    /// `HttpRequestExecutor`) ignore the field. `None` means "use the executor's
+    /// default."
     pub model: Option<String>,
     /// When `Some`, names the identity this step's action should act as.
     /// Executor implementations resolve it into harness-defined auth
