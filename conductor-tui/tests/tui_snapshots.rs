@@ -425,6 +425,81 @@ fn snap_workflow_run_detail_with_steps() {
 }
 
 #[test]
+fn snap_workflow_run_detail_ticket_targeted() {
+    use conductor_core::workflow::{ConductorWorkflowRun, WorkflowRun, WorkflowRunStatus};
+    let mut state = make_state();
+    let repos = make_repos();
+    state.data.repos = repos;
+
+    let ticket = conductor_core::tickets::Ticket {
+        id: "01TK00000000000000000000T1".into(),
+        repo_id: "01REPO0000000000000000000A".into(),
+        source_type: "github".into(),
+        source_id: "2936".into(),
+        title: "Some ticket title".into(),
+        body: String::new(),
+        state: "open".into(),
+        labels: "[]".into(),
+        assignee: None,
+        priority: None,
+        url: "https://github.com/user/my-app/issues/2936".into(),
+        synced_at: "2024-01-15T10:00:00Z".into(),
+        raw_json: String::new(),
+        workflow: None,
+        agent_map: None,
+    };
+    state
+        .data
+        .ticket_map
+        .insert("01TK00000000000000000000T1".into(), ticket);
+
+    let run = ConductorWorkflowRun {
+        run: WorkflowRun {
+            id: "01RUN0000000000000000000002".into(),
+            workflow_name: "qualify-ticket-comment".into(),
+            parent_run_id: String::new(),
+            status: WorkflowRunStatus::Running,
+            dry_run: false,
+            trigger: "manual".into(),
+            started_at: "2024-01-15T10:00:00Z".into(),
+            ended_at: None,
+            result_summary: None,
+            error: None,
+            definition_snapshot: None,
+            inputs: std::collections::HashMap::new(),
+            parent_workflow_run_id: None,
+            iteration: 0,
+            blocked_on: None,
+            workflow_title: None,
+            total_input_tokens: None,
+            total_output_tokens: None,
+            total_cache_read_input_tokens: None,
+            total_cache_creation_input_tokens: None,
+            total_turns: None,
+            total_cost_usd: None,
+            total_duration_ms: None,
+            model: None,
+            dismissed: false,
+            owner_token: None,
+            lease_until: None,
+            generation: 0,
+        },
+        worktree_id: None,
+        ticket_id: Some("01TK00000000000000000000T1".into()),
+        repo_id: None,
+        target_label: None,
+        default_bot_name: None,
+    };
+
+    state.selected_workflow_run_id = Some(run.id.clone());
+    state.data.workflow_runs = vec![run];
+    state.data.workflow_steps = vec![];
+    state.view = View::WorkflowRunDetail;
+    state.workflow_step_index = 0;
+    insta::assert_snapshot!(render_to_string(&state));
+}
+
+#[test]
 fn snap_workflow_def_detail() {
     use conductor_core::workflow::WorkflowDef;
     let mut state = make_state();

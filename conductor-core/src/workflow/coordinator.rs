@@ -145,11 +145,20 @@ fn set_input(inputs: &mut HashMap<String, String>, key: &str, value: String) {
 fn inject_worktree_variables(
     wt: &crate::worktree::Worktree,
     repo_default_branch: &str,
+    pr_number: Option<i64>,
     merged_inputs: &mut HashMap<String, String>,
 ) {
     let base = wt.effective_base(repo_default_branch);
     set_input(merged_inputs, "feature_base_branch", base.to_string());
     set_input(merged_inputs, "worktree_branch", wt.branch.clone());
+
+    // Persist pr_number once at workflow start so downstream scripts see a
+    // concrete value via `{{pr_number}}` regardless of their cwd at runtime.
+    // `gh pr view` (cwd-dependent) inside scripts breaks on resume when the
+    // engine's worktree-path resolution falls back to the repo root.
+    if let Some(n) = pr_number {
+        set_input(merged_inputs, "pr_number", n.to_string());
+    }
 }
 
 fn inject_ticket_variables(
@@ -596,14 +605,24 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
                 Some(cached) => cached,
                 None => crate::worktree::WorktreeManager::new(conn, config).get_by_id(wt_id)?,
             };
-            let default_branch = if let Some(ref r) = fetched_repo {
-                r.default_branch.clone()
-            } else {
-                crate::repo::RepoManager::new(conn, config)
-                    .get_by_id(&wt.repo_id)?
-                    .default_branch
+            let repo_for_wt = match fetched_repo.as_ref() {
+                Some(r) => std::borrow::Cow::Borrowed(r),
+                None => std::borrow::Cow::Owned(
+                    crate::repo::RepoManager::new(conn, config).get_by_id(&wt.repo_id)?,
+                ),
             };
-            inject_worktree_variables(&wt, &default_branch, &mut merged_inputs);
+            // Resolve the PR number once at workflow start (cwd-independent
+            // `gh pr list --repo <slug> --head <branch>`), so downstream
+            // scripts see `{{pr_number}}` deterministically — even on resume,
+            // when the engine's worktree-path resolution may have fallen back
+            // to the repo root and broken cwd-dependent `gh pr view`.
+            let pr_number = crate::github::detect_pr_number(&repo_for_wt.remote_url, &wt.branch);
+            inject_worktree_variables(
+                &wt,
+                &repo_for_wt.default_branch,
+                pr_number,
+                &mut merged_inputs,
+            );
         }
 
         // Persist inputs.
@@ -1683,7 +1702,7 @@ mod tests {
         let wt_mgr = crate::worktree::WorktreeManager::new(&conn, &config);
         let wt = wt_mgr.get_by_id("w1").unwrap();
         let mut inputs = HashMap::new();
-        inject_worktree_variables(&wt, "main", &mut inputs);
+        inject_worktree_variables(&wt, "main", None, &mut inputs);
         assert!(
             inputs.contains_key("worktree_branch"),
             "worktree_branch must be injected"
@@ -1691,6 +1710,25 @@ mod tests {
         assert!(
             inputs.contains_key("feature_base_branch"),
             "feature_base_branch must be injected"
+        );
+        assert!(
+            !inputs.contains_key("pr_number"),
+            "pr_number must not be injected when None is passed"
+        );
+    }
+
+    #[test]
+    fn inject_worktree_variables_persists_pr_number_when_some() {
+        let conn = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let wt_mgr = crate::worktree::WorktreeManager::new(&conn, &config);
+        let wt = wt_mgr.get_by_id("w1").unwrap();
+        let mut inputs = HashMap::new();
+        inject_worktree_variables(&wt, "main", Some(2946), &mut inputs);
+        assert_eq!(
+            inputs.get("pr_number").map(String::as_str),
+            Some("2946"),
+            "pr_number must be injected as a string when Some"
         );
     }
 
