@@ -1216,7 +1216,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(table_count, 3, "table count must remain 3 after second call");
+        assert_eq!(
+            table_count, 3,
+            "table count must remain 3 after second call"
+        );
     }
 
     #[test]
