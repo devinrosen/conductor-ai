@@ -82,8 +82,12 @@ mod tests {
     #[test]
     fn claude_action_params_round_trips() {
         let mut ext = Extensions::default();
-        ext.insert(ClaudeActionParams { max_turns: Some(50) });
-        let v = ext.get::<ClaudeActionParams>().expect("should find ClaudeActionParams");
+        ext.insert(ClaudeActionParams {
+            max_turns: Some(50),
+        });
+        let v = ext
+            .get::<ClaudeActionParams>()
+            .expect("should find ClaudeActionParams");
         assert_eq!(v.max_turns, Some(50));
     }
 }

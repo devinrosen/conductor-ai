@@ -186,7 +186,9 @@ pub(super) fn build_action_params(
         extensions.insert(s);
     }
     if let Some(mt) = max_turns {
-        extensions.insert(crate::extensions::ClaudeActionParams { max_turns: Some(mt) });
+        extensions.insert(crate::extensions::ClaudeActionParams {
+            max_turns: Some(mt),
+        });
     }
     crate::traits::action_executor::ActionParams {
         name: name.to_string(),
