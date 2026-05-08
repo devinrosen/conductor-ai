@@ -128,7 +128,9 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             stall_threshold: Some(self.config.agents.stall_threshold()),
             max_turns: Some(
                 params
-                    .max_turns
+                    .extensions
+                    .get::<runkon_flow::extensions::ClaudeActionParams>()
+                    .and_then(|p| p.max_turns)
                     .unwrap_or(crate::agent_runtime::DEFAULT_MAX_TURNS),
             ),
         };
