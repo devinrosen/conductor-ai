@@ -1381,9 +1381,10 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
             .iter()
             .find(|wt| Some(wt.id.as_str()) == run.worktree_id.as_deref())
     });
-    let run_ticket = run_worktree.and_then(|wt| {
-        wt.ticket_id
-            .as_ref()
+    let run_ticket = run_info.and_then(|run| {
+        run.ticket_id
+            .as_deref()
+            .or_else(|| run_worktree.and_then(|wt| wt.ticket_id.as_deref()))
             .and_then(|tid| state.data.ticket_map.get(tid))
     });
 
