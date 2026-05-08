@@ -342,7 +342,9 @@ pub(crate) fn run_agent(
         let repo_owner: String = (|| -> Option<String> {
             let wt_id = run.worktree_id.as_deref()?;
             let wt = WorktreeManager::new(conn, &config).get_by_id(wt_id).ok()?;
-            let repo = RepoManager::new(conn, &config).get_by_id(&wt.repo_id).ok()?;
+            let repo = RepoManager::new(conn, &config)
+                .get_by_id(&wt.repo_id)
+                .ok()?;
             let (owner, _) = github::parse_github_remote(&repo.remote_url)?;
             Some(owner)
         })()

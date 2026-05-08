@@ -79,14 +79,10 @@ impl GitHubTokenCache {
             })
             .unwrap_or(true);
         if needs_refresh {
-            let token = crate::github_app::resolve_named_app_token(
-                config,
-                bot_name,
-                &self.owner,
-                "gate",
-            )
-            .token()
-            .map(String::from);
+            let token =
+                crate::github_app::resolve_named_app_token(config, bot_name, &self.owner, "gate")
+                    .token()
+                    .map(String::from);
             *cache = Some((token.clone(), Instant::now()));
             token
         } else {

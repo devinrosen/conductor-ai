@@ -341,6 +341,7 @@ fn build_rk_execution_state(args: RkStateArgs) -> runkon_flow::engine::Execution
 }
 
 /// Build a [`runkon_flow::FlowEngine`] with all gate resolvers registered.
+#[allow(clippy::too_many_arguments)]
 fn build_flow_engine(
     persistence: &Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence>,
     event_sinks: &Arc<[Arc<dyn runkon_flow::EventSink>]>,
@@ -488,7 +489,14 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
     // -----------------------------------------------------------------------
     // Setup phase — acquire lock once, do all pre-run work, release.
     // -----------------------------------------------------------------------
-    let (wf_run_id, parent_run_id, merged_inputs, effective_repo_id_owned, snapshot_json, repo_owner) = {
+    let (
+        wf_run_id,
+        parent_run_id,
+        merged_inputs,
+        effective_repo_id_owned,
+        snapshot_json,
+        repo_owner,
+    ) = {
         let guard = lock_shared(&shared_conn)?;
         let conn: &Connection = &guard;
 
@@ -1170,7 +1178,13 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
             skip_count,
         );
 
-        (wf_run, worktree_path, repo_path, snapshot_string, repo_owner)
+        (
+            wf_run,
+            worktree_path,
+            repo_path,
+            snapshot_string,
+            repo_owner,
+        )
     };
 
     // -----------------------------------------------------------------------

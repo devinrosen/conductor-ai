@@ -101,7 +101,8 @@ mod tests {
 
     #[test]
     fn test_env_empty_when_no_bin_dir_and_no_bot() {
-        let provider = ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()), None);
+        let provider =
+            ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()), None);
         let env = provider.env(&noop_ctx(), None);
         assert!(
             env.is_empty(),
@@ -112,8 +113,12 @@ mod tests {
     #[test]
     fn test_env_path_starts_with_bin_dir() {
         let bin_dir = std::path::PathBuf::from("/usr/local/bin/conductor-dir");
-        let provider =
-            ConductorScriptEnvProvider::new(Some(bin_dir), vec![], Arc::new(Config::default()), None);
+        let provider = ConductorScriptEnvProvider::new(
+            Some(bin_dir),
+            vec![],
+            Arc::new(Config::default()),
+            None,
+        );
         let env = provider.env(&noop_ctx(), None);
         let path = env.get("PATH").expect("PATH should be set");
         assert!(
@@ -144,7 +149,8 @@ mod tests {
         // No [github.apps.<name>] configured → NotConfigured branch.
         // Caller must NOT see a GH_TOKEN in the env (otherwise scripts
         // would inherit a stale or empty token).
-        let provider = ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()), None);
+        let provider =
+            ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()), None);
         let env = provider.env(&noop_ctx(), Some("reviewer"));
         assert!(
             !env.contains_key("GH_TOKEN"),
@@ -154,7 +160,8 @@ mod tests {
 
     #[test]
     fn no_bot_name_omits_gh_token() {
-        let provider = ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()), None);
+        let provider =
+            ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()), None);
         let env = provider.env(&noop_ctx(), None);
         assert!(!env.contains_key("GH_TOKEN"));
     }

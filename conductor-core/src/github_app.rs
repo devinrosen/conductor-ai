@@ -95,9 +95,7 @@ fn generate_jwt(app_config: &GitHubAppConfig) -> Result<String> {
 /// so that the JWT is kept in memory and never exposed as a command-line
 /// argument (which would be visible to other processes via `ps`/`/proc`).
 fn exchange_installation_token(jwt: &str, installation_id: u64) -> Result<String> {
-    let url = format!(
-        "https://api.github.com/app/installations/{installation_id}/access_tokens",
-    );
+    let url = format!("https://api.github.com/app/installations/{installation_id}/access_tokens",);
 
     let resp = ureq::post(&url)
         .set("Authorization", &format!("Bearer {jwt}"))
@@ -181,9 +179,9 @@ pub fn get_app_token(app_config: &GitHubAppConfig, owner: &str) -> Result<String
 
     // Check cache for an existing installation_id for this (app_id, owner).
     {
-        let cache = installation_id_cache()
-            .lock()
-            .map_err(|e| ConductorError::TicketSync(format!("installation_id cache poisoned: {e}")))?;
+        let cache = installation_id_cache().lock().map_err(|e| {
+            ConductorError::TicketSync(format!("installation_id cache poisoned: {e}"))
+        })?;
         if let Some(&cached_id) = cache.get(&(app_id, owner.to_string())) {
             let jwt = generate_jwt(app_config)?;
             return exchange_installation_token(&jwt, cached_id);
@@ -196,9 +194,9 @@ pub fn get_app_token(app_config: &GitHubAppConfig, owner: &str) -> Result<String
         discover_installation_id_with_base(app_id, &jwt, owner, "https://api.github.com")?;
 
     {
-        let mut cache = installation_id_cache()
-            .lock()
-            .map_err(|e| ConductorError::TicketSync(format!("installation_id cache poisoned: {e}")))?;
+        let mut cache = installation_id_cache().lock().map_err(|e| {
+            ConductorError::TicketSync(format!("installation_id cache poisoned: {e}"))
+        })?;
         cache.insert((app_id, owner.to_string()), installation_id);
     }
 
@@ -457,7 +455,10 @@ mod tests {
             .create();
 
         let result = discover_installation_id_with_base(12345, "fake-jwt", "testowner", &base_url);
-        assert!(result.is_err(), "expected error when both endpoints return 404");
+        assert!(
+            result.is_err(),
+            "expected error when both endpoints return 404"
+        );
     }
 
     #[test]
@@ -472,8 +473,7 @@ mod tests {
             .with_body(r#"{"id": 123456, "account": {"login": "myorg"}}"#)
             .create();
 
-        let result =
-            discover_installation_id_with_base(12345, "fake-jwt", "myorg", &base_url);
+        let result = discover_installation_id_with_base(12345, "fake-jwt", "myorg", &base_url);
         assert_eq!(result.unwrap(), 123456);
     }
 
@@ -493,8 +493,7 @@ mod tests {
             .with_body(r#"{"id": 789, "account": {"login": "myuser"}}"#)
             .create();
 
-        let result =
-            discover_installation_id_with_base(12345, "fake-jwt", "myuser", &base_url);
+        let result = discover_installation_id_with_base(12345, "fake-jwt", "myuser", &base_url);
         assert_eq!(result.unwrap(), 789);
     }
 
