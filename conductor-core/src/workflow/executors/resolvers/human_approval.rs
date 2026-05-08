@@ -91,7 +91,7 @@ mod tests {
             approval_mode: ApprovalMode::default(),
             options: HashMap::new(),
             timeout_secs: 3600,
-            bot_name: None,
+            as_identity: None,
             step_id: step_id.into(),
         }
     }

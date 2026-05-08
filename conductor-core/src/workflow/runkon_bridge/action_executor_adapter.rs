@@ -87,7 +87,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                     &format!("Workflow step: {}", params.name),
                     params.model.as_deref(),
                     ctx.parent_run_id().unwrap_or(""),
-                    params.bot_name.as_deref(),
+                    params.as_identity.as_deref(),
                 )
                 .map_err(|e| {
                     EngineError::Workflow(format!(
@@ -170,7 +170,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             step_timeout: info.step_timeout,
             shutdown: ctx.shutdown().cloned(),
             model: params.model.clone(),
-            bot_name: params.bot_name.clone(),
+            bot_name: params.as_identity.clone(),
             plugin_dirs: params.plugin_dirs.clone(),
             workflow_name: ctx.workflow_name().to_string(),
             tracker: host_adapter.clone() as std::sync::Arc<dyn runkon_runtimes::RunTracker>,

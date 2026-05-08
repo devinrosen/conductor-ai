@@ -96,7 +96,7 @@ impl GateResolver for PrApprovalGateResolver {
             ApprovalMode::MinApprovals => ["pr", "view", "--json", "reviews,author"].as_slice(),
             ApprovalMode::ReviewDecision => ["pr", "view", "--json", "reviewDecision"].as_slice(),
         };
-        if let Some(val) = self.common.run_gh(args, params.bot_name.as_deref()) {
+        if let Some(val) = self.common.run_gh(args, params.as_identity.as_deref()) {
             return Ok(evaluate_approval(&val, params));
         }
         Ok(GatePoll::Pending)
@@ -117,7 +117,7 @@ mod tests {
             approval_mode: mode,
             options: HashMap::new(),
             timeout_secs: 60,
-            bot_name: None,
+            as_identity: None,
             step_id: "step-1".into(),
         }
     }

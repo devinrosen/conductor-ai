@@ -64,7 +64,7 @@ impl GateResolver for PrChecksGateResolver {
     ) -> Result<GatePoll, EngineError> {
         if let Some(val) = self.common.run_gh(
             &["pr", "checks", "--json", "state"],
-            params.bot_name.as_deref(),
+            params.as_identity.as_deref(),
         ) {
             return Ok(evaluate_checks(&val, &params.gate_name));
         }
