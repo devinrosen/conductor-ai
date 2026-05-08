@@ -26,6 +26,31 @@ wait-timeout = "0.2"
 utoipa = { version = "5", optional = true }
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 
+[[example]]
+name = "echo_executor"
+
+[[example]]
+name = "static_items_provider"
+
+[[example]]
+name = "always_approve_gate"
+
+[[example]]
+name = "fixed_env_provider"
+
+[[example]]
+name = "stdout_event_sink"
+
+[[example]]
+name = "static_workflow_resolver"
+
+[[example]]
+name = "logging_child_runner"
+
+[[example]]
+name = "full_engine_minimal"
+required-features = ["test-utils"]
+
 [[test]]
 name = "basic_flow"
 required-features = ["test-utils"]
