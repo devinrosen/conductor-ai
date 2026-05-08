@@ -26,10 +26,18 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
 
             let syncer = TicketSyncer::new(conn);
             let source_mgr = IssueSourceManager::new(conn);
-            let token_res = github_app::resolve_app_token(config, "github-issues-sync");
-            let token = token_res.token();
 
             for r in repos {
+                let repo_owner = github::parse_github_remote(&r.remote_url)
+                    .map(|(o, _)| o)
+                    .unwrap_or_default();
+                let token_res = github_app::resolve_named_app_token(
+                    config,
+                    None,
+                    &repo_owner,
+                    "github-issues-sync",
+                );
+                let token = token_res.token();
                 let sources = source_mgr.list(&r.id)?;
 
                 if sources.is_empty() {

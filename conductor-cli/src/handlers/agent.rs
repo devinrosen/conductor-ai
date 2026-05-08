@@ -339,7 +339,17 @@ pub(crate) fn run_agent(
         // Inject GH_TOKEN from the GitHub App installation token so all `gh` calls
         // made by the agent (including `gh pr create`) use the bot identity rather
         // than the human `gh` CLI user. Fall back gracefully when not configured.
-        match github_app::resolve_named_app_token(&config, bot_name, "agent-run") {
+        let repo_owner: String = (|| -> Option<String> {
+            let wt_id = run.worktree_id.as_deref()?;
+            let wt = WorktreeManager::new(conn, &config).get_by_id(wt_id).ok()?;
+            let repo = RepoManager::new(conn, &config)
+                .get_by_id(&wt.repo_id)
+                .ok()?;
+            let (owner, _) = github::parse_github_remote(&repo.remote_url)?;
+            Some(owner)
+        })()
+        .unwrap_or_default();
+        match github_app::resolve_named_app_token(&config, bot_name, &repo_owner, "agent-run") {
             github_app::TokenResolution::AppToken(token) => {
                 if let Some(name) = bot_name {
                     eprintln!("[conductor] Using GitHub App token for bot identity: {name}");

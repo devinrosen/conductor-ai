@@ -275,7 +275,7 @@ pub struct GitHubSettings {
 /// app_id = 123456
 /// client_id = "Iv23liXXXXXXXXXXXXXX"  # from App settings — required for newer apps
 /// private_key_path = "~/.conductor/conductor-ai.pem"
-/// installation_id = 789012
+/// # installation_id is deprecated; installations are now discovered automatically per owner
 /// ```
 ///
 /// The `client_id` (found on the GitHub App settings page) is used as the JWT
@@ -290,7 +290,10 @@ pub struct GitHubAppConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
     pub private_key_path: String,
-    pub installation_id: u64,
+    /// Deprecated: installation IDs are now discovered automatically per owner.
+    /// If set, this field is ignored and a deprecation warning is logged at startup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installation_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -655,6 +658,24 @@ fn load_config_from(path: &std::path::Path) -> Result<Config> {
     // Key values are intentionally not logged here (they are secrets).
     if raw.get("web_push").is_some() {
         tracing::warn!("top-level [web_push] section is deprecated; move to [web].push");
+    }
+
+    // Deprecation: warn if installation_id is set in [github.app] or [github.apps.*].
+    if let Some(app) = config.github.app.as_ref() {
+        if app.installation_id.is_some() {
+            tracing::warn!(
+                "`installation_id` in `[github.app]` is no longer used and can be removed; \
+                 installations are now discovered automatically per owner"
+            );
+        }
+    }
+    for (name, app) in &config.github.apps {
+        if app.installation_id.is_some() {
+            tracing::warn!(
+                "`installation_id` in `[github.apps.{name}]` is no longer used and can be \
+                 removed; installations are now discovered automatically per owner"
+            );
+        }
     }
 
     // Guard: if [github.app] is present in the raw TOML but deserialized to None,
@@ -1184,7 +1205,7 @@ mod tests {
         assert_eq!(app.app_id, 123456);
         assert!(app.client_id.is_none());
         assert_eq!(app.private_key_path, "~/.conductor/conductor-ai.pem");
-        assert_eq!(app.installation_id, 789012);
+        assert_eq!(app.installation_id, Some(789012));
     }
 
     #[test]

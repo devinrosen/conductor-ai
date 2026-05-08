@@ -24,13 +24,15 @@ use crate::config::Config;
 pub(in crate::workflow) struct GitHubTokenCache {
     cache: Mutex<Option<(Option<String>, Instant)>>,
     override_token: Option<String>,
+    owner: String,
 }
 
 impl GitHubTokenCache {
-    pub(in crate::workflow) fn new(token_override: Option<String>) -> Self {
+    pub(in crate::workflow) fn new(token_override: Option<String>, owner: String) -> Self {
         Self {
             cache: Mutex::new(None),
             override_token: token_override,
+            owner,
         }
     }
 
@@ -77,9 +79,10 @@ impl GitHubTokenCache {
             })
             .unwrap_or(true);
         if needs_refresh {
-            let token = crate::github_app::resolve_named_app_token(config, bot_name, "gate")
-                .token()
-                .map(String::from);
+            let token =
+                crate::github_app::resolve_named_app_token(config, bot_name, &self.owner, "gate")
+                    .token()
+                    .map(String::from);
             *cache = Some((token.clone(), Instant::now()));
             token
         } else {
@@ -113,6 +116,7 @@ impl GhGateCommon {
         token_cache: Arc<GitHubTokenCache>,
         config: Config,
         db_path: PathBuf,
+        _owner: String,
     ) -> Self {
         Self {
             working_dir,
@@ -239,7 +243,7 @@ mod tests {
 
     #[test]
     fn test_token_cache_override_short_circuits_shell() {
-        let cache = GitHubTokenCache::new(Some("test-token-override".into()));
+        let cache = GitHubTokenCache::new(Some("test-token-override".into()), String::new());
         let config = Config::default();
         let token = cache.get(&config, None);
         assert_eq!(token.as_deref(), Some("test-token-override"));
@@ -247,7 +251,7 @@ mod tests {
 
     #[test]
     fn test_token_cache_none_when_no_app_configured() {
-        let cache = GitHubTokenCache::new(None);
+        let cache = GitHubTokenCache::new(None, String::new());
         let config = Config::default(); // no github.app configured
         let token = cache.get(&config, None);
         assert!(
@@ -258,7 +262,7 @@ mod tests {
 
     #[test]
     fn test_token_cache_ttl_success_path_override() {
-        let cache = GitHubTokenCache::new(Some("my-override-token".into()));
+        let cache = GitHubTokenCache::new(Some("my-override-token".into()), String::new());
         let config = Config::default();
 
         let first = cache.get(&config, None);
@@ -273,7 +277,7 @@ mod tests {
 
     #[test]
     fn test_token_cache_bot_name_none_no_app_returns_none() {
-        let cache = GitHubTokenCache::new(None);
+        let cache = GitHubTokenCache::new(None, String::new());
         let config = Config::default();
         let token = cache.get(&config, None);
         assert!(
@@ -284,7 +288,7 @@ mod tests {
 
     #[test]
     fn test_token_cache_stale_success_triggers_refresh() {
-        let cache = GitHubTokenCache::new(None);
+        let cache = GitHubTokenCache::new(None, String::new());
         let config = Config::default();
         let stale_instant = Instant::now() - Duration::from_secs(56 * 60);
         cache.set_cache_for_test(Some("old-token".into()), stale_instant);
@@ -297,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_token_cache_fresh_success_no_refresh() {
-        let cache = GitHubTokenCache::new(None);
+        let cache = GitHubTokenCache::new(None, String::new());
         let config = Config::default();
         let fresh_instant = Instant::now() - Duration::from_secs(60);
         cache.set_cache_for_test(Some("live-token".into()), fresh_instant);
@@ -311,7 +315,7 @@ mod tests {
 
     #[test]
     fn test_token_cache_stale_failure_triggers_refresh() {
-        let cache = GitHubTokenCache::new(None);
+        let cache = GitHubTokenCache::new(None, String::new());
         let config = Config::default();
         let stale_instant = Instant::now() - Duration::from_secs(31);
         cache.set_cache_for_test(None, stale_instant);
@@ -326,7 +330,7 @@ mod tests {
 
     #[test]
     fn test_token_cache_fresh_failure_no_refresh() {
-        let cache = GitHubTokenCache::new(None);
+        let cache = GitHubTokenCache::new(None, String::new());
         let config = Config::default();
         let fresh_instant = Instant::now() - Duration::from_secs(15);
         cache.set_cache_for_test(None, fresh_instant);

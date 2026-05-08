@@ -134,11 +134,13 @@ pub(super) fn build_rk_script_env_provider(
     conductor_bin_dir: Option<std::path::PathBuf>,
     extra_plugin_dirs: Vec<String>,
     config: Arc<crate::config::Config>,
+    owner: Option<String>,
 ) -> Arc<dyn runkon_flow::traits::script_env_provider::ScriptEnvProvider> {
     Arc::new(ConductorScriptEnvProvider::new(
         conductor_bin_dir,
         extra_plugin_dirs,
         config,
+        owner,
     ))
 }
 
