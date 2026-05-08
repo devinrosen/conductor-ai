@@ -4349,7 +4349,6 @@ name = "runkon-flow"
 version = "0.1.1-alpha"
 dependencies = [
  "chrono",
- "dirs",
  "rusqlite",
  "serde",
  "serde_json",
