@@ -8,17 +8,17 @@ workflow debug-failed-run {
   }
 
   inputs {
-    workflow_run_id required
+    target_run_id required
   }
 
   script fetch-run-data {
     run = ".conductor/scripts/fetch-run-data.sh"
-    env = { RUN_ID = "{{workflow_run_id}}" }
+    env = { RUN_ID = "{{target_run_id}}" }
   }
 
   script fetch-agent-logs {
     run = ".conductor/scripts/fetch-agent-logs.sh"
-    env = { RUN_ID = "{{workflow_run_id}}" }
+    env = { RUN_ID = "{{target_run_id}}" }
   }
 
   call diagnose-failure { output = "debug-diagnosis" }
@@ -26,6 +26,6 @@ workflow debug-failed-run {
   script file-debug-issues {
     run = ".conductor/scripts/file-debug-issues.sh"
     as  = "developer"
-    env = { PRIOR_OUTPUT = "{{prior_output}}" RUN_ID = "{{workflow_run_id}}" }
+    env = { PRIOR_OUTPUT = "{{prior_output}}" RUN_ID = "{{target_run_id}}" }
   }
 }
