@@ -19,9 +19,17 @@ impl PrApprovalGateResolver {
         token_cache: Arc<GitHubTokenCache>,
         config: crate::config::Config,
         db_path: PathBuf,
+        owner: String,
     ) -> Self {
         Self {
-            common: GhGateCommon::new(working_dir, default_bot_name, token_cache, config, db_path),
+            common: GhGateCommon::new(
+                working_dir,
+                default_bot_name,
+                token_cache,
+                config,
+                db_path,
+                owner,
+            ),
         }
     }
 }

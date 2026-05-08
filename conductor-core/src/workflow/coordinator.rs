@@ -349,12 +349,13 @@ fn build_flow_engine(
     config: Config,
     db: &std::path::Path,
     workflow_name: &str,
+    owner: String,
 ) -> Result<runkon_flow::FlowEngine> {
     use super::executors::resolvers::{
         GitHubTokenCache, HumanApprovalGateResolver, HumanGateKind, PrApprovalGateResolver,
         PrChecksGateResolver,
     };
-    let token_cache = Arc::new(GitHubTokenCache::new(None));
+    let token_cache = Arc::new(GitHubTokenCache::new(None, owner.clone()));
     runkon_flow::FlowEngineBuilder::new()
         .with_event_sinks(event_sinks)
         .gate_resolver(HumanApprovalGateResolver::new(
@@ -371,6 +372,7 @@ fn build_flow_engine(
             Arc::clone(&token_cache),
             config.clone(),
             db.to_path_buf(),
+            owner.clone(),
         ))
         .gate_resolver(PrChecksGateResolver::new(
             working_dir,
@@ -378,6 +380,7 @@ fn build_flow_engine(
             token_cache,
             config,
             db.to_path_buf(),
+            owner,
         ))
         .build()
         .map_err(|e| {
@@ -485,7 +488,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
     // -----------------------------------------------------------------------
     // Setup phase — acquire lock once, do all pre-run work, release.
     // -----------------------------------------------------------------------
-    let (wf_run_id, parent_run_id, merged_inputs, effective_repo_id_owned, snapshot_json) = {
+    let (wf_run_id, parent_run_id, merged_inputs, effective_repo_id_owned, snapshot_json, repo_owner) = {
         let guard = lock_shared(&shared_conn)?;
         let conn: &Connection = &guard;
 
@@ -598,6 +601,11 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         } else {
             None
         };
+        let repo_owner: String = fetched_repo
+            .as_ref()
+            .and_then(|r| crate::github::parse_github_remote(&r.remote_url))
+            .map(|(o, _)| o)
+            .unwrap_or_default();
         if let Some(ref wt_id) = params.worktree_id {
             // Reuse the Worktree cached during repo_id derivation (the common case where
             // effective_repo_id came from this same worktree), or fetch it now if needed.
@@ -645,6 +653,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
             merged_inputs,
             effective_repo_id,
             snapshot_json,
+            repo_owner,
         )
         // guard drops here — connection lock released
     };
@@ -679,6 +688,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         params.conductor_bin_dir.clone(),
         params.extra_plugin_dirs.clone(),
         Arc::new(config.clone()),
+        Some(repo_owner.clone()),
     );
 
     let schema_resolver = make_schema_resolver(
@@ -731,6 +741,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         config.clone(),
         &db,
         &workflow.name,
+        repo_owner,
     )?;
 
     let rk_result = match engine.run(&rk_def, &mut rk_state) {
@@ -979,7 +990,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
 
     // Pre-execution phase: validate, reset, and prepare. Lock shared_conn for the
     // duration so all mutations complete before the FlowEngine takes over.
-    let (wf_run, worktree_path, repo_path, snapshot_string) = {
+    let (wf_run, worktree_path, repo_path, snapshot_string, repo_owner) = {
         let guard = lock_shared(&shared_conn)?;
         let conn: &Connection = &guard;
         let wt_mgr = WorktreeManager::new(conn, config);
@@ -1033,16 +1044,20 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         // Determine execution paths based on target type.
         // - Worktree run: look up worktree and derive repo from it.
         // - Repo/ticket run: look up repo directly (via repo_id or ticket.repo_id).
-        let (worktree_path, _worktree_slug, repo_path) = if let Some(wt_id) =
+        let (worktree_path, _worktree_slug, repo_path, repo_owner) = if let Some(wt_id) =
             wf_run.worktree_id.as_deref()
         {
             let worktree = wt_mgr.get_by_id(wt_id)?;
             let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&worktree.repo_id)?;
+            let owner = crate::github::parse_github_remote(&repo.remote_url)
+                .map(|(o, _)| o)
+                .unwrap_or_default();
             if std::path::Path::new(&worktree.path).exists() {
                 (
                     worktree.path.clone(),
                     worktree.slug.clone(),
                     repo.local_path.clone(),
+                    owner,
                 )
             } else {
                 tracing::warn!(
@@ -1054,6 +1069,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
                     repo.local_path.clone(),
                     String::new(),
                     repo.local_path.clone(),
+                    owner,
                 )
             }
         } else {
@@ -1074,8 +1090,11 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
                     .repo_id
             };
             let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&effective_repo_id)?;
+            let owner = crate::github::parse_github_remote(&repo.remote_url)
+                .map(|(o, _)| o)
+                .unwrap_or_default();
             let path = repo.local_path.clone();
-            (path.clone(), String::new(), path)
+            (path.clone(), String::new(), path, owner)
         };
 
         // Warn if any running steps have live subprocesses — terminate_subprocesses
@@ -1151,7 +1170,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
             skip_count,
         );
 
-        (wf_run, worktree_path, repo_path, snapshot_string)
+        (wf_run, worktree_path, repo_path, snapshot_string, repo_owner)
     };
 
     // -----------------------------------------------------------------------
@@ -1183,6 +1202,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         input.conductor_bin_dir.clone(),
         vec![],
         Arc::new(config.clone()),
+        Some(repo_owner.clone()),
     );
 
     let schema_resolver = make_schema_resolver(
@@ -1236,6 +1256,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         config.clone(),
         &db,
         &wf_run.workflow_name,
+        repo_owner,
     )?;
 
     let rk_result = match engine.resume(&rk_def, &mut rk_state) {

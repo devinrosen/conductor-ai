@@ -143,7 +143,11 @@ pub async fn sync_tickets(
     let syncer = TicketSyncer::new(&db);
 
     let sources = source_mgr.list(&repo.id)?;
-    let token_res = github_app::resolve_app_token(&config, "github-issues-sync");
+    let repo_owner = github::parse_github_remote(&repo.remote_url)
+        .map(|(o, _)| o)
+        .unwrap_or_default();
+    let token_res =
+        github_app::resolve_named_app_token(&config, None, &repo_owner, "github-issues-sync");
     let token = token_res.token();
     let mut total_synced = 0usize;
     let mut total_closed = 0usize;

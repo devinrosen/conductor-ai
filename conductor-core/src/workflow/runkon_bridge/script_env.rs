@@ -24,6 +24,7 @@ pub(crate) struct ConductorScriptEnvProvider {
     conductor_bin_dir: Option<std::path::PathBuf>,
     extra_plugin_dirs: Vec<String>,
     config: Arc<Config>,
+    owner: Option<String>,
 }
 
 impl ConductorScriptEnvProvider {
@@ -31,11 +32,13 @@ impl ConductorScriptEnvProvider {
         conductor_bin_dir: Option<std::path::PathBuf>,
         extra_plugin_dirs: Vec<String>,
         config: Arc<Config>,
+        owner: Option<String>,
     ) -> Self {
         Self {
             conductor_bin_dir,
             extra_plugin_dirs,
             config,
+            owner,
         }
     }
 }
@@ -57,7 +60,8 @@ impl ScriptEnvProvider for ConductorScriptEnvProvider {
         // identity. NotConfigured / Fallback both leave GH_TOKEN unset so
         // the script falls back to the user's `gh auth` credentials.
         if let Some(name) = as_identity {
-            match resolve_named_app_token(&self.config, Some(name), "script") {
+            let owner = self.owner.as_deref().unwrap_or("");
+            match resolve_named_app_token(&self.config, Some(name), owner, "script") {
                 TokenResolution::AppToken(token) => {
                     env.insert("GH_TOKEN".to_string(), token);
                 }
@@ -97,7 +101,7 @@ mod tests {
 
     #[test]
     fn test_env_empty_when_no_bin_dir_and_no_bot() {
-        let provider = ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()));
+        let provider = ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()), None);
         let env = provider.env(&noop_ctx(), None);
         assert!(
             env.is_empty(),
@@ -109,7 +113,7 @@ mod tests {
     fn test_env_path_starts_with_bin_dir() {
         let bin_dir = std::path::PathBuf::from("/usr/local/bin/conductor-dir");
         let provider =
-            ConductorScriptEnvProvider::new(Some(bin_dir), vec![], Arc::new(Config::default()));
+            ConductorScriptEnvProvider::new(Some(bin_dir), vec![], Arc::new(Config::default()), None);
         let env = provider.env(&noop_ctx(), None);
         let path = env.get("PATH").expect("PATH should be set");
         assert!(
@@ -125,6 +129,7 @@ mod tests {
             Some(bin_dir),
             vec!["/opt/plugins".to_string(), "/home/user/plugins".to_string()],
             Arc::new(Config::default()),
+            None,
         );
         let env = provider.env(&noop_ctx(), None);
         let path = env.get("PATH").expect("PATH should be set");
@@ -139,7 +144,7 @@ mod tests {
         // No [github.apps.<name>] configured → NotConfigured branch.
         // Caller must NOT see a GH_TOKEN in the env (otherwise scripts
         // would inherit a stale or empty token).
-        let provider = ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()));
+        let provider = ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()), None);
         let env = provider.env(&noop_ctx(), Some("reviewer"));
         assert!(
             !env.contains_key("GH_TOKEN"),
@@ -149,7 +154,7 @@ mod tests {
 
     #[test]
     fn no_bot_name_omits_gh_token() {
-        let provider = ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()));
+        let provider = ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()), None);
         let env = provider.env(&noop_ctx(), None);
         assert!(!env.contains_key("GH_TOKEN"));
     }

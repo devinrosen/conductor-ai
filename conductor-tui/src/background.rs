@@ -819,10 +819,18 @@ fn sync_all_tickets(tx: &BackgroundSender) {
 
     let syncer = TicketSyncer::new(&conn);
     let source_mgr = IssueSourceManager::new(&conn);
-    let token_res = github_app::resolve_app_token(&config, "github-issues-sync");
-    let token = token_res.token();
 
     for repo in repos {
+        let repo_owner = github::parse_github_remote(&repo.remote_url)
+            .map(|(o, _)| o)
+            .unwrap_or_default();
+        let token_res = github_app::resolve_named_app_token(
+            &config,
+            None,
+            &repo_owner,
+            "github-issues-sync",
+        );
+        let token = token_res.token();
         if !sync_sources_for_repo(
             tx,
             &syncer,
@@ -978,7 +986,15 @@ pub fn spawn_ticket_sync_for_repo(
         }
 
         let source_mgr = IssueSourceManager::new(&conn);
-        let token_res = github_app::resolve_app_token(&config, "github-issues-sync");
+        let repo_owner = github::parse_github_remote(&remote_url)
+            .map(|(o, _)| o)
+            .unwrap_or_default();
+        let token_res = github_app::resolve_named_app_token(
+            &config,
+            None,
+            &repo_owner,
+            "github-issues-sync",
+        );
         let token = token_res.token();
 
         sync_sources_for_repo(
