@@ -36,14 +36,30 @@ impl ActionExecutor for EchoExecutor {
 struct StubCtx(PathBuf);
 
 impl RunContext for StubCtx {
-    fn injected_variables(&self) -> HashMap<&'static str, String> { HashMap::new() }
-    fn working_dir(&self) -> &Path { &self.0 }
-    fn working_dir_str(&self) -> String { self.0.to_string_lossy().into_owned() }
-    fn get(&self, _: &str) -> Option<String> { None }
-    fn run_id(&self) -> &str { "echo-run" }
-    fn workflow_name(&self) -> &str { "echo-example" }
-    fn parent_run_id(&self) -> Option<&str> { None }
-    fn shutdown(&self) -> Option<&Arc<AtomicBool>> { None }
+    fn injected_variables(&self) -> HashMap<&'static str, String> {
+        HashMap::new()
+    }
+    fn working_dir(&self) -> &Path {
+        &self.0
+    }
+    fn working_dir_str(&self) -> String {
+        self.0.to_string_lossy().into_owned()
+    }
+    fn get(&self, _: &str) -> Option<String> {
+        None
+    }
+    fn run_id(&self) -> &str {
+        "echo-run"
+    }
+    fn workflow_name(&self) -> &str {
+        "echo-example"
+    }
+    fn parent_run_id(&self) -> Option<&str> {
+        None
+    }
+    fn shutdown(&self) -> Option<&Arc<AtomicBool>> {
+        None
+    }
 }
 
 fn main() {
@@ -71,6 +87,8 @@ fn main() {
         as_identity: None,
         plugin_dirs: vec![],
     };
-    let output = executor.execute(&ctx, &info, &params).expect("execute failed");
+    let output = executor
+        .execute(&ctx, &info, &params)
+        .expect("execute failed");
     println!("result_text: {:?}", output.result_text);
 }

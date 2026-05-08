@@ -28,8 +28,7 @@ fn main() {
   }
   call my-agent
 }"#;
-    let def = runkon_flow::dsl::parse_workflow_str(dsl, "hello.wf")
-        .expect("DSL parse failed");
+    let def = runkon_flow::dsl::parse_workflow_str(dsl, "hello.wf").expect("DSL parse failed");
 
     let resolver = StaticWorkflowResolver {
         name: "hello".into(),

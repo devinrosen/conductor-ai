@@ -33,7 +33,11 @@ impl ChildWorkflowRunner for LoggingChildRunner {
         parent_ctx: &ChildWorkflowContext,
         params: ChildWorkflowInput,
     ) -> Result<WorkflowResult, EngineError> {
-        println!("execute_child: workflow={} inputs={}", workflow_name, params.inputs.len());
+        println!(
+            "execute_child: workflow={} inputs={}",
+            workflow_name,
+            params.inputs.len()
+        );
         Ok(stub_result(&parent_ctx.workflow_run_id, workflow_name))
     }
 
@@ -44,7 +48,10 @@ impl ChildWorkflowRunner for LoggingChildRunner {
         parent_ctx: &ChildWorkflowContext,
     ) -> Result<WorkflowResult, EngineError> {
         println!("resume_child: run_id={}", workflow_run_id);
-        Ok(stub_result(workflow_run_id, parent_ctx.run_ctx.workflow_name()))
+        Ok(stub_result(
+            workflow_run_id,
+            parent_ctx.run_ctx.workflow_name(),
+        ))
     }
 
     fn find_resumable_child(
@@ -59,14 +66,30 @@ impl ChildWorkflowRunner for LoggingChildRunner {
 struct StubCtx(PathBuf);
 
 impl RunContext for StubCtx {
-    fn injected_variables(&self) -> HashMap<&'static str, String> { HashMap::new() }
-    fn working_dir(&self) -> &Path { &self.0 }
-    fn working_dir_str(&self) -> String { self.0.to_string_lossy().into_owned() }
-    fn get(&self, _: &str) -> Option<String> { None }
-    fn run_id(&self) -> &str { "parent-run-001" }
-    fn workflow_name(&self) -> &str { "parent-workflow" }
-    fn parent_run_id(&self) -> Option<&str> { None }
-    fn shutdown(&self) -> Option<&Arc<AtomicBool>> { None }
+    fn injected_variables(&self) -> HashMap<&'static str, String> {
+        HashMap::new()
+    }
+    fn working_dir(&self) -> &Path {
+        &self.0
+    }
+    fn working_dir_str(&self) -> String {
+        self.0.to_string_lossy().into_owned()
+    }
+    fn get(&self, _: &str) -> Option<String> {
+        None
+    }
+    fn run_id(&self) -> &str {
+        "parent-run-001"
+    }
+    fn workflow_name(&self) -> &str {
+        "parent-workflow"
+    }
+    fn parent_run_id(&self) -> Option<&str> {
+        None
+    }
+    fn shutdown(&self) -> Option<&Arc<AtomicBool>> {
+        None
+    }
 }
 
 fn main() {

@@ -17,14 +17,30 @@ impl ScriptEnvProvider for FixedEnvProvider {
 struct StubCtx(PathBuf);
 
 impl RunContext for StubCtx {
-    fn injected_variables(&self) -> HashMap<&'static str, String> { HashMap::new() }
-    fn working_dir(&self) -> &Path { &self.0 }
-    fn working_dir_str(&self) -> String { self.0.to_string_lossy().into_owned() }
-    fn get(&self, _: &str) -> Option<String> { None }
-    fn run_id(&self) -> &str { "env-run" }
-    fn workflow_name(&self) -> &str { "env-example" }
-    fn parent_run_id(&self) -> Option<&str> { None }
-    fn shutdown(&self) -> Option<&Arc<AtomicBool>> { None }
+    fn injected_variables(&self) -> HashMap<&'static str, String> {
+        HashMap::new()
+    }
+    fn working_dir(&self) -> &Path {
+        &self.0
+    }
+    fn working_dir_str(&self) -> String {
+        self.0.to_string_lossy().into_owned()
+    }
+    fn get(&self, _: &str) -> Option<String> {
+        None
+    }
+    fn run_id(&self) -> &str {
+        "env-run"
+    }
+    fn workflow_name(&self) -> &str {
+        "env-example"
+    }
+    fn parent_run_id(&self) -> Option<&str> {
+        None
+    }
+    fn shutdown(&self) -> Option<&Arc<AtomicBool>> {
+        None
+    }
 }
 
 fn main() {

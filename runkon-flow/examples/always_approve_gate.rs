@@ -4,7 +4,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 
 use runkon_flow::dsl::ApprovalMode;
 use runkon_flow::engine_error::EngineError;
-use runkon_flow::traits::gate_resolver::{GatePoll, GateParams, GateResolver};
+use runkon_flow::traits::gate_resolver::{GateParams, GatePoll, GateResolver};
 use runkon_flow::traits::run_context::RunContext;
 
 /// `GateResolver` that immediately approves every gate poll.
@@ -28,14 +28,30 @@ impl GateResolver for AlwaysApproveGateResolver {
 struct StubCtx(PathBuf);
 
 impl RunContext for StubCtx {
-    fn injected_variables(&self) -> HashMap<&'static str, String> { HashMap::new() }
-    fn working_dir(&self) -> &Path { &self.0 }
-    fn working_dir_str(&self) -> String { self.0.to_string_lossy().into_owned() }
-    fn get(&self, _: &str) -> Option<String> { None }
-    fn run_id(&self) -> &str { "gate-run" }
-    fn workflow_name(&self) -> &str { "gate-example" }
-    fn parent_run_id(&self) -> Option<&str> { None }
-    fn shutdown(&self) -> Option<&Arc<AtomicBool>> { None }
+    fn injected_variables(&self) -> HashMap<&'static str, String> {
+        HashMap::new()
+    }
+    fn working_dir(&self) -> &Path {
+        &self.0
+    }
+    fn working_dir_str(&self) -> String {
+        self.0.to_string_lossy().into_owned()
+    }
+    fn get(&self, _: &str) -> Option<String> {
+        None
+    }
+    fn run_id(&self) -> &str {
+        "gate-run"
+    }
+    fn workflow_name(&self) -> &str {
+        "gate-example"
+    }
+    fn parent_run_id(&self) -> Option<&str> {
+        None
+    }
+    fn shutdown(&self) -> Option<&Arc<AtomicBool>> {
+        None
+    }
 }
 
 fn main() {
@@ -52,7 +68,10 @@ fn main() {
         step_id: "gate-step-1".into(),
     };
 
-    match resolver.poll("run-001", &params, &ctx).expect("poll failed") {
+    match resolver
+        .poll("run-001", &params, &ctx)
+        .expect("poll failed")
+    {
         GatePoll::Approved(feedback) => println!("approved (feedback: {:?})", feedback),
         GatePoll::Rejected(reason) => println!("rejected: {}", reason),
         GatePoll::Pending => println!("pending"),

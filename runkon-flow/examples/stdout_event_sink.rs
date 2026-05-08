@@ -16,8 +16,14 @@ impl EventSink for StdoutEventSink {
             EngineEvent::StepStarted { step_name } => {
                 format!("step started (step={})", step_name)
             }
-            EngineEvent::StepCompleted { step_name, succeeded } => {
-                format!("step completed (step={}, succeeded={})", step_name, succeeded)
+            EngineEvent::StepCompleted {
+                step_name,
+                succeeded,
+            } => {
+                format!(
+                    "step completed (step={}, succeeded={})",
+                    step_name, succeeded
+                )
             }
             _ => format!("{:?}", event.event),
         };
@@ -30,7 +36,9 @@ fn main() {
 
     sink.emit(&EngineEventData::new(
         "run-001".into(),
-        EngineEvent::RunStarted { workflow_name: "my-workflow".into() },
+        EngineEvent::RunStarted {
+            workflow_name: "my-workflow".into(),
+        },
     ));
     sink.emit(&EngineEventData::new(
         "run-001".into(),
