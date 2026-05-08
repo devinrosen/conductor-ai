@@ -67,9 +67,9 @@ impl ChildWorkflowRunner for CrossHarnessChildRunner {
         // 3. Wire up executors, inputs, parent linkage, and cancellation.
         //    engine_b injects sink_b into child_state.event_sinks on run().
         child_state.action_registry = Arc::new(ActionRegistry::from_executors(
-            named_executors([
-                Box::new(MockExecutor::new("child-agent")) as Box<dyn ActionExecutor>,
-            ]),
+            named_executors(
+                [Box::new(MockExecutor::new("child-agent")) as Box<dyn ActionExecutor>],
+            ),
             None,
         ));
         child_state.workflow_name = workflow_name.to_string();
