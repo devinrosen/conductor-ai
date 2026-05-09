@@ -807,6 +807,7 @@ impl App {
             InputAction::SettingsSetModel
             | InputAction::SettingsSetSyncInterval
             | InputAction::SettingsSetStallTimeout
+            | InputAction::SettingsSetMaxTurns
             | InputAction::SettingsAddRuntime
             | InputAction::SettingsAddModel { .. }
             | InputAction::SettingsEditModel { .. }

@@ -17,8 +17,10 @@ pub mod general_row {
     pub const AUTO_CLEANUP: usize = 4;
     pub const ISSUE_SOURCES: usize = 5;
     pub const STALL_TIMEOUT: usize = 6;
+    pub const ENFORCE_TURN_LIMIT: usize = 7;
+    pub const MAX_TURNS: usize = 8;
     #[allow(dead_code)]
-    pub const COUNT: usize = 7;
+    pub const COUNT: usize = 9;
 }
 
 /// Named row indices for Appearance settings (right pane).
@@ -200,6 +202,16 @@ fn render_general(frame: &mut Frame, area: Rect, block: Block, state: &AppState,
             "Stall timeout (sec)",
             &d.stall_timeout,
             row_style(general_row::STALL_TIMEOUT, sel, focused, state),
+        ),
+        setting_line(
+            "Enforce turn limit",
+            &d.enforce_turn_limit,
+            row_style(general_row::ENFORCE_TURN_LIMIT, sel, focused, state),
+        ),
+        setting_line(
+            "Max turns",
+            &d.max_turns,
+            row_style(general_row::MAX_TURNS, sel, focused, state),
         ),
         Line::from(""),
         hint_line,

@@ -207,6 +207,8 @@ pub struct SettingsDisplayCache {
     pub sync_interval: String,
     pub auto_cleanup: String,
     pub stall_timeout: String,
+    pub enforce_turn_limit: String,
+    pub max_turns: String,
     pub theme: String,
     /// (on_pattern, run_or_url) pairs for each configured hook.
     pub hooks: Vec<(String, String)>,

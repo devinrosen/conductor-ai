@@ -56,6 +56,20 @@ impl App {
             None => "300 (default)".to_string(),
             Some(n) => n.to_string(),
         };
+        let enforce_turn_limit = if cfg.agents.enforce_turn_limit {
+            "on"
+        } else {
+            "off"
+        }
+        .to_string();
+        let max_turns = if !cfg.agents.enforce_turn_limit {
+            "(disabled)".to_string()
+        } else {
+            match cfg.agents.max_turns {
+                None => "100 (default)".to_string(),
+                Some(n) => n.to_string(),
+            }
+        };
         let theme = self
             .tui_config
             .theme
@@ -127,6 +141,8 @@ impl App {
             sync_interval,
             auto_cleanup,
             stall_timeout,
+            enforce_turn_limit,
+            max_turns,
             theme,
             hooks,
             runtimes,
@@ -172,6 +188,21 @@ impl App {
                         prompt: "Stall timeout (seconds, blank to reset to default):".into(),
                         value: current,
                         on_submit: InputAction::SettingsSetStallTimeout,
+                    };
+                }
+                general_row::MAX_TURNS => {
+                    let current = self
+                        .config
+                        .agents
+                        .max_turns
+                        .map(|n| n.to_string())
+                        .unwrap_or_default();
+                    self.state.modal = Modal::Input {
+                        title: "Set max turns".into(),
+                        prompt: "Max turns (positive integer, blank to reset to default):"
+                            .into(),
+                        value: current,
+                        on_submit: InputAction::SettingsSetMaxTurns,
                     };
                 }
                 _ => {}
@@ -223,6 +254,12 @@ impl App {
                 general_row::AUTO_CLEANUP => {
                     self.config.general.auto_cleanup_merged_branches =
                         !self.config.general.auto_cleanup_merged_branches;
+                    self.save_config_background();
+                    self.refresh_settings_display();
+                }
+                general_row::ENFORCE_TURN_LIMIT => {
+                    self.config.agents.enforce_turn_limit =
+                        !self.config.agents.enforce_turn_limit;
                     self.save_config_background();
                     self.refresh_settings_display();
                 }
@@ -568,6 +605,26 @@ impl App {
                                 message:
                                     "Stall timeout must be a positive integer or blank to reset."
                                         .into(),
+                            };
+                            return;
+                        }
+                    }
+                }
+                self.save_config_background();
+                self.refresh_settings_display();
+            }
+            InputAction::SettingsSetMaxTurns => {
+                if value.trim().is_empty() {
+                    self.config.agents.max_turns = None;
+                } else {
+                    match value.trim().parse::<u32>() {
+                        Ok(n) if n > 0 => {
+                            self.config.agents.max_turns = Some(n);
+                        }
+                        _ => {
+                            self.state.modal = Modal::Error {
+                                message: "Max turns must be a positive integer or blank to reset."
+                                    .into(),
                             };
                             return;
                         }
