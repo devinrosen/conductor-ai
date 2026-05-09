@@ -199,8 +199,7 @@ impl App {
                         .unwrap_or_default();
                     self.state.modal = Modal::Input {
                         title: "Set max turns".into(),
-                        prompt: "Max turns (positive integer, blank to reset to default):"
-                            .into(),
+                        prompt: "Max turns (positive integer, blank to reset to default):".into(),
                         value: current,
                         on_submit: InputAction::SettingsSetMaxTurns,
                     };
@@ -258,8 +257,7 @@ impl App {
                     self.refresh_settings_display();
                 }
                 general_row::ENFORCE_TURN_LIMIT => {
-                    self.config.agents.enforce_turn_limit =
-                        !self.config.agents.enforce_turn_limit;
+                    self.config.agents.enforce_turn_limit = !self.config.agents.enforce_turn_limit;
                     self.save_config_background();
                     self.refresh_settings_display();
                 }
