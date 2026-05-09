@@ -217,13 +217,38 @@ pub struct NotifyConfig {
 }
 
 /// Per-agent execution settings (global, not per-run).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentsConfig {
     /// Seconds without JSONL output before the agent run is marked failed with
     /// `stall_timeout`. When unset, falls back to
     /// [`crate::agent_runtime::DEFAULT_STALL_THRESHOLD`] (300 s).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stall_threshold_secs: Option<u64>,
+
+    /// Global default turn cap for workflow-driven Claude agent steps.
+    /// Falls back to `DEFAULT_MAX_TURNS` (100) when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<u32>,
+
+    /// When `false`, workflow steps run uncapped (no turn limit enforced).
+    /// Per-step `.wf` `max_turns:` overrides still apply when explicit.
+    /// Defaults to `true` to preserve existing safety behavior.
+    #[serde(default = "default_enforce_turn_limit")]
+    pub enforce_turn_limit: bool,
+}
+
+fn default_enforce_turn_limit() -> bool {
+    true
+}
+
+impl Default for AgentsConfig {
+    fn default() -> Self {
+        Self {
+            stall_threshold_secs: None,
+            max_turns: None,
+            enforce_turn_limit: true,
+        }
+    }
 }
 
 impl AgentsConfig {
@@ -231,6 +256,21 @@ impl AgentsConfig {
         self.stall_threshold_secs
             .map(std::time::Duration::from_secs)
             .unwrap_or(crate::agent_runtime::DEFAULT_STALL_THRESHOLD)
+    }
+
+    /// Resolve the turn cap for a workflow step.
+    /// Step-explicit wins; otherwise toggle + config default; otherwise built-in default.
+    pub fn workflow_max_turns(&self, step_override: Option<u32>) -> Option<u32> {
+        if let Some(n) = step_override {
+            return Some(n);
+        }
+        if !self.enforce_turn_limit {
+            return None;
+        }
+        Some(
+            self.max_turns
+                .unwrap_or(crate::agent_runtime::DEFAULT_MAX_TURNS),
+        )
     }
 }
 
@@ -1887,6 +1927,76 @@ bot_name = "my-bot"
     fn workflow_log_path_invalid_ulid_returns_error() {
         let err = super::workflow_log_path("../etc/passwd").unwrap_err();
         assert!(err.to_string().contains("invalid run_id"));
+    }
+
+    // -----------------------------------------------------------------------
+    // AgentsConfig::workflow_max_turns tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn workflow_max_turns_default_config_returns_100() {
+        let cfg = AgentsConfig::default();
+        assert_eq!(cfg.workflow_max_turns(None), Some(100));
+    }
+
+    #[test]
+    fn workflow_max_turns_custom_max_turns_used_when_toggle_on() {
+        let cfg = AgentsConfig {
+            max_turns: Some(50),
+            enforce_turn_limit: true,
+            ..AgentsConfig::default()
+        };
+        assert_eq!(cfg.workflow_max_turns(None), Some(50));
+    }
+
+    #[test]
+    fn workflow_max_turns_toggle_off_returns_none() {
+        let cfg = AgentsConfig {
+            enforce_turn_limit: false,
+            ..AgentsConfig::default()
+        };
+        assert_eq!(cfg.workflow_max_turns(None), None);
+    }
+
+    #[test]
+    fn workflow_max_turns_step_override_wins_over_default() {
+        let cfg = AgentsConfig::default();
+        assert_eq!(cfg.workflow_max_turns(Some(25)), Some(25));
+    }
+
+    #[test]
+    fn workflow_max_turns_step_override_wins_over_custom_max_turns() {
+        let cfg = AgentsConfig {
+            max_turns: Some(50),
+            enforce_turn_limit: true,
+            ..AgentsConfig::default()
+        };
+        assert_eq!(cfg.workflow_max_turns(Some(25)), Some(25));
+    }
+
+    #[test]
+    fn workflow_max_turns_step_override_wins_when_toggle_off() {
+        let cfg = AgentsConfig {
+            enforce_turn_limit: false,
+            ..AgentsConfig::default()
+        };
+        assert_eq!(cfg.workflow_max_turns(Some(25)), Some(25));
+    }
+
+    #[test]
+    fn workflow_max_turns_step_override_wins_with_both_custom_and_toggle_off() {
+        let cfg = AgentsConfig {
+            max_turns: Some(200),
+            enforce_turn_limit: false,
+            ..AgentsConfig::default()
+        };
+        assert_eq!(cfg.workflow_max_turns(Some(25)), Some(25));
+    }
+
+    #[test]
+    fn agents_config_default_enforce_turn_limit_is_true() {
+        let cfg = AgentsConfig::default();
+        assert!(cfg.enforce_turn_limit);
     }
 
     // -----------------------------------------------------------------------
