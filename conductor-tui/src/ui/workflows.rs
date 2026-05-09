@@ -2175,7 +2175,7 @@ fn run_status_icon(
     let gate_type = steps.get(&run.id).and_then(|ss| {
         ss.iter()
             .find(|s| s.status == WorkflowStepStatus::Waiting && s.gate_type.is_some())
-            .and_then(|s| s.gate_type.as_ref())
+            .and_then(|s| s.gate_type.as_deref())
     });
     gate_type_icon(gate_type, theme)
 }
@@ -2239,7 +2239,7 @@ mod tests {
             on_fail: None,
             output: None,
             with: vec![],
-            bot_name: None,
+            as_identity: None,
             plugin_dirs: vec![],
             timeout: None,
             max_turns: None,
@@ -2252,7 +2252,7 @@ mod tests {
             inputs: Default::default(),
             retries: 0,
             on_fail: None,
-            bot_name: None,
+            as_identity: None,
         })
     }
 

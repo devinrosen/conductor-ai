@@ -23,7 +23,7 @@ pub(super) use super::*;
 pub(super) use super::{WorkflowRunStatus, WorkflowStepStatus};
 pub(super) use crate::config::Config;
 pub(super) use crate::workflow::{
-    ContextEntry, StepResult, WorkflowExecConfig, WorkflowRun, WorkflowRunStep,
+    gate_types, ContextEntry, StepResult, WorkflowExecConfig, WorkflowRun, WorkflowRunStep,
 };
 pub(super) use common::*;
 pub(super) use runkon_flow_executors::output::interpret_agent_output;

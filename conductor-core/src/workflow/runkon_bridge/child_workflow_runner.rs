@@ -87,7 +87,7 @@ impl ConductorChildWorkflowRunner {
             parent_workflow_run_id: Some(parent_ctx.workflow_run_id.clone()),
             depth: params.depth,
             parent_step_id: params.parent_step_id,
-            default_bot_name: params.bot_name,
+            default_bot_name: params.as_identity,
             iteration: params.iteration,
         }
     }
@@ -285,7 +285,7 @@ mod tests {
         let params = ChildWorkflowInput {
             inputs: HashMap::new(),
             iteration: 0,
-            bot_name: None,
+            as_identity: None,
             depth: 1,
             parent_step_id: None,
             cancellation: runkon_flow::CancellationToken::new(),

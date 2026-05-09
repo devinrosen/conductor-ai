@@ -326,7 +326,7 @@ fn build_rk_execution_state(args: RkStateArgs) -> runkon_flow::engine::Execution
         block_output: None,
         block_with: Vec::new(),
         resume_ctx: None,
-        default_bot_name: args.default_bot_name,
+        default_as_identity: args.default_bot_name,
         triggered_by_hook: args.triggered_by_hook,
         schema_resolver: Some(args.schema_resolver),
         child_runner: Some(args.child_runner),

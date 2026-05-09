@@ -23,6 +23,7 @@ pub(crate) mod panic_db_sink;
 // wrappers in this module (e.g. `recover_stuck_steps_from_db`).
 // Internal callers address the type via the full path
 // `crate::workflow::persistence_sqlite::SqliteWorkflowPersistence`.
+pub mod gate_types;
 pub(crate) mod persistence_sqlite;
 pub(crate) mod prompt_builder;
 pub(crate) mod run_context;
@@ -138,9 +139,9 @@ pub use runkon_flow::dsl::{
     collect_agent_names, collect_workflow_refs, default_skills_dir, detect_workflow_cycles,
     make_script_resolver, parse_workflow_str, resolve_script_path, validate_script_steps,
     validate_workflow_semantics, AgentRef, AlwaysNode, CallNode, CallWorkflowNode, Condition,
-    DoNode, DoWhileNode, GateNode, GateType, IfNode, InputDecl, InputType, OnFail, ParallelNode,
-    UnlessNode, ValidationContext, ValidationError, ValidationReport, WhileNode, WorkflowDef,
-    WorkflowNode, WorkflowTrigger, WorkflowWarning, MAX_WORKFLOW_DEPTH,
+    DoNode, DoWhileNode, GateNode, IfNode, InputDecl, InputType, OnFail, ParallelNode, UnlessNode,
+    ValidationContext, ValidationError, ValidationReport, WhileNode, WorkflowDef, WorkflowNode,
+    WorkflowTrigger, WorkflowWarning, MAX_WORKFLOW_DEPTH,
 };
 
 // Re-export unified runkon-flow types so downstream crates can import them from

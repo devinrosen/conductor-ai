@@ -2697,7 +2697,7 @@ fn test_set_step_gate_info_with_prompt() {
     crate::workflow::set_step_gate_info(
         &conn,
         &step_id,
-        GateType::PrApproval,
+        gate_types::PR_APPROVAL,
         Some("Need 2 approvals"),
         "24h",
     )
@@ -2706,7 +2706,7 @@ fn test_set_step_gate_info_with_prompt() {
     let step = crate::workflow::get_step_by_id(&conn, &step_id)
         .unwrap()
         .unwrap();
-    assert_eq!(step.gate_type, Some(GateType::PrApproval));
+    assert_eq!(step.gate_type, Some(gate_types::PR_APPROVAL.to_string()));
     assert_eq!(step.gate_prompt.as_deref(), Some("Need 2 approvals"));
     assert_eq!(step.gate_timeout.as_deref(), Some("24h"));
 }
@@ -2718,12 +2718,13 @@ fn test_set_step_gate_info_no_prompt() {
     let step_id =
         crate::workflow::insert_step(&conn, &run.id, "gate-step", "gate", false, 0, 0).unwrap();
 
-    crate::workflow::set_step_gate_info(&conn, &step_id, GateType::PrChecks, None, "1h").unwrap();
+    crate::workflow::set_step_gate_info(&conn, &step_id, gate_types::PR_CHECKS, None, "1h")
+        .unwrap();
 
     let step = crate::workflow::get_step_by_id(&conn, &step_id)
         .unwrap()
         .unwrap();
-    assert_eq!(step.gate_type, Some(GateType::PrChecks));
+    assert_eq!(step.gate_type, Some(gate_types::PR_CHECKS.to_string()));
     assert!(step.gate_prompt.is_none());
     assert_eq!(step.gate_timeout.as_deref(), Some("1h"));
 }

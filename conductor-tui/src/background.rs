@@ -269,7 +269,7 @@ pub fn spawn_db_poller(
                                             step_name: &step.step_name,
                                             workflow_name,
                                             target_label: target_label.as_deref(),
-                                            gate_type: step.gate_type.as_ref(),
+                                            gate_type: step.gate_type.as_deref(),
                                             gate_prompt: step.gate_prompt.as_deref(),
                                             repo_slug: rs,
                                             branch: br,
@@ -279,11 +279,9 @@ pub fn spawn_db_poller(
                                 } else if !notified_grouped_run_ids.contains(run_id) {
                                     // Multiple gates: fire a single grouped notification
                                     let (_, workflow_name, target_label) = steps[0];
-                                    let gate_types: Vec<
-                                        Option<&conductor_core::workflow::GateType>,
-                                    > = steps
+                                    let gate_types: Vec<Option<&str>> = steps
                                         .iter()
-                                        .map(|(s, _, _)| s.gate_type.as_ref())
+                                        .map(|(s, _, _)| s.gate_type.as_deref())
                                         .collect();
                                     crate::notify::fire_grouped_gate_notification(
                                         conn,

@@ -24,7 +24,7 @@ fn test_gate_approve() {
     crate::workflow::set_step_gate_info(
         &conn,
         &step_id,
-        GateType::HumanReview,
+        gate_types::HUMAN_REVIEW,
         Some("Review?"),
         "48h",
     )
@@ -69,7 +69,7 @@ fn test_gate_reject() {
     crate::workflow::set_step_gate_info(
         &conn,
         &step_id,
-        GateType::HumanApproval,
+        gate_types::HUMAN_APPROVAL,
         Some("Approve?"),
         "24h",
     )
@@ -104,7 +104,7 @@ fn test_gate_pr_approval_approve() {
     let step_id =
         crate::workflow::insert_step(&conn, &run.id, "pr_approval_gate", "gate", false, 0, 0)
             .unwrap();
-    crate::workflow::set_step_gate_info(&conn, &step_id, GateType::PrApproval, None, "48h")
+    crate::workflow::set_step_gate_info(&conn, &step_id, gate_types::PR_APPROVAL, None, "48h")
         .unwrap();
     set_step_status(&conn, &step_id, WorkflowStepStatus::Waiting);
 
@@ -122,7 +122,7 @@ fn test_gate_pr_approval_approve() {
         .unwrap()
         .unwrap();
     assert_eq!(step.status, WorkflowStepStatus::Completed);
-    assert_eq!(step.gate_type, Some(GateType::PrApproval));
+    assert_eq!(step.gate_type, Some(gate_types::PR_APPROVAL.to_string()));
     assert_eq!(step.gate_approved_by.as_deref(), Some("reviewer-bot"));
 }
 
@@ -144,7 +144,7 @@ fn test_gate_pr_approval_reject() {
     let step_id =
         crate::workflow::insert_step(&conn, &run.id, "pr_approval_gate", "gate", false, 0, 0)
             .unwrap();
-    crate::workflow::set_step_gate_info(&conn, &step_id, GateType::PrApproval, None, "24h")
+    crate::workflow::set_step_gate_info(&conn, &step_id, gate_types::PR_APPROVAL, None, "24h")
         .unwrap();
     set_step_status(&conn, &step_id, WorkflowStepStatus::Waiting);
 
@@ -179,7 +179,8 @@ fn test_gate_pr_checks_approve() {
     let step_id =
         crate::workflow::insert_step(&conn, &run.id, "pr_checks_gate", "gate", false, 0, 0)
             .unwrap();
-    crate::workflow::set_step_gate_info(&conn, &step_id, GateType::PrChecks, None, "1h").unwrap();
+    crate::workflow::set_step_gate_info(&conn, &step_id, gate_types::PR_CHECKS, None, "1h")
+        .unwrap();
     set_step_status(&conn, &step_id, WorkflowStepStatus::Waiting);
 
     crate::workflow::approve_gate(
@@ -196,7 +197,7 @@ fn test_gate_pr_checks_approve() {
         .unwrap()
         .unwrap();
     assert_eq!(step.status, WorkflowStepStatus::Completed);
-    assert_eq!(step.gate_type, Some(GateType::PrChecks));
+    assert_eq!(step.gate_type, Some(gate_types::PR_CHECKS.to_string()));
 }
 
 // ---------------------------------------------------------------------------
@@ -223,7 +224,7 @@ fn test_gate_multiselect_options_and_approval() {
     crate::workflow::set_step_gate_info(
         &conn,
         &step_id,
-        GateType::HumanReview,
+        gate_types::HUMAN_REVIEW,
         Some("Select items:"),
         "1h",
     )
@@ -303,7 +304,7 @@ fn test_gate_approve_empty_selections() {
     crate::workflow::set_step_gate_info(
         &conn,
         &step_id,
-        GateType::HumanReview,
+        gate_types::HUMAN_REVIEW,
         Some("Select items:"),
         "1h",
     )

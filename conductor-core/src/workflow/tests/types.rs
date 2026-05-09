@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::workflow::{
-    BlockedOn, ContextEntry, GateType, WorkflowExecConfig, WorkflowRunStep, WorkflowStepSummary,
+    BlockedOn, ContextEntry, WorkflowExecConfig, WorkflowRunStep, WorkflowStepSummary,
 };
 
 // ---------------------------------------------------------------------------

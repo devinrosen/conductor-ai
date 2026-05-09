@@ -596,7 +596,7 @@ mod tests {
 
     #[test]
     fn step_metadata_entries_includes_optional_fields_when_present() {
-        use conductor_core::workflow::GateType;
+        use conductor_core::workflow::gate_types;
 
         let step = WorkflowRunStep {
             status: WorkflowStepStatus::Failed,
@@ -605,7 +605,7 @@ mod tests {
             iteration: 0,
             started_at: Some("2024-01-01T00:00:00Z".into()),
             ended_at: Some("2024-01-01T01:00:00Z".into()),
-            gate_type: Some(GateType::HumanApproval),
+            gate_type: Some(gate_types::HUMAN_APPROVAL.to_string()),
             gate_prompt: Some("Approve?".into()),
             gate_feedback: Some("lgtm".into()),
             result_text: Some("result".into()),
