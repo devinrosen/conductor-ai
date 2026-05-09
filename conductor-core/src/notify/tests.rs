@@ -767,6 +767,63 @@ fn gate_text_none_fallback() {
     assert_eq!(body, "release: Deploy to prod");
 }
 
+// --- Other(_) — unknown gate types from future runkon-flow versions land here.
+//     Tests pin down the default-fallback behavior so a string change upstream
+//     never silently flips to a no-op.
+
+#[test]
+fn gate_text_other_falls_back_to_default_title() {
+    let other = GateType::Other("future_gate_type".to_string());
+    let (title, body) = gate_notification_text(
+        Some(&other),
+        "Custom step",
+        "experimental",
+        None,
+        Some("Take a look"),
+    );
+    assert_eq!(title, "Conductor \u{2014} Approval Required");
+    assert_eq!(body, "experimental: Custom step");
+}
+
+#[test]
+fn should_notify_gate_other_passes_when_workflows_enabled() {
+    let cfg = config(true, false, false);
+    let other = GateType::Other("future_gate_type".to_string());
+    assert!(
+        should_notify_gate(&cfg, Some(&other)),
+        "unknown gate types should default to notifying when notifications.enabled is true"
+    );
+}
+
+#[test]
+fn should_notify_gate_other_blocked_by_master_disabled() {
+    // Master `enabled = false` short-circuits before the per-gate-type match,
+    // so unknown gates respect the global kill switch.
+    let cfg = config(false, false, false);
+    let other = GateType::Other("future_gate_type".to_string());
+    assert!(!should_notify_gate(&cfg, Some(&other)));
+}
+
+#[test]
+fn grouped_text_other_treated_as_lowest_priority() {
+    let other = GateType::Other("future_gate_type".to_string());
+    let gate_types = vec![Some(&other), Some(&GateType::PrApproval)];
+    let (title, _) = grouped_gate_notification_text(&gate_types, "review", None, 2);
+    assert_eq!(
+        title, "Conductor \u{2014} Awaiting PR Review",
+        "PrApproval should win over Other(_)"
+    );
+}
+
+#[test]
+fn grouped_text_only_other_uses_default_title() {
+    let a = GateType::Other("custom_a".to_string());
+    let b = GateType::Other("custom_b".to_string());
+    let gate_types = vec![Some(&a), Some(&b)];
+    let (title, _) = grouped_gate_notification_text(&gate_types, "review", None, 2);
+    assert_eq!(title, "Conductor \u{2014} Approval Required");
+}
+
 #[test]
 fn gate_text_with_target_label() {
     let (title, body) = gate_notification_text(

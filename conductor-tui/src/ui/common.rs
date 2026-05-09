@@ -393,7 +393,7 @@ pub fn gate_type_icon(gate_type: Option<&GateType>, theme: &Theme) -> (&'static 
             ("👤", theme.label_warning)
         }
         Some(GateType::QualityGate) => ("🔍", theme.status_waiting),
-        None => ("⏸", theme.status_waiting),
+        Some(GateType::Other(_)) | None => ("⏸", theme.status_waiting),
     }
 }
 

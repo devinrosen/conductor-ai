@@ -644,7 +644,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-cli"
-version = "0.15.3"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-core"
-version = "0.15.3"
+version = "0.16.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -674,6 +674,7 @@ dependencies = [
  "mockito",
  "notify",
  "regex-lite",
+ "runkon-anthropic",
  "runkon-flow",
  "runkon-flow-executors",
  "runkon-runtimes",
@@ -694,7 +695,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-desktop"
-version = "0.15.3"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -712,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-tui"
-version = "0.15.3"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -735,7 +736,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-web"
-version = "0.15.3"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4440,8 +4441,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "runkon-anthropic"
+version = "0.2.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ef50bf8fc89a8f82502cebc8ac46cabad3d28fd28d79afae84de5b8b9c1fc1f"
+dependencies = [
+ "runkon-flow",
+ "runkon-flow-executors",
+ "runkon-runtimes",
+ "serde",
+ "serde_json",
+ "tracing",
+ "ureq",
+]
+
+[[package]]
 name = "runkon-flow"
-version = "0.1.1-alpha"
+version = "0.2.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bc7da8ca6d035549b72d58e4a0333b82b644e716f6345c131df7887a8fd6576"
 dependencies = [
  "chrono",
  "rusqlite",
@@ -4460,28 +4478,28 @@ dependencies = [
 
 [[package]]
 name = "runkon-flow-executors"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a01cc7eb761dec1548d82bfd85e592d16b34dea3a61f7e34332d76550c646f8f"
 dependencies = [
  "runkon-flow",
  "runkon-runtimes",
  "serde",
  "serde_json",
  "serde_yml",
- "tempfile",
  "tracing",
- "ureq",
 ]
 
 [[package]]
 name = "runkon-runtimes"
-version = "0.1.1-alpha"
+version = "0.2.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d1fd731e20c6b9ce56581b4953804686f56d07f0b0d1cb3b145b1fcf60df5c4"
 dependencies = [
  "libc",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror 2.0.18",
- "toml 0.8.23",
  "tracing",
  "utoipa",
 ]

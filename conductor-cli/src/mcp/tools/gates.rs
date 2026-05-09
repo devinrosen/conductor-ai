@@ -114,7 +114,7 @@ mod tests {
         conductor_core::workflow::set_step_gate_info(
             conn,
             &step_id,
-            GateType::HumanApproval,
+            &GateType::HumanApproval,
             Some("Approve?"),
             "24h",
         )

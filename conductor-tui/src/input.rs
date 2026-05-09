@@ -1383,7 +1383,7 @@ mod tests {
         state.data.workflow_steps = vec![WorkflowRunStep {
             role: "reviewer".into(),
             status: WorkflowStepStatus::Waiting,
-            gate_type: Some(GateType::HumanApproval),
+            gate_type: Some(GateType::HumanApproval.to_string()),
             ..base
         }];
         state

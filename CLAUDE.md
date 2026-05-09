@@ -75,7 +75,7 @@ cleaned up automatically when conductor deletes the worktree.
 
 ### Workspace Layout
 
-Five crates in a Cargo workspace:
+Conductor crates in a Cargo workspace (the `runkon-*` engine crates are now consumed from crates.io and live in their own [runkon/runkon](https://github.com/runkon/runkon) repo):
 
 - **conductor-core** — Library crate with all domain logic. Everything lives here.
 - **conductor-cli** — Thin binary wrapping core with clap subcommands.

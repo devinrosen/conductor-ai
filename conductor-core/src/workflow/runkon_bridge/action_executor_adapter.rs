@@ -161,7 +161,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             .clone()
             .or_else(|| derive_runtime_from_model(params.model.as_deref(), &self.config.runtimes));
 
-        let agent_ctx = runkon_flow_executors::claude_agent::ClaudeAgentContext {
+        let agent_ctx = runkon_anthropic::claude_agent::ClaudeAgentContext {
             run_id: child_run_id.clone(),
             working_dir: ctx.working_dir().to_path_buf(),
             repo_path: ctx
@@ -182,7 +182,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
         let schema_arc = params
             .extensions
             .get::<crate::schema_config::OutputSchema>();
-        let agent_params = runkon_flow_executors::claude_agent::ClaudeAgentParams {
+        let agent_params = runkon_anthropic::claude_agent::ClaudeAgentParams {
             name: &params.name,
             inputs: &params.inputs,
             snippet_refs: &params.snippets,
@@ -191,7 +191,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             schema: schema_arc.as_deref(),
         };
 
-        let inner = runkon_flow_executors::claude_agent::ClaudeAgentExecutor::new(
+        let inner = runkon_anthropic::claude_agent::ClaudeAgentExecutor::new(
             resolver,
             None, // Always use runtime resolver; API key path bypasses runtime selection
         );

@@ -114,7 +114,7 @@ where
             agents: wf.collect_all_agent_refs(),
             snippets: wf.collect_all_snippet_refs(),
             schemas: wf.collect_all_schema_refs(),
-            bot_names: wf.collect_all_bot_names(),
+            bot_names: wf.collect_all_as_identities(),
         })
         .collect();
 

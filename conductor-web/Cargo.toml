@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 conductor-core = { path = "../conductor-core", features = ["openapi"] }
-runkon-runtimes = { path = "../runkon-runtimes" }
+runkon-runtimes = "0.2.0-alpha"
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 axum = { version = "0.8", features = ["multipart"] }
