@@ -465,16 +465,11 @@ impl App {
                     std::thread::spawn(move || {
                         use crate::action::Action;
                         use crate::state::BranchPickerItem;
-                        use conductor_core::config::{db_path, load_config};
-                        use conductor_core::db::open_database;
                         use conductor_core::repo::RepoManager;
                         use conductor_core::worktree::WorktreeManager;
 
                         let result = (|| {
-                            let conn = open_database(&db_path())
-                                .map_err(|e| format!("Failed to open database: {e}"))?;
-                            let config =
-                                load_config().map_err(|e| format!("Failed to load config: {e}"))?;
+                            let (conn, config) = load_db_and_config()?;
                             let repo = RepoManager::new(&conn, &config)
                                 .get_by_slug(&slug)
                                 .map_err(|e| format!("Failed to get repo '{slug}': {e}"))?;
@@ -939,15 +934,11 @@ impl App {
         std::thread::spawn(move || {
             use crate::action::Action;
             use crate::state::BranchPickerItem;
-            use conductor_core::config::{db_path, load_config};
-            use conductor_core::db::open_database;
             use conductor_core::repo::RepoManager;
             use conductor_core::worktree::WorktreeManager;
 
             let result = (|| {
-                let conn = open_database(&db_path())
-                    .map_err(|e| format!("Failed to open database: {e}"))?;
-                let config = load_config().map_err(|e| format!("Failed to load config: {e}"))?;
+                let (conn, config) = load_db_and_config()?;
                 let repo = RepoManager::new(&conn, &config)
                     .get_by_slug(&repo_slug)
                     .map_err(|e| format!("Failed to get repo '{repo_slug}': {e}"))?;
@@ -1117,16 +1108,10 @@ impl App {
             let slug_clone = slug.clone();
             std::thread::spawn(move || {
                 use crate::action::Action;
-                use conductor_core::config::{db_path, load_config};
-                use conductor_core::db::open_database;
                 use conductor_core::repo::RepoManager;
 
                 let result = (|| {
-                    let db = db_path();
-                    let conn =
-                        open_database(&db).map_err(|e| format!("Failed to open database: {e}"))?;
-                    let config =
-                        load_config().map_err(|e| format!("Failed to load config: {e}"))?;
+                    let (conn, config) = load_db_and_config()?;
                     let mgr = RepoManager::new(&conn, &config);
                     mgr.set_model(&slug_clone, model_clone.as_deref())
                         .map_err(|e| format!("{e}"))?;
@@ -1157,6 +1142,15 @@ impl App {
             }
         }
     }
+}
+
+fn load_db_and_config() -> Result<(rusqlite::Connection, Config), String> {
+    use conductor_core::config::{db_path, load_config};
+    use conductor_core::db::open_database;
+    let conn =
+        open_database(&db_path()).map_err(|e| format!("Failed to open database: {e}"))?;
+    let config = load_config().map_err(|e| format!("Failed to load config: {e}"))?;
+    Ok((conn, config))
 }
 
 #[cfg(test)]
