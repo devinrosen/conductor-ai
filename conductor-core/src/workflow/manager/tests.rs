@@ -1,7 +1,7 @@
 use crate::agent::AgentManager;
 use crate::db::sql_placeholders;
-use crate::workflow::gate_types;
 use crate::workflow::types::{ConductorWorkflowRun, TimeGranularity};
+use crate::workflow::GateType;
 use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
 
 fn setup_db() -> rusqlite::Connection {
@@ -289,7 +289,7 @@ fn test_list_all_waiting_gate_steps_returns_waiting_gate_steps() {
     crate::workflow::set_step_gate_info(
         &conn,
         &step_id,
-        gate_types::HUMAN_APPROVAL,
+        &GateType::HumanApproval,
         Some("Please approve"),
         "1h",
     )
@@ -833,7 +833,7 @@ fn test_list_all_waiting_gate_steps_excludes_approved_gate_steps() {
 
     let step_id =
         crate::workflow::insert_step(&conn, &run.id, "gate", "gate", false, 0, 0).unwrap();
-    crate::workflow::set_step_gate_info(&conn, &step_id, gate_types::HUMAN_APPROVAL, None, "1h")
+    crate::workflow::set_step_gate_info(&conn, &step_id, &GateType::HumanApproval, None, "1h")
         .unwrap();
     // Mark as completed (approved) — must not appear in waiting list.
     conn.execute(
@@ -870,7 +870,7 @@ fn test_list_all_waiting_gate_steps_includes_target_label() {
     let step_id =
         crate::workflow::insert_step(&conn, &run.id, "approve-deploy", "gate", false, 0, 0)
             .unwrap();
-    crate::workflow::set_step_gate_info(&conn, &step_id, gate_types::HUMAN_APPROVAL, None, "1h")
+    crate::workflow::set_step_gate_info(&conn, &step_id, &GateType::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&conn, &step_id, WorkflowStepStatus::Waiting);
 
@@ -907,7 +907,7 @@ fn test_list_waiting_gate_steps_for_repo_via_worktree() {
     crate::workflow::set_step_gate_info(
         &conn,
         &step_id,
-        gate_types::HUMAN_APPROVAL,
+        &GateType::HumanApproval,
         Some("Please approve"),
         "1h",
     )
@@ -944,7 +944,7 @@ fn test_list_waiting_gate_steps_for_repo_via_direct_repo_id() {
 
     let step_id =
         crate::workflow::insert_step(&conn, &run.id, "direct-gate", "gate", false, 0, 0).unwrap();
-    crate::workflow::set_step_gate_info(&conn, &step_id, gate_types::HUMAN_APPROVAL, None, "1h")
+    crate::workflow::set_step_gate_info(&conn, &step_id, &GateType::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&conn, &step_id, WorkflowStepStatus::Waiting);
 
@@ -986,7 +986,7 @@ fn test_list_waiting_gate_steps_for_repo_ticket_ref_populated() {
 
     let step_id =
         crate::workflow::insert_step(&conn, &run.id, "approval-gate", "gate", false, 0, 0).unwrap();
-    crate::workflow::set_step_gate_info(&conn, &step_id, gate_types::HUMAN_APPROVAL, None, "1h")
+    crate::workflow::set_step_gate_info(&conn, &step_id, &GateType::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&conn, &step_id, WorkflowStepStatus::Waiting);
 
@@ -1008,7 +1008,7 @@ fn test_list_waiting_gate_steps_for_repo_excludes_other_repo() {
 
     let step_id =
         crate::workflow::insert_step(&conn, &run.id, "gate-other", "gate", false, 0, 0).unwrap();
-    crate::workflow::set_step_gate_info(&conn, &step_id, gate_types::HUMAN_APPROVAL, None, "1h")
+    crate::workflow::set_step_gate_info(&conn, &step_id, &GateType::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&conn, &step_id, WorkflowStepStatus::Waiting);
 
@@ -1041,7 +1041,7 @@ fn test_list_waiting_gate_steps_for_repo_excludes_completed_gate_steps() {
 
     let step_id =
         crate::workflow::insert_step(&conn, &run.id, "gate", "gate", false, 0, 0).unwrap();
-    crate::workflow::set_step_gate_info(&conn, &step_id, gate_types::HUMAN_APPROVAL, None, "1h")
+    crate::workflow::set_step_gate_info(&conn, &step_id, &GateType::HumanApproval, None, "1h")
         .unwrap();
     conn.execute(
         "UPDATE workflow_run_steps SET status = 'completed', gate_approved_at = '2024-01-01T00:00:00Z' WHERE id = :id",
@@ -1062,7 +1062,7 @@ fn test_list_waiting_gate_steps_for_repo_excludes_cancelled_run() {
 
     let step_id =
         crate::workflow::insert_step(&conn, &run.id, "gate", "gate", false, 0, 0).unwrap();
-    crate::workflow::set_step_gate_info(&conn, &step_id, gate_types::HUMAN_APPROVAL, None, "1h")
+    crate::workflow::set_step_gate_info(&conn, &step_id, &GateType::HumanApproval, None, "1h")
         .unwrap();
     conn.execute(
         "UPDATE workflow_runs SET status = 'cancelled' WHERE id = ?1",
@@ -1084,7 +1084,7 @@ fn test_list_waiting_gate_steps_for_repo_excludes_failed_run() {
 
     let step_id =
         crate::workflow::insert_step(&conn, &run.id, "gate", "gate", false, 0, 0).unwrap();
-    crate::workflow::set_step_gate_info(&conn, &step_id, gate_types::HUMAN_APPROVAL, None, "1h")
+    crate::workflow::set_step_gate_info(&conn, &step_id, &GateType::HumanApproval, None, "1h")
         .unwrap();
     conn.execute(
         "UPDATE workflow_runs SET status = 'failed' WHERE id = ?1",
@@ -3602,7 +3602,7 @@ fn test_get_gate_analytics_excludes_waiting_steps() {
 
     let step_id =
         crate::workflow::insert_step(&conn, &run.id, "approval", "gate", false, 0, 0).unwrap();
-    crate::workflow::set_step_gate_info(&conn, &step_id, gate_types::HUMAN_APPROVAL, None, "1h")
+    crate::workflow::set_step_gate_info(&conn, &step_id, &GateType::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&conn, &step_id, WorkflowStepStatus::Waiting);
 
@@ -3632,7 +3632,7 @@ fn test_get_all_pending_gates_returns_waiting_gate() {
     crate::workflow::set_step_gate_info(
         &conn,
         &step_id,
-        gate_types::HUMAN_APPROVAL,
+        &GateType::HumanApproval,
         Some("Please review"),
         "1h",
     )
@@ -3663,7 +3663,7 @@ fn test_get_all_pending_gates_excludes_completed() {
 
     let step_id =
         crate::workflow::insert_step(&conn, &run.id, "gate", "gate", false, 0, 0).unwrap();
-    crate::workflow::set_step_gate_info(&conn, &step_id, gate_types::HUMAN_APPROVAL, None, "1h")
+    crate::workflow::set_step_gate_info(&conn, &step_id, &GateType::HumanApproval, None, "1h")
         .unwrap();
     crate::workflow::approve_gate(&conn, &step_id, "alice", None, None, None).unwrap();
 
@@ -3693,14 +3693,14 @@ fn test_get_all_pending_gates_cross_workflow() {
     let run_a = create_named_worktree_run(&conn, "w1", "wf-alpha");
     let step_a =
         crate::workflow::insert_step(&conn, &run_a.id, "gate-a", "gate", false, 0, 0).unwrap();
-    crate::workflow::set_step_gate_info(&conn, &step_a, gate_types::HUMAN_APPROVAL, None, "1h")
+    crate::workflow::set_step_gate_info(&conn, &step_a, &GateType::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&conn, &step_a, WorkflowStepStatus::Waiting);
 
     let run_b = create_named_worktree_run(&conn, "w1", "wf-beta");
     let step_b =
         crate::workflow::insert_step(&conn, &run_b.id, "gate-b", "gate", false, 0, 0).unwrap();
-    crate::workflow::set_step_gate_info(&conn, &step_b, gate_types::HUMAN_APPROVAL, None, "1h")
+    crate::workflow::set_step_gate_info(&conn, &step_b, &GateType::HumanApproval, None, "1h")
         .unwrap();
     set_step_status(&conn, &step_b, WorkflowStepStatus::Waiting);
 
@@ -3720,7 +3720,7 @@ fn test_get_all_pending_gates_null_started_at() {
 
     let step_id =
         crate::workflow::insert_step(&conn, &run.id, "legacy-gate", "gate", false, 0, 0).unwrap();
-    crate::workflow::set_step_gate_info(&conn, &step_id, gate_types::HUMAN_APPROVAL, None, "1h")
+    crate::workflow::set_step_gate_info(&conn, &step_id, &GateType::HumanApproval, None, "1h")
         .unwrap();
     // Force status to 'waiting' without going through update_step_status_full
     // so that started_at stays NULL (simulating pre-fix rows).
@@ -4741,7 +4741,7 @@ fn gate_kind_human_approval_roundtrips_through_db() {
 
     let step_id =
         crate::workflow::insert_step(&conn, &run.id, "gate-step", "gate", false, 0, 0).unwrap();
-    crate::workflow::set_step_gate_info(&conn, &step_id, gate_types::HUMAN_APPROVAL, None, "1h")
+    crate::workflow::set_step_gate_info(&conn, &step_id, &GateType::HumanApproval, None, "1h")
         .unwrap();
 
     let step = crate::workflow::get_step_by_id(&conn, &step_id)
@@ -4749,7 +4749,7 @@ fn gate_kind_human_approval_roundtrips_through_db() {
         .unwrap();
     assert_eq!(
         step.gate_type,
-        Some(gate_types::HUMAN_APPROVAL.to_string()),
+        Some(GateType::HumanApproval.to_string()),
         "gate_type 'human_approval' must survive a write/read DB roundtrip"
     );
 }

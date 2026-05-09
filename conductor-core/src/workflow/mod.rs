@@ -24,6 +24,7 @@ pub(crate) mod panic_db_sink;
 // Internal callers address the type via the full path
 // `crate::workflow::persistence_sqlite::SqliteWorkflowPersistence`.
 pub mod gate_types;
+pub use gate_types::GateType;
 pub(crate) mod persistence_sqlite;
 pub(crate) mod prompt_builder;
 pub(crate) mod run_context;

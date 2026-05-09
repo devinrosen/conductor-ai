@@ -6,7 +6,7 @@ use rusqlite::Connection;
 
 use super::helpers::execute_sql;
 use crate::error::{ConductorError, Result};
-use crate::workflow::WorkflowStepStatus;
+use crate::workflow::{GateType, WorkflowStepStatus};
 
 /// Agent-run metrics to mirror onto a linked `workflow_run_steps` row (Path X.1).
 ///
@@ -241,7 +241,7 @@ pub fn set_step_output_file(conn: &Connection, step_id: &str, output_file: &str)
 pub fn set_step_gate_info(
     conn: &Connection,
     step_id: &str,
-    gate_type: &str,
+    gate_type: &GateType,
     gate_prompt: Option<&str>,
     gate_timeout: &str,
 ) -> Result<()> {
@@ -249,7 +249,7 @@ pub fn set_step_gate_info(
         conn,
         "UPDATE workflow_run_steps SET gate_type = :gate_type, gate_prompt = :gate_prompt, \
              gate_timeout = :gate_timeout WHERE id = :id",
-        named_params![":gate_type": gate_type, ":gate_prompt": gate_prompt, ":gate_timeout": gate_timeout, ":id": step_id],
+        named_params![":gate_type": gate_type.as_str(), ":gate_prompt": gate_prompt, ":gate_timeout": gate_timeout, ":id": step_id],
     )
 }
 

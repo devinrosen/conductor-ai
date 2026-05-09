@@ -1,8 +1,8 @@
 use super::*;
 use crate::agent::{AgentRun, AgentRunStatus};
 use crate::config::{HookConfig, NotificationConfig, SlackConfig, WorkflowNotificationConfig};
-use crate::workflow::gate_types;
 use crate::workflow::types::ConductorWorkflowRun;
+use crate::workflow::GateType;
 use crate::workflow::{WorkflowRun, WorkflowRunStatus};
 #[allow(unused_imports)]
 use rusqlite::Connection;
@@ -682,7 +682,7 @@ fn fire_feedback_notification_enabled_claims_once() {
 #[test]
 fn gate_text_human_approval_with_prompt() {
     let (title, body) = gate_notification_text(
-        Some(gate_types::HUMAN_APPROVAL),
+        Some(&GateType::HumanApproval),
         "Deploy to prod",
         "release",
         None,
@@ -695,7 +695,7 @@ fn gate_text_human_approval_with_prompt() {
 #[test]
 fn gate_text_human_approval_without_prompt() {
     let (title, body) = gate_notification_text(
-        Some(gate_types::HUMAN_APPROVAL),
+        Some(&GateType::HumanApproval),
         "Deploy to prod",
         "release",
         None,
@@ -708,7 +708,7 @@ fn gate_text_human_approval_without_prompt() {
 #[test]
 fn gate_text_human_review_with_prompt() {
     let (title, body) = gate_notification_text(
-        Some(gate_types::HUMAN_REVIEW),
+        Some(&GateType::HumanReview),
         "Code review",
         "ci-pipeline",
         None,
@@ -724,7 +724,7 @@ fn gate_text_human_review_with_prompt() {
 #[test]
 fn gate_text_human_review_without_prompt() {
     let (title, body) = gate_notification_text(
-        Some(gate_types::HUMAN_REVIEW),
+        Some(&GateType::HumanReview),
         "Code review",
         "ci-pipeline",
         None,
@@ -737,7 +737,7 @@ fn gate_text_human_review_without_prompt() {
 #[test]
 fn gate_text_pr_approval() {
     let (title, body) = gate_notification_text(
-        Some(gate_types::PR_APPROVAL),
+        Some(&GateType::PrApproval),
         "wait-for-review",
         "release",
         None,
@@ -750,7 +750,7 @@ fn gate_text_pr_approval() {
 #[test]
 fn gate_text_pr_checks() {
     let (title, body) = gate_notification_text(
-        Some(gate_types::PR_CHECKS),
+        Some(&GateType::PrChecks),
         "wait-for-ci",
         "release",
         None,
@@ -767,10 +767,67 @@ fn gate_text_none_fallback() {
     assert_eq!(body, "release: Deploy to prod");
 }
 
+// --- Other(_) — unknown gate types from future runkon-flow versions land here.
+//     Tests pin down the default-fallback behavior so a string change upstream
+//     never silently flips to a no-op.
+
+#[test]
+fn gate_text_other_falls_back_to_default_title() {
+    let other = GateType::Other("future_gate_type".to_string());
+    let (title, body) = gate_notification_text(
+        Some(&other),
+        "Custom step",
+        "experimental",
+        None,
+        Some("Take a look"),
+    );
+    assert_eq!(title, "Conductor \u{2014} Approval Required");
+    assert_eq!(body, "experimental: Custom step");
+}
+
+#[test]
+fn should_notify_gate_other_passes_when_workflows_enabled() {
+    let cfg = config(true, false, false);
+    let other = GateType::Other("future_gate_type".to_string());
+    assert!(
+        should_notify_gate(&cfg, Some(&other)),
+        "unknown gate types should default to notifying when notifications.enabled is true"
+    );
+}
+
+#[test]
+fn should_notify_gate_other_blocked_by_master_disabled() {
+    // Master `enabled = false` short-circuits before the per-gate-type match,
+    // so unknown gates respect the global kill switch.
+    let cfg = config(false, false, false);
+    let other = GateType::Other("future_gate_type".to_string());
+    assert!(!should_notify_gate(&cfg, Some(&other)));
+}
+
+#[test]
+fn grouped_text_other_treated_as_lowest_priority() {
+    let other = GateType::Other("future_gate_type".to_string());
+    let gate_types = vec![Some(&other), Some(&GateType::PrApproval)];
+    let (title, _) = grouped_gate_notification_text(&gate_types, "review", None, 2);
+    assert_eq!(
+        title, "Conductor \u{2014} Awaiting PR Review",
+        "PrApproval should win over Other(_)"
+    );
+}
+
+#[test]
+fn grouped_text_only_other_uses_default_title() {
+    let a = GateType::Other("custom_a".to_string());
+    let b = GateType::Other("custom_b".to_string());
+    let gate_types = vec![Some(&a), Some(&b)];
+    let (title, _) = grouped_gate_notification_text(&gate_types, "review", None, 2);
+    assert_eq!(title, "Conductor \u{2014} Approval Required");
+}
+
 #[test]
 fn gate_text_with_target_label() {
     let (title, body) = gate_notification_text(
-        Some(gate_types::HUMAN_APPROVAL),
+        Some(&GateType::HumanApproval),
         "Deploy",
         "release",
         Some("conductor-ai/feat-1095"),
@@ -786,7 +843,7 @@ fn gate_text_with_target_label() {
 #[test]
 fn gate_text_pr_approval_with_target_label() {
     let (title, body) = gate_notification_text(
-        Some(gate_types::PR_APPROVAL),
+        Some(&GateType::PrApproval),
         "wait-for-review",
         "release",
         Some("main"),
@@ -837,7 +894,7 @@ fn fire_gate_notification_enabled_claims_once() {
         step_name: "Deploy to prod",
         workflow_name: "release",
         target_label: None,
-        gate_type: Some(gate_types::HUMAN_APPROVAL),
+        gate_type: Some(&GateType::HumanApproval),
         gate_prompt: Some("Ready?"),
         repo_slug: "",
         branch: "",
@@ -891,8 +948,8 @@ fn fire_gate_notification_with_target_label_claims_once() {
 fn should_notify_gate_disabled_suppresses_all() {
     let cfg = config(false, true, true);
     assert!(!should_notify_gate(&cfg, None));
-    assert!(!should_notify_gate(&cfg, Some(gate_types::HUMAN_APPROVAL)));
-    assert!(!should_notify_gate(&cfg, Some(gate_types::PR_CHECKS)));
+    assert!(!should_notify_gate(&cfg, Some(&GateType::HumanApproval)));
+    assert!(!should_notify_gate(&cfg, Some(&GateType::PrChecks)));
 }
 
 #[test]
@@ -904,39 +961,39 @@ fn should_notify_gate_none_always_notifies() {
 #[test]
 fn should_notify_gate_human_approval() {
     let mut cfg = config(true, true, true);
-    assert!(should_notify_gate(&cfg, Some(gate_types::HUMAN_APPROVAL)));
+    assert!(should_notify_gate(&cfg, Some(&GateType::HumanApproval)));
     cfg.workflows.as_mut().unwrap().on_gate_human = false;
-    assert!(!should_notify_gate(&cfg, Some(gate_types::HUMAN_APPROVAL)));
+    assert!(!should_notify_gate(&cfg, Some(&GateType::HumanApproval)));
 }
 
 #[test]
 fn should_notify_gate_human_review() {
     let mut cfg = config(true, true, true);
-    assert!(should_notify_gate(&cfg, Some(gate_types::HUMAN_REVIEW)));
+    assert!(should_notify_gate(&cfg, Some(&GateType::HumanReview)));
     cfg.workflows.as_mut().unwrap().on_gate_human = false;
-    assert!(!should_notify_gate(&cfg, Some(gate_types::HUMAN_REVIEW)));
+    assert!(!should_notify_gate(&cfg, Some(&GateType::HumanReview)));
 }
 
 #[test]
 fn should_notify_gate_pr_checks_default_false() {
     let cfg = config(true, true, true);
     // on_gate_ci defaults to false in config() helper
-    assert!(!should_notify_gate(&cfg, Some(gate_types::PR_CHECKS)));
+    assert!(!should_notify_gate(&cfg, Some(&GateType::PrChecks)));
 }
 
 #[test]
 fn should_notify_gate_pr_checks_enabled() {
     let mut cfg = config(true, true, true);
     cfg.workflows.as_mut().unwrap().on_gate_ci = true;
-    assert!(should_notify_gate(&cfg, Some(gate_types::PR_CHECKS)));
+    assert!(should_notify_gate(&cfg, Some(&GateType::PrChecks)));
 }
 
 #[test]
 fn should_notify_gate_pr_approval() {
     let mut cfg = config(true, true, true);
-    assert!(should_notify_gate(&cfg, Some(gate_types::PR_APPROVAL)));
+    assert!(should_notify_gate(&cfg, Some(&GateType::PrApproval)));
     cfg.workflows.as_mut().unwrap().on_gate_pr_review = false;
-    assert!(!should_notify_gate(&cfg, Some(gate_types::PR_APPROVAL)));
+    assert!(!should_notify_gate(&cfg, Some(&GateType::PrApproval)));
 }
 
 // --- fire_gate_notification: per-gate-type filtering ---
@@ -955,7 +1012,7 @@ fn fire_gate_notification_suppressed_by_gate_type() {
             step_name: "wait-for-ci",
             workflow_name: "release",
             target_label: None,
-            gate_type: Some(gate_types::PR_CHECKS),
+            gate_type: Some(&GateType::PrChecks),
             gate_prompt: None,
             repo_slug: "",
             branch: "",
@@ -988,7 +1045,7 @@ fn fire_gate_notification_human_gate_allowed_by_default() {
             step_name: "approve",
             workflow_name: "release",
             target_label: None,
-            gate_type: Some(gate_types::HUMAN_APPROVAL),
+            gate_type: Some(&GateType::HumanApproval),
             gate_prompt: None,
             repo_slug: "",
             branch: "",
@@ -1013,9 +1070,9 @@ fn fire_gate_notification_human_gate_allowed_by_default() {
 #[test]
 fn grouped_text_mixed_types_picks_most_urgent() {
     let gate_types = vec![
-        Some(gate_types::PR_CHECKS),
-        Some(gate_types::HUMAN_APPROVAL),
-        Some(gate_types::PR_APPROVAL),
+        Some(&GateType::PrChecks),
+        Some(&GateType::HumanApproval),
+        Some(&GateType::PrApproval),
     ];
     let (title, body) = grouped_gate_notification_text(&gate_types, "deploy", None, 3);
     assert_eq!(title, "Conductor \u{2014} Awaiting Your Approval");
@@ -1024,7 +1081,7 @@ fn grouped_text_mixed_types_picks_most_urgent() {
 
 #[test]
 fn grouped_text_all_pr_checks() {
-    let gate_types = vec![Some(gate_types::PR_CHECKS), Some(gate_types::PR_CHECKS)];
+    let gate_types = vec![Some(&GateType::PrChecks), Some(&GateType::PrChecks)];
     let (title, body) = grouped_gate_notification_text(&gate_types, "ci", Some("main"), 2);
     assert_eq!(title, "Conductor \u{2014} Waiting on CI");
     assert_eq!(body, "ci on main: 2 gates pending");
@@ -1032,7 +1089,7 @@ fn grouped_text_all_pr_checks() {
 
 #[test]
 fn grouped_text_none_gate_types() {
-    let gate_types: Vec<Option<&str>> = vec![None, None];
+    let gate_types: Vec<Option<&GateType>> = vec![None, None];
     let (title, body) = grouped_gate_notification_text(&gate_types, "release", None, 2);
     assert_eq!(title, "Conductor \u{2014} Approval Required");
     assert_eq!(body, "release: 2 gates pending");
@@ -1040,10 +1097,7 @@ fn grouped_text_none_gate_types() {
 
 #[test]
 fn grouped_text_human_review_is_urgent() {
-    let gate_types = vec![
-        Some(gate_types::PR_APPROVAL),
-        Some(gate_types::HUMAN_REVIEW),
-    ];
+    let gate_types = vec![Some(&GateType::PrApproval), Some(&GateType::HumanReview)];
     let (title, body) = grouped_gate_notification_text(&gate_types, "review", None, 2);
     assert_eq!(title, "Conductor \u{2014} Awaiting Your Approval");
     assert_eq!(body, "review: 2 gates pending");
@@ -1051,7 +1105,7 @@ fn grouped_text_human_review_is_urgent() {
 
 #[test]
 fn grouped_text_with_target_label() {
-    let gate_types = vec![Some(gate_types::PR_APPROVAL)];
+    let gate_types = vec![Some(&GateType::PrApproval)];
     let (title, body) =
         grouped_gate_notification_text(&gate_types, "release", Some("conductor-ai/feat-1095"), 1);
     assert_eq!(title, "Conductor \u{2014} Awaiting PR Review");
@@ -1060,10 +1114,7 @@ fn grouped_text_with_target_label() {
 
 #[test]
 fn grouped_text_all_quality_gates() {
-    let gate_types = vec![
-        Some(gate_types::QUALITY_GATE_TYPE),
-        Some(gate_types::QUALITY_GATE_TYPE),
-    ];
+    let gate_types = vec![Some(&GateType::QualityGate), Some(&GateType::QualityGate)];
     let (title, body) = grouped_gate_notification_text(&gate_types, "review", None, 2);
     assert_eq!(title, "Conductor \u{2014} Quality Gate");
     assert_eq!(body, "review: 2 gates pending");
@@ -1071,10 +1122,7 @@ fn grouped_text_all_quality_gates() {
 
 #[test]
 fn grouped_text_quality_gate_lower_priority_than_human() {
-    let gate_types = vec![
-        Some(gate_types::QUALITY_GATE_TYPE),
-        Some(gate_types::HUMAN_APPROVAL),
-    ];
+    let gate_types = vec![Some(&GateType::QualityGate), Some(&GateType::HumanApproval)];
     let (title, body) = grouped_gate_notification_text(&gate_types, "review", None, 2);
     assert_eq!(title, "Conductor \u{2014} Awaiting Your Approval");
     assert_eq!(body, "review: 2 gates pending");
@@ -1082,7 +1130,7 @@ fn grouped_text_quality_gate_lower_priority_than_human() {
 
 #[test]
 fn grouped_text_quality_gate_wins_over_none() {
-    let gate_types = vec![None, Some(gate_types::QUALITY_GATE_TYPE), None];
+    let gate_types = vec![None, Some(&GateType::QualityGate), None];
     let (title, _) = grouped_gate_notification_text(&gate_types, "review", None, 3);
     assert_eq!(title, "Conductor \u{2014} Quality Gate");
 }
@@ -1101,7 +1149,7 @@ fn fire_grouped_gate_notification_disabled_does_not_claim() {
             run_id: "run-g1",
             workflow_name: "deploy",
             target_label: None,
-            gate_types: vec![Some(gate_types::HUMAN_APPROVAL)],
+            gate_types: vec![Some(&GateType::HumanApproval)],
             count: 2,
         },
     );
@@ -1123,7 +1171,7 @@ fn fire_grouped_gate_notification_claims_once() {
         run_id: "run-g2",
         workflow_name: "deploy",
         target_label: None,
-        gate_types: vec![Some(gate_types::PR_CHECKS), Some(gate_types::PR_APPROVAL)],
+        gate_types: vec![Some(&GateType::PrChecks), Some(&GateType::PrApproval)],
         count: 2,
     };
     fire_grouped_gate_notification(&conn, &cfg, &[], &params);
@@ -1811,7 +1859,7 @@ fn agent_transitions_failed_includes_error_msg() {
 fn should_notify_gate_quality_gate_returns_false() {
     let cfg = config(true, true, true);
     assert!(
-        !should_notify_gate(&cfg, Some(gate_types::QUALITY_GATE_TYPE)),
+        !should_notify_gate(&cfg, Some(&GateType::QualityGate)),
         "quality gates are non-blocking and should never trigger notifications"
     );
 }
@@ -1821,7 +1869,7 @@ fn should_notify_gate_quality_gate_returns_false() {
 #[test]
 fn gate_notification_text_quality_gate() {
     let (title, body) = gate_notification_text(
-        Some(gate_types::QUALITY_GATE_TYPE),
+        Some(&GateType::QualityGate),
         "check-quality",
         "review-pr",
         Some("feat/foo"),
@@ -2105,7 +2153,7 @@ fn hooks_fire_when_notifications_disabled_gate() {
             step_name: "approve",
             workflow_name: "deploy",
             target_label: None,
-            gate_type: Some(gate_types::HUMAN_APPROVAL),
+            gate_type: Some(&GateType::HumanApproval),
             gate_prompt: None,
             repo_slug: "my-repo",
             branch: "main",
@@ -2145,7 +2193,7 @@ fn hooks_fire_when_notifications_disabled_grouped_gate() {
             run_id: "grouped-gate-hooks-1",
             workflow_name: "deploy",
             target_label: None,
-            gate_types: vec![Some(gate_types::HUMAN_APPROVAL)],
+            gate_types: vec![Some(&GateType::HumanApproval)],
             count: 2,
         },
     );

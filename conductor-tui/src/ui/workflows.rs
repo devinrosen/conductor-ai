@@ -2176,8 +2176,9 @@ fn run_status_icon(
         ss.iter()
             .find(|s| s.status == WorkflowStepStatus::Waiting && s.gate_type.is_some())
             .and_then(|s| s.gate_type.as_deref())
+            .map(conductor_core::workflow::GateType::from)
     });
-    gate_type_icon(gate_type, theme)
+    gate_type_icon(gate_type.as_ref(), theme)
 }
 
 fn format_duration(start: &str, end: &str) -> String {

@@ -1,4 +1,4 @@
-use conductor_core::workflow::gate_types;
+use conductor_core::workflow::GateType;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -26,7 +26,8 @@ pub fn render_pending_gates(frame: &mut Frame, area: Rect, state: &AppState, foc
         .iter()
         .map(|gate| {
             // Actionability indicator based on gate type (shared helper)
-            let (icon, icon_color) = gate_type_icon(gate.step.gate_type.as_deref(), &state.theme);
+            let parsed_gt = gate.step.gate_type.as_deref().map(GateType::from);
+            let (icon, icon_color) = gate_type_icon(parsed_gt.as_ref(), &state.theme);
 
             // Branch or fallback to target_label
             let location = gate
@@ -100,14 +101,15 @@ pub fn render_pending_gates(frame: &mut Frame, area: Rect, state: &AppState, foc
         let hint = state
             .detail_gates
             .get(selected_idx)
-            .map(|gate| match gate.step.gate_type.as_deref() {
-                Some(gate_types::HUMAN_APPROVAL) => "Enter:approve/reject",
-                Some(gate_types::HUMAN_REVIEW) => "Enter:approve/reject",
-                Some(gate_types::PR_CHECKS) => "CI running",
-                Some(gate_types::PR_APPROVAL) => "Waiting for PR reviews",
-                Some(gate_types::QUALITY_GATE_TYPE) => "Auto-evaluated",
-                _ => "Enter:view",
-            })
+            .map(
+                |gate| match gate.step.gate_type.as_deref().map(GateType::from) {
+                    Some(GateType::HumanApproval | GateType::HumanReview) => "Enter:approve/reject",
+                    Some(GateType::PrChecks) => "CI running",
+                    Some(GateType::PrApproval) => "Waiting for PR reviews",
+                    Some(GateType::QualityGate) => "Auto-evaluated",
+                    _ => "Enter:view",
+                },
+            )
             .unwrap_or("Enter:view");
         format!(" Pending Gates  {hint} ")
     } else {

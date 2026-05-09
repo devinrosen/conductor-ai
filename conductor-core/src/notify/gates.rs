@@ -1,6 +1,6 @@
 use crate::config::{HookConfig, NotificationConfig};
 use crate::notification_event::NotificationEvent;
-use crate::workflow::gate_types;
+use crate::workflow::GateType;
 
 use super::{dispatch_notification, notification_body, DispatchParams};
 
@@ -9,7 +9,7 @@ use super::{dispatch_notification, notification_body, DispatchParams};
 /// Pure function — no side effects — extracted so the formatting logic is
 /// unit-testable without touching the dedup DB.
 pub fn gate_notification_text(
-    gate_type: Option<&str>,
+    gate_type: Option<&GateType>,
     step_name: &str,
     workflow_name: &str,
     target_label: Option<&str>,
@@ -18,8 +18,8 @@ pub fn gate_notification_text(
     let wf = notification_body(workflow_name, target_label);
 
     match gate_type {
-        Some(t) if t == gate_types::HUMAN_APPROVAL || t == gate_types::HUMAN_REVIEW => {
-            let title = if t == gate_types::HUMAN_APPROVAL {
+        Some(GateType::HumanApproval | GateType::HumanReview) => {
+            let title = if matches!(gate_type, Some(GateType::HumanApproval)) {
                 "Conductor \u{2014} Awaiting Your Approval"
             } else {
                 "Conductor \u{2014} Review Requested"
@@ -30,22 +30,22 @@ pub fn gate_notification_text(
             };
             (title, body)
         }
-        Some(t) if t == gate_types::PR_APPROVAL => {
+        Some(GateType::PrApproval) => {
             let title = "Conductor \u{2014} Awaiting PR Review";
             let body = format!("{wf}: PR needs review");
             (title, body)
         }
-        Some(t) if t == gate_types::PR_CHECKS => {
+        Some(GateType::PrChecks) => {
             let title = "Conductor \u{2014} Waiting on CI";
             let body = format!("{wf}: PR checks running");
             (title, body)
         }
-        Some(t) if t == gate_types::QUALITY_GATE_TYPE => {
+        Some(GateType::QualityGate) => {
             let title = "Conductor \u{2014} Quality Gate";
             let body = format!("{wf}: {step_name} evaluating");
             (title, body)
         }
-        _ => {
+        Some(GateType::Other(_)) | None => {
             let title = "Conductor \u{2014} Approval Required";
             let body = format!("{wf}: {step_name}");
             (title, body)
@@ -59,7 +59,7 @@ pub struct GateNotificationParams<'a> {
     pub step_name: &'a str,
     pub workflow_name: &'a str,
     pub target_label: Option<&'a str>,
-    pub gate_type: Option<&'a str>,
+    pub gate_type: Option<&'a GateType>,
     pub gate_prompt: Option<&'a str>,
     pub repo_slug: &'a str,
     pub branch: &'a str,
@@ -74,7 +74,7 @@ pub struct GateNotificationParams<'a> {
 /// When `config.workflows` is `None` (no legacy `[notifications.workflows]` block),
 /// hook `on` patterns are the sole filter and this function always returns `true`.
 /// When `Some(wf)`, the legacy per-gate-type flags are respected (backward compat).
-pub fn should_notify_gate(config: &NotificationConfig, gate_type: Option<&str>) -> bool {
+pub fn should_notify_gate(config: &NotificationConfig, gate_type: Option<&GateType>) -> bool {
     // No [notifications.workflows] block → hooks are the sole filter; always pass.
     let Some(wf) = &config.workflows else {
         return true;
@@ -84,13 +84,12 @@ pub fn should_notify_gate(config: &NotificationConfig, gate_type: Option<&str>) 
     }
     match gate_type {
         None => true,
-        Some(t) if t == gate_types::HUMAN_APPROVAL || t == gate_types::HUMAN_REVIEW => {
-            wf.on_gate_human
-        }
-        Some(t) if t == gate_types::PR_CHECKS => wf.on_gate_ci,
-        Some(t) if t == gate_types::PR_APPROVAL => wf.on_gate_pr_review,
-        Some(t) if t == gate_types::QUALITY_GATE_TYPE => false, // quality gates are non-blocking
-        _ => true,
+        Some(GateType::HumanApproval | GateType::HumanReview) => wf.on_gate_human,
+        Some(GateType::PrChecks) => wf.on_gate_ci,
+        Some(GateType::PrApproval) => wf.on_gate_pr_review,
+        Some(GateType::QualityGate) => false, // quality gates are non-blocking
+        // Unknown future gate types: default to allow rather than silently drop.
+        Some(GateType::Other(_)) => true,
     }
 }
 
@@ -136,18 +135,19 @@ pub fn fire_gate_notification(
 
 /// Determine the most "actionable" gate type from a slice of optional gate types.
 ///
-/// Priority: `human_approval` / `human_review` > `pr_approval` > `pr_checks` > `quality_gate` > `None`.
-/// Returns the highest-priority type found, or `None` if the slice is empty.
-fn most_urgent_gate_type<'a>(gate_types_slice: &[Option<&'a str>]) -> Option<&'a str> {
-    let mut best: Option<&str> = None;
+/// Priority (highest to lowest): `HumanApproval` / `HumanReview`, then `PrApproval`,
+/// then `PrChecks`, then `QualityGate`, then `Other` / `None`. Returns the
+/// highest-priority type found, or `None` if the slice is empty.
+fn most_urgent_gate_type<'a>(gate_types_slice: &[Option<&'a GateType>]) -> Option<&'a GateType> {
+    let mut best: Option<&GateType> = None;
     let mut best_priority = 0u8;
     for gt in gate_types_slice {
         let p = match gt {
-            Some(t) if *t == gate_types::HUMAN_APPROVAL || *t == gate_types::HUMAN_REVIEW => 4,
-            Some(t) if *t == gate_types::PR_APPROVAL => 3,
-            Some(t) if *t == gate_types::PR_CHECKS => 2,
-            Some(t) if *t == gate_types::QUALITY_GATE_TYPE => 1,
-            _ => 0,
+            Some(GateType::HumanApproval | GateType::HumanReview) => 4,
+            Some(GateType::PrApproval) => 3,
+            Some(GateType::PrChecks) => 2,
+            Some(GateType::QualityGate) => 1,
+            Some(GateType::Other(_)) | None => 0,
         };
         if p > best_priority {
             best_priority = p;
@@ -162,20 +162,20 @@ fn most_urgent_gate_type<'a>(gate_types_slice: &[Option<&'a str>]) -> Option<&'a
 /// Pure function — no side effects. The title reflects the most urgent gate type
 /// in the group; the body shows the workflow name, optional target, and count.
 pub fn grouped_gate_notification_text(
-    gate_types_slice: &[Option<&str>],
+    gate_types_slice: &[Option<&GateType>],
     workflow_name: &str,
     target_label: Option<&str>,
     count: usize,
 ) -> (&'static str, String) {
     let urgent = most_urgent_gate_type(gate_types_slice);
     let title = match urgent {
-        Some(t) if t == gate_types::HUMAN_APPROVAL || t == gate_types::HUMAN_REVIEW => {
+        Some(GateType::HumanApproval | GateType::HumanReview) => {
             "Conductor \u{2014} Awaiting Your Approval"
         }
-        Some(t) if t == gate_types::PR_APPROVAL => "Conductor \u{2014} Awaiting PR Review",
-        Some(t) if t == gate_types::PR_CHECKS => "Conductor \u{2014} Waiting on CI",
-        Some(t) if t == gate_types::QUALITY_GATE_TYPE => "Conductor \u{2014} Quality Gate",
-        _ => "Conductor \u{2014} Approval Required",
+        Some(GateType::PrApproval) => "Conductor \u{2014} Awaiting PR Review",
+        Some(GateType::PrChecks) => "Conductor \u{2014} Waiting on CI",
+        Some(GateType::QualityGate) => "Conductor \u{2014} Quality Gate",
+        Some(GateType::Other(_)) | None => "Conductor \u{2014} Approval Required",
     };
 
     let wf = notification_body(workflow_name, target_label);
@@ -189,7 +189,7 @@ pub struct GroupedGateNotificationParams<'a> {
     pub run_id: &'a str,
     pub workflow_name: &'a str,
     pub target_label: Option<&'a str>,
-    pub gate_types: Vec<Option<&'a str>>,
+    pub gate_types: Vec<Option<&'a GateType>>,
     pub count: usize,
 }
 

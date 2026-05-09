@@ -85,7 +85,7 @@ mod tests {
     /// Helper: set up a workflow run with a waiting gate step. Returns (run_id, step_id).
     fn make_waiting_gate(conductor: &Conductor) -> (String, String) {
         use conductor_core::agent::AgentManager;
-        use conductor_core::workflow::{gate_types, WorkflowStepStatus};
+        use conductor_core::workflow::{GateType, WorkflowStepStatus};
 
         let conn = &conductor.conn;
 
@@ -114,7 +114,7 @@ mod tests {
         conductor_core::workflow::set_step_gate_info(
             conn,
             &step_id,
-            gate_types::HUMAN_APPROVAL,
+            &GateType::HumanApproval,
             Some("Approve?"),
             "24h",
         )
