@@ -18,10 +18,11 @@ pub fn gate_notification_text(
     let wf = notification_body(workflow_name, target_label);
 
     match gate_type {
-        Some(GateType::HumanApproval) | Some(GateType::HumanReview) => {
-            let title = match gate_type {
-                Some(GateType::HumanApproval) => "Conductor \u{2014} Awaiting Your Approval",
-                _ => "Conductor \u{2014} Review Requested",
+        Some(GateType::HumanApproval | GateType::HumanReview) => {
+            let title = if matches!(gate_type, Some(GateType::HumanApproval)) {
+                "Conductor \u{2014} Awaiting Your Approval"
+            } else {
+                "Conductor \u{2014} Review Requested"
             };
             let body = match gate_prompt {
                 Some(prompt) => format!("{wf} \u{2192} {step_name}: {prompt}"),
@@ -44,7 +45,7 @@ pub fn gate_notification_text(
             let body = format!("{wf}: {step_name} evaluating");
             (title, body)
         }
-        None => {
+        Some(GateType::Other(_)) | None => {
             let title = "Conductor \u{2014} Approval Required";
             let body = format!("{wf}: {step_name}");
             (title, body)
@@ -86,7 +87,9 @@ pub fn should_notify_gate(config: &NotificationConfig, gate_type: Option<&GateTy
         Some(GateType::HumanApproval | GateType::HumanReview) => wf.on_gate_human,
         Some(GateType::PrChecks) => wf.on_gate_ci,
         Some(GateType::PrApproval) => wf.on_gate_pr_review,
-        Some(GateType::QualityGate) => false, // quality gates are non-blocking, no notification
+        Some(GateType::QualityGate) => false, // quality gates are non-blocking
+        // Unknown future gate types: default to allow rather than silently drop.
+        Some(GateType::Other(_)) => true,
     }
 }
 
@@ -132,18 +135,19 @@ pub fn fire_gate_notification(
 
 /// Determine the most "actionable" gate type from a slice of optional gate types.
 ///
-/// Priority: `HumanApproval` / `HumanReview` > `PrApproval` > `PrChecks` > `QualityGate` > `None`.
-/// Returns the highest-priority type found, or `None` if the slice is empty.
-fn most_urgent_gate_type<'a>(gate_types: &[Option<&'a GateType>]) -> Option<&'a GateType> {
+/// Priority (highest to lowest): `HumanApproval` / `HumanReview`, then `PrApproval`,
+/// then `PrChecks`, then `QualityGate`, then `Other` / `None`. Returns the
+/// highest-priority type found, or `None` if the slice is empty.
+fn most_urgent_gate_type<'a>(gate_types_slice: &[Option<&'a GateType>]) -> Option<&'a GateType> {
     let mut best: Option<&GateType> = None;
     let mut best_priority = 0u8;
-    for gt in gate_types {
+    for gt in gate_types_slice {
         let p = match gt {
-            Some(GateType::HumanApproval) | Some(GateType::HumanReview) => 4,
+            Some(GateType::HumanApproval | GateType::HumanReview) => 4,
             Some(GateType::PrApproval) => 3,
             Some(GateType::PrChecks) => 2,
-            Some(GateType::QualityGate) => 1, // quality gates are non-blocking but still a valid gate type
-            None => 0,
+            Some(GateType::QualityGate) => 1,
+            Some(GateType::Other(_)) | None => 0,
         };
         if p > best_priority {
             best_priority = p;
@@ -158,20 +162,20 @@ fn most_urgent_gate_type<'a>(gate_types: &[Option<&'a GateType>]) -> Option<&'a 
 /// Pure function — no side effects. The title reflects the most urgent gate type
 /// in the group; the body shows the workflow name, optional target, and count.
 pub fn grouped_gate_notification_text(
-    gate_types: &[Option<&GateType>],
+    gate_types_slice: &[Option<&GateType>],
     workflow_name: &str,
     target_label: Option<&str>,
     count: usize,
 ) -> (&'static str, String) {
-    let urgent = most_urgent_gate_type(gate_types);
+    let urgent = most_urgent_gate_type(gate_types_slice);
     let title = match urgent {
-        Some(GateType::HumanApproval) | Some(GateType::HumanReview) => {
+        Some(GateType::HumanApproval | GateType::HumanReview) => {
             "Conductor \u{2014} Awaiting Your Approval"
         }
         Some(GateType::PrApproval) => "Conductor \u{2014} Awaiting PR Review",
         Some(GateType::PrChecks) => "Conductor \u{2014} Waiting on CI",
         Some(GateType::QualityGate) => "Conductor \u{2014} Quality Gate",
-        None => "Conductor \u{2014} Approval Required",
+        Some(GateType::Other(_)) | None => "Conductor \u{2014} Approval Required",
     };
 
     let wf = notification_body(workflow_name, target_label);

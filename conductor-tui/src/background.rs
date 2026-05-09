@@ -260,6 +260,10 @@ pub fn spawn_db_poller(
                                     let (rs, br) = conductor_core::notify::parse_target_label(
                                         target_label.as_deref(),
                                     );
+                                    let gate_type = step
+                                        .gate_type
+                                        .as_deref()
+                                        .map(conductor_core::workflow::GateType::from);
                                     crate::notify::fire_gate_notification(
                                         conn,
                                         &config.notifications,
@@ -269,7 +273,7 @@ pub fn spawn_db_poller(
                                             step_name: &step.step_name,
                                             workflow_name,
                                             target_label: target_label.as_deref(),
-                                            gate_type: step.gate_type.as_ref(),
+                                            gate_type: gate_type.as_ref(),
                                             gate_prompt: step.gate_prompt.as_deref(),
                                             repo_slug: rs,
                                             branch: br,
@@ -279,12 +283,19 @@ pub fn spawn_db_poller(
                                 } else if !notified_grouped_run_ids.contains(run_id) {
                                     // Multiple gates: fire a single grouped notification
                                     let (_, workflow_name, target_label) = steps[0];
-                                    let gate_types: Vec<
-                                        Option<&conductor_core::workflow::GateType>,
+                                    let parsed_gates: Vec<
+                                        Option<conductor_core::workflow::GateType>,
                                     > = steps
                                         .iter()
-                                        .map(|(s, _, _)| s.gate_type.as_ref())
+                                        .map(|(s, _, _)| {
+                                            s.gate_type
+                                                .as_deref()
+                                                .map(conductor_core::workflow::GateType::from)
+                                        })
                                         .collect();
+                                    let gate_types: Vec<
+                                        Option<&conductor_core::workflow::GateType>,
+                                    > = parsed_gates.iter().map(|o| o.as_ref()).collect();
                                     crate::notify::fire_grouped_gate_notification(
                                         conn,
                                         &config.notifications,

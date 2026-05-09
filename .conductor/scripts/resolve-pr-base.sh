@@ -2,9 +2,9 @@
 # resolve-pr-base.sh — resolve the PR's base branch ONCE per workflow run and
 # expose it to downstream steps via the engine's variable substitution layer.
 #
-# Emits a FLOW_OUTPUT block whose `base_branch` field is picked up by
-# runkon-flow/src/prompt_builder.rs::build_variable_map and exposed as
-# `{{base_branch}}` in subsequent step prompts and env-var bindings.
+# Emits a FLOW_OUTPUT block whose `base_branch` field is picked up by the
+# runkon-flow variable-substitution layer (see runkon/runkon repo) and
+# exposed as `{{base_branch}}` in subsequent step prompts and env-var bindings.
 #
 # Why this exists: reviewer agents running `gh pr view` from inside their own
 # subprocess routinely cd into a different repo path before the lookup. From
