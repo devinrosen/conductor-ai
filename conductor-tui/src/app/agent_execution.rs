@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use conductor_core::agent::{AgentManager, AgentRun, FeedbackRequest};
 use conductor_core::agent_config::{AgentDef, AgentRole};
+use conductor_core::agent_runtime::{EventSink, RuntimeEvent};
 use conductor_core::config::AutoStartAgent;
 use conductor_core::runtime::adapter::SqliteHostAdapter;
 use conductor_core::runtime::{resolve_runtime, RuntimeOptions, RuntimeRequest};
 use conductor_core::tickets::build_agent_prompt;
 use conductor_core::worktree::{WorktreeCreateOptions, WorktreeManager};
-use conductor_core::agent_runtime::{EventSink, RuntimeEvent};
 
 use crate::action::Action;
 use crate::state::{InputAction, Modal, WorkflowPickerItem, WorktreeDetailFocus};
