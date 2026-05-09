@@ -1147,8 +1147,7 @@ impl App {
 fn load_db_and_config() -> Result<(rusqlite::Connection, Config), String> {
     use conductor_core::config::{db_path, load_config};
     use conductor_core::db::open_database;
-    let conn =
-        open_database(&db_path()).map_err(|e| format!("Failed to open database: {e}"))?;
+    let conn = open_database(&db_path()).map_err(|e| format!("Failed to open database: {e}"))?;
     let config = load_config().map_err(|e| format!("Failed to load config: {e}"))?;
     Ok((conn, config))
 }
