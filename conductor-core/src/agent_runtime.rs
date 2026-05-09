@@ -34,7 +34,7 @@ pub const DEFAULT_MAX_TURNS: u32 = 100;
 pub use runkon_runtimes::headless::{DrainOutcome, HeadlessHandle};
 // Re-export conductor-CLI-specific argv builder from the local submodule.
 pub use conductor_headless::{build_headless_agent_args, SpawnHeadlessParams};
-pub use runkon_runtimes::tracker::EventSink;
+pub use runkon_runtimes::tracker::{EventSink, RunEventSink, RunTracker, RuntimeEvent};
 
 /// Resolve the path to the `conductor` binary.
 ///

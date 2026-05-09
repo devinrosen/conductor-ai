@@ -147,7 +147,7 @@ async fn wire_headless_drain(
                 tracing::warn!(run_id = %run_id_owned, "{msg}");
                 // Kill the subprocess so that finish() (child.wait) does not block indefinitely.
                 #[cfg(unix)]
-                runkon_runtimes::process_utils::cancel_subprocess(subprocess_pid);
+                conductor_core::process_utils::cancel_subprocess(subprocess_pid);
                 AgentManager::try_mark_run_failed_in_db(
                     &db_path,
                     &run_id_owned,
@@ -159,7 +159,7 @@ async fn wire_headless_drain(
                 let msg = format!("turn_cap_reached: {} turns", count);
                 tracing::warn!(run_id = %run_id_owned, "{msg}");
                 #[cfg(unix)]
-                runkon_runtimes::process_utils::cancel_subprocess(subprocess_pid);
+                conductor_core::process_utils::cancel_subprocess(subprocess_pid);
                 AgentManager::try_mark_run_failed_in_db(
                     &db_path,
                     &run_id_owned,

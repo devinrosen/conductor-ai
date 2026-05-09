@@ -658,6 +658,8 @@ pub enum InputAction {
     SettingsSetSyncInterval,
     /// Settings view: set the stall timeout in seconds (blank to reset to default).
     SettingsSetStallTimeout,
+    /// Settings view: set agents.max_turns (positive u32, blank to reset to None)
+    SettingsSetMaxTurns,
     /// Adopt an existing on-disk git worktree: user enters the path.
     AdoptWorktree {
         repo_slug: String,
