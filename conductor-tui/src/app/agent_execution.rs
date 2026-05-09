@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use conductor_core::agent::{AgentManager, AgentRun, FeedbackRequest};
 use conductor_core::agent_config::{AgentDef, AgentRole};
+use conductor_core::agent_runtime::{EventSink, RuntimeEvent};
 use conductor_core::config::AutoStartAgent;
 use conductor_core::runtime::adapter::SqliteHostAdapter;
 use conductor_core::runtime::{resolve_runtime, RuntimeOptions, RuntimeRequest};
 use conductor_core::tickets::build_agent_prompt;
 use conductor_core::worktree::{WorktreeCreateOptions, WorktreeManager};
-use runkon_runtimes::tracker::{EventSink, RuntimeEvent};
 
 use crate::action::Action;
 use crate::state::{InputAction, Modal, WorkflowPickerItem, WorktreeDetailFocus};
@@ -143,11 +143,11 @@ pub(super) fn drive_headless_run(
         }
     };
 
-    let event_sink: Arc<dyn runkon_runtimes::tracker::RunEventSink> = Arc::new(TuiEventSink {
+    let event_sink: Arc<dyn conductor_core::agent_runtime::RunEventSink> = Arc::new(TuiEventSink {
         inner: adapter.clone(),
         tx: std::sync::Mutex::new(tx.clone()),
     });
-    let tracker: Arc<dyn runkon_runtimes::tracker::RunTracker> = adapter;
+    let tracker: Arc<dyn conductor_core::agent_runtime::RunTracker> = adapter;
 
     let request = RuntimeRequest {
         run_id: run.id.clone(),
