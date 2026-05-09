@@ -1,0 +1,125 @@
+name: Release
+
+# Tags release commits and creates a GitHub release.
+#
+# Triggers:
+#   - push to main where the commit subject starts with `release: X.Y.Z` —
+#     fires automatically when a `release: X.Y.Z (#NNNN)` PR squash-merges.
+#   - workflow_dispatch — manual override for back-filling a missed release
+#     or re-running against an arbitrary commit (e.g. b1c923b0 for v0.16.0,
+#     which merged before this workflow existed).
+#
+# Notes:
+# - Tags are unsigned. Existing manual tags are SSH-signed, but a CI bot
+#   doesn't have access to maintainer keys. The commit on main has already
+#   been reviewed via squash-merge gate, so tag signing is not load-bearing
+#   for provenance here.
+# - Release notes use `gh release create --generate-notes`, which builds from
+#   the PR / commit list since the previous tag. That's a starting point —
+#   maintainers can edit notes on the GH release page after publish if a
+#   curated changelog is desired.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 0.16.0). Leave blank to detect from the target commit subject.'
+        required: false
+        type: string
+      commit:
+        description: 'Commit SHA to tag. Leave blank to use the latest main HEAD.'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  tag-and-release:
+    # Skip the job entirely on non-release pushes so we don't burn an Actions
+    # minute on every commit. Manual dispatch always runs.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.head_commit.message, 'release: ')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.commit || github.sha }}
+
+      - name: Determine version + tag
+        id: version
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            MSG=$(git log -1 --pretty=%s)
+            if [[ "$MSG" =~ ^release:[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+              VERSION="${BASH_REMATCH[1]}"
+            else
+              echo "::error::Commit subject does not match 'release: X.Y.Z': $MSG"
+              echo "Provide an explicit version via workflow_dispatch input if this is intentional."
+              exit 1
+            fi
+          fi
+          # Validate semver-ish (X.Y.Z, digits only) — keeps tags consistent with `v*` ruleset.
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version '$VERSION' is not in X.Y.Z form"
+            exit 1
+          fi
+          TAG="v$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Resolved: tag=$TAG (version=$VERSION)"
+
+      - name: Verify tag does not already exist
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Tag $TAG already exists locally"
+            exit 1
+          fi
+          # The `v*` ruleset prevents overwriting tags on origin, so a stale
+          # remote tag would also reject the push later — fail fast and clearly.
+          if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists on origin"
+            exit 1
+          fi
+
+      - name: Create + push annotated tag
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            --verify-tag
+
+      - name: Summary
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          REPO_URL="https://github.com/${{ github.repository }}"
+          echo "Tagged and released **$TAG**" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Tag: $REPO_URL/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Release: $REPO_URL/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
