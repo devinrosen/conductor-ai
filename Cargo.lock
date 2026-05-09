@@ -644,7 +644,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-cli"
-version = "0.16.0"
+version = "0.16.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-core"
-version = "0.16.0"
+version = "0.16.1"
 dependencies = [
  "chrono",
  "dirs",
@@ -695,7 +695,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-desktop"
-version = "0.16.0"
+version = "0.16.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -713,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-tui"
-version = "0.16.0"
+version = "0.16.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -735,7 +735,7 @@ dependencies = [
 
 [[package]]
 name = "conductor-web"
-version = "0.16.0"
+version = "0.16.1"
 dependencies = [
  "anyhow",
  "axum",
