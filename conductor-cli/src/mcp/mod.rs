@@ -8,6 +8,7 @@ mod helpers;
 
 mod resources;
 mod server;
+mod subscriptions;
 mod tools;
 
 pub use server::ConductorMcpServer;

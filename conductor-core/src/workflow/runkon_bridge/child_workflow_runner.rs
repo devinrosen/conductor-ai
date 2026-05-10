@@ -228,16 +228,16 @@ mod tests {
             Arc::new(CountingSink) as Arc<dyn EventSink>,
         ]);
 
-        let parent_ctx = ChildWorkflowContext {
-            run_ctx: std::sync::Arc::new(runkon_flow::traits::run_context::NoopRunContext::default())
+        let parent_ctx = ChildWorkflowContext::new(
+            std::sync::Arc::new(runkon_flow::traits::run_context::NoopRunContext::default())
                 as std::sync::Arc<dyn runkon_flow::traits::run_context::RunContext>,
-            extra_plugin_dirs: vec![],
-            workflow_run_id: "parent-run".to_string(),
-            model: None,
-            exec_config: crate::workflow::WorkflowExecConfig::default(),
-            inputs: HashMap::new(),
-            event_sinks: Arc::clone(&sinks),
-        };
+            vec![],
+            "parent-run".to_string(),
+            None,
+            crate::workflow::WorkflowExecConfig::default(),
+            HashMap::new(),
+            Arc::clone(&sinks),
+        );
 
         let input = runner.build_resume_input("child-run-1", None, &parent_ctx);
 
@@ -270,16 +270,16 @@ mod tests {
             false,
         );
 
-        let parent_ctx = ChildWorkflowContext {
-            run_ctx: std::sync::Arc::new(run_ctx)
+        let parent_ctx = ChildWorkflowContext::new(
+            std::sync::Arc::new(run_ctx)
                 as std::sync::Arc<dyn runkon_flow::traits::run_context::RunContext>,
-            extra_plugin_dirs: vec![],
-            workflow_run_id: "parent-run".to_string(),
-            model: None,
-            exec_config: crate::workflow::WorkflowExecConfig::default(),
-            inputs: HashMap::new(),
-            event_sinks: Arc::<[Arc<dyn EventSink>]>::from(vec![]),
-        };
+            vec![],
+            "parent-run".to_string(),
+            None,
+            crate::workflow::WorkflowExecConfig::default(),
+            HashMap::new(),
+            Arc::<[Arc<dyn EventSink>]>::from(vec![]),
+        );
 
         let workflow = runkon_flow::test_helpers::make_def("test-child", vec![]);
         let params = ChildWorkflowInput {
@@ -319,16 +319,16 @@ mod tests {
             false,
         );
 
-        let parent_ctx = ChildWorkflowContext {
-            run_ctx: std::sync::Arc::new(runkon_flow::traits::run_context::NoopRunContext::default())
+        let parent_ctx = ChildWorkflowContext::new(
+            std::sync::Arc::new(runkon_flow::traits::run_context::NoopRunContext::default())
                 as std::sync::Arc<dyn runkon_flow::traits::run_context::RunContext>,
-            extra_plugin_dirs: vec![],
-            workflow_run_id: "parent-run".to_string(),
-            model: None,
-            exec_config: crate::workflow::WorkflowExecConfig::default(),
-            inputs: HashMap::new(),
-            event_sinks: Arc::<[Arc<dyn EventSink>]>::from(vec![]),
-        };
+            vec![],
+            "parent-run".to_string(),
+            None,
+            crate::workflow::WorkflowExecConfig::default(),
+            HashMap::new(),
+            Arc::<[Arc<dyn EventSink>]>::from(vec![]),
+        );
 
         let input = runner.build_resume_input("child-run-2", None, &parent_ctx);
         assert!(input.event_sinks.is_empty());

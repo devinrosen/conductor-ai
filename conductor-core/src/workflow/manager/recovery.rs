@@ -555,6 +555,7 @@ fn cas_claim_ids_and_notify(
             conn,
             &config.notifications,
             &config.notify.hooks,
+            std::sync::Arc::new(crate::notify::SqliteDedupStore::default_db()),
             &claimed,
         );
     }

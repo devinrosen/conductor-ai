@@ -1,9 +1,8 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 
-use conductor_core::config::Config;
-use conductor_core::notification_event::NotificationEvent;
-use conductor_core::notification_hooks::HookRunner;
+use conductor_core::config::{hooks_as_runkon, Config};
+use conductor_core::notify::{build_synthetic_event, HookRunner};
 
 use crate::commands::NotificationsCommands;
 
@@ -18,11 +17,10 @@ pub fn handle_notifications(command: NotificationsCommands, config: &Config) -> 
             }
 
             let now = Utc::now().to_rfc3339();
-            let notification_event =
-                NotificationEvent::synthetic(&event, now).map_err(|e| anyhow!("{e}"))?;
+            let event_obj = build_synthetic_event(&event, now).map_err(|e| anyhow!("{e}"))?;
 
-            let runner = HookRunner::new(hooks);
-            runner.fire(&notification_event);
+            let runner = HookRunner::new(&hooks_as_runkon(hooks));
+            runner.fire(&event_obj);
 
             println!(
                 "Test event '{}' dispatched through {} configured hook(s).",
@@ -37,7 +35,7 @@ pub fn handle_notifications(command: NotificationsCommands, config: &Config) -> 
 
 #[cfg(test)]
 mod tests {
-    use conductor_core::notification_event::NotificationEvent;
+    use conductor_core::notify::build_synthetic_event;
 
     #[test]
     fn synthetic_all_valid_event_names() {
@@ -50,15 +48,15 @@ mod tests {
             "feedback.requested",
         ];
         for name in names {
-            let result = NotificationEvent::synthetic(name, "2024-01-01T00:00:00Z");
+            let result = build_synthetic_event(name, "2024-01-01T00:00:00Z");
             assert!(result.is_ok(), "expected Ok for '{name}'");
-            assert_eq!(result.unwrap().event_name(), name);
+            assert_eq!(result.unwrap().kind, name);
         }
     }
 
     #[test]
     fn synthetic_unknown_event_name_returns_err() {
-        let result = NotificationEvent::synthetic("bad.event", "t");
+        let result = build_synthetic_event("bad.event", "t");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("bad.event"));
     }

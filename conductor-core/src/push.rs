@@ -71,6 +71,65 @@ pub fn get_all_subscriptions(db: &Connection) -> Result<Vec<PushSubscription>> {
     Ok(subscriptions)
 }
 
+/// SQLite-backed [`runkon_notify::PushSubscriptionStore`].
+///
+/// Opens a fresh `rusqlite::Connection` per method call to avoid coupling to
+/// any particular mutex or async runtime.
+pub struct SqlitePushSubscriptionStore {
+    path: std::path::PathBuf,
+}
+
+impl SqlitePushSubscriptionStore {
+    pub fn new(path: std::path::PathBuf) -> Self {
+        Self { path }
+    }
+}
+
+impl runkon_notify::PushSubscriptionStore for SqlitePushSubscriptionStore {
+    fn list(&self) -> runkon_notify::Result<Vec<runkon_notify::Subscription>> {
+        use runkon_notify::NotifyError;
+        let conn = Connection::open(&self.path)
+            .map_err(|e| NotifyError::Subscription(format!("DB open: {e}")))?;
+        get_all_subscriptions(&conn)
+            .map(|subs| subs.into_iter().map(Into::into).collect())
+            .map_err(|e| NotifyError::Subscription(e.to_string()))
+    }
+
+    fn upsert(
+        &self,
+        endpoint: &str,
+        p256dh: &str,
+        auth: &str,
+    ) -> runkon_notify::Result<runkon_notify::Subscription> {
+        use runkon_notify::NotifyError;
+        let conn = Connection::open(&self.path)
+            .map_err(|e| NotifyError::Subscription(format!("DB open: {e}")))?;
+        upsert_subscription(&conn, endpoint, p256dh, auth)
+            .map(Into::into)
+            .map_err(|e| NotifyError::Subscription(e.to_string()))
+    }
+
+    fn delete(&self, endpoint: &str) -> runkon_notify::Result<bool> {
+        use runkon_notify::NotifyError;
+        let conn = Connection::open(&self.path)
+            .map_err(|e| NotifyError::Subscription(format!("DB open: {e}")))?;
+        delete_subscription(&conn, endpoint).map_err(|e| NotifyError::Subscription(e.to_string()))
+    }
+}
+
+impl From<PushSubscription> for runkon_notify::Subscription {
+    fn from(s: PushSubscription) -> Self {
+        runkon_notify::Subscription {
+            id: s.id,
+            endpoint: s.endpoint,
+            p256dh: s.p256dh,
+            auth: s.auth,
+            created_at: s.created_at,
+            updated_at: s.updated_at,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

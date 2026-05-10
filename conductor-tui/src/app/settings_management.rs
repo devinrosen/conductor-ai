@@ -1,6 +1,5 @@
 use conductor_core::config::{AgentPermissionMode, AutoStartAgent};
-use conductor_core::notification_event::NotificationEvent;
-use conductor_core::notification_hooks::HookRunner;
+use conductor_core::notify::{build_synthetic_for_pattern, HookRunner};
 
 use crate::action::Action;
 use crate::state::{
@@ -296,8 +295,8 @@ impl App {
 
         std::thread::spawn(move || {
             let now = chrono::Utc::now().to_rfc3339();
-            let event = NotificationEvent::synthetic_for_pattern(&hook.on, now);
-            let runner = HookRunner::new(&[hook]);
+            let event = build_synthetic_for_pattern(&hook.on, now);
+            let runner = HookRunner::new(&[hook.to_runkon_hook_config()]);
             let result = runner.run_test(&event);
             let _ = bg_tx.send(Action::SettingsHookTestComplete { hook_index, result });
         });

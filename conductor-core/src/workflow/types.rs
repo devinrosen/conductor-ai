@@ -279,6 +279,8 @@ pub struct WorkflowResumeStandalone {
     /// Shutdown signal for graceful cancellation. `None` means the run cannot
     /// be aborted externally (e.g. auto-resume watchdog threads).
     pub shutdown: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Event sinks for run observability. Defaults to empty (no sinks).
+    pub event_sinks: Vec<std::sync::Arc<dyn runkon_flow::events::EventSink>>,
 }
 
 /// Input parameters for resuming a workflow run.
