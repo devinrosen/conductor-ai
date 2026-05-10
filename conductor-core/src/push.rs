@@ -113,8 +113,7 @@ impl runkon_notify::PushSubscriptionStore for SqlitePushSubscriptionStore {
         use runkon_notify::NotifyError;
         let conn = Connection::open(&self.path)
             .map_err(|e| NotifyError::Subscription(format!("DB open: {e}")))?;
-        delete_subscription(&conn, endpoint)
-            .map_err(|e| NotifyError::Subscription(e.to_string()))
+        delete_subscription(&conn, endpoint).map_err(|e| NotifyError::Subscription(e.to_string()))
     }
 }
 

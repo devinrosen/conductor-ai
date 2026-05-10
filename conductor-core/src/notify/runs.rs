@@ -63,7 +63,11 @@ pub fn fire_workflow_notification(
         return;
     }
 
-    let event_type = if params.succeeded { "completed" } else { "failed" };
+    let event_type = if params.succeeded {
+        "completed"
+    } else {
+        "failed"
+    };
     let body = notification_body(params.workflow_name, params.target_label);
     let deep_link = build_workflow_deep_link(
         ctx.config.web_url.as_deref(),
@@ -92,16 +96,9 @@ pub fn fire_workflow_notification(
         ),
         (
             "ticket_url".into(),
-            params
-                .ticket_url
-                .as_deref()
-                .unwrap_or("")
-                .into(),
+            params.ticket_url.as_deref().unwrap_or("").into(),
         ),
-        (
-            "url".into(),
-            deep_link.as_deref().unwrap_or("").into(),
-        ),
+        ("url".into(), deep_link.as_deref().unwrap_or("").into()),
         ("timestamp".into(), now),
         ("is_root".into(), is_root.to_string()),
     ]
@@ -212,11 +209,7 @@ pub fn fire_agent_run_notification(
         ),
         (
             "ticket_url".into(),
-            params
-                .ticket_url
-                .as_deref()
-                .unwrap_or("")
-                .into(),
+            params.ticket_url.as_deref().unwrap_or("").into(),
         ),
         ("timestamp".into(), now),
     ]

@@ -13,8 +13,8 @@ pub use anomalies::*;
 pub use dedup::SqliteDedupStore;
 pub use event::{build_synthetic_event, build_synthetic_for_pattern, ALL_EVENTS};
 pub use gates::*;
-pub use runs::*;
 pub use runkon_notify::HookRunner;
+pub use runs::*;
 pub use transitions::*;
 
 /// Returns `true` if a notification should fire given the config and run outcome.

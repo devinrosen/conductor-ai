@@ -2293,9 +2293,13 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn error_path_key_deduplicates() {
-        let db = empty_state().db;
+        let (_, db_path) = conductor_core::test_helpers::create_file_test_db();
+        let _guard = conductor_core::test_helpers::ENV_MUTEX.lock().unwrap();
+        std::env::set_var("CONDUCTOR_TEST_DB", &db_path);
 
+        let db = empty_state().db;
         let notifications = test_notification_config();
 
         let bucket = std::time::SystemTime::now()
@@ -2369,8 +2373,8 @@ mod tests {
         .unwrap();
 
         // Dedup: only one row should exist despite two calls with the same key
-        let conn = db.lock().await;
-        let count: i64 = conn
+        let conn2 = rusqlite::Connection::open(&db_path).unwrap();
+        let count: i64 = conn2
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = ?1 AND event_type = 'failed'",
                 [&key],
@@ -2381,20 +2385,47 @@ mod tests {
             count, 1,
             "duplicate error-path notifications must be deduped to a single log row"
         );
+
+        std::env::remove_var("CONDUCTOR_TEST_DB");
+        drop(_guard);
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn fire_workflow_notification_with_notifications_enabled_claims_log_row() {
-        let conn = conductor_core::test_helpers::create_test_conn();
+        let (conn, db_path) = conductor_core::test_helpers::create_file_test_db();
+        let _guard = conductor_core::test_helpers::ENV_MUTEX.lock().unwrap();
+        std::env::set_var("CONDUCTOR_TEST_DB", &db_path);
 
         let notifications = test_notification_config();
 
-        tokio::task::spawn_blocking(move || {
-            let ctx = NotificationCtx { conn: &conn, config: &notifications, hooks: &[] };
-            fire_workflow_notification(&ctx, &WorkflowNotificationArgs { run_id: "run-notify-1", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None, repo_slug: "", branch: "", duration_ms: None, ticket_url: None, error: None, repo_id: None, worktree_id: None });
+        let result = tokio::task::spawn_blocking(move || {
+            let ctx = NotificationCtx {
+                conn: &conn,
+                config: &notifications,
+                hooks: &[],
+            };
+            fire_workflow_notification(
+                &ctx,
+                &WorkflowNotificationArgs {
+                    run_id: "run-notify-1",
+                    workflow_name: "my-workflow",
+                    target_label: None,
+                    succeeded: true,
+                    parent_workflow_run_id: None,
+                    repo_slug: "",
+                    branch: "",
+                    duration_ms: None,
+                    ticket_url: None,
+                    error: None,
+                    repo_id: None,
+                    worktree_id: None,
+                },
+            );
 
             // Verify the dedup row was inserted into notification_log
-            let count: i64 = conn
+            let conn2 = rusqlite::Connection::open(&db_path).unwrap();
+            let count: i64 = conn2
                 .query_row(
                     "SELECT COUNT(*) FROM notification_log WHERE entity_id = ?1 AND event_type = ?2",
                     rusqlite::params!["run-notify-1", "completed"],
@@ -2406,8 +2437,11 @@ mod tests {
                 "notification_log must contain exactly one dedup row"
             );
         })
-        .await
-        .unwrap();
+        .await;
+
+        std::env::remove_var("CONDUCTOR_TEST_DB");
+        drop(_guard);
+        result.unwrap();
     }
 
     /// When execute_workflow creates the run record before failing, the slot holds

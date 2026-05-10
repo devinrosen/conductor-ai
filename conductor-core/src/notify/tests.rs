@@ -158,7 +158,10 @@ fn hook_config_translation_workflow_filter() {
     };
     let rk = hook.to_runkon_hook_config();
     let eq = rk.when_field_eq.unwrap();
-    assert_eq!(eq.get("workflow_name").map(String::as_str), Some("my-workflow"));
+    assert_eq!(
+        eq.get("workflow_name").map(String::as_str),
+        Some("my-workflow")
+    );
 }
 
 #[test]
@@ -225,7 +228,10 @@ fn hook_config_translation_root_workflows_only_appends_root_suffix() {
         ..Default::default()
     };
     let rk = hook.to_runkon_hook_config();
-    assert_eq!(rk.on, "workflow_run.completed:root,workflow_run.failed:root");
+    assert_eq!(
+        rk.on,
+        "workflow_run.completed:root,workflow_run.failed:root"
+    );
 }
 
 #[test]

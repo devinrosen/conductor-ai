@@ -4,9 +4,7 @@ use runkon_notify::{Event, HookRunner, Severity};
 
 use crate::config::{hooks_as_runkon, HookConfig, NotificationConfig};
 
-use super::{
-    build_workflow_deep_link, notification_body, parse_target_label, SqliteDedupStore,
-};
+use super::{build_workflow_deep_link, notification_body, parse_target_label, SqliteDedupStore};
 
 fn stale_notifications_active(config: &NotificationConfig, notify_hooks: &[HookConfig]) -> bool {
     let legacy_enabled = config
@@ -190,10 +188,7 @@ pub fn fire_cost_spike_notification(
                     .map(|ms| ms.to_string())
                     .unwrap_or_default(),
             ),
-            (
-                "url".into(),
-                deep_link.as_deref().unwrap_or("").into(),
-            ),
+            ("url".into(), deep_link.as_deref().unwrap_or("").into()),
             ("timestamp".into(), now),
             ("multiple".into(), params.multiple.to_string()),
             ("cost_usd".into(), params.cost_usd.to_string()),
@@ -269,10 +264,7 @@ pub fn fire_duration_spike_notification(
                     .map(|ms| ms.to_string())
                     .unwrap_or_default(),
             ),
-            (
-                "url".into(),
-                deep_link.as_deref().unwrap_or("").into(),
-            ),
+            ("url".into(), deep_link.as_deref().unwrap_or("").into()),
             ("timestamp".into(), now),
             ("multiple".into(), params.multiple.to_string()),
             ("is_root".into(), is_root.to_string()),
@@ -348,10 +340,7 @@ pub fn fire_gate_pending_too_long_notification(
                     .map(|ms| ms.to_string())
                     .unwrap_or_default(),
             ),
-            (
-                "url".into(),
-                deep_link.as_deref().unwrap_or("").into(),
-            ),
+            ("url".into(), deep_link.as_deref().unwrap_or("").into()),
             ("timestamp".into(), now),
             ("pending_ms".into(), params.pending_ms.to_string()),
         ]

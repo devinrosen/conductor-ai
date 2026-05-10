@@ -18,8 +18,14 @@ impl SqliteDedupStore {
     }
 
     /// Create a store targeting the default conductor database path (`~/.conductor/conductor.db`).
+    /// Tests can override with `CONDUCTOR_TEST_DB` environment variable.
     pub fn default_db() -> Self {
-        Self { path: db_path() }
+        let path = std::env::var("CONDUCTOR_TEST_DB")
+            .ok()
+            .and_then(|p| if p.is_empty() { None } else { Some(p) })
+            .map(PathBuf::from)
+            .unwrap_or_else(db_path);
+        Self { path }
     }
 }
 

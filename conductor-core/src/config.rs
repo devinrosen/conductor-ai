@@ -234,9 +234,10 @@ impl HookConfig {
             self.on.clone()
         };
 
-        let when_field_eq = self.workflow.as_ref().map(|wf| {
-            [("workflow_name".into(), wf.clone())].into_iter().collect()
-        });
+        let when_field_eq = self
+            .workflow
+            .as_ref()
+            .map(|wf| [("workflow_name".into(), wf.clone())].into_iter().collect());
 
         let mut when_field_in: HashMap<String, Vec<String>> = HashMap::new();
         if let Some(ref repo) = self.repo {
@@ -251,9 +252,10 @@ impl HookConfig {
             Some(when_field_in)
         };
 
-        let when_field_glob = self.branch.as_ref().map(|b| {
-            [("branch".into(), b.clone())].into_iter().collect()
-        });
+        let when_field_glob = self
+            .branch
+            .as_ref()
+            .map(|b| [("branch".into(), b.clone())].into_iter().collect());
 
         let mut when_field_gte: HashMap<String, f64> = HashMap::new();
         if let Some(mult) = self.threshold_multiple {
