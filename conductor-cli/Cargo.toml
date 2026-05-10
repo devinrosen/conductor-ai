@@ -26,6 +26,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "6"
 rmcp = { version = "1", features = ["server", "transport-io"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "io-std"] }
+tracing = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -51,6 +51,17 @@ impl SubscriptionRegistry {
             .unwrap_or_default()
     }
 
+    /// Drains all subscribers for `run_id` and fires a resource-updated notification on each.
+    pub async fn notify_and_drain(&self, run_id: &str) {
+        let sinks = self.take(run_id);
+        for sink in sinks {
+            let _ = sink
+                .peer
+                .notify_resource_updated(ResourceUpdatedNotificationParam::new(sink.uri))
+                .await;
+        }
+    }
+
     #[cfg(test)]
     fn len_for(&self, run_id: &str) -> usize {
         self.inner
@@ -100,13 +111,7 @@ impl SubscriptionHub {
 
     /// Drains all subscribers for `run_id` and fires a resource-updated notification on each.
     pub async fn notify_and_drain(&self, run_id: &str) {
-        let sinks = self.registry.take(run_id);
-        for sink in sinks {
-            let _ = sink
-                .peer
-                .notify_resource_updated(ResourceUpdatedNotificationParam::new(sink.uri))
-                .await;
-        }
+        self.registry.notify_and_drain(run_id).await;
     }
 }
 
@@ -129,13 +134,7 @@ pub fn spawn_broadcaster(
             if !is_terminal {
                 continue;
             }
-            let sinks = registry.take(&event_data.run_id);
-            for sink in sinks {
-                let _ = sink
-                    .peer
-                    .notify_resource_updated(ResourceUpdatedNotificationParam::new(sink.uri))
-                    .await;
-            }
+            registry.notify_and_drain(&event_data.run_id).await;
         }
     })
 }
@@ -220,6 +219,30 @@ mod tests {
         let handle = spawn_broadcaster(rx, registry);
         drop(hub);
         handle.await.expect("broadcaster task should exit cleanly");
+    }
+
+    /// Verify notify_and_drain removes the registry slot (no sinks to notify).
+    #[tokio::test]
+    async fn test_notify_and_drain_removes_slot() {
+        let reg = make_registry();
+        {
+            let mut map = reg.inner.lock().unwrap();
+            map.entry("run-drain".to_string()).or_default();
+        }
+        reg.notify_and_drain("run-drain").await;
+        let map = reg.inner.lock().unwrap();
+        assert!(
+            !map.contains_key("run-drain"),
+            "notify_and_drain should remove the slot"
+        );
+    }
+
+    /// Verify notify_and_drain is a no-op when the run has no subscribers.
+    #[tokio::test]
+    async fn test_notify_and_drain_absent_is_noop() {
+        let reg = make_registry();
+        reg.notify_and_drain("no-such-run").await;
+        assert_eq!(reg.len_for("no-such-run"), 0);
     }
 
     /// Verify that terminal events drain the registry (no panics even with empty sinks).

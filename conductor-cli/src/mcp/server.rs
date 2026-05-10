@@ -10,6 +10,10 @@ use rmcp::{RoleServer, ServerHandler};
 
 use super::subscriptions::{spawn_broadcaster, SubscriptionHub};
 
+fn is_terminal(status: Option<&str>) -> bool {
+    status.is_some_and(|s| matches!(s, "completed" | "failed" | "cancelled"))
+}
+
 /// The conductor MCP server. Each request opens its own `Conductor` inside
 /// `spawn_blocking` to avoid the `!Send` issue with `rusqlite::Connection`.
 pub struct ConductorMcpServer {
@@ -143,12 +147,6 @@ impl ServerHandler for ConductorMcpServer {
         .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?
         .map_err(|e: anyhow::Error| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
-        // Determine outcome without holding any borrow across the upcoming await point.
-        let is_terminal = status
-            .as_deref()
-            .map(|s| matches!(s, "completed" | "failed" | "cancelled"))
-            .unwrap_or(false);
-
         if status.is_none() {
             return Err(rmcp::ErrorData::invalid_params(
                 format!("unknown run_id: {run_id}"),
@@ -156,7 +154,7 @@ impl ServerHandler for ConductorMcpServer {
             ));
         }
 
-        if is_terminal {
+        if is_terminal(status.as_deref()) {
             // Run is already terminal — fire one notification immediately (option a from the ticket).
             // Don't insert into the registry; client will re-read the resource.
             let _ = context
@@ -175,13 +173,26 @@ impl ServerHandler for ConductorMcpServer {
                     .map_err(anyhow::Error::from)
             })
             .await;
-            if recheck
-                .ok()
-                .and_then(|r| r.ok())
-                .flatten()
-                .is_some_and(|s| matches!(s.as_str(), "completed" | "failed" | "cancelled"))
-            {
-                self.hub.notify_and_drain(&run_id).await;
+            match recheck {
+                Err(join_err) => {
+                    tracing::warn!(
+                        "TOCTOU recheck task panicked for run {run_id}: {join_err}; \
+                         draining subscriber to avoid orphan"
+                    );
+                    self.hub.notify_and_drain(&run_id).await;
+                }
+                Ok(Err(db_err)) => {
+                    tracing::warn!(
+                        "TOCTOU recheck DB error for run {run_id}: {db_err}; \
+                         draining subscriber to avoid orphan"
+                    );
+                    self.hub.notify_and_drain(&run_id).await;
+                }
+                Ok(Ok(status)) => {
+                    if is_terminal(status.as_deref()) {
+                        self.hub.notify_and_drain(&run_id).await;
+                    }
+                }
             }
         }
 
@@ -198,5 +209,25 @@ impl ServerHandler for ConductorMcpServer {
             self.hub.registry.remove(run_id, &uri);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_terminal_recognises_all_terminal_states() {
+        assert!(is_terminal(Some("completed")));
+        assert!(is_terminal(Some("failed")));
+        assert!(is_terminal(Some("cancelled")));
+    }
+
+    #[test]
+    fn test_is_terminal_rejects_nonterminal_and_none() {
+        assert!(!is_terminal(Some("running")));
+        assert!(!is_terminal(Some("pending")));
+        assert!(!is_terminal(Some("queued")));
+        assert!(!is_terminal(None));
     }
 }
