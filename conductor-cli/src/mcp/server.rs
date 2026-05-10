@@ -2,18 +2,29 @@ use anyhow::Result;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, Implementation, ListResourcesResult, ListToolsResult,
     PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
-    ResourcesCapability, ServerCapabilities, ServerInfo, ToolsCapability,
+    ResourcesCapability, ServerCapabilities, ServerInfo, SubscribeRequestParams,
+    ToolsCapability, UnsubscribeRequestParams,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler};
 
+use super::subscriptions::{spawn_broadcaster, SubscriptionHub};
+
 /// The conductor MCP server. Each request opens its own `Conductor` inside
 /// `spawn_blocking` to avoid the `!Send` issue with `rusqlite::Connection`.
-pub struct ConductorMcpServer {}
+pub struct ConductorMcpServer {
+    hub: SubscriptionHub,
+    _broadcaster_handle: tokio::task::JoinHandle<()>,
+}
 
 impl ConductorMcpServer {
     pub fn new() -> Self {
-        Self {}
+        let (hub, rx) = SubscriptionHub::new();
+        let handle = spawn_broadcaster(rx, hub.registry.clone());
+        Self {
+            hub,
+            _broadcaster_handle: handle,
+        }
     }
 }
 
@@ -21,7 +32,7 @@ impl ServerHandler for ConductorMcpServer {
     fn get_info(&self) -> ServerInfo {
         let mut caps = ServerCapabilities::default();
         caps.resources = Some(ResourcesCapability {
-            subscribe: Some(false),
+            subscribe: Some(true),
             list_changed: Some(false),
         });
         caps.tools = Some(ToolsCapability {
@@ -91,10 +102,11 @@ impl ServerHandler for ConductorMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let name = request.name.to_string();
         let args = request.arguments.unwrap_or_default();
+        let hub = self.hub.clone();
         let result = tokio::task::spawn_blocking(move || {
             let conductor = conductor_core::Conductor::open().map_err(anyhow::Error::from);
             match conductor {
-                Ok(c) => super::tools::dispatch_tool(&c, &name, &args),
+                Ok(c) => super::tools::dispatch_tool(&c, &name, &args, Some(&hub)),
                 Err(e) => crate::mcp::helpers::tool_err(e),
             }
         })
@@ -102,5 +114,74 @@ impl ServerHandler for ConductorMcpServer {
         .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
         Ok(result)
+    }
+
+    async fn subscribe(
+        &self,
+        request: SubscribeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), rmcp::ErrorData> {
+        let uri = request.uri.clone();
+
+        let run_id = uri
+            .strip_prefix("conductor://run/")
+            .ok_or_else(|| {
+                rmcp::ErrorData::invalid_params(
+                    "URI must be conductor://run/{run_id}".to_string(),
+                    None,
+                )
+            })?
+            .to_string();
+
+        let run_id_for_lookup = run_id.clone();
+        let status = tokio::task::spawn_blocking(move || {
+            let conductor =
+                conductor_core::Conductor::open().map_err(anyhow::Error::from)?;
+            conductor_core::workflow::get_workflow_run_status(&conductor.conn, &run_id_for_lookup)
+                .map_err(anyhow::Error::from)
+        })
+        .await
+        .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?
+        .map_err(|e: anyhow::Error| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+
+        // Determine outcome without holding any borrow across the upcoming await point.
+        let is_terminal = status
+            .as_deref()
+            .map(|s| matches!(s, "completed" | "failed" | "cancelled"))
+            .unwrap_or(false);
+
+        if status.is_none() {
+            return Err(rmcp::ErrorData::invalid_params(
+                format!("unknown run_id: {run_id}"),
+                None,
+            ));
+        }
+
+        if is_terminal {
+            // Run is already terminal — fire one notification immediately (option a from the ticket).
+            // Don't insert into the registry; client will re-read the resource.
+            let _ = context
+                .peer
+                .notify_resource_updated(
+                    rmcp::model::ResourceUpdatedNotificationParam::new(uri),
+                )
+                .await;
+        } else {
+            self.hub.registry.insert(run_id, context.peer.clone(), uri);
+        }
+
+        Ok(())
+    }
+
+    async fn unsubscribe(
+        &self,
+        request: UnsubscribeRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<(), rmcp::ErrorData> {
+        let uri = request.uri;
+        if let Some(run_id) = uri.strip_prefix("conductor://run/") {
+            self.hub.registry.remove(run_id, &uri);
+        }
+        Ok(())
     }
 }

@@ -6,7 +6,7 @@
 
 mod batch_validate;
 pub(crate) mod engine_keys;
-pub use runkon_flow::events::EventSink;
+pub use runkon_flow::events::{EngineEvent, EngineEventData, EventSink};
 pub use runkon_flow_executors::ChannelEventSink;
 pub(crate) mod constants;
 pub(crate) mod coordinator;

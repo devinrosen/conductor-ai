@@ -854,7 +854,7 @@ pub fn resume_workflow_standalone(params: &WorkflowResumeStandalone) -> Result<W
         from_step: params.from_step.as_deref(),
         restart: params.restart,
         conductor_bin_dir: params.conductor_bin_dir.clone(),
-        event_sinks: vec![],
+        event_sinks: params.event_sinks.clone(),
         db_path: Some(db),
         shutdown: params.shutdown.clone(),
     };
@@ -882,6 +882,7 @@ fn make_resume_params(
         db_path,
         conductor_bin_dir,
         shutdown: None,
+        event_sinks: vec![],
     }
 }
 
@@ -2049,6 +2050,7 @@ mod tests {
             db_path: Some(db_path),
             conductor_bin_dir: None,
             shutdown: None,
+            event_sinks: vec![],
         }
     }
 

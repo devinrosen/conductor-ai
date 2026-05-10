@@ -154,6 +154,7 @@ fn format_validation_result(
 pub(super) fn tool_run_workflow(
     conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
+    hub: Option<&crate::mcp::subscriptions::SubscriptionHub>,
 ) -> CallToolResult {
     use conductor_core::repo::RepoManager;
     use conductor_core::workflow::{
@@ -275,6 +276,7 @@ pub(super) fn tool_run_workflow(
         runtime: None,
         exec_config: WorkflowExecConfig {
             dry_run,
+            event_sinks: hub.map(|h| vec![h.channel_sink()]).unwrap_or_default(),
             ..WorkflowExecConfig::default()
         },
         inputs,
@@ -743,7 +745,7 @@ workflow review {
     fn test_dispatch_run_workflow_missing_args() {
         let (_f, conductor) = make_test_conductor();
         // Missing both "workflow" and "repo"
-        let result = tool_run_workflow(&conductor, &empty_args());
+        let result = tool_run_workflow(&conductor, &empty_args(), None);
         assert_eq!(result.is_error, Some(true));
     }
 
@@ -753,7 +755,7 @@ workflow review {
         let mut args = serde_json::Map::new();
         args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
-        let result = tool_run_workflow(&conductor, &args);
+        let result = tool_run_workflow(&conductor, &args, None);
         assert_eq!(result.is_error, Some(true));
     }
 
@@ -768,7 +770,7 @@ workflow review {
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         args.insert("inputs".to_string(), Value::Object(inputs_map));
         // Should fail at repo lookup, not at inputs parsing
-        let result = tool_run_workflow(&conductor, &args);
+        let result = tool_run_workflow(&conductor, &args, None);
         assert_eq!(result.is_error, Some(true));
         let content = format!("{result:?}");
         assert!(
@@ -787,7 +789,7 @@ workflow review {
             "inputs".to_string(),
             Value::String(r#"{"key":"val"}"#.to_string()),
         );
-        let result = tool_run_workflow(&conductor, &args);
+        let result = tool_run_workflow(&conductor, &args, None);
         assert_eq!(result.is_error, Some(true));
         let content = format!("{result:?}");
         assert!(
@@ -805,7 +807,7 @@ workflow review {
         args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         args.insert("inputs".to_string(), Value::Object(inputs_map));
-        let result = tool_run_workflow(&conductor, &args);
+        let result = tool_run_workflow(&conductor, &args, None);
         assert_eq!(result.is_error, Some(true));
         let content = format!("{result:?}");
         assert!(
@@ -843,7 +845,7 @@ workflow review {
         args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         args.insert("dry_run".to_string(), Value::Bool(true));
-        let result = tool_run_workflow(&conductor, &args);
+        let result = tool_run_workflow(&conductor, &args, None);
         // Should fail at repo lookup (ghost-repo not registered), not at arg parsing
         assert_eq!(result.is_error, Some(true));
         let content = format!("{result:?}");
@@ -857,7 +859,7 @@ workflow review {
         args2.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args2.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         args2.insert("dry_run".to_string(), Value::String("true".to_string()));
-        let result2 = tool_run_workflow(&conductor, &args2);
+        let result2 = tool_run_workflow(&conductor, &args2, None);
         assert_eq!(result2.is_error, Some(true));
         let content2 = format!("{result2:?}");
         assert!(
@@ -877,7 +879,7 @@ workflow review {
             "worktree".to_string(),
             Value::String("feat-something".to_string()),
         );
-        let result = tool_run_workflow(&conductor, &args);
+        let result = tool_run_workflow(&conductor, &args, None);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -899,7 +901,7 @@ workflow review {
             "pr".to_string(),
             Value::String("not-a-pr-number-or-url".to_string()),
         );
-        let result = tool_run_workflow(&conductor, &args);
+        let result = tool_run_workflow(&conductor, &args, None);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -919,7 +921,7 @@ workflow review {
         args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         args.insert("pr".to_string(), Value::String("42".to_string()));
-        let result = tool_run_workflow(&conductor, &args);
+        let result = tool_run_workflow(&conductor, &args, None);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -943,7 +945,7 @@ workflow review {
             "pr".to_string(),
             Value::String("https://github.com/owner/repo/pull/99".to_string()),
         );
-        let result = tool_run_workflow(&conductor, &args);
+        let result = tool_run_workflow(&conductor, &args, None);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()

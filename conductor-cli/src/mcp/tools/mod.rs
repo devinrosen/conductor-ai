@@ -513,6 +513,7 @@ pub(super) fn dispatch_tool(
     conductor: &Conductor,
     name: &str,
     args: &serde_json::Map<String, Value>,
+    hub: Option<&crate::mcp::subscriptions::SubscriptionHub>,
 ) -> CallToolResult {
     match name {
         "conductor_list_tickets" => tickets::tool_list_tickets(conductor, args),
@@ -520,7 +521,7 @@ pub(super) fn dispatch_tool(
         "conductor_create_worktree" => worktrees::tool_create_worktree(conductor, args),
         "conductor_delete_worktree" => worktrees::tool_delete_worktree(conductor, args),
         "conductor_sync_tickets" => tickets::tool_sync_tickets(conductor, args),
-        "conductor_run_workflow" => workflows::tool_run_workflow(conductor, args),
+        "conductor_run_workflow" => workflows::tool_run_workflow(conductor, args, hub),
         "conductor_list_runs" => runs::tool_list_runs(conductor, args),
         "conductor_list_agent_runs" => agents::tool_list_agent_runs(conductor, args),
         "conductor_get_run" => runs::tool_get_run(conductor, args),
@@ -532,7 +533,7 @@ pub(super) fn dispatch_tool(
         "conductor_cancel_run" => runs::tool_cancel_run(conductor, args),
         "conductor_list_workflows" => workflows::tool_list_workflows(conductor, args),
         "conductor_list_repos" => repos::tool_list_repos(conductor),
-        "conductor_resume_run" => runs::tool_resume_run(conductor, args),
+        "conductor_resume_run" => runs::tool_resume_run(conductor, args, hub),
         "conductor_submit_agent_feedback" => agents::tool_submit_agent_feedback(conductor, args),
         "conductor_get_worktree" => worktrees::tool_get_worktree(conductor, args),
         "conductor_get_step_log" => runs::tool_get_step_log(conductor, args),
@@ -567,7 +568,7 @@ mod tests {
     #[test]
     fn test_dispatch_unknown_tool() {
         let (_f, conductor) = make_test_conductor();
-        let result = dispatch_tool(&conductor, "conductor_nonexistent", &empty_args());
+        let result = dispatch_tool(&conductor, "conductor_nonexistent", &empty_args(), None);
         assert_eq!(
             result.is_error,
             Some(true),
