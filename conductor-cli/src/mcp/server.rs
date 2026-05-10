@@ -162,9 +162,9 @@ impl ServerHandler for ConductorMcpServer {
             })?
             .to_string();
 
-        let status = lookup_run_status(run_id.clone())
-            .await
-            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        let status = lookup_run_status(run_id.clone()).await.map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("failed to look up run {run_id}: {e}"), None)
+        })?;
 
         if status.is_none() {
             return Err(rmcp::ErrorData::invalid_params(
