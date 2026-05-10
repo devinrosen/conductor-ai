@@ -141,3 +141,20 @@ pub fn ensure_agent_log_dir() -> std::path::PathBuf {
     std::fs::create_dir_all(&dir).ok();
     dir
 }
+
+/// Create a file-based test database with migrations applied.
+/// Returns the path to the database file. The file is created in a temporary directory.
+/// Use with `CONDUCTOR_TEST_DB` environment variable to make fire_* functions use it.
+pub fn create_file_test_db() -> (Connection, String) {
+    let tmpdir = std::env::temp_dir();
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let db_path = tmpdir.join(format!("conductor_test_{}.db", nonce));
+    let path_str = db_path.to_string_lossy().to_string();
+    let conn = Connection::open(&db_path).unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    db::migrations::run(&conn).unwrap();
+    (conn, path_str)
+}

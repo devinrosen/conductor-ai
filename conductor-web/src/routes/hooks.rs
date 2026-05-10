@@ -5,8 +5,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use conductor_core::config::{hooks_dir, save_config, HookConfig};
-use conductor_core::notification_event::{NotificationEvent, ALL_EVENTS};
-use conductor_core::notification_hooks::HookRunner;
+use conductor_core::notify::{build_synthetic_for_pattern, HookRunner, ALL_EVENTS};
 
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -239,9 +238,10 @@ pub async fn test_hook(
     drop(config);
 
     let now = Utc::now().to_rfc3339();
-    let event = NotificationEvent::synthetic_for_pattern(&hook.on, now);
+    let event = build_synthetic_for_pattern(&hook.on, now);
+    let runkon_hook = hook.to_runkon_hook_config();
 
-    let runner = HookRunner::new(&[hook]);
+    let runner = HookRunner::new(&[runkon_hook]);
     runner.fire(&event);
 
     Ok(StatusCode::NO_CONTENT)

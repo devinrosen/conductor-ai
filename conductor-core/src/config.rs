@@ -209,6 +209,87 @@ pub struct HookConfig {
     pub step: Option<String>,
 }
 
+impl HookConfig {
+    /// Translate this conductor `HookConfig` into a `runkon_notify::HookConfig` for dispatch.
+    ///
+    /// The user-facing TOML structure is unchanged; conductor-specific filter fields
+    /// (`workflow`, `repo`, `branch`, `step`, `threshold_multiple`, `gate_pending_ms`,
+    /// `root_workflows_only`) are mapped onto the upstream `when_field_*` predicates.
+    pub fn to_runkon_hook_config(&self) -> runkon_notify::HookConfig {
+        // Append `:root` to each comma-separated arm when `root_workflows_only` is set.
+        let on = if self.root_workflows_only == Some(true) {
+            self.on
+                .split(',')
+                .map(|arm| {
+                    let arm = arm.trim();
+                    if arm.ends_with(":root") {
+                        arm.to_string()
+                    } else {
+                        format!("{arm}:root")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        } else {
+            self.on.clone()
+        };
+
+        let when_field_eq = self
+            .workflow
+            .as_ref()
+            .map(|wf| [("workflow_name".into(), wf.clone())].into_iter().collect());
+
+        let mut when_field_in: HashMap<String, Vec<String>> = HashMap::new();
+        if let Some(ref repo) = self.repo {
+            when_field_in.insert("repo_slug".into(), vec![repo.clone()]);
+        }
+        if let Some(ref step) = self.step {
+            when_field_in.insert("step_name".into(), vec![step.clone()]);
+        }
+        let when_field_in = if when_field_in.is_empty() {
+            None
+        } else {
+            Some(when_field_in)
+        };
+
+        let when_field_glob = self
+            .branch
+            .as_ref()
+            .map(|b| [("branch".into(), b.clone())].into_iter().collect());
+
+        let mut when_field_gte: HashMap<String, f64> = HashMap::new();
+        if let Some(mult) = self.threshold_multiple {
+            when_field_gte.insert("multiple".into(), mult);
+        }
+        if let Some(ms) = self.gate_pending_ms {
+            when_field_gte.insert("pending_ms".into(), ms as f64);
+        }
+        let when_field_gte = if when_field_gte.is_empty() {
+            None
+        } else {
+            Some(when_field_gte)
+        };
+
+        runkon_notify::HookConfig {
+            on,
+            run: self.run.clone(),
+            url: self.url.clone(),
+            headers: self.headers.clone(),
+            timeout_ms: self.timeout_ms,
+            when_field_eq,
+            when_field_in,
+            when_field_glob,
+            when_field_gte,
+            when_field_lte: None,
+        }
+    }
+}
+
+/// Translate a slice of conductor `HookConfig`s to `runkon_notify::HookConfig`s.
+pub fn hooks_as_runkon(hooks: &[HookConfig]) -> Vec<runkon_notify::HookConfig> {
+    hooks.iter().map(|h| h.to_runkon_hook_config()).collect()
+}
+
 /// Top-level `[notify]` section containing user-configured notification hooks.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NotifyConfig {

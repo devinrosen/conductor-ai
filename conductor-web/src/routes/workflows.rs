@@ -99,6 +99,9 @@ fn fire_notification_via_state(state: &AppState, args: &WorkflowNotificationArgs
         conn: &conn,
         config: &cfg.notifications,
         hooks: &cfg.notify.hooks,
+        dedup_store: std::sync::Arc::new(conductor_core::notify::SqliteDedupStore::new(
+            state.db_path.clone(),
+        )),
     };
     fire_workflow_notification(&ctx, args);
 }
@@ -2246,6 +2249,7 @@ mod tests {
     #[tokio::test]
     async fn fire_workflow_notification_completes_without_panic() {
         let conn = conductor_core::test_helpers::create_test_conn();
+        let (_, db_path) = conductor_core::test_helpers::create_file_test_db();
         let notifications = conductor_core::config::NotificationConfig::default(); // enabled=false
 
         tokio::task::spawn_blocking(move || {
@@ -2253,6 +2257,9 @@ mod tests {
                 conn: &conn,
                 config: &notifications,
                 hooks: &[],
+                dedup_store: Arc::new(conductor_core::notify::SqliteDedupStore::new(
+                    std::path::PathBuf::from(db_path),
+                )),
             };
             fire_workflow_notification(
                 &ctx,
@@ -2294,8 +2301,9 @@ mod tests {
 
     #[tokio::test]
     async fn error_path_key_deduplicates() {
-        let db = empty_state().db;
+        let (_, db_path) = conductor_core::test_helpers::create_file_test_db();
 
+        let db = empty_state().db;
         let notifications = test_notification_config();
 
         let bucket = std::time::SystemTime::now()
@@ -2309,12 +2317,16 @@ mod tests {
         let db1 = Arc::clone(&db);
         let notifications1 = notifications.clone();
         let key1 = key.clone();
+        let db_path1 = db_path.clone();
         tokio::task::spawn_blocking(move || {
             let conn = db1.blocking_lock();
             let ctx = NotificationCtx {
                 conn: &conn,
                 config: &notifications1,
                 hooks: &[],
+                dedup_store: Arc::new(conductor_core::notify::SqliteDedupStore::new(
+                    std::path::PathBuf::from(db_path1),
+                )),
             };
             fire_workflow_notification(
                 &ctx,
@@ -2340,12 +2352,16 @@ mod tests {
         // Second call — simulates a concurrent web process observing the same failure
         let db2 = Arc::clone(&db);
         let key2 = key.clone();
+        let db_path2 = db_path.clone();
         tokio::task::spawn_blocking(move || {
             let conn = db2.blocking_lock();
             let ctx = NotificationCtx {
                 conn: &conn,
                 config: &notifications,
                 hooks: &[],
+                dedup_store: Arc::new(conductor_core::notify::SqliteDedupStore::new(
+                    std::path::PathBuf::from(db_path2),
+                )),
             };
             fire_workflow_notification(
                 &ctx,
@@ -2369,8 +2385,8 @@ mod tests {
         .unwrap();
 
         // Dedup: only one row should exist despite two calls with the same key
-        let conn = db.lock().await;
-        let count: i64 = conn
+        let conn2 = rusqlite::Connection::open(&db_path).unwrap();
+        let count: i64 = conn2
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = ?1 AND event_type = 'failed'",
                 [&key],
@@ -2385,16 +2401,39 @@ mod tests {
 
     #[tokio::test]
     async fn fire_workflow_notification_with_notifications_enabled_claims_log_row() {
-        let conn = conductor_core::test_helpers::create_test_conn();
-
+        let (conn, db_path) = conductor_core::test_helpers::create_file_test_db();
         let notifications = test_notification_config();
 
         tokio::task::spawn_blocking(move || {
-            let ctx = NotificationCtx { conn: &conn, config: &notifications, hooks: &[] };
-            fire_workflow_notification(&ctx, &WorkflowNotificationArgs { run_id: "run-notify-1", workflow_name: "my-workflow", target_label: None, succeeded: true, parent_workflow_run_id: None, repo_slug: "", branch: "", duration_ms: None, ticket_url: None, error: None, repo_id: None, worktree_id: None });
+            let ctx = NotificationCtx {
+                conn: &conn,
+                config: &notifications,
+                hooks: &[],
+                dedup_store: Arc::new(conductor_core::notify::SqliteDedupStore::new(
+                    std::path::PathBuf::from(&db_path),
+                )),
+            };
+            fire_workflow_notification(
+                &ctx,
+                &WorkflowNotificationArgs {
+                    run_id: "run-notify-1",
+                    workflow_name: "my-workflow",
+                    target_label: None,
+                    succeeded: true,
+                    parent_workflow_run_id: None,
+                    repo_slug: "",
+                    branch: "",
+                    duration_ms: None,
+                    ticket_url: None,
+                    error: None,
+                    repo_id: None,
+                    worktree_id: None,
+                },
+            );
 
             // Verify the dedup row was inserted into notification_log
-            let count: i64 = conn
+            let conn2 = rusqlite::Connection::open(&db_path).unwrap();
+            let count: i64 = conn2
                 .query_row(
                     "SELECT COUNT(*) FROM notification_log WHERE entity_id = ?1 AND event_type = ?2",
                     rusqlite::params!["run-notify-1", "completed"],

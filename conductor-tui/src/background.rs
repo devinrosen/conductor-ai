@@ -110,6 +110,8 @@ pub fn spawn_db_poller(
                         &mut initialized,
                     );
                     if let Some(ref conn) = claim_conn {
+                        let dedup_store =
+                            Arc::new(conductor_core::notify::SqliteDedupStore::default_db());
                         // Build a run_id → ConductorWorkflowRun lookup for spike detection.
                         let run_by_id: HashMap<
                             &str,
@@ -126,6 +128,7 @@ pub fn spawn_db_poller(
                                 conn,
                                 config: &config.notifications,
                                 hooks: &config.notify.hooks,
+                                dedup_store: dedup_store.clone(),
                             };
                             crate::notify::fire_workflow_notification(
                                 &wf_ctx,
@@ -164,6 +167,7 @@ pub fn spawn_db_poller(
                                                     conn,
                                                     &config.notifications,
                                                     &config.notify.hooks,
+                                                    dedup_store.clone(),
                                                     &crate::notify::CostSpikeArgs {
                                                         run_id: &t.run_id,
                                                         workflow_name: &t.workflow_name,
@@ -191,6 +195,7 @@ pub fn spawn_db_poller(
                                                     conn,
                                                     &config.notifications,
                                                     &config.notify.hooks,
+                                                    dedup_store.clone(),
                                                     &crate::notify::DurationSpikeArgs {
                                                         run_id: &t.run_id,
                                                         workflow_name: &t.workflow_name,
@@ -221,6 +226,7 @@ pub fn spawn_db_poller(
                                     conn,
                                     &config.notifications,
                                     &config.notify.hooks,
+                                    dedup_store.clone(),
                                     &crate::notify::FeedbackNotificationParams {
                                         request_id: &req.id,
                                         prompt_preview: &req.prompt,
@@ -268,6 +274,7 @@ pub fn spawn_db_poller(
                                         conn,
                                         &config.notifications,
                                         &config.notify.hooks,
+                                        dedup_store.clone(),
                                         &crate::notify::GateNotificationParams {
                                             step_id: &step.id,
                                             step_name: &step.step_name,
@@ -300,6 +307,7 @@ pub fn spawn_db_poller(
                                         conn,
                                         &config.notifications,
                                         &config.notify.hooks,
+                                        dedup_store.clone(),
                                         &crate::notify::GroupedGateNotificationParams {
                                             run_id,
                                             workflow_name,
@@ -342,6 +350,7 @@ pub fn spawn_db_poller(
                                         conn,
                                         &config.notifications,
                                         &config.notify.hooks,
+                                        dedup_store.clone(),
                                         &crate::notify::GatePendingTooLongArgs {
                                             step_id: &step.id,
                                             step_name: &step.step_name,
@@ -384,6 +393,7 @@ pub fn spawn_db_poller(
                                     conn,
                                     &config.notifications,
                                     &config.notify.hooks,
+                                    dedup_store.clone(),
                                     &crate::notify::AgentRunNotificationArgs {
                                         run_id: &t.run_id,
                                         worktree_slug: t.worktree_slug.as_deref(),
