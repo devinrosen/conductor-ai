@@ -8,10 +8,24 @@ use rmcp::model::{
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler};
 
-use super::subscriptions::{spawn_broadcaster, SubscriptionHub};
+use super::subscriptions::SubscriptionHub;
 
 fn is_terminal(status: Option<&str>) -> bool {
     status.is_some_and(|s| matches!(s, "completed" | "failed" | "cancelled"))
+}
+
+/// Look up a workflow run's status off-thread. `Ok(None)` means the run does
+/// not exist; `Err` means a join failure or DB error (both fatal to the caller's
+/// intent — the caller decides whether that means "fail the request" or "drain
+/// the subscriber to avoid an orphan").
+async fn lookup_run_status(run_id: String) -> Result<Option<String>, anyhow::Error> {
+    tokio::task::spawn_blocking(move || {
+        let conductor = conductor_core::Conductor::open().map_err(anyhow::Error::from)?;
+        conductor_core::workflow::get_workflow_run_status(&conductor.conn, &run_id)
+            .map_err(anyhow::Error::from)
+    })
+    .await
+    .map_err(anyhow::Error::from)?
 }
 
 /// The conductor MCP server. Each request opens its own `Conductor` inside
@@ -23,8 +37,7 @@ pub struct ConductorMcpServer {
 
 impl ConductorMcpServer {
     pub fn new() -> Self {
-        let (hub, rx) = SubscriptionHub::new();
-        let handle = spawn_broadcaster(rx, hub.registry.clone());
+        let (hub, handle) = SubscriptionHub::new();
         Self {
             hub,
             _broadcaster_handle: handle,
@@ -137,15 +150,9 @@ impl ServerHandler for ConductorMcpServer {
             })?
             .to_string();
 
-        let run_id_for_lookup = run_id.clone();
-        let status = tokio::task::spawn_blocking(move || {
-            let conductor = conductor_core::Conductor::open().map_err(anyhow::Error::from)?;
-            conductor_core::workflow::get_workflow_run_status(&conductor.conn, &run_id_for_lookup)
-                .map_err(anyhow::Error::from)
-        })
-        .await
-        .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?
-        .map_err(|e: anyhow::Error| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        let status = lookup_run_status(run_id.clone())
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
         if status.is_none() {
             return Err(rmcp::ErrorData::invalid_params(
@@ -162,37 +169,23 @@ impl ServerHandler for ConductorMcpServer {
                 .notify_resource_updated(rmcp::model::ResourceUpdatedNotificationParam::new(uri))
                 .await;
         } else {
-            let run_id_recheck = run_id.clone();
             self.hub
-                .registry
-                .insert(run_id.clone(), context.peer.clone(), uri);
+                .subscribe(run_id.clone(), context.peer.clone(), uri);
             // Close TOCTOU: re-check status after insert to catch terminal transition in the gap.
-            let recheck = tokio::task::spawn_blocking(move || {
-                let conductor = conductor_core::Conductor::open().map_err(anyhow::Error::from)?;
-                conductor_core::workflow::get_workflow_run_status(&conductor.conn, &run_id_recheck)
-                    .map_err(anyhow::Error::from)
-            })
-            .await;
-            match recheck {
-                Err(join_err) => {
+            // Both join failures and DB errors are non-fatal to the subscribe request itself —
+            // we drain the just-inserted subscriber so it isn't orphaned, and let the client retry.
+            match lookup_run_status(run_id.clone()).await {
+                Err(e) => {
                     tracing::warn!(
-                        "TOCTOU recheck task panicked for run {run_id}: {join_err}; \
+                        "TOCTOU recheck failed for run {run_id}: {e}; \
                          draining subscriber to avoid orphan"
                     );
                     self.hub.notify_and_drain(&run_id).await;
                 }
-                Ok(Err(db_err)) => {
-                    tracing::warn!(
-                        "TOCTOU recheck DB error for run {run_id}: {db_err}; \
-                         draining subscriber to avoid orphan"
-                    );
+                Ok(status) if is_terminal(status.as_deref()) => {
                     self.hub.notify_and_drain(&run_id).await;
                 }
-                Ok(Ok(status)) => {
-                    if is_terminal(status.as_deref()) {
-                        self.hub.notify_and_drain(&run_id).await;
-                    }
-                }
+                Ok(_) => {}
             }
         }
 
@@ -206,7 +199,7 @@ impl ServerHandler for ConductorMcpServer {
     ) -> Result<(), rmcp::ErrorData> {
         let uri = request.uri;
         if let Some(run_id) = uri.strip_prefix("conductor://run/") {
-            self.hub.registry.remove(run_id, &uri);
+            self.hub.unsubscribe(run_id, &uri);
         }
         Ok(())
     }

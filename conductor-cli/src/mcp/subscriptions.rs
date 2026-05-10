@@ -86,17 +86,29 @@ impl EventSink for TokioSink {
 #[derive(Clone)]
 pub struct SubscriptionHub {
     tx: mpsc::UnboundedSender<EngineEventData>,
-    pub registry: SubscriptionRegistry,
+    registry: SubscriptionRegistry,
 }
 
 impl SubscriptionHub {
-    pub fn new() -> (Self, mpsc::UnboundedReceiver<EngineEventData>) {
+    /// Construct a hub and spawn its broadcaster task. The returned `JoinHandle`
+    /// keeps the task alive for the lifetime of the holder; on drop, the channel
+    /// closes and the task exits cleanly.
+    pub fn new() -> (Self, tokio::task::JoinHandle<()>) {
         let (tx, rx) = mpsc::unbounded_channel();
-        let hub = Self {
-            tx,
-            registry: SubscriptionRegistry::new(),
-        };
-        (hub, rx)
+        let registry = SubscriptionRegistry::new();
+        let handle = spawn_broadcaster(rx, registry.clone());
+        let hub = Self { tx, registry };
+        (hub, handle)
+    }
+
+    /// Register a subscriber for `run_id`.
+    pub fn subscribe(&self, run_id: String, peer: Peer<RoleServer>, uri: String) {
+        self.registry.insert(run_id, peer, uri);
+    }
+
+    /// Remove a subscriber identified by `(run_id, uri)`.
+    pub fn unsubscribe(&self, run_id: &str, uri: &str) {
+        self.registry.remove(run_id, uri);
     }
 
     /// Returns an `EventSink` that forwards events to the broadcaster task.
@@ -115,13 +127,11 @@ impl SubscriptionHub {
     }
 }
 
-/// Spawn the broadcaster task.
-///
 /// Reads `EngineEventData` from the receiver, and on terminal events
 /// (`RunCompleted` / `RunCancelled`) drains the registry for that run_id
 /// and fires `notify_resource_updated` for each subscriber. Dead peers
 /// are silently swept (send errors are ignored).
-pub fn spawn_broadcaster(
+fn spawn_broadcaster(
     mut rx: mpsc::UnboundedReceiver<EngineEventData>,
     registry: SubscriptionRegistry,
 ) -> tokio::task::JoinHandle<()> {
@@ -192,9 +202,7 @@ mod tests {
     /// Verify the broadcaster drops non-terminal events and does not stall.
     #[tokio::test]
     async fn test_broadcaster_ignores_nonterminal_events() {
-        let (hub, rx) = SubscriptionHub::new();
-        let registry = hub.registry.clone();
-        let handle = spawn_broadcaster(rx, registry.clone());
+        let (hub, handle) = SubscriptionHub::new();
 
         // Emit a non-terminal event.
         let sink = hub.channel_sink();
@@ -214,9 +222,7 @@ mod tests {
     /// Verify the broadcaster exits when the sender is dropped.
     #[tokio::test]
     async fn test_broadcaster_exits_on_channel_close() {
-        let (hub, rx) = SubscriptionHub::new();
-        let registry = hub.registry.clone();
-        let handle = spawn_broadcaster(rx, registry);
+        let (hub, handle) = SubscriptionHub::new();
         drop(hub);
         handle.await.expect("broadcaster task should exit cleanly");
     }
@@ -248,9 +254,8 @@ mod tests {
     /// Verify that terminal events drain the registry (no panics even with empty sinks).
     #[tokio::test]
     async fn test_broadcaster_drains_registry_on_terminal() {
-        let (hub, rx) = SubscriptionHub::new();
+        let (hub, handle) = SubscriptionHub::new();
         let registry = hub.registry.clone();
-        let handle = spawn_broadcaster(rx, registry.clone());
 
         // Manually insert a raw entry so we can verify it's consumed.
         {
