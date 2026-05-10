@@ -2,8 +2,8 @@ use anyhow::Result;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, Implementation, ListResourcesResult, ListToolsResult,
     PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
-    ResourcesCapability, ServerCapabilities, ServerInfo, SubscribeRequestParams,
-    ToolsCapability, UnsubscribeRequestParams,
+    ResourcesCapability, ServerCapabilities, ServerInfo, SubscribeRequestParams, ToolsCapability,
+    UnsubscribeRequestParams,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler};
@@ -135,8 +135,7 @@ impl ServerHandler for ConductorMcpServer {
 
         let run_id_for_lookup = run_id.clone();
         let status = tokio::task::spawn_blocking(move || {
-            let conductor =
-                conductor_core::Conductor::open().map_err(anyhow::Error::from)?;
+            let conductor = conductor_core::Conductor::open().map_err(anyhow::Error::from)?;
             conductor_core::workflow::get_workflow_run_status(&conductor.conn, &run_id_for_lookup)
                 .map_err(anyhow::Error::from)
         })
@@ -162,9 +161,7 @@ impl ServerHandler for ConductorMcpServer {
             // Don't insert into the registry; client will re-read the resource.
             let _ = context
                 .peer
-                .notify_resource_updated(
-                    rmcp::model::ResourceUpdatedNotificationParam::new(uri),
-                )
+                .notify_resource_updated(rmcp::model::ResourceUpdatedNotificationParam::new(uri))
                 .await;
         } else {
             self.hub.registry.insert(run_id, context.peer.clone(), uri);
