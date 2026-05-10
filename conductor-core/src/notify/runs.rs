@@ -1,17 +1,12 @@
-use crate::config::{HookConfig, NotificationConfig};
-use crate::notification_event::NotificationEvent;
+use std::sync::Arc;
 
-use super::{
-    build_workflow_deep_link, dispatch_notification, notification_body, should_notify,
-    DispatchParams,
-};
+use runkon_notify::{Event, HookRunner, Severity};
+
+use crate::config::{hooks_as_runkon, HookConfig, NotificationConfig};
+
+use super::{build_workflow_deep_link, notification_body, should_notify, SqliteDedupStore};
 
 /// Narrow context bundle for [`fire_workflow_notification`].
-///
-/// Holds references rather than owned values so all three call-site patterns
-/// fit without ownership transfer: `MutexGuard<Connection>` in the web
-/// background task, `RwLockReadGuard<Config>` slices, and plain `&Connection`
-/// in the TUI background thread.
 pub struct NotificationCtx<'a> {
     pub conn: &'a rusqlite::Connection,
     pub config: &'a NotificationConfig,
@@ -56,13 +51,9 @@ pub struct FeedbackNotificationParams<'a> {
     pub branch: &'a str,
 }
 
-/// Fire a desktop notification for a workflow completion, respecting user config.
+/// Fire a notification for a workflow run that reached a terminal state.
 ///
-/// Filters are applied in order: master `enabled` flag, then per-event
-/// `on_success`/`on_failure` guards. A cross-process dedup check via
-/// `notification_log` prevents duplicate notifications when multiple TUI/web
-/// instances run concurrently.
-/// Matching entries in `notify_hooks` are fired after the dedup claim succeeds.
+/// Deduped on `(run_id, "completed"|"failed")` via SQLite.
 pub fn fire_workflow_notification(
     ctx: &NotificationCtx<'_>,
     params: &WorkflowNotificationArgs<'_>,
@@ -72,74 +63,88 @@ pub fn fire_workflow_notification(
         return;
     }
 
-    let run_id = params.run_id;
-    let workflow_name = params.workflow_name;
-    let target_label = params.target_label;
-    let succeeded = params.succeeded;
-    let parent_workflow_run_id = params.parent_workflow_run_id;
-    let repo_slug = params.repo_slug.to_string();
-    let branch = params.branch.to_string();
-    let duration_ms = params.duration_ms;
-    let ticket_url = params.ticket_url.clone();
-    let error = params.error.map(|s| s.to_string());
+    let event_type = if params.succeeded { "completed" } else { "failed" };
+    let body = notification_body(params.workflow_name, params.target_label);
     let deep_link = build_workflow_deep_link(
         ctx.config.web_url.as_deref(),
         params.repo_id,
         params.worktree_id,
-        run_id,
+        params.run_id,
     );
+    let is_root = params.parent_workflow_run_id.is_none();
+    let now = chrono::Utc::now().to_rfc3339();
 
-    let event_type = if succeeded { "completed" } else { "failed" };
-    let body = notification_body(workflow_name, target_label);
+    let mut fields: std::collections::HashMap<String, String> = [
+        ("run_id".into(), params.run_id.into()),
+        ("workflow_name".into(), params.workflow_name.into()),
+        (
+            "parent_workflow_run_id".into(),
+            params.parent_workflow_run_id.unwrap_or("").into(),
+        ),
+        ("repo_slug".into(), params.repo_slug.into()),
+        ("branch".into(), params.branch.into()),
+        (
+            "duration_ms".into(),
+            params
+                .duration_ms
+                .map(|ms| ms.to_string())
+                .unwrap_or_default(),
+        ),
+        (
+            "ticket_url".into(),
+            params
+                .ticket_url
+                .as_deref()
+                .unwrap_or("")
+                .into(),
+        ),
+        (
+            "url".into(),
+            deep_link.as_deref().unwrap_or("").into(),
+        ),
+        ("timestamp".into(), now),
+        ("is_root".into(), is_root.to_string()),
+    ]
+    .into_iter()
+    .collect();
 
-    let hook_event = if succeeded {
-        NotificationEvent::WorkflowRunCompleted {
-            run_id: run_id.to_string(),
-            label: body.clone(),
-            timestamp: chrono::Utc::now().to_rfc3339(),
-            url: deep_link.clone(),
-            workflow_name: workflow_name.to_string(),
-            parent_workflow_run_id: parent_workflow_run_id.map(|s| s.to_string()),
-            repo_slug,
-            branch,
-            duration_ms,
-            ticket_url,
-        }
+    if let Some(err) = params.error {
+        fields.insert("error".into(), err.into());
+    }
+
+    let (kind, title, severity) = if params.succeeded {
+        (
+            "workflow_run.completed",
+            "Conductor \u{2014} Workflow Completed",
+            Severity::Info,
+        )
     } else {
-        NotificationEvent::WorkflowRunFailed {
-            run_id: run_id.to_string(),
-            label: body.clone(),
-            timestamp: chrono::Utc::now().to_rfc3339(),
-            url: deep_link,
-            workflow_name: workflow_name.to_string(),
-            parent_workflow_run_id: parent_workflow_run_id.map(|s| s.to_string()),
-            repo_slug,
-            branch,
-            duration_ms,
-            ticket_url,
-            error,
-        }
+        (
+            "workflow_run.failed",
+            "Conductor \u{2014} Workflow Failed",
+            Severity::Error,
+        )
     };
 
-    dispatch_notification(
-        ctx.conn,
-        &DispatchParams {
-            dedup_entity_id: run_id,
-            dedup_event_type: event_type,
-            hooks: ctx.hooks,
-            event: Some(&hook_event),
-        },
-    );
+    let event = Event {
+        kind: kind.into(),
+        title: title.into(),
+        body,
+        severity,
+        fields,
+    };
+
+    let store = Arc::new(SqliteDedupStore::default_db());
+    HookRunner::new(&hooks_as_runkon(ctx.hooks))
+        .with_dedup_store(store)
+        .fire_with_dedup(&event, params.run_id, event_type);
 }
 
 /// Fire a notification for an agent feedback request.
 ///
-/// Gated on `config.enabled`. Uses `(request_id, "feedback_requested")` as the
-/// dedup key so each feedback request fires at most one notification across all
-/// processes. Matching entries in `notify_hooks` are fired after the dedup claim
-/// succeeds.
+/// Deduped on `(request_id, "feedback_requested")` via SQLite.
 pub fn fire_feedback_notification(
-    conn: &rusqlite::Connection,
+    _conn: &rusqlite::Connection,
     config: &NotificationConfig,
     notify_hooks: &[HookConfig],
     params: &FeedbackNotificationParams<'_>,
@@ -149,93 +154,103 @@ pub fn fire_feedback_notification(
         return;
     }
 
-    let hook_event = NotificationEvent::FeedbackRequested {
-        run_id: params.request_id.to_string(),
-        label: params.prompt_preview.to_string(),
-        timestamp: chrono::Utc::now().to_rfc3339(),
-        url: None,
-        prompt_preview: params.prompt_preview.to_string(),
-        repo_slug: params.repo_slug.to_string(),
-        branch: params.branch.to_string(),
-        duration_ms: None,
-        ticket_url: None,
+    let now = chrono::Utc::now().to_rfc3339();
+    let event = Event {
+        kind: "feedback.requested".into(),
+        title: "Conductor \u{2014} Feedback Requested".into(),
+        body: params.prompt_preview.into(),
+        severity: Severity::Info,
+        fields: [
+            ("run_id".into(), params.request_id.into()),
+            ("prompt_preview".into(), params.prompt_preview.into()),
+            ("repo_slug".into(), params.repo_slug.into()),
+            ("branch".into(), params.branch.into()),
+            ("timestamp".into(), now),
+        ]
+        .into_iter()
+        .collect(),
     };
 
-    dispatch_notification(
-        conn,
-        &DispatchParams {
-            dedup_entity_id: params.request_id,
-            dedup_event_type: "feedback_requested",
-            hooks: notify_hooks,
-            event: Some(&hook_event),
-        },
-    );
+    let store = Arc::new(SqliteDedupStore::default_db());
+    HookRunner::new(&hooks_as_runkon(notify_hooks))
+        .with_dedup_store(store)
+        .fire_with_dedup(&event, params.request_id, "feedback_requested");
 }
 
 /// Fire a notification for a standalone agent run that reached a terminal state.
 ///
-/// Gated on `config.enabled` and per-event `on_success`/`on_failure` guards.
-/// Uses `(run_id, "agent_completed"|"agent_failed")` as the dedup key.
-/// Matching entries in `notify_hooks` are fired after the dedup claim succeeds.
+/// Deduped on `(run_id, "agent_completed"|"agent_failed")` via SQLite.
 pub fn fire_agent_run_notification(
-    conn: &rusqlite::Connection,
+    _conn: &rusqlite::Connection,
     config: &NotificationConfig,
     notify_hooks: &[HookConfig],
     params: &AgentRunNotificationArgs<'_>,
 ) {
-    let run_id = params.run_id;
-    let worktree_slug = params.worktree_slug;
-    let succeeded = params.succeeded;
-    let error_msg = params.error_msg;
-    let repo_slug = params.repo_slug.to_string();
-    let branch = params.branch.to_string();
-    let duration_ms = params.duration_ms;
-    let ticket_url = params.ticket_url.clone();
-
     let has_hooks = !notify_hooks.is_empty();
-    if !should_notify(config, succeeded) && !has_hooks {
+    if !should_notify(config, params.succeeded) && !has_hooks {
         return;
     }
 
-    let event_type = if succeeded {
+    let event_type = if params.succeeded {
         "agent_completed"
     } else {
         "agent_failed"
     };
+    let label = params.worktree_slug.unwrap_or(params.run_id).to_string();
+    let now = chrono::Utc::now().to_rfc3339();
 
-    let label = worktree_slug.unwrap_or(run_id).to_string();
-    let hook_event = if succeeded {
-        NotificationEvent::AgentRunCompleted {
-            run_id: run_id.to_string(),
-            label,
-            timestamp: chrono::Utc::now().to_rfc3339(),
-            url: None,
-            repo_slug,
-            branch,
-            duration_ms,
-            ticket_url,
-        }
+    let mut fields: std::collections::HashMap<String, String> = [
+        ("run_id".into(), params.run_id.into()),
+        ("repo_slug".into(), params.repo_slug.into()),
+        ("branch".into(), params.branch.into()),
+        (
+            "duration_ms".into(),
+            params
+                .duration_ms
+                .map(|ms| ms.to_string())
+                .unwrap_or_default(),
+        ),
+        (
+            "ticket_url".into(),
+            params
+                .ticket_url
+                .as_deref()
+                .unwrap_or("")
+                .into(),
+        ),
+        ("timestamp".into(), now),
+    ]
+    .into_iter()
+    .collect();
+
+    if let Some(err) = params.error_msg {
+        fields.insert("error".into(), err.into());
+    }
+
+    let (kind, title, severity) = if params.succeeded {
+        (
+            "agent_run.completed",
+            "Conductor \u{2014} Agent Completed",
+            Severity::Info,
+        )
     } else {
-        NotificationEvent::AgentRunFailed {
-            run_id: run_id.to_string(),
-            label,
-            timestamp: chrono::Utc::now().to_rfc3339(),
-            url: None,
-            error: error_msg.map(|s| s.to_string()),
-            repo_slug,
-            branch,
-            duration_ms,
-            ticket_url,
-        }
+        (
+            "agent_run.failed",
+            "Conductor \u{2014} Agent Failed",
+            Severity::Error,
+        )
     };
 
-    dispatch_notification(
-        conn,
-        &DispatchParams {
-            dedup_entity_id: run_id,
-            dedup_event_type: event_type,
-            hooks: notify_hooks,
-            event: Some(&hook_event),
-        },
-    );
+    let event = Event {
+        kind: kind.into(),
+        title: title.into(),
+        body: label,
+        severity,
+        fields,
+    };
+
+    let store = Arc::new(SqliteDedupStore::default_db());
+    HookRunner::new(&hooks_as_runkon(notify_hooks))
+        .with_dedup_store(store)
+        .fire_with_dedup(&event, params.run_id, event_type);
 }

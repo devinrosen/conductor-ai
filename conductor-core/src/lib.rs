@@ -46,8 +46,6 @@ pub mod infer;
 pub mod issue_source;
 pub mod jira_acli;
 pub mod models;
-pub mod notification_event;
-pub mod notification_hooks;
 pub mod notify;
 pub mod process_utils;
 pub mod prompt_config;

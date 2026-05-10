@@ -1,8 +1,11 @@
-use crate::config::{HookConfig, NotificationConfig};
-use crate::notification_event::NotificationEvent;
+use std::sync::Arc;
+
+use runkon_notify::{Event, HookRunner, Severity};
+
+use crate::config::{hooks_as_runkon, HookConfig, NotificationConfig};
 use crate::workflow::GateType;
 
-use super::{dispatch_notification, notification_body, DispatchParams};
+use super::{notification_body, SqliteDedupStore};
 
 /// Build the notification title and body for a gate based on its type.
 ///
@@ -75,7 +78,6 @@ pub struct GateNotificationParams<'a> {
 /// hook `on` patterns are the sole filter and this function always returns `true`.
 /// When `Some(wf)`, the legacy per-gate-type flags are respected (backward compat).
 pub fn should_notify_gate(config: &NotificationConfig, gate_type: Option<&GateType>) -> bool {
-    // No [notifications.workflows] block → hooks are the sole filter; always pass.
     let Some(wf) = &config.workflows else {
         return true;
     };
@@ -87,19 +89,16 @@ pub fn should_notify_gate(config: &NotificationConfig, gate_type: Option<&GateTy
         Some(GateType::HumanApproval | GateType::HumanReview) => wf.on_gate_human,
         Some(GateType::PrChecks) => wf.on_gate_ci,
         Some(GateType::PrApproval) => wf.on_gate_pr_review,
-        Some(GateType::QualityGate) => false, // quality gates are non-blocking
-        // Unknown future gate types: default to allow rather than silently drop.
+        Some(GateType::QualityGate) => false,
         Some(GateType::Other(_)) => true,
     }
 }
 
 /// Fire a desktop notification for a workflow gate waiting for action.
 ///
-/// Gated on `config.enabled` and per-gate-type flags. Uses `(step_id, "gate_waiting")`
-/// as the dedup key. Matching entries in `notify_hooks` are fired after the dedup
-/// claim succeeds.
+/// Deduped on `(step_id, "gate_waiting")` via SQLite.
 pub fn fire_gate_notification(
-    conn: &rusqlite::Connection,
+    _conn: &rusqlite::Connection,
     config: &NotificationConfig,
     notify_hooks: &[HookConfig],
     params: &GateNotificationParams<'_>,
@@ -110,27 +109,32 @@ pub fn fire_gate_notification(
     }
 
     let label = notification_body(params.workflow_name, params.target_label);
-    let hook_event = NotificationEvent::GateWaiting {
-        run_id: params.step_id.to_string(),
-        label,
-        timestamp: chrono::Utc::now().to_rfc3339(),
-        url: None,
-        step_name: params.step_name.to_string(),
-        repo_slug: params.repo_slug.to_string(),
-        branch: params.branch.to_string(),
-        duration_ms: None,
-        ticket_url: params.ticket_url.clone(),
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let event = Event {
+        kind: "gate.waiting".into(),
+        title: "Conductor \u{2014} Gate Waiting".into(),
+        body: label,
+        severity: Severity::Info,
+        fields: [
+            ("run_id".into(), params.step_id.into()),
+            ("step_name".into(), params.step_name.into()),
+            ("repo_slug".into(), params.repo_slug.into()),
+            ("branch".into(), params.branch.into()),
+            (
+                "ticket_url".into(),
+                params.ticket_url.as_deref().unwrap_or("").into(),
+            ),
+            ("timestamp".into(), now),
+        ]
+        .into_iter()
+        .collect(),
     };
 
-    dispatch_notification(
-        conn,
-        &DispatchParams {
-            dedup_entity_id: params.step_id,
-            dedup_event_type: "gate_waiting",
-            hooks: notify_hooks,
-            event: Some(&hook_event),
-        },
-    );
+    let store = Arc::new(SqliteDedupStore::default_db());
+    HookRunner::new(&hooks_as_runkon(notify_hooks))
+        .with_dedup_store(store)
+        .fire_with_dedup(&event, params.step_id, "gate_waiting");
 }
 
 /// Determine the most "actionable" gate type from a slice of optional gate types.
@@ -195,9 +199,9 @@ pub struct GroupedGateNotificationParams<'a> {
 
 /// Fire a single grouped desktop notification for multiple gates in the same run.
 ///
-/// Uses `(run_id, "gates_grouped")` as the dedup key.
+/// Deduped on `(run_id, "gates_grouped")` via SQLite.
 pub fn fire_grouped_gate_notification(
-    conn: &rusqlite::Connection,
+    _conn: &rusqlite::Connection,
     config: &NotificationConfig,
     notify_hooks: &[HookConfig],
     params: &GroupedGateNotificationParams<'_>,
@@ -208,25 +212,28 @@ pub fn fire_grouped_gate_notification(
     }
 
     let label = notification_body(params.workflow_name, params.target_label);
-    let hook_event = NotificationEvent::GateWaiting {
-        run_id: params.run_id.to_string(),
-        label,
-        timestamp: chrono::Utc::now().to_rfc3339(),
-        url: None,
-        step_name: format!("{} gates pending", params.count),
-        repo_slug: String::new(),
-        branch: String::new(),
-        duration_ms: None,
-        ticket_url: None,
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let event = Event {
+        kind: "gate.waiting".into(),
+        title: "Conductor \u{2014} Gate Waiting".into(),
+        body: label,
+        severity: Severity::Info,
+        fields: [
+            ("run_id".into(), params.run_id.into()),
+            (
+                "step_name".into(),
+                format!("{} gates pending", params.count),
+            ),
+            ("count".into(), params.count.to_string()),
+            ("timestamp".into(), now),
+        ]
+        .into_iter()
+        .collect(),
     };
 
-    dispatch_notification(
-        conn,
-        &DispatchParams {
-            dedup_entity_id: params.run_id,
-            dedup_event_type: "gates_grouped",
-            hooks: notify_hooks,
-            event: Some(&hook_event),
-        },
-    );
+    let store = Arc::new(SqliteDedupStore::default_db());
+    HookRunner::new(&hooks_as_runkon(notify_hooks))
+        .with_dedup_store(store)
+        .fire_with_dedup(&event, params.run_id, "gates_grouped");
 }
