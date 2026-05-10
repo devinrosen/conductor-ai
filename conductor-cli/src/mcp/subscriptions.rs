@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use conductor_core::workflow::{EngineEvent, EngineEventData, EventSink};
 use rmcp::model::ResourceUpdatedNotificationParam;
@@ -24,17 +24,26 @@ impl SubscriptionRegistry {
         }
     }
 
+    /// Acquire the registry lock, recovering from poisoning by ignoring it —
+    /// state is purely additive so a panicked writer leaves the map consistent.
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, Vec<ClientSink>>> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn insert(&self, run_id: String, peer: Peer<RoleServer>, uri: String) {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        self.lock()
             .entry(run_id)
             .or_default()
             .push(ClientSink { peer, uri });
     }
 
+    // TODO(transport): when conductor moves off stdio (single-peer) to a
+    // multi-client transport like SSE/HTTP, this needs to identify the
+    // requesting client and only remove their subscription, not every
+    // subscription matching `uri`. rmcp does not currently expose a stable
+    // peer-identity API to do this.
     pub fn remove(&self, run_id: &str, uri: &str) {
-        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = self.lock();
         if let Some(sinks) = map.get_mut(run_id) {
             sinks.retain(|s| s.uri != uri);
             if sinks.is_empty() {
@@ -44,11 +53,7 @@ impl SubscriptionRegistry {
     }
 
     fn take(&self, run_id: &str) -> Vec<ClientSink> {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(run_id)
-            .unwrap_or_default()
+        self.lock().remove(run_id).unwrap_or_default()
     }
 
     /// Drains all subscribers for `run_id` and fires a resource-updated notification on each.
@@ -64,12 +69,7 @@ impl SubscriptionRegistry {
 
     #[cfg(test)]
     fn len_for(&self, run_id: &str) -> usize {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(run_id)
-            .map(|v| v.len())
-            .unwrap_or(0)
+        self.lock().get(run_id).map(|v| v.len()).unwrap_or(0)
     }
 }
 

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use conductor_core::workflow::WorkflowRunStatus;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, Implementation, ListResourcesResult, ListToolsResult,
     PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
@@ -10,8 +11,20 @@ use rmcp::{RoleServer, ServerHandler};
 
 use super::subscriptions::SubscriptionHub;
 
+const RUN_URI_PREFIX: &str = "conductor://run/";
+
+/// Strip the `conductor://run/` prefix from a resource URI, returning the run id.
+fn parse_run_uri(uri: &str) -> Option<&str> {
+    uri.strip_prefix(RUN_URI_PREFIX)
+}
+
+/// Whether a raw DB status string represents a terminal workflow state.
+/// Defers to `WorkflowRunStatus::is_terminal()` so we don't drift from the
+/// canonical status enum if new variants are added.
 fn is_terminal(status: Option<&str>) -> bool {
-    status.is_some_and(|s| matches!(s, "completed" | "failed" | "cancelled"))
+    status
+        .and_then(|s| s.parse::<WorkflowRunStatus>().ok())
+        .is_some_and(|s| s.is_terminal())
 }
 
 /// Look up a workflow run's status off-thread. `Ok(None)` means the run does
@@ -140,11 +153,10 @@ impl ServerHandler for ConductorMcpServer {
     ) -> Result<(), rmcp::ErrorData> {
         let uri = request.uri.clone();
 
-        let run_id = uri
-            .strip_prefix("conductor://run/")
+        let run_id = parse_run_uri(&uri)
             .ok_or_else(|| {
                 rmcp::ErrorData::invalid_params(
-                    "URI must be conductor://run/{run_id}".to_string(),
+                    format!("URI must be {RUN_URI_PREFIX}{{run_id}}"),
                     None,
                 )
             })?
@@ -198,7 +210,7 @@ impl ServerHandler for ConductorMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<(), rmcp::ErrorData> {
         let uri = request.uri;
-        if let Some(run_id) = uri.strip_prefix("conductor://run/") {
+        if let Some(run_id) = parse_run_uri(&uri) {
             self.hub.unsubscribe(run_id, &uri);
         }
         Ok(())
@@ -220,7 +232,43 @@ mod tests {
     fn test_is_terminal_rejects_nonterminal_and_none() {
         assert!(!is_terminal(Some("running")));
         assert!(!is_terminal(Some("pending")));
-        assert!(!is_terminal(Some("queued")));
+        assert!(!is_terminal(Some("waiting")));
+        assert!(!is_terminal(Some("needs_resume")));
+        assert!(!is_terminal(Some("cancelling")));
         assert!(!is_terminal(None));
+    }
+
+    #[test]
+    fn test_is_terminal_rejects_unparseable_status() {
+        // Unknown strings (e.g., DB corruption, schema drift) are treated as
+        // non-terminal — the safer default for subscribe TOCTOU logic.
+        assert!(!is_terminal(Some("queued")));
+        assert!(!is_terminal(Some("")));
+        assert!(!is_terminal(Some("garbage")));
+    }
+
+    #[test]
+    fn test_parse_run_uri_strips_prefix() {
+        assert_eq!(
+            parse_run_uri("conductor://run/01HXYZ"),
+            Some("01HXYZ"),
+            "should strip the conductor://run/ prefix"
+        );
+    }
+
+    #[test]
+    fn test_parse_run_uri_rejects_other_schemes() {
+        assert_eq!(parse_run_uri("conductor://ticket/abc"), None);
+        assert_eq!(parse_run_uri("https://example.com/run/abc"), None);
+        assert_eq!(parse_run_uri("run/abc"), None);
+        assert_eq!(parse_run_uri(""), None);
+    }
+
+    #[test]
+    fn test_parse_run_uri_accepts_empty_run_id() {
+        // Empty run_id passes the prefix check; the run-lookup step is what
+        // actually validates the id, and an empty/unknown id will be rejected
+        // there with `unknown run_id`.
+        assert_eq!(parse_run_uri("conductor://run/"), Some(""));
     }
 }
