@@ -99,7 +99,9 @@ fn fire_notification_via_state(state: &AppState, args: &WorkflowNotificationArgs
         conn: &conn,
         config: &cfg.notifications,
         hooks: &cfg.notify.hooks,
-        dedup_store: std::sync::Arc::new(conductor_core::notify::SqliteDedupStore::default_db()),
+        dedup_store: std::sync::Arc::new(conductor_core::notify::SqliteDedupStore::new(
+            state.db_path.clone(),
+        )),
     };
     fire_workflow_notification(&ctx, args);
 }
