@@ -292,6 +292,7 @@ async fn main() -> Result<()> {
                         &conn,
                         &cfg.notifications,
                         &cfg.notify.hooks,
+                        Arc::new(conductor_core::notify::SqliteDedupStore::default_db()),
                         &conductor_web::notify::AgentRunNotificationArgs {
                             run_id: &t.run_id,
                             worktree_slug: t.worktree_slug.as_deref(),
@@ -344,6 +345,9 @@ async fn main() -> Result<()> {
                         conn: &conn,
                         config: &cfg.notifications,
                         hooks: &cfg.notify.hooks,
+                        dedup_store: Arc::new(
+                            conductor_core::notify::SqliteDedupStore::default_db(),
+                        ),
                     };
                     conductor_web::notify::fire_workflow_notification(
                         &wf_ctx,
@@ -412,6 +416,7 @@ async fn main() -> Result<()> {
                                                 &conn,
                                                 &cfg.notifications,
                                                 &cfg.notify.hooks,
+                                                Arc::new(conductor_core::notify::SqliteDedupStore::default_db()),
                                                 &conductor_web::notify::CostSpikeArgs {
                                                     run_id: &t.run_id,
                                                     workflow_name: &t.workflow_name,
@@ -437,6 +442,7 @@ async fn main() -> Result<()> {
                                                 &conn,
                                                 &cfg.notifications,
                                                 &cfg.notify.hooks,
+                                                Arc::new(conductor_core::notify::SqliteDedupStore::default_db()),
                                                 &conductor_web::notify::DurationSpikeArgs {
                                                     run_id: &t.run_id,
                                                     workflow_name: &t.workflow_name,
@@ -482,6 +488,7 @@ async fn main() -> Result<()> {
                                 &conn,
                                 &cfg.notifications,
                                 &cfg.notify.hooks,
+                                Arc::new(conductor_core::notify::SqliteDedupStore::default_db()),
                                 &conductor_web::notify::GatePendingTooLongArgs {
                                     step_id: &step.id,
                                     step_name: &step.step_name,

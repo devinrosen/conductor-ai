@@ -1,16 +1,17 @@
 use std::sync::Arc;
 
-use runkon_notify::{Event, HookRunner, Severity};
+use runkon_notify::{DedupStore, Event, HookRunner, Severity};
 
 use crate::config::{hooks_as_runkon, HookConfig, NotificationConfig};
 
-use super::{build_workflow_deep_link, notification_body, should_notify, SqliteDedupStore};
+use super::{build_workflow_deep_link, notification_body, should_notify};
 
 /// Narrow context bundle for [`fire_workflow_notification`].
 pub struct NotificationCtx<'a> {
     pub conn: &'a rusqlite::Connection,
     pub config: &'a NotificationConfig,
     pub hooks: &'a [HookConfig],
+    pub dedup_store: Arc<dyn DedupStore>,
 }
 
 /// Parameters for [`fire_workflow_notification`].
@@ -131,9 +132,8 @@ pub fn fire_workflow_notification(
         fields,
     };
 
-    let store = Arc::new(SqliteDedupStore::default_db());
     HookRunner::new(&hooks_as_runkon(ctx.hooks))
-        .with_dedup_store(store)
+        .with_dedup_store(ctx.dedup_store.clone())
         .fire_with_dedup(&event, params.run_id, event_type);
 }
 
@@ -144,6 +144,7 @@ pub fn fire_feedback_notification(
     _conn: &rusqlite::Connection,
     config: &NotificationConfig,
     notify_hooks: &[HookConfig],
+    dedup_store: Arc<dyn DedupStore>,
     params: &FeedbackNotificationParams<'_>,
 ) {
     let has_hooks = !notify_hooks.is_empty();
@@ -168,9 +169,8 @@ pub fn fire_feedback_notification(
         .collect(),
     };
 
-    let store = Arc::new(SqliteDedupStore::default_db());
     HookRunner::new(&hooks_as_runkon(notify_hooks))
-        .with_dedup_store(store)
+        .with_dedup_store(dedup_store)
         .fire_with_dedup(&event, params.request_id, "feedback_requested");
 }
 
@@ -181,6 +181,7 @@ pub fn fire_agent_run_notification(
     _conn: &rusqlite::Connection,
     config: &NotificationConfig,
     notify_hooks: &[HookConfig],
+    dedup_store: Arc<dyn DedupStore>,
     params: &AgentRunNotificationArgs<'_>,
 ) {
     let has_hooks = !notify_hooks.is_empty();
@@ -242,8 +243,7 @@ pub fn fire_agent_run_notification(
         fields,
     };
 
-    let store = Arc::new(SqliteDedupStore::default_db());
     HookRunner::new(&hooks_as_runkon(notify_hooks))
-        .with_dedup_store(store)
+        .with_dedup_store(dedup_store)
         .fire_with_dedup(&event, params.run_id, event_type);
 }

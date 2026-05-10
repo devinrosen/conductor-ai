@@ -951,6 +951,7 @@ pub fn spawn_heartbeat_resume(p: SpawnHeartbeatResumeParams) -> std::thread::Joi
                                 &db,
                                 &p.config.notifications,
                                 &p.config.notify.hooks,
+                                std::sync::Arc::new(crate::notify::SqliteDedupStore::default_db()),
                                 &p.run_id,
                                 &p.workflow_name,
                                 p.target_label.as_deref(),

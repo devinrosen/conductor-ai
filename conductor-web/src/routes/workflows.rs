@@ -99,6 +99,7 @@ fn fire_notification_via_state(state: &AppState, args: &WorkflowNotificationArgs
         conn: &conn,
         config: &cfg.notifications,
         hooks: &cfg.notify.hooks,
+        dedup_store: std::sync::Arc::new(conductor_core::notify::SqliteDedupStore::default_db()),
     };
     fire_workflow_notification(&ctx, args);
 }
@@ -2246,6 +2247,7 @@ mod tests {
     #[tokio::test]
     async fn fire_workflow_notification_completes_without_panic() {
         let conn = conductor_core::test_helpers::create_test_conn();
+        let (_, db_path) = conductor_core::test_helpers::create_file_test_db();
         let notifications = conductor_core::config::NotificationConfig::default(); // enabled=false
 
         tokio::task::spawn_blocking(move || {
@@ -2253,6 +2255,9 @@ mod tests {
                 conn: &conn,
                 config: &notifications,
                 hooks: &[],
+                dedup_store: Arc::new(conductor_core::notify::SqliteDedupStore::new(
+                    std::path::PathBuf::from(db_path),
+                )),
             };
             fire_workflow_notification(
                 &ctx,
@@ -2293,11 +2298,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
     async fn error_path_key_deduplicates() {
         let (_, db_path) = conductor_core::test_helpers::create_file_test_db();
-        let _guard = conductor_core::test_helpers::ENV_MUTEX.lock().unwrap();
-        std::env::set_var("CONDUCTOR_TEST_DB", &db_path);
 
         let db = empty_state().db;
         let notifications = test_notification_config();
@@ -2313,12 +2315,16 @@ mod tests {
         let db1 = Arc::clone(&db);
         let notifications1 = notifications.clone();
         let key1 = key.clone();
+        let db_path1 = db_path.clone();
         tokio::task::spawn_blocking(move || {
             let conn = db1.blocking_lock();
             let ctx = NotificationCtx {
                 conn: &conn,
                 config: &notifications1,
                 hooks: &[],
+                dedup_store: Arc::new(conductor_core::notify::SqliteDedupStore::new(
+                    std::path::PathBuf::from(db_path1),
+                )),
             };
             fire_workflow_notification(
                 &ctx,
@@ -2344,12 +2350,16 @@ mod tests {
         // Second call — simulates a concurrent web process observing the same failure
         let db2 = Arc::clone(&db);
         let key2 = key.clone();
+        let db_path2 = db_path.clone();
         tokio::task::spawn_blocking(move || {
             let conn = db2.blocking_lock();
             let ctx = NotificationCtx {
                 conn: &conn,
                 config: &notifications,
                 hooks: &[],
+                dedup_store: Arc::new(conductor_core::notify::SqliteDedupStore::new(
+                    std::path::PathBuf::from(db_path2),
+                )),
             };
             fire_workflow_notification(
                 &ctx,
@@ -2385,25 +2395,21 @@ mod tests {
             count, 1,
             "duplicate error-path notifications must be deduped to a single log row"
         );
-
-        std::env::remove_var("CONDUCTOR_TEST_DB");
-        drop(_guard);
     }
 
     #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
     async fn fire_workflow_notification_with_notifications_enabled_claims_log_row() {
         let (conn, db_path) = conductor_core::test_helpers::create_file_test_db();
-        let _guard = conductor_core::test_helpers::ENV_MUTEX.lock().unwrap();
-        std::env::set_var("CONDUCTOR_TEST_DB", &db_path);
-
         let notifications = test_notification_config();
 
-        let result = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             let ctx = NotificationCtx {
                 conn: &conn,
                 config: &notifications,
                 hooks: &[],
+                dedup_store: Arc::new(conductor_core::notify::SqliteDedupStore::new(
+                    std::path::PathBuf::from(&db_path),
+                )),
             };
             fire_workflow_notification(
                 &ctx,
@@ -2437,11 +2443,8 @@ mod tests {
                 "notification_log must contain exactly one dedup row"
             );
         })
-        .await;
-
-        std::env::remove_var("CONDUCTOR_TEST_DB");
-        drop(_guard);
-        result.unwrap();
+        .await
+        .unwrap();
     }
 
     /// When execute_workflow creates the run record before failing, the slot holds

@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use runkon_notify::{Event, HookRunner, Severity};
+use runkon_notify::{DedupStore, Event, HookRunner, Severity};
 
 use crate::config::{hooks_as_runkon, HookConfig, NotificationConfig};
 use crate::workflow::GateType;
 
-use super::{notification_body, SqliteDedupStore};
+use super::notification_body;
 
 /// Build the notification title and body for a gate based on its type.
 ///
@@ -101,6 +101,7 @@ pub fn fire_gate_notification(
     _conn: &rusqlite::Connection,
     config: &NotificationConfig,
     notify_hooks: &[HookConfig],
+    dedup_store: Arc<dyn DedupStore>,
     params: &GateNotificationParams<'_>,
 ) {
     let has_hooks = !notify_hooks.is_empty();
@@ -131,9 +132,8 @@ pub fn fire_gate_notification(
         .collect(),
     };
 
-    let store = Arc::new(SqliteDedupStore::default_db());
     HookRunner::new(&hooks_as_runkon(notify_hooks))
-        .with_dedup_store(store)
+        .with_dedup_store(dedup_store)
         .fire_with_dedup(&event, params.step_id, "gate_waiting");
 }
 
@@ -204,6 +204,7 @@ pub fn fire_grouped_gate_notification(
     _conn: &rusqlite::Connection,
     config: &NotificationConfig,
     notify_hooks: &[HookConfig],
+    dedup_store: Arc<dyn DedupStore>,
     params: &GroupedGateNotificationParams<'_>,
 ) {
     let has_hooks = !notify_hooks.is_empty();
@@ -232,8 +233,7 @@ pub fn fire_grouped_gate_notification(
         .collect(),
     };
 
-    let store = Arc::new(SqliteDedupStore::default_db());
     HookRunner::new(&hooks_as_runkon(notify_hooks))
-        .with_dedup_store(store)
+        .with_dedup_store(dedup_store)
         .fire_with_dedup(&event, params.run_id, "gates_grouped");
 }

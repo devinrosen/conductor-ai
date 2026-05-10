@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use runkon_notify::{Event, HookRunner, Severity};
+use runkon_notify::{DedupStore, Event, HookRunner, Severity};
 
 use crate::config::{hooks_as_runkon, HookConfig, NotificationConfig};
 
-use super::{build_workflow_deep_link, notification_body, parse_target_label, SqliteDedupStore};
+use super::{build_workflow_deep_link, notification_body, parse_target_label};
 
 fn stale_notifications_active(config: &NotificationConfig, notify_hooks: &[HookConfig]) -> bool {
     let legacy_enabled = config
@@ -21,6 +21,7 @@ pub fn fire_orphan_resumed_notification(
     conn: &rusqlite::Connection,
     config: &NotificationConfig,
     notify_hooks: &[HookConfig],
+    dedup_store: Arc<dyn DedupStore>,
     run_ids: &[String],
 ) {
     if !stale_notifications_active(config, notify_hooks) {
@@ -78,19 +79,20 @@ pub fn fire_orphan_resumed_notification(
         .collect(),
     };
 
-    let store = Arc::new(SqliteDedupStore::default_db());
     HookRunner::new(&hooks_as_runkon(notify_hooks))
-        .with_dedup_store(store)
+        .with_dedup_store(dedup_store)
         .fire_with_dedup(&event, &dedup_key, "workflow_orphan_resumed");
 }
 
 /// Fire a notification when a stuck workflow run fails to auto-resume after being reaped.
 ///
 /// Deduped on `(run_id, "workflow_run.reaped")` via SQLite.
+#[allow(clippy::too_many_arguments)]
 pub fn fire_heartbeat_stuck_failed_notification(
     _conn: &rusqlite::Connection,
     config: &NotificationConfig,
     notify_hooks: &[HookConfig],
+    dedup_store: Arc<dyn DedupStore>,
     run_id: &str,
     workflow_name: &str,
     target_label: Option<&str>,
@@ -121,9 +123,8 @@ pub fn fire_heartbeat_stuck_failed_notification(
         .collect(),
     };
 
-    let store = Arc::new(SqliteDedupStore::default_db());
     HookRunner::new(&hooks_as_runkon(notify_hooks))
-        .with_dedup_store(store)
+        .with_dedup_store(dedup_store)
         .fire_with_dedup(&event, run_id, "workflow_run.reaped");
 }
 
@@ -151,6 +152,7 @@ pub fn fire_cost_spike_notification(
     _conn: &rusqlite::Connection,
     config: &NotificationConfig,
     notify_hooks: &[HookConfig],
+    dedup_store: Arc<dyn DedupStore>,
     params: &CostSpikeArgs<'_>,
 ) {
     if notify_hooks.is_empty() {
@@ -198,9 +200,8 @@ pub fn fire_cost_spike_notification(
         .collect(),
     };
 
-    let store = Arc::new(SqliteDedupStore::default_db());
     HookRunner::new(&hooks_as_runkon(notify_hooks))
-        .with_dedup_store(store)
+        .with_dedup_store(dedup_store)
         .fire_with_dedup(&event, params.run_id, "workflow_run.cost_spike");
 }
 
@@ -227,6 +228,7 @@ pub fn fire_duration_spike_notification(
     _conn: &rusqlite::Connection,
     config: &NotificationConfig,
     notify_hooks: &[HookConfig],
+    dedup_store: Arc<dyn DedupStore>,
     params: &DurationSpikeArgs<'_>,
 ) {
     if notify_hooks.is_empty() {
@@ -273,9 +275,8 @@ pub fn fire_duration_spike_notification(
         .collect(),
     };
 
-    let store = Arc::new(SqliteDedupStore::default_db());
     HookRunner::new(&hooks_as_runkon(notify_hooks))
-        .with_dedup_store(store)
+        .with_dedup_store(dedup_store)
         .fire_with_dedup(&event, params.run_id, "workflow_run.duration_spike");
 }
 
@@ -303,6 +304,7 @@ pub fn fire_gate_pending_too_long_notification(
     _conn: &rusqlite::Connection,
     config: &NotificationConfig,
     notify_hooks: &[HookConfig],
+    dedup_store: Arc<dyn DedupStore>,
     params: &GatePendingTooLongArgs<'_>,
 ) {
     const DEFAULT_THRESHOLD_MS: u64 = 1_800_000; // 30 minutes
@@ -348,8 +350,7 @@ pub fn fire_gate_pending_too_long_notification(
         .collect(),
     };
 
-    let store = Arc::new(SqliteDedupStore::default_db());
     HookRunner::new(&hooks_as_runkon(notify_hooks))
-        .with_dedup_store(store)
+        .with_dedup_store(dedup_store)
         .fire_with_dedup(&event, params.step_id, "gate.pending_too_long");
 }

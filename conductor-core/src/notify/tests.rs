@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use runkon_notify::DedupStore;
 
 use super::*;
@@ -318,12 +320,15 @@ fn build_synthetic_for_pattern_prefix_match() {
 fn workflow_event_is_root_field_set_for_root_run() {
     let dummy = rusqlite::Connection::open_in_memory().unwrap();
     let cfg = config(true, true, true);
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    open_test_db(tmp.path());
+    let store: Arc<dyn DedupStore> = Arc::new(SqliteDedupStore::new(tmp.path().to_path_buf()));
     let ctx = NotificationCtx {
         conn: &dummy,
         config: &cfg,
         hooks: &[],
+        dedup_store: store,
     };
-    // Just verify it doesn't panic — dedup writes to default_db, not dummy.
     fire_workflow_notification(
         &ctx,
         &WorkflowNotificationArgs {
@@ -353,6 +358,7 @@ fn fire_workflow_notification_disabled_early_returns() {
         conn: &dummy,
         config: &cfg,
         hooks: &[],
+        dedup_store: Arc::new(SqliteDedupStore::new(std::path::PathBuf::new())),
     };
     // disabled + no hooks → early return; must not panic
     fire_workflow_notification(
@@ -382,6 +388,7 @@ fn fire_workflow_notification_on_success_false_early_returns() {
         conn: &dummy,
         config: &cfg,
         hooks: &[],
+        dedup_store: Arc::new(SqliteDedupStore::new(std::path::PathBuf::new())),
     };
     fire_workflow_notification(
         &ctx,
@@ -639,6 +646,7 @@ fn fire_gate_notification_disabled_early_returns() {
         &dummy,
         &cfg,
         &[],
+        Arc::new(SqliteDedupStore::new(std::path::PathBuf::new())),
         &GateNotificationParams {
             step_id: "step-1",
             step_name: "Deploy to prod",
@@ -662,6 +670,7 @@ fn fire_gate_notification_suppressed_by_gate_type() {
         &dummy,
         &cfg,
         &[],
+        Arc::new(SqliteDedupStore::new(std::path::PathBuf::new())),
         &GateNotificationParams {
             step_id: "step-ci-1",
             step_name: "wait-for-ci",
