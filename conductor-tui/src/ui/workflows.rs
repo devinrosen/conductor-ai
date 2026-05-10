@@ -2016,10 +2016,12 @@ fn render_step_agent_activity(
                 .map(|ms| format!(" ({:.1}s)", ms as f64 / 1000.0))
                 .unwrap_or_default();
             let ts = ev.started_at.get(11..19).unwrap_or(&ev.started_at);
-            let summary = truncate(
-                &shorten_paths(&ev.summary, worktree_path, state.home_dir.as_deref()),
-                80,
-            );
+            // Take only the first line — embedded \n in a Span is rendered as a
+            // zero-width grapheme that the terminal interprets as a line feed,
+            // moving the cursor mid-frame and leaving stale right-edge artifacts
+            // that ratatui's diff renderer never overwrites.
+            let shortened = shorten_paths(&ev.summary, worktree_path, state.home_dir.as_deref());
+            let summary = truncate(shortened.lines().next().unwrap_or(""), 80);
             let spans = vec![
                 Span::styled(
                     format!("{ts} "),
