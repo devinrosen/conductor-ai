@@ -116,11 +116,6 @@ impl SubscriptionHub {
         Arc::new(TokioSink(self.tx.clone()))
     }
 
-    /// Returns event sinks for the given hub, or an empty vec when hub is absent.
-    pub fn event_sinks(hub: Option<&Self>) -> Vec<Arc<dyn EventSink>> {
-        hub.map(|h| vec![h.channel_sink()]).unwrap_or_default()
-    }
-
     /// Drains all subscribers for `run_id` and fires a resource-updated notification on each.
     pub async fn notify_and_drain(&self, run_id: &str) {
         self.registry.notify_and_drain(run_id).await;

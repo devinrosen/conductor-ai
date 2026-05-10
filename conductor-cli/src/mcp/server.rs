@@ -119,11 +119,11 @@ impl ServerHandler for ConductorMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let name = request.name.to_string();
         let args = request.arguments.unwrap_or_default();
-        let hub = self.hub.clone();
+        let event_sinks = vec![self.hub.channel_sink()];
         let result = tokio::task::spawn_blocking(move || {
             let conductor = conductor_core::Conductor::open().map_err(anyhow::Error::from);
             match conductor {
-                Ok(c) => super::tools::dispatch_tool(&c, &name, &args, Some(&hub)),
+                Ok(c) => super::tools::dispatch_tool(&c, &name, &args, &event_sinks),
                 Err(e) => crate::mcp::helpers::tool_err(e),
             }
         })

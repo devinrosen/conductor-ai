@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use conductor_core::workflow::EventSink;
 use conductor_core::Conductor;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
@@ -187,12 +190,12 @@ pub(super) fn tool_cancel_run(
 pub(super) fn tool_resume_run(
     conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
-    hub: Option<&crate::mcp::subscriptions::SubscriptionHub>,
+    event_sinks: &[Arc<dyn EventSink>],
 ) -> CallToolResult {
     use conductor_core::workflow::{
         resume_workflow_standalone, validate_resume_preconditions, WorkflowResumeStandalone,
     };
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
 
     let run_id = require_arg!(args, "run_id");
     let from_step = get_arg(args, "from_step").map(str::to_string);
@@ -210,8 +213,6 @@ pub(super) fn tool_resume_run(
         return tool_err(e);
     }
 
-    let event_sinks = crate::mcp::subscriptions::SubscriptionHub::event_sinks(hub);
-
     let params = WorkflowResumeStandalone {
         config,
         workflow_run_id: run_id.to_string(),
@@ -222,7 +223,7 @@ pub(super) fn tool_resume_run(
         db_path: Some(Conductor::db_path()),
         conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
         shutdown: None,
-        event_sinks,
+        event_sinks: event_sinks.to_vec(),
     };
 
     // Error slot: captures any error that occurs before steps begin executing.
@@ -731,7 +732,7 @@ mod tests {
     #[test]
     fn test_dispatch_resume_run_missing_arg() {
         let (_f, conductor) = make_test_conductor();
-        let result = tool_resume_run(&conductor, &empty_args(), None);
+        let result = tool_resume_run(&conductor, &empty_args(), &[]);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -744,7 +745,7 @@ mod tests {
     fn test_dispatch_resume_run_not_found() {
         let (_f, conductor) = make_test_conductor();
         let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
-        let result = tool_resume_run(&conductor, &args, None);
+        let result = tool_resume_run(&conductor, &args, &[]);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -759,7 +760,7 @@ mod tests {
         let (_f, conductor) = make_test_conductor();
         let run_id = make_workflow_run_with_status(_f.path(), WorkflowRunStatus::Running);
         let args = args_with("run_id", &run_id);
-        let result = tool_resume_run(&conductor, &args, None);
+        let result = tool_resume_run(&conductor, &args, &[]);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -774,7 +775,7 @@ mod tests {
         let (_f, conductor) = make_test_conductor();
         let run_id = make_workflow_run_with_status(_f.path(), WorkflowRunStatus::Completed);
         let args = args_with("run_id", &run_id);
-        let result = tool_resume_run(&conductor, &args, None);
+        let result = tool_resume_run(&conductor, &args, &[]);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -789,7 +790,7 @@ mod tests {
         let (_f, conductor) = make_test_conductor();
         let run_id = make_workflow_run_with_status(_f.path(), WorkflowRunStatus::Cancelled);
         let args = args_with("run_id", &run_id);
-        let result = tool_resume_run(&conductor, &args, None);
+        let result = tool_resume_run(&conductor, &args, &[]);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -804,7 +805,7 @@ mod tests {
         let (_f, conductor) = make_test_conductor();
         let run_id = make_workflow_run_with_status(_f.path(), WorkflowRunStatus::Failed);
         let args = args_with("run_id", &run_id);
-        let result = tool_resume_run(&conductor, &args, None);
+        let result = tool_resume_run(&conductor, &args, &[]);
         // Status validation passes for Failed runs — any error must come from setup
         // (e.g. missing snapshot), not from the status check.
         let text = result.content[0]
