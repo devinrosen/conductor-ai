@@ -164,7 +164,25 @@ impl ServerHandler for ConductorMcpServer {
                 .notify_resource_updated(rmcp::model::ResourceUpdatedNotificationParam::new(uri))
                 .await;
         } else {
-            self.hub.registry.insert(run_id, context.peer.clone(), uri);
+            let run_id_recheck = run_id.clone();
+            self.hub
+                .registry
+                .insert(run_id.clone(), context.peer.clone(), uri);
+            // Close TOCTOU: re-check status after insert to catch terminal transition in the gap.
+            let recheck = tokio::task::spawn_blocking(move || {
+                let conductor = conductor_core::Conductor::open().map_err(anyhow::Error::from)?;
+                conductor_core::workflow::get_workflow_run_status(&conductor.conn, &run_id_recheck)
+                    .map_err(anyhow::Error::from)
+            })
+            .await;
+            if recheck
+                .ok()
+                .and_then(|r| r.ok())
+                .flatten()
+                .is_some_and(|s| matches!(s.as_str(), "completed" | "failed" | "cancelled"))
+            {
+                self.hub.notify_and_drain(&run_id).await;
+            }
         }
 
         Ok(())

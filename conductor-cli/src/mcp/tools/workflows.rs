@@ -276,7 +276,7 @@ pub(super) fn tool_run_workflow(
         runtime: None,
         exec_config: WorkflowExecConfig {
             dry_run,
-            event_sinks: hub.map(|h| vec![h.channel_sink()]).unwrap_or_default(),
+            event_sinks: crate::mcp::subscriptions::SubscriptionHub::event_sinks(hub),
             ..WorkflowExecConfig::default()
         },
         inputs,

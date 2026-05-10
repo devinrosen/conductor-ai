@@ -92,6 +92,22 @@ impl SubscriptionHub {
     pub fn channel_sink(&self) -> Arc<dyn EventSink> {
         Arc::new(TokioSink(self.tx.clone()))
     }
+
+    /// Returns event sinks for the given hub, or an empty vec when hub is absent.
+    pub fn event_sinks(hub: Option<&Self>) -> Vec<Arc<dyn EventSink>> {
+        hub.map(|h| vec![h.channel_sink()]).unwrap_or_default()
+    }
+
+    /// Drains all subscribers for `run_id` and fires a resource-updated notification on each.
+    pub async fn notify_and_drain(&self, run_id: &str) {
+        let sinks = self.registry.take(run_id);
+        for sink in sinks {
+            let _ = sink
+                .peer
+                .notify_resource_updated(ResourceUpdatedNotificationParam::new(sink.uri))
+                .await;
+        }
+    }
 }
 
 /// Spawn the broadcaster task.
@@ -190,7 +206,8 @@ mod tests {
             },
         ));
 
-        // Drop the hub's sender so the broadcaster task exits.
+        // Drop all senders (sink holds a clone of hub.tx) before awaiting the handle.
+        drop(sink);
         drop(hub);
         handle.await.expect("broadcaster task should exit cleanly");
     }
@@ -225,6 +242,8 @@ mod tests {
             EngineEvent::RunCompleted { succeeded: true },
         ));
 
+        // Drop all senders (sink holds a clone of hub.tx) before awaiting the handle.
+        drop(sink);
         drop(hub);
         handle.await.expect("broadcaster task should exit cleanly");
 

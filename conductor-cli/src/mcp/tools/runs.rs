@@ -210,7 +210,7 @@ pub(super) fn tool_resume_run(
         return tool_err(e);
     }
 
-    let event_sinks = hub.map(|h| vec![h.channel_sink()]).unwrap_or_default();
+    let event_sinks = crate::mcp::subscriptions::SubscriptionHub::event_sinks(hub);
 
     let params = WorkflowResumeStandalone {
         config,
