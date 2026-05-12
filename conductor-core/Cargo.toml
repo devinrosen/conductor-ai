@@ -11,6 +11,7 @@ runkon-flow = { version = "0.6.0-alpha", features = ["sqlite", "diagnostics"] }
 runkon-flow-executors = "0.6.0-alpha"
 runkon-runtimes = "0.6.0-alpha"
 runkon-anthropic = "0.6.0-alpha"
+runkon-google = "0.6.0-alpha"
 runkon-notify = "0.6.0-alpha"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

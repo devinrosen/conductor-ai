@@ -142,13 +142,13 @@ pub fn validate_agent_runtime(
     runtimes: &HashMap<String, RuntimeConfig>,
     request_model: Option<&str>,
 ) -> Result<()> {
-    if def.runtime == "claude" {
+    if def.runtime == "claude" || def.runtime == "gemini" {
         return Ok(());
     }
     let rt_config = runtimes.get(&def.runtime).ok_or_else(|| {
         ConductorError::AgentConfig(format!(
             "agent '{}' specifies runtime '{}' which is not defined in config; \
-             add a `[runtimes.{}]` section or use the built-in \"claude\"",
+             add a `[runtimes.{}]` section to your config",
             def.name, def.runtime, def.runtime
         ))
     })?;
@@ -475,6 +475,20 @@ Implement the plan written in PLAN.md.
 
         let def = parse_agent_file(&file, None).unwrap();
         assert_eq!(def.runtime, "cli");
+    }
+
+    #[test]
+    fn test_runtime_explicit_gemini() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("agent.md");
+        fs::write(
+            &file,
+            "---\nrole: actor\nruntime: gemini\n---\nPrompt body.",
+        )
+        .unwrap();
+
+        let def = parse_agent_file(&file, None).unwrap();
+        assert_eq!(def.runtime, "gemini");
     }
 
     #[test]
@@ -1231,6 +1245,16 @@ Implement the plan written in PLAN.md.
         let runtimes = HashMap::new();
         let def = make_def("claude", None);
         assert!(validate_agent_runtime(&def, &runtimes, None).is_ok());
+    }
+
+    #[test]
+    fn validate_agent_runtime_builtin_gemini_always_ok() {
+        let runtimes = HashMap::new();
+        let def = make_def("gemini", None);
+        assert!(
+            validate_agent_runtime(&def, &runtimes, None).is_ok(),
+            "gemini is a built-in runtime and must not require a config entry"
+        );
     }
 
     #[test]
