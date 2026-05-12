@@ -779,9 +779,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         let agent_mgr = AgentManager::new(&guard);
         let summary = format!("Workflow '{}' completed", workflow.name);
         if rk_result.all_succeeded {
-            let metrics = rk_result
-                .extensions
-                .get::<crate::workflow::LlmRunMetrics>();
+            let metrics = rk_result.extensions.get::<crate::workflow::LlmRunMetrics>();
             let total_cost_usd = metrics.as_ref().and_then(|m| m.total_cost_usd);
             let total_turns = metrics.as_ref().and_then(|m| m.total_turns);
             let total_input_tokens = metrics.as_ref().and_then(|m| m.total_input_tokens);

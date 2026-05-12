@@ -695,10 +695,11 @@ pub fn handle_workflow(
                     let metrics = result
                         .extensions
                         .get::<conductor_core::workflow::LlmRunMetrics>();
-                    let total_cost =
-                        metrics.as_ref().and_then(|m| m.total_cost_usd).unwrap_or(0.0);
-                    let total_turns =
-                        metrics.as_ref().and_then(|m| m.total_turns).unwrap_or(0);
+                    let total_cost = metrics
+                        .as_ref()
+                        .and_then(|m| m.total_cost_usd)
+                        .unwrap_or(0.0);
+                    let total_turns = metrics.as_ref().and_then(|m| m.total_turns).unwrap_or(0);
                     println!(
                         "\nTotal: ${:.4}, {} turns, {:.1}s",
                         total_cost,

@@ -94,16 +94,15 @@ pub(in crate::workflow) fn row_to_workflow_run(
         || total_cost_usd.is_some()
         || model.is_some()
     {
-        run.extensions
-            .insert(crate::workflow::LlmRunMetrics {
-                total_input_tokens,
-                total_output_tokens,
-                total_cache_read_input_tokens,
-                total_cache_creation_input_tokens,
-                total_turns,
-                total_cost_usd,
-                model,
-            });
+        run.extensions.insert(crate::workflow::LlmRunMetrics {
+            total_input_tokens,
+            total_output_tokens,
+            total_cache_read_input_tokens,
+            total_cache_creation_input_tokens,
+            total_turns,
+            total_cost_usd,
+            model,
+        });
     }
     Ok(run)
 }

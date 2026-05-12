@@ -12,7 +12,7 @@ use crate::error::Result;
 
 use super::helpers::row_to_workflow_run;
 
-use crate::workflow::constants::RUN_COLUMNS;
+use crate::workflow::constants::{CONDUCTOR_METRICS_COLUMNS, RUN_COLUMNS};
 use crate::workflow::persistence_sqlite::SqliteWorkflowPersistence;
 use crate::workflow::types::StepKey;
 use crate::workflow::WorkflowRun;
@@ -768,7 +768,7 @@ pub fn find_resumable_child_run(
     Ok(conn
             .query_row(
                 &format!(
-                    "SELECT {RUN_COLUMNS} FROM workflow_runs \
+                    "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS} FROM workflow_runs \
                      WHERE parent_workflow_run_id = :parent_workflow_run_id \
                        AND workflow_name = :child_workflow_name \
                        AND status IN ('failed', 'pending', 'waiting') \
@@ -908,7 +908,9 @@ pub fn delete_run(conn: &Connection, run_id: &str) -> Result<()> {
     // Validate the run exists and is terminal.
     let run = conn
         .query_row(
-            &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE id = :id"),
+            &format!(
+                "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS} FROM workflow_runs WHERE id = :id"
+            ),
             named_params![":id": run_id],
             row_to_workflow_run,
         )

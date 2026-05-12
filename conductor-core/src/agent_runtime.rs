@@ -85,22 +85,20 @@ pub fn try_spawn_headless_run(
 ///
 /// Wire this into `ClaudeRuntimeOptions::argv_builder` at every conductor call site.
 pub fn conductor_argv_builder() -> runkon_anthropic::ArgvBuilder {
-    std::sync::Arc::new(
-        |req: &runkon_anthropic::ClaudeArgvRequest<'_>| {
-            let params = conductor_headless::SpawnHeadlessParams {
-                run_id: req.run_id,
-                working_dir: req.working_dir,
-                prompt: req.prompt,
-                resume_session_id: req.resume_session_id,
-                model: req.model,
-                extra_cli_args: req.extra_cli_args,
-                permission_mode: req.permission_mode,
-                plugin_dirs: req.plugin_dirs,
-            };
-            let (args, pf) = conductor_headless::build_headless_agent_args(&params)?;
-            Ok((args, Some(pf)))
-        },
-    )
+    std::sync::Arc::new(|req: &runkon_anthropic::ClaudeArgvRequest<'_>| {
+        let params = conductor_headless::SpawnHeadlessParams {
+            run_id: req.run_id,
+            working_dir: req.working_dir,
+            prompt: req.prompt,
+            resume_session_id: req.resume_session_id,
+            model: req.model,
+            extra_cli_args: req.extra_cli_args,
+            permission_mode: req.permission_mode,
+            plugin_dirs: req.plugin_dirs,
+        };
+        let (args, pf) = conductor_headless::build_headless_agent_args(&params)?;
+        Ok((args, Some(pf)))
+    })
 }
 
 /// Drain a streaming JSON output from a headless agent subprocess.
