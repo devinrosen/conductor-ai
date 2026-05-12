@@ -678,6 +678,7 @@ dependencies = [
  "runkon-anthropic",
  "runkon-flow",
  "runkon-flow-executors",
+ "runkon-google",
  "runkon-notify",
  "runkon-runtimes",
  "rusqlite",
@@ -4488,6 +4489,21 @@ dependencies = [
  "serde_json",
  "serde_yml",
  "tracing",
+]
+
+[[package]]
+name = "runkon-google"
+version = "0.6.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ee2c46e071aa711010cc804c8f12e079c86eab8362eb61f5329825921b835fc"
+dependencies = [
+ "runkon-flow",
+ "runkon-flow-executors",
+ "runkon-runtimes",
+ "serde",
+ "serde_json",
+ "tracing",
+ "ureq",
 ]
 
 [[package]]

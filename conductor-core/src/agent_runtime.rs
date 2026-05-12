@@ -79,6 +79,16 @@ pub fn try_spawn_headless_run(
     conductor_headless::try_spawn_headless_run(params, &binary_path, env)
 }
 
+/// Create the [`runkon_google::ArgvBuilder`] closure for GeminiRuntime.
+///
+/// Delegates to [`runkon_google::default_argv_builder`], which produces the
+/// standard Gemini CLI invocation (`--output-format stream-json --prompt …`).
+/// Conductor does not customise the Gemini argv — env overlay and binary path
+/// are handled via `GeminiRuntimeOptions` at construction time.
+pub fn conductor_gemini_argv_builder() -> runkon_google::ArgvBuilder {
+    runkon_google::default_argv_builder()
+}
+
 /// Create the [`runkon_anthropic::ArgvBuilder`] closure that
 /// translates a [`runkon_anthropic::ClaudeArgvRequest`] into
 /// `conductor agent run` argv via [`build_headless_agent_args`].

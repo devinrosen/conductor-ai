@@ -687,6 +687,11 @@ impl Config {
     pub fn anthropic_api_key(&self) -> Option<String> {
         std::env::var("ANTHROPIC_API_KEY").ok()
     }
+
+    /// Returns the Gemini API key from the `GEMINI_API_KEY` environment variable.
+    pub fn gemini_api_key(&self) -> Option<String> {
+        std::env::var("GEMINI_API_KEY").ok()
+    }
 }
 
 /// Load config from disk, returning defaults if the file doesn't exist.
@@ -2327,5 +2332,15 @@ custom_models = ["model-a"]
         assert!(config2.general.custom_models.is_empty());
         let claude2 = config2.runtimes.get("claude").unwrap();
         assert_eq!(claude2.supported_models, vec!["model-a".to_string()]);
+    }
+
+    #[test]
+    fn gemini_api_key_reads_env_var() {
+        let config = Config::default();
+        // Without env var set, returns None.
+        // (Deliberately not setting GEMINI_API_KEY in this test to avoid
+        // depending on the test environment — just confirm the method exists
+        // and delegates to the env.)
+        let _ = config.gemini_api_key(); // must compile and not panic
     }
 }
