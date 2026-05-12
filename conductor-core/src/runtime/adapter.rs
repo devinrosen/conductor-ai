@@ -142,6 +142,18 @@ impl runkon_runtimes::RuntimeResolver for ConductorRuntimeResolver {
         &self,
         name: &str,
     ) -> runkon_runtimes::Result<Box<dyn runkon_runtimes::AgentRuntime>> {
+        if name == "claude" {
+            let claude_opts = runkon_anthropic::ClaudeRuntimeOptions {
+                permission_mode: self.permission_mode.clone(),
+                binary_path: self.options.binary_path.clone(),
+                env: self.options.env.clone(),
+                log_path_for_run: self.options.log_path_for_run.clone(),
+                argv_builder: crate::agent_runtime::conductor_argv_builder(),
+                stall_threshold: self.options.stall_threshold,
+                max_turns: self.options.max_turns,
+            };
+            return Ok(Box::new(runkon_anthropic::ClaudeRuntime::new(claude_opts)));
+        }
         runkon_runtimes::runtime::resolve_runtime(
             name,
             self.permission_mode.clone(),

@@ -62,7 +62,7 @@ pub(in crate::workflow) fn row_to_workflow_run(
     let dismissed_int: i64 = row.get("dismissed")?;
     let definition_snapshot: Option<String> = row.get("definition_snapshot")?;
     let workflow_title: Option<String> = row.get("workflow_title")?;
-    Ok(WorkflowRun {
+    let mut run = WorkflowRun {
         id,
         workflow_name: row.get("workflow_name")?,
         parent_run_id: row.get("parent_run_id")?,
@@ -79,19 +79,33 @@ pub(in crate::workflow) fn row_to_workflow_run(
         iteration,
         blocked_on,
         workflow_title,
-        total_input_tokens,
-        total_output_tokens,
-        total_cache_read_input_tokens,
-        total_cache_creation_input_tokens,
-        total_turns,
-        total_cost_usd,
         total_duration_ms,
-        model,
+        extensions: Default::default(),
         dismissed: dismissed_int != 0,
         owner_token: row.get("owner_token")?,
         lease_until: row.get("lease_until")?,
         generation: row.get("generation")?,
-    })
+    };
+    if total_input_tokens.is_some()
+        || total_output_tokens.is_some()
+        || total_cache_read_input_tokens.is_some()
+        || total_cache_creation_input_tokens.is_some()
+        || total_turns.is_some()
+        || total_cost_usd.is_some()
+        || model.is_some()
+    {
+        run.extensions
+            .insert(crate::workflow::LlmRunMetrics {
+                total_input_tokens,
+                total_output_tokens,
+                total_cache_read_input_tokens,
+                total_cache_creation_input_tokens,
+                total_turns,
+                total_cost_usd,
+                model,
+            });
+    }
+    Ok(run)
 }
 
 /// Row mapper that builds a `ConductorWorkflowRun` by calling [`row_to_workflow_run`]

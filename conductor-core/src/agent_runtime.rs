@@ -4,8 +4,8 @@
 //! - [`conductor_headless`]: owns the `conductor agent run` argv shape
 //!   (`SpawnHeadlessParams`, `build_headless_agent_args`, `try_spawn_headless_run`).
 //!   Lives here (not in `runkon-runtimes`) because the argv shape is conductor-CLI-specific.
-//! - [`conductor_argv_builder`]: factory that creates the [`runkon_runtimes::runtime::claude::ArgvBuilder`]
-//!   closure wired into `RuntimeOptions` at all conductor call sites.
+//! - [`conductor_argv_builder`]: factory that creates the [`runkon_anthropic::ArgvBuilder`]
+//!   closure wired into `ClaudeRuntimeOptions::argv_builder` at every conductor call site.
 //! - [`CombinedSink`]: the [`runkon_runtimes::tracker::EventSink`] used by callers
 //!   to persist runtime events into `AgentManager` while also forwarding parsed
 //!   `AgentEvent`s to a UI/WebSocket callback. Construct it via
@@ -79,14 +79,14 @@ pub fn try_spawn_headless_run(
     conductor_headless::try_spawn_headless_run(params, &binary_path, env)
 }
 
-/// Create the [`runkon_runtimes::runtime::claude::ArgvBuilder`] closure that
-/// translates a [`runkon_runtimes::runtime::claude::ClaudeArgvRequest`] into
+/// Create the [`runkon_anthropic::ArgvBuilder`] closure that
+/// translates a [`runkon_anthropic::ClaudeArgvRequest`] into
 /// `conductor agent run` argv via [`build_headless_agent_args`].
 ///
-/// Wire this into `RuntimeOptions::argv_builder` at every conductor call site.
-pub fn conductor_argv_builder() -> runkon_runtimes::runtime::claude::ArgvBuilder {
+/// Wire this into `ClaudeRuntimeOptions::argv_builder` at every conductor call site.
+pub fn conductor_argv_builder() -> runkon_anthropic::ArgvBuilder {
     std::sync::Arc::new(
-        |req: &runkon_runtimes::runtime::claude::ClaudeArgvRequest<'_>| {
+        |req: &runkon_anthropic::ClaudeArgvRequest<'_>| {
             let params = conductor_headless::SpawnHeadlessParams {
                 run_id: req.run_id,
                 working_dir: req.working_dir,
@@ -123,6 +123,7 @@ pub fn drain_stream_json(
         sink,
         stall_threshold,
         max_turns,
+        runkon_anthropic::ClaudeLineEventParser,
     )
 }
 
@@ -267,6 +268,7 @@ mod tests {
             &sink,
             None,
             None,
+            runkon_anthropic::ClaudeLineEventParser,
         );
         let _ = std::fs::remove_file(&log);
         (outcome, captured.into_inner())

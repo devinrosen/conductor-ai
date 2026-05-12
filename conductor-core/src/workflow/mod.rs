@@ -152,6 +152,7 @@ pub use runkon_flow::types::{
     extract_workflow_title, BlockedOn, ContextEntry, StepResult, WorkflowExecConfig,
     WorkflowResult, WorkflowRun, WorkflowRunStep, WorkflowStepSummary,
 };
+pub use runkon_flow::extensions::LlmRunMetrics;
 
 use crate::agent_config::AgentSpec;
 

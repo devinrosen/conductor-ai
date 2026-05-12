@@ -160,7 +160,8 @@ pub fn spawn_db_poller(
                                 {
                                     // Cost spike detection
                                     if let Some(run) = run_by_id.get(t.run_id.as_str()) {
-                                        if let Some(cost_usd) = run.total_cost_usd {
+                                        let metrics = run.run.extensions.get::<conductor_core::workflow::LlmRunMetrics>();
+                                        if let Some(cost_usd) = metrics.as_ref().and_then(|m| m.total_cost_usd) {
                                             if baseline.avg_cost_usd > 0.0 {
                                                 let multiple = cost_usd / baseline.avg_cost_usd;
                                                 crate::notify::fire_cost_spike_notification(
