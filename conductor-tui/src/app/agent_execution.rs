@@ -158,6 +158,7 @@ pub(super) fn drive_headless_run(
         extra_cli_args: bot_name_args,
         plugin_dirs: vec![],
         resume_session_id: config.resume_session_id.clone(),
+        effective_runtime: runtime_name.to_string(),
         tracker,
         event_sink,
     };
