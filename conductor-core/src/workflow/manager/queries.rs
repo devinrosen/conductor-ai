@@ -11,8 +11,9 @@ use super::helpers::{
     waiting_gate_step_row_mapper,
 };
 use crate::workflow::constants::{
-    CONDUCTOR_RUN_EXTRA, REGRESSION_COST_THRESHOLD_PCT, REGRESSION_DURATION_THRESHOLD_PCT,
-    REGRESSION_FAILURE_RATE_THRESHOLD_PP, RUN_COLUMNS, STEP_COLUMNS_WITH_PREFIX,
+    CONDUCTOR_METRICS_COLUMNS, CONDUCTOR_RUN_EXTRA, REGRESSION_COST_THRESHOLD_PCT,
+    REGRESSION_DURATION_THRESHOLD_PCT, REGRESSION_FAILURE_RATE_THRESHOLD_PP, RUN_COLUMNS,
+    STEP_COLUMNS_WITH_PREFIX,
 };
 use rusqlite::Connection;
 
@@ -133,7 +134,7 @@ pub fn get_workflow_run_status(conn: &Connection, run_id: &str) -> Result<Option
 pub fn get_workflow_run(conn: &Connection, id: &str) -> Result<Option<ConductorWorkflowRun>> {
     Ok(conn
         .query_row(
-            &format!("SELECT {RUN_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs WHERE id = :id"),
+            &format!("SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs WHERE id = :id"),
             named_params! { ":id": id },
             row_to_conductor_run,
         )
@@ -181,7 +182,7 @@ pub fn list_child_workflow_runs(
     parent_run_id: &str,
 ) -> Result<Vec<WorkflowRun>> {
     let mut stmt = conn.prepare_cached(&format!(
-        "SELECT {RUN_COLUMNS} FROM workflow_runs \
+        "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS} FROM workflow_runs \
              WHERE parent_workflow_run_id = :parent_workflow_run_id \
              ORDER BY started_at ASC"
     ))?;
@@ -382,7 +383,7 @@ pub fn get_active_run_for_worktree(
     let placeholders = sql_placeholders(WorkflowRunStatus::ACTIVE.len());
     let active_strings = WorkflowRunStatus::active_strings();
     let sql = format!(
-        "SELECT {RUN_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
+        "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
              WHERE worktree_id = ? AND status IN ({placeholders}) \
              LIMIT 1"
     );
@@ -409,7 +410,7 @@ pub fn list_workflow_runs(
     query_collect(
         conn,
         &format!(
-            "SELECT {RUN_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
+            "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
              WHERE worktree_id = :worktree_id ORDER BY started_at DESC"
         ),
         named_params! { ":worktree_id": worktree_id },
@@ -427,7 +428,7 @@ pub fn list_workflow_runs_filtered(
         query_collect(
             conn,
             &format!(
-                "SELECT {RUN_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
+                "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
                      WHERE worktree_id = :worktree_id AND status = :status \
                      ORDER BY started_at DESC"
             ),
@@ -480,7 +481,7 @@ pub fn list_workflow_runs_filtered_paginated(
         query_collect(
             conn,
             &format!(
-                "SELECT {RUN_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
+                "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
                      WHERE worktree_id = :worktree_id AND status = :status \
                      ORDER BY started_at DESC LIMIT :limit OFFSET :offset"
             ),
@@ -628,7 +629,7 @@ pub fn list_workflow_runs_paginated(
     query_collect(
         conn,
         &format!(
-            "SELECT {RUN_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
+            "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
                  WHERE worktree_id = :worktree_id \
                  ORDER BY started_at DESC LIMIT :limit OFFSET :offset"
         ),
@@ -647,7 +648,7 @@ pub fn list_root_workflow_runs(
     query_collect(
         conn,
         &format!(
-            "SELECT {RUN_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
+            "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
                  WHERE parent_workflow_run_id IS NULL \
                  ORDER BY started_at DESC LIMIT :limit"
         ),
@@ -671,7 +672,7 @@ pub fn list_active_non_worktree_workflow_runs(
     query_collect(
         conn,
         &format!(
-            "SELECT {RUN_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
+            "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
                  WHERE parent_workflow_run_id IS NULL \
                    AND worktree_id IS NULL \
                    AND (\

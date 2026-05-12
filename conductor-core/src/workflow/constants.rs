@@ -1,5 +1,12 @@
 pub(super) use runkon_flow::constants::{RUN_COLUMNS, STEP_COLUMNS};
 
+/// LLM metric columns kept on `workflow_runs` per D2 (runkon 0.6.0-alpha extracted these
+/// from `WorkflowRun` into `Extensions`, but conductor keeps the DB columns for SQL-level
+/// reporting). Must be appended to every SELECT that feeds `row_to_workflow_run`.
+pub(super) const CONDUCTOR_METRICS_COLUMNS: &str =
+    ", total_input_tokens, total_output_tokens, total_cache_read_input_tokens, \
+     total_cache_creation_input_tokens, total_turns, total_cost_usd, model";
+
 /// Conductor-specific extra columns on `workflow_runs` that are not part of the
 /// harness-neutral `RUN_COLUMNS`. Appended to `RUN_COLUMNS` when conductor-core
 /// queries need to populate `ConductorWorkflowRun`.

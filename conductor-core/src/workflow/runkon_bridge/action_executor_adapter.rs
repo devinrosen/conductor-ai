@@ -124,7 +124,6 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                     .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")))
             }),
             workspace_root: self.config.general.workspace_root.clone(),
-            argv_builder: crate::agent_runtime::conductor_argv_builder(),
             stall_threshold: Some(self.config.agents.stall_threshold()),
             max_turns: self.config.agents.workflow_max_turns(
                 params

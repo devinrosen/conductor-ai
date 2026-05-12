@@ -165,7 +165,6 @@ fn test_script_runtime_resolve_via_config() {
                 .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")))
         }),
         workspace_root: std::path::PathBuf::from("/tmp"),
-        argv_builder: conductor_core::agent_runtime::conductor_argv_builder(),
         stall_threshold: None,
         max_turns: None,
     };

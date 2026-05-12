@@ -29,9 +29,13 @@ pub(crate) fn check_prerequisites() {
 }
 
 pub(crate) fn report_workflow_result(result: conductor_core::workflow::WorkflowResult) {
+    let metrics = result
+        .extensions
+        .get::<conductor_core::workflow::LlmRunMetrics>();
+    let total_turns = metrics.as_ref().and_then(|m| m.total_turns).unwrap_or(0);
     println!(
         "\nTotal: {} turns, {:.1}s",
-        result.total_turns,
+        total_turns,
         result.total_duration_ms as f64 / 1000.0
     );
     if result.all_succeeded {
