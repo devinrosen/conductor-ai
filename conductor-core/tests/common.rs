@@ -40,15 +40,18 @@ pub fn make_request(
 ) -> RuntimeRequest {
     let tracker = Arc::new(SqliteHostAdapter::new(db_path.clone()).unwrap());
     let event_sink = tracker.clone();
+    let agent_def = make_agent_def(runtime);
+    let effective_runtime = agent_def.runtime.clone();
     RuntimeRequest {
         run_id: run_id.to_string(),
-        agent_def: make_agent_def(runtime),
+        agent_def,
         prompt: prompt.to_string(),
         model: None,
         working_dir: std::path::PathBuf::from("/tmp"),
         extra_cli_args: vec![],
         plugin_dirs: vec![],
         resume_session_id: None,
+        effective_runtime,
         tracker,
         event_sink,
     }

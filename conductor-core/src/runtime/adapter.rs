@@ -142,6 +142,44 @@ impl runkon_runtimes::RuntimeResolver for ConductorRuntimeResolver {
         &self,
         name: &str,
     ) -> runkon_runtimes::Result<Box<dyn runkon_runtimes::AgentRuntime>> {
+        if name == "claude" {
+            let claude_opts = runkon_anthropic::ClaudeRuntimeOptions {
+                permission_mode: self.permission_mode.clone(),
+                binary_path: self.options.binary_path.clone(),
+                env: self.options.env.clone(),
+                log_path_for_run: self.options.log_path_for_run.clone(),
+                argv_builder: crate::agent_runtime::conductor_argv_builder(),
+                stall_threshold: self.options.stall_threshold,
+                max_turns: self.options.max_turns,
+            };
+            return Ok(Box::new(runkon_anthropic::ClaudeRuntime::new(claude_opts)));
+        }
+        if name == "gemini" {
+            // binary: explicit [runtimes.gemini].binary config field, or "gemini" from PATH.
+            let binary = self
+                .runtimes
+                .get("gemini")
+                .and_then(|rc| rc.binary.as_deref())
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from("gemini"));
+            // env overlay: from [runtimes.gemini.env], or empty (GEMINI_API_KEY
+            // is typically inherited from the parent process environment).
+            let env = self
+                .runtimes
+                .get("gemini")
+                .map(|rc| rc.env.clone())
+                .unwrap_or_default();
+            let gemini_opts = runkon_google::GeminiRuntimeOptions {
+                binary_path: binary,
+                env,
+                permission_mode: self.permission_mode.clone(),
+                log_path_for_run: self.options.log_path_for_run.clone(),
+                argv_builder: crate::agent_runtime::conductor_gemini_argv_builder(),
+                stall_threshold: self.options.stall_threshold,
+                max_turns: self.options.max_turns,
+            };
+            return Ok(Box::new(runkon_google::GeminiRuntime::new(gemini_opts)));
+        }
         runkon_runtimes::runtime::resolve_runtime(
             name,
             self.permission_mode.clone(),
@@ -383,5 +421,48 @@ mod tests {
 
         // The row never existed, so `get_run` should still return None.
         assert!(adapter.get_run("missing-run").unwrap().is_none());
+    }
+
+    fn make_resolver(
+        runtimes: std::collections::HashMap<String, runkon_runtimes::RuntimeConfig>,
+    ) -> ConductorRuntimeResolver {
+        ConductorRuntimeResolver {
+            permission_mode: runkon_runtimes::PermissionMode::Default,
+            runtimes,
+            options: runkon_runtimes::RuntimeOptions {
+                binary_path: std::path::PathBuf::from("conductor"),
+                env: std::collections::HashMap::new(),
+                log_path_for_run: std::sync::Arc::new(|run_id: &str| {
+                    std::env::temp_dir().join(format!("{run_id}.log"))
+                }),
+                workspace_root: std::env::temp_dir(),
+                stall_threshold: None,
+                max_turns: None,
+            },
+        }
+    }
+
+    #[test]
+    fn resolve_gemini_returns_ok_without_config_entry() {
+        let resolver = make_resolver(std::collections::HashMap::new());
+        let result = runkon_runtimes::RuntimeResolver::resolve(&resolver, "gemini");
+        assert!(result.is_ok(), "resolve(\"gemini\") must return Ok");
+    }
+
+    #[test]
+    fn resolve_gemini_uses_configured_binary() {
+        let mut runtimes = std::collections::HashMap::new();
+        runtimes.insert(
+            "gemini".to_string(),
+            runkon_runtimes::RuntimeConfig {
+                binary: Some("/usr/local/bin/gemini-custom".to_string()),
+                ..Default::default()
+            },
+        );
+        let resolver = make_resolver(runtimes);
+        // Resolve must succeed — we cannot inspect the binary_path on the returned
+        // Box<dyn AgentRuntime>, but the test confirms no panic/error.
+        let result = runkon_runtimes::RuntimeResolver::resolve(&resolver, "gemini");
+        assert!(result.is_ok());
     }
 }

@@ -5,8 +5,9 @@ use conductor_core::agent::{AgentManager, AgentRun, FeedbackRequest};
 use conductor_core::agent_config::{AgentDef, AgentRole};
 use conductor_core::agent_runtime::{EventSink, RuntimeEvent};
 use conductor_core::config::AutoStartAgent;
+use conductor_core::runtime::adapter::ConductorRuntimeResolver;
 use conductor_core::runtime::adapter::SqliteHostAdapter;
-use conductor_core::runtime::{resolve_runtime, RuntimeOptions, RuntimeRequest};
+use conductor_core::runtime::{RuntimeOptions, RuntimeRequest, RuntimeResolver};
 use conductor_core::tickets::build_agent_prompt;
 use conductor_core::worktree::{WorktreeCreateOptions, WorktreeManager};
 
@@ -115,18 +116,17 @@ pub(super) fn drive_headless_run(
                 .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")))
         }),
         workspace_root: PathBuf::from(&config.working_dir),
-        argv_builder: conductor_core::agent_runtime::conductor_argv_builder(),
         stall_threshold: Some(config.stall_threshold),
         max_turns: None,
     };
 
     let runtime_name: &str = config.runtime.as_deref().unwrap_or("claude");
-    let runtime = match resolve_runtime(
-        runtime_name,
-        permission_mode,
-        &config.runtimes,
-        &runtime_options,
-    ) {
+    let resolver = ConductorRuntimeResolver {
+        permission_mode: permission_mode.clone(),
+        runtimes: config.runtimes.clone(),
+        options: runtime_options,
+    };
+    let runtime = match RuntimeResolver::resolve(&resolver, runtime_name) {
         Ok(r) => r,
         Err(e) => {
             let _ = tx.send(on_launched(Err(e.to_string())));
@@ -158,6 +158,7 @@ pub(super) fn drive_headless_run(
         extra_cli_args: bot_name_args,
         plugin_dirs: vec![],
         resume_session_id: config.resume_session_id.clone(),
+        effective_runtime: runtime_name.to_string(),
         tracker,
         event_sink,
     };

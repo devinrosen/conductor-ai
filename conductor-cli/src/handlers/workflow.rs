@@ -692,10 +692,18 @@ pub fn handle_workflow(
 
             match conductor_core::workflow::resume_workflow(&resume_input) {
                 Ok(result) => {
+                    let metrics = result
+                        .extensions
+                        .get::<conductor_core::workflow::LlmRunMetrics>();
+                    let total_cost = metrics
+                        .as_ref()
+                        .and_then(|m| m.total_cost_usd)
+                        .unwrap_or(0.0);
+                    let total_turns = metrics.as_ref().and_then(|m| m.total_turns).unwrap_or(0);
                     println!(
                         "\nTotal: ${:.4}, {} turns, {:.1}s",
-                        result.total_cost,
-                        result.total_turns,
+                        total_cost,
+                        total_turns,
                         result.total_duration_ms as f64 / 1000.0
                     );
                     if result.all_succeeded {

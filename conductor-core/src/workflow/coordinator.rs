@@ -315,6 +315,7 @@ fn build_rk_execution_state(args: RkStateArgs) -> runkon_flow::engine::Execution
         contexts: Vec::new(),
         position: 0,
         all_succeeded: true,
+        has_llm_metrics: false,
         total_cost: 0.0,
         total_turns: 0,
         total_duration_ms: 0,
@@ -778,17 +779,28 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         let agent_mgr = AgentManager::new(&guard);
         let summary = format!("Workflow '{}' completed", workflow.name);
         if rk_result.all_succeeded {
+            let metrics = rk_result.extensions.get::<crate::workflow::LlmRunMetrics>();
+            let total_cost_usd = metrics.as_ref().and_then(|m| m.total_cost_usd);
+            let total_turns = metrics.as_ref().and_then(|m| m.total_turns);
+            let total_input_tokens = metrics.as_ref().and_then(|m| m.total_input_tokens);
+            let total_output_tokens = metrics.as_ref().and_then(|m| m.total_output_tokens);
+            let total_cache_read = metrics
+                .as_ref()
+                .and_then(|m| m.total_cache_read_input_tokens);
+            let total_cache_create = metrics
+                .as_ref()
+                .and_then(|m| m.total_cache_creation_input_tokens);
             if let Err(e) = agent_mgr.update_run_completed(
                 &parent_run_id,
                 None,
                 Some(&summary),
-                Some(rk_result.total_cost),
-                Some(rk_result.total_turns),
+                total_cost_usd,
+                total_turns,
                 Some(rk_result.total_duration_ms),
-                Some(rk_result.total_input_tokens),
-                Some(rk_result.total_output_tokens),
-                Some(rk_result.total_cache_read_input_tokens),
-                Some(rk_result.total_cache_creation_input_tokens),
+                total_input_tokens,
+                total_output_tokens,
+                total_cache_read,
+                total_cache_create,
             ) {
                 tracing::warn!("Failed to mark parent run {parent_run_id} completed: {e}");
             }

@@ -124,7 +124,6 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                     .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")))
             }),
             workspace_root: self.config.general.workspace_root.clone(),
-            argv_builder: crate::agent_runtime::conductor_argv_builder(),
             stall_threshold: Some(self.config.agents.stall_threshold()),
             max_turns: self.config.agents.workflow_max_turns(
                 params
@@ -159,6 +158,22 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             .runtime_override
             .clone()
             .or_else(|| derive_runtime_from_model(params.model.as_deref(), &self.config.runtimes));
+
+        // `create_child_run` hardcodes `runtime = "claude"` at row creation
+        // (it has no way to know the eventual resolution). Patch the row now
+        // that we've resolved it, so the DB reflects the runtime that will
+        // actually launch the subprocess.
+        if let Some(rt) = runtime_override.as_deref() {
+            let conn = self.conn.lock().map_err(bridge_lock_err)?;
+            let agent_mgr = crate::agent::AgentManager::new(&conn);
+            if let Err(e) = agent_mgr.update_run_runtime(&child_run_id, rt) {
+                tracing::warn!(
+                    "step '{}': failed to update agent_runs.runtime to '{}': {e}",
+                    params.name,
+                    rt,
+                );
+            }
+        }
 
         let agent_ctx = runkon_anthropic::claude_agent::ClaudeAgentContext {
             run_id: child_run_id.clone(),

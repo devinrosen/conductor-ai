@@ -409,7 +409,8 @@ async fn main() -> Result<()> {
                                 )
                             {
                                 if let Some(run) = run_by_id.get(t.run_id.as_str()) {
-                                    if let Some(cost_usd) = run.total_cost_usd {
+                                    let llm_metrics = run.extensions.get::<conductor_core::workflow::LlmRunMetrics>();
+                                    if let Some(cost_usd) = llm_metrics.as_ref().and_then(|m| m.total_cost_usd) {
                                         if baseline.avg_cost_usd > 0.0 {
                                             let multiple = cost_usd / baseline.avg_cost_usd;
                                             conductor_web::notify::fire_cost_spike_notification(
