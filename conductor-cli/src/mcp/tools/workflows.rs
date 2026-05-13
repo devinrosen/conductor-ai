@@ -218,6 +218,37 @@ pub(super) fn tool_run_workflow(
         Err(e) => return tool_err(e),
     };
 
+    // Resolve ticket_id from inputs if provided.
+    // Accepts either the internal ULID (26 chars, tried first) or an external source ID
+    // (e.g. GitHub issue number). Falls back from ULID to source_id on TicketNotFound so
+    // 26-char source IDs still work in the unlikely edge case.
+    let resolved_ticket_id: Option<String> = if let Some(raw_tid) = inputs.get("ticket_id") {
+        use conductor_core::error::ConductorError;
+        use conductor_core::tickets::TicketSyncer;
+        let syncer = TicketSyncer::new(conn);
+        let ticket = if raw_tid.len() == 26 {
+            match syncer.get_by_id(raw_tid) {
+                Ok(t) => Ok(t),
+                Err(ConductorError::TicketNotFound { .. }) => {
+                    syncer.get_by_source_id(&repo.id, raw_tid)
+                }
+                Err(e) => Err(e),
+            }
+        } else {
+            syncer.get_by_source_id(&repo.id, raw_tid)
+        };
+        match ticket {
+            Ok(t) => Some(t.id),
+            Err(_) => {
+                return tool_err(format!(
+                    "ticket_id '{raw_tid}' not found in repo '{repo_slug}'"
+                ))
+            }
+        }
+    } else {
+        None
+    };
+
     // Load the workflow definition
     let workflow = match conductor_core::workflow::load_def_by_name(
         &repo.local_path,
@@ -272,7 +303,7 @@ pub(super) fn tool_run_workflow(
         worktree_id,
         working_dir,
         repo_path: repo.local_path,
-        ticket_id: None,
+        ticket_id: resolved_ticket_id,
         repo_id: Some(repo.id),
         model: None,
         runtime: None,
@@ -1365,5 +1396,150 @@ workflow wt-only-wf {
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         let result = tool_instantiate_template(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
+    }
+
+    // -----------------------------------------------------------------------
+    // ticket_id resolution tests (#3033)
+    // -----------------------------------------------------------------------
+
+    /// Helper: register a repo and seed one ticket, returning the ticket's internal ULID.
+    fn setup_repo_with_ticket(
+        _f: &tempfile::NamedTempFile,
+        repo_slug: &str,
+        source_id: &str,
+    ) -> String {
+        use conductor_core::config::Config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+        use conductor_core::tickets::{TicketInput, TicketSyncer};
+
+        let conn = open_database(_f.path()).expect("open db");
+        let config = Config::default();
+        let repo = RepoManager::new(&conn, &config)
+            .register(repo_slug, "/tmp/test-repo", "https://github.com/x/y", None)
+            .expect("register repo");
+        let ticket = TicketInput {
+            source_id: source_id.to_string(),
+            source_type: "github".to_string(),
+            title: "Test ticket for resolution".to_string(),
+            body: "body".to_string(),
+            state: "open".to_string(),
+            labels: vec![],
+            assignee: None,
+            priority: None,
+            url: format!("https://github.com/x/y/issues/{source_id}"),
+            raw_json: None,
+            label_details: vec![],
+            blocked_by: vec![],
+            children: vec![],
+            parent: None,
+        };
+        let syncer = TicketSyncer::new(&conn);
+        syncer.sync_and_close_tickets(&repo.id, "github", &[ticket]);
+        let found = syncer
+            .get_by_source_id(&repo.id, source_id)
+            .expect("ticket should exist after seeding");
+        found.id
+    }
+
+    #[test]
+    fn test_run_workflow_resolves_ticket_id_from_inputs_by_source_id() {
+        // When ticket_id is a short source ID (e.g. GitHub issue number), the handler
+        // must resolve it before constructing WorkflowExecStandalone. A missing workflow
+        // error (not a "ticket_id not found" error) proves resolution succeeded.
+        let (_f, conductor) = make_test_conductor();
+        let ticket_ulid = setup_repo_with_ticket(&_f, "tid-src-repo", "382");
+        assert!(!ticket_ulid.is_empty());
+
+        let mut inputs_map = serde_json::Map::new();
+        inputs_map.insert("ticket_id".to_string(), Value::String("382".to_string()));
+        let mut args = serde_json::Map::new();
+        args.insert("workflow".to_string(), Value::String("nonexistent-wf".to_string()));
+        args.insert("repo".to_string(), Value::String("tid-src-repo".to_string()));
+        args.insert("inputs".to_string(), Value::Object(inputs_map));
+
+        let result = tool_run_workflow(&conductor, &args, &[]);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        // Must NOT fail with "ticket_id '382' not found" — resolution succeeded.
+        assert!(
+            !text.contains("ticket_id '382' not found"),
+            "ticket resolution should succeed; got: {text}"
+        );
+        // Should fail at workflow-load, not at ticket resolution.
+        assert!(
+            text.contains("nonexistent-wf") || text.contains("workflow") || text.contains("Failed"),
+            "expected workflow-load failure; got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_run_workflow_resolves_ticket_id_from_inputs_by_ulid() {
+        // When ticket_id is the internal ULID, the handler must accept it directly.
+        let (_f, conductor) = make_test_conductor();
+        let ticket_ulid = setup_repo_with_ticket(&_f, "tid-ulid-repo", "500");
+        assert_eq!(ticket_ulid.len(), 26, "seeded ticket should have a 26-char ULID");
+
+        let mut inputs_map = serde_json::Map::new();
+        inputs_map.insert("ticket_id".to_string(), Value::String(ticket_ulid.clone()));
+        let mut args = serde_json::Map::new();
+        args.insert("workflow".to_string(), Value::String("nonexistent-wf".to_string()));
+        args.insert("repo".to_string(), Value::String("tid-ulid-repo".to_string()));
+        args.insert("inputs".to_string(), Value::Object(inputs_map));
+
+        let result = tool_run_workflow(&conductor, &args, &[]);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        // Must NOT fail with a ticket-not-found message.
+        assert!(
+            !text.contains("not found in repo"),
+            "ULID resolution should succeed; got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_run_workflow_unknown_ticket_id_in_inputs_errors() {
+        // When ticket_id refers to a non-existent ticket, the handler must return
+        // is_error=true with a message naming the offending value.
+        let (_f, conductor) = make_test_conductor();
+        // Register the repo but seed no tickets.
+        {
+            use conductor_core::config::Config;
+            use conductor_core::db::open_database;
+            use conductor_core::repo::RepoManager;
+            let conn = open_database(_f.path()).expect("open db");
+            let config = Config::default();
+            RepoManager::new(&conn, &config)
+                .register("tid-unknown-repo", "/tmp/test-repo", "https://github.com/x/y", None)
+                .expect("register repo");
+        }
+
+        let mut inputs_map = serde_json::Map::new();
+        inputs_map.insert("ticket_id".to_string(), Value::String("99999".to_string()));
+        let mut args = serde_json::Map::new();
+        args.insert("workflow".to_string(), Value::String("any-wf".to_string()));
+        args.insert("repo".to_string(), Value::String("tid-unknown-repo".to_string()));
+        args.insert("inputs".to_string(), Value::Object(inputs_map));
+
+        let result = tool_run_workflow(&conductor, &args, &[]);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("ticket_id '99999' not found"),
+            "expected ticket-not-found error; got: {text}"
+        );
+        assert!(
+            text.contains("tid-unknown-repo"),
+            "error should name the repo; got: {text}"
+        );
     }
 }

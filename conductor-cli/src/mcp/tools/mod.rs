@@ -176,7 +176,11 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
                     json!({
                         "type": "object",
                         "additionalProperties": { "type": "string" },
-                        "description": "Input key=value pairs (optional)"
+                        "description": "Input key=value pairs (optional). Recognized keys: \
+                            `ticket_id` — accepts either the internal ULID or the external source ID \
+                            (e.g. GitHub issue number '382'); required for ticket-targeted workflows \
+                            that use {{ticket_url}} or other {{ticket_*}} template variables. \
+                            `pr_number` — PR number when targeting a pull request context."
                     }),
                 );
                 props.insert(
