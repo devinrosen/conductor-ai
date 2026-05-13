@@ -175,11 +175,9 @@ impl App {
                 repo_slug,
                 remote_url,
             } => {
-                use conductor_core::github;
-                match github::parse_github_remote(&remote_url) {
-                    Some((owner, repo)) => {
-                        let config_json =
-                            serde_json::json!({"owner": owner, "repo": repo}).to_string();
+                use conductor_core::ticket_source::TicketSource;
+                match TicketSource::default_config("github", None, &remote_url) {
+                    Ok(config_json) => {
                         let mgr = IssueSourceManager::new(&self.conn);
                         match mgr.add(&repo_id, "github", &config_json, &repo_slug) {
                             Ok(_) => {
@@ -203,10 +201,10 @@ impl App {
                             }
                         }
                     }
-                    None => {
+                    Err(e) => {
                         self.state.modal = Modal::Error {
                             message: format!(
-                                "Cannot infer GitHub owner/repo from remote URL: {remote_url}"
+                                "Cannot infer GitHub owner/repo from remote URL: {remote_url}: {e}"
                             ),
                         };
                     }

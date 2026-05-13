@@ -18,11 +18,17 @@ impl App {
         self.state.data.tickets = ticket_syncer.list(None).unwrap_or_default();
 
         let issue_source_mgr = IssueSourceManager::new(&self.conn);
-        let source_counts = issue_source_mgr.count_by_repo().unwrap_or_default();
-        self.state.data.repo_has_issue_source = source_counts
-            .into_iter()
-            .map(|(id, count)| (id, count > 0))
-            .collect();
+        match issue_source_mgr.count_by_repo() {
+            Ok(source_counts) => {
+                self.state.data.repo_has_issue_source = source_counts
+                    .into_iter()
+                    .map(|(id, count)| (id, count > 0))
+                    .collect();
+            }
+            Err(e) => {
+                tracing::warn!("failed to load issue source counts: {e}");
+            }
+        }
 
         self.state.data.latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
 
