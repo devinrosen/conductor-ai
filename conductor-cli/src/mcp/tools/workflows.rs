@@ -1442,6 +1442,32 @@ workflow wt-only-wf {
         found.id
     }
 
+    /// Helper: invoke `tool_run_workflow` with a ticket_id under `inputs`, and
+    /// return the resulting `(is_error, response_text)` for assertion.
+    fn run_workflow_with_ticket_id(
+        conductor: &Conductor,
+        workflow: &str,
+        repo: &str,
+        ticket_id: &str,
+    ) -> (Option<bool>, String) {
+        let mut inputs_map = serde_json::Map::new();
+        inputs_map.insert(
+            "ticket_id".to_string(),
+            Value::String(ticket_id.to_string()),
+        );
+        let mut args = serde_json::Map::new();
+        args.insert("workflow".to_string(), Value::String(workflow.to_string()));
+        args.insert("repo".to_string(), Value::String(repo.to_string()));
+        args.insert("inputs".to_string(), Value::Object(inputs_map));
+
+        let result = tool_run_workflow(conductor, &args, &[]);
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.to_string())
+            .unwrap_or_default();
+        (result.is_error, text)
+    }
+
     #[test]
     fn test_run_workflow_resolves_ticket_id_from_inputs_by_source_id() {
         // When ticket_id is a short source ID (e.g. GitHub issue number), the handler
@@ -1451,25 +1477,9 @@ workflow wt-only-wf {
         let ticket_ulid = setup_repo_with_ticket(&_f, "tid-src-repo", "382");
         assert!(!ticket_ulid.is_empty());
 
-        let mut inputs_map = serde_json::Map::new();
-        inputs_map.insert("ticket_id".to_string(), Value::String("382".to_string()));
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "workflow".to_string(),
-            Value::String("nonexistent-wf".to_string()),
-        );
-        args.insert(
-            "repo".to_string(),
-            Value::String("tid-src-repo".to_string()),
-        );
-        args.insert("inputs".to_string(), Value::Object(inputs_map));
-
-        let result = tool_run_workflow(&conductor, &args, &[]);
-        assert_eq!(result.is_error, Some(true));
-        let text = result.content[0]
-            .as_text()
-            .map(|t| t.text.as_str())
-            .unwrap_or("");
+        let (is_error, text) =
+            run_workflow_with_ticket_id(&conductor, "nonexistent-wf", "tid-src-repo", "382");
+        assert_eq!(is_error, Some(true));
         // Must NOT fail with "ticket_id '382' not found" — resolution succeeded.
         assert!(
             !text.contains("ticket_id '382' not found"),
@@ -1493,25 +1503,13 @@ workflow wt-only-wf {
             "seeded ticket should have a 26-char ULID"
         );
 
-        let mut inputs_map = serde_json::Map::new();
-        inputs_map.insert("ticket_id".to_string(), Value::String(ticket_ulid.clone()));
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "workflow".to_string(),
-            Value::String("nonexistent-wf".to_string()),
+        let (is_error, text) = run_workflow_with_ticket_id(
+            &conductor,
+            "nonexistent-wf",
+            "tid-ulid-repo",
+            &ticket_ulid,
         );
-        args.insert(
-            "repo".to_string(),
-            Value::String("tid-ulid-repo".to_string()),
-        );
-        args.insert("inputs".to_string(), Value::Object(inputs_map));
-
-        let result = tool_run_workflow(&conductor, &args, &[]);
-        assert_eq!(result.is_error, Some(true));
-        let text = result.content[0]
-            .as_text()
-            .map(|t| t.text.as_str())
-            .unwrap_or("");
+        assert_eq!(is_error, Some(true));
         // Must NOT fail with a ticket-not-found message.
         assert!(
             !text.contains("not found in repo"),
@@ -1541,22 +1539,9 @@ workflow wt-only-wf {
                 .expect("register repo");
         }
 
-        let mut inputs_map = serde_json::Map::new();
-        inputs_map.insert("ticket_id".to_string(), Value::String("99999".to_string()));
-        let mut args = serde_json::Map::new();
-        args.insert("workflow".to_string(), Value::String("any-wf".to_string()));
-        args.insert(
-            "repo".to_string(),
-            Value::String("tid-unknown-repo".to_string()),
-        );
-        args.insert("inputs".to_string(), Value::Object(inputs_map));
-
-        let result = tool_run_workflow(&conductor, &args, &[]);
-        assert_eq!(result.is_error, Some(true));
-        let text = result.content[0]
-            .as_text()
-            .map(|t| t.text.as_str())
-            .unwrap_or("");
+        let (is_error, text) =
+            run_workflow_with_ticket_id(&conductor, "any-wf", "tid-unknown-repo", "99999");
+        assert_eq!(is_error, Some(true));
         assert!(
             text.contains("ticket_id '99999' not found"),
             "expected ticket-not-found error; got: {text}"
