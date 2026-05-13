@@ -1,5 +1,6 @@
 ---
 source: conductor-tui/tests/tui_snapshots.rs
+assertion_line: 239
 expression: render_to_string(&state)
 ---
 "┌ Info ──────────────────────────────────────────────────────────────────────┐┌ Workflow Runs (my-app) (H: show history┐"
@@ -19,7 +20,7 @@ expression: render_to_string(&state)
 "│(loading…)                                                                  ││                                        │"
 "└────────────────────────────────────────────────────────────────────────────┘│                                        │"
 "┌ Tickets (hiding closed, sort: #↓) ─────────────────────────────────────────┐│                                        │"
-"│                                                                            ││                                        │"
+"│⚠ No issue source configured. Press M to manage sources.                    ││                                        │"
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"

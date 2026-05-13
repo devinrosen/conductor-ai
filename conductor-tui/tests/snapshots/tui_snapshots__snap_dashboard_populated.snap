@@ -1,12 +1,13 @@
 ---
 source: conductor-tui/tests/tui_snapshots.rs
+assertion_line: 221
 expression: render_to_string(&state)
 ---
 "┌ Repos & Worktrees (2 active) ──────────────────────────────────────────────┐┌ All Workflow Runs (H: show history, V: ┐"
-"│● my-app                                                                    ││                                        │"
+"│● my-app ⚠ no source                                                        ││                                        │"
 "│  ├ feat-123-add-login                                                      ││                                        │"
 "│  └ fix-456-null-ptr                                                        ││                                        │"
-"│○ backend-api                                                               ││                                        │"
+"│○ backend-api ⚠ no source                                                   ││                                        │"
 "│  └ [merged]  feat-789-auth                                                 ││                                        │"
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"

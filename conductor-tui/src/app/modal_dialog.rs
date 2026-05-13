@@ -183,9 +183,8 @@ impl App {
                         let mgr = IssueSourceManager::new(&self.conn);
                         match mgr.add(&repo_id, "github", &config_json, &repo_slug) {
                             Ok(_) => {
-                                self.state.status_message = Some(format!(
-                                    "Added github issue source for {repo_slug}"
-                                ));
+                                self.state.status_message =
+                                    Some(format!("Added github issue source for {repo_slug}"));
                                 self.refresh_data();
                                 if let Some(ref tx) = self.bg_tx.clone() {
                                     crate::background::spawn_ticket_sync_for_repo(

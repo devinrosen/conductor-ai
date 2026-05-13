@@ -1,8 +1,8 @@
 use ratatui::widgets::ListState;
 
 use crate::state::{
-    info_row, model_picker_total, repo_info_row, workflow_run_info_row, ConfirmAction, DashboardRow,
-    FormField, Modal, RepoDetailFocus, View, WorkflowDefFocus, WorkflowPickerItem,
+    info_row, model_picker_total, repo_info_row, workflow_run_info_row, ConfirmAction,
+    DashboardRow, FormField, Modal, RepoDetailFocus, View, WorkflowDefFocus, WorkflowPickerItem,
     WorkflowRunDetailFocus, WorkflowsFocus, WorktreeDetailFocus,
 };
 

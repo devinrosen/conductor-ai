@@ -258,12 +258,13 @@ mod tests {
             .unwrap();
         let counts = mgr.count_by_repo().unwrap();
         assert_eq!(counts.get("r1").copied(), Some(1));
-        assert!(counts.get("r2").is_none());
+        assert!(!counts.contains_key("r2"));
     }
 
     #[test]
     fn test_count_by_repo_multi_repo() {
         let conn = setup_db();
+        crate::test_helpers::insert_test_repo(&conn, "r2", "repo-two", "/tmp/repo2");
         let mgr = IssueSourceManager::new(&conn);
         mgr.add("r1", "github", r#"{"owner":"a","repo":"b"}"#, "r1")
             .unwrap();
