@@ -108,7 +108,6 @@ pub enum Action {
     SyncTickets,
     #[allow(dead_code)]
     LinkTicket,
-    #[allow(dead_code)]
     ManageIssueSources,
     IssueSourceAdd,
     IssueSourceDelete,

@@ -526,6 +526,12 @@ pub enum ConfirmAction {
         runtime: String,
         key: String,
     },
+    /// Auto-add a github issue source inferred from the repo's remote URL.
+    AddGithubIssueSource {
+        repo_id: String,
+        repo_slug: String,
+        remote_url: String,
+    },
     Quit,
 }
 

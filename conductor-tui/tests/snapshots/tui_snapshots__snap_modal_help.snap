@@ -31,7 +31,7 @@ expression: render_to_string(&state)
 "│                       │  i                   Adopt existing worktree                         │                       │"
 "│                       │  d                   Delete (worktree/repo)                          │                       │"
 "│                       │  s                   Sync tickets                                    │                       │"
-"│                       │  S                   Manage issue sources                            │                       │"
+"│                       │  S                   Open settings                                   │                       │"
 "│                       │  A                   Toggle closed tickets                           │                       │"
 "│                       │  w                   Open workflow picker                            │                       │"
 "│                       │  /                   Filter/search                                   │                       │"

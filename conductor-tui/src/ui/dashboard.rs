@@ -44,13 +44,26 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                 } else {
                     Span::styled("○ ", Style::default().fg(state.theme.label_secondary))
                 };
-                ListItem::new(Line::from(vec![
+                let has_source = state
+                    .data
+                    .repo_has_issue_source
+                    .get(&repo.id)
+                    .copied()
+                    .unwrap_or(false);
+                let mut spans = vec![
                     dot,
                     Span::styled(
                         repo.slug.clone(),
                         Style::default().add_modifier(Modifier::BOLD),
                     ),
-                ]))
+                ];
+                if !has_source {
+                    spans.push(Span::styled(
+                        " ⚠ no source",
+                        Style::default().fg(state.theme.label_warning),
+                    ));
+                }
+                ListItem::new(Line::from(spans))
             }
             DashboardRow::Worktree { idx, prefix } => {
                 let Some(wt) = state.data.worktrees.get(*idx) else {
