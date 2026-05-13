@@ -1454,8 +1454,14 @@ workflow wt-only-wf {
         let mut inputs_map = serde_json::Map::new();
         inputs_map.insert("ticket_id".to_string(), Value::String("382".to_string()));
         let mut args = serde_json::Map::new();
-        args.insert("workflow".to_string(), Value::String("nonexistent-wf".to_string()));
-        args.insert("repo".to_string(), Value::String("tid-src-repo".to_string()));
+        args.insert(
+            "workflow".to_string(),
+            Value::String("nonexistent-wf".to_string()),
+        );
+        args.insert(
+            "repo".to_string(),
+            Value::String("tid-src-repo".to_string()),
+        );
         args.insert("inputs".to_string(), Value::Object(inputs_map));
 
         let result = tool_run_workflow(&conductor, &args, &[]);
@@ -1481,13 +1487,23 @@ workflow wt-only-wf {
         // When ticket_id is the internal ULID, the handler must accept it directly.
         let (_f, conductor) = make_test_conductor();
         let ticket_ulid = setup_repo_with_ticket(&_f, "tid-ulid-repo", "500");
-        assert_eq!(ticket_ulid.len(), 26, "seeded ticket should have a 26-char ULID");
+        assert_eq!(
+            ticket_ulid.len(),
+            26,
+            "seeded ticket should have a 26-char ULID"
+        );
 
         let mut inputs_map = serde_json::Map::new();
         inputs_map.insert("ticket_id".to_string(), Value::String(ticket_ulid.clone()));
         let mut args = serde_json::Map::new();
-        args.insert("workflow".to_string(), Value::String("nonexistent-wf".to_string()));
-        args.insert("repo".to_string(), Value::String("tid-ulid-repo".to_string()));
+        args.insert(
+            "workflow".to_string(),
+            Value::String("nonexistent-wf".to_string()),
+        );
+        args.insert(
+            "repo".to_string(),
+            Value::String("tid-ulid-repo".to_string()),
+        );
         args.insert("inputs".to_string(), Value::Object(inputs_map));
 
         let result = tool_run_workflow(&conductor, &args, &[]);
@@ -1516,7 +1532,12 @@ workflow wt-only-wf {
             let conn = open_database(_f.path()).expect("open db");
             let config = Config::default();
             RepoManager::new(&conn, &config)
-                .register("tid-unknown-repo", "/tmp/test-repo", "https://github.com/x/y", None)
+                .register(
+                    "tid-unknown-repo",
+                    "/tmp/test-repo",
+                    "https://github.com/x/y",
+                    None,
+                )
                 .expect("register repo");
         }
 
@@ -1524,7 +1545,10 @@ workflow wt-only-wf {
         inputs_map.insert("ticket_id".to_string(), Value::String("99999".to_string()));
         let mut args = serde_json::Map::new();
         args.insert("workflow".to_string(), Value::String("any-wf".to_string()));
-        args.insert("repo".to_string(), Value::String("tid-unknown-repo".to_string()));
+        args.insert(
+            "repo".to_string(),
+            Value::String("tid-unknown-repo".to_string()),
+        );
         args.insert("inputs".to_string(), Value::Object(inputs_map));
 
         let result = tool_run_workflow(&conductor, &args, &[]);
