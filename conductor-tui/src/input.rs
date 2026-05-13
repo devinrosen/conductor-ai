@@ -787,6 +787,9 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         if let KeyCode::Char('I') = key.code {
             return Action::ToggleAgentIssues;
         }
+        if let KeyCode::Char('M') = key.code {
+            return Action::ManageIssueSources;
+        }
     }
 
     // Normal keybindings

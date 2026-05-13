@@ -264,7 +264,14 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         .max()
         .unwrap_or("unclaimed".len());
 
-    let ticket_items: Vec<ListItem> = state
+    let has_source = state
+        .selected_repo_id
+        .as_ref()
+        .and_then(|id| state.data.repo_has_issue_source.get(id))
+        .copied()
+        .unwrap_or(false);
+
+    let mut ticket_items: Vec<ListItem> = state
         .filtered_detail_tickets
         .iter()
         .enumerate()
@@ -357,6 +364,15 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
             ListItem::new(Line::from(spans))
         })
         .collect();
+    if !has_source {
+        ticket_items.insert(
+            0,
+            ListItem::new(Line::from(Span::styled(
+                "⚠ No issue source configured. Press M to manage sources.",
+                Style::default().fg(state.theme.label_warning),
+            ))),
+        );
+    }
 
     let hiding = !state.show_closed_tickets;
     let sort_frag = state.detail_ticket_sort.title_fragment();

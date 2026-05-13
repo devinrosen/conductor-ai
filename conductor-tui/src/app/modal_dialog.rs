@@ -161,10 +161,54 @@ impl App {
                         };
                         self.state.status_message =
                             Some(format!("Removed issue source from {repo_slug}"));
+                        self.refresh_data();
                     }
                     Err(e) => {
                         self.state.modal = Modal::Error {
                             message: format!("Failed to remove source: {e}"),
+                        };
+                    }
+                }
+            }
+            ConfirmAction::AddGithubIssueSource {
+                repo_id,
+                repo_slug,
+                remote_url,
+            } => {
+                use conductor_core::github;
+                match github::parse_github_remote(&remote_url) {
+                    Some((owner, repo)) => {
+                        let config_json =
+                            serde_json::json!({"owner": owner, "repo": repo}).to_string();
+                        let mgr = IssueSourceManager::new(&self.conn);
+                        match mgr.add(&repo_id, "github", &config_json, &repo_slug) {
+                            Ok(_) => {
+                                self.state.status_message = Some(format!(
+                                    "Added github issue source for {repo_slug}"
+                                ));
+                                self.refresh_data();
+                                if let Some(ref tx) = self.bg_tx.clone() {
+                                    crate::background::spawn_ticket_sync_for_repo(
+                                        tx.clone(),
+                                        repo_id,
+                                        repo_slug,
+                                        remote_url,
+                                        true,
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                self.state.modal = Modal::Error {
+                                    message: format!("Failed to add github source: {e}"),
+                                };
+                            }
+                        }
+                    }
+                    None => {
+                        self.state.modal = Modal::Error {
+                            message: format!(
+                                "Cannot infer GitHub owner/repo from remote URL: {remote_url}"
+                            ),
                         };
                     }
                 }

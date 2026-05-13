@@ -87,6 +87,9 @@ pub struct DataCache {
     pub fan_out_items: HashMap<String, Vec<FanOutItemRow>>,
     /// Cumulative completed token totals per worktree (worktree_id -> (input, output)).
     pub completed_token_totals_by_worktree: HashMap<String, (i64, i64)>,
+    /// repo_id -> true when the repo has at least one configured issue source.
+    /// Missing entries should be treated as false (no source).
+    pub repo_has_issue_source: HashMap<String, bool>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.

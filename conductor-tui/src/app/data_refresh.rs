@@ -1,4 +1,5 @@
 use conductor_core::agent::AgentManager;
+use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::TicketSyncer;
 use conductor_core::worktree::WorktreeManager;
@@ -15,6 +16,13 @@ impl App {
         self.state.data.repos = repo_mgr.list().unwrap_or_default();
         self.state.data.worktrees = wt_mgr.list(None, true).unwrap_or_default();
         self.state.data.tickets = ticket_syncer.list(None).unwrap_or_default();
+
+        let issue_source_mgr = IssueSourceManager::new(&self.conn);
+        let source_counts = issue_source_mgr.count_by_repo().unwrap_or_default();
+        self.state.data.repo_has_issue_source = source_counts
+            .into_iter()
+            .map(|(id, count)| (id, count > 0))
+            .collect();
 
         self.state.data.latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
 

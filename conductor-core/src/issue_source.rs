@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use rusqlite::{named_params, Connection};
 use serde::{Deserialize, Serialize};
 
@@ -103,6 +105,25 @@ impl<'a> IssueSourceManager<'a> {
             named_params! { ":id": id },
         )?;
         Ok(())
+    }
+
+    /// Return a map of repo_id → source count for all repos that have at least one source.
+    /// Repos with no sources are absent from the map (treat missing as 0).
+    pub fn count_by_repo(&self) -> Result<HashMap<String, usize>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT repo_id, COUNT(*) FROM repo_issue_sources GROUP BY repo_id")?;
+        let rows = stmt.query_map([], |row| {
+            let repo_id: String = row.get(0)?;
+            let count: i64 = row.get(1)?;
+            Ok((repo_id, count as usize))
+        })?;
+        let mut map = HashMap::new();
+        for row in rows {
+            let (repo_id, count) = row?;
+            map.insert(repo_id, count);
+        }
+        Ok(map)
     }
 
     /// Remove an issue source by repo_id and source_type.
@@ -219,6 +240,45 @@ mod tests {
 
         let sources = mgr.list("r1").unwrap();
         assert!(sources.is_empty());
+    }
+
+    #[test]
+    fn test_count_by_repo_empty() {
+        let conn = setup_db();
+        let mgr = IssueSourceManager::new(&conn);
+        let counts = mgr.count_by_repo().unwrap();
+        assert!(counts.is_empty());
+    }
+
+    #[test]
+    fn test_count_by_repo_single() {
+        let conn = setup_db();
+        let mgr = IssueSourceManager::new(&conn);
+        mgr.add("r1", "github", r#"{"owner":"a","repo":"b"}"#, "r1")
+            .unwrap();
+        let counts = mgr.count_by_repo().unwrap();
+        assert_eq!(counts.get("r1").copied(), Some(1));
+        assert!(counts.get("r2").is_none());
+    }
+
+    #[test]
+    fn test_count_by_repo_multi_repo() {
+        let conn = setup_db();
+        let mgr = IssueSourceManager::new(&conn);
+        mgr.add("r1", "github", r#"{"owner":"a","repo":"b"}"#, "r1")
+            .unwrap();
+        mgr.add(
+            "r1",
+            "jira",
+            r#"{"jql":"project=X","url":"https://jira.example.com"}"#,
+            "r1",
+        )
+        .unwrap();
+        mgr.add("r2", "github", r#"{"owner":"c","repo":"d"}"#, "r2")
+            .unwrap();
+        let counts = mgr.count_by_repo().unwrap();
+        assert_eq!(counts.get("r1").copied(), Some(2));
+        assert_eq!(counts.get("r2").copied(), Some(1));
     }
 
     #[test]

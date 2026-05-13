@@ -1,9 +1,9 @@
 use ratatui::widgets::ListState;
 
 use crate::state::{
-    info_row, model_picker_total, repo_info_row, workflow_run_info_row, DashboardRow, FormField,
-    Modal, RepoDetailFocus, View, WorkflowDefFocus, WorkflowPickerItem, WorkflowRunDetailFocus,
-    WorkflowsFocus, WorktreeDetailFocus,
+    info_row, model_picker_total, repo_info_row, workflow_run_info_row, ConfirmAction, DashboardRow,
+    FormField, Modal, RepoDetailFocus, View, WorkflowDefFocus, WorkflowPickerItem,
+    WorkflowRunDetailFocus, WorkflowsFocus, WorktreeDetailFocus,
 };
 
 use super::helpers::{clamp_increment, max_scroll, wrap_decrement, wrap_increment};
@@ -868,6 +868,33 @@ impl App {
             self.reload_repo_agent_events();
             self.refresh_pending_repo_feedback();
             *self.state.repo_agent_list_state.borrow_mut() = ratatui::widgets::ListState::default();
+
+            // First-run prompt: if repo has no issue sources and is GitHub-hosted, offer to add one.
+            let has_source = self
+                .state
+                .data
+                .repo_has_issue_source
+                .get(&repo_id)
+                .copied()
+                .unwrap_or(false);
+            if !has_source {
+                let repo_remote = repo.remote_url.clone();
+                if let Some((owner, gh_repo)) =
+                    conductor_core::github::parse_github_remote(&repo_remote)
+                {
+                    self.state.modal = Modal::Confirm {
+                        title: "Add GitHub issue source?".to_string(),
+                        message: format!(
+                            "This repo has no issue source. Add github source for {owner}/{gh_repo} now?"
+                        ),
+                        on_confirm: ConfirmAction::AddGithubIssueSource {
+                            repo_id,
+                            repo_slug: repo.slug.clone(),
+                            remote_url: repo_remote,
+                        },
+                    };
+                }
+            }
         }
     }
 

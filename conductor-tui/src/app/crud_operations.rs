@@ -252,6 +252,7 @@ impl App {
                 };
                 self.state.status_message =
                     Some(format!("Added {type_str} source for {repo_slug}"));
+                self.refresh_data();
             }
             Err(e) => {
                 self.state.modal = Modal::Error {

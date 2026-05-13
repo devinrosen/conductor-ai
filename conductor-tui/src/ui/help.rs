@@ -47,12 +47,21 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
         help_line("i", "Adopt existing worktree", theme),
         help_line("d", "Delete (worktree/repo)", theme),
         help_line("s", "Sync tickets", theme),
-        help_line("S", "Manage issue sources", theme),
+        help_line("S", "Open settings", theme),
         help_line("A", "Toggle closed tickets", theme),
         help_line("w", "Open workflow picker", theme),
         help_line("/", "Filter/search", theme),
         help_line("T", "Open theme picker", theme),
         help_line("L", "Filter tickets by label (repo detail)", theme),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Repo Detail",
+            Style::default()
+                .fg(theme.label_accent)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        help_line("M", "Manage issue sources", theme),
         Line::from(""),
         Line::from(Span::styled(
             "Repo Detail — Tickets",
