@@ -69,7 +69,7 @@ fn enriched_worktree_base() -> String {
          FROM worktrees w \
          {agent_join} \
          LEFT JOIN tickets t ON t.id = w.ticket_id",
-        cols = &*WORKTREE_COLUMNS_W,
+        cols = *WORKTREE_COLUMNS_W,
         agent_join = AGENT_LATEST_JOIN,
     )
 }
@@ -846,7 +846,7 @@ impl<'a> WorktreeManager<'a> {
         let base_query = match repo_slug {
             Some(_) => format!(
                 "SELECT {} FROM worktrees w JOIN repos r ON r.id = w.repo_id WHERE r.slug = :slug{} ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
-                &*WORKTREE_COLUMNS_W,
+                *WORKTREE_COLUMNS_W,
                 status_filter,
             ),
             None => format!(

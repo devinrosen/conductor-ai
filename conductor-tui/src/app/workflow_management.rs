@@ -890,10 +890,8 @@ impl App {
             }
             | WorkflowPickerTarget::PostCreate {
                 ref worktree_id, ..
-            } => {
-                if self.active_run_blocks_dispatch(worktree_id) {
-                    return;
-                }
+            } if self.active_run_blocks_dispatch(worktree_id) => {
+                return;
             }
             _ => {}
         }
