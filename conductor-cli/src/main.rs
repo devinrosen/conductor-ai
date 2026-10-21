@@ -15,12 +15,16 @@ use commands::{AgentCommands, Cli, Commands};
 
 fn main() -> Result<()> {
     // Initialize tracing subscriber so workflow engine log events appear on
-    // stderr for CLI users.  Respects RUST_LOG; defaults to `info`.
+    // stderr for CLI users.  Respects RUST_LOG; defaults to `info`.  The
+    // explicit stderr writer matters: the tracing_subscriber default is
+    // stdout, which `conductor mcp serve` reserves for JSON-RPC and which
+    // callers parse for command output.
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
+        .with_writer(std::io::stderr)
         .with_target(false)
         .init();
 
