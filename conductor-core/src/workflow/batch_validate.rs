@@ -6,8 +6,63 @@ use crate::prompt_config;
 use crate::schema_config;
 use runkon_flow::dsl::{
     default_skills_dir, detect_workflow_cycles, make_script_resolver, validate_script_steps,
-    validate_workflow_semantics, AgentRef, ValidationContext, ValidationError, WorkflowDef,
+    validate_workflow_semantics, AgentRef, ScriptNode, ValidationContext, ValidationError,
+    WorkflowDef, WorkflowNode,
 };
+
+/// Suffix shared by the legacy `<<<CONDUCTOR_OUTPUT>>>` and
+/// `<<<END_CONDUCTOR_OUTPUT>>>` markers, renamed to `FLOW_OUTPUT` in #2726.
+/// Since runkon-flow 0.6.2-alpha a script that prints them fails its step.
+const LEGACY_OUTPUT_MARKER: &str = "CONDUCTOR_OUTPUT>>>";
+
+fn collect_script_nodes<'a>(nodes: &'a [WorkflowNode], out: &mut Vec<&'a ScriptNode>) {
+    for node in nodes {
+        match node {
+            WorkflowNode::Script(s) => out.push(s),
+            other => {
+                if let Some(body) = other.body() {
+                    collect_script_nodes(body, out);
+                }
+            }
+        }
+    }
+}
+
+/// Report script steps whose script file still prints the legacy
+/// `<<<CONDUCTOR_OUTPUT>>>` block (#3042). Scripts that can't be resolved or
+/// read are skipped: `validate_script_steps` already reports missing ones.
+fn check_legacy_output_markers<F>(workflow: &WorkflowDef, resolver: &F) -> Vec<ValidationError>
+where
+    F: Fn(&str) -> std::result::Result<std::path::PathBuf, String>,
+{
+    let mut nodes = Vec::new();
+    collect_script_nodes(&workflow.body, &mut nodes);
+    collect_script_nodes(&workflow.always, &mut nodes);
+
+    nodes
+        .into_iter()
+        .filter(|node| !node.run.contains("{{"))
+        .filter_map(|node| {
+            let path = resolver(&node.run).ok()?;
+            let contents = std::fs::read_to_string(&path).ok()?;
+            contents
+                .contains(LEGACY_OUTPUT_MARKER)
+                .then(|| ValidationError {
+                    message: format!(
+                        "Script step '{}': {} prints the legacy <<<CONDUCTOR_OUTPUT>>> block, \
+                         which is no longer parsed; the step will fail at runtime",
+                        node.name,
+                        path.display()
+                    ),
+                    hint: Some(
+                        "rename <<<CONDUCTOR_OUTPUT>>> to <<<FLOW_OUTPUT>>> and \
+                         <<<END_CONDUCTOR_OUTPUT>>> to <<<END_FLOW_OUTPUT>>>"
+                            .to_string(),
+                    ),
+                })
+        })
+        .collect()
+}
 
 // ---------------------------------------------------------------------------
 // Batch workflow validation (orchestration)
@@ -258,6 +313,7 @@ where
         for err in script_errors {
             wf_errors.push(err);
         }
+        wf_errors.extend(check_legacy_output_markers(workflow, &script_resolver));
 
         warnings.extend(unknown_bots.iter().map(|b| BatchValidationWarning {
             message: format!("unknown bot name '{b}' (not in [github.apps])"),
@@ -496,5 +552,80 @@ mod tests {
             errs.iter().any(|e| e.message.contains("cycle")),
             "expected cycle detection error, got: {errs:?}"
         );
+    }
+
+    /// Write an executable script under `<dir>/.conductor/scripts/`.
+    fn write_script(dir: &std::path::Path, name: &str, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let scripts = dir.join(".conductor/scripts");
+        std::fs::create_dir_all(&scripts).unwrap();
+        let file = scripts.join(name);
+        std::fs::write(&file, body).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn batch_legacy_output_marker_in_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap();
+        write_script(
+            dir.path(),
+            "detect.sh",
+            "#!/bin/sh\necho '<<<CONDUCTOR_OUTPUT>>>'\necho '{}'\necho '<<<END_CONDUCTOR_OUTPUT>>>'\n",
+        );
+
+        let wf = parse_wf(
+            r#"workflow legacy {
+                meta { trigger = "manual" targets = ["worktree"] }
+                if prior.done {
+                    script detect { run = ".conductor/scripts/detect.sh" }
+                }
+            }"#,
+        );
+
+        let known_bots = HashSet::new();
+        let result = validate_workflows_batch(&[wf], &[], path, path, &known_bots, &failing_loader);
+
+        let errs = &result.entries[0].errors;
+        let legacy: Vec<_> = errs
+            .iter()
+            .filter(|e| e.message.contains("CONDUCTOR_OUTPUT"))
+            .collect();
+        assert_eq!(
+            legacy.len(),
+            1,
+            "expected one legacy marker error, got: {errs:?}"
+        );
+        assert!(legacy[0].message.contains("'detect'"));
+        assert!(legacy[0].message.contains("detect.sh"));
+        assert!(legacy[0]
+            .hint
+            .as_deref()
+            .unwrap_or("")
+            .contains("FLOW_OUTPUT"));
+    }
+
+    #[test]
+    fn batch_flow_output_script_has_no_legacy_marker_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap();
+        write_script(
+            dir.path(),
+            "detect.sh",
+            "#!/bin/sh\necho '<<<FLOW_OUTPUT>>>'\necho '{}'\necho '<<<END_FLOW_OUTPUT>>>'\n",
+        );
+
+        let wf = parse_wf(
+            r#"workflow current {
+                meta { trigger = "manual" targets = ["worktree"] }
+                script detect { run = ".conductor/scripts/detect.sh" }
+            }"#,
+        );
+
+        let known_bots = HashSet::new();
+        let result = validate_workflows_batch(&[wf], &[], path, path, &known_bots, &failing_loader);
+
+        let errs = &result.entries[0].errors;
+        assert!(errs.is_empty(), "expected no errors, got: {errs:?}");
     }
 }
