@@ -578,7 +578,7 @@ impl App {
         textarea.set_placeholder_text(&placeholder);
 
         self.state.modal = Modal::AgentPrompt {
-            title: format!("{title_prefix}: {}", &fb.prompt),
+            title: format!("{title_prefix}: {}", fb.prompt),
             prompt: fb.prompt.clone(),
             textarea: Box::new(textarea),
             on_submit: InputAction::FeedbackResponse {

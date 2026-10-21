@@ -247,7 +247,7 @@ pub fn get_workflow_steps(
             "{} \
                  WHERE s.workflow_run_id = :workflow_run_id \
                  ORDER BY s.position",
-            &*STEP_SELECT_EXPANDED
+            *STEP_SELECT_EXPANDED
         ),
         named_params! { ":workflow_run_id": workflow_run_id },
         row_to_workflow_step,
@@ -306,7 +306,7 @@ fn fetch_steps_for_runs_filtered(
         "{} \
              WHERE s.workflow_run_id IN ({placeholders}){status_clause} \
              ORDER BY s.workflow_run_id, s.position",
-        &*STEP_SELECT_EXPANDED
+        *STEP_SELECT_EXPANDED
     );
     let combined = run_ids
         .iter()
@@ -329,7 +329,7 @@ pub fn get_step_by_id(conn: &Connection, step_id: &str) -> Result<Option<Workflo
     let mut stmt = conn.prepare_cached(&format!(
         "{} \
              WHERE s.id = :id",
-        &*STEP_SELECT_EXPANDED
+        *STEP_SELECT_EXPANDED
     ))?;
     let mut rows = stmt.query_map(named_params! { ":id": step_id }, row_to_workflow_step)?;
     match rows.next() {
@@ -358,7 +358,7 @@ pub fn find_step_by_name_and_iteration(
                AND s.status != 'completed' \
              ORDER BY s.id DESC \
              LIMIT 1",
-        &*STEP_SELECT_EXPANDED
+        *STEP_SELECT_EXPANDED
     ))?;
     let mut rows = stmt.query_map(
         named_params! {
@@ -855,7 +855,7 @@ pub fn find_waiting_gates_for_runs(
                AND s.gate_approved_at IS NULL \
                AND s.status IN ('running', 'waiting') \
              ORDER BY s.workflow_run_id, s.position DESC",
-        &*STEP_SELECT_EXPANDED
+        *STEP_SELECT_EXPANDED
     );
     let steps: Vec<WorkflowRunStep> = {
         let mut stmt = conn.prepare(&sql)?;
@@ -886,7 +886,7 @@ pub fn find_waiting_gate(
                      WHERE s.workflow_run_id = :workflow_run_id AND s.gate_type IS NOT NULL AND s.gate_approved_at IS NULL \
                        AND s.status IN ('running', 'waiting') \
                      ORDER BY s.position DESC LIMIT 1",
-                    &*STEP_SELECT_EXPANDED
+                    *STEP_SELECT_EXPANDED
                 ),
                 named_params! { ":workflow_run_id": workflow_run_id },
                 row_to_workflow_step,
@@ -909,7 +909,7 @@ pub fn list_all_waiting_gate_steps(
              WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
              AND r.status IN ({placeholders}) \
              ORDER BY s.started_at",
-        cols = &*STEP_COLUMNS_WITH_PREFIX,
+        cols = *STEP_COLUMNS_WITH_PREFIX,
     );
     crate::db::query_collect(
         conn,
@@ -939,7 +939,7 @@ pub fn list_waiting_gate_steps_for_repo(
              AND r.status IN ({status_placeholders}) \
              AND (r.repo_id = ? OR wt.repo_id = ?) \
              ORDER BY s.started_at",
-            cols = &*STEP_COLUMNS_WITH_PREFIX,
+            cols = *STEP_COLUMNS_WITH_PREFIX,
         );
     let mut all_params: Vec<rusqlite::types::Value> = active_strings
         .iter()
