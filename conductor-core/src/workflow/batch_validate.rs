@@ -606,6 +606,41 @@ mod tests {
     }
 
     #[test]
+    fn batch_legacy_output_marker_in_always_block_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap();
+        write_script(
+            dir.path(),
+            "cleanup.sh",
+            "#!/bin/sh\necho '<<<CONDUCTOR_OUTPUT>>>'\necho '{}'\necho '<<<END_CONDUCTOR_OUTPUT>>>'\n",
+        );
+
+        let wf = parse_wf(
+            r#"workflow legacy-always {
+                meta { trigger = "manual" targets = ["worktree"] }
+                always {
+                    script cleanup { run = ".conductor/scripts/cleanup.sh" }
+                }
+            }"#,
+        );
+        assert_eq!(
+            wf.always.len(),
+            1,
+            "script should parse into the always block"
+        );
+
+        let known_bots = HashSet::new();
+        let result = validate_workflows_batch(&[wf], &[], path, path, &known_bots, &failing_loader);
+
+        let errs = &result.entries[0].errors;
+        assert!(
+            errs.iter()
+                .any(|e| e.message.contains("'cleanup'") && e.message.contains("CONDUCTOR_OUTPUT")),
+            "expected legacy marker error for always-block script, got: {errs:?}"
+        );
+    }
+
+    #[test]
     fn batch_flow_output_script_has_no_legacy_marker_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().to_str().unwrap();
