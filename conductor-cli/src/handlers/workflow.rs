@@ -435,6 +435,30 @@ pub fn handle_workflow(
                 })?;
             }
         }
+        WorkflowCommands::Wait {
+            id,
+            timeout,
+            stall_after,
+            json,
+        } => {
+            let opts = conductor_core::workflow::WaitOptions::with_overrides(
+                timeout.map(std::time::Duration::from_secs),
+                stall_after.map(std::time::Duration::from_secs),
+            );
+            let summary = conductor_core::workflow::wait_for_workflow_run(conn, &id, &opts)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                print!(
+                    "{}",
+                    conductor_core::workflow::format_wait_summary(&summary)
+                );
+            }
+            let code = summary.outcome.exit_code();
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
         WorkflowCommands::RunShow { id } => {
             match conductor_core::workflow::get_workflow_run(conn, &id)? {
                 Some(run) => {

@@ -116,6 +116,10 @@ pub use manager::steps::{
     set_step_output_file, set_step_parallel_group, set_step_subprocess_pid,
     update_step_child_run_id, update_step_status, update_step_status_full,
 };
+pub use manager::wait::{
+    format_wait_summary, wait_for_workflow_run, WaitOptions, WaitOutcome, WaitStepSummary,
+    WaitSummary,
+};
 pub use manager::{InvalidWorkflowEntry, StepMetrics};
 pub use output::{parse_flow_output, FlowOutput};
 pub use runkon_flow::traits::persistence::{

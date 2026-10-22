@@ -350,3 +350,122 @@ fn workflow_run_background_reports_unknown_worktree() {
         .failure()
         .stderr(predicate::str::contains("worktree not found"));
 }
+
+/// Insert a workflow run with the given status/timestamps into the test DB; returns its id.
+fn insert_wait_run(
+    home: &std::path::Path,
+    status: &str,
+    started_offset: &str,
+    lease: &str,
+) -> String {
+    let conn = conductor_core::db::open_database(&home.join("conductor.db")).unwrap();
+    let parent = conductor_core::agent::AgentManager::new(&conn)
+        .create_run(None, "workflow", None)
+        .unwrap();
+    let run = conductor_core::workflow::create_workflow_run(
+        &conn, "wait-wf", None, &parent.id, false, "manual", None,
+    )
+    .unwrap();
+    conn.execute(
+        &format!(
+            "UPDATE workflow_runs SET status = ?1, \
+             started_at = strftime('%Y-%m-%dT%H:%M:%SZ','now','{started_offset}'), \
+             lease_until = {lease} WHERE id = ?2"
+        ),
+        rusqlite::params![status, run.id],
+    )
+    .unwrap();
+    if status == "running" {
+        // Keep the startup reaper from failing a running run that has no active step.
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, position, status, started_at) \
+             VALUES (?1, ?2, 'busy', 'actor', 0, 'running', \
+                     strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 hours'))",
+            rusqlite::params![conductor_core::new_id(), run.id],
+        )
+        .unwrap();
+    }
+    run.id.clone()
+}
+
+#[test]
+fn workflow_wait_exit_codes() {
+    let home = tempfile::tempdir().unwrap();
+    let cases = [
+        (
+            "completed",
+            "NULL",
+            "-1 hours",
+            vec![],
+            Some(0),
+            "outcome: completed",
+        ),
+        (
+            "failed",
+            "NULL",
+            "-1 hours",
+            vec![],
+            Some(1),
+            "outcome: failed",
+        ),
+        (
+            "cancelled",
+            "NULL",
+            "-1 hours",
+            vec![],
+            Some(1),
+            "outcome: cancelled",
+        ),
+        (
+            "running",
+            "datetime('now','+60 seconds')",
+            "-1 hours",
+            vec!["--timeout", "0"],
+            Some(2),
+            "outcome: timeout",
+        ),
+        (
+            "running",
+            "datetime('now','-300 seconds')",
+            "-1 hours",
+            vec!["--timeout", "30", "--stall-after", "10"],
+            Some(3),
+            "outcome: stalled",
+        ),
+    ];
+    for (status, lease, started, extra, code, want) in cases {
+        let id = insert_wait_run(home.path(), status, started, lease);
+        conductor_cmd(home.path())
+            .args(["workflow", "wait", &id])
+            .args(&extra)
+            .assert()
+            .code(code.unwrap())
+            .stdout(predicate::str::contains(want));
+    }
+}
+
+#[test]
+fn workflow_wait_json_output() {
+    let home = tempfile::tempdir().unwrap();
+    let id = insert_wait_run(home.path(), "failed", "-1 hours", "NULL");
+    let out = conductor_cmd(home.path())
+        .args(["workflow", "wait", &id, "--json"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(v["outcome"], "failed");
+    assert_eq!(v["run_id"], id);
+}
+
+#[test]
+fn workflow_wait_unknown_run_fails() {
+    let home = tempfile::tempdir().unwrap();
+    conductor_cmd(home.path())
+        .args(["workflow", "wait", "nope"])
+        .assert()
+        .failure();
+}
