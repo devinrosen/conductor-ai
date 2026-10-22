@@ -25,6 +25,7 @@ workflow review-pr {
 
   inputs {
     scope default = "full"
+    since default = ""
   }
 
   script detect-db-migrations {
