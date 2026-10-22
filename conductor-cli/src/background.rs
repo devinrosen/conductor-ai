@@ -69,17 +69,30 @@ pub fn notify_fd(command: &crate::commands::Commands) -> Option<i32> {
     }
 }
 
-/// Report a failure that happened before [`run_as_background_child`] took over
-/// (opening the database, resolving the repo, worktree or workflow) to the
-/// waiting parent as an `ERROR:` line, since this process has no visible stdio.
-pub fn report_startup_error(write_fd: i32, err: &anyhow::Error) {
-    let msg = format!("ERROR:{}\n", format!("{err:#}").replace('\n', " "));
+/// Prefix of the line the child sends instead of a run ID when it fails to start.
+const ERROR_PREFIX: &str = "ERROR:";
+
+/// The pipe line reporting a startup failure; newlines are flattened so the
+/// parent reads it as one line.
+fn error_line(msg: &str) -> String {
+    format!("{ERROR_PREFIX}{}\n", msg.replace('\n', " "))
+}
+
+/// Write one line to the parent's pipe and close the child's end.
+fn send_to_parent(write_fd: i32, line: &str) {
     // SAFETY: write_fd came from the parent's pipe via NOTIFY_FD_FLAG. A stale
     // or invalid fd only makes write/close fail, which is harmless here.
     unsafe {
-        libc::write(write_fd, msg.as_ptr() as *const libc::c_void, msg.len());
+        libc::write(write_fd, line.as_ptr() as *const libc::c_void, line.len());
         libc::close(write_fd);
     }
+}
+
+/// Report a failure that happened before [`run_as_background_child`] took over
+/// (opening the database, resolving the repo, worktree or workflow) to the
+/// waiting parent, since this process has no visible stdio.
+pub fn report_startup_error(write_fd: i32, err: &anyhow::Error) {
+    send_to_parent(write_fd, &error_line(&format!("{err:#}")));
 }
 
 /// Start this same `conductor workflow run` invocation as a detached background
@@ -96,8 +109,14 @@ pub fn spawn_background_workflow() -> Result<String> {
     let (read_fd, write_fd) = (fds[0], fds[1]);
     // The child only needs the write end; keep the read end out of it.
     // SAFETY: read_fd is a valid fd from pipe().
-    unsafe {
-        libc::fcntl(read_fd, libc::F_SETFD, libc::FD_CLOEXEC);
+    if unsafe { libc::fcntl(read_fd, libc::F_SETFD, libc::FD_CLOEXEC) } == -1 {
+        let err = std::io::Error::last_os_error();
+        // SAFETY: both fds are valid fds from pipe().
+        unsafe {
+            libc::close(read_fd);
+            libc::close(write_fd);
+        }
+        anyhow::bail!("fcntl(FD_CLOEXEC) on the notify pipe failed: {err}");
     }
 
     let exe = std::env::current_exe().context("Failed to locate the conductor executable")?;
@@ -111,7 +130,9 @@ pub fn spawn_background_workflow() -> Result<String> {
     // SAFETY: setsid() is async-signal-safe, which is all pre_exec allows.
     unsafe {
         cmd.pre_exec(|| {
-            libc::setsid();
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
             Ok(())
         });
     }
@@ -123,43 +144,61 @@ pub fn spawn_background_workflow() -> Result<String> {
     unsafe {
         libc::close(write_fd);
     }
-    if let Err(e) = spawned {
-        // SAFETY: read_fd is a valid fd from pipe().
-        unsafe {
-            libc::close(read_fd);
+    let mut child = match spawned {
+        Ok(child) => child,
+        Err(e) => {
+            // SAFETY: read_fd is a valid fd from pipe().
+            unsafe {
+                libc::close(read_fd);
+            }
+            anyhow::bail!("Failed to start background workflow process: {e}");
         }
-        anyhow::bail!("Failed to start background workflow process: {e}");
-    }
+    };
 
     // Wrap the read end in a File so Rust manages its lifetime.
     // SAFETY: read_fd is a valid fd from pipe(); ownership transfers to File.
     let read_file = unsafe { std::fs::File::from_raw_fd(read_fd) };
-    read_run_id(BufReader::new(read_file))
+    match read_child_reply(BufReader::new(read_file))? {
+        ChildReply::RunId(id) => Ok(id),
+        ChildReply::Error(msg) => anyhow::bail!("Background workflow failed to start: {msg}"),
+        ChildReply::Nothing => {
+            // The child closed the pipe without reporting (crash, signal, exec
+            // failure). It has no visible output, so report how it exited.
+            let how = match child.wait() {
+                Ok(status) => status.to_string(),
+                Err(e) => format!("unknown ({e})"),
+            };
+            anyhow::bail!("Background process exited without sending a run ID ({how}).")
+        }
+    }
+}
+
+/// What the background child sent on the notify pipe.
+#[derive(Debug, PartialEq)]
+enum ChildReply {
+    RunId(String),
+    Error(String),
+    /// The pipe closed without a line.
+    Nothing,
 }
 
 /// Read the child's first line: the run ID, or an error prefixed with
-/// "ERROR:". An empty read means the child exited without reporting.
-fn read_run_id(mut reader: impl BufRead) -> Result<String> {
+/// [`ERROR_PREFIX`].
+fn read_child_reply(mut reader: impl BufRead) -> Result<ChildReply> {
     // A ULID is 26 chars; errors are short strings.
     let mut line = String::new();
     reader
         .read_line(&mut line)
         .context("Failed to read run ID from background process")?;
 
-    let line = line.trim().to_string();
-
-    if line.is_empty() {
-        anyhow::bail!(
-            "Background process exited without sending a run ID. \
-             Check logs for errors."
-        );
-    }
-
-    if let Some(err_msg) = line.strip_prefix("ERROR:") {
-        anyhow::bail!("Background workflow failed to start: {}", err_msg.trim());
-    }
-
-    Ok(line)
+    let line = line.trim();
+    Ok(if line.is_empty() {
+        ChildReply::Nothing
+    } else if let Some(msg) = line.strip_prefix(ERROR_PREFIX) {
+        ChildReply::Error(msg.trim().to_string())
+    } else {
+        ChildReply::RunId(line.to_string())
+    })
 }
 
 /// Entry point for the re-executed background child: starts the workflow,
@@ -214,37 +253,29 @@ pub fn run_as_background_child(mut params: WorkflowExecStandalone, write_fd: i32
         })
         .unwrap_or_else(|e| e.into_inner());
 
-    // Build the message to send through the pipe.
-    let message = if let Some(err) = error_slot
+    // Build the line to send through the pipe.
+    let (line, is_error) = if let Some(err) = error_slot
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
     {
-        format!("ERROR:{}\n", err)
+        (error_line(err), true)
     } else {
         match guard.as_ref() {
-            Some(id) => format!("{}\n", id),
-            None => "ERROR:Timed out waiting for workflow run ID (30s)\n".to_string(),
+            Some(id) => (format!("{id}\n"), false),
+            None => (
+                error_line("Timed out waiting for workflow run ID (30s)"),
+                true,
+            ),
         }
     };
     // Drop the guard before writing to avoid holding the lock.
     drop(guard);
 
-    // Write the message to the pipe.
-    // SAFETY: write_fd is a valid fd from pipe(). We use libc::write which is
-    // async-signal-safe, though at this point we are well past the fork danger zone.
-    let msg_bytes = message.as_bytes();
-    unsafe {
-        libc::write(
-            write_fd,
-            msg_bytes.as_ptr() as *const libc::c_void,
-            msg_bytes.len(),
-        );
-        libc::close(write_fd);
-    }
+    send_to_parent(write_fd, &line);
 
     // If we sent an error, exit immediately.
-    if message.starts_with("ERROR:") {
+    if is_error {
         std::process::exit(1);
     }
 
@@ -436,37 +467,41 @@ mod tests {
         assert_eq!(notify_fd(&cli.command), None);
     }
 
-    #[test]
-    fn read_run_id_returns_the_id() {
-        let id = read_run_id(std::io::Cursor::new("01M5HXSKQ2VZ2052WAQ89AYSYW\n")).unwrap();
-        assert_eq!(id, "01M5HXSKQ2VZ2052WAQ89AYSYW");
+    fn reply(s: &str) -> ChildReply {
+        read_child_reply(std::io::Cursor::new(s.to_string())).unwrap()
     }
 
     #[test]
-    fn read_run_id_surfaces_child_errors() {
-        let err = read_run_id(std::io::Cursor::new("ERROR:worktree 'wt' not found\n")).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("failed to start"), "got: {msg}");
-        assert!(msg.contains("worktree 'wt' not found"), "got: {msg}");
+    fn read_child_reply_returns_the_id() {
+        assert_eq!(
+            reply("01M5HXSKQ2VZ2052WAQ89AYSYW\n"),
+            ChildReply::RunId("01M5HXSKQ2VZ2052WAQ89AYSYW".into())
+        );
     }
 
     #[test]
-    fn read_run_id_reports_a_silent_exit() {
-        let err = read_run_id(std::io::Cursor::new("")).unwrap_err();
-        assert!(err.to_string().contains("exited without sending a run ID"));
+    fn read_child_reply_surfaces_child_errors() {
+        assert_eq!(
+            reply("ERROR:worktree 'wt' not found\n"),
+            ChildReply::Error("worktree 'wt' not found".into())
+        );
+    }
+
+    #[test]
+    fn read_child_reply_reports_a_silent_exit() {
+        assert_eq!(reply(""), ChildReply::Nothing);
     }
 
     #[test]
     fn report_startup_error_writes_one_error_line() {
         let mut fds = [0i32; 2];
         assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
-        let err = anyhow::anyhow!("repo 'r' not found").context("loading target");
+        let err = anyhow::anyhow!("repo 'r'\nnot found").context("loading target");
         report_startup_error(fds[1], &err);
         let read = unsafe { std::fs::File::from_raw_fd(fds[0]) };
-        let msg = read_run_id(BufReader::new(read)).unwrap_err().to_string();
-        assert!(
-            msg.contains("loading target: repo 'r' not found"),
-            "got: {msg}"
+        assert_eq!(
+            read_child_reply(BufReader::new(read)).unwrap(),
+            ChildReply::Error("loading target: repo 'r' not found".into())
         );
     }
 
