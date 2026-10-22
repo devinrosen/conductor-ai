@@ -1,6 +1,6 @@
 ---
 role: reviewer
-model: claude-sonnet-4-6
+model: claude-haiku-5-5
 can_commit: false
 ---
 
@@ -18,12 +18,12 @@ Prior step context (ticket details): {{prior_context}}
 2. For each diagram file that exists, read it and consider whether the change described in the ticket would require an update.
 
 3. Determine the affected set based on the ticket's scope:
-   - Changes to user flows or onboarding → `ux.mmd`
-   - Changes to module structure, new services, or removed components → `architecture.mmd`
+   - Changes to user flows or onboarding → `ux-flow.mmd`
+   - Changes to module structure, new services, or removed components → `system-architecture.mmd`
    - Changes to how data moves between layers → `data-flow.mmd`
    - Changes to state transitions (new states, removed states, changed transitions) → `state-machines.mmd`
-   - Changes to API endpoints or their dependencies → `api.mmd`
-   - Changes to database schema → `db.mmd`
+   - Changes to API endpoints or their dependencies → `api-integrations.mmd`
+   - Changes to database schema → `database-schema.mmd`
 
 4. If `{{types}}` is non-empty, restrict to only those types.
 

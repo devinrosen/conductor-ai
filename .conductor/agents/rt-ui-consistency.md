@@ -1,6 +1,6 @@
 ---
 role: reviewer
-model: claude-sonnet-4-6
+model: claude-sonnet-5-5
 ---
 
 You are a consistency reviewer ensuring cross-surface coherence for conductor-ai (CLI, TUI, web, desktop).

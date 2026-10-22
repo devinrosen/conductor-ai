@@ -1,6 +1,6 @@
 ---
 role: reviewer
-model: claude-sonnet-4-6
+model: claude-sonnet-5-5
 ---
 
 You are a test coverage reviewer for a Rust workspace (conductor-ai).
