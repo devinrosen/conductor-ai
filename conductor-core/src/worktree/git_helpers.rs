@@ -85,6 +85,7 @@ pub fn check_main_health(repo_path: &str, base_branch: &str) -> MainHealthStatus
 }
 
 /// Outcome of bringing the base branch up to date before branching a worktree.
+#[derive(Debug)]
 pub(super) struct BaseUpdate {
     /// Non-fatal warnings (fetch failure, diverged branch, skipped fast-forward, etc.).
     pub warnings: Vec<String>,
@@ -298,6 +299,27 @@ pub(super) fn ensure_base_up_to_date(
     )
 }
 
+/// Returns whether the tracked files of the checkout at `repo_path` have uncommitted
+/// changes. Untracked files are excluded (see `ensure_base_up_to_date_with_fetch_control`).
+/// A `git status` that cannot be spawned or exits non-zero is an error, not "clean".
+fn base_checkout_is_dirty(repo_path: &str) -> Result<bool> {
+    let output = git_in(repo_path)
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .output()?;
+    if !output.status.success() {
+        return Err(ConductorError::Git(
+            crate::error::SubprocessFailure::from_message(
+                "git",
+                format!(
+                    "git status failed in {repo_path}: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+            ),
+        ));
+    }
+    Ok(!output.stdout.is_empty())
+}
+
 fn ensure_base_up_to_date_with_fetch_control(
     repo_path: &str,
     base_branch: &str,
@@ -311,19 +333,11 @@ fn ensure_base_up_to_date_with_fetch_control(
     //    excluded — they don't affect `git worktree add` (new directory, separate from
     //    the main working tree) and are the most common source of false-positive
     //    "dirty" reports (e.g. untracked test-helper directories).
-    if !force_dirty && !pre_verified_clean {
-        let output = git_in(repo_path)
-            .args(["status", "--porcelain", "--untracked-files=no"])
-            .output()?;
-        if output.status.success() && !output.stdout.is_empty() {
-            return Err(ConductorError::InvalidInput(
-                format!(
-                    "uncommitted changes on base branch '{base_branch}'; commit or stash them, or retry \
-                     with force (CLI --force, MCP force=true) to branch from origin/{base_branch} \
-                     without touching the checkout"
-                ),
-            ));
-        }
+    if !force_dirty && !pre_verified_clean && base_checkout_is_dirty(repo_path)? {
+        return Err(ConductorError::InvalidInput(format!(
+            "uncommitted changes on base branch '{base_branch}'; commit or stash them, or retry \
+             with force_dirty to branch from origin/{base_branch} without touching the checkout"
+        )));
     }
 
     // 2. Fetch from remote (soft failure — warn and allow local-only creation).
@@ -419,16 +433,27 @@ fn ensure_base_up_to_date_with_fetch_control(
     let mut start_point = format!("refs/heads/{base_branch}");
     // With `force_dirty`, merging would rewrite the user's uncommitted checkout, so
     // leave it alone and branch from the freshly fetched remote ref instead.
+    // An unknown state (the probe itself failed) is treated as dirty so a failing
+    // `git status` can never lead to a merge over uncommitted files.
+    let mut probe_failure = None;
     let leave_checkout_alone = current_branch == base_branch
         && force_dirty
         && !pre_verified_clean
-        && git_in(repo_path)
-            .args(["status", "--porcelain", "--untracked-files=no"])
-            .output()
-            .map(|o| o.status.success() && !o.stdout.is_empty())
-            .unwrap_or(false);
+        && match base_checkout_is_dirty(repo_path) {
+            Ok(dirty) => dirty,
+            Err(e) => {
+                probe_failure = Some(e.to_string());
+                true
+            }
+        };
     if leave_checkout_alone {
         start_point = remote_ref.clone();
+        if let Some(err) = &probe_failure {
+            tracing::warn!("could not determine dirty state of {repo_path}: {err}");
+            warnings.push(format!(
+                "could not determine whether {repo_path} has uncommitted changes ({err}); treating it as dirty"
+            ));
+        }
         warnings.push(format!(
             "base branch '{base_branch}' has uncommitted changes in {repo_path}; local branch was not updated — worktree branched from origin/{base_branch} (local commits not on origin are not included)"
         ));
