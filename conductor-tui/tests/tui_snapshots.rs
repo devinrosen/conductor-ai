@@ -638,7 +638,7 @@ fn snap_modal_model_picker() {
     let mut state = make_state();
     state.modal = Modal::ModelPicker {
         context_label: "worktree: feat-login".into(),
-        effective_default: Some("claude-sonnet-4-6".into()),
+        effective_default: Some("claude-sonnet-5-5".into()),
         effective_source: "global config".into(),
         selected: 1,
         runtime_sections: vec![conductor_tui::state::RuntimeSection {

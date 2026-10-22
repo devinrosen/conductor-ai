@@ -14,7 +14,7 @@ pub enum ModelTier {
 /// A known Claude model with metadata for display in pickers.
 #[derive(Debug, Clone, Serialize)]
 pub struct KnownModel {
-    /// Full model ID (e.g. "claude-opus-4-6")
+    /// Full model ID (e.g. "claude-opus-5-5")
     pub id: &'static str,
     /// Short alias (e.g. "opus")
     pub alias: &'static str,
@@ -47,19 +47,19 @@ impl KnownModel {
 /// Curated list of known Claude models, ordered by tier (powerful → fast).
 pub const KNOWN_MODELS: &[KnownModel] = &[
     KnownModel {
-        id: "claude-opus-4-6",
+        id: "claude-opus-5-5",
         alias: "opus",
         tier: ModelTier::Powerful,
         description: "Planning, architecture, complex analysis",
     },
     KnownModel {
-        id: "claude-sonnet-4-6",
+        id: "claude-sonnet-5-5",
         alias: "sonnet",
         tier: ModelTier::Balanced,
         description: "General implementation (default)",
     },
     KnownModel {
-        id: "claude-haiku-4-5",
+        id: "claude-haiku-5-5",
         alias: "haiku",
         tier: ModelTier::Fast,
         description: "Commit messages, formatting, quick edits",
@@ -191,14 +191,14 @@ mod tests {
 
     #[test]
     fn test_find_known_model_by_id() {
-        let m = find_known_model("claude-sonnet-4-6").unwrap();
+        let m = find_known_model("claude-sonnet-5-5").unwrap();
         assert_eq!(m.alias, "sonnet");
     }
 
     #[test]
     fn test_find_known_model_by_alias() {
         let m = find_known_model("opus").unwrap();
-        assert_eq!(m.id, "claude-opus-4-6");
+        assert_eq!(m.id, "claude-opus-5-5");
     }
 
     #[test]

@@ -132,7 +132,7 @@ pub enum AgentCommands {
         /// Resume a previous Claude session
         #[arg(long)]
         resume: Option<String>,
-        /// Model to use (e.g. "sonnet", "claude-opus-4-6"). Overrides per-worktree and global defaults.
+        /// Model to use (e.g. "sonnet", "claude-opus-5-5"). Overrides per-worktree and global defaults.
         #[arg(long)]
         model: Option<String>,
         /// Named GitHub App bot identity to use (matches [github.apps.<name>] in config).
@@ -383,7 +383,7 @@ pub enum RepoCommands {
     SetModel {
         /// Repo slug
         slug: String,
-        /// Model alias or ID (e.g. "sonnet", "claude-opus-4-6"). Omit to clear.
+        /// Model alias or ID (e.g. "sonnet", "claude-opus-5-5"). Omit to clear.
         model: Option<String>,
     },
     /// Manage issue sources for a repository
@@ -498,7 +498,7 @@ pub enum WorktreeCommands {
         repo: String,
         /// Worktree slug
         name: String,
-        /// Model alias or full ID (e.g. "sonnet", "claude-opus-4-6"). Omit to clear.
+        /// Model alias or full ID (e.g. "sonnet", "claude-opus-5-5"). Omit to clear.
         model: Option<String>,
     },
     /// Detect merged PRs and clean up their worktrees (branch + directory)
