@@ -43,7 +43,7 @@ workflow iterate-pr {
           as = "developer"
         }
 
-        script fmt-fix {
+        script fmt-fix-pre-verify {
           run = ".conductor/scripts/fmt-fix.sh"
           env = {
             FMT_FIX_ALLOW_FAILURE = "1"
@@ -57,7 +57,7 @@ workflow iterate-pr {
             retries = 1
             as      = "developer"
           }
-          script fmt-fix {
+          script fmt-fix-pre-reverify {
             run = ".conductor/scripts/fmt-fix.sh"
             env = {
               FMT_FIX_ALLOW_FAILURE = "1"
