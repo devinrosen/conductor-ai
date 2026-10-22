@@ -5,15 +5,28 @@ use rusqlite::types::ToSql;
 use rusqlite::Connection;
 use std::collections::HashSet;
 use std::path::Path;
+use std::time::Duration;
 
 use crate::error::Result;
 
-/// Open (or create) the SQLite database with WAL mode enabled.
-pub fn open_database(path: &Path) -> Result<Connection> {
-    let conn = Connection::open(path)?;
+/// How long a connection waits for a conflicting lock before returning `SQLITE_BUSY`.
+const BUSY_TIMEOUT: Duration = Duration::from_millis(5000);
+
+/// Apply connection pragmas. The busy timeout is set first so that every later
+/// statement that takes a lock (notably `journal_mode=wal`) waits instead of
+/// failing immediately.
+fn configure_connection(conn: &Connection) -> Result<()> {
+    conn.busy_timeout(BUSY_TIMEOUT)?;
     conn.pragma_update(None, "journal_mode", "wal")?;
     conn.pragma_update(None, "foreign_keys", "on")?;
-    conn.pragma_update(None, "busy_timeout", 5000)?;
+    Ok(())
+}
+
+/// Open (or create) the SQLite database with WAL mode enabled and a 5 s busy
+/// timeout.
+pub fn open_database(path: &Path) -> Result<Connection> {
+    let conn = Connection::open(path)?;
+    configure_connection(&conn)?;
     migrations::run(&conn)?;
     Ok(conn)
 }
@@ -26,9 +39,7 @@ pub fn open_database(path: &Path) -> Result<Connection> {
 /// running after an `implement` agent step has applied a newer migration.
 pub fn open_database_compat(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
-    conn.pragma_update(None, "journal_mode", "wal")?;
-    conn.pragma_update(None, "foreign_keys", "on")?;
-    conn.pragma_update(None, "busy_timeout", 5000)?;
+    configure_connection(&conn)?;
     migrations::run_compat(&conn)?;
     Ok(conn)
 }
@@ -121,6 +132,49 @@ where
 mod tests {
     use super::*;
     use tempfile::NamedTempFile;
+
+    /// Hold an exclusive lock on a non-WAL database for ~300 ms from another
+    /// connection, and check that `open` waits for it rather than failing.
+    fn assert_open_waits_for_lock(open: fn(&Path) -> Result<Connection>) {
+        let tmp = NamedTempFile::new().unwrap();
+        let holder = Connection::open(tmp.path()).unwrap();
+        holder
+            .execute_batch("BEGIN EXCLUSIVE; CREATE TABLE lock_probe (id INTEGER);")
+            .unwrap();
+
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            holder.execute_batch("COMMIT").unwrap();
+        });
+
+        let start = std::time::Instant::now();
+        let conn = open(tmp.path()).expect("open should wait for the lock, not fail");
+        let elapsed = start.elapsed();
+        handle.join().unwrap();
+
+        assert!(
+            elapsed >= Duration::from_millis(200),
+            "open returned after {elapsed:?}; expected it to wait for the lock"
+        );
+        let mode: String = conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+        let timeout: i64 = conn
+            .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+            .unwrap();
+        assert_eq!(timeout, 5000);
+    }
+
+    #[test]
+    fn open_database_waits_for_lock() {
+        assert_open_waits_for_lock(open_database);
+    }
+
+    #[test]
+    fn open_database_compat_waits_for_lock() {
+        assert_open_waits_for_lock(open_database_compat);
+    }
 
     #[test]
     fn open_database_success() {
