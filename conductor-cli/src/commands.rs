@@ -225,6 +225,9 @@ pub enum WorkflowCommands {
         /// Run the workflow in the background: print the run ID and exit immediately
         #[arg(long)]
         background: bool,
+        /// Internal: set on the process `--background` starts; the fd to write the run ID to
+        #[arg(long, hide = true, conflicts_with = "background")]
+        background_notify_fd: Option<i32>,
         /// Additional plugin directories to pass to agent sessions (appended to repo-level plugin_dirs)
         #[arg(long = "plugin-dir")]
         plugin_dirs: Vec<String>,
