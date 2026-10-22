@@ -2525,4 +2525,138 @@ mod tests {
             "expected Git error from is_ancestor after fetch spawn failure, got: {result:?}"
         );
     }
+
+    /// Integration test: create a worktree with force_dirty=true when the primary checkout
+    /// has uncommitted tracked changes.  Verifies:
+    ///   1. Creation succeeds (no error).
+    ///   2. At least one warning is returned.
+    ///   3. The new branch tip matches origin/<base> (not the local commit that is ahead).
+    #[test]
+    fn test_create_with_force_dirty_branches_from_origin() {
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let repo_dir = TempDir::new().unwrap();
+        let ws_dir = TempDir::new().unwrap();
+        let repo_path = repo_dir.path().to_str().unwrap().to_string();
+        let ws_path = ws_dir.path().to_str().unwrap().to_string();
+
+        // Init repo.
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "t@t.com"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "T"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(&repo_path)
+            .output()
+            .expect("initial commit");
+
+        // Capture this SHA as the simulated origin/main tip.
+        let origin_sha = String::from_utf8(
+            Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&repo_path)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+
+        // Pin refs/remotes/origin/main at the initial commit so git-branch can use it.
+        Command::new("git")
+            .args(["update-ref", "refs/remotes/origin/main", &origin_sha])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        // Add a local-only commit so local main diverges from origin/main.
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "local-only"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        // Stage an uncommitted change to make the primary checkout dirty.
+        std::fs::write(format!("{repo_path}/tracked.txt"), "dirty").unwrap();
+        Command::new("git")
+            .args(["add", "tracked.txt"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        let conn = create_test_conn();
+        let config = crate::config::Config::default();
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('r1','test-repo',:repo_path,'',:ws_path,'2024-01-01T00:00:00Z')",
+            rusqlite::named_params! { ":repo_path": repo_path, ":ws_path": ws_path },
+        )
+        .unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+
+        // Without force_dirty, create must fail with an uncommitted-changes error.
+        let no_force = mgr.create(
+            "test-repo",
+            "feat-no-force",
+            WorktreeCreateOptions::default(),
+        );
+        assert!(
+            matches!(no_force, Err(ConductorError::InvalidInput(ref msg)) if msg.contains("uncommitted")),
+            "expected dirty-checkout error without force_dirty, got: {no_force:?}"
+        );
+
+        // With force_dirty=true, create must succeed even though the checkout is dirty.
+        let result = mgr.create(
+            "test-repo",
+            "feat-dirty-force",
+            WorktreeCreateOptions {
+                force_dirty: true,
+                ..Default::default()
+            },
+        );
+        assert!(
+            result.is_ok(),
+            "create with force_dirty=true should succeed on a dirty checkout, got: {result:?}"
+        );
+        let (wt, warnings) = result.unwrap();
+
+        // A warning must be returned (fetch failure or dirty-skip notice).
+        assert!(
+            !warnings.is_empty(),
+            "expected at least one warning when force_dirty=true, got none"
+        );
+
+        // The new branch tip must equal origin/main (origin_sha), not local main
+        // (which has one additional local-only commit).
+        let branch_sha = String::from_utf8(
+            Command::new("git")
+                .args(["rev-parse", &wt.branch])
+                .current_dir(&repo_path)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        assert_eq!(
+            branch_sha, origin_sha,
+            "branch should point to origin/main ({origin_sha}), not local main"
+        );
+    }
 }

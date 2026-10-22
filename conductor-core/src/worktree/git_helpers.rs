@@ -295,9 +295,7 @@ fn ensure_base_up_to_date_with_fetch_control(
             .output()?;
         if output.status.success() && !output.stdout.is_empty() {
             return Err(ConductorError::InvalidInput(
-                "uncommitted changes on base branch, please commit or stash first. \
-                 Pass allow_dirty=true to branch from origin/<base> without modifying the local checkout."
-                    .to_string(),
+                "uncommitted changes on base branch, please commit or stash first".to_string(),
             ));
         }
     }
