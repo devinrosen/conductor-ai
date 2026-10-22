@@ -295,7 +295,9 @@ fn ensure_base_up_to_date_with_fetch_control(
             .output()?;
         if output.status.success() && !output.stdout.is_empty() {
             return Err(ConductorError::InvalidInput(
-                "uncommitted changes on base branch, please commit or stash first".to_string(),
+                "uncommitted changes on base branch, please commit or stash first. \
+                 Pass allow_dirty=true to branch from origin/<base> without modifying the local checkout."
+                    .to_string(),
             ));
         }
     }
@@ -376,6 +378,17 @@ fn ensure_base_up_to_date_with_fetch_control(
 
     if !has_remote {
         // Local branch exists but no remote tracking — use local state as-is.
+        return Ok(warnings);
+    }
+
+    // When force_dirty, skip the fast-forward — the caller will branch the new worktree
+    // from refs/remotes/origin/<base> directly (already fetched in step 2 above).
+    if force_dirty {
+        warnings.push(format!(
+            "local base branch '{}' was not fast-forwarded (dirty checkout); \
+             new worktree branches from origin/{} instead.",
+            base_branch, base_branch
+        ));
         return Ok(warnings);
     }
 

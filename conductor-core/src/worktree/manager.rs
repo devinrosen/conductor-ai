@@ -377,11 +377,16 @@ impl<'a> WorktreeManager<'a> {
                 force_dirty,
                 pre_verified_clean,
             )?;
+            let branch_point = if force_dirty {
+                format!("refs/remotes/origin/{base}")
+            } else {
+                format!("refs/heads/{base}")
+            };
             check_output(git_in(&repo.local_path).args([
                 "branch",
                 "--",
                 &branch,
-                &format!("refs/heads/{base}"),
+                &branch_point,
             ]))?;
             (branch, Some(base), warnings)
         };

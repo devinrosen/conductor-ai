@@ -177,6 +177,7 @@ pub(super) fn tool_create_worktree(
     };
 
     let from_branch = get_arg(args, "from_branch").map(str::to_string);
+    let force_dirty = get_bool_arg(args, "allow_dirty");
 
     let wt_mgr = WorktreeManager::new(conn, config);
     match wt_mgr.create(
@@ -185,6 +186,7 @@ pub(super) fn tool_create_worktree(
         WorktreeCreateOptions {
             ticket_id: resolved_ticket_id,
             from_branch,
+            force_dirty,
             ..Default::default()
         },
     ) {
@@ -810,6 +812,28 @@ mod tests {
         assert!(
             !text.contains("unknown parameter") && !text.contains("from_branch"),
             "from_branch should be accepted without error, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_tool_create_worktree_with_allow_dirty_propagates() {
+        let (_f, conductor) = make_test_conductor();
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), Value::String("nonexistent-repo".into()));
+        args.insert("name".into(), Value::String("feat-dirty".into()));
+        args.insert("allow_dirty".into(), Value::Bool(true));
+        // The call will fail because the repo doesn't exist, but allow_dirty must not
+        // cause a parse error — it should reach the repo lookup phase.
+        let result = tool_create_worktree(&conductor, &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        // Error is about the repo, not about an unknown/invalid parameter.
+        assert!(
+            !text.contains("unknown parameter") && !text.contains("allow_dirty"),
+            "allow_dirty should be accepted without parse error, got: {text}"
         );
     }
 

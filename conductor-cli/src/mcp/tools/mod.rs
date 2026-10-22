@@ -77,6 +77,13 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
                     "Branch to fork from at create time (optional). Defaults to the repo default branch.",
                     false,
                 ),
+                (
+                    "allow_dirty",
+                    "Set to 'true' to create the worktree even if the primary checkout has \
+                     uncommitted changes. The new branch is created from origin/<base> without \
+                     fast-forwarding the local checkout. Returns a warning instead of an error.",
+                    false,
+                ),
             ]),
         ),
         Tool::new(
