@@ -220,6 +220,29 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Like [`Self::update_run_failed_with_session`], but only if the run is currently
+    /// `running`. Used by log recovery so it never overwrites a finalized run.
+    pub fn update_run_failed_with_session_if_running(
+        &self,
+        run_id: &str,
+        error: &str,
+        session_id: Option<&str>,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE agent_runs SET status = 'failed', result_text = :error, ended_at = :ended_at, \
+             session_id = COALESCE(:session_id, session_id) \
+             WHERE id = :id AND status = 'running'",
+            named_params! {
+                ":error": error,
+                ":ended_at": now,
+                ":session_id": session_id,
+                ":id": run_id,
+            },
+        )?;
+        Ok(())
+    }
+
     /// Mark a run as failed only if it is currently `running` or `waiting_for_feedback`.
     /// Used by background reapers and panic monitors to avoid overwriting a run that has
     /// already been finalized (e.g. `completed`, `failed`, `cancelled`) by another path.

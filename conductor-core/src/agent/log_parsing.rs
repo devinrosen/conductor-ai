@@ -76,6 +76,44 @@ pub(crate) fn try_recover_from_log(
     try_recover_from_log_at(mgr, run_id, &crate::config::agent_log_dir())
 }
 
+/// Recover a run that is still `running` after its process finished, from the
+/// `result` event in `<log_dir>/<run_id>.log`. Unlike [`try_recover_from_log_at`],
+/// every write is status-guarded (`status = 'running'`), so a row finalized by
+/// another path is never overwritten, and the session id is kept. Returns the
+/// refreshed run, or `None` when the log has no result or a write failed.
+pub(crate) fn try_recover_running_from_log_at(
+    mgr: &super::manager::AgentManager<'_>,
+    run_id: &str,
+    log_dir: &std::path::Path,
+) -> Option<AgentRun> {
+    let log_path = log_dir.join(format!("{run_id}.log"));
+    let log_result = scan_log_for_result_at(&log_path)?;
+    let written = if log_result.is_error {
+        let error_msg = log_result
+            .result_text
+            .as_deref()
+            .unwrap_or(DEFAULT_AGENT_ERROR_MSG);
+        mgr.update_run_failed_with_session_if_running(
+            run_id,
+            error_msg,
+            log_result.session_id.as_deref(),
+        )
+    } else {
+        mgr.update_run_completed_if_running_full(run_id, &log_result)
+    };
+    if let Err(e) = written {
+        tracing::warn!("failed to write terminal status for run {run_id} during log recovery: {e}");
+        return None;
+    }
+    match mgr.get_run(run_id) {
+        Ok(run) => run,
+        Err(e) => {
+            tracing::warn!("failed to fetch run {run_id} after log recovery: {e}");
+            None
+        }
+    }
+}
+
 /// Like [`try_recover_from_log`] but reads from `log_dir` instead of the default agent-log
 /// directory. Useful in tests to avoid writing to the real `~/.conductor/agent-logs/`.
 pub(crate) fn try_recover_from_log_at(
