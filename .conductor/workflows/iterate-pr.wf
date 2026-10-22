@@ -76,6 +76,37 @@ workflow iterate-pr {
           run = ".conductor/scripts/fmt-fix.sh"
         }
       }
+
+      // Pushback-only cycle (#3100): nothing is committed, so the loop below
+      // exits and the PR would stay CHANGES_REQUESTED. Re-review once so the
+      // aggregator sees the pushback replies. No commits are pushed here, so
+      // the do-while still exits: one extra review per pushback round. Reuse
+      // this cycle's scope; review-scope.sh would now return "full".
+      unless triage-reviews.has_to_address {
+        if triage-reviews.has_pushback {
+          call workflow review-pr {
+            inputs {
+              scope = "{{review_scope}}"
+              since = "{{review_since}}"
+            }
+          }
+
+          if review-aggregator.has_blocking_findings {
+            script pushback-disputed {
+              run = ".conductor/scripts/pushback-disputed.sh"
+              env = {
+                PR_NUMBER = "{{pr_number}}"
+              }
+            }
+
+            gate human_review {
+              prompt     = "The re-review after triage pushback still requests changes. Read the latest conductor review and the [Pushback on ...] comments on the PR, then dismiss the review or address the findings."
+              timeout    = "72h"
+              on_timeout = fail
+            }
+          }
+        }
+      }
     }
 
     script push {

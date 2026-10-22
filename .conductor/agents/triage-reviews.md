@@ -106,6 +106,8 @@ gh pr comment "${PR_NUMBER}" --body "[Pushback on ${REVIEWER} — ${FILE}:${LINE
 
 Note: the next `review-pr` run reads this comment. Its aggregator sets aside a finding that a reply posted since the last review already answered, so keep the `[Pushback on …]` prefix with the reviewer, file and line, and state the reason in a way someone reading only the comment can check. Security findings are never set aside. A finding can still come back in a later round, and the pushback-count check in step 2b is what prevents an infinite pushback loop.
 
+A cycle that ends with pushback and nothing to address triggers one re-review in the same run, so post the pushback comment (do not only record it in `triaged`) before emitting output.
+
 #### 2f. Act on clarify
 
 If classified **clarify**, post a top-level PR comment with one specific question:
