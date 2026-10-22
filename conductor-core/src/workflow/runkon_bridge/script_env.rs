@@ -89,6 +89,10 @@ impl ScriptEnvProvider for ConductorScriptEnvProvider {
 
         env
     }
+
+    fn input_env_prefix(&self) -> &str {
+        "CONDUCTOR_"
+    }
 }
 
 #[cfg(test)]
@@ -164,5 +168,12 @@ mod tests {
             ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()), None);
         let env = provider.env(&noop_ctx(), None);
         assert!(!env.contains_key("GH_TOKEN"));
+    }
+
+    #[test]
+    fn input_env_prefix_is_conductor() {
+        let provider =
+            ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()), None);
+        assert_eq!(provider.input_env_prefix(), "CONDUCTOR_");
     }
 }
