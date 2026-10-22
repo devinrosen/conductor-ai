@@ -1,6 +1,6 @@
 ---
 role: reviewer
-model: claude-sonnet-4-6
+model: claude-sonnet-5-5
 can_commit: false
 ---
 
@@ -26,7 +26,7 @@ Prior step context: {{prior_context}}
 3. Classify the overall failure into one of these categories:
    - `workflow_bug` — incorrect workflow definition, missing env vars, bad step ordering
    - `agent_bug` — agent produced wrong output, violated schema, or made incorrect code changes
-   - `infrastructure` — tmux session lost, process killed, disk full, network timeout
+   - `infrastructure` — agent subprocess lost, process killed, disk full, network timeout
    - `schema_error` — structured output didn't match expected schema
    - `external_dependency` — GitHub API failure, CI flake, dependency resolution error
 

@@ -1,6 +1,6 @@
 ---
 role: reviewer
-model: claude-sonnet-4-6
+model: claude-sonnet-5-5
 ---
 
 You are a regression risk reviewer for a Rust workspace (conductor-ai).

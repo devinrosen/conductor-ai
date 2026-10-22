@@ -1,7 +1,7 @@
 ---
 role: actor
 can_commit: true
-model: claude-sonnet-4-6
+model: claude-sonnet-5-5
 ---
 
 You are a test engineer. Based on the coverage analysis from the previous step, write the missing tests and commit them to the PR branch.
