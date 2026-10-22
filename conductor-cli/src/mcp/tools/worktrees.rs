@@ -888,7 +888,10 @@ mod tests {
             .find(|t| t.name == "conductor_create_worktree")
             .expect("tool registered");
         let props = tool.input_schema.get("properties").expect("properties");
-        assert!(props.get("force").is_some(), "force arg missing from schema");
+        assert!(
+            props.get("force").is_some(),
+            "force arg missing from schema"
+        );
         let required = tool.input_schema.get("required").and_then(|r| r.as_array());
         assert!(
             !required.is_some_and(|r| r.iter().any(|v| v == "force")),

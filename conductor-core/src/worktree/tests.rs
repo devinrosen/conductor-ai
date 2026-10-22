@@ -154,7 +154,7 @@ fn test_ensure_base_up_to_date_dirty_working_tree() {
 
     let result = git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false);
     assert!(result.is_err());
-    let err = result.unwrap_err().to_string();
+    let err = result.err().expect("expected an error").to_string();
     assert!(
         err.contains("uncommitted changes"),
         "unexpected error: {err}"
@@ -337,7 +337,10 @@ fn test_ensure_base_up_to_date_force_dirty_leaves_checkout_untouched() {
         update.warnings
     );
     assert_eq!(head_sha(&local), head_before);
-    assert_eq!(fs::read_to_string(local.join("README.md")).unwrap(), "modified");
+    assert_eq!(
+        fs::read_to_string(local.join("README.md")).unwrap(),
+        "modified"
+    );
     assert!(!local.join("new_file.txt").exists());
 }
 
