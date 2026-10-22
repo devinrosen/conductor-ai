@@ -51,7 +51,13 @@ fn test_script_runtime_captures_conductor_prompt() {
     let run_id = format!("test-script-prompt-{}", ulid::Ulid::new());
     let _db_guard = common::setup_test_db(&run_id, "script");
 
-    let runtime = make_runtime(Some("echo $CONDUCTOR_PROMPT"));
+    // Explicitly set prompt_env to CONDUCTOR_PROMPT: runkon 0.7.0-alpha changed the default
+    // to FLOW_PROMPT, but ConductorRuntimeResolver injects CONDUCTOR_PROMPT for backward compat.
+    let runtime = ScriptRuntime::new(RuntimeConfig {
+        command: Some("echo $CONDUCTOR_PROMPT".to_string()),
+        prompt_env: Some("CONDUCTOR_PROMPT".to_string()),
+        ..RuntimeConfig::default()
+    });
     let req = common::make_request(
         &run_id,
         "my-unique-prompt-string",
