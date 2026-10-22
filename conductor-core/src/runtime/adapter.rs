@@ -82,9 +82,10 @@ impl SqliteHostAdapter {
     where
         F: FnOnce(&AgentManager<'_>) -> crate::error::Result<T>,
     {
-        let guard = self.conn.lock().map_err(|e| {
-            ConductorError::Agent(format!("database mutex poisoned: {e}"))
-        })?;
+        let guard = self
+            .conn
+            .lock()
+            .map_err(|e| ConductorError::Agent(format!("database mutex poisoned: {e}")))?;
         let mgr = AgentManager::new(&guard);
         op(&mgr)
     }
@@ -586,21 +587,22 @@ mod tests {
 
     fn setup_adapter_with_log_dir(
         run_id: &str,
-    ) -> (SqliteHostAdapter, tempfile::NamedTempFile, tempfile::TempDir) {
+    ) -> (
+        SqliteHostAdapter,
+        tempfile::NamedTempFile,
+        tempfile::TempDir,
+    ) {
         let (adapter, tmp) = setup_adapter_with_run(run_id);
         let log_dir = tempfile::tempdir().unwrap();
-        let adapter = SqliteHostAdapter::with_log_dir(
-            tmp.path().to_path_buf(),
-            log_dir.path().to_path_buf(),
-        )
-        .unwrap();
+        let adapter =
+            SqliteHostAdapter::with_log_dir(tmp.path().to_path_buf(), log_dir.path().to_path_buf())
+                .unwrap();
         (adapter, tmp, log_dir)
     }
 
     fn write_log(dir: &tempfile::TempDir, run_id: &str, result_line: Option<&str>) {
-        let mut body = String::from(
-            "{\"type\":\"system\",\"subtype\":\"init\"}\n{\"type\":\"assistant\"}\n",
-        );
+        let mut body =
+            String::from("{\"type\":\"system\",\"subtype\":\"init\"}\n{\"type\":\"assistant\"}\n");
         if let Some(line) = result_line {
             body.push_str(line);
             body.push('\n');
