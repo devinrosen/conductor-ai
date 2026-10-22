@@ -26,11 +26,18 @@ jobs:
         id: filter
         with:
           filters: |
+            # Must cover every path in the per-crate filters below: the Test
+            # job's setup steps (nextest, frontend build) run only when `rust`
+            # matches, and its test steps run when a crate filter matches.
             rust:
               - '**/*.rs'
               - '**/Cargo.toml'
               - 'Cargo.lock'
-              - 'conductor-web/frontend/**'
+              - 'conductor-core/**'
+              - 'conductor-cli/**'
+              - 'conductor-tui/**'
+              - 'conductor-web/**'
+              - 'conductor-desktop/**'
               - '.github/workflows/ci.yml'
             core:
               - 'conductor-core/**'
