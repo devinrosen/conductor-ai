@@ -29,7 +29,6 @@ pub(super) const READ_ONLY_TOOLS: &[&str] = &[
     "conductor_list_agent_runs",
     "conductor_get_step_log",
     "conductor_list_worktrees",
-    "conductor_get_worktree",
     "conductor_list_tickets",
     "conductor_get_ready_tickets",
     "conductor_list_repos",
@@ -54,6 +53,8 @@ const OTHER_TOOLS: &[&str] = &[
     "conductor_resume_run",
     "conductor_submit_agent_feedback",
     "conductor_list_prs",
+    // Reads the DB, but also fetches PR detail with a synchronous `gh` call.
+    "conductor_get_worktree",
     "conductor_validate_workflow",
     "conductor_register_repo",
     "conductor_unregister_repo",
