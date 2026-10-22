@@ -135,7 +135,9 @@ fn test_ensure_base_up_to_date_clean_fast_forward() {
 
     // Local is now behind origin/main
     let warnings =
-        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false).unwrap();
+        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false)
+            .unwrap()
+            .warnings;
     assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
 
     // Verify local main now has the new file
@@ -194,7 +196,9 @@ fn test_ensure_base_up_to_date_diverged_branch() {
 
     // Now ensure_base_up_to_date should warn about divergence
     let warnings =
-        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false).unwrap();
+        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false)
+            .unwrap()
+            .warnings;
     assert!(
         warnings.iter().any(|w| w.contains("diverged")),
         "expected divergence warning, got: {:?}",
@@ -302,6 +306,58 @@ fn test_ensure_base_up_to_date_force_dirty_skips_check() {
     );
 }
 
+fn head_sha(dir: &std::path::Path) -> String {
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .expect("failed to run git");
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+#[test]
+fn test_ensure_base_up_to_date_force_dirty_leaves_checkout_untouched() {
+    let (_tmp, remote, local) = setup_repo_with_remote();
+    let (_tmp2, other) = setup_second_clone(&remote);
+    fs::write(other.join("new_file.txt"), "new content").unwrap();
+    git(&["add", "new_file.txt"], &other);
+    git(&["commit", "-m", "remote commit"], &other);
+    git(&["push", "origin", "main"], &other);
+
+    fs::write(local.join("README.md"), "modified").unwrap();
+    let head_before = head_sha(&local);
+
+    let update =
+        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", true, false).unwrap();
+
+    assert_eq!(update.start_point, "refs/remotes/origin/main");
+    assert!(
+        update.warnings.iter().any(|w| w.contains("not updated")),
+        "expected not-updated warning, got: {:?}",
+        update.warnings
+    );
+    assert_eq!(head_sha(&local), head_before);
+    assert_eq!(fs::read_to_string(local.join("README.md")).unwrap(), "modified");
+    assert!(!local.join("new_file.txt").exists());
+}
+
+#[test]
+fn test_ensure_base_up_to_date_force_clean_still_fast_forwards() {
+    let (_tmp, remote, local) = setup_repo_with_remote();
+    let (_tmp2, other) = setup_second_clone(&remote);
+    fs::write(other.join("new_file.txt"), "new content").unwrap();
+    git(&["add", "new_file.txt"], &other);
+    git(&["commit", "-m", "remote commit"], &other);
+    git(&["push", "origin", "main"], &other);
+
+    let update =
+        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", true, false).unwrap();
+
+    assert_eq!(update.start_point, "refs/heads/main");
+    assert!(update.warnings.is_empty(), "{:?}", update.warnings);
+    assert!(local.join("new_file.txt").exists());
+}
+
 #[test]
 fn test_ensure_base_up_to_date_skips_status_when_pre_verified_clean() {
     let (_tmp, _, local) = setup_repo_with_remote();
@@ -394,7 +450,9 @@ fn test_ensure_base_up_to_date_detached_head() {
     git(&["checkout", "--detach", "HEAD"], &local);
 
     let warnings =
-        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false).unwrap();
+        git_helpers::ensure_base_up_to_date(local.to_str().unwrap(), "main", false, false)
+            .unwrap()
+            .warnings;
     // Should succeed (fast-forward refs/heads/main) with no warnings
     assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
 

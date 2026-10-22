@@ -177,6 +177,7 @@ pub(super) fn tool_create_worktree(
     };
 
     let from_branch = get_arg(args, "from_branch").map(str::to_string);
+    let force = get_bool_arg(args, "force");
 
     let wt_mgr = WorktreeManager::new(conn, config);
     match wt_mgr.create(
@@ -185,6 +186,7 @@ pub(super) fn tool_create_worktree(
         WorktreeCreateOptions {
             ticket_id: resolved_ticket_id,
             from_branch,
+            force_dirty: force,
             ..Default::default()
         },
     ) {
@@ -875,6 +877,22 @@ mod tests {
         assert!(
             !text.contains("invalid") && !text.contains("unknown parameter"),
             "rebase arg should be accepted without parse error, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_create_worktree_schema_has_optional_force_arg() {
+        let tools = super::super::list_tools();
+        let tool = tools
+            .iter()
+            .find(|t| t.name == "conductor_create_worktree")
+            .expect("tool registered");
+        let props = tool.input_schema.get("properties").expect("properties");
+        assert!(props.get("force").is_some(), "force arg missing from schema");
+        let required = tool.input_schema.get("required").and_then(|r| r.as_array());
+        assert!(
+            !required.is_some_and(|r| r.iter().any(|v| v == "force")),
+            "force must be optional"
         );
     }
 
