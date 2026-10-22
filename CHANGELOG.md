@@ -1,18 +1,22 @@
 # Changelog
 
-## [Unreleased]
+Release notes are published on [GitHub Releases](https://github.com/devinrosen/conductor-ai/releases). Each `release: X.Y.Z` pull request merged into `main` tags `vX.Y.Z` and creates the release with its notes, so this file is no longer updated.
 
-## [0.11.0] — 2026-05-01
+## Historical entries
+
+The entries below cover releases up to 0.11.0 and are kept for reference.
+
+### [0.11.0] — 2026-05-01
 
 The headline of 0.11.0 is **the `WorkflowManager` struct is gone.** All 116 of its methods are now free functions in `conductor_core::workflow::*`, taking `&Connection` directly. The conductor-core "manager pattern" no longer carries the largest god-object on which it was modeled, and binary crates (CLI, TUI, web, desktop) now call the workflow API directly rather than constructing throwaway managers around it. Surrounding work cleaned up several layer violations (binary crates reaching into `rusqlite` or unmanaged DB access), retired backward-compat shims from the v0.10.0 runkon split, and addressed a handful of architectural review findings flagged during the sweep.
 
-### Added
+#### Added
 
 - **`validate_jql` defense-in-depth on `sync_jira_issues_acli`** — rejects empty / NUL / CR / LF before invoking `acli`, plus an explicit `# Trust model` doc on the function spelling out the caller-trusts-jql contract. (#2790, closes #2333)
 - **`tracing::warn!` on TUI cache-miss label resolution** — silent `.ok()?` swallows in `do_dispatch_workflow`'s fallback closure now emit a structured warn so operators can observe failures without changing dispatch behavior. (#2775, closes #2774)
 - **`run_acli_search` helper** — extracts the duplicated `Command::new("acli").args([...])` chain shared by `sync_jira_issues_acli` and `fetch_jira_issue` in `jira_acli`. (#2790)
 
-### Changed
+#### Changed
 
 - **`WorkflowManager` struct deleted.** Migration landed across six PRs: `definitions.rs` (#2765), `queries.rs` (#2767), `steps.rs` + `fan_out.rs` (#2768), `lifecycle.rs` (#2770), `recovery.rs` (#2771), and the final caller migration + struct removal (#2772). All callers across `conductor-cli`, `conductor-tui`, `conductor-web`, `conductor-desktop`, and tests now invoke `conductor_core::workflow::<fn>(&conn, …)` free functions directly. (#2590)
 - **`drain_stream_json` shim removed from `conductor-core::agent_runtime`.** TUI and web binaries now construct `CombinedSink::new(mgr, on_event_cb)` and call `runkon_runtimes::headless::drain_stream_json` directly, matching the existing re-export pattern for the rest of the headless primitives. (#2780, closes #2747)
@@ -27,23 +31,23 @@ The headline of 0.11.0 is **the `WorkflowManager` struct is gone.** All 116 of i
 - **runkon-runtimes accepts a `bot_name`.** Threaded through the spawn API; conductor-core's `BotConfig` is consumed at the boundary. (#2760, closes #2725)
 - **`analyze-lint.sh` scopes via base-branch merge-base** instead of `git diff HEAD`. The previous scoping went empty as soon as the agent committed, falling through to a workspace-wide clippy run that misattributed pre-existing errors to the agent. (#2779, closes #2777)
 
-### Fixed
+#### Fixed
 
 - **Reaper false-finalization during long actor cleanup.** `reap_finalization_stuck_workflow_runs` now skips parents whose latest actor step has a `running` `agent_run`. The 60 s threshold was previously tripping on the legitimate gap between a step's record flipping terminal on FLOW_OUTPUT and the agent subprocess actually exiting (final SDK message, log flush, prompt-file removal, child wait). The original #1777 case (transient finalization-DB-write failure) is preserved — when the agent_run is genuinely `completed`, the new check passes and the reaper still finalizes. (#2789, closes #2787)
 - **Two pre-existing test-clippy errors on the release branch** — an unused `super::*` import in `manager/tests.rs` and a `needless_borrow` on `&conn` in `tests/common.rs`. Both surfaced by PR #2772's `--lib`-only test plan; CI doesn't run on release branches, so they slipped in. (#2778, closes #2776)
 - **Web route raw SQL replaced with `WorkflowManager` calls** (now free functions after #2772). (#2759, closes #2677)
 - **`PushSubscriptionManager` correctly used in web routes** — addresses a pre-existing layer violation that was masking #2678. (#2762)
 
-### Notes
+#### Notes
 
 - v0.11.0 also closed **#2334** (jira_acli should use the manager pattern) as **won't-fix**. The cohesion benefit only materializes if the module owns real state, and giving `jira_acli` real state requires first restructuring `TicketSource` itself into a manager — a larger ticket out of v0.11.0 scope. The smaller security and DRY fixes the issue surrounded did ship in #2790.
 - No new DB migrations were added on this branch (`git log main..release/0.11.0 -- conductor-core/src/db/migrations/` is empty).
 
-## [0.10.0] — 2026-04-30
+### [0.10.0] — 2026-04-30
 
 The headline of 0.10.0 is **the workflow engine extraction is done.** `runkon-flow` is a standalone crate that conductor-core consumes through six trait implementations. A second runtime crate (`runkon-runtimes`) carries the portable agent-runtime layer. Conductor's own engine and DSL have been deleted; everything goes through `FlowEngine::run()` / `resume()` now.
 
-### Added
+#### Added
 
 - **`runkon-flow` crate** — standalone, harness-agnostic workflow engine carrying the DSL parser, execution loop, and six host-implementable traits (`ActionExecutor`, `ItemProvider`, `GateResolver`, `RunContext`, `WorkflowPersistence`, `TriggerSource`). Conductor is now the first harness. (#2700, #2685, #2688, #2699 — Phases 1–3)
 - **`runkon-runtimes` crate** — portable agent-runtime layer extracted from `conductor-core` per RFC 007. Carries `RunHandle`, `RunStatus`, `AgentRuntime`, `RunTracker`, headless subprocess plumbing, and `PermissionMode`. (#2700, #2720, #2721, #2723)
@@ -52,7 +56,7 @@ The headline of 0.10.0 is **the workflow engine extraction is done.** `runkon-fl
 - **Generic FlowOutput extras → variable map plumbing** — any string-valued top-level field in a script step's FLOW_OUTPUT is now exposed as `{{name}}` to subsequent steps, with `ENGINE_INJECTED_KEYS` shadowing prevention. (#2737)
 - **Deterministic off-diff finding filter** in `submit-review.sh` — drops blocking findings whose cited file is not in the PR diff before building the review body. Catches reviewer hallucinations that prompt-tightening alone misses. (#2735)
 
-### Changed
+#### Changed
 
 - **Engine wiring:** `execute_workflow_standalone` and `resume_workflow_standalone` now delegate to `FlowEngine::run()` / `FlowEngine::resume()`. Conductor-core's parallel engine and DSL implementations have been removed. (#2575, #2598, #2618 — Phase 3)
 - **`ChildWorkflowRunner` trait** narrowed: `execute_child` and `resume_child` now take `&ChildWorkflowContext` (an 8-field projection) instead of the full `&ExecutionState`. Future `ExecutionState` field renames no longer break harness implementors. (#2729)
@@ -64,7 +68,7 @@ The headline of 0.10.0 is **the workflow engine extraction is done.** `runkon-fl
 - **`HumanApprovalGateResolver` and PR gate resolvers** moved off direct `gh` CLI invocations and onto the bridge layer. (#2727)
 - **Workflow review pipeline:** review-aggregator's `overall_approved` decision is now derived from the post-filter blocking-findings count in `submit-review.sh`, so a clean filtered review correctly approves instead of mis-reporting "Changes Requested." (#2735)
 
-### Fixed
+#### Fixed
 
 - **`ticket_url`, `ticket_title`, `ticket_body`, `ticket_source_id`, `ticket_source_type`, `ticket_raw_json`, `repo_name`** template variables resolved to empty strings in script `env` blocks. The `prompt_builder` filter discarded all 11 `ENGINE_INJECTED_KEYS` from `state.inputs`, but the engine only re-injected 4 of them explicitly. (#2738)
 - **`foreach` child workflow runs** now inherit `ticket_id` and `repo_id` lineage from the parent run. Previously the lineage was lost because `ForeachParentCtx::make_child_state` projected from a forked `child_state` whose `inputs` had been cleared. (#2733)
@@ -74,14 +78,14 @@ The headline of 0.10.0 is **the workflow engine extraction is done.** `runkon-fl
 - **Cancellation token isolation** in foreach: each fan-out item now gets its own `current_execution_id` Arc so a `cancel_run` targeting one in-flight executor cannot clobber another sibling's slot. (#2729)
 - **Shell scripts emit `<<<FLOW_OUTPUT>>>` markers** — earlier rename pass missed `*.sh` and conditional reviewers in `review-pr.wf` silently skipped because their detect-* steps had empty `markers_out`. (#2730)
 
-### Security
+#### Security
 
 - **CORS hardening** in `conductor-web`: explicit method/header allowlist instead of wildcard. Hooks documentation calls out the threat model for command execution. (#2714)
 - **Path traversal** rejected in workflow DSL: absolute paths and `..` traversal are blocked at parse time. (#2714)
 - **JSON injection guard** in `resolve-pr-base.sh`: branch names go through `jq -nc --arg` instead of string interpolation. (#2737)
 - **Sub-workflow event sinks** are now propagated on resume so resumed child workflows emit step events to TUI/web consumers. Previously `resume_child` hardcoded `event_sinks: vec![]`. (#2729)
 
-### Deprecated
+#### Deprecated
 
 - `[notifications.workflows]` — Use `[[notify.hooks]]` with `on` patterns instead.
   A deprecation warning is now emitted at startup when this section is present in `config.toml`.
