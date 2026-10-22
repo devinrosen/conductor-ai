@@ -76,6 +76,33 @@ pub(crate) fn try_recover_from_log(
     try_recover_from_log_at(mgr, run_id, &crate::config::agent_log_dir())
 }
 
+/// Recover a run that is still `running` after its process finished, from the
+/// `result` event in `<log_dir>/<run_id>.log`. Unlike [`try_recover_from_log_at`],
+/// every write is status-guarded (`status = 'running'`), so a row finalized by
+/// another path is never overwritten, and the session id is kept. Returns the
+/// refreshed run, or `None` when the log has no result or a write failed.
+pub(crate) fn try_recover_running_from_log_at(
+    mgr: &super::manager::AgentManager<'_>,
+    run_id: &str,
+    log_dir: &std::path::Path,
+) -> Option<AgentRun> {
+    let log_path = log_dir.join(format!("{run_id}.log"));
+    let log_result = scan_log_for_result_at(&log_path)?;
+    apply_log_result(
+        mgr,
+        run_id,
+        &log_result,
+        |error_msg| {
+            mgr.update_run_failed_with_session_if_running(
+                run_id,
+                error_msg,
+                log_result.session_id.as_deref(),
+            )
+        },
+        || mgr.update_run_completed_if_running_full(run_id, &log_result),
+    )
+}
+
 /// Like [`try_recover_from_log`] but reads from `log_dir` instead of the default agent-log
 /// directory. Useful in tests to avoid writing to the real `~/.conductor/agent-logs/`.
 pub(crate) fn try_recover_from_log_at(
@@ -85,28 +112,49 @@ pub(crate) fn try_recover_from_log_at(
 ) -> Option<AgentRun> {
     let log_path = log_dir.join(format!("{run_id}.log"));
     let log_result = scan_log_for_result_at(&log_path)?;
-    if log_result.is_error {
+    apply_log_result(
+        mgr,
+        run_id,
+        &log_result,
+        |error_msg| mgr.update_run_failed(run_id, error_msg),
+        || {
+            mgr.update_run_completed(
+                run_id,
+                None,
+                log_result.result_text.as_deref(),
+                log_result.cost_usd,
+                log_result.num_turns,
+                log_result.duration_ms,
+                log_result.input_tokens,
+                log_result.output_tokens,
+                log_result.cache_read_input_tokens,
+                log_result.cache_creation_input_tokens,
+            )
+        },
+    )
+}
+
+/// Shared tail of the log-recovery functions: pick the failed or completed writer
+/// from `log_result.is_error`, run it, and read the refreshed run back. Returns
+/// `None` if the write or the read-back fails.
+fn apply_log_result(
+    mgr: &super::manager::AgentManager<'_>,
+    run_id: &str,
+    log_result: &LogResult,
+    write_failed: impl FnOnce(&str) -> crate::error::Result<()>,
+    write_completed: impl FnOnce() -> crate::error::Result<()>,
+) -> Option<AgentRun> {
+    let written = if log_result.is_error {
         let error_msg = log_result
             .result_text
             .as_deref()
             .unwrap_or(DEFAULT_AGENT_ERROR_MSG);
-        if let Err(e) = mgr.update_run_failed(run_id, error_msg) {
-            tracing::warn!("failed to mark run {run_id} as failed during log recovery: {e}");
-            return None;
-        }
-    } else if let Err(e) = mgr.update_run_completed(
-        run_id,
-        None,
-        log_result.result_text.as_deref(),
-        log_result.cost_usd,
-        log_result.num_turns,
-        log_result.duration_ms,
-        log_result.input_tokens,
-        log_result.output_tokens,
-        log_result.cache_read_input_tokens,
-        log_result.cache_creation_input_tokens,
-    ) {
-        tracing::warn!("failed to mark run {run_id} as completed during log recovery: {e}");
+        write_failed(error_msg)
+    } else {
+        write_completed()
+    };
+    if let Err(e) = written {
+        tracing::warn!("failed to write terminal status for run {run_id} during log recovery: {e}");
         return None;
     }
     // DB update succeeded — read back the refreshed run. Warn explicitly on
