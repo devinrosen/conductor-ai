@@ -51,7 +51,13 @@ fn test_script_runtime_captures_conductor_prompt() {
     let run_id = format!("test-script-prompt-{}", ulid::Ulid::new());
     let _db_guard = common::setup_test_db(&run_id, "script");
 
-    let runtime = make_runtime(Some("echo $CONDUCTOR_PROMPT"));
+    // Explicitly set prompt_env to CONDUCTOR_PROMPT: runkon 0.7.0-alpha changed the default
+    // to FLOW_PROMPT, but ConductorRuntimeResolver injects CONDUCTOR_PROMPT for backward compat.
+    let runtime = ScriptRuntime::new(RuntimeConfig {
+        command: Some("echo $CONDUCTOR_PROMPT".to_string()),
+        prompt_env: Some("CONDUCTOR_PROMPT".to_string()),
+        ..RuntimeConfig::default()
+    });
     let req = common::make_request(
         &run_id,
         "my-unique-prompt-string",
@@ -197,5 +203,74 @@ fn test_script_runtime_rejects_invalid_run_id() {
     assert!(
         err.to_string().contains("invalid run_id"),
         "error must mention invalid run_id, got: {err}"
+    );
+}
+
+#[test]
+fn test_conductor_runtime_resolver_injects_conductor_prompt_for_legacy_script() {
+    // Exercises the backward-compat block in ConductorRuntimeResolver::resolve:
+    // a script runtime with no explicit prompt_env must
+    // receive CONDUCTOR_PROMPT so existing workflow scripts don't silently break
+    // after the runkon 0.7.0-alpha upgrade changed the default to FLOW_PROMPT.
+    use conductor_core::config::{AgentPermissionMode, RuntimeConfig};
+    use conductor_core::runtime::adapter::ConductorRuntimeResolver;
+    use conductor_core::runtime::RuntimeOptions;
+    use runkon_runtimes::RuntimeResolver;
+    use std::collections::HashMap;
+
+    let run_id = format!("test-resolver-compat-{}", ulid::Ulid::new());
+    let _db_guard = common::setup_test_db(&run_id, "script");
+
+    let mut runtimes = HashMap::new();
+    runtimes.insert(
+        "my-script".to_string(),
+        RuntimeConfig {
+            runtime_type: Some("script".to_string()),
+            command: Some("echo $CONDUCTOR_PROMPT".to_string()),
+            prompt_env: None, // omitted — resolver must inject CONDUCTOR_PROMPT
+            ..RuntimeConfig::default()
+        },
+    );
+
+    let options = RuntimeOptions {
+        binary_path: std::path::PathBuf::from("conductor"),
+        env: Default::default(),
+        log_path_for_run: Arc::new(|run_id| {
+            conductor_core::config::agent_log_path(run_id)
+                .unwrap_or_else(|_| std::env::temp_dir().join(format!("{run_id}.log")))
+        }),
+        workspace_root: std::path::PathBuf::from("/tmp"),
+        stall_threshold: None,
+        max_turns: None,
+    };
+
+    let resolver = ConductorRuntimeResolver {
+        permission_mode: AgentPermissionMode::default().to_runtime_permission_mode(),
+        runtimes,
+        options,
+    };
+
+    let runtime = resolver
+        .resolve("my-script")
+        .expect("ConductorRuntimeResolver must resolve a script runtime");
+
+    let req = common::make_request(
+        &run_id,
+        "backward-compat-prompt-value",
+        _db_guard.path().to_path_buf(),
+        "my-script",
+    );
+
+    runtime.spawn_validated(&req).expect("spawn must succeed");
+
+    let result = runtime
+        .poll(&run_id, None, Duration::from_secs(5))
+        .expect("poll must succeed");
+
+    assert_eq!(result.status, runkon_runtimes::RunStatus::Completed);
+    let text = result.result_text.expect("result_text must be set");
+    assert!(
+        text.contains("backward-compat-prompt-value"),
+        "CONDUCTOR_PROMPT must be injected by resolver; got: {text}"
     );
 }
