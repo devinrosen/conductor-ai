@@ -18,7 +18,9 @@ workflow iterate-pr {
     }
 
     // Review everything since the last conductor review, or the whole PR when
-    // there is none (first cycle, rebase, force-push). #3074.
+    // there is none (first cycle, rebase, force-push). #3074. Also decides
+    // whether off-diff findings are filed: only the PR's first conductor
+    // review files them (#3090).
     script review-scope {
       run = ".conductor/scripts/review-scope.sh"
       env = {
@@ -30,6 +32,7 @@ workflow iterate-pr {
       inputs {
         scope = "{{review_scope}}"
         since = "{{review_since}}"
+        file_off_diff = "{{review_file_off_diff}}"
       }
     }
 
