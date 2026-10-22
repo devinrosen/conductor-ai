@@ -32,6 +32,19 @@ fn resolve_wt_path(
     }
 }
 
+/// Load the definition a run will execute: the target's own
+/// `.conductor/workflows/<name>.wf`, falling back to the repo's checkout when
+/// the target has none. `working_dir` is the resolved worktree path, or the
+/// repo path for repo-targeted runs.
+fn load_run_workflow_def(
+    working_dir: &str,
+    repo_path: &str,
+    workflow_name: &str,
+) -> Result<conductor_core::workflow::WorkflowDef, CallToolResult> {
+    conductor_core::workflow::load_def_by_name(working_dir, repo_path, workflow_name)
+        .map_err(|e| tool_err(format!("Failed to load workflow '{workflow_name}': {e}")))
+}
+
 pub(super) fn tool_list_workflows(
     conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
@@ -249,16 +262,6 @@ pub(super) fn tool_run_workflow(
         None
     };
 
-    // Load the workflow definition
-    let workflow = match conductor_core::workflow::load_def_by_name(
-        &repo.local_path,
-        &repo.local_path,
-        workflow_name,
-    ) {
-        Ok(w) => w,
-        Err(e) => return tool_err(format!("Failed to load workflow '{workflow_name}': {e}")),
-    };
-
     // Resolve worktree: either from `worktree` slug or from `pr` number/URL
     let (worktree_id, working_dir, target_label) = if let Some(pr_number) = pr_number {
         use conductor_core::github::get_pr_head_branch;
@@ -290,6 +293,11 @@ pub(super) fn tool_run_workflow(
         }
     } else {
         (None, repo.local_path.clone(), repo_slug.to_string())
+    };
+
+    let workflow = match load_run_workflow_def(&working_dir, &repo.local_path, workflow_name) {
+        Ok(w) => w,
+        Err(e) => return e,
     };
 
     // Condvar-based notification: the workflow engine writes the run ID here and
@@ -921,6 +929,76 @@ workflow review {
         assert!(
             text.contains("mutually exclusive"),
             "expected 'mutually exclusive' error, got: {text}"
+        );
+    }
+
+    const RUN_WF: &str = r#"
+workflow deploy {
+    meta { description = "Deploy" trigger = "manual" targets = ["worktree"] }
+    call deployer
+}
+"#;
+
+    #[test]
+    fn test_load_run_workflow_def_prefers_worktree_copy() {
+        let repo = make_wf_dir_with_workflow("deploy", RUN_WF);
+        let wt = make_wf_dir_with_workflow("deploy", RUN_WF);
+        let def = load_run_workflow_def(
+            wt.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            "deploy",
+        )
+        .expect("load");
+        assert!(
+            def.source_path.starts_with(wt.path().to_str().unwrap()),
+            "expected the worktree's copy, got {}",
+            def.source_path
+        );
+    }
+
+    #[test]
+    fn test_load_run_workflow_def_worktree_only() {
+        let repo = tempfile::TempDir::new().expect("tempdir");
+        let wt = make_wf_dir_with_workflow("deploy", RUN_WF);
+        let def = load_run_workflow_def(
+            wt.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            "deploy",
+        )
+        .expect("a workflow that exists only in the worktree must load");
+        assert!(def.source_path.starts_with(wt.path().to_str().unwrap()));
+    }
+
+    #[test]
+    fn test_load_run_workflow_def_falls_back_to_repo() {
+        let repo = make_wf_dir_with_workflow("deploy", RUN_WF);
+        let wt = tempfile::TempDir::new().expect("tempdir");
+        let def = load_run_workflow_def(
+            wt.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            "deploy",
+        )
+        .expect("load");
+        assert!(def.source_path.starts_with(repo.path().to_str().unwrap()));
+    }
+
+    #[test]
+    fn test_load_run_workflow_def_missing_is_tool_error() {
+        let repo = tempfile::TempDir::new().expect("tempdir");
+        let wt = tempfile::TempDir::new().expect("tempdir");
+        let err = load_run_workflow_def(
+            wt.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            "deploy",
+        )
+        .expect_err("missing workflow");
+        let text = err.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("Failed to load workflow 'deploy'"),
+            "got: {text}"
         );
     }
 
