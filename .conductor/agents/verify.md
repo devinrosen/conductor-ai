@@ -55,7 +55,7 @@ Report the passed/failed counts from the summary line, and on failure the failin
 
 **c. cargo clippy**, for each changed crate: `cargo clippy -p <crate> --all-targets -- -D warnings`
 
-**d. cargo fmt** (always run if any Rust changed): `cargo fmt --all --check`
+**d. cargo fmt** (always run if any Rust changed): `cargo fmt --all --check`. The `fmt-fix` script runs just before this step, so a failure here means rustfmt itself couldn't format the code (usually a parse error). Report it as such, not as formatting hunks to apply by hand.
 
 A command that can't run (a missing tool, a bad flag) is a FAIL with the reason, not a PASS.
 

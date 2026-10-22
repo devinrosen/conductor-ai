@@ -43,6 +43,13 @@ workflow iterate-pr {
           as = "developer"
         }
 
+        script fmt-fix {
+          run = ".conductor/scripts/fmt-fix.sh"
+          env = {
+            FMT_FIX_ALLOW_FAILURE = "1"
+          }
+        }
+
         call verify
 
         if verify.has_failures {
@@ -50,13 +57,19 @@ workflow iterate-pr {
             retries = 1
             as      = "developer"
           }
+          script fmt-fix {
+            run = ".conductor/scripts/fmt-fix.sh"
+            env = {
+              FMT_FIX_ALLOW_FAILURE = "1"
+            }
+          }
           call verify
         }
 
+        call workflow lint-fix
         script fmt-fix {
           run = ".conductor/scripts/fmt-fix.sh"
         }
-        call workflow lint-fix
       }
     }
 
