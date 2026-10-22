@@ -13,6 +13,7 @@ hints:
   - If the repo has multiple services or packages, the review agents may need to be scoped per-service
   - Consider whether performance review makes sense for this repo type (e.g. skip for pure docs repos)
   - In the shared review-diff-scope prompt, have reviewers report every location of a concern in one finding (first location in file/line, the rest as "Also at: <path>:<line>, ..." at the end of message), and have the address-reviews agent fix every listed location. A concern split across review rounds costs a full fix, CI and review cycle per round
+  - The fetch-pr-replies script collects comments, review bodies and inline comments posted since the most recent review carrying the <!-- conductor-review --> marker, excluding that review's author, and emits them as a `replies` field in its FLOW_OUTPUT. It must read only replies, never findings from earlier reviews (the reviews API also returns dismissed reviews). The review-aggregator agent moves findings a reply already answered into an optional `answered_findings` schema field; submit-review lists them under "Previously answered" and moves any Security finding back to blocking
 ---
 workflow review-pr {
   meta {
@@ -46,10 +47,14 @@ workflow review-pr {
     call review-db-migrations   { retries = 1  if = "detect-db-migrations.has_db_migrations" }
   }
 
+  script fetch-pr-replies {
+    run = ".conductor/scripts/fetch-pr-replies.sh"
+    env = { PR_NUMBER = "{{pr_number}}" }
+  }
+  call review-aggregator { output = "review-aggregator" retries = 1 }
   script submit-review {
     run = ".conductor/scripts/submit-review.sh"
     as  = "reviewer"
     env = { PRIOR_OUTPUT = "{{prior_output}}" PR_NUMBER = "{{pr_number}}" DRY_RUN = "{{dry_run}}" }
   }
-  call review-aggregator { output = "review-aggregator" retries = 1 }
 }
