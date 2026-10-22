@@ -70,7 +70,7 @@ pub use manager::fan_out::{
 };
 pub use manager::lifecycle::{
     cancel_run, create_workflow_run, create_workflow_run_with_targets, fail_workflow_run,
-    persist_workflow_metrics, set_dismissed, set_waiting_blocked_on,
+    mark_run_resuming, persist_workflow_metrics, set_dismissed, set_waiting_blocked_on,
     set_workflow_run_default_bot_name, set_workflow_run_inputs, set_workflow_run_iteration,
     update_workflow_status,
 };

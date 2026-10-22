@@ -1176,14 +1176,9 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
             skip_count
         };
 
-        // Reset run status to Running
-        crate::workflow::update_workflow_status(
-            conn,
-            &wf_run.id,
-            WorkflowRunStatus::Running,
-            None,
-            None,
-        )?;
+        // Reset run status to Running, under a grace lease so the dead-parent
+        // reaper can't fail it before the engine takes ownership (#3076).
+        crate::workflow::mark_run_resuming(conn, &wf_run.id)?;
 
         tracing::info!(
             "Resuming workflow '{}' (run {}), {} completed steps to skip",
