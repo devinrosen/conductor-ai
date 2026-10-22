@@ -20,7 +20,10 @@ pub async fn static_handler(uri: Uri) -> Response {
         // SPA fallback: serve index.html for any unmatched path
         match Assets::get("index.html") {
             Some(content) => Html(content.data.into_owned()).into_response(),
-            None => StatusCode::NOT_FOUND.into_response(),
+            None => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Html("<pre>Frontend not built.\nRun: cd conductor-web/frontend &amp;&amp; bun install &amp;&amp; bun run build</pre>"),
+            ).into_response(),
         }
     }
 }
