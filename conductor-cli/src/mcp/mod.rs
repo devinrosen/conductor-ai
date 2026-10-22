@@ -8,6 +8,8 @@ mod helpers;
 
 mod resources;
 mod server;
+#[cfg(unix)]
+mod stdio;
 mod subscriptions;
 mod tools;
 
@@ -16,6 +18,18 @@ pub use server::ConductorMcpServer;
 /// Start the stdio MCP server and block until the client disconnects.
 pub async fn serve() -> anyhow::Result<()> {
     let server = ConductorMcpServer::new();
+    // On unix, keep the JSON-RPC pipes off fd 0/1 so spawned children can't
+    // read requests or write into responses (#3093). See `stdio`.
+    #[cfg(unix)]
+    let service = {
+        let (reader, writer) = stdio::isolate_stdio()?;
+        let transport = (
+            tokio::fs::File::from_std(reader),
+            tokio::fs::File::from_std(writer),
+        );
+        rmcp::serve_server(server, transport).await?
+    };
+    #[cfg(not(unix))]
     let service = rmcp::serve_server(server, rmcp::transport::stdio()).await?;
     service.waiting().await?;
     Ok(())

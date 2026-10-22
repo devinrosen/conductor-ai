@@ -8,10 +8,59 @@ use rmcp::model::{
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler};
+use std::time::Duration;
 
 use super::subscriptions::SubscriptionHub;
 
 const RUN_URI_PREFIX: &str = "conductor://run/";
+
+/// Upper bound for read-only DB tools: two `busy_timeout` waits (5s each).
+const READ_TOOL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Timeout for DB-only read tools. Tools that mutate state, run workflows, or
+/// shell out to the network get none: timing out would report failure for work
+/// that is still in progress.
+fn read_only_timeout(name: &str) -> Option<Duration> {
+    match name {
+        "conductor_get_run"
+        | "conductor_list_runs"
+        | "conductor_list_agent_runs"
+        | "conductor_get_step_log"
+        | "conductor_list_worktrees"
+        | "conductor_get_worktree"
+        | "conductor_list_tickets"
+        | "conductor_get_ready_tickets"
+        | "conductor_list_repos"
+        | "conductor_list_workflows"
+        | "conductor_list_templates" => Some(READ_TOOL_TIMEOUT),
+        _ => None,
+    }
+}
+
+/// Await a blocking tool task, returning a clear tool error if it exceeds `limit`.
+/// On expiry the blocking task keeps running and is dropped when it finishes;
+/// read-only tools hold only a read connection, so leaving it is harmless.
+async fn run_with_timeout(
+    name: &str,
+    limit: Option<Duration>,
+    handle: tokio::task::JoinHandle<CallToolResult>,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let joined = match limit {
+        Some(limit) => match tokio::time::timeout(limit, handle).await {
+            Ok(joined) => joined,
+            Err(_) => {
+                return Ok(crate::mcp::helpers::tool_err(format!(
+                    "{name} did not finish within {}s. The conductor database may be locked \
+                     by another process (a running workflow, the TUI, or another MCP server). \
+                     Retry, or check with `conductor workflow run-show <id>`.",
+                    limit.as_secs()
+                )))
+            }
+        },
+        None => handle.await,
+    };
+    joined.map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))
+}
 
 /// Strip the `conductor://run/` prefix from a resource URI, returning the run id.
 fn parse_run_uri(uri: &str) -> Option<&str> {
@@ -133,17 +182,16 @@ impl ServerHandler for ConductorMcpServer {
         let name = request.name.to_string();
         let args = request.arguments.unwrap_or_default();
         let event_sinks = vec![self.hub.channel_sink()];
-        let result = tokio::task::spawn_blocking(move || {
+        let limit = read_only_timeout(&name);
+        let tool_name = name.clone();
+        let handle = tokio::task::spawn_blocking(move || {
             let conductor = conductor_core::Conductor::open().map_err(anyhow::Error::from);
             match conductor {
                 Ok(c) => super::tools::dispatch_tool(&c, &name, &args, &event_sinks),
                 Err(e) => crate::mcp::helpers::tool_err(e),
             }
-        })
-        .await
-        .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
-
-        Ok(result)
+        });
+        run_with_timeout(&tool_name, limit, handle).await
     }
 
     async fn subscribe(
@@ -220,6 +268,50 @@ impl ServerHandler for ConductorMcpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn result_text(r: &CallToolResult) -> String {
+        serde_json::to_string(r).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_run_with_timeout_errors_when_task_is_too_slow() {
+        let handle = tokio::task::spawn_blocking(|| {
+            std::thread::sleep(Duration::from_millis(500));
+            crate::mcp::helpers::tool_ok("late")
+        });
+        let r = run_with_timeout(
+            "conductor_get_run",
+            Some(Duration::from_millis(50)),
+            handle,
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.is_error, Some(true));
+        let text = result_text(&r);
+        assert!(text.contains("conductor_get_run"), "{text}");
+        assert!(text.contains("did not finish within"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn test_run_with_timeout_passes_through_fast_result() {
+        let handle = tokio::task::spawn_blocking(|| crate::mcp::helpers::tool_ok("fast"));
+        let r = run_with_timeout("conductor_get_run", Some(Duration::from_secs(5)), handle)
+            .await
+            .unwrap();
+        assert_ne!(r.is_error, Some(true));
+        assert!(result_text(&r).contains("fast"));
+    }
+
+    #[test]
+    fn test_read_only_timeout_classification() {
+        assert_eq!(
+            read_only_timeout("conductor_get_run"),
+            Some(READ_TOOL_TIMEOUT)
+        );
+        assert_eq!(read_only_timeout("conductor_run_workflow"), None);
+        assert_eq!(read_only_timeout("conductor_create_worktree"), None);
+        assert_eq!(read_only_timeout("conductor_list_prs"), None);
+    }
 
     #[test]
     fn test_is_terminal_recognises_all_terminal_states() {
