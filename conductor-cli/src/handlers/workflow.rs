@@ -441,14 +441,10 @@ pub fn handle_workflow(
             stall_after,
             json,
         } => {
-            let defaults = conductor_core::workflow::WaitOptions::default();
-            let opts = conductor_core::workflow::WaitOptions {
-                timeout: timeout.map(std::time::Duration::from_secs),
-                stall_after: stall_after
-                    .map(std::time::Duration::from_secs)
-                    .unwrap_or(defaults.stall_after),
-                ..defaults
-            };
+            let opts = conductor_core::workflow::WaitOptions::with_overrides(
+                timeout.map(std::time::Duration::from_secs),
+                stall_after.map(std::time::Duration::from_secs),
+            );
             let summary = conductor_core::workflow::wait_for_workflow_run(conn, &id, &opts)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&summary)?);

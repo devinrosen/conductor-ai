@@ -22,7 +22,7 @@ use rusqlite::{named_params, Connection};
 use serde::Serialize;
 
 use crate::error::{ConductorError, Result};
-use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
+use crate::workflow::{ConductorWorkflowRun, WorkflowRunStatus, WorkflowStepStatus};
 
 use super::queries::{get_workflow_run, get_workflow_steps};
 
@@ -82,6 +82,18 @@ impl Default for WaitOptions {
     }
 }
 
+impl WaitOptions {
+    /// Defaults with optional caller overrides, shared by the CLI and the MCP tool.
+    pub fn with_overrides(timeout: Option<Duration>, stall_after: Option<Duration>) -> Self {
+        let defaults = Self::default();
+        Self {
+            timeout,
+            stall_after: stall_after.unwrap_or(defaults.stall_after),
+            ..defaults
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct WaitStepSummary {
     pub step_name: String,
@@ -107,14 +119,18 @@ pub struct WaitSummary {
     pub last_step: Option<WaitStepSummary>,
 }
 
-/// Returns `(age of newest sign of life in secs, non-terminal descendants with a fresh lease)`.
-fn run_tree_liveness(conn: &Connection, run_id: &str) -> Result<(Option<i64>, usize)> {
-    let age: Option<i64> = conn.query_row(
-        "WITH RECURSIVE tree(id) AS (
+/// Recursive CTE yielding `tree(id)` for `:root` and all its descendant runs.
+const RUN_TREE_CTE: &str = "WITH RECURSIVE tree(id) AS (
            SELECT :root
            UNION ALL
            SELECT r.id FROM workflow_runs r JOIN tree t ON r.parent_workflow_run_id = t.id
-         ),
+         )";
+
+/// Returns `(age of newest sign of life in secs, non-terminal descendants with a fresh lease)`.
+fn run_tree_liveness(conn: &Connection, run_id: &str) -> Result<(Option<i64>, usize)> {
+    let age: Option<i64> = conn.query_row(
+        &format!(
+            "{RUN_TREE_CTE},
          signals(ts) AS (
            SELECT datetime(lease_until) FROM workflow_runs WHERE id IN (SELECT id FROM tree)
            UNION ALL SELECT datetime(started_at) FROM workflow_runs WHERE id IN (SELECT id FROM tree)
@@ -123,27 +139,32 @@ fn run_tree_liveness(conn: &Connection, run_id: &str) -> Result<(Option<i64>, us
            UNION ALL SELECT datetime(ended_at) FROM workflow_run_steps
              WHERE workflow_run_id IN (SELECT id FROM tree)
          )
-         SELECT CAST((julianday('now') - julianday(MAX(ts))) * 86400 AS INTEGER) FROM signals",
+         SELECT CAST((julianday('now') - julianday(MAX(ts))) * 86400 AS INTEGER) FROM signals"
+        ),
         named_params![":root": run_id],
         |row| row.get(0),
     )?;
 
     let live_descendants: i64 = conn.query_row(
-        "WITH RECURSIVE tree(id) AS (
-           SELECT r.id FROM workflow_runs r WHERE r.parent_workflow_run_id = :root
-           UNION ALL
-           SELECT r.id FROM workflow_runs r JOIN tree t ON r.parent_workflow_run_id = t.id
-         )
+        &format!(
+            "{RUN_TREE_CTE}
          SELECT COUNT(*) FROM workflow_runs
          WHERE id IN (SELECT id FROM tree)
+           AND id != :root
            AND status NOT IN ('completed', 'failed', 'cancelled')
            AND lease_until IS NOT NULL
-           AND datetime(lease_until) > datetime('now')",
+           AND datetime(lease_until) > datetime('now')"
+        ),
         named_params![":root": run_id],
         |row| row.get(0),
     )?;
 
     Ok((age, live_descendants.max(0) as usize))
+}
+
+fn load_run(conn: &Connection, run_id: &str) -> Result<ConductorWorkflowRun> {
+    get_workflow_run(conn, run_id)?
+        .ok_or_else(|| ConductorError::WorkflowRunNotFound { id: run_id.into() })
 }
 
 fn last_step_summary(conn: &Connection, run_id: &str) -> Result<Option<WaitStepSummary>> {
@@ -172,12 +193,11 @@ fn last_step_summary(conn: &Connection, run_id: &str) -> Result<Option<WaitStepS
 
 fn build_summary(
     conn: &Connection,
-    run_id: &str,
+    run: &ConductorWorkflowRun,
     outcome: WaitOutcome,
     started: Instant,
 ) -> Result<WaitSummary> {
-    let run = get_workflow_run(conn, run_id)?
-        .ok_or_else(|| ConductorError::WorkflowRunNotFound { id: run_id.into() })?;
+    let run_id = run.id.as_str();
     let (age, _) = run_tree_liveness(conn, run_id)?;
     Ok(WaitSummary {
         run_id: run.id.clone(),
@@ -201,10 +221,8 @@ fn evaluate(
     opts: &WaitOptions,
     started: Instant,
 ) -> Result<Option<WaitSummary>> {
-    let status = get_workflow_run(conn, run_id)?
-        .ok_or_else(|| ConductorError::WorkflowRunNotFound { id: run_id.into() })?
-        .status
-        .clone();
+    let run = load_run(conn, run_id)?;
+    let status = run.status.clone();
     let (age, live_descendants) = run_tree_liveness(conn, run_id)?;
 
     if status.is_terminal() {
@@ -218,13 +236,13 @@ fn evaluate(
             WorkflowRunStatus::Cancelled => WaitOutcome::Cancelled,
             _ => WaitOutcome::Failed,
         };
-        return Ok(Some(build_summary(conn, run_id, outcome, started)?));
+        return Ok(Some(build_summary(conn, &run, outcome, started)?));
     }
 
     if age.is_some_and(|a| a > opts.stall_after.as_secs() as i64) {
         return Ok(Some(build_summary(
             conn,
-            run_id,
+            &run,
             WaitOutcome::Stalled,
             started,
         )?));
@@ -247,7 +265,12 @@ pub fn wait_for_workflow_run(
         }
         if let Some(timeout) = opts.timeout {
             if started.elapsed() >= timeout {
-                return build_summary(conn, run_id, WaitOutcome::Timeout, started);
+                return build_summary(
+                    conn,
+                    &load_run(conn, run_id)?,
+                    WaitOutcome::Timeout,
+                    started,
+                );
             }
         }
         std::thread::sleep(opts.poll_interval);
@@ -357,6 +380,14 @@ mod tests {
         conn.execute(
             &sql,
             named_params![":id": id, ":run": run_id, ":name": name],
+        )
+        .unwrap();
+    }
+
+    fn set_step(conn: &Connection, id: &str, status: &str, position: i64, result: Option<&str>) {
+        conn.execute(
+            "UPDATE workflow_run_steps SET status = :s, position = :p, result_text = :r WHERE id = :id",
+            named_params![":s": status, ":p": position, ":r": result, ":id": id],
         )
         .unwrap();
     }
@@ -559,5 +590,139 @@ mod tests {
         });
         assert!(text.starts_with("outcome: failed"));
         assert!(text.contains("second"));
+    }
+
+    #[test]
+    fn failed_last_step_populates_step_error() {
+        let conn = setup();
+        insert_run(&conn, "r", None, "failed", None, "-1 hours");
+        insert_step(&conn, "s", "r", "boom", "-50 minutes", Some("-49 minutes"));
+        set_step(&conn, "s", "failed", 0, Some("it broke"));
+        let step = eval(&conn, "r").unwrap().last_step.unwrap();
+        assert_eq!(step.status, "failed");
+        assert_eq!(step.step_error.as_deref(), Some("it broke"));
+    }
+
+    #[test]
+    fn non_failed_step_has_no_step_error() {
+        let conn = setup();
+        insert_run(&conn, "r", None, "failed", None, "-1 hours");
+        insert_step(&conn, "s", "r", "ok", "-50 minutes", Some("-49 minutes"));
+        set_step(&conn, "s", "completed", 0, Some("fine"));
+        assert!(eval(&conn, "r")
+            .unwrap()
+            .last_step
+            .unwrap()
+            .step_error
+            .is_none());
+    }
+
+    #[test]
+    fn run_without_steps_has_no_last_step() {
+        let conn = setup();
+        insert_run(&conn, "r", None, "failed", None, "-1 hours");
+        assert!(eval(&conn, "r").unwrap().last_step.is_none());
+    }
+
+    #[test]
+    fn last_step_ties_break_by_position() {
+        let conn = setup();
+        insert_run(&conn, "r", None, "failed", None, "-1 hours");
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, position, status, started_at) \
+             VALUES ('a', 'r', 'low', 'actor', 1, 'completed', '2026-01-01T00:00:00Z'), \
+                    ('b', 'r', 'high', 'actor', 2, 'completed', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        let step = eval(&conn, "r").unwrap().last_step.unwrap();
+        assert_eq!(step.step_name, "high");
+    }
+
+    fn summary(outcome: WaitOutcome) -> WaitSummary {
+        WaitSummary {
+            run_id: "run1".into(),
+            workflow_name: "wf".into(),
+            outcome,
+            status: "running".into(),
+            error: None,
+            elapsed_secs: 5,
+            last_signal_age_secs: Some(123),
+            last_step: None,
+        }
+    }
+
+    #[test]
+    fn format_includes_error_and_step_error_lines() {
+        let text = format_wait_summary(&WaitSummary {
+            error: Some("engine died".into()),
+            last_step: Some(WaitStepSummary {
+                step_name: "build".into(),
+                status: "failed".into(),
+                iteration: 2,
+                step_error: Some("exit 1".into()),
+                context_out: Some("partial".into()),
+                started_at: None,
+                ended_at: None,
+            }),
+            ..summary(WaitOutcome::Failed)
+        });
+        assert!(text.contains("error: engine died\n"));
+        assert!(text.contains("last step: build [failed] (iteration 2)"));
+        assert!(text.contains("  step error: exit 1\n"));
+        assert!(text.contains("  context: partial\n"));
+        assert!(!text.contains("hint:"));
+    }
+
+    #[test]
+    fn format_stalled_hint_has_resume_command() {
+        let text = format_wait_summary(&summary(WaitOutcome::Stalled));
+        assert!(text.starts_with("outcome: stalled"));
+        assert!(text.contains("for 123s"));
+        assert!(text.contains("conductor workflow resume run1"));
+    }
+
+    #[test]
+    fn format_timeout_hint() {
+        let text = format_wait_summary(&summary(WaitOutcome::Timeout));
+        assert!(text.starts_with("outcome: timeout"));
+        assert!(text.contains("hint: run is still in progress"));
+    }
+
+    #[test]
+    fn with_overrides_applies_or_falls_back() {
+        let d = WaitOptions::default();
+        let o = WaitOptions::with_overrides(None, None);
+        assert_eq!(o.timeout, None);
+        assert_eq!(o.stall_after, d.stall_after);
+        let o =
+            WaitOptions::with_overrides(Some(Duration::from_secs(7)), Some(Duration::from_secs(9)));
+        assert_eq!(o.timeout, Some(Duration::from_secs(7)));
+        assert_eq!(o.stall_after, Duration::from_secs(9));
+        assert_eq!(o.poll_interval, d.poll_interval);
+    }
+
+    #[test]
+    fn descendant_count_excludes_root() {
+        let conn = setup();
+        insert_run(
+            &conn,
+            "root",
+            None,
+            "running",
+            Some("+20 seconds"),
+            "-1 hours",
+        );
+        assert_eq!(run_tree_liveness(&conn, "root").unwrap().1, 0);
+        insert_run(
+            &conn,
+            "kid",
+            Some("root"),
+            "running",
+            Some("+20 seconds"),
+            "-1 hours",
+        );
+        assert_eq!(run_tree_liveness(&conn, "root").unwrap().1, 1);
     }
 }

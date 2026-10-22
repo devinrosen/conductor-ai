@@ -341,11 +341,18 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
                     "run_id": { "type": "string", "description": "Workflow run ID" },
                     "timeout_secs": {
                         "type": "integer",
-                        "description": "Give up after this many seconds (default 600, max 3600)"
+                        "description": format!(
+                            "Give up after this many seconds (default {}, max {})",
+                            runs::WAIT_DEFAULT_TIMEOUT_SECS,
+                            runs::WAIT_MAX_TIMEOUT_SECS
+                        )
                     },
                     "stall_after_secs": {
                         "type": "integer",
-                        "description": "Report a stall when a non-terminal run shows no lease or step activity for this many seconds (default 60)"
+                        "description": format!(
+                            "Report a stall when a non-terminal run shows no lease or step activity for this many seconds (default {})",
+                            conductor_core::workflow::WaitOptions::default().stall_after.as_secs()
+                        )
                     }
                 }));
                 m.insert("required".into(), json!(["run_id"]));
