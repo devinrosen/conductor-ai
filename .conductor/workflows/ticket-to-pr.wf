@@ -28,12 +28,25 @@ workflow ticket-to-pr {
     as      = "developer"
   }
 
+  script fmt-fix-pre-verify {
+    run = ".conductor/scripts/fmt-fix.sh"
+    env = {
+      FMT_FIX_ALLOW_FAILURE = "1"
+    }
+  }
+
   call verify
 
   if verify.has_failures {
     call implement {
       retries = 1
       as      = "developer"
+    }
+    script fmt-fix-pre-reverify {
+      run = ".conductor/scripts/fmt-fix.sh"
+      env = {
+        FMT_FIX_ALLOW_FAILURE = "1"
+      }
     }
     call verify
   }
