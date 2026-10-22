@@ -79,20 +79,21 @@ fn error_line(msg: &str) -> String {
 }
 
 /// Write one line to the parent's pipe and close the child's end.
-fn send_to_parent(write_fd: i32, line: &str) {
-    // SAFETY: write_fd came from the parent's pipe via NOTIFY_FD_FLAG. A stale
-    // or invalid fd only makes write/close fail, which is harmless here.
-    unsafe {
-        libc::write(write_fd, line.as_ptr() as *const libc::c_void, line.len());
-        libc::close(write_fd);
-    }
+fn send_to_parent(write_fd: i32, line: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    // SAFETY: write_fd came from the parent's pipe via NOTIFY_FD_FLAG and is
+    // used nowhere else; the File takes ownership and closes it on drop.
+    let mut pipe = unsafe { std::fs::File::from_raw_fd(write_fd) };
+    pipe.write_all(line.as_bytes())
 }
 
 /// Report a failure that happened before [`run_as_background_child`] took over
 /// (opening the database, resolving the repo, worktree or workflow) to the
 /// waiting parent, since this process has no visible stdio.
 pub fn report_startup_error(write_fd: i32, err: &anyhow::Error) {
-    send_to_parent(write_fd, &error_line(&format!("{err:#}")));
+    // Best effort: this process is already exiting with `err`, and with no
+    // visible stdio there is nowhere else to report a failed write.
+    let _ = send_to_parent(write_fd, &error_line(&format!("{err:#}")));
 }
 
 /// Start this same `conductor workflow run` invocation as a detached background
@@ -254,6 +255,7 @@ pub fn run_as_background_child(mut params: WorkflowExecStandalone, write_fd: i32
         .unwrap_or_else(|e| e.into_inner());
 
     // Build the line to send through the pipe.
+    let run_id = guard.clone();
     let (line, is_error) = if let Some(err) = error_slot
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -272,7 +274,14 @@ pub fn run_as_background_child(mut params: WorkflowExecStandalone, write_fd: i32
     // Drop the guard before writing to avoid holding the lock.
     drop(guard);
 
-    send_to_parent(write_fd, &line);
+    if let Err(e) = send_to_parent(write_fd, &line) {
+        // The parent never learns the run ID and would otherwise wait on this
+        // process for the whole workflow. Fail the run and exit now.
+        if let (false, Some(id)) = (is_error, run_id.as_deref()) {
+            let _ = cleanup_failed_run(id, &format!("could not report the run ID to the CLI: {e}"));
+        }
+        std::process::exit(1);
+    }
 
     // If we sent an error, exit immediately.
     if is_error {
@@ -490,6 +499,15 @@ mod tests {
     #[test]
     fn read_child_reply_reports_a_silent_exit() {
         assert_eq!(reply(""), ChildReply::Nothing);
+    }
+
+    #[test]
+    fn send_to_parent_reports_a_failed_write() {
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        // No reader: the write fails with EPIPE (Rust ignores SIGPIPE).
+        unsafe { libc::close(fds[0]) };
+        assert!(send_to_parent(fds[1], "01M5HXSKQ2VZ2052WAQ89AYSYW\n").is_err());
     }
 
     #[test]
