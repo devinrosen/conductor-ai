@@ -238,6 +238,24 @@ pub enum WorkflowCommands {
         /// Workflow run ID
         id: String,
     },
+    /// Block until a workflow run (and its child runs) finishes, stalls, or times out
+    #[command(
+        after_help = "Exit codes:\n  0  run completed\n  1  run failed or was cancelled\n  2  timeout\n  3  stalled (no live engine)\n\nExample:\n  conductor workflow wait <run-id> --timeout 3600 --json"
+    )]
+    Wait {
+        /// Workflow run ID
+        id: String,
+        /// Give up after this many seconds (default: wait until finished or stalled)
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// Report a stall when a non-terminal run shows no lease or step activity for this many
+        /// seconds (default: 2x the engine lease TTL)
+        #[arg(long)]
+        stall_after: Option<u64>,
+        /// Print the summary as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Validate a workflow definition (check all agents exist)
     Validate {
         /// Workflow name (required unless --all is set)

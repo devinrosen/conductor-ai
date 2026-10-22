@@ -101,6 +101,21 @@ conductor workflow runs my-repo fix-login-bug
 conductor workflow run-show <run-id>
 ```
 
+To block until a run (and its child runs) finishes, use `wait`:
+
+```bash
+conductor workflow wait <run-id> [--timeout <secs>] [--stall-after <secs>] [--json]
+```
+
+It prints the final status, error, and last step. A non-terminal run with no lease or step activity for `--stall-after` seconds (default 60) is reported as stalled: its engine is gone, so resume it with `conductor workflow resume`. Agents can use the `conductor_wait_run` MCP tool instead.
+
+| Exit code | Meaning |
+|-----------|---------|
+| 0 | Run completed |
+| 1 | Run failed or was cancelled |
+| 2 | Timeout |
+| 3 | Stalled (no live engine) |
+
 ## Gates
 
 When a workflow reaches a `gate human_approval` or `gate human_review` step, it pauses and waits. Use these commands to unblock it:

@@ -19,6 +19,7 @@ pub(crate) mod lifecycle;
 pub(crate) mod queries;
 pub(crate) mod recovery;
 pub(crate) mod steps;
+pub(crate) mod wait;
 
 #[cfg(test)]
 mod tests;
