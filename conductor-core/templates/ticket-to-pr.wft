@@ -11,6 +11,7 @@ hints:
   - Inspect CODEOWNERS or team structure to set appropriate reviewer roles
   - Check if the repo has a CONTRIBUTING.md or PR template in .github/PULL_REQUEST_TEMPLATE.md
   - If the repo uses Jira or another issue tracker instead of GitHub issues, the merge-and-close script's ticket close logic will need adjustment
+  - Have the plan agent write PLAN.md to "$(git rev-parse --git-dir)/PLAN.md", not the worktree root, and point the implement and triage-reviews agents there. Git never tracks that directory, so the plan stays available through the review loop without a .gitignore entry or a cleanup step
 ---
 workflow ticket-to-pr {
   meta {
@@ -39,10 +40,6 @@ workflow ticket-to-pr {
   call implement {
     retries = 2
     as      = "developer"
-  }
-
-  script cleanup-plan {
-    run = ".conductor/scripts/cleanup-plan.sh"
   }
 
   call workflow lint-fix

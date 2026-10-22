@@ -38,10 +38,6 @@ workflow ticket-to-pr {
     call verify
   }
 
-  script cleanup-plan {
-    run = ".conductor/scripts/cleanup-plan.sh"
-  }
-
   call workflow lint-fix
 
   script fmt-fix {
