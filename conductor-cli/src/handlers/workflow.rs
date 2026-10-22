@@ -144,6 +144,7 @@ pub fn handle_workflow(
             step_timeout_secs,
             inputs,
             background,
+            background_notify_fd,
             plugin_dirs,
         } => {
             // Parse input key=value pairs (shared by both paths)
@@ -363,7 +364,7 @@ pub fn handle_workflow(
                 let wt_label = format!("{repo_slug}/{worktree_slug}");
 
                 #[cfg(unix)]
-                if background {
+                if let Some(notify_fd) = background_notify_fd {
                     let params = conductor_core::workflow::WorkflowExecStandalone {
                         config: config.clone(),
                         workflow,
@@ -389,12 +390,16 @@ pub fn handle_workflow(
                         default_bot_name: None,
                         iteration: 0,
                     };
-                    let run_id = crate::background::fork_and_run_workflow(params)?;
+                    crate::background::run_as_background_child(params, notify_fd);
+                }
+                #[cfg(unix)]
+                if background {
+                    let run_id = crate::background::spawn_background_workflow()?;
                     println!("{}", run_id);
                     return Ok(());
                 }
                 #[cfg(not(unix))]
-                if background {
+                if background || background_notify_fd.is_some() {
                     anyhow::bail!("--background is only supported on Unix systems");
                 }
 

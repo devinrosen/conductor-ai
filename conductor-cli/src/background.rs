@@ -1,23 +1,33 @@
-//! Fork-based background workflow execution for Unix systems.
+//! Background workflow execution for Unix systems.
 //!
-//! When `conductor workflow run --background` is used, the CLI forks a child
-//! process that detaches from the controlling terminal (via `setsid`) and drives
-//! the workflow to completion. The parent reads the workflow run ID from a pipe,
-//! prints it, and exits immediately.
+//! When `conductor workflow run --background` is used, the CLI starts a fresh
+//! copy of itself (same arguments, minus `--background`, plus a hidden
+//! `--background-notify-fd <fd>`) in a new session, and reads the workflow run
+//! ID back through a pipe. The parent prints the ID and exits immediately.
 //!
 //! # Process boundary
 //!
-//! - **Parent**: reads the run ID from the pipe (blocking), prints it, returns.
-//! - **Child**: calls `setsid()`, redirects stdio to `/dev/null`, opens a fresh
-//!   DB connection (via `execute_workflow_standalone`), runs the workflow, and
-//!   exits.
+//! - **Parent** ([`spawn_background_workflow`]): starts the child, reads the run
+//!   ID (or an `ERROR:` line) from the pipe, returns.
+//! - **Child** ([`run_as_background_child`]): resolves the same workflow, starts
+//!   it, writes the run ID to the pipe, redirects stdio to `/dev/null`, drives the
+//!   workflow to completion and exits.
 //!
-//! The child never inherits the parent's `rusqlite::Connection` -- it opens its
-//! own. SQLite WAL mode ensures concurrent readers/writers are safe at the
-//! database level.
+//! # Why not `fork()`
+//!
+//! The parent has the SQLite database open when it starts the child. After a
+//! `fork()` the child inherits SQLite's per-process state for that file (inode
+//! and WAL shared-memory bookkeeping) without the POSIX locks it describes, and
+//! a "fresh" connection opened in the child reuses that state. With other
+//! processes active in the WAL, the child's writes then fail with
+//! `SQLITE_PROTOCOL` ("locking protocol"). See #3051. Starting a new process
+//! with exec gives the child a clean SQLite state; SQLite opens its files with
+//! `O_CLOEXEC`, so the parent's database descriptors are not inherited.
 
 use std::io::{BufRead, BufReader};
 use std::os::unix::io::FromRawFd;
+use std::os::unix::process::CommandExt;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex};
 
 use anyhow::{Context, Result};
@@ -25,10 +35,27 @@ use anyhow::{Context, Result};
 use conductor_core::agent::AgentManager;
 use conductor_core::workflow::{execute_workflow_standalone, WorkflowExecStandalone};
 
-/// Fork the current process. The child detaches and runs the workflow in the
-/// background. The parent blocks until the child signals the run ID (or an
-/// error), then returns the run ID string.
-pub fn fork_and_run_workflow(params: WorkflowExecStandalone) -> Result<String> {
+/// Hidden flag that marks the re-executed child and names its pipe fd.
+pub const NOTIFY_FD_FLAG: &str = "--background-notify-fd";
+
+/// The arguments for the background child: the parent's own arguments without
+/// `--background`, plus [`NOTIFY_FD_FLAG`] and the pipe's write fd.
+fn child_args(
+    parent_args: impl IntoIterator<Item = std::ffi::OsString>,
+    write_fd: i32,
+) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = parent_args
+        .into_iter()
+        .filter(|a| a != "--background")
+        .collect();
+    args.push(NOTIFY_FD_FLAG.into());
+    args.push(write_fd.to_string().into());
+    args
+}
+
+/// Start this same `conductor workflow run` invocation as a detached background
+/// process and wait for it to report the run ID. Returns the run ID string.
+pub fn spawn_background_workflow() -> Result<String> {
     // Create a pipe for the child to send the run ID back to the parent.
     let mut fds = [0i32; 2];
     // SAFETY: `pipe` writes two valid file descriptors into `fds`. We check the
@@ -38,99 +65,77 @@ pub fn fork_and_run_workflow(params: WorkflowExecStandalone) -> Result<String> {
         anyhow::bail!("pipe() failed: {}", std::io::Error::last_os_error());
     }
     let (read_fd, write_fd) = (fds[0], fds[1]);
-
-    // SAFETY: We call `fork()` before spawning any threads in the child. After
-    // fork only async-signal-safe functions are called until we reach safe Rust
-    // code in `child_main`. The parent merely reads from the pipe and returns.
-    let pid = unsafe { libc::fork() };
-
-    match pid {
-        -1 => {
-            // Fork failed -- close pipe fds and report.
-            // SAFETY: both fds are valid (pipe succeeded above).
-            unsafe {
-                libc::close(read_fd);
-                libc::close(write_fd);
-            }
-            anyhow::bail!("fork() failed: {}", std::io::Error::last_os_error());
-        }
-        0 => {
-            // ---------- CHILD PROCESS ----------
-            // This function never returns.
-            child_main(params, read_fd, write_fd);
-        }
-        _child_pid => {
-            // ---------- PARENT PROCESS ----------
-            // Close the write end; we only read.
-            // SAFETY: write_fd is a valid fd from pipe().
-            unsafe {
-                libc::close(write_fd);
-            }
-
-            // Wrap the read end in a File so Rust manages its lifetime.
-            // SAFETY: read_fd is a valid fd from pipe(); ownership transfers to File.
-            let read_file = unsafe { std::fs::File::from_raw_fd(read_fd) };
-            let mut reader = BufReader::new(read_file);
-
-            // Read the first line -- either the run ID or an error prefixed
-            // with "ERROR:". A ULID is 26 chars; errors are short strings. No
-            // need for an explicit length guard.
-            let mut line = String::new();
-            reader
-                .read_line(&mut line)
-                .context("Failed to read run ID from background process")?;
-
-            let line = line.trim().to_string();
-
-            if line.is_empty() {
-                anyhow::bail!(
-                    "Background process exited without sending a run ID. \
-                     Check logs for errors."
-                );
-            }
-
-            if let Some(err_msg) = line.strip_prefix("ERROR:") {
-                anyhow::bail!("Background workflow failed to start: {}", err_msg.trim());
-            }
-
-            Ok(line)
-        }
-    }
-}
-
-/// Child process entry point. Detaches from the terminal, runs the workflow,
-/// and writes the run ID to the pipe.
-///
-/// This function never returns -- it calls `std::process::exit`.
-fn child_main(mut params: WorkflowExecStandalone, read_fd: i32, write_fd: i32) -> ! {
-    // Detach from the controlling terminal so the workflow survives if the
-    // parent's terminal closes.
-    // SAFETY: setsid() is async-signal-safe and has no preconditions beyond
-    // "the calling process is not a process group leader", which holds because
-    // we just forked.
-    unsafe {
-        libc::setsid();
-    }
-
-    // Close the read end of the pipe; the child only writes.
+    // The child only needs the write end; keep the read end out of it.
     // SAFETY: read_fd is a valid fd from pipe().
     unsafe {
-        libc::close(read_fd);
+        libc::fcntl(read_fd, libc::F_SETFD, libc::FD_CLOEXEC);
     }
 
-    // Close all inherited file descriptors except stdin (0), stdout (1),
-    // stderr (2), and the pipe write end (write_fd). This prevents the
-    // child from inheriting the parent's SQLite WAL/SHM FDs, which would
-    // cause coordination issues when the child opens its own DB connection.
-    // SAFETY: close() on an invalid FD is harmless (returns EBADF, ignored).
+    let exe = std::env::current_exe().context("Failed to locate the conductor executable")?;
+    let mut cmd = Command::new(exe);
+    cmd.args(child_args(std::env::args_os().skip(1), write_fd))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // Detach from the controlling terminal so the workflow survives if the
+    // parent's terminal closes.
+    // SAFETY: setsid() is async-signal-safe, which is all pre_exec allows.
     unsafe {
-        for fd in 3..1024 {
-            if fd != write_fd {
-                libc::close(fd);
-            }
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let spawned = cmd.spawn();
+
+    // Close the write end in the parent whether or not the spawn worked, so the
+    // read below sees EOF once the child closes its copy.
+    // SAFETY: write_fd is a valid fd from pipe().
+    unsafe {
+        libc::close(write_fd);
+    }
+    if let Err(e) = spawned {
+        // SAFETY: read_fd is a valid fd from pipe().
+        unsafe {
+            libc::close(read_fd);
         }
+        anyhow::bail!("Failed to start background workflow process: {e}");
     }
 
+    // Wrap the read end in a File so Rust manages its lifetime.
+    // SAFETY: read_fd is a valid fd from pipe(); ownership transfers to File.
+    let read_file = unsafe { std::fs::File::from_raw_fd(read_fd) };
+    let mut reader = BufReader::new(read_file);
+
+    // Read the first line -- either the run ID or an error prefixed with
+    // "ERROR:". A ULID is 26 chars; errors are short strings.
+    let mut line = String::new();
+    reader
+        .read_line(&mut line)
+        .context("Failed to read run ID from background process")?;
+
+    let line = line.trim().to_string();
+
+    if line.is_empty() {
+        anyhow::bail!(
+            "Background process exited without sending a run ID. \
+             Check logs for errors."
+        );
+    }
+
+    if let Some(err_msg) = line.strip_prefix("ERROR:") {
+        anyhow::bail!("Background workflow failed to start: {}", err_msg.trim());
+    }
+
+    Ok(line)
+}
+
+/// Entry point for the re-executed background child: starts the workflow,
+/// writes the run ID (or an error) to `write_fd`, then drives the workflow to
+/// completion.
+///
+/// This function never returns -- it calls `std::process::exit`.
+pub fn run_as_background_child(mut params: WorkflowExecStandalone, write_fd: i32) -> ! {
     // Set up the run_id_notify mechanism. When execute_workflow creates the run
     // record, it writes the ID into the Mutex and signals the Condvar -- all
     // synchronously within execute_workflow before any steps execute. We use a
@@ -294,5 +299,56 @@ fn redirect_stdio_to_devnull() {
         if devnull > 2 {
             libc::close(devnull);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    fn os(args: &[&str]) -> Vec<OsString> {
+        args.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn child_args_drops_background_and_adds_notify_fd() {
+        let args = child_args(
+            os(&[
+                "workflow",
+                "run",
+                "review-pr",
+                "repo",
+                "wt",
+                "--background",
+                "--input",
+                "k=v",
+            ]),
+            7,
+        );
+        assert_eq!(
+            args,
+            os(&[
+                "workflow",
+                "run",
+                "review-pr",
+                "repo",
+                "wt",
+                "--input",
+                "k=v",
+                NOTIFY_FD_FLAG,
+                "7"
+            ])
+        );
+    }
+
+    #[test]
+    fn child_args_keeps_values_that_merely_contain_background() {
+        let args = child_args(
+            os(&["workflow", "run", "x", "--input", "mode=--background-ish"]),
+            3,
+        );
+        assert!(args.contains(&OsString::from("mode=--background-ish")));
+        assert!(!args.contains(&OsString::from("--background")));
     }
 }
