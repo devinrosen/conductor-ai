@@ -26,8 +26,9 @@ Map path prefixes to crate names:
 - `conductor-cli/` → `conductor-cli`
 - `conductor-tui/` → `conductor-tui`
 - `conductor-web/` → `conductor-web`
+- Root `Cargo.toml` or `Cargo.lock` → every crate above (a dependency change can break any of them)
 
-If only non-Rust files changed (`.wf`, `.md`, `.sh`, `.toml` config, etc.), skip all cargo checks and emit an all-pass FLOW_OUTPUT.
+`Cargo.toml`, `Cargo.lock` and `build.rs` count as Rust changes. If only other files changed (`.wf`, `.md`, `.sh`, other config), skip all cargo checks and emit an all-pass FLOW_OUTPUT.
 
 ### 2. Delegate cargo runs to sub-agents
 

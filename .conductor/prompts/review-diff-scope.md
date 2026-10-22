@@ -7,8 +7,7 @@ Run every `git` command from your current working directory. Do **NOT**
 or memory like `/Users/.../Personal/conductor-ai`). The harness has
 already placed you in the worktree that holds this PR's branch — any
 other checkout will have a different `HEAD`, producing a fabricated
-diff that contaminates the entire review (this is the same class of bug
-that `resolve-pr-base.sh` was added to prevent — see #2736).
+diff that contaminates the entire review.
 
 ### Diff command
 
