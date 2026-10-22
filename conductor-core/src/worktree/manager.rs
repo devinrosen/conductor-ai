@@ -382,12 +382,7 @@ impl<'a> WorktreeManager<'a> {
             } else {
                 format!("refs/heads/{base}")
             };
-            check_output(git_in(&repo.local_path).args([
-                "branch",
-                "--",
-                &branch,
-                &branch_point,
-            ]))?;
+            check_output(git_in(&repo.local_path).args(["branch", "--", &branch, &branch_point]))?;
             (branch, Some(base), warnings)
         };
 
