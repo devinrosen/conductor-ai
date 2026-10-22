@@ -53,6 +53,35 @@ fn child_args(
     args
 }
 
+/// The notify fd when this process is the background child, i.e. when it was
+/// started with [`NOTIFY_FD_FLAG`].
+pub fn notify_fd(command: &crate::commands::Commands) -> Option<i32> {
+    use crate::commands::{Commands, WorkflowCommands};
+    match command {
+        Commands::Workflow {
+            command:
+                WorkflowCommands::Run {
+                    background_notify_fd,
+                    ..
+                },
+        } => *background_notify_fd,
+        _ => None,
+    }
+}
+
+/// Report a failure that happened before [`run_as_background_child`] took over
+/// (opening the database, resolving the repo, worktree or workflow) to the
+/// waiting parent as an `ERROR:` line, since this process has no visible stdio.
+pub fn report_startup_error(write_fd: i32, err: &anyhow::Error) {
+    let msg = format!("ERROR:{}\n", format!("{err:#}").replace('\n', " "));
+    // SAFETY: write_fd came from the parent's pipe via NOTIFY_FD_FLAG. A stale
+    // or invalid fd only makes write/close fail, which is harmless here.
+    unsafe {
+        libc::write(write_fd, msg.as_ptr() as *const libc::c_void, msg.len());
+        libc::close(write_fd);
+    }
+}
+
 /// Start this same `conductor workflow run` invocation as a detached background
 /// process and wait for it to report the run ID. Returns the run ID string.
 pub fn spawn_background_workflow() -> Result<String> {
@@ -105,10 +134,13 @@ pub fn spawn_background_workflow() -> Result<String> {
     // Wrap the read end in a File so Rust manages its lifetime.
     // SAFETY: read_fd is a valid fd from pipe(); ownership transfers to File.
     let read_file = unsafe { std::fs::File::from_raw_fd(read_fd) };
-    let mut reader = BufReader::new(read_file);
+    read_run_id(BufReader::new(read_file))
+}
 
-    // Read the first line -- either the run ID or an error prefixed with
-    // "ERROR:". A ULID is 26 chars; errors are short strings.
+/// Read the child's first line: the run ID, or an error prefixed with
+/// "ERROR:". An empty read means the child exited without reporting.
+fn read_run_id(mut reader: impl BufRead) -> Result<String> {
+    // A ULID is 26 chars; errors are short strings.
     let mut line = String::new();
     reader
         .read_line(&mut line)
@@ -339,6 +371,102 @@ mod tests {
                 NOTIFY_FD_FLAG,
                 "7"
             ])
+        );
+    }
+
+    fn parse(args: Vec<OsString>) -> clap::error::Result<crate::commands::Cli> {
+        use clap::Parser;
+        let mut full = os(&["conductor"]);
+        full.extend(args);
+        crate::commands::Cli::try_parse_from(full)
+    }
+
+    #[test]
+    fn child_args_round_trip_through_clap() {
+        let parent = os(&["workflow", "run", "review-pr", "repo", "wt", "--background"]);
+        let cli = parse(child_args(parent, 9)).expect("child args must parse");
+        match cli.command {
+            crate::commands::Commands::Workflow {
+                command:
+                    crate::commands::WorkflowCommands::Run {
+                        background,
+                        background_notify_fd,
+                        ..
+                    },
+            } => {
+                assert!(
+                    !background,
+                    "the child must not start another background process"
+                );
+                assert_eq!(background_notify_fd, Some(9));
+            }
+            _ => panic!("expected `workflow run`"),
+        }
+        assert_eq!(
+            notify_fd(
+                &parse(child_args(os(&["workflow", "run", "x", "r", "w"]), 4))
+                    .unwrap()
+                    .command
+            ),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn notify_fd_conflicts_with_background() {
+        let err = parse(os(&[
+            "workflow",
+            "run",
+            "x",
+            "r",
+            "w",
+            "--background",
+            NOTIFY_FD_FLAG,
+            "3",
+        ]));
+        assert!(
+            err.is_err(),
+            "--background and the notify fd must be mutually exclusive"
+        );
+    }
+
+    #[test]
+    fn notify_fd_is_none_for_a_normal_run() {
+        let cli = parse(os(&["workflow", "run", "x", "r", "w"])).unwrap();
+        assert_eq!(notify_fd(&cli.command), None);
+    }
+
+    #[test]
+    fn read_run_id_returns_the_id() {
+        let id = read_run_id(std::io::Cursor::new("01M5HXSKQ2VZ2052WAQ89AYSYW\n")).unwrap();
+        assert_eq!(id, "01M5HXSKQ2VZ2052WAQ89AYSYW");
+    }
+
+    #[test]
+    fn read_run_id_surfaces_child_errors() {
+        let err = read_run_id(std::io::Cursor::new("ERROR:worktree 'wt' not found\n")).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("failed to start"), "got: {msg}");
+        assert!(msg.contains("worktree 'wt' not found"), "got: {msg}");
+    }
+
+    #[test]
+    fn read_run_id_reports_a_silent_exit() {
+        let err = read_run_id(std::io::Cursor::new("")).unwrap_err();
+        assert!(err.to_string().contains("exited without sending a run ID"));
+    }
+
+    #[test]
+    fn report_startup_error_writes_one_error_line() {
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let err = anyhow::anyhow!("repo 'r' not found").context("loading target");
+        report_startup_error(fds[1], &err);
+        let read = unsafe { std::fs::File::from_raw_fd(fds[0]) };
+        let msg = read_run_id(BufReader::new(read)).unwrap_err().to_string();
+        assert!(
+            msg.contains("loading target: repo 'r' not found"),
+            "got: {msg}"
         );
     }
 
