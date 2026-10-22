@@ -12,6 +12,7 @@ hints:
   - Check if there's a .github/PULL_REQUEST_TEMPLATE.md — the submit-review script should post a comment that complements the PR template
   - If the repo has multiple services or packages, the review agents may need to be scoped per-service
   - Consider whether performance review makes sense for this repo type (e.g. skip for pure docs repos)
+  - In the shared review-diff-scope prompt, have reviewers report every location of a concern in one finding (first location in file/line, the rest as "Also at: <path>:<line>, ..." at the end of message), and have the address-reviews agent fix every listed location. A concern split across review rounds costs a full fix, CI and review cycle per round
 ---
 workflow review-pr {
   meta {
