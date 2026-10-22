@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # submit-review.sh — dismiss stale conductor review, file off-diff issues, submit formal review
-# Called as a script step after review-aggregator. Env vars: PRIOR_OUTPUT, PR_NUMBER, DRY_RUN
+# Called as a script step after review-aggregator. Env vars: PRIOR_OUTPUT, PR_NUMBER, DRY_RUN,
+# FILE_OFF_DIFF ("false" lists off-diff findings in the review body instead of filing issues)
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
@@ -19,6 +20,11 @@ if ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
   echo "PR_NUMBER is not a valid number: '${PR_NUMBER}' — aborting."
   exit 1
 fi
+
+# Only the exact string "false" turns filing off. An unset or unsubstituted
+# value keeps the default behaviour (#3090).
+FILE_OFF_DIFF_ENABLED="true"
+[ "${FILE_OFF_DIFF:-true}" = "false" ] && FILE_OFF_DIFF_ENABLED="false"
 
 # ---------------------------------------------------------------------------
 # 1a. Security findings always block.
@@ -80,10 +86,12 @@ fi
 # ---------------------------------------------------------------------------
 # 2. No-op on dry run
 # ---------------------------------------------------------------------------
+# Dry runs must never file issues: this exit has to stay before step 4 (#3090).
 if [ "${DRY_RUN:-false}" = "true" ]; then
   echo "DRY_RUN=true — would submit formal GitHub review for PR #${PR_NUMBER}."
   echo "TICKET_SOURCE_ID: ${TICKET_SOURCE_ID:-<not set>}"
   echo "CONDUCTOR_REPO:   ${CONDUCTOR_REPO:-<not set>}"
+  echo "file_off_diff:    ${FILE_OFF_DIFF_ENABLED}"
   echo "reviewed_by:"
   echo "${PRIOR_OUTPUT}" | jq -r '.reviewed_by // ""'
   echo "blocking_findings:"
@@ -121,6 +129,7 @@ OFF_DIFF_FINDINGS=$(echo "${PRIOR_OUTPUT}" | jq -c '.off_diff_findings // []')
 FINDING_COUNT=$(echo "${OFF_DIFF_FINDINGS}" | jq 'length')
 
 FILED_ISSUES=""
+UNFILED_OFF_DIFF=""
 
 # Create a label if it doesn't exist. Failures other than "already exists" are
 # logged, not hidden (#3081) — labelling is best-effort and never fails the step.
@@ -136,7 +145,7 @@ ensure_label() {
   return 0
 }
 
-if [ "${FINDING_COUNT}" -gt 0 ]; then
+if [ "${FINDING_COUNT}" -gt 0 ] && [ "${FILE_OFF_DIFF_ENABLED}" = "true" ]; then
   ensure_label conductor-off-diff "0075ca" "Finding in unchanged/removed code, not blocking the PR"
 
   # Fetch ALL open issues for dedup, matching on the "(file:line)" title suffix.
@@ -249,6 +258,11 @@ ${MESSAGE}"
         2>/dev/null || echo "Warning: conductor ticket upsert failed for issue #${ISSUE_NUMBER} (non-fatal)"
     fi
   done < <(echo "${OFF_DIFF_FINDINGS}" | jq -c '.[]')
+elif [ "${FINDING_COUNT}" -gt 0 ]; then
+  echo "file_off_diff=false — listing ${FINDING_COUNT} off-diff finding(s) in the review body without filing issues."
+  UNFILED_OFF_DIFF=$(echo "${OFF_DIFF_FINDINGS}" | jq -r '
+    .[] | "- **\(.severity)** `\(.file):\(.line)` (\(.reviewer)) — \(.title): \(.message)"
+  ')
 fi
 
 # ---------------------------------------------------------------------------
@@ -317,6 +331,13 @@ if [ -n "${FILED_ISSUES}" ]; then
 
 ### Off-diff findings (filed as issues, not blocking this PR)
 ${FILED_ISSUES}"
+fi
+
+if [ -n "${UNFILED_OFF_DIFF}" ]; then
+  REVIEW_BODY="${REVIEW_BODY}
+
+### Off-diff findings (not filed as issues, not blocking this PR)
+${UNFILED_OFF_DIFF}"
 fi
 
 REVIEW_BODY_FILE=$(mktemp "${TMPDIR:-/tmp}/conductor_review_body.XXXXXXXXXX")
