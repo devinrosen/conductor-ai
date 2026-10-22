@@ -208,8 +208,8 @@ fn test_script_runtime_rejects_invalid_run_id() {
 
 #[test]
 fn test_conductor_runtime_resolver_injects_conductor_prompt_for_legacy_script() {
-    // Exercises the backward-compat block in ConductorRuntimeResolver::resolve
-    // (adapter.rs:187-196): a script runtime with no explicit prompt_env must
+    // Exercises the backward-compat block in ConductorRuntimeResolver::resolve:
+    // a script runtime with no explicit prompt_env must
     // receive CONDUCTOR_PROMPT so existing workflow scripts don't silently break
     // after the runkon 0.7.0-alpha upgrade changed the default to FLOW_PROMPT.
     use conductor_core::config::{AgentPermissionMode, RuntimeConfig};

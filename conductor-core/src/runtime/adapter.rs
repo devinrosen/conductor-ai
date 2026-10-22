@@ -183,16 +183,21 @@ impl runkon_runtimes::RuntimeResolver for ConductorRuntimeResolver {
         // Maintain backward compat: runkon 0.7.0-alpha changed DEFAULT_SCRIPT_PROMPT_ENV from
         // "CONDUCTOR_PROMPT" to "FLOW_PROMPT". Inject the old default for script-type runtimes
         // that don't explicitly set prompt_env, so existing conductor workflow scripts that read
-        // $CONDUCTOR_PROMPT continue to work without config changes.
+        // $CONDUCTOR_PROMPT continue to work without config changes. Construction still goes
+        // through resolve_runtime, with only the overridden entry in the map.
         if let Some(rt) = self.runtimes.get(name) {
             if rt.runtime_type.as_deref() == Some("script") && rt.prompt_env.is_none() {
                 let config = runkon_runtimes::RuntimeConfig {
                     prompt_env: Some("CONDUCTOR_PROMPT".to_string()),
                     ..rt.clone()
                 };
-                return Ok(Box::new(
-                    runkon_runtimes::runtime::script::ScriptRuntime::new(config),
-                ));
+                let runtimes = std::collections::HashMap::from([(name.to_string(), config)]);
+                return runkon_runtimes::runtime::resolve_runtime(
+                    name,
+                    self.permission_mode.clone(),
+                    &runtimes,
+                    &self.options,
+                );
             }
         }
         runkon_runtimes::runtime::resolve_runtime(
