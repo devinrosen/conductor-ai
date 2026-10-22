@@ -842,6 +842,76 @@ mod tests {
     }
 
     #[test]
+    fn test_tool_create_worktree_dirty_checkout_suggests_allow_dirty() {
+        use conductor_core::config::Config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+        use std::process::Command;
+        use tempfile::TempDir;
+
+        let repo_dir = TempDir::new().unwrap();
+        let ws_dir = TempDir::new().unwrap();
+        let repo_path = repo_dir.path().to_str().unwrap().to_string();
+        let ws_path = ws_dir.path().to_str().unwrap().to_string();
+
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "t@t.com"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "T"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        // Stage an uncommitted change to make the primary checkout dirty.
+        std::fs::write(format!("{repo_path}/tracked.txt"), "dirty").unwrap();
+        Command::new("git")
+            .args(["add", "tracked.txt"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        let (_f, conductor) = make_test_conductor();
+        let conn = open_database(_f.path()).expect("open db");
+        let config = Config::default();
+        RepoManager::new(&conn, &config)
+            .register(
+                "dirty-repo",
+                &repo_path,
+                "https://github.com/org/dirty-repo.git",
+                Some(&ws_path),
+            )
+            .expect("register repo");
+
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), Value::String("dirty-repo".into()));
+        args.insert("name".into(), Value::String("feat-new".into()));
+        let result = tool_create_worktree(&conductor, &args);
+
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("allow_dirty=true"),
+            "DirtyCheckout error should suggest allow_dirty=true, got: {text}"
+        );
+    }
+
+    #[test]
     fn test_tool_set_base_branch_missing_repo_returns_error() {
         let (_f, conductor) = make_test_conductor();
         let args = args_with("name", "feat-wt");
