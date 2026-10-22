@@ -237,9 +237,35 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                 ),
             }
         }
+        if let Some(e) = schema_output_missing(&params.name, schema_arc.is_some(), &output.metadata)
+        {
+            return Err(e);
+        }
         output.child_run_id = Some(child_run_id);
         Ok(output)
     }
+}
+
+/// Fail a step that has an output schema but whose agent produced no usable
+/// output. runkon 0.7.1 fails a schema step on a missing or invalid
+/// `FLOW_OUTPUT` block, but still passes it with empty markers when the agent
+/// produced no result text at all; it only records `OUTPUT_WARNING`. For
+/// `verify` that reads as "no `has_failures`", i.e. a pass.
+///
+/// Steps without a schema keep the warning-only behaviour. This can go once
+/// runkon/runkon#105 (engine-level `require_output`) lands.
+fn schema_output_missing(
+    step: &str,
+    has_schema: bool,
+    metadata: &std::collections::HashMap<String, String>,
+) -> Option<EngineError> {
+    if !has_schema {
+        return None;
+    }
+    let warning = metadata.get(runkon_flow::constants::metadata_keys::OUTPUT_WARNING)?;
+    Some(EngineError::Workflow(format!(
+        "step '{step}': has an output schema but produced no usable output: {warning}"
+    )))
 }
 
 /// Write the metrics runkon summed across output-correction attempts onto the
@@ -270,9 +296,37 @@ fn persist_corrected_run_metrics(
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_runtime_from_model, persist_corrected_run_metrics};
+    use super::{derive_runtime_from_model, persist_corrected_run_metrics, schema_output_missing};
     use runkon_runtimes::config::RuntimeConfig;
     use std::collections::HashMap;
+
+    fn warning_metadata() -> HashMap<String, String> {
+        let mut md = HashMap::new();
+        md.insert(
+            runkon_flow::constants::metadata_keys::OUTPUT_WARNING.to_string(),
+            "no FLOW_OUTPUT block".to_string(),
+        );
+        md
+    }
+
+    #[test]
+    fn schema_step_with_output_warning_fails() {
+        let err = schema_output_missing("verify", true, &warning_metadata())
+            .expect("schema + warning must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("verify"), "{msg}");
+        assert!(msg.contains("no FLOW_OUTPUT block"), "{msg}");
+    }
+
+    #[test]
+    fn schema_step_without_warning_passes() {
+        assert!(schema_output_missing("verify", true, &HashMap::new()).is_none());
+    }
+
+    #[test]
+    fn non_schema_step_with_output_warning_passes() {
+        assert!(schema_output_missing("implement", false, &warning_metadata()).is_none());
+    }
 
     fn rt(models: &[&str]) -> RuntimeConfig {
         RuntimeConfig {

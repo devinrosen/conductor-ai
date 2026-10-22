@@ -1,0 +1,17 @@
+fields:
+  passed:
+    type: boolean
+    desc: "true only if every applicable check ran to completion and passed, or no Rust files changed; false if any check failed or could not run"
+  checks:
+    type: array
+    desc: "One entry per check run: build, nextest -p <crate>, clippy -p <crate>, fmt. Empty when no Rust files changed."
+    items:
+      name: string
+      status: enum(pass, fail, skipped)
+      summary: string
+  context:
+    type: string
+    desc: "One or two sentences. FAIL: <what broke, test names / compiler error lines>. PASS: <passing checks>."
+
+markers:
+  has_failures: "passed == false"

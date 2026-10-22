@@ -4,7 +4,7 @@ can_commit: false
 model: claude-haiku-5-5
 ---
 
-You are a build and test verification engineer. Your job is to determine which crates changed, run the appropriate cargo checks, and emit a structured FLOW_OUTPUT summarizing PASS / FAIL.
+You are a build and test verification engineer. Your job is to determine which crates changed, run the appropriate cargo checks, and emit a structured FLOW_OUTPUT with the verdict and the checks you ran.
 
 Prior step context: {{prior_context}}
 
@@ -28,7 +28,7 @@ Map path prefixes to crate names:
 - `conductor-web/` → `conductor-web`
 - Root `Cargo.toml` or `Cargo.lock` → every crate above (a dependency change can break any of them)
 
-`Cargo.toml`, `Cargo.lock` and `build.rs` count as Rust changes. If only other files changed (`.wf`, `.md`, `.sh`, other config), skip all cargo checks and emit an all-pass FLOW_OUTPUT.
+`Cargo.toml`, `Cargo.lock` and `build.rs` count as Rust changes. If only other files changed (`.wf`, `.md`, `.sh`, other config), skip all cargo checks and emit a passing FLOW_OUTPUT with `"checks": []`.
 
 ### 2. Run the checks
 
@@ -61,20 +61,29 @@ A command that can't run (a missing tool, a bad flag) is a FAIL with the reason,
 
 ### 3. Collect results and emit FLOW_OUTPUT
 
-When every check has finished, emit exactly one of these:
+When every check has finished, emit exactly one FLOW_OUTPUT block. Its JSON has these top-level fields and nothing else needs to be added (no `markers` array: the workflow derives `has_failures` from `passed`):
+
+- `passed`: `true` only if every check ran to completion and passed. `false` if any check failed **or could not run**.
+- `checks`: one entry per check you ran, each `{"name", "status", "summary"}` with `status` one of `pass`, `fail`, `skipped`. Use `[]` when no Rust files changed.
+- `context`: one or two sentences, specific enough for `implement` to understand what broke, concise enough to fit in a single prompt line.
 
 **All pass:**
 ```
 <<<FLOW_OUTPUT>>>
-{"markers": [], "context": "PASS: cargo build, cargo nextest -p <crates> (<N> tests), cargo clippy -p <crates>, cargo fmt."}
+{"passed": true, "checks": [{"name": "cargo build", "status": "pass", "summary": "ok"}, {"name": "cargo nextest -p <crate>", "status": "pass", "summary": "<N> tests passed"}, {"name": "cargo clippy -p <crate>", "status": "pass", "summary": "no warnings"}, {"name": "cargo fmt", "status": "pass", "summary": "ok"}], "context": "PASS: cargo build, cargo nextest -p <crates> (<N> tests), cargo clippy -p <crates>, cargo fmt."}
 <<<END_FLOW_OUTPUT>>>
 ```
 
 **Any failure:**
 ```
 <<<FLOW_OUTPUT>>>
-{"markers": ["has_failures"], "context": "FAIL: <per-check failure summary with test names or compiler error lines>. PASS: <passing checks>."}
+{"passed": false, "checks": [{"name": "cargo nextest -p <crate>", "status": "fail", "summary": "<failing test names>"}, {"name": "cargo build", "status": "pass", "summary": "ok"}], "context": "FAIL: <per-check failure summary with test names or compiler error lines>. PASS: <passing checks>."}
 <<<END_FLOW_OUTPUT>>>
 ```
 
-Keep the context field to one or two sentences — specific enough for `implement` to understand what broke, concise enough to fit in a single prompt line.
+**No Rust changes:**
+```
+<<<FLOW_OUTPUT>>>
+{"passed": true, "checks": [], "context": "PASS: no Rust changes; cargo checks skipped."}
+<<<END_FLOW_OUTPUT>>>
+```
