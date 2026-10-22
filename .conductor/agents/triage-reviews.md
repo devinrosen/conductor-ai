@@ -47,7 +47,7 @@ If you cannot find a `review-aggregator` entry in `{{prior_contexts}}`, OR its `
 
 ```
 <<<FLOW_OUTPUT>>>
-{"markers": [], "context": "BUG: review-aggregator output missing from prior_contexts. Refusing to triage by fetching reviews from GitHub (risk of triaging dismissed/stale review). Halting cleanly so the loop exits without pushback or address-reviews. See workflow run history for the missing aggregator step.", "structured_output": {"triaged": [], "counts": {"address": 0, "pushback": 0, "clarify": 0}, "halt_reason": "missing_aggregator_output"}}
+{"context": "BUG: review-aggregator output missing from prior_contexts. Refusing to triage by fetching reviews from GitHub (risk of triaging dismissed/stale review). Halting cleanly so the loop exits without pushback or address-reviews. See workflow run history for the missing aggregator step.", "triaged": [], "halt_reason": "missing_aggregator_output"}
 <<<END_FLOW_OUTPUT>>>
 ```
 
@@ -57,7 +57,7 @@ If `blocking_findings` is present but empty, that's different — it means revie
 
 ```
 <<<FLOW_OUTPUT>>>
-{"markers": [], "context": "No blocking findings to triage.", "structured_output": {"triaged": [], "counts": {"address": 0, "pushback": 0, "clarify": 0}}}
+{"context": "No blocking findings to triage.", "triaged": []}
 <<<END_FLOW_OUTPUT>>>
 ```
 
@@ -92,7 +92,7 @@ Scan `{{prior_contexts}}` for prior `triage-reviews` step entries (i.e. earlier 
 
 Pick exactly one outcome:
 
-- **address** — The finding is valid, in scope, and based on a correct reading of the code. Do nothing in this step; it passes to `address-reviews` via your structured_output.
+- **address** — The finding is valid, in scope, and based on a correct reading of the code. Do nothing in this step; it passes to `address-reviews` via your `triaged` array.
 - **pushback** — The finding is demonstrably wrong, out-of-scope per PLAN.md, or based on a misread, AND the reviewer is not `Security`. You must be able to cite a specific line of code, a constraint in PLAN.md, or a prior decision from `{{prior_contexts}}`.
 - **clarify** — The finding is ambiguous or unclear. You need more specifics to act on it correctly.
 
@@ -116,18 +116,18 @@ gh pr comment "${PR_NUMBER}" --body "[Clarify on ${REVIEWER} — ${FILE}:${LINE}
 
 #### 2g. No action on address
 
-If classified **address**, take no action here. The classification is recorded in your structured_output and `address-reviews` will pick it up.
+If classified **address**, take no action here. The classification is recorded in your `triaged` array and `address-reviews` will pick it up.
 
 ### 3. Emit FLOW_OUTPUT
 
-After processing all findings, emit your output:
+After processing all findings, emit your output. The JSON has top-level `context` and `triaged` fields (no `markers` array, no nested `structured_output`):
 
 ```
 <<<FLOW_OUTPUT>>>
-{"markers": ["has_to_address"], "context": "Triaged N findings: A address, P pushback (brief reasons), C clarify.", "structured_output": {"triaged": [{"file": "<path>", "line": <line>, "reviewer": "<display name>", "outcome": "address|pushback|clarify", "reason": "<one-line reason>"}], "counts": {"address": A, "pushback": P, "clarify": C}}}
+{"context": "Triaged N findings: A address, P pushback (brief reasons), C clarify.", "triaged": [{"file": "<path>", "line": <line>, "reviewer": "<display name>", "outcome": "address|pushback|clarify", "reason": "<one-line reason>"}]}
 <<<END_FLOW_OUTPUT>>>
 ```
 
-Use `markers: ["has_to_address"]` if **any** finding was classified `address` (including findings escalated to `[NEEDS_FEEDBACK]` that defaulted to address). Use `markers: []` only if **every** finding was pushed back on or clarified.
+The workflow derives `has_to_address` from `triaged`: it is set when **any** entry has `outcome: "address"` (including findings escalated to `[NEEDS_FEEDBACK]` that defaulted to address). You only have to classify correctly; never set markers yourself.
 
 (Empty / missing `blocking_findings` is handled in step 1's "Halting on missing data" section above — do not duplicate that path here.)

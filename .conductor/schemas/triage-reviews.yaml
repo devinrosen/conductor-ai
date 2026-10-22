@@ -1,0 +1,19 @@
+fields:
+  context:
+    type: string
+    desc: "Triaged N findings: A address, P pushback (brief reasons), C clarify."
+  triaged:
+    type: array
+    desc: "One entry per blocking finding. Empty when triage halted or there were no findings."
+    items:
+      file: string
+      line: number
+      reviewer: string
+      outcome: enum(address, pushback, clarify)
+      reason: string
+  halt_reason?:
+    type: string
+    desc: "Set only when triage halted, e.g. missing_aggregator_output"
+
+markers:
+  has_to_address: "triaged[outcome == address].length > 0"

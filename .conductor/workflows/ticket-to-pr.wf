@@ -35,7 +35,9 @@ workflow ticket-to-pr {
     }
   }
 
-  call verify
+  call verify {
+    output = "verify"
+  }
 
   if verify.has_failures {
     call implement {
@@ -48,7 +50,9 @@ workflow ticket-to-pr {
         FMT_FIX_ALLOW_FAILURE = "1"
       }
     }
-    call verify
+    call verify {
+      output = "verify"
+    }
   }
 
   call workflow lint-fix
