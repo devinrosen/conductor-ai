@@ -429,7 +429,7 @@ pub struct GeneralConfig {
     /// Defaults to `auto-mode` (`--enable-auto-mode`).
     #[serde(default)]
     pub agent_permission_mode: AgentPermissionMode,
-    /// Global default model for Claude agent runs (e.g. "sonnet", "claude-opus-4-6").
+    /// Global default model for Claude agent runs (e.g. "sonnet", "claude-opus-5-5").
     /// Overridden by per-worktree and per-run model settings. Omit to use claude's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
