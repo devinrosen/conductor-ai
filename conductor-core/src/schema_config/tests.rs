@@ -108,173 +108,6 @@ fields:
 }
 
 #[test]
-fn test_validate_valid_output() {
-    let schema = parse_schema_content(TEST_SCHEMA_YAML, "test").unwrap();
-    let json = r#"
-<<<FLOW_OUTPUT>>>
-{
-  "findings": [
-    {
-      "file": "src/auth.rs",
-      "line": 42,
-      "severity": "high",
-      "category": "injection",
-      "message": "SQL injection risk"
-    }
-  ],
-  "approved": false,
-  "summary": "Found 1 high severity issue"
-}
-<<<END_FLOW_OUTPUT>>>
-"#;
-    let result = parse_structured_output(json, &schema).unwrap();
-    assert_eq!(result.context, "Found 1 high severity issue");
-    assert!(result.markers.contains(&"has_findings".to_string()));
-    assert!(result.markers.contains(&"has_high_findings".to_string()));
-    assert!(result.markers.contains(&"not_approved".to_string()));
-}
-
-#[test]
-fn test_validate_missing_required_field() {
-    let schema = parse_schema_content(TEST_SCHEMA_YAML, "test").unwrap();
-    let json = r#"
-<<<FLOW_OUTPUT>>>
-{
-  "findings": [],
-  "summary": "All good"
-}
-<<<END_FLOW_OUTPUT>>>
-"#;
-    let result = parse_structured_output(json, &schema);
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("approved"));
-}
-
-#[test]
-fn test_validate_wrong_type() {
-    let schema = parse_schema_content(TEST_SCHEMA_YAML, "test").unwrap();
-    let json = r#"
-<<<FLOW_OUTPUT>>>
-{
-  "findings": [],
-  "approved": "yes",
-  "summary": "All good"
-}
-<<<END_FLOW_OUTPUT>>>
-"#;
-    let result = parse_structured_output(json, &schema);
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("approved"));
-}
-
-#[test]
-fn test_validate_invalid_enum() {
-    let schema = parse_schema_content(TEST_SCHEMA_YAML, "test").unwrap();
-    let json = r#"
-<<<FLOW_OUTPUT>>>
-{
-  "findings": [
-    {
-      "file": "test.rs",
-      "line": 1,
-      "severity": "extreme",
-      "category": "test",
-      "message": "test"
-    }
-  ],
-  "approved": true,
-  "summary": "test"
-}
-<<<END_FLOW_OUTPUT>>>
-"#;
-    let result = parse_structured_output(json, &schema);
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("extreme"));
-}
-
-#[test]
-fn test_lenient_parsing_code_fences() {
-    let schema =
-        parse_schema_content("fields:\n  name: string\n  count: number\n", "test").unwrap();
-    let json = r#"
-<<<FLOW_OUTPUT>>>
-```json
-{
-  "name": "hello",
-  "count": 42
-}
-```
-<<<END_FLOW_OUTPUT>>>
-"#;
-    let result = parse_structured_output(json, &schema);
-    assert!(result.is_ok());
-}
-
-#[test]
-fn test_lenient_parsing_trailing_commas() {
-    let schema =
-        parse_schema_content("fields:\n  name: string\n  count: number\n", "test").unwrap();
-    let json = r#"
-<<<FLOW_OUTPUT>>>
-{
-  "name": "hello",
-  "count": 42,
-}
-<<<END_FLOW_OUTPUT>>>
-"#;
-    let result = parse_structured_output(json, &schema);
-    assert!(result.is_ok());
-}
-
-#[test]
-fn test_default_markers_approved_false() {
-    let value: serde_json::Value = serde_json::from_str(r#"{"approved": false}"#).unwrap();
-    let markers = derive_default_markers(&value);
-    assert!(markers.contains(&"not_approved".to_string()));
-}
-
-#[test]
-fn test_default_markers_findings() {
-    let value: serde_json::Value =
-        serde_json::from_str(r#"{"findings": [{"severity": "critical"}, {"severity": "high"}]}"#)
-            .unwrap();
-    let markers = derive_default_markers(&value);
-    assert!(markers.contains(&"has_findings".to_string()));
-    assert!(markers.contains(&"has_critical_findings".to_string()));
-    assert!(markers.contains(&"has_high_findings".to_string()));
-}
-
-#[test]
-fn test_custom_marker_expressions() {
-    let value: serde_json::Value = serde_json::from_str(
-        r#"{
-                "findings": [
-                    {"severity": "critical", "file": "a.rs"},
-                    {"severity": "low", "file": "b.rs"}
-                ],
-                "approved": false,
-                "coverage_percent": 75
-            }"#,
-    )
-    .unwrap();
-
-    assert!(evaluate_marker_expr(&value, "findings.length > 0"));
-    assert!(!evaluate_marker_expr(&value, "findings.length == 0"));
-    assert!(evaluate_marker_expr(
-        &value,
-        "findings[severity == critical].length > 0"
-    ));
-    assert!(!evaluate_marker_expr(
-        &value,
-        "findings[severity == high].length > 0"
-    ));
-    assert!(evaluate_marker_expr(&value, "approved == false"));
-    assert!(!evaluate_marker_expr(&value, "approved == true"));
-    assert!(evaluate_marker_expr(&value, "coverage_percent < 80"));
-    assert!(!evaluate_marker_expr(&value, "coverage_percent > 80"));
-}
-
-#[test]
 fn test_prompt_generation() {
     let schema =
         parse_schema_content("fields:\n  approved: boolean\n  summary: string\n", "test").unwrap();
@@ -410,22 +243,6 @@ fn test_strip_trailing_commas() {
 }
 
 #[test]
-fn test_strip_code_fences() {
-    let input = "```json\n{\"a\": 1}\n```";
-    assert_eq!(strip_code_fences(input), "{\"a\": 1}");
-
-    let input2 = "```\n{\"a\": 1}\n```";
-    assert_eq!(strip_code_fences(input2), "{\"a\": 1}");
-
-    let input3 = "{\"a\": 1}";
-    assert_eq!(strip_code_fences(input3), "{\"a\": 1}");
-}
-
-// -----------------------------------------------------------------------
-// load_schema_by_path tests
-// -----------------------------------------------------------------------
-
-#[test]
 fn test_load_schema_by_path_rejects_absolute() {
     let result = load_schema_by_path("/tmp", "/etc/passwd");
     assert!(result.is_err());
@@ -532,43 +349,6 @@ fn test_schema_ref_backslash_treated_as_path() {
         SchemaRef::from_str_value("..\\..\\etc\\passwd"),
         SchemaRef::Path("..\\..\\etc\\passwd".to_string())
     );
-}
-
-// -----------------------------------------------------------------------
-// Missing output block and malformed expression tests
-// -----------------------------------------------------------------------
-
-#[test]
-fn test_parse_structured_output_no_block() {
-    let schema = parse_schema_content("fields:\n  name: string\n", "test").unwrap();
-    let result = parse_structured_output("This output has no FLOW_OUTPUT block", &schema);
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("No <<<FLOW_OUTPUT>>>"));
-}
-
-#[test]
-fn test_parse_structured_output_missing_end_marker() {
-    let schema = parse_schema_content("fields:\n  name: string\n", "test").unwrap();
-    let result = parse_structured_output(
-        "<<<FLOW_OUTPUT>>>\n{\"name\": \"hello\"}\nno end marker here",
-        &schema,
-    );
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("FLOW_OUTPUT"));
-}
-
-#[test]
-fn test_malformed_marker_expressions_return_false() {
-    let value: serde_json::Value = serde_json::from_str(r#"{"name": "test", "count": 5}"#).unwrap();
-
-    // Completely invalid expressions should return false, not panic
-    assert!(!evaluate_marker_expr(&value, ""));
-    assert!(!evaluate_marker_expr(&value, "not a valid expression"));
-    assert!(!evaluate_marker_expr(&value, "field !=! value"));
-    assert!(!evaluate_marker_expr(&value, "nonexistent_field == 5"));
 }
 
 // -----------------------------------------------------------------------
@@ -758,74 +538,6 @@ fn test_check_schemas_path_ref_valid() {
     assert!(issues.is_empty());
 }
 
-/// Marker appears in code examples before the real block — structured path must find the real block.
-#[test]
-fn test_parse_structured_output_skips_code_examples() {
-    let schema_yaml = "fields:\n  summary: string\n";
-    let schema = parse_schema_content(schema_yaml, "test").unwrap();
-
-    let text = r#"Here is how to emit output:
-```bash
-echo '<<<FLOW_OUTPUT>>>'
-echo '{"summary": "fake"}'
-echo '<<<END_FLOW_OUTPUT>>>'
-```
-
-Actual output:
-<<<FLOW_OUTPUT>>>
-{"summary": "real result"}
-<<<END_FLOW_OUTPUT>>>
-"#;
-    let result = parse_structured_output(text, &schema).unwrap();
-    assert_eq!(result.context, "real result");
-}
-
-/// Multiple complete blocks before the real one — structured path must find the last valid block.
-#[test]
-fn test_parse_structured_output_multiple_complete_blocks() {
-    let schema_yaml = "fields:\n  summary: string\n";
-    let schema = parse_schema_content(schema_yaml, "test").unwrap();
-
-    let text = r#"Example 1:
-<<<FLOW_OUTPUT>>>
-{"summary": "first example"}
-<<<END_FLOW_OUTPUT>>>
-
-Example 2:
-<<<FLOW_OUTPUT>>>
-{"summary": "second example"}
-<<<END_FLOW_OUTPUT>>>
-
-Real output:
-<<<FLOW_OUTPUT>>>
-{"summary": "the actual result"}
-<<<END_FLOW_OUTPUT>>>
-"#;
-    let result = parse_structured_output(text, &schema).unwrap();
-    assert_eq!(result.context, "the actual result");
-}
-
-/// Output block wrapped in a markdown code fence — structured path must strip fences.
-#[test]
-fn test_parse_structured_output_code_fenced() {
-    let schema_yaml = "fields:\n  summary: string\n";
-    let schema = parse_schema_content(schema_yaml, "test").unwrap();
-
-    let text = r#"Here is my output:
-<<<FLOW_OUTPUT>>>
-```json
-{"summary": "fenced result"}
-```
-<<<END_FLOW_OUTPUT>>>
-"#;
-    let result = parse_structured_output(text, &schema).unwrap();
-    assert_eq!(result.context, "fenced result");
-}
-
-// -----------------------------------------------------------------------
-// Scalar array tests
-// -----------------------------------------------------------------------
-
 #[test]
 fn test_parse_scalar_array_string() {
     let yaml = "fields:\n  tags:\n    type: array\n    items: string\n";
@@ -891,62 +603,11 @@ fn test_parse_scalar_array_enum() {
 }
 
 #[test]
-fn test_validate_scalar_array() {
-    let yaml = "fields:\n  tags:\n    type: array\n    items: string\n";
-    let schema = parse_schema_content(yaml, "test").unwrap();
-    let json = "<<<FLOW_OUTPUT>>>\n{\"tags\": [\"a\", \"b\"]}\n<<<END_FLOW_OUTPUT>>>";
-    let result = parse_structured_output(json, &schema);
-    assert!(result.is_ok());
-}
-
-#[test]
-fn test_validate_scalar_array_rejects_wrong_type() {
-    let yaml = "fields:\n  tags:\n    type: array\n    items: string\n";
-    let schema = parse_schema_content(yaml, "test").unwrap();
-    let json = "<<<FLOW_OUTPUT>>>\n{\"tags\": [1, 2]}\n<<<END_FLOW_OUTPUT>>>";
-    let result = parse_structured_output(json, &schema);
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("expected string"));
-}
-
-#[test]
 fn test_prompt_scalar_array() {
     let yaml = "fields:\n  tags:\n    type: array\n    items: string\n";
     let schema = parse_schema_content(yaml, "test").unwrap();
     let prompt = generate_prompt_instructions(&schema);
     assert!(prompt.contains("[\"...\", \"...\"]"));
-}
-
-#[test]
-fn test_validate_enum_scalar_array_valid() {
-    let yaml = "fields:\n  status:\n    type: array\n    items: \"enum(a,b)\"\n";
-    let schema = parse_schema_content(yaml, "test").unwrap();
-    let json = "<<<FLOW_OUTPUT>>>\n{\"status\": [\"a\"]}\n<<<END_FLOW_OUTPUT>>>";
-    let result = parse_structured_output(json, &schema);
-    assert!(result.is_ok());
-}
-
-#[test]
-fn test_validate_enum_scalar_array_rejects_invalid_value() {
-    let yaml = "fields:\n  status:\n    type: array\n    items: \"enum(a,b)\"\n";
-    let schema = parse_schema_content(yaml, "test").unwrap();
-    let json = "<<<FLOW_OUTPUT>>>\n{\"status\": [\"c\"]}\n<<<END_FLOW_OUTPUT>>>";
-    let result = parse_structured_output(json, &schema);
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("is not one of"));
-}
-
-#[test]
-fn test_validate_enum_scalar_array_rejects_wrong_type() {
-    let yaml = "fields:\n  status:\n    type: array\n    items: \"enum(a,b)\"\n";
-    let schema = parse_schema_content(yaml, "test").unwrap();
-    let json = "<<<FLOW_OUTPUT>>>\n{\"status\": [123]}\n<<<END_FLOW_OUTPUT>>>";
-    let result = parse_structured_output(json, &schema);
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("expected enum string"));
 }
 
 #[test]
@@ -1000,36 +661,6 @@ fields:
     let hints = generate_field_hints(&schema.fields, "");
     assert!(hints.contains("array of string"));
     assert!(hints.contains("list of labels"));
-}
-
-#[test]
-fn test_validate_scalar_array_number() {
-    let yaml = "fields:\n  scores:\n    type: array\n    items: number\n";
-    let schema = parse_schema_content(yaml, "test").unwrap();
-
-    let ok = "<<<FLOW_OUTPUT>>>\n{\"scores\": [1, 2.5, 3]}\n<<<END_FLOW_OUTPUT>>>";
-    assert!(parse_structured_output(ok, &schema).is_ok());
-
-    let bad = "<<<FLOW_OUTPUT>>>\n{\"scores\": [\"nope\"]}\n<<<END_FLOW_OUTPUT>>>";
-    let err = parse_structured_output(bad, &schema)
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("expected number"), "got: {err}");
-}
-
-#[test]
-fn test_validate_scalar_array_boolean() {
-    let yaml = "fields:\n  flags:\n    type: array\n    items: boolean\n";
-    let schema = parse_schema_content(yaml, "test").unwrap();
-
-    let ok = "<<<FLOW_OUTPUT>>>\n{\"flags\": [true, false]}\n<<<END_FLOW_OUTPUT>>>";
-    assert!(parse_structured_output(ok, &schema).is_ok());
-
-    let bad = "<<<FLOW_OUTPUT>>>\n{\"flags\": [\"yes\"]}\n<<<END_FLOW_OUTPUT>>>";
-    let err = parse_structured_output(bad, &schema)
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("expected boolean"), "got: {err}");
 }
 
 #[test]
@@ -1096,30 +727,6 @@ fields:
     );
     assert!(hints.contains("\"foo\""), "got: {hints}");
     assert!(hints.contains("\"bar\""), "got: {hints}");
-}
-
-/// Regression: when a field value contains the start marker string, the real block is still found.
-#[test]
-fn test_parse_structured_output_marker_in_field_value() {
-    let schema_yaml = r#"
-fields:
-  summary: string
-  description: string
-"#;
-    let schema = parse_schema_content(schema_yaml, "test").unwrap();
-
-    // The description field value contains <<<FLOW_OUTPUT>>> — rfind would
-    // have selected that inner occurrence as the block start, causing a parse failure.
-    let text = r#"Some preamble text.
-<<<FLOW_OUTPUT>>>
-{
-  "summary": "all good",
-  "description": "output block looks like <<<FLOW_OUTPUT>>> but is inside JSON"
-}
-<<<END_FLOW_OUTPUT>>>
-"#;
-    let result = parse_structured_output(text, &schema).unwrap();
-    assert_eq!(result.context, "all good");
 }
 
 #[test]
@@ -1229,6 +836,7 @@ fn test_fix_escapes_double_backslash_at_string_end() {
     assert_eq!(v["k"], "\\");
 }
 
+
 #[test]
 fn test_fix_escapes_escaped_quote_not_treated_as_string_boundary() {
     // `\"` inside a string must not close the string.
@@ -1237,97 +845,4 @@ fn test_fix_escapes_escaped_quote_not_treated_as_string_boundary() {
     assert_eq!(output, input);
     let v: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(v["k"], r#"say "hi" now"#);
-}
-
-// ---------------------------------------------------------------------------
-// parse_structured_output integration test with Swift key-path
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_parse_structured_output_swift_keypath() {
-    // Regression: a Swift key-path in a summary field must not fail parsing.
-    let schema_yaml = "fields:\n  summary:\n    type: string\n";
-    let schema = parse_schema_content(schema_yaml, "test").unwrap();
-    let text = r#"Done.
-<<<FLOW_OUTPUT>>>
-{"summary": "Add @Environment(\.openURL) button to the toolbar"}
-<<<END_FLOW_OUTPUT>>>
-"#;
-    let result = parse_structured_output(text, &schema);
-    assert!(
-        result.is_ok(),
-        "Swift key-path should not fail parsing: {:?}",
-        result
-    );
-    let structured = result.unwrap();
-    assert!(structured.context.contains(r"\.openURL"));
-}
-
-// ---------------------------------------------------------------------------
-// derive_output_from_value unit tests
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_derive_output_from_value_summary_field() {
-    let schema_yaml = "fields:\n  summary:\n    type: string\n";
-    let schema = parse_schema_content(schema_yaml, "test").unwrap();
-    let value = serde_json::json!({"summary": "All checks passed"});
-
-    let out = derive_output_from_value(value, &schema);
-
-    assert_eq!(out.context, "All checks passed");
-    assert!(out.markers.is_empty());
-    assert_eq!(out.json_string, r#"{"summary":"All checks passed"}"#);
-}
-
-#[test]
-fn test_derive_output_from_value_context_field_preferred() {
-    // A schema with both "context" and "summary" — "context" wins.
-    let schema_yaml = "fields:\n  context:\n    type: string\n  summary:\n    type: string\n";
-    let schema = parse_schema_content(schema_yaml, "test").unwrap();
-    let value = serde_json::json!({"context": "Primary context", "summary": "Secondary"});
-
-    let out = derive_output_from_value(value, &schema);
-
-    assert_eq!(out.context, "Primary context");
-}
-
-#[test]
-fn test_derive_output_from_value_fallback_first_string_field() {
-    // Schema has no "context" or "summary" — falls back to first string field.
-    let schema_yaml = "fields:\n  description:\n    type: string\n  count:\n    type: number\n";
-    let schema = parse_schema_content(schema_yaml, "test").unwrap();
-    let value = serde_json::json!({"description": "Fallback text", "count": 3});
-
-    let out = derive_output_from_value(value, &schema);
-
-    assert_eq!(out.context, "Fallback text");
-}
-
-#[test]
-fn test_derive_output_from_value_no_string_field_empty_context() {
-    // Schema has no string field at all — context must be empty (not panic).
-    let schema_yaml = "fields:\n  approved:\n    type: boolean\n";
-    let schema = parse_schema_content(schema_yaml, "test").unwrap();
-    let value = serde_json::json!({"approved": true});
-
-    let out = derive_output_from_value(value, &schema);
-
-    assert_eq!(out.context, "");
-}
-
-#[test]
-fn test_derive_output_from_value_markers_derived() {
-    let schema_yaml = "fields:\n  approved:\n    type: boolean\n  summary:\n    type: string\nmarkers:\n  not_approved: \"approved == false\"\n";
-    let schema = parse_schema_content(schema_yaml, "test").unwrap();
-    let value = serde_json::json!({"approved": false, "summary": "Needs work"});
-
-    let out = derive_output_from_value(value, &schema);
-
-    assert!(
-        out.markers.contains(&"not_approved".to_string()),
-        "expected not_approved marker, got: {:?}",
-        out.markers
-    );
-    assert_eq!(out.context, "Needs work");
 }

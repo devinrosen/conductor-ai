@@ -212,14 +212,55 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
         let mut output = inner
             .execute(&agent_ctx, &agent_params)
             .map_err(EngineError::Workflow)?;
+        if output
+            .metadata
+            .contains_key(runkon_flow::constants::metadata_keys::OUTPUT_CORRECTION_ATTEMPTS)
+        {
+            // Runkon summed the metrics across correction attempts; the row only
+            // holds the final attempt's, so write the totals back (best-effort).
+            let conn = self.conn.lock().map_err(bridge_lock_err)?;
+            if let Err(e) = persist_corrected_run_metrics(&conn, &child_run_id, &output.metadata) {
+                tracing::warn!(
+                    "step '{}': failed to persist summed correction metrics for run {}: {e}",
+                    params.name,
+                    child_run_id,
+                );
+            }
+        }
         output.child_run_id = Some(child_run_id);
         Ok(output)
     }
 }
 
+/// Write the metrics runkon summed across output-correction attempts onto the
+/// step's `agent_runs` row. Missing or unparseable keys leave that column as is.
+fn persist_corrected_run_metrics(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+    metadata: &std::collections::HashMap<String, String>,
+) -> crate::error::Result<()> {
+    use runkon_flow::constants::metadata_keys as k;
+    fn get<T: std::str::FromStr>(
+        m: &std::collections::HashMap<String, String>,
+        key: &str,
+    ) -> Option<T> {
+        m.get(key).and_then(|v| v.parse().ok())
+    }
+    crate::agent::AgentManager::new(conn).set_run_metrics(
+        run_id,
+        get(metadata, k::COST_USD),
+        get(metadata, k::NUM_TURNS),
+        get(metadata, k::DURATION_MS),
+        get(metadata, k::INPUT_TOKENS),
+        get(metadata, k::OUTPUT_TOKENS),
+        get(metadata, k::CACHE_READ_INPUT_TOKENS),
+        get(metadata, k::CACHE_CREATION_INPUT_TOKENS),
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::derive_runtime_from_model;
+    use super::{derive_runtime_from_model, persist_corrected_run_metrics};
     use runkon_runtimes::config::RuntimeConfig;
     use std::collections::HashMap;
 
@@ -288,5 +329,26 @@ mod tests {
             derive_runtime_from_model(Some("dup"), &runtimes),
             Some("alpha".to_string())
         );
+    }
+
+    #[test]
+    fn persist_corrected_run_metrics_writes_summed_totals() {
+        let conn = crate::test_helpers::setup_db();
+        let mgr = crate::agent::AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
+
+        let mut md = HashMap::new();
+        md.insert("cost_usd".to_string(), "0.75".to_string());
+        md.insert("num_turns".to_string(), "9".to_string());
+        md.insert("input_tokens".to_string(), "1200".to_string());
+        md.insert("output_tokens".to_string(), "bogus".to_string());
+        md.insert("output_correction_attempts".to_string(), "1".to_string());
+        persist_corrected_run_metrics(&conn, &run.id, &md).unwrap();
+
+        let row = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(row.cost_usd, Some(0.75));
+        assert_eq!(row.num_turns, Some(9));
+        assert_eq!(row.input_tokens, Some(1200));
+        assert_eq!(row.output_tokens, None);
     }
 }
