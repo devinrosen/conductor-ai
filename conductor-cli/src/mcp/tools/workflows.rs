@@ -383,7 +383,7 @@ pub(super) fn tool_run_workflow(
     };
 
     tool_ok(format!(
-        "Workflow '{workflow_name}' started.\nrun_id: {run_id}\nstatus: pending\ndry_run: {dry_run}\nPoll progress with conductor_get_run."
+        "Workflow '{workflow_name}' started.\nrun_id: {run_id}\nstatus: pending\ndry_run: {dry_run}\nWait for it with conductor_wait_run (or check progress with conductor_get_run)."
     ))
 }
 
@@ -866,7 +866,7 @@ workflow review {
         let run_id = "01HXXXXXXXXXXXXXXXXXXXXXXX";
         let dry_run = false;
         let response = format!(
-            "Workflow '{workflow_name}' started.\nrun_id: {run_id}\nstatus: pending\ndry_run: {dry_run}\nPoll progress with conductor_get_run."
+            "Workflow '{workflow_name}' started.\nrun_id: {run_id}\nstatus: pending\ndry_run: {dry_run}\nWait for it with conductor_wait_run (or check progress with conductor_get_run)."
         );
         assert!(
             response.contains("status: pending"),

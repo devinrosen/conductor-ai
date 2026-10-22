@@ -50,6 +50,8 @@ const OTHER_TOOLS: &[&str] = &[
     "conductor_push_worktree",
     "conductor_set_base_branch",
     "conductor_cancel_run",
+    // Blocks by design until the run finishes or times out, so it must not get the read timeout.
+    "conductor_wait_run",
     "conductor_resume_run",
     "conductor_submit_agent_feedback",
     "conductor_list_prs",
@@ -203,7 +205,7 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
         ),
         Tool::new(
             "conductor_run_workflow",
-            "Start a workflow. Returns run_id immediately; poll with conductor_get_run. \
+            "Start a workflow. Returns run_id immediately; block on it with conductor_wait_run. \
              Provide worktree or pr to target a specific context. \
              Use pr (PR number or URL) as a shortcut — it resolves the linked worktree automatically.",
             {
@@ -324,6 +326,31 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
              the Claude Code session), read the `conductor://run/{run_id}` resource — \
              this context is not available from this tool.",
             schema(&[("run_id", "Workflow run ID", true)]),
+        ),
+        Tool::new(
+            "conductor_wait_run",
+            "Block until a workflow run (and its child runs) reaches a terminal status, its \
+             engine is detected dead (stalled), or timeout_secs passes. Returns the outcome \
+             (completed|failed|cancelled|timeout|stalled), error, and the last step with its \
+             context. Prefer this over polling conductor_get_run. Some MCP clients cut off long \
+             tool calls: pass a smaller timeout_secs and call again if the outcome is timeout.",
+            Arc::new({
+                let mut m = serde_json::Map::new();
+                m.insert("type".into(), json!("object"));
+                m.insert("properties".into(), json!({
+                    "run_id": { "type": "string", "description": "Workflow run ID" },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "description": "Give up after this many seconds (default 600, max 3600)"
+                    },
+                    "stall_after_secs": {
+                        "type": "integer",
+                        "description": "Report a stall when a non-terminal run shows no lease or step activity for this many seconds (default 60)"
+                    }
+                }));
+                m.insert("required".into(), json!(["run_id"]));
+                m
+            }),
         ),
         Tool::new(
             "conductor_approve_gate",
@@ -589,6 +616,7 @@ pub(super) fn dispatch_tool(
         "conductor_push_worktree" => worktrees::tool_push_worktree(conductor, args),
         "conductor_set_base_branch" => worktrees::tool_set_base_branch(conductor, args),
         "conductor_cancel_run" => runs::tool_cancel_run(conductor, args),
+        "conductor_wait_run" => runs::tool_wait_run(conductor, args),
         "conductor_list_workflows" => workflows::tool_list_workflows(conductor, args),
         "conductor_list_repos" => repos::tool_list_repos(conductor),
         "conductor_resume_run" => runs::tool_resume_run(conductor, args, event_sinks),

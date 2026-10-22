@@ -5,7 +5,7 @@ use conductor_core::Conductor;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, pagination_hint, tool_err, tool_ok};
+use crate::mcp::helpers::{get_arg, get_arg_usize, pagination_hint, tool_err, tool_ok};
 use crate::mcp::resources::{
     format_run_detail_with_log, format_run_summary_line, format_run_summary_line_with_repo,
 };
@@ -161,6 +161,42 @@ pub(super) fn tool_get_run(
         &steps,
         claude_dir.as_deref(),
     ))
+}
+
+/// Default and maximum `timeout_secs` for `conductor_wait_run`.
+const WAIT_DEFAULT_TIMEOUT_SECS: usize = 600;
+const WAIT_MAX_TIMEOUT_SECS: usize = 3600;
+
+pub(super) fn tool_wait_run(
+    conductor: &Conductor,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
+    use conductor_core::workflow::{format_wait_summary, wait_for_workflow_run, WaitOptions};
+    use std::time::Duration;
+
+    let run_id = require_arg!(args, "run_id");
+    let requested = get_arg_usize(args, "timeout_secs").unwrap_or(WAIT_DEFAULT_TIMEOUT_SECS);
+    let timeout_secs = requested.min(WAIT_MAX_TIMEOUT_SECS);
+    let defaults = WaitOptions::default();
+    let opts = WaitOptions {
+        timeout: Some(Duration::from_secs(timeout_secs as u64)),
+        stall_after: get_arg_usize(args, "stall_after_secs")
+            .map(|s| Duration::from_secs(s as u64))
+            .unwrap_or(defaults.stall_after),
+        ..defaults
+    };
+    match wait_for_workflow_run(&conductor.conn, run_id, &opts) {
+        Ok(summary) => {
+            let mut text = format_wait_summary(&summary);
+            if requested > WAIT_MAX_TIMEOUT_SECS {
+                text.push_str(&format!(
+                    "note: timeout_secs was capped at {WAIT_MAX_TIMEOUT_SECS}s.\n"
+                ));
+            }
+            tool_ok(text)
+        }
+        Err(e) => tool_err(e),
+    }
 }
 
 pub(super) fn tool_cancel_run(
@@ -417,6 +453,50 @@ mod tests {
         let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
         let result = tool_get_run(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_wait_run_missing_run_id_arg() {
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_wait_run(&conductor, &empty_args());
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_wait_run_nonexistent_run() {
+        let (_f, conductor) = make_test_conductor();
+        let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
+        let result = tool_wait_run(&conductor, &args);
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_wait_run_completed_returns_immediately() {
+        let (_f, conductor) = make_test_conductor();
+        let parent = conductor_core::agent::AgentManager::new(&conductor.conn)
+            .create_run(None, "workflow", None)
+            .expect("create parent run");
+        let run = conductor_core::workflow::create_workflow_run(
+            &conductor.conn,
+            "test-wf",
+            None,
+            &parent.id,
+            false,
+            "manual",
+            None,
+        )
+        .expect("create workflow run");
+        conductor
+            .conn
+            .execute(
+                "UPDATE workflow_runs SET status = 'completed' WHERE id = ?1",
+                [&run.id],
+            )
+            .unwrap();
+        let result = tool_wait_run(&conductor, &args_with("run_id", &run.id));
+        assert_ne!(result.is_error, Some(true));
+        let text = result.content[0].as_text().map(|t| t.text.as_str()).unwrap_or("");
+        assert!(text.starts_with("outcome: completed"), "got: {text}");
     }
 
     #[test]
