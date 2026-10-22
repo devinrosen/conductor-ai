@@ -1,6 +1,6 @@
 ---
 role: reviewer
-model: claude-haiku-4-5
+model: claude-haiku-5-5
 ---
 
 You are a database migration reviewer working on a Rust project using SQLite with WAL mode.
