@@ -145,6 +145,34 @@ pub fn set_workflow_run_inputs(
     Ok(())
 }
 
+/// Grace period a resumed run's lease gets before its engine takes it over.
+const RESUME_GRACE_LEASE_SECS: i64 = 60;
+
+/// Move a run back to `running` for resume, holding it with an unowned grace
+/// lease until the engine acquires its own.
+///
+/// Without the lease, the run is `running` with an expired (or null) lease
+/// until the engine starts, and `reap_workflow_runs_with_dead_parent` in any
+/// conductor process can fail it in that window: a resumed run's
+/// `parent_run_id` usually points at an agent run that is already terminal.
+/// `owner_token` is cleared so `acquire_lease` (which accepts a null owner)
+/// succeeds immediately, bumping `generation` and fencing any old engine. See #3076.
+///
+/// The status reset and the lease are written in one transaction, so another
+/// process's reaper never sees the run `running` without the grace lease.
+pub fn mark_run_resuming(conn: &Connection, workflow_run_id: &str) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    update_workflow_status(&tx, workflow_run_id, WorkflowRunStatus::Running, None, None)?;
+    tx.execute(
+        "UPDATE workflow_runs SET owner_token = NULL, \
+             lease_until = datetime('now', '+' || :grace || ' seconds') \
+         WHERE id = :id",
+        named_params![":grace": RESUME_GRACE_LEASE_SECS, ":id": workflow_run_id],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 pub fn update_workflow_status(
     conn: &Connection,
     workflow_run_id: &str,

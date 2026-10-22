@@ -62,6 +62,11 @@ impl<'a> AgentManager<'a> {
     /// without rewriting `parent_run_id`). Only runs with an expired or absent
     /// lease are eligible. See #2828.
     ///
+    /// The lease is compared with `datetime()` on both sides: the engine writes
+    /// `lease_until` as `datetime('now', '+N seconds')` (`YYYY-MM-DD HH:MM:SS`),
+    /// and a plain string comparison against an RFC 3339 timestamp treated every
+    /// same-day lease as expired (the space sorts before `T`). See #3076.
+    ///
     /// Returns the number of workflow runs transitioned to `failed`.
     pub fn reap_workflow_runs_with_dead_parent(&self) -> Result<usize> {
         let now = chrono::Utc::now().to_rfc3339();
@@ -75,8 +80,8 @@ impl<'a> AgentManager<'a> {
                    SELECT id FROM agent_runs \
                    WHERE status IN ('failed', 'completed', 'cancelled') \
                ) \
-               AND (lease_until IS NULL OR lease_until <= :now)",
-            rusqlite::named_params! { ":ended_at": now, ":now": now },
+               AND (lease_until IS NULL OR datetime(lease_until) <= datetime('now'))",
+            rusqlite::named_params! { ":ended_at": now },
         )?;
         if changed > 0 {
             tracing::warn!(
@@ -693,6 +698,78 @@ mod tests {
             )
             .unwrap();
         assert_eq!(wf_status, "running", "status must remain running");
+    }
+
+    /// Same as above, with the lease written the way the engine writes it
+    /// (`datetime('now', '+N seconds')`, `YYYY-MM-DD HH:MM:SS`). Regression for
+    /// #3076: a string comparison against an RFC 3339 `now` treated this as expired.
+    #[test]
+    fn test_reap_wf_runs_dead_parent_skips_active_sqlite_format_lease() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let wf_run_id = setup_dead_parent_with_wf_run(&conn, &mgr, "failed", "running");
+        conn.execute(
+            "UPDATE workflow_runs SET lease_until = datetime('now', '+60 seconds') WHERE id = :id",
+            rusqlite::named_params! { ":id": wf_run_id },
+        )
+        .unwrap();
+
+        let reaped = mgr.reap_workflow_runs_with_dead_parent().unwrap();
+        assert_eq!(reaped, 0, "a live engine-format lease must not be reaped");
+    }
+
+    /// A run that failed with a terminal parent and a stale lease, then is moved back
+    /// to `running` by resume, must survive a reaper sweep before its engine acquires
+    /// a lease, and must be left unowned so the engine can take it. Regression for #3076.
+    #[test]
+    fn test_reap_wf_runs_dead_parent_skips_run_being_resumed() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let wf_run_id = setup_dead_parent_with_wf_run(&conn, &mgr, "failed", "failed");
+        conn.execute(
+            "UPDATE workflow_runs SET owner_token = 'old-engine', \
+                 lease_until = datetime('now', '-300 seconds') WHERE id = :id",
+            rusqlite::named_params! { ":id": wf_run_id },
+        )
+        .unwrap();
+
+        crate::workflow::mark_run_resuming(&conn, &wf_run_id).unwrap();
+
+        let reaped = mgr.reap_workflow_runs_with_dead_parent().unwrap();
+        assert_eq!(reaped, 0, "a run being resumed must not be reaped");
+
+        let (status, owner, error): (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT status, owner_token, error FROM workflow_runs WHERE id = :id",
+                rusqlite::named_params! { ":id": wf_run_id },
+                |r| Ok((r.get("status")?, r.get("owner_token")?, r.get("error")?)),
+            )
+            .unwrap();
+        assert_eq!(status, "running");
+        assert_eq!(
+            owner, None,
+            "owner_token must be cleared so the engine can acquire the lease"
+        );
+        assert_eq!(error, None);
+    }
+
+    /// An expired lease in the engine's format is still reaped.
+    #[test]
+    fn test_reap_wf_runs_dead_parent_reaps_expired_sqlite_format_lease() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let wf_run_id = setup_dead_parent_with_wf_run(&conn, &mgr, "failed", "running");
+        conn.execute(
+            "UPDATE workflow_runs SET lease_until = datetime('now', '-1 seconds') WHERE id = :id",
+            rusqlite::named_params! { ":id": wf_run_id },
+        )
+        .unwrap();
+
+        let reaped = mgr.reap_workflow_runs_with_dead_parent().unwrap();
+        assert_eq!(reaped, 1, "an expired engine-format lease must be reaped");
     }
 
     /// A workflow_run with an expired lease (lease_until <= now) and a terminal parent
