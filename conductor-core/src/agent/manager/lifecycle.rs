@@ -4,7 +4,7 @@ use rusqlite::named_params;
 use crate::error::Result;
 
 use super::super::status::AgentRunStatus;
-use super::super::types::{AgentRun, LogResult};
+use super::super::types::{AgentRun, LogResult, RunMetrics};
 use super::AgentManager;
 
 impl<'a> AgentManager<'a> {
@@ -377,6 +377,51 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Reopen a `completed` run so a resumed spawn under the same `run_id` can
+    /// record its result. Returns whether a row changed.
+    ///
+    /// Only `completed` rows reopen; `failed` and `cancelled` stay terminal.
+    /// Runkon's structured-output correction resumes the session with the same
+    /// `run_id` after the first attempt completed, and the guarded
+    /// [`update_run_completed_if_running_full`] would otherwise ignore the
+    /// corrected result.
+    pub fn reopen_run_for_resume(&self, run_id: &str) -> Result<bool> {
+        let changed = self.conn.execute(
+            "UPDATE agent_runs SET status = 'running', ended_at = NULL \
+             WHERE id = :id AND status = 'completed'",
+            named_params! { ":id": run_id },
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Overwrite a run's metric columns with the given totals, leaving `None`
+    /// fields, `status` and `result_text` untouched. Used to record the metrics
+    /// summed across output-correction attempts.
+    pub fn set_run_metrics(&self, run_id: &str, metrics: &RunMetrics) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_runs \
+             SET cost_usd = COALESCE(:cost_usd, cost_usd), \
+                 num_turns = COALESCE(:num_turns, num_turns), \
+                 duration_ms = COALESCE(:duration_ms, duration_ms), \
+                 input_tokens = COALESCE(:input_tokens, input_tokens), \
+                 output_tokens = COALESCE(:output_tokens, output_tokens), \
+                 cache_read_input_tokens = COALESCE(:cache_read_input_tokens, cache_read_input_tokens), \
+                 cache_creation_input_tokens = COALESCE(:cache_creation_input_tokens, cache_creation_input_tokens) \
+             WHERE id = :id",
+            named_params! {
+                ":cost_usd": metrics.cost_usd,
+                ":num_turns": metrics.num_turns,
+                ":duration_ms": metrics.duration_ms,
+                ":input_tokens": metrics.input_tokens,
+                ":output_tokens": metrics.output_tokens,
+                ":cache_read_input_tokens": metrics.cache_read_input_tokens,
+                ":cache_creation_input_tokens": metrics.cache_creation_input_tokens,
+                ":id": run_id,
+            },
+        )?;
+        Ok(())
+    }
+
     /// Record the runtime name for an agent run.
     pub fn update_run_runtime(&self, run_id: &str, runtime: &str) -> Result<()> {
         self.conn.execute(
@@ -507,6 +552,7 @@ mod tests {
     use super::super::AgentManager;
     use crate::agent::status::AgentRunStatus;
     use crate::agent::types::LogResult;
+    use crate::agent::RunMetrics;
 
     #[test]
     fn test_create_and_list() {
@@ -928,6 +974,97 @@ mod tests {
             Some("original error"),
             "result_text must not be overwritten when run is not running"
         );
+    }
+
+    fn log_result_with_text(text: &str, session: &str) -> LogResult {
+        LogResult {
+            result_text: Some(text.into()),
+            session_id: Some(session.into()),
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            is_error: false,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+        }
+    }
+
+    #[test]
+    fn test_reopen_run_for_resume_reopens_completed_only() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let done = mgr.create_run(Some("w1"), "task", None).unwrap();
+        mgr.update_run_completed_if_running_full(&done.id, &log_result_with_text("A", "s1"))
+            .unwrap();
+        assert!(mgr.reopen_run_for_resume(&done.id).unwrap());
+        let row = mgr.get_run(&done.id).unwrap().unwrap();
+        assert_eq!(row.status, AgentRunStatus::Running);
+        assert!(row.ended_at.is_none());
+
+        let failed = mgr.create_run(Some("w1"), "task", None).unwrap();
+        mgr.update_run_failed(&failed.id, "boom").unwrap();
+        assert!(!mgr.reopen_run_for_resume(&failed.id).unwrap());
+        assert_eq!(
+            mgr.get_run(&failed.id).unwrap().unwrap().status,
+            AgentRunStatus::Failed
+        );
+
+        let cancelled = mgr.create_run(Some("w1"), "task", None).unwrap();
+        mgr.update_run_cancelled(&cancelled.id).unwrap();
+        assert!(!mgr.reopen_run_for_resume(&cancelled.id).unwrap());
+        assert_eq!(
+            mgr.get_run(&cancelled.id).unwrap().unwrap().status,
+            AgentRunStatus::Cancelled
+        );
+    }
+
+    #[test]
+    fn test_reopened_run_takes_corrected_result() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
+        mgr.update_run_completed_if_running_full(&run.id, &log_result_with_text("A", "s1"))
+            .unwrap();
+        mgr.reopen_run_for_resume(&run.id).unwrap();
+        mgr.update_run_completed_if_running_full(&run.id, &log_result_with_text("B", "s2"))
+            .unwrap();
+
+        let row = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(row.status, AgentRunStatus::Completed);
+        assert_eq!(row.result_text.as_deref(), Some("B"));
+        assert_eq!(row.session_id.as_deref(), Some("s2"));
+    }
+
+    #[test]
+    fn test_set_run_metrics_overwrites_given_fields_only() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
+        mgr.update_run_completed_if_running_full(&run.id, &log_result_with_text("A", "s1"))
+            .unwrap();
+        mgr.set_run_metrics(
+            &run.id,
+            &RunMetrics {
+                cost_usd: Some(0.3),
+                num_turns: Some(7),
+                input_tokens: Some(300),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let row = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(row.status, AgentRunStatus::Completed);
+        assert_eq!(row.result_text.as_deref(), Some("A"));
+        assert_eq!(row.cost_usd, Some(0.3));
+        assert_eq!(row.num_turns, Some(7));
+        assert_eq!(row.input_tokens, Some(300));
+        assert_eq!(row.output_tokens, None);
     }
 
     #[test]

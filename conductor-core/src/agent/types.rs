@@ -372,6 +372,18 @@ pub struct ActiveAgentCounts {
     pub waiting: u32,
 }
 
+/// Metric totals to write onto an `agent_runs` row; `None` fields are left as is.
+#[derive(Debug, Clone, Default)]
+pub struct RunMetrics {
+    pub cost_usd: Option<f64>,
+    pub num_turns: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cache_read_input_tokens: Option<i64>,
+    pub cache_creation_input_tokens: Option<i64>,
+}
+
 /// Parsed result event from an agent log file or streaming JSON.
 pub struct LogResult {
     pub result_text: Option<String>,
