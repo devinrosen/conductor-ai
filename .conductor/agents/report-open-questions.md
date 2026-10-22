@@ -1,6 +1,6 @@
 ---
 role: reviewer
-model: claude-haiku-4-5
+model: claude-haiku-5-5
 can_commit: false
 ---
 
