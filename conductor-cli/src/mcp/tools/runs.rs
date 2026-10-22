@@ -955,6 +955,35 @@ mod tests {
     }
 
     #[test]
+    fn test_get_run_not_blocked_by_open_write_transaction() {
+        // Regression for #3093: a write transaction held open on another
+        // connection must not make get_run wait (WAL readers don't block).
+        let (_f, conductor) = make_test_conductor();
+        let (run_id, _step_id) = make_run_with_step(_f.path(), "build");
+
+        let writer = rusqlite::Connection::open(_f.path()).expect("open writer");
+        writer
+            .execute_batch("BEGIN IMMEDIATE; UPDATE workflow_runs SET workflow_name = 'held';")
+            .expect("hold write txn");
+
+        let start = std::time::Instant::now();
+        let result = tool_get_run(&conductor, &args_with("run_id", &run_id));
+        let elapsed = start.elapsed();
+
+        writer.execute_batch("ROLLBACK").expect("rollback");
+
+        assert_ne!(result.is_error, Some(true), "get_run errored: {result:?}");
+        assert!(
+            serde_json::to_string(&result).unwrap().contains(&run_id),
+            "result should mention the run id"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "get_run blocked for {elapsed:?}"
+        );
+    }
+
+    #[test]
     fn test_dispatch_get_step_log_step_not_found() {
         let (_f, conductor) = make_test_conductor();
         let (run_id, _step_id) = make_run_with_step(_f.path(), "build");
