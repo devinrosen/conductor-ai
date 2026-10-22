@@ -294,9 +294,7 @@ fn ensure_base_up_to_date_with_fetch_control(
             .args(["status", "--porcelain", "--untracked-files=no"])
             .output()?;
         if output.status.success() && !output.stdout.is_empty() {
-            return Err(ConductorError::InvalidInput(
-                "uncommitted changes on base branch, please commit or stash first".to_string(),
-            ));
+            return Err(ConductorError::DirtyCheckout);
         }
     }
 

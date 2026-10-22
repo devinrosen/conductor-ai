@@ -200,16 +200,11 @@ pub(super) fn tool_create_worktree(
             }
             tool_ok(msg)
         }
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("uncommitted changes on base branch") {
-                tool_err(format!(
-                    "{msg}. Pass allow_dirty=true to branch from origin/<base> without modifying the local checkout."
-                ))
-            } else {
-                tool_err(e)
-            }
-        }
+        Err(conductor_core::error::ConductorError::DirtyCheckout) => tool_err(format!(
+            "{}. Pass allow_dirty=true to branch from origin/<base> without modifying the local checkout.",
+            conductor_core::error::ConductorError::DirtyCheckout
+        )),
+        Err(e) => tool_err(e),
     }
 }
 

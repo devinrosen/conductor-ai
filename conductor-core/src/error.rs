@@ -135,6 +135,9 @@ pub enum ConductorError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
+    #[error("uncommitted changes on base branch, please commit or stash first")]
+    DirtyCheckout,
+
     #[error("unknown ticket source type: {0}")]
     UnknownSourceType(String),
 
@@ -185,6 +188,7 @@ impl ConductorError {
             Self::TicketNotFound { .. } => 25,
             Self::TicketAlreadyLinked => 26,
             Self::InvalidInput(_) => 27,
+            Self::DirtyCheckout => 28,
             Self::Git(_) => 30,
             Self::GhCli(_) => 31,
             Self::TicketSync(_) => 32,
@@ -234,6 +238,7 @@ mod tests {
             ConductorError::TicketNotFound { id: "t".into() },
             ConductorError::TicketAlreadyLinked,
             ConductorError::InvalidInput("bad".into()),
+            ConductorError::DirtyCheckout,
             ConductorError::Git(SubprocessFailure::from_message("git", "err".into())),
             ConductorError::GhCli(SubprocessFailure::from_message("gh", "err".into())),
             ConductorError::TicketSync("sync".into()),
