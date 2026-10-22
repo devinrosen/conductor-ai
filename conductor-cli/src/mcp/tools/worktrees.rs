@@ -177,6 +177,7 @@ pub(super) fn tool_create_worktree(
     };
 
     let from_branch = get_arg(args, "from_branch").map(str::to_string);
+    let force = get_bool_arg(args, "force");
 
     let wt_mgr = WorktreeManager::new(conn, config);
     match wt_mgr.create(
@@ -185,6 +186,7 @@ pub(super) fn tool_create_worktree(
         WorktreeCreateOptions {
             ticket_id: resolved_ticket_id,
             from_branch,
+            force_dirty: force,
             ..Default::default()
         },
     ) {
@@ -813,6 +815,106 @@ mod tests {
         );
     }
 
+    /// Register a real git repo (bare remote + clone) whose tracked README is dirty,
+    /// with a newer commit on the remote. Returns guards plus a conductor wired to it.
+    fn dirty_repo_conductor() -> (tempfile::TempDir, tempfile::NamedTempFile, Conductor) {
+        use conductor_core::config::Config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+        use std::process::Command;
+
+        fn git(args: &[&str], dir: &std::path::Path) {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .expect("run git");
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let remote = tmp.path().join("remote.git");
+        let local = tmp.path().join("local");
+        std::fs::create_dir_all(&remote).unwrap();
+        git(&["init", "--bare", "-b", "main"], &remote);
+        git(
+            &["clone", remote.to_str().unwrap(), local.to_str().unwrap()],
+            tmp.path(),
+        );
+        git(&["config", "user.email", "t@t.com"], &local);
+        git(&["config", "user.name", "T"], &local);
+        git(&["checkout", "-b", "main"], &local);
+        std::fs::write(local.join("README.md"), "initial").unwrap();
+        git(&["add", "README.md"], &local);
+        git(&["commit", "-m", "initial"], &local);
+        git(&["push", "-u", "origin", "main"], &local);
+        std::fs::write(local.join("README.md"), "modified").unwrap();
+
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_database(file.path()).expect("open db");
+        let mut config = Config::default();
+        config.general.workspace_root = tmp.path().to_path_buf();
+        RepoManager::new(&conn, &config)
+            .register(
+                "my-repo",
+                local.to_str().unwrap(),
+                remote.to_str().unwrap(),
+                Some(tmp.path().join("workspaces/my-repo").to_str().unwrap()),
+            )
+            .expect("register repo");
+        (tmp, file, Conductor { conn, config })
+    }
+
+    fn create_args(name: &str, force: Option<Value>) -> serde_json::Map<String, Value> {
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), Value::String("my-repo".into()));
+        args.insert("name".into(), Value::String(name.into()));
+        if let Some(f) = force {
+            args.insert("force".into(), f);
+        }
+        args
+    }
+
+    fn result_text(result: &CallToolResult) -> String {
+        result.content[0]
+            .as_text()
+            .map(|t| t.text.clone())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn test_tool_create_worktree_dirty_checkout_without_force_errors() {
+        let (_tmp, _f, conductor) = dirty_repo_conductor();
+        let result = tool_create_worktree(&conductor, &create_args("feat-dirty", None));
+        assert_eq!(result.is_error, Some(true));
+        assert!(result_text(&result).contains("uncommitted changes"));
+    }
+
+    #[test]
+    fn test_tool_create_worktree_force_string_true_succeeds_on_dirty_checkout() {
+        let (_tmp, _f, conductor) = dirty_repo_conductor();
+        let result = tool_create_worktree(
+            &conductor,
+            &create_args("feat-forced-str", Some(Value::String("true".into()))),
+        );
+        assert_ne!(result.is_error, Some(true), "{}", result_text(&result));
+        assert!(result_text(&result).contains("not updated"));
+    }
+
+    #[test]
+    fn test_tool_create_worktree_force_json_bool_succeeds_on_dirty_checkout() {
+        let (_tmp, _f, conductor) = dirty_repo_conductor();
+        let result = tool_create_worktree(
+            &conductor,
+            &create_args("feat-forced-bool", Some(Value::Bool(true))),
+        );
+        assert_ne!(result.is_error, Some(true), "{}", result_text(&result));
+    }
+
     #[test]
     fn test_tool_set_base_branch_missing_repo_returns_error() {
         let (_f, conductor) = make_test_conductor();
@@ -875,6 +977,25 @@ mod tests {
         assert!(
             !text.contains("invalid") && !text.contains("unknown parameter"),
             "rebase arg should be accepted without parse error, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_create_worktree_schema_has_optional_force_arg() {
+        let tools = super::super::conductor_tools();
+        let tool = tools
+            .iter()
+            .find(|t| t.name == "conductor_create_worktree")
+            .expect("tool registered");
+        let props = tool.input_schema.get("properties").expect("properties");
+        assert!(
+            props.get("force").is_some(),
+            "force arg missing from schema"
+        );
+        let required = tool.input_schema.get("required").and_then(|r| r.as_array());
+        assert!(
+            !required.is_some_and(|r| r.iter().any(|v| v == "force")),
+            "force must be optional"
         );
     }
 

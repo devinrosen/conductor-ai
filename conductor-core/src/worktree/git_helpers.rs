@@ -84,6 +84,25 @@ pub fn check_main_health(repo_path: &str, base_branch: &str) -> MainHealthStatus
     }
 }
 
+/// Outcome of bringing the base branch up to date before branching a worktree.
+#[derive(Debug)]
+pub(super) struct BaseUpdate {
+    /// Non-fatal warnings (fetch failure, diverged branch, skipped fast-forward, etc.).
+    pub warnings: Vec<String>,
+    /// Ref to branch the new worktree from: `refs/heads/<base>` normally,
+    /// `refs/remotes/origin/<base>` when a dirty checkout was left untouched.
+    pub start_point: String,
+}
+
+impl BaseUpdate {
+    fn local(base_branch: &str, warnings: Vec<String>) -> Self {
+        Self {
+            warnings,
+            start_point: format!("refs/heads/{base_branch}"),
+        }
+    }
+}
+
 /// Resolve the base branch name (with prefix fallback) and ensure it's up to date.
 ///
 /// When an explicit `from_branch` is provided (e.g. from a Vantage ticket), we try:
@@ -94,18 +113,19 @@ pub fn check_main_health(repo_path: &str, base_branch: &str) -> MainHealthStatus
 /// If no explicit branch is given, falls back to `resolve_base_branch`.
 ///
 /// The `force_dirty` and `pre_verified_clean` flags are forwarded to
-/// `ensure_base_up_to_date`.
+/// `ensure_base_up_to_date`. The returned `BaseUpdate::start_point` is the ref the
+/// worktree should branch from (see `ensure_base_up_to_date`).
 pub(super) fn resolve_and_update_base(
     repo_path: &str,
     from_branch: Option<&str>,
     configured_default: &str,
     force_dirty: bool,
     pre_verified_clean: bool,
-) -> Result<(String, Vec<String>)> {
+) -> Result<(String, BaseUpdate)> {
     let Some(requested) = from_branch else {
         let base = resolve_base_branch(repo_path, configured_default);
-        let warnings = ensure_base_up_to_date(repo_path, &base, force_dirty, pre_verified_clean)?;
-        return Ok((base, warnings));
+        let update = ensure_base_up_to_date(repo_path, &base, force_dirty, pre_verified_clean)?;
+        return Ok((base, update));
     };
 
     // Perform a single fetch upfront to avoid redundant network calls
@@ -129,9 +149,9 @@ pub(super) fn resolve_and_update_base(
         pre_verified_clean,
         false,
     ) {
-        Ok(mut warnings) => {
-            warnings.extend(fetch_warnings);
-            Ok((requested.to_string(), warnings))
+        Ok(mut update) => {
+            update.warnings.extend(fetch_warnings);
+            Ok((requested.to_string(), update))
         }
         Err(_first_err) => {
             // If the name already has a known prefix, don't try alternatives
@@ -142,15 +162,15 @@ pub(super) fn resolve_and_update_base(
             // Try feat/ and fix/ prefixes (skip fetch since we already did it)
             for prefix in &["feat/", "fix/"] {
                 let candidate = format!("{prefix}{requested}");
-                if let Ok(mut warnings) = ensure_base_up_to_date_with_fetch_control(
+                if let Ok(mut update) = ensure_base_up_to_date_with_fetch_control(
                     repo_path,
                     &candidate,
                     force_dirty,
                     pre_verified_clean,
                     false,
                 ) {
-                    warnings.extend(fetch_warnings);
-                    return Ok((candidate, warnings));
+                    update.warnings.extend(fetch_warnings);
+                    return Ok((candidate, update));
                 }
             }
 
@@ -256,7 +276,10 @@ pub(super) fn detect_remote_head(repo_path: &str) -> Option<String> {
 /// Returns `Err` only for hard failures like a dirty working tree (unless `force_dirty` is true).
 ///
 /// When `force_dirty` is `true`, the dirty-state check is skipped (the caller has
-/// already confirmed the user wants to proceed despite uncommitted changes).
+/// already confirmed the user wants to proceed despite uncommitted changes). If the
+/// base branch is checked out and the checkout really is dirty, the fast-forward is
+/// skipped too, so the user's files are never touched; the returned `start_point` is
+/// then `refs/remotes/origin/<base>` and a warning says the local base wasn't updated.
 ///
 /// When `pre_verified_clean` is `true`, the dirty-state check is also skipped because
 /// the caller has already confirmed the working tree is clean via `check_main_health`.
@@ -266,7 +289,7 @@ pub(super) fn ensure_base_up_to_date(
     base_branch: &str,
     force_dirty: bool,
     pre_verified_clean: bool,
-) -> Result<Vec<String>> {
+) -> Result<BaseUpdate> {
     ensure_base_up_to_date_with_fetch_control(
         repo_path,
         base_branch,
@@ -276,28 +299,51 @@ pub(super) fn ensure_base_up_to_date(
     )
 }
 
+/// Returns whether the tracked files of the checkout at `repo_path` have uncommitted
+/// changes. Untracked files are excluded (see `ensure_base_up_to_date_with_fetch_control`).
+/// A `git status` that cannot be spawned or exits non-zero is an error, not "clean".
+fn base_checkout_is_dirty(repo_path: &str) -> Result<bool> {
+    let output = git_in(repo_path)
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .output()
+        .map_err(|e| {
+            ConductorError::Git(crate::error::SubprocessFailure::from_message(
+                "git",
+                format!("failed to run git status in {repo_path}: {e}"),
+            ))
+        })?;
+    if !output.status.success() {
+        return Err(ConductorError::Git(
+            crate::error::SubprocessFailure::from_message(
+                "git",
+                format!(
+                    "git status failed in {repo_path}: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+            ),
+        ));
+    }
+    Ok(!output.stdout.is_empty())
+}
+
 fn ensure_base_up_to_date_with_fetch_control(
     repo_path: &str,
     base_branch: &str,
     force_dirty: bool,
     pre_verified_clean: bool,
     should_fetch: bool,
-) -> Result<Vec<String>> {
+) -> Result<BaseUpdate> {
     let mut warnings = Vec::new();
 
     // 1. Check for uncommitted changes in the repo working tree. Untracked files are
     //    excluded — they don't affect `git worktree add` (new directory, separate from
     //    the main working tree) and are the most common source of false-positive
     //    "dirty" reports (e.g. untracked test-helper directories).
-    if !force_dirty && !pre_verified_clean {
-        let output = git_in(repo_path)
-            .args(["status", "--porcelain", "--untracked-files=no"])
-            .output()?;
-        if output.status.success() && !output.stdout.is_empty() {
-            return Err(ConductorError::InvalidInput(
-                "uncommitted changes on base branch, please commit or stash first".to_string(),
-            ));
-        }
+    if !force_dirty && !pre_verified_clean && base_checkout_is_dirty(repo_path)? {
+        return Err(ConductorError::InvalidInput(format!(
+            "uncommitted changes on base branch '{base_branch}'; commit or stash them, or retry \
+             with the force option to branch from origin/{base_branch} without touching the checkout"
+        )));
     }
 
     // 2. Fetch from remote (soft failure — warn and allow local-only creation).
@@ -309,7 +355,7 @@ fn ensure_base_up_to_date_with_fetch_control(
                 warnings.push(
                     "could not fetch from origin; creating worktree from local state".to_string(),
                 );
-                return Ok(warnings);
+                return Ok(BaseUpdate::local(base_branch, warnings));
             }
         }
     }
@@ -371,12 +417,12 @@ fn ensure_base_up_to_date_with_fetch_control(
             }
         }
         // Local branch is now set to the remote tip — no need to fast-forward.
-        return Ok(warnings);
+        return Ok(BaseUpdate::local(base_branch, warnings));
     }
 
     if !has_remote {
         // Local branch exists but no remote tracking — use local state as-is.
-        return Ok(warnings);
+        return Ok(BaseUpdate::local(base_branch, warnings));
     }
 
     // 4. Determine which branch is currently checked out
@@ -390,7 +436,34 @@ fn ensure_base_up_to_date_with_fetch_control(
 
     // 5. Fast-forward the base branch
     let origin_ref = format!("origin/{base_branch}");
-    if current_branch == base_branch {
+    let mut start_point = format!("refs/heads/{base_branch}");
+    // With `force_dirty`, merging would rewrite the user's uncommitted checkout, so
+    // leave it alone and branch from the freshly fetched remote ref instead.
+    // An unknown state (the probe itself failed) is treated as dirty so a failing
+    // `git status` can never lead to a merge over uncommitted files.
+    let mut probe_failure = None;
+    let leave_checkout_alone = current_branch == base_branch
+        && force_dirty
+        && !pre_verified_clean
+        && match base_checkout_is_dirty(repo_path) {
+            Ok(dirty) => dirty,
+            Err(e) => {
+                probe_failure = Some(e.to_string());
+                true
+            }
+        };
+    if leave_checkout_alone {
+        start_point = remote_ref.clone();
+        if let Some(err) = &probe_failure {
+            tracing::warn!("could not determine dirty state of {repo_path}: {err}");
+            warnings.push(format!(
+                "could not determine whether {repo_path} has uncommitted changes ({err}); treating it as dirty"
+            ));
+        }
+        warnings.push(format!(
+            "base branch '{base_branch}' has uncommitted changes in {repo_path}; local branch was not updated — worktree branched from origin/{base_branch} (local commits not on origin are not included)"
+        ));
+    } else if current_branch == base_branch {
         // Base is already checked out — merge directly
         let merge = git_in(repo_path)
             .args(["merge", "--ff-only", &origin_ref])
@@ -419,7 +492,10 @@ fn ensure_base_up_to_date_with_fetch_control(
         }
     }
 
-    Ok(warnings)
+    Ok(BaseUpdate {
+        warnings,
+        start_point,
+    })
 }
 
 /// Fast-forward pull in a worktree directory using `git pull --ff-only`.
