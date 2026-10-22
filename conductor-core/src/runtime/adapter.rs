@@ -90,6 +90,15 @@ impl SqliteHostAdapter {
         op(&mgr)
     }
 
+    /// [`Self::with_mgr_raw`] retried on busy/locked errors with
+    /// [`TERMINAL_WRITE_BACKOFF`], for writes that must not be lost (#3075).
+    fn with_terminal_write<F>(&self, op: F) -> crate::error::Result<()>
+    where
+        F: Fn(&AgentManager<'_>) -> crate::error::Result<()>,
+    {
+        retry_on_busy(&TERMINAL_WRITE_BACKOFF, || self.with_mgr_raw(&op))
+    }
+
     /// Helper that locks the connection, builds an `AgentManager`, and delegates
     /// to the provided closure. Centralises the mutex-lock + error-mapping
     /// boilerplate shared by every `RunTracker` method.
@@ -195,19 +204,13 @@ impl EventSink for SqliteHostAdapter {
                     cache_read_input_tokens,
                     cache_creation_input_tokens,
                 };
-                retry_on_busy(&TERMINAL_WRITE_BACKOFF, || {
-                    self.with_mgr_raw(|mgr| {
-                        mgr.update_run_completed_if_running_full(run_id, &log_result)
-                    })
+                self.with_terminal_write(|mgr| {
+                    mgr.update_run_completed_if_running_full(run_id, &log_result)
                 })
             }
-            RuntimeEvent::Failed { error, session_id } => {
-                retry_on_busy(&TERMINAL_WRITE_BACKOFF, || {
-                    self.with_mgr_raw(|mgr| {
-                        mgr.update_run_failed_with_session(run_id, &error, session_id.as_deref())
-                    })
-                })
-            }
+            RuntimeEvent::Failed { error, session_id } => self.with_terminal_write(|mgr| {
+                mgr.update_run_failed_with_session(run_id, &error, session_id.as_deref())
+            }),
         };
 
         if let Err(ref e) = result {
