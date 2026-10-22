@@ -218,13 +218,23 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
         {
             // Runkon summed the metrics across correction attempts; the row only
             // holds the final attempt's, so write the totals back (best-effort).
-            let conn = self.conn.lock().map_err(bridge_lock_err)?;
-            if let Err(e) = persist_corrected_run_metrics(&conn, &child_run_id, &output.metadata) {
-                tracing::warn!(
-                    "step '{}': failed to persist summed correction metrics for run {}: {e}",
+            match self.conn.lock() {
+                Ok(conn) => {
+                    if let Err(e) =
+                        persist_corrected_run_metrics(&conn, &child_run_id, &output.metadata)
+                    {
+                        tracing::warn!(
+                            "step '{}': failed to persist summed correction metrics for run {}: {e}",
+                            params.name,
+                            child_run_id,
+                        );
+                    }
+                }
+                Err(e) => tracing::warn!(
+                    "step '{}': db lock poisoned, skipping summed correction metrics for run {}: {e}",
                     params.name,
                     child_run_id,
-                );
+                ),
             }
         }
         output.child_run_id = Some(child_run_id);
@@ -246,16 +256,16 @@ fn persist_corrected_run_metrics(
     ) -> Option<T> {
         m.get(key).and_then(|v| v.parse().ok())
     }
-    crate::agent::AgentManager::new(conn).set_run_metrics(
-        run_id,
-        get(metadata, k::COST_USD),
-        get(metadata, k::NUM_TURNS),
-        get(metadata, k::DURATION_MS),
-        get(metadata, k::INPUT_TOKENS),
-        get(metadata, k::OUTPUT_TOKENS),
-        get(metadata, k::CACHE_READ_INPUT_TOKENS),
-        get(metadata, k::CACHE_CREATION_INPUT_TOKENS),
-    )
+    let metrics = crate::agent::RunMetrics {
+        cost_usd: get(metadata, k::COST_USD),
+        num_turns: get(metadata, k::NUM_TURNS),
+        duration_ms: get(metadata, k::DURATION_MS),
+        input_tokens: get(metadata, k::INPUT_TOKENS),
+        output_tokens: get(metadata, k::OUTPUT_TOKENS),
+        cache_read_input_tokens: get(metadata, k::CACHE_READ_INPUT_TOKENS),
+        cache_creation_input_tokens: get(metadata, k::CACHE_CREATION_INPUT_TOKENS),
+    };
+    crate::agent::AgentManager::new(conn).set_run_metrics(run_id, &metrics)
 }
 
 #[cfg(test)]

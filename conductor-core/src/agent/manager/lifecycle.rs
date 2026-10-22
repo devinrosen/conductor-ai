@@ -4,7 +4,7 @@ use rusqlite::named_params;
 use crate::error::Result;
 
 use super::super::status::AgentRunStatus;
-use super::super::types::{AgentRun, LogResult};
+use super::super::types::{AgentRun, LogResult, RunMetrics};
 use super::AgentManager;
 
 impl<'a> AgentManager<'a> {
@@ -397,18 +397,7 @@ impl<'a> AgentManager<'a> {
     /// Overwrite a run's metric columns with the given totals, leaving `None`
     /// fields, `status` and `result_text` untouched. Used to record the metrics
     /// summed across output-correction attempts.
-    #[allow(clippy::too_many_arguments)]
-    pub fn set_run_metrics(
-        &self,
-        run_id: &str,
-        cost_usd: Option<f64>,
-        num_turns: Option<i64>,
-        duration_ms: Option<i64>,
-        input_tokens: Option<i64>,
-        output_tokens: Option<i64>,
-        cache_read_input_tokens: Option<i64>,
-        cache_creation_input_tokens: Option<i64>,
-    ) -> Result<()> {
+    pub fn set_run_metrics(&self, run_id: &str, metrics: &RunMetrics) -> Result<()> {
         self.conn.execute(
             "UPDATE agent_runs \
              SET cost_usd = COALESCE(:cost_usd, cost_usd), \
@@ -420,13 +409,13 @@ impl<'a> AgentManager<'a> {
                  cache_creation_input_tokens = COALESCE(:cache_creation_input_tokens, cache_creation_input_tokens) \
              WHERE id = :id",
             named_params! {
-                ":cost_usd": cost_usd,
-                ":num_turns": num_turns,
-                ":duration_ms": duration_ms,
-                ":input_tokens": input_tokens,
-                ":output_tokens": output_tokens,
-                ":cache_read_input_tokens": cache_read_input_tokens,
-                ":cache_creation_input_tokens": cache_creation_input_tokens,
+                ":cost_usd": metrics.cost_usd,
+                ":num_turns": metrics.num_turns,
+                ":duration_ms": metrics.duration_ms,
+                ":input_tokens": metrics.input_tokens,
+                ":output_tokens": metrics.output_tokens,
+                ":cache_read_input_tokens": metrics.cache_read_input_tokens,
+                ":cache_creation_input_tokens": metrics.cache_creation_input_tokens,
                 ":id": run_id,
             },
         )?;
@@ -563,6 +552,7 @@ mod tests {
     use super::super::AgentManager;
     use crate::agent::status::AgentRunStatus;
     use crate::agent::types::LogResult;
+    use crate::agent::RunMetrics;
 
     #[test]
     fn test_create_and_list() {
@@ -1059,13 +1049,12 @@ mod tests {
             .unwrap();
         mgr.set_run_metrics(
             &run.id,
-            Some(0.3),
-            Some(7),
-            None,
-            Some(300),
-            None,
-            None,
-            None,
+            &RunMetrics {
+                cost_usd: Some(0.3),
+                num_turns: Some(7),
+                input_tokens: Some(300),
+                ..Default::default()
+            },
         )
         .unwrap();
 
