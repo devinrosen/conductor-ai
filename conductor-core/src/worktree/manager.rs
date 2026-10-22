@@ -2616,7 +2616,7 @@ mod tests {
             WorktreeCreateOptions::default(),
         );
         assert!(
-            matches!(no_force, Err(ConductorError::DirtyCheckout { .. })),
+            matches!(no_force, Err(ConductorError::DirtyCheckout)),
             "expected dirty-checkout error without force_dirty, got: {no_force:?}"
         );
 
