@@ -45,6 +45,15 @@ workflow review-pr {
     call review-db-migrations   { retries = 1  if = "detect-db-migrations.has_db_migrations" }
   }
 
+  // Replies posted on the PR since the last conductor review, so the
+  // aggregator can set aside findings that were already answered (#3050).
+  script fetch-pr-replies {
+    run = ".conductor/scripts/fetch-pr-replies.sh"
+    env = {
+      PR_NUMBER = "{{pr_number}}"
+    }
+  }
+
   call review-aggregator { output = "review-aggregator" retries = 1 }
   script submit-review {
     run = ".conductor/scripts/submit-review.sh"
