@@ -592,7 +592,7 @@ mod tests {
         tempfile::NamedTempFile,
         tempfile::TempDir,
     ) {
-        let (adapter, tmp) = setup_adapter_with_run(run_id);
+        let (_adapter, tmp) = setup_adapter_with_run(run_id);
         let log_dir = tempfile::tempdir().unwrap();
         let adapter =
             SqliteHostAdapter::with_log_dir(tmp.path().to_path_buf(), log_dir.path().to_path_buf())
