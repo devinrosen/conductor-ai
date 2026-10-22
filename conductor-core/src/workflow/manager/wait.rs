@@ -203,7 +203,8 @@ fn evaluate(
 ) -> Result<Option<WaitSummary>> {
     let status = get_workflow_run(conn, run_id)?
         .ok_or_else(|| ConductorError::WorkflowRunNotFound { id: run_id.into() })?
-        .status;
+        .status
+        .clone();
     let (age, live_descendants) = run_tree_liveness(conn, run_id)?;
 
     if status.is_terminal() {
