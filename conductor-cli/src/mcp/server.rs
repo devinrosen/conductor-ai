@@ -279,13 +279,9 @@ mod tests {
             std::thread::sleep(Duration::from_millis(500));
             crate::mcp::helpers::tool_ok("late")
         });
-        let r = run_with_timeout(
-            "conductor_get_run",
-            Some(Duration::from_millis(50)),
-            handle,
-        )
-        .await
-        .unwrap();
+        let r = run_with_timeout("conductor_get_run", Some(Duration::from_millis(50)), handle)
+            .await
+            .unwrap();
         assert_eq!(r.is_error, Some(true));
         let text = result_text(&r);
         assert!(text.contains("conductor_get_run"), "{text}");
