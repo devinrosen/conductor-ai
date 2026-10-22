@@ -237,8 +237,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                 ),
             }
         }
-        if let Some(e) =
-            schema_output_missing(&params.name, schema_arc.is_some(), &output.metadata)
+        if let Some(e) = schema_output_missing(&params.name, schema_arc.is_some(), &output.metadata)
         {
             return Err(e);
         }
