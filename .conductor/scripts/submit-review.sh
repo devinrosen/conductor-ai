@@ -122,19 +122,30 @@ FINDING_COUNT=$(echo "${OFF_DIFF_FINDINGS}" | jq 'length')
 
 FILED_ISSUES=""
 
-if [ "${FINDING_COUNT}" -gt 0 ]; then
-  # Ensure label exists
-  gh label create conductor-off-diff \
-    --color "0075ca" \
-    --description "Finding in unchanged/removed code, not blocking the PR" \
-    2>/dev/null || true
+# Create a label if it doesn't exist. Failures other than "already exists" are
+# logged, not hidden (#3081) — labelling is best-effort and never fails the step.
+ensure_label() {
+  local name="$1" color="$2" description="${3:-}" err
+  if err=$(gh label create "${name}" --color "${color}" --description "${description}" 2>&1); then
+    return 0
+  fi
+  case "${err}" in
+    *"already exists"*) ;;
+    *) echo "Warning: could not create label ${name}: ${err}" ;;
+  esac
+  return 0
+}
 
-  # Fetch existing open off-diff issues for dedup
-  EXISTING_ISSUES=$(gh issue list \
-    --label conductor-off-diff \
-    --state open \
-    --json title,url \
-    2>/dev/null || echo "[]")
+if [ "${FINDING_COUNT}" -gt 0 ]; then
+  ensure_label conductor-off-diff "0075ca" "Finding in unchanged/removed code, not blocking the PR"
+
+  # Fetch ALL open issues for dedup, matching on the "(file:line)" title suffix.
+  # Deliberately not filtered by label: the reviewer identity can create issues
+  # that GitHub then drops labels from, so a label filter never finds them (#3081).
+  if ! EXISTING_ISSUES=$(gh issue list --state open --limit 1000 --json title,url); then
+    echo "Warning: could not list open issues for dedup — already-tracked findings may be filed again."
+    EXISTING_ISSUES="[]"
+  fi
 
   # File each finding not already tracked
   while IFS= read -r finding; do
@@ -153,9 +164,9 @@ if [ "${FINDING_COUNT}" -gt 0 ]; then
 
     FILE_LINE_REF="${FILE}:${LINE}"
 
-    # Skip if already tracked
+    # Skip if already tracked. Match the parenthesised ref so foo.rs:3 doesn't match foo.rs:38.
     ALREADY_EXISTS=$(echo "${EXISTING_ISSUES}" | jq -r \
-      --arg ref "${FILE_LINE_REF}" \
+      --arg ref "(${FILE_LINE_REF})" \
       '[.[] | select(.title | contains($ref))] | length')
 
     if [ "${ALREADY_EXISTS}" -gt 0 ]; then
@@ -163,11 +174,13 @@ if [ "${FINDING_COUNT}" -gt 0 ]; then
       continue
     fi
 
-    # Extract finding-specific labels and ensure they exist
+    # Requested labels: conductor-off-diff plus the finding's own, each ensured to exist
+    REQUESTED_LABELS=("conductor-off-diff")
     LABEL_ARGS=(--label "conductor-off-diff")
     while IFS= read -r label; do
       [ -z "${label}" ] && continue
-      gh label create "${label}" --color "ededed" 2>/dev/null || true
+      ensure_label "${label}" "ededed"
+      REQUESTED_LABELS+=("${label}")
       LABEL_ARGS+=(--label "${label}")
     done < <(echo "${finding}" | jq -r '(.labels // []) | .[]')
 
@@ -177,14 +190,44 @@ if [ "${FINDING_COUNT}" -gt 0 ]; then
 
 ${MESSAGE}"
 
-    ISSUE_URL=$(gh issue create \
+    if ! ISSUE_URL=$(gh issue create \
       --title "${TITLE} (${FILE_LINE_REF})" \
       "${LABEL_ARGS[@]}" \
-      --body "${ISSUE_BODY}" \
-      2>/dev/null)
+      --body "${ISSUE_BODY}"); then
+      echo "Warning: could not file off-diff issue for ${FILE_LINE_REF} — skipping."
+      continue
+    fi
+    ISSUE_URL=$(echo "${ISSUE_URL}" | tail -n 1)
 
-    ISSUE_NUMBER=$(echo "${ISSUE_URL}" | grep -o '[0-9]*$')
+    ISSUE_NUMBER=$(echo "${ISSUE_URL}" | grep -o '[0-9]*$' || true)
     echo "Filed off-diff issue: ${ISSUE_URL}"
+
+    # Same-run dedup: later findings at this location must not be filed again
+    EXISTING_ISSUES=$(echo "${EXISTING_ISSUES}" | jq -c \
+      --arg title "${TITLE} (${FILE_LINE_REF})" --arg url "${ISSUE_URL}" \
+      '. + [{title: $title, url: $url}]')
+
+    # GitHub silently drops labels on create when the caller lacks push access.
+    # Read them back, retry the missing ones, and warn if that fails too (#3081).
+    if [ -n "${ISSUE_NUMBER}" ]; then
+      APPLIED_LABELS=$(gh issue view "${ISSUE_NUMBER}" --json labels -q '[.labels[].name] | .[]' 2>/dev/null || true)
+      MISSING_LABELS=()
+      for label in "${REQUESTED_LABELS[@]}"; do
+        if ! printf '%s\n' "${APPLIED_LABELS}" | grep -qxF -- "${label}"; then
+          MISSING_LABELS+=("${label}")
+        fi
+      done
+      if [ "${#MISSING_LABELS[@]}" -gt 0 ]; then
+        MISSING_CSV=$(IFS=,; echo "${MISSING_LABELS[*]}")
+        if LABEL_ERR=$(gh issue edit "${ISSUE_NUMBER}" --add-label "${MISSING_CSV}" 2>&1); then
+          echo "Applied labels ${MISSING_CSV} to #${ISSUE_NUMBER} after create dropped them"
+        else
+          echo "Warning: issue #${ISSUE_NUMBER} was created without labels [${MISSING_CSV}]: ${LABEL_ERR}"
+          echo "         The reviewer identity likely lacks permission to label issues."
+        fi
+      fi
+    fi
+
     FILED_ISSUES="${FILED_ISSUES}- [#${ISSUE_NUMBER} — ${TITLE}](${ISSUE_URL}) — \`${FILE_LINE_REF}\` (${SEVERITY})
 "
 
@@ -192,11 +235,7 @@ ${MESSAGE}"
     if [ -n "${TICKET_SOURCE_ID:-}" ] && [ -n "${CONDUCTOR_REPO:-}" ] \
         && [[ "${TICKET_SOURCE_ID}" != *"{{"* ]] \
         && [[ "${CONDUCTOR_REPO}" != *"{{"* ]]; then
-      UPSERT_LABELS="conductor-off-diff"
-      while IFS= read -r label; do
-        [ -z "${label}" ] && continue
-        UPSERT_LABELS="${UPSERT_LABELS},${label}"
-      done < <(echo "${finding}" | jq -r '(.labels // []) | .[]')
+      UPSERT_LABELS=$(IFS=,; echo "${REQUESTED_LABELS[*]}")
 
       conductor tickets upsert "${CONDUCTOR_REPO}" \
         --source-type github \
