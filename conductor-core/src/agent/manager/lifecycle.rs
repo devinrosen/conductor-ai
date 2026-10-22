@@ -1057,8 +1057,17 @@ mod tests {
         let run = mgr.create_run(Some("w1"), "task", None).unwrap();
         mgr.update_run_completed_if_running_full(&run.id, &log_result_with_text("A", "s1"))
             .unwrap();
-        mgr.set_run_metrics(&run.id, Some(0.3), Some(7), None, Some(300), None, None, None)
-            .unwrap();
+        mgr.set_run_metrics(
+            &run.id,
+            Some(0.3),
+            Some(7),
+            None,
+            Some(300),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let row = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(row.status, AgentRunStatus::Completed);

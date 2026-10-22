@@ -836,7 +836,6 @@ fn test_fix_escapes_double_backslash_at_string_end() {
     assert_eq!(v["k"], "\\");
 }
 
-
 #[test]
 fn test_fix_escapes_escaped_quote_not_treated_as_string_boundary() {
     // `\"` inside a string must not close the string.
