@@ -30,6 +30,20 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    // When this process is the child started by `workflow run --background`, a
+    // failure before the run starts must reach the parent through the notify
+    // pipe: this process's stdout and stderr go to /dev/null.
+    #[cfg(unix)]
+    let notify_fd = background::notify_fd(&cli.command);
+    let result = run(cli);
+    #[cfg(unix)]
+    if let (Err(e), Some(fd)) = (&result, notify_fd) {
+        background::report_startup_error(fd, e);
+    }
+    result
+}
+
+fn run(cli: Cli) -> Result<()> {
     // Headless agent subprocesses use compat mode so they tolerate a DB schema
     // that is ahead of this binary (e.g. after an implement step applied a new
     // migration and rebuilt the binary, but the subprocess was spawned with the
