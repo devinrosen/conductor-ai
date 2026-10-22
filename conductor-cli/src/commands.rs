@@ -239,7 +239,9 @@ pub enum WorkflowCommands {
         id: String,
     },
     /// Block until a workflow run (and its child runs) finishes, stalls, or times out
-    #[command(after_help = "Exit codes:\n  0  run completed\n  1  run failed or was cancelled\n  2  timeout\n  3  stalled (no live engine)\n\nExample:\n  conductor workflow wait <run-id> --timeout 3600 --json")]
+    #[command(
+        after_help = "Exit codes:\n  0  run completed\n  1  run failed or was cancelled\n  2  timeout\n  3  stalled (no live engine)\n\nExample:\n  conductor workflow wait <run-id> --timeout 3600 --json"
+    )]
     Wait {
         /// Workflow run ID
         id: String,

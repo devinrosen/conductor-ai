@@ -495,7 +495,10 @@ mod tests {
             .unwrap();
         let result = tool_wait_run(&conductor, &args_with("run_id", &run.id));
         assert_ne!(result.is_error, Some(true));
-        let text = result.content[0].as_text().map(|t| t.text.as_str()).unwrap_or("");
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
         assert!(text.starts_with("outcome: completed"), "got: {text}");
     }
 

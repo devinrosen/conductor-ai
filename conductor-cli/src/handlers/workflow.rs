@@ -453,7 +453,10 @@ pub fn handle_workflow(
             if json {
                 println!("{}", serde_json::to_string_pretty(&summary)?);
             } else {
-                print!("{}", conductor_core::workflow::format_wait_summary(&summary));
+                print!(
+                    "{}",
+                    conductor_core::workflow::format_wait_summary(&summary)
+                );
             }
             let code = summary.outcome.exit_code();
             if code != 0 {

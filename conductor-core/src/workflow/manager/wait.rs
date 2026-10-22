@@ -150,9 +150,11 @@ fn last_step_summary(conn: &Connection, run_id: &str) -> Result<Option<WaitStepS
     let steps = get_workflow_steps(conn, run_id)?;
     // `started_at` is RFC 3339 for every step, so string order is time order here;
     // steps that never started sort first.
-    let last = steps
-        .iter()
-        .max_by(|a, b| a.started_at.cmp(&b.started_at).then(a.position.cmp(&b.position)));
+    let last = steps.iter().max_by(|a, b| {
+        a.started_at
+            .cmp(&b.started_at)
+            .then(a.position.cmp(&b.position))
+    });
     Ok(last.map(|s| WaitStepSummary {
         step_name: s.step_name.clone(),
         status: s.status.to_string(),
@@ -334,7 +336,14 @@ mod tests {
             .id
     }
 
-    fn insert_step(conn: &Connection, id: &str, run_id: &str, name: &str, started: &str, ended: Option<&str>) {
+    fn insert_step(
+        conn: &Connection,
+        id: &str,
+        run_id: &str,
+        name: &str,
+        started: &str,
+        ended: Option<&str>,
+    ) {
         let ended_sql = ended
             .map(|o| format!("strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '{o}')"))
             .unwrap_or_else(|| "NULL".into());
@@ -344,8 +353,11 @@ mod tests {
              VALUES (:id, :run, :name, 'actor', 0, 'completed', \
                      strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '{started}'), {ended_sql}, 'ctx')"
         );
-        conn.execute(&sql, named_params![":id": id, ":run": run_id, ":name": name])
-            .unwrap();
+        conn.execute(
+            &sql,
+            named_params![":id": id, ":run": run_id, ":name": name],
+        )
+        .unwrap();
     }
 
     fn opts() -> WaitOptions {
@@ -389,7 +401,14 @@ mod tests {
     #[test]
     fn stale_lease_and_old_steps_is_stalled() {
         let conn = setup();
-        insert_run(&conn, "r", None, "running", Some("-300 seconds"), "-1 hours");
+        insert_run(
+            &conn,
+            "r",
+            None,
+            "running",
+            Some("-300 seconds"),
+            "-1 hours",
+        );
         insert_step(&conn, "s", "r", "old", "-1 hours", Some("-300 seconds"));
         let s = eval(&conn, "r").unwrap();
         assert_eq!(s.outcome, WaitOutcome::Stalled);
@@ -399,7 +418,14 @@ mod tests {
     #[test]
     fn recent_step_blocks_stall() {
         let conn = setup();
-        insert_run(&conn, "r", None, "running", Some("-300 seconds"), "-1 hours");
+        insert_run(
+            &conn,
+            "r",
+            None,
+            "running",
+            Some("-300 seconds"),
+            "-1 hours",
+        );
         insert_step(&conn, "s", "r", "recent", "-10 seconds", None);
         assert!(eval(&conn, "r").is_none());
     }
@@ -416,8 +442,22 @@ mod tests {
     #[test]
     fn child_with_fresh_lease_keeps_wait_alive() {
         let conn = setup();
-        insert_run(&conn, "root", None, "running", Some("-300 seconds"), "-1 hours");
-        insert_run(&conn, "kid", Some("root"), "running", Some("+20 seconds"), "-1 hours");
+        insert_run(
+            &conn,
+            "root",
+            None,
+            "running",
+            Some("-300 seconds"),
+            "-1 hours",
+        );
+        insert_run(
+            &conn,
+            "kid",
+            Some("root"),
+            "running",
+            Some("+20 seconds"),
+            "-1 hours",
+        );
         assert!(eval(&conn, "root").is_none());
     }
 
@@ -425,7 +465,14 @@ mod tests {
     fn terminal_root_waits_for_live_child_but_ignores_orphan() {
         let conn = setup();
         insert_run(&conn, "root", None, "completed", None, "-1 hours");
-        insert_run(&conn, "kid", Some("root"), "running", Some("+20 seconds"), "-1 hours");
+        insert_run(
+            &conn,
+            "kid",
+            Some("root"),
+            "running",
+            Some("+20 seconds"),
+            "-1 hours",
+        );
         assert!(eval(&conn, "root").is_none());
 
         conn.execute(
@@ -439,7 +486,14 @@ mod tests {
     #[test]
     fn zero_timeout_returns_timeout() {
         let conn = setup();
-        insert_run(&conn, "r", None, "running", Some("+20 seconds"), "-1 minutes");
+        insert_run(
+            &conn,
+            "r",
+            None,
+            "running",
+            Some("+20 seconds"),
+            "-1 minutes",
+        );
         let o = WaitOptions {
             timeout: Some(Duration::ZERO),
             ..opts()
@@ -460,7 +514,14 @@ mod tests {
     fn mixed_timestamp_formats_compare_correctly() {
         // lease_until is `YYYY-MM-DD HH:MM:SS`, started_at is RFC 3339 on the same day (#3076).
         let conn = setup();
-        insert_run(&conn, "r", None, "running", Some("+20 seconds"), "-30 seconds");
+        insert_run(
+            &conn,
+            "r",
+            None,
+            "running",
+            Some("+20 seconds"),
+            "-30 seconds",
+        );
         let (age, _) = run_tree_liveness(&conn, "r").unwrap();
         // Newest signal is the future lease, so age is <= 0, never ~a day.
         assert!(age.unwrap() <= 0, "age was {age:?}");
@@ -471,8 +532,22 @@ mod tests {
     fn last_step_is_latest_started_with_context() {
         let conn = setup();
         insert_run(&conn, "r", None, "failed", None, "-1 hours");
-        insert_step(&conn, "s1", "r", "first", "-50 minutes", Some("-49 minutes"));
-        insert_step(&conn, "s2", "r", "second", "-40 minutes", Some("-39 minutes"));
+        insert_step(
+            &conn,
+            "s1",
+            "r",
+            "first",
+            "-50 minutes",
+            Some("-49 minutes"),
+        );
+        insert_step(
+            &conn,
+            "s2",
+            "r",
+            "second",
+            "-40 minutes",
+            Some("-39 minutes"),
+        );
         let s = eval(&conn, "r").unwrap();
         let step = s.last_step.unwrap();
         assert_eq!(step.step_name, "second");
