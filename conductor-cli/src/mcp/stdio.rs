@@ -14,13 +14,20 @@ use std::fs::File;
 use std::io;
 use std::os::unix::io::{FromRawFd, RawFd};
 
+fn with_context(e: io::Error, what: impl std::fmt::Display) -> io::Error {
+    io::Error::new(e.kind(), format!("{what}: {e}"))
+}
+
 /// Duplicate `fd` to the lowest free fd >= 3 with close-on-exec set.
 fn dup_cloexec(fd: RawFd) -> io::Result<RawFd> {
     // SAFETY: fcntl with F_DUPFD_CLOEXEC has no memory-safety requirements; the
     // return value is checked below.
     let new_fd = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
     if new_fd < 0 {
-        Err(io::Error::last_os_error())
+        Err(with_context(
+            io::Error::last_os_error(),
+            format!("failed to duplicate fd {fd} for MCP transport"),
+        ))
     } else {
         Ok(new_fd)
     }
@@ -29,7 +36,10 @@ fn dup_cloexec(fd: RawFd) -> io::Result<RawFd> {
 fn dup2_checked(src: RawFd, dst: RawFd) -> io::Result<()> {
     // SAFETY: dup2 has no memory-safety requirements; the return value is checked.
     if unsafe { libc::dup2(src, dst) } < 0 {
-        Err(io::Error::last_os_error())
+        Err(with_context(
+            io::Error::last_os_error(),
+            format!("failed to redirect fd {dst}"),
+        ))
     } else {
         Ok(())
     }
@@ -45,7 +55,8 @@ pub fn isolate_stdio() -> io::Result<(File, File)> {
     // SAFETY: out_fd was just created by us and is exclusively owned here.
     let writer = unsafe { File::from_raw_fd(out_fd) };
 
-    let devnull = File::open("/dev/null")?;
+    let devnull =
+        File::open("/dev/null").map_err(|e| with_context(e, "failed to open /dev/null"))?;
     {
         use std::os::unix::io::AsRawFd;
         dup2_checked(devnull.as_raw_fd(), 0)?;

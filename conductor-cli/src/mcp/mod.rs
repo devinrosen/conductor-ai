@@ -13,6 +13,8 @@ mod stdio;
 mod subscriptions;
 mod tools;
 
+use anyhow::Context as _;
+
 pub use server::ConductorMcpServer;
 
 /// Start the stdio MCP server and block until the client disconnects.
@@ -22,7 +24,8 @@ pub async fn serve() -> anyhow::Result<()> {
     // read requests or write into responses (#3093). See `stdio`.
     #[cfg(unix)]
     let service = {
-        let (reader, writer) = stdio::isolate_stdio()?;
+        let (reader, writer) =
+            stdio::isolate_stdio().context("failed to isolate MCP stdio from child processes")?;
         let transport = (
             tokio::fs::File::from_std(reader),
             tokio::fs::File::from_std(writer),

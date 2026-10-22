@@ -17,24 +17,9 @@ const RUN_URI_PREFIX: &str = "conductor://run/";
 /// Upper bound for read-only DB tools: two `busy_timeout` waits (5s each).
 const READ_TOOL_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Timeout for DB-only read tools. Tools that mutate state, run workflows, or
-/// shell out to the network get none: timing out would report failure for work
-/// that is still in progress.
+/// Timeout for DB-only read tools (classified in `tools::READ_ONLY_TOOLS`).
 fn read_only_timeout(name: &str) -> Option<Duration> {
-    match name {
-        "conductor_get_run"
-        | "conductor_list_runs"
-        | "conductor_list_agent_runs"
-        | "conductor_get_step_log"
-        | "conductor_list_worktrees"
-        | "conductor_get_worktree"
-        | "conductor_list_tickets"
-        | "conductor_get_ready_tickets"
-        | "conductor_list_repos"
-        | "conductor_list_workflows"
-        | "conductor_list_templates" => Some(READ_TOOL_TIMEOUT),
-        _ => None,
-    }
+    super::tools::is_read_only(name).then_some(READ_TOOL_TIMEOUT)
 }
 
 /// Await a blocking tool task, returning a clear tool error if it exceeds `limit`.
