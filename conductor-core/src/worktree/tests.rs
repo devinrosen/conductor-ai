@@ -230,10 +230,8 @@ fn test_check_main_health_dirty_repo() {
         health.is_dirty,
         "repo with modified tracked file should be dirty"
     );
-    assert!(
-        !health.dirty_files.is_empty(),
-        "dirty_files should be non-empty"
-    );
+    // An unstaged change is ` M README.md`; only the path is reported.
+    assert_eq!(health.dirty_files, vec!["README.md".to_string()]);
 }
 
 #[test]

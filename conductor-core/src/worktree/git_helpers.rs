@@ -34,30 +34,10 @@ pub fn check_main_health(repo_path: &str, base_branch: &str) -> MainHealthStatus
     //    untracked files — blocking on them just produces false positives (e.g.
     //    untracked test-helper submodule directories that the user can't easily
     //    commit or stash).
-    let (is_dirty, dirty_files, status_check_failed) = match git_in(repo_path)
-        .args(["status", "--porcelain", "--untracked-files=no"])
-        .output()
-    {
-        Ok(o) if o.status.success() && !o.stdout.is_empty() => {
-            let files: Vec<String> = String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| {
-                    l.trim_start_matches(|c: char| !c.is_whitespace())
-                        .trim()
-                        .to_string()
-                })
-                .collect();
-            (true, files, false)
-        }
-        Ok(o) if o.status.success() => {
-            // Empty stdout → working tree is clean
-            (false, Vec::new(), false)
-        }
-        _ => {
-            // Command failed or non-zero exit — cannot determine dirty state
-            (false, Vec::new(), true)
-        }
+    let (is_dirty, dirty_files, status_check_failed) = match tracked_changes(repo_path) {
+        Ok(files) => (!files.is_empty(), files, false),
+        // Command failed or non-zero exit — cannot determine dirty state
+        Err(_) => (false, Vec::new(), true),
     };
 
     // 2. Count commits behind using cached remote refs (no fetch — avoids double
@@ -303,6 +283,13 @@ pub(super) fn ensure_base_up_to_date(
 /// changes. Untracked files are excluded (see `ensure_base_up_to_date_with_fetch_control`).
 /// A `git status` that cannot be spawned or exits non-zero is an error, not "clean".
 fn base_checkout_is_dirty(repo_path: &str) -> Result<bool> {
+    Ok(!tracked_changes(repo_path)?.is_empty())
+}
+
+/// Paths of tracked files with uncommitted changes in the checkout at `repo_path`,
+/// from `git status --porcelain --untracked-files=no`. Empty means clean.
+/// A `git status` that cannot be spawned or exits non-zero is an error, not "clean".
+fn tracked_changes(repo_path: &str) -> Result<Vec<String>> {
     let output = git_in(repo_path)
         .args(["status", "--porcelain", "--untracked-files=no"])
         .output()
@@ -323,7 +310,13 @@ fn base_checkout_is_dirty(repo_path: &str) -> Result<bool> {
             ),
         ));
     }
-    Ok(!output.stdout.is_empty())
+    // Porcelain v1 lines are `XY <path>`: two status columns, a space, the path.
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|l| l.get(3..))
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect())
 }
 
 fn ensure_base_up_to_date_with_fetch_control(
