@@ -48,8 +48,17 @@ impl SqliteHostAdapter {
 }
 
 impl RunTracker for SqliteHostAdapter {
+    /// Runkon's structured-output correction re-spawns the session under the
+    /// same `run_id` after the first attempt already marked the row
+    /// `completed`, then reads the row back in `poll`. Reopen it here so the
+    /// correction run's `Completed` event isn't dropped by the
+    /// `status = 'running'` guard. A fresh row is already `running`, so this
+    /// is a no-op for first spawns.
     fn record_pid(&self, run_id: &str, pid: u32) -> Result<(), RuntimeError> {
-        self.with_mgr(|mgr| mgr.update_run_subprocess_pid(run_id, pid))
+        self.with_mgr(|mgr| {
+            mgr.reopen_run_for_resume(run_id)?;
+            mgr.update_run_subprocess_pid(run_id, pid)
+        })
     }
 
     fn record_runtime(&self, run_id: &str, runtime_name: &str) -> Result<(), RuntimeError> {
@@ -250,6 +259,49 @@ mod tests {
         assert!(run.is_some());
         let run = run.unwrap();
         assert_eq!(run.subprocess_pid, Some(12345));
+    }
+
+    fn completed_event(text: &str, session: &str) -> RuntimeEvent {
+        RuntimeEvent::Completed {
+            result_text: Some(text.to_string()),
+            session_id: Some(session.to_string()),
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+        }
+    }
+
+    #[test]
+    fn test_correction_respawn_records_corrected_result() {
+        let (adapter, _tmp) = setup_adapter_with_run("test-run-corr");
+        let run_id = "test-run-corr";
+
+        adapter.record_pid(run_id, 1111).unwrap();
+        adapter.on_event(run_id, completed_event("A (missing tasks[4].id)", "sess-a"));
+        // Correction re-spawns the same run_id, then completes again.
+        adapter.record_pid(run_id, 2222).unwrap();
+        adapter.on_event(run_id, completed_event("B (corrected)", "sess-b"));
+
+        let run = adapter.get_run(run_id).unwrap().unwrap();
+        assert_eq!(run.status, runkon_runtimes::RunStatus::Completed);
+        assert_eq!(run.result_text, Some("B (corrected)".to_string()));
+        assert_eq!(run.session_id, Some("sess-b".to_string()));
+    }
+
+    #[test]
+    fn test_record_pid_keeps_failed_run_failed() {
+        let (adapter, _tmp) = setup_adapter_with_run("test-run-failed-pid");
+        let run_id = "test-run-failed-pid";
+
+        adapter.mark_failed_if_running(run_id, "boom").unwrap();
+        adapter.record_pid(run_id, 3333).unwrap();
+
+        let run = adapter.get_run(run_id).unwrap().unwrap();
+        assert_eq!(run.status, runkon_runtimes::RunStatus::Failed);
     }
 
     #[test]
