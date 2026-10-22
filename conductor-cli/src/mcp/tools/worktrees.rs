@@ -882,7 +882,7 @@ mod tests {
 
     #[test]
     fn test_create_worktree_schema_has_optional_force_arg() {
-        let tools = super::super::list_tools();
+        let tools = super::super::conductor_tools();
         let tool = tools
             .iter()
             .find(|t| t.name == "conductor_create_worktree")
