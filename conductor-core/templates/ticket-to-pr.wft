@@ -41,6 +41,10 @@ workflow ticket-to-pr {
     as      = "developer"
   }
 
+  script cleanup-plan {
+    run = ".conductor/scripts/cleanup-plan.sh"
+  }
+
   call workflow lint-fix
 
   script fmt-fix {
