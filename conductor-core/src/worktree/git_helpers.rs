@@ -305,7 +305,13 @@ pub(super) fn ensure_base_up_to_date(
 fn base_checkout_is_dirty(repo_path: &str) -> Result<bool> {
     let output = git_in(repo_path)
         .args(["status", "--porcelain", "--untracked-files=no"])
-        .output()?;
+        .output()
+        .map_err(|e| {
+            ConductorError::Git(crate::error::SubprocessFailure::from_message(
+                "git",
+                format!("failed to run git status in {repo_path}: {e}"),
+            ))
+        })?;
     if !output.status.success() {
         return Err(ConductorError::Git(
             crate::error::SubprocessFailure::from_message(
@@ -336,7 +342,7 @@ fn ensure_base_up_to_date_with_fetch_control(
     if !force_dirty && !pre_verified_clean && base_checkout_is_dirty(repo_path)? {
         return Err(ConductorError::InvalidInput(format!(
             "uncommitted changes on base branch '{base_branch}'; commit or stash them, or retry \
-             with force_dirty to branch from origin/{base_branch} without touching the checkout"
+             with the force option to branch from origin/{base_branch} without touching the checkout"
         )));
     }
 

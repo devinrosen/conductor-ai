@@ -2894,7 +2894,8 @@ fn test_ensure_base_up_to_date_dirty_error_is_frontend_neutral() {
         .expect_err("expected an error")
         .to_string();
 
-    assert!(err.contains("force_dirty"), "unexpected error: {err}");
+    assert!(err.contains("force option"), "unexpected error: {err}");
+    assert!(!err.contains("force_dirty"), "unexpected error: {err}");
     assert!(
         !err.contains("CLI") && !err.contains("MCP"),
         "core error must not name frontends: {err}"
