@@ -181,6 +181,8 @@ pub struct WorktreeCreateOptions {
     pub ticket_id: Option<String>,
     /// When `true`, skip the dirty-state check. Use only after the caller has
     /// explicitly confirmed the user wants to proceed with uncommitted changes.
+    /// A dirty checkout of the base branch is left untouched (not fast-forwarded) and
+    /// the worktree branches from `origin/<base>`, with a warning.
     pub force_dirty: bool,
     /// Pre-computed health status from a prior `check_main_health()` call.
     /// When `Some` and the working tree is clean, the redundant `git status`
@@ -291,7 +293,8 @@ impl<'a> WorktreeManager<'a> {
     /// instead of a newly-created branch.  `from_branch` is ignored in that case.
     ///
     /// When `force_dirty` is `true`, the dirty-state check inside
-    /// `ensure_base_up_to_date()` is skipped. Use this only after the caller has
+    /// `ensure_base_up_to_date()` is skipped and a dirty base checkout is not
+    /// fast-forwarded (the worktree branches from `origin/<base>`). Use this only after the caller has
     /// explicitly confirmed the user wants to proceed with uncommitted changes.
     ///
     /// When `opts.pre_health` is `Some` and the health status shows a clean working tree,
@@ -370,7 +373,7 @@ impl<'a> WorktreeManager<'a> {
             let pre_verified_clean = pre_health
                 .map(|h| !h.is_dirty && !h.status_check_failed)
                 .unwrap_or(false);
-            let (base, warnings) = resolve_and_update_base(
+            let (base, update) = resolve_and_update_base(
                 &repo.local_path,
                 explicit_base.as_deref(),
                 &repo.default_branch,
@@ -381,9 +384,9 @@ impl<'a> WorktreeManager<'a> {
                 "branch",
                 "--",
                 &branch,
-                &format!("refs/heads/{base}"),
+                &update.start_point,
             ]))?;
-            (branch, Some(base), warnings)
+            (branch, Some(base), update.warnings)
         };
 
         // Create git worktree
