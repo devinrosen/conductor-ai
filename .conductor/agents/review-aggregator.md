@@ -40,13 +40,9 @@ Steps:
      Additionally, if the finding has severity `critical`, add `bug` to its labels (if not already present).
      Each finding's `labels` field should be an array of strings (e.g. `["security", "bug"]`).
 
-2. Get the PR number:
-   - If `{{pr_number}}` is set and does not contain `{{` (i.e. it was substituted), use it directly.
-   - Otherwise run: `gh pr view --json number -q .number`
-
 ## Phase 2 — Produce output
 
-3. Produce your FLOW_OUTPUT with the correct structured fields so the workflow engine can derive outcome markers automatically from the schema:
+2. Produce your FLOW_OUTPUT with the correct structured fields so the workflow engine can derive outcome markers automatically from the schema:
 
    - Set `overall_approved: false` if **any** reviewer is classified as blocking in Phase 1 (i.e. has `has_review_issues` marker OR has critical/warning findings in `structured_output`). Set `overall_approved: true` only if no reviewer is blocking.
    - Populate `reviewed_by` with a comma-separated string of human-readable reviewer display names (e.g. "DB Migrations, Security, Performance") for each reviewer that ran and returned results.
