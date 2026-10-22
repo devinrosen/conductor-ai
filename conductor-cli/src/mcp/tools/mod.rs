@@ -20,6 +20,53 @@ mod worktrees;
 #[cfg(test)]
 mod test_helpers;
 
+/// Tools that only read the database. The server bounds these with a timeout;
+/// every tool in `conductor_tools()` must appear in exactly one of this list and
+/// `OTHER_TOOLS` (enforced by a test), so a new tool cannot go unclassified.
+pub(super) const READ_ONLY_TOOLS: &[&str] = &[
+    "conductor_get_run",
+    "conductor_list_runs",
+    "conductor_list_agent_runs",
+    "conductor_get_step_log",
+    "conductor_list_worktrees",
+    "conductor_get_worktree",
+    "conductor_list_tickets",
+    "conductor_get_ready_tickets",
+    "conductor_list_repos",
+    "conductor_list_workflows",
+    "conductor_list_templates",
+];
+
+/// Tools that mutate state, run workflows, or shell out to the network. Timing
+/// these out would report failure for work that is still in progress.
+#[cfg(test)]
+const OTHER_TOOLS: &[&str] = &[
+    "conductor_create_worktree",
+    "conductor_delete_worktree",
+    "conductor_sync_tickets",
+    "conductor_run_workflow",
+    "conductor_approve_gate",
+    "conductor_reject_gate",
+    "conductor_adopt_worktree",
+    "conductor_push_worktree",
+    "conductor_set_base_branch",
+    "conductor_cancel_run",
+    "conductor_resume_run",
+    "conductor_submit_agent_feedback",
+    "conductor_list_prs",
+    "conductor_validate_workflow",
+    "conductor_register_repo",
+    "conductor_unregister_repo",
+    "conductor_delete_ticket",
+    "conductor_upsert_ticket",
+    "conductor_instantiate_template",
+    "conductor_create_gh_issue",
+];
+
+pub(super) fn is_read_only(name: &str) -> bool {
+    READ_ONLY_TOOLS.contains(&name)
+}
+
 pub(super) fn conductor_tools() -> Vec<Tool> {
     vec![
         Tool::new(
@@ -589,5 +636,24 @@ mod tests {
             .map(|t| t.text.as_str())
             .unwrap_or("");
         assert!(text.contains("Unknown tool"), "got: {text}");
+    }
+
+    #[test]
+    fn test_every_tool_is_classified_exactly_once() {
+        let mut registered: Vec<String> = conductor_tools()
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        let mut classified: Vec<String> = READ_ONLY_TOOLS
+            .iter()
+            .chain(OTHER_TOOLS)
+            .map(|s| s.to_string())
+            .collect();
+        registered.sort();
+        classified.sort();
+        assert_eq!(
+            registered, classified,
+            "every registered tool must be listed once in READ_ONLY_TOOLS or OTHER_TOOLS"
+        );
     }
 }
