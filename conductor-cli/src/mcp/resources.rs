@@ -368,12 +368,6 @@ pub(crate) fn format_run_summary_line(
         "id: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\n",
         run.id, run.workflow_name, run.status, run.started_at
     );
-    if run.status == conductor_core::workflow::WorkflowRunStatus::Failed {
-        let chain = conductor_core::workflow::run_failure_chain(conn, &run.id).unwrap_or_default();
-        if let Some(cause) = conductor_core::workflow::format_failure_cause(&chain) {
-            out.push_str(&format!("cause: {cause}\n"));
-        }
-    }
     if let Some(slug) = worktree_slug {
         out.push_str(&format!("worktree_slug: {slug}\n"));
     }
@@ -414,6 +408,12 @@ fn format_run_detail(
         run.ended_at.as_deref().unwrap_or("running"),
         run.result_summary.as_deref().unwrap_or("none")
     );
+    if run.status == conductor_core::workflow::WorkflowRunStatus::Failed {
+        let chain = conductor_core::workflow::run_failure_chain(conn, &run.id).unwrap_or_default();
+        if let Some(cause) = conductor_core::workflow::format_failure_cause(&chain) {
+            out.push_str(&format!("cause: {cause}\n"));
+        }
+    }
     if let Some(slug) = worktree_slug {
         out.push_str(&format!("worktree_slug: {slug}\n"));
     }
