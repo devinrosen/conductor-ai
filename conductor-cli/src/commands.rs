@@ -238,6 +238,23 @@ pub enum WorkflowCommands {
         /// Workflow run ID
         id: String,
     },
+    /// Show the agent log of a workflow step: its final result, the last messages, or everything
+    #[command(
+        name = "step-log",
+        after_help = "Example:\n  conductor workflow step-log <run-id> plan\n  conductor workflow step-log <run-id> plan --mode tail --lines 50"
+    )]
+    StepLog {
+        /// Workflow run ID
+        run_id: String,
+        /// Step name (as shown by run-show)
+        step_name: String,
+        /// What to show: result (final message), tail (last messages) or full (whole log)
+        #[arg(long, default_value = "result")]
+        mode: String,
+        /// Number of messages for --mode tail (default 20, max 200)
+        #[arg(long)]
+        lines: Option<usize>,
+    },
     /// Block until a workflow run (and its child runs) finishes, stalls, or times out
     #[command(
         after_help = "Exit codes:\n  0  run completed\n  1  run failed or was cancelled\n  2  timeout\n  3  stalled (no live engine)\n\nExample:\n  conductor workflow wait <run-id> --timeout 3600 --json"

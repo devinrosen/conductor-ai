@@ -472,6 +472,9 @@ fn format_run_detail(
                 out.push_str(&format!("    step_error: {err}\n"));
             }
         }
+        if let Some(excerpt) = conductor_core::workflow::step_output_error_excerpt(conn, step) {
+            out.push_str(&format!("    {excerpt}\n"));
+        }
         out.push_str(&conductor_core::workflow::render_step_failure_tree(
             conn, step, &run_chain, 4,
         ));
@@ -702,6 +705,53 @@ mod tests {
         )
         .unwrap();
         assert!(run_detail(conn, "r1").contains("    step_error: different\n"));
+    }
+
+    #[test]
+    fn test_format_run_detail_shows_parsed_block_excerpt_for_output_error() {
+        use conductor_core::agent::AgentManager;
+        let (_f, conductor) = make_test_conductor();
+        let conn = &conductor.conn;
+        insert_test_wf_run(conn, "r1", "wf", "failed", None);
+        insert_test_wf_step(
+            conn,
+            "s1",
+            "r1",
+            "plan",
+            "actor",
+            "failed",
+            0,
+            "2026-01-01T00:00:01Z",
+            None,
+            None,
+        );
+        let mgr = AgentManager::new(conn);
+        let agent = mgr.create_run(None, "agent", None).unwrap();
+        mgr.update_run_completed(
+            &agent.id,
+            None,
+            Some("text\n<<<FLOW_OUTPUT>>>\n{\"markers\": [bad]}\n<<<END_FLOW_OUTPUT>>>"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE workflow_run_steps SET child_run_id = ?1, \
+             step_error = 'structured output validation: Invalid JSON in FLOW_OUTPUT: x' \
+             WHERE id = 's1'",
+            [&agent.id],
+        )
+        .unwrap();
+        let out = run_detail(conn, "r1");
+        assert!(
+            out.contains("    parsed FLOW_OUTPUT block (line 2 of result): {\"markers\": [bad]}\n"),
+            "got: {out}"
+        );
     }
 
     #[test]
