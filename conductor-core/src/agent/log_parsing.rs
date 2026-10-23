@@ -1341,7 +1341,7 @@ mod tests {
 
     // ── scan_partial_token_usage ────────────────────────────────────────────
 
-    fn write_log_lines(lines: &[&str]) -> (tempfile::TempDir, String) {
+    fn write_temp_log_lines(lines: &[&str]) -> (tempfile::TempDir, String) {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("run.log");
         let content: String = lines.iter().map(|l| format!("{l}\n")).collect();
@@ -1367,7 +1367,7 @@ mod tests {
     #[test]
     fn test_scan_partial_token_usage_single_event() {
         let line = r#"{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":20,"cache_creation_input_tokens":10}}}"#;
-        let (_dir, path) = write_log_lines(&[line]);
+        let (_dir, path) = write_temp_log_lines(&[line]);
         let tokens = scan_partial_token_usage(&path);
         assert_eq!(tokens, (100, 50, 20, 10));
     }
@@ -1376,7 +1376,7 @@ mod tests {
     fn test_scan_partial_token_usage_multiple_events_summed() {
         let line1 = r#"{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":20,"cache_creation_input_tokens":10}}}"#;
         let line2 = r#"{"type":"assistant","message":{"usage":{"input_tokens":200,"output_tokens":80,"cache_read_input_tokens":30,"cache_creation_input_tokens":5}}}"#;
-        let (_dir, path) = write_log_lines(&[line1, line2]);
+        let (_dir, path) = write_temp_log_lines(&[line1, line2]);
         let tokens = scan_partial_token_usage(&path);
         assert_eq!(tokens, (300, 130, 50, 15));
     }
@@ -1386,7 +1386,7 @@ mod tests {
         let assistant = r#"{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#;
         let result_ev = r#"{"type":"result","usage":{"input_tokens":999,"output_tokens":999,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}"#;
         let system_ev = r#"{"type":"system","subtype":"init","model":"claude-opus-4-6"}"#;
-        let (_dir, path) = write_log_lines(&[assistant, result_ev, system_ev]);
+        let (_dir, path) = write_temp_log_lines(&[assistant, result_ev, system_ev]);
         let tokens = scan_partial_token_usage(&path);
         // Only the assistant event should be counted
         assert_eq!(tokens, (100, 50, 0, 0));
