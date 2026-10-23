@@ -13,7 +13,7 @@ Focus exclusively on:
 - Design pattern misuse or missed opportunities (especially the manager pattern used throughout conductor-core)
 - API surface consistency across manager structs (RepoManager, WorktreeManager, AgentManager, etc.)
 - Crate boundary violations — conductor-core should be a clean library; CLI/TUI/web are thin consumers
-- MCP tool classification: when a tool is added to `conductor-cli/src/mcp/tools/mod.rs`, or moved between `READ_ONLY_TOOLS` and `OTHER_TOOLS`, check its handler (one hop) for subprocess (`std::process::Command`, `gh`, `git`) or network calls. A tool that makes them must not be in `READ_ONLY_TOOLS`, because those tools run under the database-only timeout (#3111, fixed in #3113)
+- MCP tool classification: when a tool is added to `conductor-cli/src/mcp/tools/mod.rs`, or moved between `READ_ONLY_TOOLS` and `OTHER_TOOLS`, check its handler (one hop) for subprocess (`std::process::Command`, `gh`, `git`) or network calls. A tool that makes them must not be in `READ_ONLY_TOOLS`, because those tools run under the database-only timeout
 
 Do NOT flag:
 - Minor style preferences or speculative improvements
