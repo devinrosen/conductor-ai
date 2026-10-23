@@ -67,6 +67,7 @@ workflow ticket-to-pr {
     env = {
       FEATURE_BASE_BRANCH = "{{feature_base_branch}}"
       WORKTREE_BRANCH     = "{{worktree_branch}}"
+      TICKET_SOURCE_ID    = "{{ticket_source_id}}"
     }
   }
 
