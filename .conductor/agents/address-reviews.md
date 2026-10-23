@@ -25,7 +25,7 @@ Steps:
    {"markers": [], "context": "Modified: conductor-core/src/agent/manager/lifecycle.rs (crates: conductor-core)"}
    <<<END_FLOW_OUTPUT>>>
    ```
-5. Commit all changes with a message like: `fix: address PR review feedback`
+5. Commit all changes. The subject must be a conventional commit line that names what changed and ends in `(review)`, for example `fix(flow): make ResumeContext::step_map private (review)`. Pick the scope from the touched area. If the findings span unrelated changes, make one commit per logical fix, or summarise the main change in the subject and list each finding in the body. Never use a generic subject such as "address PR review feedback". The same rule applies when you run on a verify loopback.
 
 **Do NOT run `git push`.** Only commit locally — the workflow will push in a subsequent step.
 
