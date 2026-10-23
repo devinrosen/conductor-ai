@@ -61,15 +61,39 @@ const MAX_TAIL_BYTES: u64 = 1024 * 1024;
 pub(crate) fn scan_log_for_result_at(path: &std::path::Path) -> Option<LogResult> {
     use std::io::{Read as _, Seek, SeekFrom};
 
-    let mut file = std::fs::File::open(path).ok()?;
-    let len = file.metadata().ok()?.len();
+    let warn_io = |op: &str, e: &std::io::Error| {
+        tracing::warn!(path = %path.display(), error = %e, "agent log recovery: {op} failed");
+    };
+
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        // A missing log just means the agent never wrote one.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            warn_io("open", &e);
+            return None;
+        }
+    };
+    let len = match file.metadata() {
+        Ok(m) => m.len(),
+        Err(e) => {
+            warn_io("metadata", &e);
+            return None;
+        }
+    };
 
     let mut window = INITIAL_TAIL_BYTES;
     loop {
         let start = len.saturating_sub(window);
-        file.seek(SeekFrom::Start(start)).ok()?;
+        if let Err(e) = file.seek(SeekFrom::Start(start)) {
+            warn_io("seek", &e);
+            return None;
+        }
         let mut buf = Vec::new();
-        file.read_to_end(&mut buf).ok()?;
+        if let Err(e) = file.read_to_end(&mut buf) {
+            warn_io("read", &e);
+            return None;
+        }
 
         let mut lines = buf.split(|&b| b == b'\n');
         if start > 0 {
@@ -89,7 +113,16 @@ pub(crate) fn scan_log_for_result_at(path: &std::path::Path) -> Option<LogResult
             }
         }
 
-        if start == 0 || window >= MAX_TAIL_BYTES {
+        if start == 0 {
+            return None;
+        }
+        if window >= MAX_TAIL_BYTES {
+            tracing::warn!(
+                path = %path.display(),
+                cap_bytes = MAX_TAIL_BYTES,
+                "agent log recovery: no complete result line within the tail cap; \
+                 the result line may exceed it"
+            );
             return None;
         }
         window = (window * 2).min(MAX_TAIL_BYTES);
