@@ -38,6 +38,12 @@ pub fn parse_result_event(event: &serde_json::Value) -> LogResult {
     }
 }
 
+/// Read the final `result` event from the agent log at `path`, or `None` when the
+/// log is missing or holds no result event. Public wrapper over the recovery scan.
+pub fn read_log_result(path: &std::path::Path) -> Option<LogResult> {
+    scan_log_for_result_at(path)
+}
+
 /// First tail window read by [`scan_log_for_result_at`].
 const INITIAL_TAIL_BYTES: u64 = 64 * 1024;
 /// Upper bound on the tail window, so a corrupt or newline-free log can't make

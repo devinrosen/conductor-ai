@@ -301,62 +301,22 @@ pub(super) fn tool_get_step_log(
     conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
-    use conductor_core::agent::AgentManager;
+    use conductor_core::workflow::{render_step_log, resolve_step_log_target, StepLogMode};
 
     let run_id = require_arg!(args, "run_id");
     let step_name = require_arg!(args, "step_name");
 
-    let conn = &conductor.conn;
-
-    // Verify the workflow run exists.
-    match conductor_core::workflow::get_workflow_run(conn, run_id) {
-        Ok(Some(_)) => {}
-        Ok(None) => return tool_err(format!("Workflow run {run_id} not found")),
-        Err(e) => return tool_err(e),
-    }
-
-    // Find all steps for this run and pick the last matching step_name.
-    let steps = match conductor_core::workflow::get_workflow_steps(conn, run_id) {
-        Ok(s) => s,
+    let mode = match StepLogMode::parse(get_arg(args, "mode"), get_arg_usize(args, "lines")) {
+        Ok(m) => m,
         Err(e) => return tool_err(e),
     };
-    let step = steps
-        .into_iter()
-        .filter(|s| s.step_name == step_name)
-        .max_by_key(|s| s.iteration);
-    let step = match step {
-        Some(s) => s,
-        None => {
-            return tool_err(format!(
-                "Step '{step_name}' not found in workflow run {run_id}"
-            ))
-        }
-    };
-
-    // Gate/skipped steps have no child_run_id.
-    let child_run_id = match step.child_run_id.as_deref() {
-        Some(id) => id.to_string(),
-        None => {
-            return tool_err(format!(
-                "Step '{step_name}' has no associated agent run \
-                 (gate steps and skipped steps do not produce logs)"
-            ))
-        }
-    };
-
-    // Resolve the log file path (verifies run exists; respects log_file override).
-    let agent_mgr = AgentManager::new(conn);
-    let log_path = match agent_mgr.log_path_for_run(&child_run_id) {
-        Ok(p) => p,
+    let target = match resolve_step_log_target(&conductor.conn, run_id, step_name) {
+        Ok(t) => t,
         Err(e) => return tool_err(e),
     };
-
-    match std::fs::read_to_string(&log_path) {
-        Ok(contents) => tool_ok(contents),
-        Err(e) => tool_err(format!(
-            "Log file not found for step '{step_name}' (agent run {child_run_id}) at '{}': {e}",
-            log_path.display()
-        )),
+    match render_step_log(&target, mode) {
+        Ok(text) => tool_ok(text),
+        Err(e) => tool_err(e),
     }
 }
 
@@ -1231,7 +1191,7 @@ mod tests {
             .as_text()
             .map(|t| t.text.as_str())
             .unwrap_or("");
-        assert!(text.contains("no associated agent run"), "got: {text}");
+        assert!(text.contains("has no agent run"), "got: {text}");
     }
 
     #[test]
@@ -1295,6 +1255,118 @@ mod tests {
         );
     }
 
+    /// Create a completed step whose agent run logs `log`. Returns the workflow run id.
+    fn make_step_with_log(
+        db_path: &std::path::Path,
+        step_name: &str,
+        log: &str,
+        step_error: Option<&str>,
+    ) -> String {
+        use conductor_core::db::open_database;
+        use conductor_core::workflow::WorkflowStepStatus;
+
+        let (run_id, step_id) = make_run_with_step(db_path, step_name);
+        let log_dir = conductor_core::test_helpers::ensure_agent_log_dir();
+        let log_file = tempfile::Builder::new()
+            .tempfile_in(&log_dir)
+            .expect("temp log file");
+        std::fs::write(log_file.path(), log).expect("write log");
+        let (_, log_path) = log_file.keep().expect("keep log");
+        let conn = open_database(db_path).expect("open db");
+        let child = create_run_with_log(&conn, log_path.to_str().unwrap());
+        conductor_core::workflow::update_step_status(
+            &conn,
+            &step_id,
+            WorkflowStepStatus::Completed,
+            Some(&child),
+            Some("done"),
+            None,
+            None,
+            None,
+        )
+        .expect("update step");
+        if let Some(err) = step_error {
+            conn.execute(
+                "UPDATE workflow_run_steps SET step_error = ?1 WHERE id = ?2",
+                rusqlite::params![err, step_id],
+            )
+            .expect("set step_error");
+        }
+        run_id
+    }
+
+    fn step_log_text(conductor: &Conductor, run_id: &str, extra: &[(&str, Value)]) -> String {
+        let mut args = serde_json::Map::new();
+        args.insert("run_id".into(), Value::String(run_id.into()));
+        args.insert("step_name".into(), Value::String("s".into()));
+        for (k, v) in extra {
+            args.insert((*k).into(), v.clone());
+        }
+        let result = tool_get_step_log(conductor, &args);
+        result.content[0]
+            .as_text()
+            .map(|t| t.text.clone())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn test_dispatch_get_step_log_defaults_to_result() {
+        let (_f, conductor) = make_test_conductor();
+        let log = "{\"type\":\"assistant\",\"note\":\"chatter\"}\n{\"type\":\"result\",\"result\":\"the final answer\"}\n";
+        let run_id = make_step_with_log(_f.path(), "s", log, None);
+        let text = step_log_text(&conductor, &run_id, &[]);
+        assert!(text.contains("the final answer"), "got: {text}");
+        assert!(text.contains("step: s"), "got: {text}");
+        assert!(!text.contains("chatter"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_get_step_log_tail_honours_lines() {
+        let (_f, conductor) = make_test_conductor();
+        let log: String = (0..10).map(|i| format!("{{\"i\":{i}}}\n")).collect();
+        let run_id = make_step_with_log(_f.path(), "s", &log, None);
+        let text = step_log_text(
+            &conductor,
+            &run_id,
+            &[("mode", Value::String("tail".into())), ("lines", Value::from(2))],
+        );
+        assert!(text.contains("last 2 of 10 messages"), "got: {text}");
+        assert!(text.contains("{\"i\":9}") && !text.contains("{\"i\":7}"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_get_step_log_invalid_mode_errors() {
+        let (_f, conductor) = make_test_conductor();
+        let run_id = make_step_with_log(_f.path(), "s", "x\n", None);
+        let mut args = serde_json::Map::new();
+        args.insert("run_id".into(), Value::String(run_id));
+        args.insert("step_name".into(), Value::String("s".into()));
+        args.insert("mode".into(), Value::String("bogus".into()));
+        let result = tool_get_step_log(&conductor, &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0].as_text().map(|t| t.text.as_str()).unwrap_or("");
+        assert!(text.contains("tail"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_get_step_log_shows_parsed_block_excerpt() {
+        let (_f, conductor) = make_test_conductor();
+        let result_text = "intro\n<<<FLOW_OUTPUT>>>\n{\"markers\": [oops]}\n<<<END_FLOW_OUTPUT>>>";
+        let log = format!(
+            "{}\n",
+            serde_json::json!({"type": "result", "result": result_text})
+        );
+        let run_id = make_step_with_log(
+            _f.path(),
+            "s",
+            &log,
+            Some("structured output validation: Invalid JSON in FLOW_OUTPUT: expected value"),
+        );
+        let text = step_log_text(&conductor, &run_id, &[]);
+        assert!(text.contains("parsed FLOW_OUTPUT block (line 2 of result)"), "got: {text}");
+        assert!(text.contains("oops"), "got: {text}");
+    }
+
     #[test]
     fn test_dispatch_get_step_log_success() {
         // Happy path: step has child_run linked to an agent run with a log file.
@@ -1334,6 +1406,7 @@ mod tests {
             "step_name".to_string(),
             Value::String("test-step".to_string()),
         );
+        args.insert("mode".to_string(), Value::String("full".to_string()));
         let result = tool_get_step_log(&conductor, &args);
         assert_ne!(
             result.is_error,
@@ -1409,6 +1482,7 @@ mod tests {
         let mut args = serde_json::Map::new();
         args.insert("run_id".to_string(), Value::String(run_id));
         args.insert("step_name".to_string(), Value::String("build".to_string()));
+        args.insert("mode".to_string(), Value::String("full".to_string()));
         let result = tool_get_step_log(&conductor, &args);
         assert_ne!(
             result.is_error,
@@ -1515,6 +1589,7 @@ mod tests {
         let mut args = serde_json::Map::new();
         args.insert("run_id".to_string(), Value::String(run_id));
         args.insert("step_name".to_string(), Value::String("test".to_string()));
+        args.insert("mode".to_string(), Value::String("full".to_string()));
         let result = tool_get_step_log(&conductor, &args);
         assert_ne!(
             result.is_error,

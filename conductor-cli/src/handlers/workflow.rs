@@ -459,6 +459,17 @@ pub fn handle_workflow(
                 std::process::exit(code);
             }
         }
+        WorkflowCommands::StepLog {
+            run_id,
+            step_name,
+            mode,
+            lines,
+        } => {
+            use conductor_core::workflow::{render_step_log, resolve_step_log_target, StepLogMode};
+            let mode = StepLogMode::parse(Some(&mode), lines)?;
+            let target = resolve_step_log_target(conn, &run_id, &step_name)?;
+            print!("{}", render_step_log(&target, mode)?);
+        }
         WorkflowCommands::RunShow { id } => {
             match conductor_core::workflow::get_workflow_run(conn, &id)? {
                 Some(run) => {
@@ -540,6 +551,11 @@ pub fn handle_workflow(
                                 if !err.is_empty() {
                                     println!("        validation error: {err}");
                                 }
+                            }
+                            if let Some(excerpt) =
+                                conductor_core::workflow::step_output_error_excerpt(conn, step)
+                            {
+                                println!("        {excerpt}");
                             }
                             if let Some(line) = step_child_run_line(step) {
                                 println!("{line}");
