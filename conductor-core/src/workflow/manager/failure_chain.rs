@@ -14,7 +14,7 @@ use crate::error::Result;
 use crate::text_util::cap_with_suffix;
 use crate::workflow::{WorkflowRunStep, WorkflowStepStatus};
 
-use super::queries::{get_workflow_run, get_workflow_steps};
+use super::queries::{get_last_failed_step, get_workflow_run};
 
 /// Maximum number of levels followed before the walk stops.
 const MAX_DEPTH: usize = 8;
@@ -56,19 +56,6 @@ fn step_error_text(step: &WorkflowRunStep) -> String {
         .unwrap_or_else(|| NO_ERROR.to_string())
 }
 
-/// The failed step to blame: latest `started_at`, then highest `position`
-/// (so the last retry attempt wins).
-fn pick_failed_step(steps: &[WorkflowRunStep]) -> Option<&WorkflowRunStep> {
-    steps
-        .iter()
-        .filter(|s| s.status == WorkflowStepStatus::Failed)
-        .max_by(|a, b| {
-            a.started_at
-                .cmp(&b.started_at)
-                .then(a.position.cmp(&b.position))
-        })
-}
-
 fn walk(
     conn: &Connection,
     mut run_id: String,
@@ -80,8 +67,7 @@ fn walk(
             return Ok(());
         };
         let name = run.workflow_name.clone();
-        let steps = get_workflow_steps(conn, &run_id)?;
-        let Some(step) = pick_failed_step(&steps) else {
+        let Some(step) = get_last_failed_step(conn, &run_id)? else {
             // Cancelled or reaped runs have no failed step; use the run's own error.
             let msg = run
                 .error
@@ -102,13 +88,13 @@ fn walk(
         let next = step
             .child_run_id
             .clone()
-            .filter(|_| is_workflow_call_step(step));
+            .filter(|_| is_workflow_call_step(&step));
         chain.push(FailureLink {
             run_id: run_id.clone(),
             workflow_name: name,
             step_name: step.step_name.clone(),
             child_run_id: next.clone(),
-            error: step_error_text(step),
+            error: step_error_text(&step),
         });
         match next {
             Some(child) => run_id = child,
@@ -146,6 +132,53 @@ pub fn child_failure_chain(conn: &Connection, step: &WorkflowRunStep) -> Result<
     Ok(chain)
 }
 
+/// Chain below a failed `call workflow` step, reusing `known` (the chain already walked
+/// from the step's own run) when its first link is this step, so a render walks each
+/// child run once.
+///
+/// Empty for steps that are not failed `call workflow` steps.
+pub fn failed_call_step_chain(
+    conn: &Connection,
+    step: &WorkflowRunStep,
+    known: &[FailureLink],
+) -> Result<Vec<FailureLink>> {
+    if step.status != WorkflowStepStatus::Failed || !is_workflow_call_step(step) {
+        return Ok(Vec::new());
+    }
+    if let (Some(first), Some(child)) = (known.first(), step.child_run_id.as_deref()) {
+        if first.run_id == step.workflow_run_id && first.child_run_id.as_deref() == Some(child) {
+            return Ok(known[1..].to_vec());
+        }
+    }
+    child_failure_chain(conn, step)
+}
+
+/// One-line cause of a failed run, or `None` when the chain is empty.
+pub fn run_failure_cause(conn: &Connection, run_id: &str) -> Result<Option<String>> {
+    Ok(format_failure_cause(&run_failure_chain(conn, run_id)?))
+}
+
+/// Render a chain as an indented tree, one line per level, each ending in a newline.
+///
+/// Levels that were followed into a child run show `(child <id>)`; the leaf shows its error.
+pub fn render_failure_tree(chain: &[FailureLink], indent: usize) -> String {
+    let mut out = String::new();
+    for (depth, link) in chain.iter().enumerate() {
+        let pad = " ".repeat(indent + depth * 2);
+        match &link.child_run_id {
+            Some(child) => out.push_str(&format!(
+                "{pad}└ [FAIL] {} (child {child})\n",
+                link.step_name
+            )),
+            None => out.push_str(&format!(
+                "{pad}└ [FAIL] {}: {}\n",
+                link.step_name, link.error
+            )),
+        }
+    }
+    out
+}
+
 /// One-line rendering: `submit-review: exited 1: …`, or `review-pr › submit-review: …`
 /// for multi-level chains (intermediate levels shown by step name).
 pub fn format_failure_cause(chain: &[FailureLink]) -> Option<String> {
@@ -158,7 +191,7 @@ pub fn format_failure_cause(chain: &[FailureLink]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::named_params;
+    use crate::workflow::get_workflow_steps;
 
     fn setup() -> Connection {
         let conn = crate::test_helpers::setup_db();
@@ -167,13 +200,7 @@ mod tests {
     }
 
     fn insert_run(conn: &Connection, id: &str, name: &str, status: &str, error: Option<&str>) {
-        conn.execute(
-            "INSERT INTO workflow_runs \
-             (id, workflow_name, parent_run_id, status, dry_run, trigger, started_at, iteration, error) \
-             VALUES (:id, :name, 'agent', :status, 0, 'manual', '2026-01-01T00:00:00Z', 0, :error)",
-            named_params![":id": id, ":name": name, ":status": status, ":error": error],
-        )
-        .unwrap();
+        crate::test_helpers::insert_test_wf_run(conn, id, name, status, error);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -188,16 +215,9 @@ mod tests {
         child: Option<&str>,
         error: Option<&str>,
     ) {
-        conn.execute(
-            "INSERT INTO workflow_run_steps \
-             (id, workflow_run_id, step_name, role, position, status, started_at, child_run_id, step_error, result_text) \
-             VALUES (:id, :run, :name, :role, :pos, 'failed', :started, :child, :err, :err)",
-            named_params![
-                ":id": id, ":run": run, ":name": name, ":role": role, ":pos": position,
-                ":started": started, ":child": child, ":err": error
-            ],
-        )
-        .unwrap();
+        crate::test_helpers::insert_test_wf_step(
+            conn, id, run, name, role, "failed", position, started, child, error,
+        );
     }
 
     fn top_step(conn: &Connection, run: &str) -> WorkflowRunStep {
@@ -425,5 +445,102 @@ mod tests {
         assert!(!chain[0].error.contains('\n'));
         assert!(chain[0].error.starts_with("line1 line2 "));
         assert!(chain[0].error.len() <= MAX_ERROR_LEN + "…".len());
+    }
+
+    #[test]
+    fn failed_call_step_chain_reuses_known_chain() {
+        let conn = setup();
+        insert_run(&conn, "r1", "parent", "failed", None);
+        insert_run(&conn, "r2", "child", "failed", None);
+        insert_step(
+            &conn,
+            "s1",
+            "r1",
+            "workflow:child",
+            "workflow",
+            0,
+            "2026-01-01T00:00:01Z",
+            Some("r2"),
+            Some("Sub-workflow 'child' failed"),
+        );
+        insert_step(
+            &conn,
+            "s2",
+            "r2",
+            "leaf",
+            "script",
+            0,
+            "2026-01-01T00:00:02Z",
+            None,
+            Some("boom"),
+        );
+        let step = top_step(&conn, "r1");
+        let known = run_failure_chain(&conn, "r1").unwrap();
+        let below = failed_call_step_chain(&conn, &step, &known).unwrap();
+        assert_eq!(below, known[1..].to_vec());
+        // Without a known chain the walk is done from the DB and agrees.
+        assert_eq!(failed_call_step_chain(&conn, &step, &[]).unwrap(), below);
+        assert_eq!(
+            run_failure_cause(&conn, "r1").unwrap().as_deref(),
+            Some("workflow:child › leaf: boom")
+        );
+    }
+
+    #[test]
+    fn failed_call_step_chain_empty_for_non_failed_or_non_call() {
+        let conn = setup();
+        insert_run(&conn, "r1", "parent", "failed", None);
+        insert_run(&conn, "r2", "child", "failed", None);
+        insert_step(
+            &conn,
+            "s1",
+            "r1",
+            "agent-step",
+            "actor",
+            0,
+            "2026-01-01T00:00:01Z",
+            Some("r2"),
+            Some("x"),
+        );
+        insert_step(
+            &conn,
+            "s2",
+            "r2",
+            "leaf",
+            "script",
+            0,
+            "2026-01-01T00:00:02Z",
+            None,
+            Some("boom"),
+        );
+        let mut step = top_step(&conn, "r1");
+        assert!(failed_call_step_chain(&conn, &step, &[])
+            .unwrap()
+            .is_empty());
+        step.role = "workflow".into();
+        step.status = WorkflowStepStatus::Completed;
+        assert!(failed_call_step_chain(&conn, &step, &[])
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn render_failure_tree_nests_levels() {
+        let link = |step: &str, child: Option<&str>, error: &str| FailureLink {
+            run_id: "r".into(),
+            workflow_name: "wf".into(),
+            step_name: step.into(),
+            child_run_id: child.map(Into::into),
+            error: error.into(),
+        };
+        let chain = vec![
+            link("workflow:submit", Some("C2"), "Sub-workflow failed"),
+            link("submit-review", None, "exited 1: mktemp failed"),
+        ];
+        assert_eq!(
+            render_failure_tree(&chain, 8),
+            "        └ [FAIL] workflow:submit (child C2)\n          └ [FAIL] submit-review: exited 1: mktemp failed\n"
+        );
+        assert_eq!(render_failure_tree(&[], 8), "");
     }
 }

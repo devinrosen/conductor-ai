@@ -69,6 +69,49 @@ pub fn setup_db() -> Connection {
     conn
 }
 
+/// Insert a `workflow_runs` row with test defaults. Turns foreign keys off because
+/// `parent_run_id` points at a placeholder agent run.
+pub fn insert_test_wf_run(
+    conn: &Connection,
+    id: &str,
+    name: &str,
+    status: &str,
+    error: Option<&str>,
+) {
+    conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+    conn.execute(
+        "INSERT INTO workflow_runs \
+         (id, workflow_name, parent_run_id, status, dry_run, trigger, started_at, iteration, error) \
+         VALUES (?1, ?2, 'agent', ?3, 0, 'manual', '2026-01-01T00:00:00Z', 0, ?4)",
+        rusqlite::params![id, name, status, error],
+    )
+    .unwrap();
+}
+
+/// Insert a `workflow_run_steps` row; `error` fills both `step_error` and `result_text`.
+#[allow(clippy::too_many_arguments)]
+pub fn insert_test_wf_step(
+    conn: &Connection,
+    id: &str,
+    run_id: &str,
+    name: &str,
+    role: &str,
+    status: &str,
+    position: i64,
+    started: &str,
+    child_run_id: Option<&str>,
+    error: Option<&str>,
+) {
+    conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, started_at, child_run_id, step_error, result_text) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+        rusqlite::params![id, run_id, name, role, position, status, started, child_run_id, error],
+    )
+    .unwrap();
+}
+
 pub fn make_ticket(source_id: &str, title: &str) -> TicketInput {
     TicketInput {
         source_type: "github".to_string(),

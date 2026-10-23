@@ -24,7 +24,7 @@ use serde::Serialize;
 use crate::error::{ConductorError, Result};
 use crate::workflow::{ConductorWorkflowRun, WorkflowRunStatus, WorkflowStepStatus};
 
-use super::failure_chain::{child_failure_chain, format_failure_cause, is_workflow_call_step};
+use super::failure_chain::{failed_call_step_chain, format_failure_cause, is_workflow_call_step};
 use super::queries::{get_workflow_run, get_workflow_steps};
 
 /// How often the wait loop re-checks the run.
@@ -186,13 +186,13 @@ fn last_step_summary(conn: &Connection, run_id: &str) -> Result<Option<WaitStepS
     };
     let failed = s.status == WorkflowStepStatus::Failed;
     let is_call = is_workflow_call_step(s);
-    let cause = if failed && is_call {
-        // A broken lookup must not hide the wait result.
-        child_failure_chain(conn, s)
-            .ok()
-            .and_then(|chain| format_failure_cause(&chain))
-    } else {
-        None
+    // A broken lookup must not hide the wait result, but it should not vanish either.
+    let cause = match failed_call_step_chain(conn, s, &[]) {
+        Ok(chain) => format_failure_cause(&chain),
+        Err(e) => {
+            tracing::warn!(run_id, step = %s.step_name, error = %e, "failure cause lookup failed");
+            None
+        }
     };
     Ok(Some(WaitStepSummary {
         step_name: s.step_name.clone(),
@@ -625,38 +625,63 @@ mod tests {
         assert_eq!(step.step_error.as_deref(), Some("it broke"));
     }
 
-    #[test]
-    fn failed_workflow_step_reports_nested_cause() {
+    /// Parent run `r` whose only step has the given role/status and points at failed child `c`,
+    /// which has a failed leaf step.
+    fn setup_parent_with_child(role: &str, status: &str) -> Connection {
+        use crate::test_helpers::{insert_test_wf_run, insert_test_wf_step};
         let conn = setup();
-        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
-        insert_run(&conn, "r", None, "failed", None, "-1 hours");
-        insert_run(&conn, "c", Some("r"), "failed", None, "-1 hours");
-        insert_step(
+        insert_test_wf_run(&conn, "r", "parent", "failed", None);
+        insert_test_wf_run(&conn, "c", "child", "failed", None);
+        insert_test_wf_step(
             &conn,
             "s",
             "r",
             "workflow:child",
-            "-50 minutes",
-            Some("-49 minutes"),
+            role,
+            status,
+            0,
+            "2026-01-01T00:00:01Z",
+            Some("c"),
+            Some("Sub-workflow 'child' failed"),
         );
-        set_step(&conn, "s", "failed", 0, Some("Sub-workflow 'child' failed"));
-        conn.execute(
-            "UPDATE workflow_run_steps SET role = 'workflow', child_run_id = 'c' WHERE id = 's'",
-            [],
-        )
-        .unwrap();
-        insert_step(
+        insert_test_wf_step(
             &conn,
             "leaf",
             "c",
             "submit",
-            "-48 minutes",
-            Some("-47 minutes"),
+            "script",
+            "failed",
+            0,
+            "2026-01-01T00:00:02Z",
+            None,
+            Some("exited 1"),
         );
-        set_step(&conn, "leaf", "failed", 0, Some("exited 1"));
+        conn
+    }
+
+    #[test]
+    fn failed_workflow_step_reports_nested_cause() {
+        let conn = setup_parent_with_child("workflow", "failed");
         let step = eval(&conn, "r").unwrap().last_step.unwrap();
         assert_eq!(step.child_run_id.as_deref(), Some("c"));
         assert_eq!(step.cause.as_deref(), Some("submit: exited 1"));
+    }
+
+    #[test]
+    fn failed_non_workflow_step_ignores_child_run_id() {
+        // An agent step's `child_run_id` is an agent run ID, not a workflow run.
+        let conn = setup_parent_with_child("actor", "failed");
+        let step = eval(&conn, "r").unwrap().last_step.unwrap();
+        assert_eq!(step.child_run_id, None);
+        assert_eq!(step.cause, None);
+    }
+
+    #[test]
+    fn non_failed_workflow_step_has_child_but_no_cause() {
+        let conn = setup_parent_with_child("workflow", "running");
+        let step = eval(&conn, "r").unwrap().last_step.unwrap();
+        assert_eq!(step.child_run_id.as_deref(), Some("c"));
+        assert_eq!(step.cause, None);
     }
 
     #[test]

@@ -754,27 +754,103 @@ fn merge_error_and_cause_appends_cause() {
 }
 
 #[test]
+fn merge_error_and_cause_skips_cause_already_in_error() {
+    use super::runs::merge_error_and_cause;
+    assert_eq!(
+        merge_error_and_cause(Some("x: leaf"), Some("leaf")).as_deref(),
+        Some("x: leaf")
+    );
+}
+
+fn insert_failed_parent_and_child(conn: &rusqlite::Connection) {
+    use crate::test_helpers::{insert_test_wf_run, insert_test_wf_step};
+    insert_test_wf_run(conn, "r1", "parent", "failed", None);
+    insert_test_wf_run(conn, "r2", "child", "failed", None);
+    insert_test_wf_step(
+        conn,
+        "s1",
+        "r1",
+        "workflow:child",
+        "workflow",
+        "failed",
+        0,
+        "2026-01-01T00:00:01Z",
+        Some("r2"),
+        Some("Sub-workflow 'child' failed"),
+    );
+    insert_test_wf_step(
+        conn,
+        "s2",
+        "r2",
+        "submit-review",
+        "script",
+        "failed",
+        0,
+        "2026-01-01T00:00:02Z",
+        None,
+        Some("exited 1"),
+    );
+}
+
+#[test]
 fn failure_cause_follows_child_workflow() {
     let conn = crate::test_helpers::setup_db();
-    conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
-    for (id, name) in [("r1", "parent"), ("r2", "child")] {
-        conn.execute(
-            "INSERT INTO workflow_runs \
-             (id, workflow_name, parent_run_id, status, dry_run, trigger, started_at, iteration) \
-             VALUES (?1, ?2, 'agent', 'failed', 0, 'manual', '2026-01-01T00:00:00Z', 0)",
-            rusqlite::params![id, name],
-        )
-        .unwrap();
-    }
-    conn.execute_batch(
-        "INSERT INTO workflow_run_steps \
-           (id, workflow_run_id, step_name, role, position, status, started_at, child_run_id, step_error) \
-         VALUES ('s1', 'r1', 'workflow:child', 'workflow', 0, 'failed', '2026-01-01T00:00:01Z', 'r2', 'Sub-workflow ''child'' failed'), \
-                ('s2', 'r2', 'submit-review', 'script', 0, 'failed', '2026-01-01T00:00:02Z', NULL, 'exited 1');",
-    )
-    .unwrap();
+    insert_failed_parent_and_child(&conn);
     assert_eq!(
         super::runs::failure_cause(&conn, "r1").as_deref(),
         Some("workflow:child › submit-review: exited 1")
+    );
+}
+
+fn workflow_event_for(conn: &rusqlite::Connection, succeeded: bool) -> runkon_notify::Event {
+    let cfg = config(true, true, true);
+    let ctx = NotificationCtx {
+        conn,
+        config: &cfg,
+        hooks: &[],
+        dedup_store: Arc::new(SqliteDedupStore::new(std::path::PathBuf::new())),
+    };
+    super::runs::workflow_event(
+        &ctx,
+        &WorkflowNotificationArgs {
+            run_id: "r1",
+            workflow_name: "parent",
+            target_label: None,
+            succeeded,
+            parent_workflow_run_id: None,
+            repo_slug: "",
+            branch: "",
+            duration_ms: None,
+            ticket_url: None,
+            error: Some("Sub-workflow 'child' failed"),
+            repo_id: None,
+            worktree_id: None,
+        },
+    )
+}
+
+#[test]
+fn failed_workflow_event_carries_cause_and_merged_error() {
+    let conn = crate::test_helpers::setup_db();
+    insert_failed_parent_and_child(&conn);
+    let event = workflow_event_for(&conn, false);
+    assert_eq!(
+        event.fields.get("cause").map(String::as_str),
+        Some("workflow:child › submit-review: exited 1")
+    );
+    let error = event.fields.get("error").unwrap();
+    assert!(error.starts_with("Sub-workflow 'child' failed"));
+    assert!(error.ends_with("cause: workflow:child › submit-review: exited 1"));
+}
+
+#[test]
+fn succeeded_workflow_event_has_no_cause() {
+    let conn = crate::test_helpers::setup_db();
+    insert_failed_parent_and_child(&conn);
+    let event = workflow_event_for(&conn, true);
+    assert!(!event.fields.contains_key("cause"));
+    assert_eq!(
+        event.fields.get("error").map(String::as_str),
+        Some("Sub-workflow 'child' failed")
     );
 }

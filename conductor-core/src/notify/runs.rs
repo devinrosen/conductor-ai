@@ -56,8 +56,8 @@ pub struct FeedbackNotificationParams<'a> {
 ///
 /// Lookup errors are logged and ignored so they never block a notification.
 pub(crate) fn failure_cause(conn: &rusqlite::Connection, run_id: &str) -> Option<String> {
-    match crate::workflow::run_failure_chain(conn, run_id) {
-        Ok(chain) => crate::workflow::format_failure_cause(&chain),
+    match crate::workflow::run_failure_cause(conn, run_id) {
+        Ok(cause) => cause,
         Err(e) => {
             tracing::warn!(run_id, error = %e, "failure cause lookup failed");
             None
@@ -92,6 +92,18 @@ pub fn fire_workflow_notification(
     } else {
         "failed"
     };
+    let event = workflow_event(ctx, params);
+
+    HookRunner::new(&hooks_as_runkon(ctx.hooks))
+        .with_dedup_store(ctx.dedup_store.clone())
+        .fire_with_dedup(&event, params.run_id, event_type);
+}
+
+/// Build the event for a terminal workflow run, adding the nested failure cause when failed.
+pub(crate) fn workflow_event(
+    ctx: &NotificationCtx<'_>,
+    params: &WorkflowNotificationArgs<'_>,
+) -> Event {
     let body = notification_body(params.workflow_name, params.target_label);
     let deep_link = build_workflow_deep_link(
         ctx.config.web_url.as_deref(),
@@ -155,17 +167,13 @@ pub fn fire_workflow_notification(
         )
     };
 
-    let event = Event {
+    Event {
         kind: kind.into(),
         title: title.into(),
         body,
         severity,
         fields,
-    };
-
-    HookRunner::new(&hooks_as_runkon(ctx.hooks))
-        .with_dedup_store(ctx.dedup_store.clone())
-        .fire_with_dedup(&event, params.run_id, event_type);
+    }
 }
 
 /// Fire a notification for an agent feedback request.

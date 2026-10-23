@@ -254,6 +254,27 @@ pub fn get_workflow_steps(
     )
 }
 
+/// The failed step to blame for a run: latest `started_at`, then highest `position`
+/// (so the last retry attempt wins). `None` when no step failed.
+pub fn get_last_failed_step(
+    conn: &Connection,
+    workflow_run_id: &str,
+) -> Result<Option<WorkflowRunStep>> {
+    let mut rows = query_collect(
+        conn,
+        &format!(
+            "{} \
+                 WHERE s.workflow_run_id = :workflow_run_id AND s.status = 'failed' \
+                 ORDER BY s.started_at DESC, s.position DESC \
+                 LIMIT 1",
+            *STEP_SELECT_EXPANDED
+        ),
+        named_params! { ":workflow_run_id": workflow_run_id },
+        row_to_workflow_step,
+    )?;
+    Ok(rows.pop())
+}
+
 /// Batch-fetch steps for multiple runs in a single query.
 /// Returns a map of run_id → steps (sorted by position).
 pub fn get_steps_for_runs(
