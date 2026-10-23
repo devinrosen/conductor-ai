@@ -39,8 +39,19 @@ fi
 
 SKIP_E2E=1 git push -u origin "$current_branch"
 
+# With more than one commit, `gh pr create --fill` titles the PR from the branch
+# name, and the squash merge makes that title the commit on base. Title it from
+# the oldest commit's subject (implement writes it in conventional form) and keep
+# --fill for the body. sed, not head: sed reads all input so git log can't hit
+# SIGPIPE and fail the pipeline under pipefail.
+pr_title=$(git log --reverse --no-merges --format=%s "origin/$base..HEAD" | sed -n 1p)
+pr_args=(--fill --base "$base")
+if [ -n "$pr_title" ]; then
+  pr_args+=(--title "$pr_title")
+fi
+
 pr_create_err=$(mktemp)
-if pr_url=$(gh pr create --fill --base "$base" 2>"$pr_create_err"); then
+if pr_url=$(gh pr create "${pr_args[@]}" 2>"$pr_create_err"); then
   : # pr_url already set from stdout
 else
   exit_code=$?

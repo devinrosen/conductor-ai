@@ -19,7 +19,7 @@ Steps:
    {"markers": [], "context": "Modified: conductor-core/src/workflow/coordinator.rs, conductor-core/src/agent/manager/mod.rs (crates: conductor-core)"}
    <<<END_FLOW_OUTPUT>>>
    ```
-4. Commit all changes with a clear, descriptive commit message referencing the ticket.
+4. Commit all changes. The subject must be a conventional commit line: `<type>(<scope>): <imperative summary> (#<ticket number>)`, for example `fix(flow): match resumed steps by occurrence within an iteration (#108)`. Types: feat, fix, refactor, docs, test, chore, perf. The push step uses the first commit's subject as the PR title, and the squash merge uses it as the commit message on the base branch, so it must read as a changelog line. Commits made on a verify-loopback retry should also name what they fixed.
 
 Do not create files or make changes beyond what the plan specifies. If you discover the plan is incomplete or incorrect, document the deviation in `PLAN.md` before proceeding.
 
