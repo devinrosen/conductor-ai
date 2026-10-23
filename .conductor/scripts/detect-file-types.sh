@@ -11,10 +11,18 @@ fi
 
 changed_files=$(git diff "origin/${BASE_BRANCH}...HEAD" --name-only 2>/dev/null || true)
 
-# Filter for code files, excluding .conductor/, docs/, .github/, and root-level *.md
+# Filter for code files, excluding .conductor/, docs/, .github/, and root-level *.md.
+# Shell scripts under .conductor/scripts/ count as code, so the security and
+# error-handling reviewers cover them.
 code_files=()
 while IFS= read -r file; do
   [[ -z "$file" ]] && continue
+
+  # Pipeline shell scripts run gh and git, so they count as code
+  if [[ "$file" == .conductor/scripts/*.sh ]]; then
+    code_files+=("$file")
+    continue
+  fi
 
   # Exclude specific directories and root-level .md files
   [[ "$file" == .conductor/* ]] && continue
