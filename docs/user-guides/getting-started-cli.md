@@ -74,9 +74,14 @@ conductor workflow list my-repo fix-login-bug
 # Run a workflow:
 conductor workflow run my-repo fix-login-bug ticket-to-pr --input ticket_id=PROJ-123
 
+# Small change with clear acceptance criteria (no plan step):
+conductor workflow run my-repo fix-typo quick-fix-pr --input ticket_id=PROJ-124
+
 # Dry run (agents with can_commit = true will not commit or push):
 conductor workflow run my-repo fix-login-bug ticket-to-pr --dry-run
 ```
+
+**Choosing a workflow.** Use `quick-fix-pr` for changes to a few files with clear acceptance criteria, prompt and workflow edits, and small bugs. It has no plan step and runs one review plus at most one re-review, then hands off to a human if the PR still has blocking findings. Use `ticket-to-pr` (the default) for anything that needs a plan.
 
 ### Validate a workflow before running
 

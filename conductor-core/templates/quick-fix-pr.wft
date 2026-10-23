@@ -1,0 +1,93 @@
+---
+name: quick-fix-pr
+description: Small, well-specified changes — implement from the ticket (no plan step), verify, lint, open a PR, and run one review with at most one re-review
+version: "1.0.0"
+target_types:
+  - worktree
+hints:
+  - The implement agent's brief is the ticket itself. Have it fetch the full ticket and its comments, and ask for feedback instead of guessing when the ticket lacks clear acceptance criteria
+  - Use this for small changes only (a few files, clear acceptance criteria, prompt and workflow edits, small bugs). Keep ticket-to-pr for anything that needs a plan
+  - The single re-review is deliberate. If the repo wants more cycles, call iterate-pr instead of inlining the review
+  - The review-scope script picks each review's scope: "incremental" from the commit the last <!-- conductor-review --> review was submitted on (exported as review_since) when that commit is still an ancestor of HEAD, otherwise "full". Never hard-code incremental: the first review must cover the whole PR
+  - Check the repo's CI config (.github/workflows/ or similar) and customize the verify, fmt-fix and lint-fix commands to match it
+---
+workflow quick-fix-pr {
+  meta {
+    description = "Small, well-specified changes: implement from the ticket, verify, lint, open a PR, and run one review with at most one re-review"
+    trigger     = "manual"
+    targets     = ["worktree"]
+    group       = "Development"
+  }
+
+  inputs {
+    ticket_id required
+  }
+
+  call implement-ticket {
+    retries = 2
+    as      = "developer"
+  }
+
+  call verify { output = "verify" }
+
+  call workflow lint-fix
+
+  script fmt-fix {
+    run = ".conductor/scripts/fmt-fix.sh"
+  }
+
+  script push-and-pr {
+    run = ".conductor/scripts/push-and-pr.sh"
+    as  = "developer"
+    env = { FEATURE_BASE_BRANCH = "{{feature_base_branch}}" }
+  }
+
+  unless push-and-pr.no_changes {
+    script review-scope {
+      run = ".conductor/scripts/review-scope.sh"
+      env = { PR_NUMBER = "{{pr_number}}" }
+    }
+
+    call workflow review-pr {
+      inputs {
+        scope = "{{review_scope}}"
+        since = "{{review_since}}"
+      }
+    }
+
+    if review-pr.has_blocking_findings {
+      call address-reviews {
+        as = "developer"
+      }
+
+      script fmt-fix-review {
+        run = ".conductor/scripts/fmt-fix.sh"
+      }
+
+      script push {
+        run = ".conductor/scripts/push.sh"
+        as  = "developer"
+      }
+
+      script review-scope-rereview {
+        run = ".conductor/scripts/review-scope.sh"
+        env = { PR_NUMBER = "{{pr_number}}" }
+      }
+
+      call workflow review-pr {
+        inputs {
+          scope = "{{review_scope}}"
+          since = "{{review_since}}"
+        }
+      }
+
+      if review-pr.has_blocking_findings {
+        gate human_review {
+          prompt     = "quick-fix-pr allows one re-review, and it still requests changes. Address the findings by hand, or rerun as ticket-to-pr or iterate-pr."
+          timeout    = "72h"
+          on_timeout = fail
+        }
+      }
+    }
+  }
+}
