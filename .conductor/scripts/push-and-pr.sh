@@ -50,9 +50,20 @@ if [ -n "$pr_title" ]; then
   pr_args+=(--title "$pr_title")
 fi
 
+# Link the ticket so close-linked-issues.yml closes it on a release-branch merge.
+# Only a numeric ID counts (rejects empty, Jira keys, an unsubstituted template).
+# `gh pr create --body` would replace the --fill body, so the line is added with
+# `gh pr edit` after creating the PR. An existing PR's body is left alone.
+ticket_id="${TICKET_SOURCE_ID:-}"
+case "$ticket_id" in
+  ''|*[!0-9]*) ticket_id="" ;;
+esac
+created=0
+link_warning=""
+
 pr_create_err=$(mktemp)
 if pr_url=$(gh pr create "${pr_args[@]}" 2>"$pr_create_err"); then
-  : # pr_url already set from stdout
+  created=1 # pr_url already set from stdout
 else
   exit_code=$?
   if grep -qi "already exists" "$pr_create_err"; then
@@ -65,8 +76,30 @@ else
 fi
 rm -f "$pr_create_err"
 
+if [ "$created" -eq 1 ] && [ -n "$ticket_id" ]; then
+  if body=$(gh pr view "$pr_url" --json body -q .body); then
+    if printf '%s' "$body" | grep -qiE "(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#${ticket_id}([^0-9]|$)"; then
+      : # body already links the ticket
+    else
+      if [ -n "$body" ]; then
+        new_body="$body"$'\n\n'"Closes #${ticket_id}"
+      else
+        new_body="Closes #${ticket_id}"
+      fi
+      if ! printf '%s\n' "$new_body" | gh pr edit "$pr_url" --body-file - >/dev/null; then
+        link_warning=" (warning: could not add Closes #${ticket_id})"
+      fi
+    fi
+  else
+    link_warning=" (warning: could not add Closes #${ticket_id})"
+  fi
+  if [ -n "$link_warning" ]; then
+    echo "WARNING: could not add 'Closes #${ticket_id}' to $pr_url" >&2
+  fi
+fi
+
 cat <<EOF
 <<<FLOW_OUTPUT>>>
-{"markers": [], "context": "PR is open at $pr_url"}
+{"markers": [], "context": "PR is open at $pr_url$link_warning"}
 <<<END_FLOW_OUTPUT>>>
 EOF
