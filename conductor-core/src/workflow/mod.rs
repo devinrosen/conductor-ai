@@ -61,6 +61,11 @@ pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
 pub use manager::definitions::{
     list_defs, list_defs_with_validation, load_def_by_name, validate_single,
 };
+pub use manager::failure_chain::{
+    chain_or_empty, child_failure_chain, failed_call_step_chain, format_failure_cause,
+    is_workflow_call_step, render_failure_tree, render_step_failure_tree, run_chain_if_failed,
+    run_failure_cause, run_failure_chain, FailureLink,
+};
 pub use manager::fan_out::{
     cancel_fan_out_items, get_existing_fan_out_item_ids, get_fan_out_items,
     get_fan_out_items_checked, get_fan_out_items_for_steps, insert_fan_out_item,

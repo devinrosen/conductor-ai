@@ -4,7 +4,7 @@ use rusqlite::Connection;
 use conductor_core::config::Config;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::TicketSyncer;
-use conductor_core::workflow::WorkflowExecConfig;
+use conductor_core::workflow::{is_workflow_call_step, WorkflowExecConfig};
 use conductor_core::workflow_config;
 use conductor_core::worktree::WorktreeManager;
 
@@ -488,22 +488,17 @@ pub fn handle_workflow(
                     if let Some(ref summary) = run.result_summary {
                         println!("\n{summary}");
                     }
+                    let run_chain = conductor_core::workflow::run_chain_if_failed(conn, &run);
+                    if let Some(cause) = conductor_core::workflow::format_failure_cause(&run_chain)
+                    {
+                        println!("\nCause: {cause}");
+                    }
 
                     let steps = conductor_core::workflow::get_workflow_steps(conn, &run.id)?;
                     if !steps.is_empty() {
                         println!("\nSteps:");
                         for step in &steps {
-                            let marker = step.status.short_label();
-                            let commit_flag = if step.can_commit { " [commit]" } else { "" };
-                            let iter_label = if step.iteration > 0 {
-                                format!(" iter={}", step.iteration)
-                            } else {
-                                String::new()
-                            };
-                            println!(
-                                "  [{marker}] {} ({}{}){iter_label}",
-                                step.step_name, step.role, commit_flag
-                            );
+                            println!("{}", step_header_line(step));
                             if let Some(ref started) = step.started_at {
                                 print!("        started: {started}");
                                 if let Some(ref ended) = step.ended_at {
@@ -546,9 +541,15 @@ pub fn handle_workflow(
                                     println!("        validation error: {err}");
                                 }
                             }
-                            if let Some(ref child) = step.child_run_id {
-                                println!("        child run: {child}");
+                            if let Some(line) = step_child_run_line(step) {
+                                println!("{line}");
                             }
+                            print!(
+                                "{}",
+                                conductor_core::workflow::render_step_failure_tree(
+                                    conn, step, &run_chain, 8
+                                )
+                            );
                             // foreach fan-out progress
                             if step.role == "foreach" {
                                 if let Some(total) = step.fan_out_total {
@@ -1030,5 +1031,87 @@ fn with_waiting_gate(
             println!("No waiting gate found for workflow run: {run_id}");
             Ok(())
         }
+    }
+}
+
+/// `[marker] name (role[ [commit]][, child <id>]) iter=N` header for a step in run-show.
+///
+/// The child run ID is shown only for `call workflow` steps; other steps' `child_run_id`
+/// is an agent run ID (see [`step_child_run_line`]).
+fn step_header_line(step: &conductor_core::workflow::WorkflowRunStep) -> String {
+    let commit_flag = if step.can_commit { " [commit]" } else { "" };
+    let iter_label = if step.iteration > 0 {
+        format!(" iter={}", step.iteration)
+    } else {
+        String::new()
+    };
+    let child_label = match (&step.child_run_id, is_workflow_call_step(step)) {
+        (Some(child), true) => format!(", child {child}"),
+        _ => String::new(),
+    };
+    format!(
+        "  [{}] {} ({}{commit_flag}{child_label}){iter_label}",
+        step.status.short_label(),
+        step.step_name,
+        step.role
+    )
+}
+
+/// `child run: <id>` detail line for steps whose `child_run_id` is not a workflow run.
+fn step_child_run_line(step: &conductor_core::workflow::WorkflowRunStep) -> Option<String> {
+    match &step.child_run_id {
+        Some(child) if !is_workflow_call_step(step) => Some(format!("        child run: {child}")),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+    use conductor_core::workflow::{WorkflowRunStep, WorkflowStepStatus};
+
+    fn step(role: &str, child: Option<&str>) -> WorkflowRunStep {
+        let conn = conductor_core::test_helpers::setup_db();
+        conductor_core::test_helpers::insert_test_wf_run(&conn, "r", "wf", "failed", None);
+        conductor_core::test_helpers::insert_test_wf_step(
+            &conn,
+            "s",
+            "r",
+            "build",
+            role,
+            "failed",
+            0,
+            "2026-01-01T00:00:01Z",
+            child,
+            Some("boom"),
+        );
+        let mut steps = conductor_core::workflow::get_workflow_steps(&conn, "r").unwrap();
+        let mut step = steps.remove(0);
+        step.status = WorkflowStepStatus::Failed;
+        step
+    }
+
+    #[test]
+    fn call_step_header_shows_child_and_suppresses_child_run_line() {
+        let s = step("workflow", Some("C1"));
+        assert_eq!(step_header_line(&s), "  [FAIL] build (workflow, child C1)");
+        assert_eq!(step_child_run_line(&s), None);
+    }
+
+    #[test]
+    fn non_call_step_keeps_child_run_line_and_hides_child_in_header() {
+        let s = step("actor", Some("A1"));
+        assert_eq!(step_header_line(&s), "  [FAIL] build (actor)");
+        assert_eq!(
+            step_child_run_line(&s).as_deref(),
+            Some("        child run: A1")
+        );
+    }
+
+    #[test]
+    fn step_without_child_has_no_child_output() {
+        let s = step("workflow", None);
+        assert_eq!(step_header_line(&s), "  [FAIL] build (workflow)");
+        assert_eq!(step_child_run_line(&s), None);
     }
 }

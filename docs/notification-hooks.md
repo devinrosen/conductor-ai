@@ -299,7 +299,8 @@ All entries in the event `fields` map are injected as `RUNKON_NOTIFY_FIELD_<UPPE
 
 | Variable | Example value | Notes |
 |---|---|---|
-| `RUNKON_NOTIFY_FIELD_ERROR` | Error message | `workflow_run.failed`, `agent_run.failed`, `workflow_run.reaped`; empty string when `None` |
+| `RUNKON_NOTIFY_FIELD_ERROR` | Error message | `workflow_run.failed`, `agent_run.failed`, `workflow_run.reaped`; empty string when `None`. For `workflow_run.failed` with a failing sub-workflow, ends with ` — cause: <cause>` |
+| `RUNKON_NOTIFY_FIELD_CAUSE` | `"workflow:review-pr › submit-review: exited 1"` | `workflow_run.failed` only, when a nested failing step was found |
 
 #### Gate events
 

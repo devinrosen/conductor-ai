@@ -24,6 +24,9 @@ use serde::Serialize;
 use crate::error::{ConductorError, Result};
 use crate::workflow::{ConductorWorkflowRun, WorkflowRunStatus, WorkflowStepStatus};
 
+use super::failure_chain::{
+    chain_or_empty, failed_call_step_chain, format_failure_cause, is_workflow_call_step,
+};
 use super::queries::{get_workflow_run, get_workflow_steps};
 
 /// How often the wait loop re-checks the run.
@@ -100,6 +103,10 @@ pub struct WaitStepSummary {
     pub status: String,
     pub iteration: i64,
     pub step_error: Option<String>,
+    /// Child workflow run for a `call workflow` step.
+    pub child_run_id: Option<String>,
+    /// One-line nested cause for a failed `call workflow` step.
+    pub cause: Option<String>,
     pub context_out: Option<String>,
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
@@ -176,15 +183,23 @@ fn last_step_summary(conn: &Connection, run_id: &str) -> Result<Option<WaitStepS
             .cmp(&b.started_at)
             .then(a.position.cmp(&b.position))
     });
-    Ok(last.map(|s| WaitStepSummary {
+    let Some(s) = last else {
+        return Ok(None);
+    };
+    let failed = s.status == WorkflowStepStatus::Failed;
+    let is_call = is_workflow_call_step(s);
+    // A broken lookup must not hide the wait result, but it should not vanish either.
+    let cause = format_failure_cause(&chain_or_empty(
+        run_id,
+        failed_call_step_chain(conn, s, &[]),
+    ));
+    Ok(Some(WaitStepSummary {
         step_name: s.step_name.clone(),
         status: s.status.to_string(),
         iteration: s.iteration,
-        step_error: if s.status == WorkflowStepStatus::Failed {
-            s.result_text.clone()
-        } else {
-            None
-        },
+        step_error: if failed { s.result_text.clone() } else { None },
+        child_run_id: s.child_run_id.clone().filter(|_| is_call),
+        cause,
         context_out: s.context_out.clone(),
         started_at: s.started_at.clone(),
         ended_at: s.ended_at.clone(),
@@ -297,6 +312,12 @@ pub fn format_wait_summary(s: &WaitSummary) -> String {
         ));
         if let Some(e) = &step.step_error {
             out.push_str(&format!("  step error: {e}\n"));
+        }
+        if let Some(id) = &step.child_run_id {
+            out.push_str(&format!("  child run: {id}\n"));
+        }
+        if let Some(c) = &step.cause {
+            out.push_str(&format!("  cause: {c}\n"));
         }
         if let Some(c) = &step.context_out {
             out.push_str(&format!("  context: {c}\n"));
@@ -603,6 +624,65 @@ mod tests {
         assert_eq!(step.step_error.as_deref(), Some("it broke"));
     }
 
+    /// Parent run `r` whose only step has the given role/status and points at failed child `c`,
+    /// which has a failed leaf step.
+    fn setup_parent_with_child(role: &str, status: &str) -> Connection {
+        use crate::test_helpers::{insert_test_wf_run, insert_test_wf_step};
+        let conn = setup();
+        insert_test_wf_run(&conn, "r", "parent", "failed", None);
+        insert_test_wf_run(&conn, "c", "child", "failed", None);
+        insert_test_wf_step(
+            &conn,
+            "s",
+            "r",
+            "workflow:child",
+            role,
+            status,
+            0,
+            "2026-01-01T00:00:01Z",
+            Some("c"),
+            Some("Sub-workflow 'child' failed"),
+        );
+        insert_test_wf_step(
+            &conn,
+            "leaf",
+            "c",
+            "submit",
+            "script",
+            "failed",
+            0,
+            "2026-01-01T00:00:02Z",
+            None,
+            Some("exited 1"),
+        );
+        conn
+    }
+
+    #[test]
+    fn failed_workflow_step_reports_nested_cause() {
+        let conn = setup_parent_with_child("workflow", "failed");
+        let step = eval(&conn, "r").unwrap().last_step.unwrap();
+        assert_eq!(step.child_run_id.as_deref(), Some("c"));
+        assert_eq!(step.cause.as_deref(), Some("submit: exited 1"));
+    }
+
+    #[test]
+    fn failed_non_workflow_step_ignores_child_run_id() {
+        // An agent step's `child_run_id` is an agent run ID, not a workflow run.
+        let conn = setup_parent_with_child("actor", "failed");
+        let step = eval(&conn, "r").unwrap().last_step.unwrap();
+        assert_eq!(step.child_run_id, None);
+        assert_eq!(step.cause, None);
+    }
+
+    #[test]
+    fn non_failed_workflow_step_has_child_but_no_cause() {
+        let conn = setup_parent_with_child("workflow", "running");
+        let step = eval(&conn, "r").unwrap().last_step.unwrap();
+        assert_eq!(step.child_run_id.as_deref(), Some("c"));
+        assert_eq!(step.cause, None);
+    }
+
     #[test]
     fn non_failed_step_has_no_step_error() {
         let conn = setup();
@@ -662,6 +742,8 @@ mod tests {
                 status: "failed".into(),
                 iteration: 2,
                 step_error: Some("exit 1".into()),
+                child_run_id: Some("child1".into()),
+                cause: Some("inner: exited 1".into()),
                 context_out: Some("partial".into()),
                 started_at: None,
                 ended_at: None,
@@ -671,6 +753,8 @@ mod tests {
         assert!(text.contains("error: engine died\n"));
         assert!(text.contains("last step: build [failed] (iteration 2)"));
         assert!(text.contains("  step error: exit 1\n"));
+        assert!(text.contains("  child run: child1\n"));
+        assert!(text.contains("  cause: inner: exited 1\n"));
         assert!(text.contains("  context: partial\n"));
         assert!(!text.contains("hint:"));
     }
