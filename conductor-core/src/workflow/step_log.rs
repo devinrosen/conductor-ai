@@ -106,11 +106,7 @@ pub fn render_step_log(target: &StepLogTarget, mode: StepLogMode) -> Result<Stri
     match mode {
         StepLogMode::Full => read_log(target),
         StepLogMode::Tail { lines } => {
-            let excerpt = target
-                .output_error
-                .then(|| final_text(target))
-                .flatten()
-                .and_then(|t| flow_output_excerpt(&t));
+            let excerpt = output_excerpt(target, || final_text(target));
             Ok(format!(
                 "{}{}",
                 header(target, excerpt.as_deref()),
@@ -119,10 +115,7 @@ pub fn render_step_log(target: &StepLogTarget, mode: StepLogMode) -> Result<Stri
         }
         StepLogMode::Result => {
             let result = final_text(target);
-            let excerpt = result
-                .as_deref()
-                .filter(|_| target.output_error)
-                .and_then(flow_output_excerpt);
+            let excerpt = output_excerpt(target, || result.clone());
             let header = header(target, excerpt.as_deref());
             match result {
                 Some(text) => Ok(format!("{header}--- result ---\n{text}\n")),
@@ -135,6 +128,18 @@ pub fn render_step_log(target: &StepLogTarget, mode: StepLogMode) -> Result<Stri
             }
         }
     }
+}
+
+/// The parsed FLOW_OUTPUT excerpt to show in the header; only for steps whose output failed to parse.
+/// `result` is only evaluated when the gate is open, so healthy steps never read the log for it.
+fn output_excerpt(
+    target: &StepLogTarget,
+    result: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    if !target.output_error {
+        return None;
+    }
+    result().and_then(|t| flow_output_excerpt(&t))
 }
 
 /// The step's final result message: the log's last result event, else the stored text.
