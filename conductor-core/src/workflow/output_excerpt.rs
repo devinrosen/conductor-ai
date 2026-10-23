@@ -40,10 +40,11 @@ pub fn is_output_parse_error(err: &str) -> bool {
 /// Returns `None` for other steps, or when the agent run or its result can't be found:
 /// this only decorates error display, so lookups never fail loudly.
 pub fn step_output_error_excerpt(conn: &Connection, step: &WorkflowRunStep) -> Option<String> {
-    let err = step
-        .step_error
-        .as_deref()
-        .or_else(|| step.result_text.as_deref().filter(|_| step.status == WorkflowStepStatus::Failed))?;
+    let err = step.step_error.as_deref().or_else(|| {
+        step.result_text
+            .as_deref()
+            .filter(|_| step.status == WorkflowStepStatus::Failed)
+    })?;
     if !is_output_parse_error(err) {
         return None;
     }

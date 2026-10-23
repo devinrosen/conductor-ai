@@ -32,9 +32,7 @@ impl StepLogMode {
     /// Parse the `mode` and `lines` arguments. `mode` defaults to `result`; `lines`
     /// defaults to 20 and is clamped to 1..=200 (it only matters for `tail`).
     pub fn parse(mode: Option<&str>, lines: Option<usize>) -> Result<Self> {
-        let lines = lines
-            .unwrap_or(DEFAULT_TAIL_LINES)
-            .clamp(1, MAX_TAIL_LINES);
+        let lines = lines.unwrap_or(DEFAULT_TAIL_LINES).clamp(1, MAX_TAIL_LINES);
         match mode.unwrap_or("result") {
             "result" => Ok(Self::Result),
             "tail" => Ok(Self::Tail { lines }),
@@ -245,7 +243,9 @@ mod tests {
             StepLogMode::parse(Some("full"), None).unwrap(),
             StepLogMode::Full
         );
-        let err = StepLogMode::parse(Some("bogus"), None).unwrap_err().to_string();
+        let err = StepLogMode::parse(Some("bogus"), None)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("result") && err.contains("tail") && err.contains("full"));
     }
 
@@ -283,7 +283,10 @@ mod tests {
         let (t, path) = target(&log, None);
         let out = render_step_log(&t, StepLogMode::Tail { lines: 3 }).unwrap();
         assert!(out.contains("last 3 of 10 messages"), "{out}");
-        assert!(out.contains("{\"i\":9}") && out.contains("{\"i\":7}"), "{out}");
+        assert!(
+            out.contains("{\"i\":9}") && out.contains("{\"i\":7}"),
+            "{out}"
+        );
         assert!(!out.contains("{\"i\":6}"), "{out}");
         std::fs::remove_file(path).ok();
     }
@@ -302,10 +305,18 @@ mod tests {
     #[test]
     fn full_mode_reads_whole_file_and_reports_missing() {
         let (mut t, path) = target("line1\nline2\n", None);
-        assert_eq!(render_step_log(&t, StepLogMode::Full).unwrap(), "line1\nline2\n");
+        assert_eq!(
+            render_step_log(&t, StepLogMode::Full).unwrap(),
+            "line1\nline2\n"
+        );
         std::fs::remove_file(&path).ok();
         t.log_path = path;
-        let err = render_step_log(&t, StepLogMode::Full).unwrap_err().to_string();
-        assert!(err.contains("Log file not found") && err.contains("plan"), "{err}");
+        let err = render_step_log(&t, StepLogMode::Full)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Log file not found") && err.contains("plan"),
+            "{err}"
+        );
     }
 }

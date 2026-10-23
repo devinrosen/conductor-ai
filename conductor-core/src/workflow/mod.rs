@@ -28,9 +28,9 @@ pub mod gate_types;
 pub use gate_types::GateType;
 pub(crate) mod persistence_sqlite;
 pub(crate) mod prompt_builder;
-mod step_log;
 pub(crate) mod run_context;
 pub(crate) mod runkon_bridge;
+mod step_log;
 pub(crate) mod types;
 
 // Re-export batch validation from the workflow layer (not DSL).
@@ -130,12 +130,12 @@ pub use manager::wait::{
 pub use manager::{InvalidWorkflowEntry, StepMetrics};
 pub use output::{parse_flow_output, FlowOutput};
 pub use output_excerpt::{flow_output_excerpt, is_output_parse_error, step_output_error_excerpt};
-pub use step_log::{render_step_log, resolve_step_log_target, StepLogMode, StepLogTarget};
 pub use runkon_flow::traits::persistence::{
     FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,
     WorkflowPersistence,
 };
 pub use runkon_flow::types::FanOutItemRow;
+pub use step_log::{render_step_log, resolve_step_log_target, StepLogMode, StepLogTarget};
 pub use types::SpawnHeartbeatResumeParams;
 pub use types::{
     resolve_conductor_bin_dir, ActiveWorkflowCounts, AgentRunMetrics, ConductorWorkflowRun,

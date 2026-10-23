@@ -1531,7 +1531,11 @@ pub async fn get_workflow_step_log(
     // File reads are blocking; keep them off the tokio worker thread.
     let log = tokio::task::spawn_blocking(move || render_step_log(&target, mode))
         .await
-        .map_err(|e| ApiError::Core(ConductorError::Workflow(format!("log read task failed: {e}"))))??;
+        .map_err(|e| {
+            ApiError::Core(ConductorError::Workflow(format!(
+                "log read task failed: {e}"
+            )))
+        })??;
 
     Ok(Json(serde_json::json!({ "log": log })))
 }

@@ -1328,10 +1328,16 @@ mod tests {
         let text = step_log_text(
             &conductor,
             &run_id,
-            &[("mode", Value::String("tail".into())), ("lines", Value::from(2))],
+            &[
+                ("mode", Value::String("tail".into())),
+                ("lines", Value::from(2)),
+            ],
         );
         assert!(text.contains("last 2 of 10 messages"), "got: {text}");
-        assert!(text.contains("{\"i\":9}") && !text.contains("{\"i\":7}"), "got: {text}");
+        assert!(
+            text.contains("{\"i\":9}") && !text.contains("{\"i\":7}"),
+            "got: {text}"
+        );
     }
 
     #[test]
@@ -1344,7 +1350,10 @@ mod tests {
         args.insert("mode".into(), Value::String("bogus".into()));
         let result = tool_get_step_log(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
-        let text = result.content[0].as_text().map(|t| t.text.as_str()).unwrap_or("");
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
         assert!(text.contains("tail"), "got: {text}");
     }
 
@@ -1363,7 +1372,10 @@ mod tests {
             Some("structured output validation: Invalid JSON in FLOW_OUTPUT: expected value"),
         );
         let text = step_log_text(&conductor, &run_id, &[]);
-        assert!(text.contains("parsed FLOW_OUTPUT block (line 2 of result)"), "got: {text}");
+        assert!(
+            text.contains("parsed FLOW_OUTPUT block (line 2 of result)"),
+            "got: {text}"
+        );
         assert!(text.contains("oops"), "got: {text}");
     }
 
