@@ -10,20 +10,6 @@ pub(crate) fn looks_like_ulid(s: &str) -> bool {
     s.len() == 26 && s.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
-/// Unwrap a failure-chain lookup for display, logging a failure instead of hiding it.
-///
-/// A broken lookup must not block run-show or run detail output, but it should not look
-/// the same as "no nested cause" either.
-pub(crate) fn chain_or_warn(
-    run_id: &str,
-    chain: conductor_core::error::Result<Vec<conductor_core::workflow::FailureLink>>,
-) -> Vec<conductor_core::workflow::FailureLink> {
-    chain.unwrap_or_else(|e| {
-        tracing::warn!(run_id, error = %e, "failure chain lookup failed");
-        Vec::new()
-    })
-}
-
 pub(crate) fn check_prerequisites() {
     let mut missing = Vec::new();
     if Command::new("gh").arg("--version").output().is_err() {

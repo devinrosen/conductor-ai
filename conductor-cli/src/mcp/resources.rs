@@ -408,14 +408,7 @@ fn format_run_detail(
         run.ended_at.as_deref().unwrap_or("running"),
         run.result_summary.as_deref().unwrap_or("none")
     );
-    let run_chain = if run.status == conductor_core::workflow::WorkflowRunStatus::Failed {
-        crate::helpers::chain_or_warn(
-            &run.id,
-            conductor_core::workflow::run_failure_chain(conn, &run.id),
-        )
-    } else {
-        Vec::new()
-    };
+    let run_chain = conductor_core::workflow::run_chain_if_failed(conn, run);
     if let Some(cause) = conductor_core::workflow::format_failure_cause(&run_chain) {
         out.push_str(&format!("cause: {cause}\n"));
     }
@@ -479,11 +472,9 @@ fn format_run_detail(
                 out.push_str(&format!("    step_error: {err}\n"));
             }
         }
-        let below = crate::helpers::chain_or_warn(
-            &step.workflow_run_id,
-            conductor_core::workflow::failed_call_step_chain(conn, step, &run_chain),
-        );
-        out.push_str(&conductor_core::workflow::render_failure_tree(&below, 4));
+        out.push_str(&conductor_core::workflow::render_step_failure_tree(
+            conn, step, &run_chain, 4,
+        ));
     }
     out
 }

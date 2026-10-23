@@ -12,7 +12,7 @@ use rusqlite::Connection;
 
 use crate::error::Result;
 use crate::text_util::cap_with_suffix;
-use crate::workflow::{WorkflowRunStep, WorkflowStepStatus};
+use crate::workflow::{WorkflowRun, WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus};
 
 use super::queries::{get_last_failed_step, get_workflow_run};
 
@@ -153,9 +153,44 @@ pub fn failed_call_step_chain(
     child_failure_chain(conn, step)
 }
 
-/// One-line cause of a failed run, or `None` when the chain is empty.
-pub fn run_failure_cause(conn: &Connection, run_id: &str) -> Result<Option<String>> {
-    Ok(format_failure_cause(&run_failure_chain(conn, run_id)?))
+/// Unwrap a failure-chain lookup for display, logging a failure instead of hiding it.
+///
+/// A broken lookup must not block run-show, run detail, wait or notification output, but
+/// it should not look the same as "no nested cause" either.
+pub fn chain_or_empty(run_id: &str, chain: Result<Vec<FailureLink>>) -> Vec<FailureLink> {
+    chain.unwrap_or_else(|e| {
+        tracing::warn!(run_id, error = %e, "failure chain lookup failed");
+        Vec::new()
+    })
+}
+
+/// Chain for a run, empty unless the run is `Failed`. Lookup errors are logged.
+pub fn run_chain_if_failed(conn: &Connection, run: &WorkflowRun) -> Vec<FailureLink> {
+    if run.status != WorkflowRunStatus::Failed {
+        return Vec::new();
+    }
+    chain_or_empty(&run.id, run_failure_chain(conn, &run.id))
+}
+
+/// One-line cause of a failed run, or `None` when the chain is empty. Lookup errors are
+/// logged and yield `None`.
+pub fn run_failure_cause(conn: &Connection, run_id: &str) -> Option<String> {
+    format_failure_cause(&chain_or_empty(run_id, run_failure_chain(conn, run_id)))
+}
+
+/// Indented tree of the failure chain below a step (see [`failed_call_step_chain`]),
+/// empty for steps that are not failed `call workflow` steps. Lookup errors are logged.
+pub fn render_step_failure_tree(
+    conn: &Connection,
+    step: &WorkflowRunStep,
+    known: &[FailureLink],
+    indent: usize,
+) -> String {
+    let below = chain_or_empty(
+        &step.workflow_run_id,
+        failed_call_step_chain(conn, step, known),
+    );
+    render_failure_tree(&below, indent)
 }
 
 /// Render a chain as an indented tree, one line per level, each ending in a newline.
@@ -481,7 +516,7 @@ mod tests {
         // Without a known chain the walk is done from the DB and agrees.
         assert_eq!(failed_call_step_chain(&conn, &step, &[]).unwrap(), below);
         assert_eq!(
-            run_failure_cause(&conn, "r1").unwrap().as_deref(),
+            run_failure_cause(&conn, "r1").as_deref(),
             Some("workflow:child › leaf: boom")
         );
     }

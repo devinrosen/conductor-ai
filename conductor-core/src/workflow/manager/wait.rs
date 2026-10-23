@@ -24,7 +24,9 @@ use serde::Serialize;
 use crate::error::{ConductorError, Result};
 use crate::workflow::{ConductorWorkflowRun, WorkflowRunStatus, WorkflowStepStatus};
 
-use super::failure_chain::{failed_call_step_chain, format_failure_cause, is_workflow_call_step};
+use super::failure_chain::{
+    chain_or_empty, failed_call_step_chain, format_failure_cause, is_workflow_call_step,
+};
 use super::queries::{get_workflow_run, get_workflow_steps};
 
 /// How often the wait loop re-checks the run.
@@ -187,13 +189,10 @@ fn last_step_summary(conn: &Connection, run_id: &str) -> Result<Option<WaitStepS
     let failed = s.status == WorkflowStepStatus::Failed;
     let is_call = is_workflow_call_step(s);
     // A broken lookup must not hide the wait result, but it should not vanish either.
-    let cause = match failed_call_step_chain(conn, s, &[]) {
-        Ok(chain) => format_failure_cause(&chain),
-        Err(e) => {
-            tracing::warn!(run_id, step = %s.step_name, error = %e, "failure cause lookup failed");
-            None
-        }
-    };
+    let cause = format_failure_cause(&chain_or_empty(
+        run_id,
+        failed_call_step_chain(conn, s, &[]),
+    ));
     Ok(Some(WaitStepSummary {
         step_name: s.step_name.clone(),
         status: s.status.to_string(),

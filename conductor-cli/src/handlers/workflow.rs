@@ -488,15 +488,7 @@ pub fn handle_workflow(
                     if let Some(ref summary) = run.result_summary {
                         println!("\n{summary}");
                     }
-                    let run_chain =
-                        if run.status == conductor_core::workflow::WorkflowRunStatus::Failed {
-                            crate::helpers::chain_or_warn(
-                                &run.id,
-                                conductor_core::workflow::run_failure_chain(conn, &run.id),
-                            )
-                        } else {
-                            Vec::new()
-                        };
+                    let run_chain = conductor_core::workflow::run_chain_if_failed(conn, &run);
                     if let Some(cause) = conductor_core::workflow::format_failure_cause(&run_chain)
                     {
                         println!("\nCause: {cause}");
@@ -552,15 +544,11 @@ pub fn handle_workflow(
                             if let Some(line) = step_child_run_line(step) {
                                 println!("{line}");
                             }
-                            let below = crate::helpers::chain_or_warn(
-                                &step.workflow_run_id,
-                                conductor_core::workflow::failed_call_step_chain(
-                                    conn, step, &run_chain,
-                                ),
-                            );
                             print!(
                                 "{}",
-                                conductor_core::workflow::render_failure_tree(&below, 8)
+                                conductor_core::workflow::render_step_failure_tree(
+                                    conn, step, &run_chain, 8
+                                )
                             );
                             // foreach fan-out progress
                             if step.role == "foreach" {

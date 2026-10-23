@@ -2349,4 +2349,127 @@ mod tests {
         let empty = super::list_workflow_runs_for_repo(&conn, "no-such-repo", 10).unwrap();
         assert!(empty.is_empty(), "unknown repo_id should return empty vec");
     }
+
+    fn failed_step_id(conn: &Connection, run: &str) -> Option<String> {
+        super::get_last_failed_step(conn, run)
+            .unwrap()
+            .map(|s| s.id)
+    }
+
+    #[test]
+    fn get_last_failed_step_none_without_failed_step() {
+        let conn = setup_db();
+        crate::test_helpers::insert_test_wf_run(&conn, "r1", "wf", "failed", None);
+        assert_eq!(failed_step_id(&conn, "r1"), None);
+        crate::test_helpers::insert_test_wf_step(
+            &conn,
+            "s1",
+            "r1",
+            "ok",
+            "script",
+            "completed",
+            0,
+            "2026-01-01T00:00:01Z",
+            None,
+            None,
+        );
+        assert_eq!(failed_step_id(&conn, "r1"), None);
+    }
+
+    #[test]
+    fn get_last_failed_step_prefers_latest_started_at() {
+        let conn = setup_db();
+        crate::test_helpers::insert_test_wf_run(&conn, "r1", "wf", "failed", None);
+        // Earlier-started step has the higher position: started_at must win.
+        crate::test_helpers::insert_test_wf_step(
+            &conn,
+            "late",
+            "r1",
+            "a",
+            "script",
+            "failed",
+            0,
+            "2026-01-01T00:00:09Z",
+            None,
+            None,
+        );
+        crate::test_helpers::insert_test_wf_step(
+            &conn,
+            "early",
+            "r1",
+            "b",
+            "script",
+            "failed",
+            5,
+            "2026-01-01T00:00:01Z",
+            None,
+            None,
+        );
+        assert_eq!(failed_step_id(&conn, "r1").as_deref(), Some("late"));
+    }
+
+    #[test]
+    fn get_last_failed_step_breaks_started_at_tie_by_position() {
+        let conn = setup_db();
+        crate::test_helpers::insert_test_wf_run(&conn, "r1", "wf", "failed", None);
+        for (id, pos) in [("p1", 1), ("p3", 3), ("p2", 2)] {
+            crate::test_helpers::insert_test_wf_step(
+                &conn,
+                id,
+                "r1",
+                "retry",
+                "script",
+                "failed",
+                pos,
+                "2026-01-01T00:00:01Z",
+                None,
+                None,
+            );
+        }
+        assert_eq!(failed_step_id(&conn, "r1").as_deref(), Some("p3"));
+    }
+
+    #[test]
+    fn get_last_failed_step_ignores_later_non_failed_and_other_runs() {
+        let conn = setup_db();
+        crate::test_helpers::insert_test_wf_run(&conn, "r1", "wf", "failed", None);
+        crate::test_helpers::insert_test_wf_run(&conn, "r2", "wf", "failed", None);
+        crate::test_helpers::insert_test_wf_step(
+            &conn,
+            "bad",
+            "r1",
+            "a",
+            "script",
+            "failed",
+            0,
+            "2026-01-01T00:00:01Z",
+            None,
+            None,
+        );
+        crate::test_helpers::insert_test_wf_step(
+            &conn,
+            "later-ok",
+            "r1",
+            "b",
+            "script",
+            "completed",
+            1,
+            "2026-01-01T00:00:09Z",
+            None,
+            None,
+        );
+        crate::test_helpers::insert_test_wf_step(
+            &conn,
+            "other",
+            "r2",
+            "c",
+            "script",
+            "failed",
+            2,
+            "2026-01-01T00:00:20Z",
+            None,
+            None,
+        );
+        assert_eq!(failed_step_id(&conn, "r1").as_deref(), Some("bad"));
+    }
 }

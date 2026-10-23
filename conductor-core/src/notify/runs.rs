@@ -56,13 +56,7 @@ pub struct FeedbackNotificationParams<'a> {
 ///
 /// Lookup errors are logged and ignored so they never block a notification.
 pub(crate) fn failure_cause(conn: &rusqlite::Connection, run_id: &str) -> Option<String> {
-    match crate::workflow::run_failure_cause(conn, run_id) {
-        Ok(cause) => cause,
-        Err(e) => {
-            tracing::warn!(run_id, error = %e, "failure cause lookup failed");
-            None
-        }
-    }
+    crate::workflow::run_failure_cause(conn, run_id)
 }
 
 /// `"<error> — cause: <cause>"`, skipping the suffix when the error already contains it.
