@@ -1149,6 +1149,118 @@ fn test_resume_workflow_skips_completed_steps_via_flow_engine() {
     );
 }
 
+/// runkon matches resumed steps by occurrence within an iteration, so a resume
+/// between two same-named steps must run the second one instead of skipping it.
+#[test]
+fn test_resume_runs_second_occurrence_of_repeated_step_name() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_tmp, db_path) = make_standalone_db();
+    let ws = tempfile::tempdir().unwrap();
+    let script = ws.path().join("noop.sh");
+    std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let conn = crate::db::open_database(&db_path).unwrap();
+    crate::test_helpers::insert_test_worktree(
+        &conn,
+        "w-repeat",
+        "r1",
+        "feat-repeat",
+        ws.path().to_str().unwrap(),
+    );
+    let config = Config::default();
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr
+        .create_run(Some("w-repeat"), "workflow", None)
+        .unwrap();
+
+    let run_path = script.to_str().unwrap();
+    let def = runkon_flow::dsl::parse_workflow_str(
+        &format!(
+            r#"workflow repeat-wf {{
+                meta {{ trigger = "manual" targets = ["worktree"] }}
+                script a {{ run = "{run_path}" }}
+                script b {{ run = "{run_path}" }}
+                script a {{ run = "{run_path}" }}
+            }}"#
+        ),
+        "<test>",
+    )
+    .expect("repeat workflow should parse");
+    let snapshot = serde_json::to_string(&def).unwrap();
+    let run = crate::workflow::create_workflow_run(
+        &conn,
+        "repeat-wf",
+        Some("w-repeat"),
+        &parent.id,
+        false,
+        "manual",
+        Some(&snapshot),
+    )
+    .unwrap();
+
+    // The run was interrupted after the first `a` and `b`.
+    let mut first_a_id = String::new();
+    for (position, name) in [(0, "a"), (1, "b")] {
+        let step_id =
+            crate::workflow::insert_step(&conn, &run.id, name, "script", false, position, 0)
+                .unwrap();
+        crate::workflow::update_step_status(
+            &conn,
+            &step_id,
+            WorkflowStepStatus::Completed,
+            None,
+            Some("prior result"),
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
+        if position == 0 {
+            first_a_id = step_id;
+        }
+    }
+    crate::workflow::update_workflow_status(
+        &conn,
+        &run.id,
+        WorkflowRunStatus::Failed,
+        Some("interrupted"),
+        None,
+    )
+    .unwrap();
+
+    let result = resume_workflow(&WorkflowResumeInput {
+        config: &config,
+        workflow_run_id: &run.id,
+        model: None,
+        runtime: None,
+        from_step: None,
+        restart: false,
+        conductor_bin_dir: None,
+        event_sinks: vec![],
+        db_path: Some(db_path),
+        shutdown: None,
+    })
+    .expect("resume_workflow must succeed for a run interrupted between repeated steps");
+    assert!(result.all_succeeded, "resumed run should succeed");
+
+    let steps = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
+    let a_steps: Vec<_> = steps.iter().filter(|s| s.step_name == "a").collect();
+    assert_eq!(
+        a_steps.len(),
+        2,
+        "second occurrence of `a` must run, got steps: {:?}",
+        steps
+            .iter()
+            .map(|s| (&s.step_name, s.position, &s.status))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(a_steps[0].id, first_a_id, "first `a` row must be untouched");
+    assert_eq!(a_steps[1].position, 2);
+    assert_eq!(a_steps[1].status, WorkflowStepStatus::Completed);
+}
+
 /// `spawn_workflow_resume` must complete without panicking when the resume
 /// fails (e.g. missing definition snapshot) and leave the run in Failed status.
 #[test]
