@@ -1268,7 +1268,7 @@ mod tests {
         let filler = serde_json::json!({"type": "assistant", "text": "f".repeat(1000)}).to_string();
         let mut lines = vec!["{\"type\":\"result\",\"result\":\"early\"}"];
         let count = (INITIAL_TAIL_BYTES as usize / filler.len()) + 20;
-        lines.extend(std::iter::repeat(filler.as_str()).take(count));
+        lines.extend(std::iter::repeat_n(filler.as_str(), count));
         write_log_lines(&path, &lines);
 
         let result = scan_log_for_result_at(&path).expect("window should grow to find result");
