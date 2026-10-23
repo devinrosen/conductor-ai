@@ -4,7 +4,7 @@
 use rusqlite::Connection;
 
 use super::{WorkflowRunStep, WorkflowStepStatus};
-use crate::agent::{read_log_result, AgentManager};
+use crate::agent::{final_result_text, AgentManager};
 
 /// How many characters of the extracted block an excerpt shows.
 const EXCERPT_CHARS: usize = 200;
@@ -34,32 +34,42 @@ pub fn flow_output_excerpt(result_text: &str) -> Option<String> {
     ))
 }
 
+/// Fragments of runkon's output parse and validation errors. runkon reports these as
+/// plain strings (`structured output validation: ...`, `Invalid JSON in FLOW_OUTPUT:
+/// ...`), with no typed variant to match on, so these must track its wording. The
+/// `predicate_matches_runkon_errors` test pins them.
+const OUTPUT_ERROR_FRAGMENTS: [&str; 2] = ["structured output validation", "FLOW_OUTPUT"];
+
 /// True when `err` reads like a FLOW_OUTPUT parse or validation failure.
 pub fn is_output_parse_error(err: &str) -> bool {
-    err.contains("structured output validation") || err.contains("FLOW_OUTPUT")
+    OUTPUT_ERROR_FRAGMENTS.iter().any(|f| err.contains(f))
+}
+
+/// True when `step` failed on its FLOW_OUTPUT: its error (or, for a failed step with
+/// no error, its result text) is an output parse or validation error.
+pub fn step_has_output_error(step: &WorkflowRunStep) -> bool {
+    step.step_error
+        .as_deref()
+        .or_else(|| {
+            step.result_text
+                .as_deref()
+                .filter(|_| step.status == WorkflowStepStatus::Failed)
+        })
+        .is_some_and(is_output_parse_error)
 }
 
 /// For a step that failed on its output, the excerpt of the block its agent produced.
 /// Returns `None` for other steps, or when the agent run or its result can't be found:
 /// this only decorates error display, so lookups never fail loudly.
 pub fn step_output_error_excerpt(conn: &Connection, step: &WorkflowRunStep) -> Option<String> {
-    let err = step.step_error.as_deref().or_else(|| {
-        step.result_text
-            .as_deref()
-            .filter(|_| step.status == WorkflowStepStatus::Failed)
-    })?;
-    if !is_output_parse_error(err) {
+    if !step_has_output_error(step) {
         return None;
     }
-    let mgr = AgentManager::new(conn);
-    let run = mgr.get_run(step.child_run_id.as_deref()?).ok()??;
-    // Prefer the log: some failure paths overwrite `result_text` with an error message.
-    let from_log = run
-        .log_path()
-        .ok()
-        .and_then(|p| read_log_result(&p))
-        .and_then(|r| r.result_text);
-    flow_output_excerpt(&from_log.or(run.result_text)?)
+    let run = AgentManager::new(conn)
+        .get_run(step.child_run_id.as_deref()?)
+        .ok()??;
+    let log_path = run.log_path().ok()?;
+    flow_output_excerpt(&final_result_text(&log_path, run.result_text.as_deref())?)
 }
 
 #[cfg(test)]
@@ -111,5 +121,122 @@ mod tests {
         ));
         assert!(is_output_parse_error("no FLOW_OUTPUT block found"));
         assert!(!is_output_parse_error("process exited with code 1"));
+    }
+
+    // --- step_output_error_excerpt ---
+
+    use crate::test_helpers::{seed_step_with_agent_run, setup_db_with_agent_run};
+    use crate::workflow::create_workflow_run;
+
+    const PARSE_ERR: &str = "structured output validation: Invalid JSON in FLOW_OUTPUT: oops";
+
+    fn block(body: &str) -> String {
+        format!("<<<FLOW_OUTPUT>>>\n{body}\n<<<END_FLOW_OUTPUT>>>")
+    }
+
+    fn result_event(text: &str) -> String {
+        format!(
+            "{}\n",
+            serde_json::json!({"type": "result", "result": text})
+        )
+    }
+
+    /// Seed a failed step (error `err`) whose agent run has the given stored result and log.
+    fn failed_step(
+        conn: &Connection,
+        err: Option<&str>,
+        stored: Option<&str>,
+        log: &str,
+    ) -> (WorkflowRunStep, std::path::PathBuf) {
+        let run = create_workflow_run(conn, "wf", None, "ar1", false, "manual", None).unwrap();
+        let seeded = seed_step_with_agent_run(
+            conn,
+            &run.id,
+            "plan",
+            0,
+            WorkflowStepStatus::Failed,
+            err,
+            stored,
+            log,
+        );
+        let step = crate::workflow::get_workflow_steps(conn, &run.id)
+            .unwrap()
+            .remove(0);
+        (step, seeded.log_path)
+    }
+
+    #[test]
+    fn step_excerpt_none_for_non_parse_error() {
+        let conn = setup_db_with_agent_run();
+        let (step, path) = failed_step(
+            &conn,
+            Some("process exited with code 1"),
+            Some(&block("{}")),
+            "",
+        );
+        assert!(step_output_error_excerpt(&conn, &step).is_none());
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn step_excerpt_none_without_child_run() {
+        let conn = setup_db_with_agent_run();
+        let step = WorkflowRunStep {
+            step_error: Some(PARSE_ERR.into()),
+            child_run_id: None,
+            ..Default::default()
+        };
+        assert!(step_output_error_excerpt(&conn, &step).is_none());
+    }
+
+    #[test]
+    fn step_excerpt_none_when_agent_run_missing() {
+        let conn = setup_db_with_agent_run();
+        let step = WorkflowRunStep {
+            step_error: Some(PARSE_ERR.into()),
+            child_run_id: Some("missing".into()),
+            ..Default::default()
+        };
+        assert!(step_output_error_excerpt(&conn, &step).is_none());
+    }
+
+    #[test]
+    fn step_excerpt_uses_result_text_error_on_failed_step() {
+        let conn = setup_db_with_agent_run();
+        let (mut step, path) = failed_step(&conn, None, Some(&block("{stored")), "");
+        // No step_error: the failed step's result_text carries the parse error.
+        step.step_error = None;
+        step.result_text = Some(PARSE_ERR.into());
+        let e = step_output_error_excerpt(&conn, &step).unwrap();
+        assert!(e.contains("{stored"), "{e}");
+        // A non-failed step's result_text is not an error.
+        step.status = WorkflowStepStatus::Completed;
+        assert!(step_output_error_excerpt(&conn, &step).is_none());
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn step_excerpt_prefers_log_result_over_stored_text() {
+        let conn = setup_db_with_agent_run();
+        let log = result_event(&block("{from-log"));
+        let (step, path) = failed_step(&conn, Some(PARSE_ERR), Some(&block("{stored")), &log);
+        let e = step_output_error_excerpt(&conn, &step).unwrap();
+        assert!(e.contains("{from-log"), "{e}");
+        assert!(!e.contains("{stored"), "{e}");
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn step_excerpt_falls_back_to_stored_text_when_log_has_no_result() {
+        let conn = setup_db_with_agent_run();
+        let (step, path) = failed_step(
+            &conn,
+            Some(PARSE_ERR),
+            Some(&block("{stored")),
+            "{\"type\":\"assistant\"}\n",
+        );
+        let e = step_output_error_excerpt(&conn, &step).unwrap();
+        assert!(e.contains("{stored"), "{e}");
+        std::fs::remove_file(path).ok();
     }
 }

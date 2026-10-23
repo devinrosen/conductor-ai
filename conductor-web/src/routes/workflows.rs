@@ -3051,6 +3051,87 @@ mod tests {
         assert!(!log.contains("chatter"), "got: {log}");
     }
 
+    /// Seed a completed step `my-step` whose agent log holds `content`. Returns the
+    /// run id and the log file, which must outlive the request.
+    async fn seed_step_with_log(
+        state: &AppState,
+        content: &str,
+    ) -> (String, tempfile::NamedTempFile) {
+        let run_id = seed_workflow_fixtures(state).await;
+        let log_dir = conductor_core::test_helpers::ensure_agent_log_dir();
+        let log_file = tempfile::Builder::new().tempfile_in(&log_dir).unwrap();
+        std::fs::write(log_file.path(), content).unwrap();
+        let log_path = log_file.path().to_str().unwrap().to_string();
+        let db = state.db.lock().await;
+        let ar2 = insert_agent_run(&db, "w1", "child", "completed", &log_path);
+        let step_id =
+            conductor_core::workflow::insert_step(&db, &run_id, "my-step", "actor", false, 0, 0)
+                .unwrap();
+        conductor_core::workflow::update_step_status(
+            &db,
+            &step_id,
+            conductor_core::workflow::WorkflowStepStatus::Completed,
+            Some(&ar2),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        (run_id, log_file)
+    }
+
+    #[tokio::test]
+    async fn step_log_mode_tail_returns_last_lines() {
+        let state = empty_state();
+        let content: String = (0..5).map(|i| format!("{{\"i\":{i}}}\n")).collect();
+        let (run_id, _log) = seed_step_with_log(&state, &content).await;
+
+        let (status, body) = get_response(
+            &format!("/api/workflows/runs/{run_id}/steps/my-step/log?mode=tail&lines=1"),
+            state,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let log = body["log"].as_str().unwrap();
+        assert!(log.contains("last 1 of 5 messages"), "got: {log}");
+        assert!(log.contains("{\"i\":4}"), "got: {log}");
+        assert!(!log.contains("{\"i\":3}"), "got: {log}");
+    }
+
+    #[tokio::test]
+    async fn step_log_without_mode_returns_full_log() {
+        let state = empty_state();
+        let content = "{\"type\":\"assistant\"}\n{\"type\":\"result\",\"result\":\"done\"}\n";
+        let (run_id, _log) = seed_step_with_log(&state, content).await;
+
+        let (status, body) = get_response(
+            &format!("/api/workflows/runs/{run_id}/steps/my-step/log"),
+            state,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        // Full mode is the raw file, with no header.
+        assert_eq!(body["log"], content);
+    }
+
+    #[tokio::test]
+    async fn step_log_invalid_mode_returns_error() {
+        let state = empty_state();
+        let (run_id, _log) = seed_step_with_log(&state, "x\n").await;
+
+        let (status, body) = get_response(
+            &format!("/api/workflows/runs/{run_id}/steps/my-step/log?mode=bogus"),
+            state,
+        )
+        .await;
+        assert!(
+            status.is_client_error() || status.is_server_error(),
+            "{status}"
+        );
+        assert_error_contains(&body, "Invalid mode 'bogus'");
+    }
+
     #[tokio::test]
     async fn step_log_multi_iteration_returns_last_iteration() {
         let state = empty_state();

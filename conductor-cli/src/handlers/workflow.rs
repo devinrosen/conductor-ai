@@ -1131,3 +1131,64 @@ mod render_tests {
         assert_eq!(step_child_run_line(&s), None);
     }
 }
+
+#[cfg(test)]
+mod step_log_cli_tests {
+    use crate::commands::{Cli, Commands, WorkflowCommands};
+    use clap::Parser;
+    use conductor_core::workflow::StepLogMode;
+
+    /// Parse `conductor workflow step-log ...` and return its (mode, lines) arguments.
+    fn parse(extra: &[&str]) -> Result<(String, Option<usize>), clap::Error> {
+        let mut argv = vec!["conductor", "workflow", "step-log", "run1", "plan"];
+        argv.extend_from_slice(extra);
+        match Cli::try_parse_from(argv)?.command {
+            Commands::Workflow {
+                command:
+                    WorkflowCommands::StepLog {
+                        run_id,
+                        step_name,
+                        mode,
+                        lines,
+                    },
+            } => {
+                assert_eq!((run_id.as_str(), step_name.as_str()), ("run1", "plan"));
+                Ok((mode, lines))
+            }
+            _ => panic!("expected workflow step-log"),
+        }
+    }
+
+    #[test]
+    fn mode_defaults_to_result() {
+        let (mode, lines) = parse(&[]).unwrap();
+        assert_eq!(mode, "result");
+        assert_eq!(lines, None);
+        assert_eq!(
+            StepLogMode::parse(Some(&mode), lines).unwrap(),
+            StepLogMode::Result
+        );
+    }
+
+    #[test]
+    fn mode_and_lines_flags_are_parsed() {
+        let (mode, lines) = parse(&["--mode", "tail", "--lines", "50"]).unwrap();
+        assert_eq!((mode.as_str(), lines), ("tail", Some(50)));
+        assert_eq!(
+            StepLogMode::parse(Some(&mode), lines).unwrap(),
+            StepLogMode::Tail { lines: 50 }
+        );
+    }
+
+    #[test]
+    fn invalid_mode_is_rejected_by_the_handler_parse() {
+        let (mode, lines) = parse(&["--mode", "bogus"]).unwrap();
+        let err = StepLogMode::parse(Some(&mode), lines).unwrap_err();
+        assert!(err.to_string().contains("Invalid mode 'bogus'"), "{err}");
+    }
+
+    #[test]
+    fn non_numeric_lines_is_a_parse_error() {
+        assert!(parse(&["--lines", "many"]).is_err());
+    }
+}

@@ -5,9 +5,9 @@ use std::path::PathBuf;
 
 use rusqlite::Connection;
 
-use super::output_excerpt::step_output_error_excerpt;
+use super::output_excerpt::{flow_output_excerpt, step_has_output_error};
 use super::WorkflowRunStep;
-use crate::agent::{read_log_result, AgentManager};
+use crate::agent::{final_result_text, AgentManager};
 use crate::error::{ConductorError, Result};
 
 const DEFAULT_TAIL_LINES: usize = 20;
@@ -53,8 +53,10 @@ pub struct StepLogTarget {
     pub log_path: PathBuf,
     /// The agent run's stored result text, used when the log has no result event.
     pub agent_result_text: Option<String>,
-    /// Excerpt of the parsed FLOW_OUTPUT block, when the step failed on its output.
-    pub output_excerpt: Option<String>,
+    /// The step failed on its FLOW_OUTPUT, so rendering adds an excerpt of the block.
+    /// The excerpt is built at render time: it needs the log, and resolving only
+    /// touches the database.
+    pub output_error: bool,
 }
 
 /// Find the step named `step_name` in `run_id` (last iteration wins) and the log of
@@ -82,23 +84,20 @@ pub fn resolve_step_log_target(
         ))
     })?;
 
-    // Resolves the path from the run, respecting its log_file override.
-    let mgr = AgentManager::new(conn);
-    let log_path = mgr.log_path_for_run(&child_run_id)?;
-    let agent_result_text = mgr
-        .get_run(&child_run_id)
-        .ok()
-        .flatten()
-        .and_then(|r| r.result_text);
-    let output_excerpt = step_output_error_excerpt(conn, &step);
+    // `log_path` respects the run's log_file override.
+    let run = AgentManager::new(conn)
+        .get_run(&child_run_id)?
+        .ok_or_else(|| ConductorError::Agent(format!("agent run not found: {child_run_id}")))?;
+    let log_path = run.log_path()?;
+    let output_error = step_has_output_error(&step);
 
     Ok(StepLogTarget {
         run_id: run_id.to_string(),
         step,
         child_run_id,
         log_path,
-        agent_result_text,
-        output_excerpt,
+        agent_result_text: run.result_text,
+        output_error,
     })
 }
 
@@ -106,30 +105,41 @@ pub fn resolve_step_log_target(
 pub fn render_step_log(target: &StepLogTarget, mode: StepLogMode) -> Result<String> {
     match mode {
         StepLogMode::Full => read_log(target),
-        StepLogMode::Tail { lines } => Ok(format!(
-            "{}{}",
-            header(target),
-            render_tail(&read_log(target)?, lines)
-        )),
+        StepLogMode::Tail { lines } => {
+            let excerpt = target
+                .output_error
+                .then(|| final_text(target))
+                .flatten()
+                .and_then(|t| flow_output_excerpt(&t));
+            Ok(format!(
+                "{}{}",
+                header(target, excerpt.as_deref()),
+                render_tail(&read_log(target)?, lines)
+            ))
+        }
         StepLogMode::Result => {
-            // The last result event is the final attempt: output-correction resumes
-            // append to the same log. Prefer it over the stored text, which some
-            // failure paths overwrite with an error message.
-            let result = read_log_result(&target.log_path)
-                .and_then(|r| r.result_text)
-                .or_else(|| target.agent_result_text.clone());
+            let result = final_text(target);
+            let excerpt = result
+                .as_deref()
+                .filter(|_| target.output_error)
+                .and_then(flow_output_excerpt);
+            let header = header(target, excerpt.as_deref());
             match result {
-                Some(text) => Ok(format!("{}--- result ---\n{text}\n", header(target))),
+                Some(text) => Ok(format!("{header}--- result ---\n{text}\n")),
                 None => {
                     let tail = render_tail(&read_log(target)?, DEFAULT_TAIL_LINES);
                     Ok(format!(
-                        "{}No result message yet (step still running or killed); showing the log tail.\n{tail}",
-                        header(target)
+                        "{header}No result message yet (step still running or killed); showing the log tail.\n{tail}"
                     ))
                 }
             }
         }
     }
+}
+
+/// The step's final result message: the log's last result event, else the stored text.
+fn final_text(target: &StepLogTarget) -> Option<String> {
+    final_result_text(&target.log_path, target.agent_result_text.as_deref())
 }
 
 fn read_log(target: &StepLogTarget) -> Result<String> {
@@ -144,7 +154,7 @@ fn read_log(target: &StepLogTarget) -> Result<String> {
     })
 }
 
-fn header(target: &StepLogTarget) -> String {
+fn header(target: &StepLogTarget, excerpt: Option<&str>) -> String {
     let step = &target.step;
     let mut out = format!(
         "step: {} (iteration {})\nstatus: {}\nagent run: {}\n",
@@ -153,7 +163,7 @@ fn header(target: &StepLogTarget) -> String {
     if let Some(err) = step.step_error.as_deref() {
         out.push_str(&format!("step error: {err}\n"));
     }
-    if let Some(excerpt) = target.output_excerpt.as_deref() {
+    if let Some(excerpt) = excerpt {
         out.push_str(excerpt);
         out.push('\n');
     }
@@ -209,7 +219,7 @@ mod tests {
             child_run_id: "c1".into(),
             log_path: path.clone(),
             agent_result_text: db_result.map(String::from),
-            output_excerpt: None,
+            output_error: false,
         };
         (t, path)
     }
@@ -318,5 +328,87 @@ mod tests {
             err.contains("Log file not found") && err.contains("plan"),
             "{err}"
         );
+    }
+
+    // --- resolve_step_log_target ---
+
+    use crate::test_helpers::{seed_step_with_agent_run, setup_db_with_agent_run};
+    use crate::workflow::{create_workflow_run, insert_step, WorkflowStepStatus};
+
+    fn db_with_run() -> (Connection, String) {
+        let conn = setup_db_with_agent_run();
+        let run = create_workflow_run(&conn, "wf", None, "ar1", false, "manual", None).unwrap();
+        (conn, run.id.clone())
+    }
+
+    #[test]
+    fn resolve_unknown_run_errors() {
+        let (conn, _) = db_with_run();
+        let err = resolve_step_log_target(&conn, "nope", "plan").unwrap_err();
+        assert!(
+            matches!(err, ConductorError::WorkflowRunNotFound { .. }),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn resolve_unknown_step_errors() {
+        let (conn, run_id) = db_with_run();
+        let err = resolve_step_log_target(&conn, &run_id, "missing")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Step 'missing' not found"), "{err}");
+    }
+
+    #[test]
+    fn resolve_step_without_agent_run_errors() {
+        let (conn, run_id) = db_with_run();
+        insert_step(&conn, &run_id, "gate", "actor", false, 0, 0).unwrap();
+        let err = resolve_step_log_target(&conn, &run_id, "gate")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("has no agent run"), "{err}");
+    }
+
+    #[test]
+    fn resolve_picks_highest_iteration() {
+        let (conn, run_id) = db_with_run();
+        let done = WorkflowStepStatus::Completed;
+        // Seed the later iteration first so row order can't explain the result.
+        let second =
+            seed_step_with_agent_run(&conn, &run_id, "plan", 1, done.clone(), None, None, "");
+        let first = seed_step_with_agent_run(&conn, &run_id, "plan", 0, done, None, None, "");
+        let t = resolve_step_log_target(&conn, &run_id, "plan").unwrap();
+        assert_eq!(t.step.iteration, 1);
+        assert_eq!(t.child_run_id, second.child_run_id);
+        assert_eq!(t.log_path, second.log_path);
+        assert!(!t.output_error);
+        std::fs::remove_file(first.log_path).ok();
+        std::fs::remove_file(second.log_path).ok();
+    }
+
+    #[test]
+    fn resolve_carries_stored_result_and_flags_output_error() {
+        let (conn, run_id) = db_with_run();
+        let seeded = seed_step_with_agent_run(
+            &conn,
+            &run_id,
+            "plan",
+            0,
+            WorkflowStepStatus::Failed,
+            Some("structured output validation: Invalid JSON in FLOW_OUTPUT: oops"),
+            Some("<<<FLOW_OUTPUT>>>\n{bad\n<<<END_FLOW_OUTPUT>>>"),
+            "{\"type\":\"assistant\"}\n",
+        );
+        let t = resolve_step_log_target(&conn, &run_id, "plan").unwrap();
+        assert!(t.output_error);
+        let out = render_step_log(&t, StepLogMode::Result).unwrap();
+        assert!(
+            out.contains("parsed FLOW_OUTPUT block (line 1 of result): {bad"),
+            "{out}"
+        );
+        let out = render_step_log(&t, StepLogMode::Tail { lines: 5 }).unwrap();
+        assert!(out.contains("parsed FLOW_OUTPUT block"), "{out}");
+        std::fs::remove_file(seeded.log_path).ok();
     }
 }

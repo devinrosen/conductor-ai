@@ -44,6 +44,16 @@ pub fn read_log_result(path: &std::path::Path) -> Option<LogResult> {
     scan_log_for_result_at(path)
 }
 
+/// The agent's final result message: the last `result` event in the log at
+/// `log_path`, else `stored` (the run's `result_text`). The log wins because
+/// output-correction resumes append to it, and some failure paths overwrite the
+/// stored text with an error message.
+pub fn final_result_text(log_path: &std::path::Path, stored: Option<&str>) -> Option<String> {
+    read_log_result(log_path)
+        .and_then(|r| r.result_text)
+        .or_else(|| stored.map(String::from))
+}
+
 /// First tail window read by [`scan_log_for_result_at`].
 const INITIAL_TAIL_BYTES: u64 = 64 * 1024;
 /// Upper bound on the tail window, so a corrupt or newline-free log can't make

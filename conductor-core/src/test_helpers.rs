@@ -178,6 +178,71 @@ pub fn setup_db_with_agent_run() -> Connection {
     conn
 }
 
+/// A workflow step seeded by [`seed_step_with_agent_run`].
+pub struct SeededStep {
+    pub step_id: String,
+    pub child_run_id: String,
+    pub log_path: std::path::PathBuf,
+}
+
+/// Insert a step of `wf_run_id` linked to a new agent run whose log file holds `log`
+/// and whose stored `result_text` is `stored_result`. The caller removes `log_path`.
+/// Needs a worktree `w1` (see [`setup_db`]).
+#[allow(clippy::too_many_arguments)]
+pub fn seed_step_with_agent_run(
+    conn: &Connection,
+    wf_run_id: &str,
+    step_name: &str,
+    iteration: i64,
+    status: crate::workflow::WorkflowStepStatus,
+    step_error: Option<&str>,
+    stored_result: Option<&str>,
+    log: &str,
+) -> SeededStep {
+    let mgr = crate::agent::AgentManager::new(conn);
+    let child = mgr.create_run(Some("w1"), "child", None).unwrap();
+    let log_path = ensure_agent_log_dir().join(format!("test-seed-{}.log", child.id));
+    std::fs::write(&log_path, log).unwrap();
+    mgr.update_run_log_file(&child.id, log_path.to_str().unwrap())
+        .unwrap();
+    if stored_result.is_some() {
+        mgr.update_run_completed(
+            &child.id,
+            None,
+            stored_result,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    }
+    let step_id =
+        crate::workflow::insert_step(conn, wf_run_id, step_name, "actor", false, 0, iteration)
+            .unwrap();
+    crate::workflow::update_step_status_full(
+        conn,
+        &step_id,
+        status,
+        Some(&child.id),
+        None,
+        None,
+        None,
+        None,
+        None,
+        step_error,
+    )
+    .unwrap();
+    SeededStep {
+        step_id,
+        child_run_id: child.id,
+        log_path,
+    }
+}
+
 /// Returns the agent log dir, creating it if necessary.
 pub fn ensure_agent_log_dir() -> std::path::PathBuf {
     let dir = crate::config::agent_log_dir();
