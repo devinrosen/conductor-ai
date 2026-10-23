@@ -1487,12 +1487,21 @@ pub async fn get_pending_gates(
     Ok(Json(rows))
 }
 
+/// Query parameters for the step-log route.
+#[derive(Debug, Deserialize)]
+pub struct StepLogQuery {
+    mode: Option<String>,
+    lines: Option<usize>,
+}
+
 #[utoipa::path(
     get,
     path = "/api/workflows/runs/{id}/steps/{step_name}/log",
     params(
         ("id" = String, Path, description = "Workflow run ID"),
         ("step_name" = String, Path, description = "Workflow step name"),
+        ("mode" = Option<String>, Query, description = "full (default), result or tail"),
+        ("lines" = Option<usize>, Query, description = "Messages for mode=tail (default 20, max 200)"),
     ),
     responses(
         (status = 200, description = "Step log content"),
@@ -1501,54 +1510,32 @@ pub async fn get_pending_gates(
     tag = "workflows",
 )]
 /// GET /api/workflows/runs/{id}/steps/{step_name}/log
+///
+/// Unlike the MCP tool and CLI, this defaults to `mode=full` so existing API callers
+/// keep receiving the whole log.
 pub async fn get_workflow_step_log(
     State(state): State<AppState>,
     Path((run_id, step_name)): Path<(String, String)>,
+    Query(query): Query<StepLogQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    use conductor_core::agent::AgentManager;
+    use conductor_core::workflow::{render_step_log, resolve_step_log_target, StepLogMode};
+
+    let mode = StepLogMode::parse(Some(query.mode.as_deref().unwrap_or("full")), query.lines)?;
 
     // Hold the DB lock only for the DB queries, then drop it before the file read.
-    let log_path = {
+    let target = {
         let db = state.db.lock().await;
+        resolve_step_log_target(&db, &run_id, &step_name)?
+    };
 
-        // Verify run exists
-        conductor_core::workflow::get_workflow_run(&db, &run_id)?.ok_or_else(|| {
-            ApiError::Core(ConductorError::WorkflowRunNotFound { id: run_id.clone() })
-        })?;
-
-        // Find matching step — last iteration wins
-        let steps = conductor_core::workflow::get_workflow_steps(&db, &run_id)?;
-        let step = steps
-            .into_iter()
-            .filter(|s| s.step_name == step_name)
-            .max_by_key(|s| s.iteration)
-            .ok_or_else(|| {
-                ApiError::Core(ConductorError::Workflow(format!(
-                    "step '{step_name}' not found in run '{run_id}'"
-                )))
-            })?;
-
-        // Gate/skipped steps have no child_run_id
-        let child_run_id = step.child_run_id.ok_or_else(|| {
+    // File reads are blocking; keep them off the tokio worker thread.
+    let log = tokio::task::spawn_blocking(move || render_step_log(&target, mode))
+        .await
+        .map_err(|e| {
             ApiError::Core(ConductorError::Workflow(format!(
-                "step '{step_name}' has no agent run (gate or skipped step)"
+                "log read task failed: {e}"
             )))
-        })?;
-
-        // Resolve log path (verifies run exists; respects log_file override).
-        let agent_mgr = AgentManager::new(&db);
-        agent_mgr
-            .log_path_for_run(&child_run_id)
-            .map_err(ApiError::Core)?
-    }; // DB lock released here
-
-    // Non-blocking async file read — does not block the tokio worker thread
-    let log = tokio::fs::read_to_string(&log_path).await.map_err(|e| {
-        ApiError::Core(ConductorError::Workflow(format!(
-            "failed to read log file '{}' for run '{run_id}' step '{step_name}': {e}",
-            log_path.display()
-        )))
-    })?;
+        })??;
 
     Ok(Json(serde_json::json!({ "log": log })))
 }
@@ -3017,6 +3004,132 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["log"], "hello from the agent");
+    }
+
+    #[tokio::test]
+    async fn step_log_mode_result_returns_only_final_result() {
+        let state = empty_state();
+        let run_id = seed_workflow_fixtures(&state).await;
+
+        let log_dir = conductor_core::test_helpers::ensure_agent_log_dir();
+        let log_file = tempfile::Builder::new().tempfile_in(&log_dir).unwrap();
+        std::fs::write(
+            log_file.path(),
+            "{\"type\":\"assistant\",\"note\":\"chatter\"}\n{\"type\":\"result\",\"result\":\"final answer\"}\n",
+        )
+        .unwrap();
+        let log_path = log_file.path().to_str().unwrap().to_string();
+
+        {
+            let db = state.db.lock().await;
+            let ar2 = insert_agent_run(&db, "w1", "child", "completed", &log_path);
+            let step_id = conductor_core::workflow::insert_step(
+                &db, &run_id, "my-step", "actor", false, 0, 0,
+            )
+            .unwrap();
+            conductor_core::workflow::update_step_status(
+                &db,
+                &step_id,
+                conductor_core::workflow::WorkflowStepStatus::Completed,
+                Some(&ar2),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        }
+
+        let (status, body) = get_response(
+            &format!("/api/workflows/runs/{run_id}/steps/my-step/log?mode=result"),
+            state,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let log = body["log"].as_str().unwrap();
+        assert!(log.contains("final answer"), "got: {log}");
+        assert!(!log.contains("chatter"), "got: {log}");
+    }
+
+    /// Seed a completed step `my-step` whose agent log holds `content`. Returns the
+    /// run id and the log file, which must outlive the request.
+    async fn seed_step_with_log(
+        state: &AppState,
+        content: &str,
+    ) -> (String, tempfile::NamedTempFile) {
+        let run_id = seed_workflow_fixtures(state).await;
+        let log_dir = conductor_core::test_helpers::ensure_agent_log_dir();
+        let log_file = tempfile::Builder::new().tempfile_in(&log_dir).unwrap();
+        std::fs::write(log_file.path(), content).unwrap();
+        let log_path = log_file.path().to_str().unwrap().to_string();
+        let db = state.db.lock().await;
+        let ar2 = insert_agent_run(&db, "w1", "child", "completed", &log_path);
+        let step_id =
+            conductor_core::workflow::insert_step(&db, &run_id, "my-step", "actor", false, 0, 0)
+                .unwrap();
+        conductor_core::workflow::update_step_status(
+            &db,
+            &step_id,
+            conductor_core::workflow::WorkflowStepStatus::Completed,
+            Some(&ar2),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        (run_id, log_file)
+    }
+
+    #[tokio::test]
+    async fn step_log_mode_tail_returns_last_lines() {
+        let state = empty_state();
+        let content: String = (0..5).map(|i| format!("{{\"i\":{i}}}\n")).collect();
+        let (run_id, _log) = seed_step_with_log(&state, &content).await;
+
+        let (status, body) = get_response(
+            &format!("/api/workflows/runs/{run_id}/steps/my-step/log?mode=tail&lines=1"),
+            state,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let log = body["log"].as_str().unwrap();
+        assert!(log.contains("last 1 of 5 messages"), "got: {log}");
+        assert!(log.contains("{\"i\":4}"), "got: {log}");
+        assert!(!log.contains("{\"i\":3}"), "got: {log}");
+    }
+
+    #[tokio::test]
+    async fn step_log_without_mode_returns_full_log() {
+        let state = empty_state();
+        let content = "{\"type\":\"assistant\"}\n{\"type\":\"result\",\"result\":\"done\"}\n";
+        let (run_id, _log) = seed_step_with_log(&state, content).await;
+
+        let (status, body) = get_response(
+            &format!("/api/workflows/runs/{run_id}/steps/my-step/log"),
+            state,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        // Full mode is the raw file, with no header.
+        assert_eq!(body["log"], content);
+    }
+
+    #[tokio::test]
+    async fn step_log_invalid_mode_returns_error() {
+        let state = empty_state();
+        let (run_id, _log) = seed_step_with_log(&state, "x\n").await;
+
+        let (status, body) = get_response(
+            &format!("/api/workflows/runs/{run_id}/steps/my-step/log?mode=bogus"),
+            state,
+        )
+        .await;
+        assert!(
+            status.is_client_error() || status.is_server_error(),
+            "{status}"
+        );
+        assert_error_contains(&body, "Invalid mode 'bogus'");
     }
 
     #[tokio::test]

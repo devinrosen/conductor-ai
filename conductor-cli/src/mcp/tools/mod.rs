@@ -461,12 +461,27 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
         ),
         Tool::new(
             "conductor_get_step_log",
-            "Retrieve the full agent log for a named step in a workflow run. \
-             Use this to diagnose step failures. The step must have an associated agent run \
-             (gate steps and skipped steps do not have logs).",
-            schema(&[
-                ("run_id", "Workflow run ID", true),
-                ("step_name", "Step name (as shown in conductor_get_run output)", true),
+            "Retrieve a workflow step's agent log. Defaults to the agent's final result \
+             message (mode=result), with a header showing the step status, agent run id and \
+             step error. mode=tail returns the last N log messages (lines, default 20, max \
+             200); mode=full returns the whole log, which can be hundreds of KB. Use this to \
+             diagnose step failures. The step must have an associated agent run (gate steps \
+             and skipped steps do not have logs).",
+            schema_typed(&[
+                ("run_id", "string", "Workflow run ID", true),
+                ("step_name", "string", "Step name (as shown in conductor_get_run output)", true),
+                (
+                    "mode",
+                    "string",
+                    "One of 'result' (default; the final result message), 'tail' (last N messages) or 'full' (whole log)",
+                    false,
+                ),
+                (
+                    "lines",
+                    "integer",
+                    "Number of messages for mode=tail (default 20, max 200)",
+                    false,
+                ),
             ]),
         ),
         Tool::new(

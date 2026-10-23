@@ -10,8 +10,8 @@ pub(crate) mod types;
 pub use context::{build_startup_context, PR_REVIEW_SWARM_PROMPT_PREFIX};
 
 pub use log_parsing::{
-    count_turns_in_log, count_turns_incremental, parse_agent_log, parse_events_from_line,
-    parse_events_from_value, parse_result_event,
+    count_turns_in_log, count_turns_incremental, final_result_text, parse_agent_log,
+    parse_events_from_line, parse_events_from_value, parse_result_event, read_log_result,
 };
 
 pub use manager::feedback::normalize_feedback_response;
