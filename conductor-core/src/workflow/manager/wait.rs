@@ -24,6 +24,7 @@ use serde::Serialize;
 use crate::error::{ConductorError, Result};
 use crate::workflow::{ConductorWorkflowRun, WorkflowRunStatus, WorkflowStepStatus};
 
+use super::failure_chain::{child_failure_chain, format_failure_cause, is_workflow_call_step};
 use super::queries::{get_workflow_run, get_workflow_steps};
 
 /// How often the wait loop re-checks the run.
@@ -100,6 +101,10 @@ pub struct WaitStepSummary {
     pub status: String,
     pub iteration: i64,
     pub step_error: Option<String>,
+    /// Child workflow run for a `call workflow` step.
+    pub child_run_id: Option<String>,
+    /// One-line nested cause for a failed `call workflow` step.
+    pub cause: Option<String>,
     pub context_out: Option<String>,
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
@@ -176,15 +181,26 @@ fn last_step_summary(conn: &Connection, run_id: &str) -> Result<Option<WaitStepS
             .cmp(&b.started_at)
             .then(a.position.cmp(&b.position))
     });
-    Ok(last.map(|s| WaitStepSummary {
+    let Some(s) = last else {
+        return Ok(None);
+    };
+    let failed = s.status == WorkflowStepStatus::Failed;
+    let is_call = is_workflow_call_step(s);
+    let cause = if failed && is_call {
+        // A broken lookup must not hide the wait result.
+        child_failure_chain(conn, s)
+            .ok()
+            .and_then(|chain| format_failure_cause(&chain))
+    } else {
+        None
+    };
+    Ok(Some(WaitStepSummary {
         step_name: s.step_name.clone(),
         status: s.status.to_string(),
         iteration: s.iteration,
-        step_error: if s.status == WorkflowStepStatus::Failed {
-            s.result_text.clone()
-        } else {
-            None
-        },
+        step_error: if failed { s.result_text.clone() } else { None },
+        child_run_id: s.child_run_id.clone().filter(|_| is_call),
+        cause,
         context_out: s.context_out.clone(),
         started_at: s.started_at.clone(),
         ended_at: s.ended_at.clone(),
@@ -297,6 +313,12 @@ pub fn format_wait_summary(s: &WaitSummary) -> String {
         ));
         if let Some(e) = &step.step_error {
             out.push_str(&format!("  step error: {e}\n"));
+        }
+        if let Some(id) = &step.child_run_id {
+            out.push_str(&format!("  child run: {id}\n"));
+        }
+        if let Some(c) = &step.cause {
+            out.push_str(&format!("  cause: {c}\n"));
         }
         if let Some(c) = &step.context_out {
             out.push_str(&format!("  context: {c}\n"));
@@ -604,6 +626,26 @@ mod tests {
     }
 
     #[test]
+    fn failed_workflow_step_reports_nested_cause() {
+        let conn = setup();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        insert_run(&conn, "r", None, "failed", None, "-1 hours");
+        insert_run(&conn, "c", Some("r"), "failed", None, "-1 hours");
+        insert_step(&conn, "s", "r", "workflow:child", "-50 minutes", Some("-49 minutes"));
+        set_step(&conn, "s", "failed", 0, Some("Sub-workflow 'child' failed"));
+        conn.execute(
+            "UPDATE workflow_run_steps SET role = 'workflow', child_run_id = 'c' WHERE id = 's'",
+            [],
+        )
+        .unwrap();
+        insert_step(&conn, "leaf", "c", "submit", "-48 minutes", Some("-47 minutes"));
+        set_step(&conn, "leaf", "failed", 0, Some("exited 1"));
+        let step = eval(&conn, "r").unwrap().last_step.unwrap();
+        assert_eq!(step.child_run_id.as_deref(), Some("c"));
+        assert_eq!(step.cause.as_deref(), Some("submit: exited 1"));
+    }
+
+    #[test]
     fn non_failed_step_has_no_step_error() {
         let conn = setup();
         insert_run(&conn, "r", None, "failed", None, "-1 hours");
@@ -662,6 +704,8 @@ mod tests {
                 status: "failed".into(),
                 iteration: 2,
                 step_error: Some("exit 1".into()),
+                child_run_id: Some("child1".into()),
+                cause: Some("inner: exited 1".into()),
                 context_out: Some("partial".into()),
                 started_at: None,
                 ended_at: None,
@@ -671,6 +715,8 @@ mod tests {
         assert!(text.contains("error: engine died\n"));
         assert!(text.contains("last step: build [failed] (iteration 2)"));
         assert!(text.contains("  step error: exit 1\n"));
+        assert!(text.contains("  child run: child1\n"));
+        assert!(text.contains("  cause: inner: exited 1\n"));
         assert!(text.contains("  context: partial\n"));
         assert!(!text.contains("hint:"));
     }

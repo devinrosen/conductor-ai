@@ -52,6 +52,29 @@ pub struct FeedbackNotificationParams<'a> {
     pub branch: &'a str,
 }
 
+/// One-line cause of a failed run, found by following failed sub-workflow steps.
+///
+/// Lookup errors are logged and ignored so they never block a notification.
+pub(crate) fn failure_cause(conn: &rusqlite::Connection, run_id: &str) -> Option<String> {
+    match crate::workflow::run_failure_chain(conn, run_id) {
+        Ok(chain) => crate::workflow::format_failure_cause(&chain),
+        Err(e) => {
+            tracing::warn!(run_id, error = %e, "failure cause lookup failed");
+            None
+        }
+    }
+}
+
+/// `"<error> — cause: <cause>"`, skipping the suffix when the error already contains it.
+pub(crate) fn merge_error_and_cause(error: Option<&str>, cause: Option<&str>) -> Option<String> {
+    match (error, cause) {
+        (Some(e), Some(c)) if !e.contains(c) => Some(format!("{e} \u{2014} cause: {c}")),
+        (Some(e), _) => Some(e.to_string()),
+        (None, Some(c)) => Some(format!("cause: {c}")),
+        (None, None) => None,
+    }
+}
+
 /// Fire a notification for a workflow run that reached a terminal state.
 ///
 /// Deduped on `(run_id, "completed"|"failed")` via SQLite.
@@ -106,8 +129,16 @@ pub fn fire_workflow_notification(
     .into_iter()
     .collect();
 
-    if let Some(err) = params.error {
-        fields.insert("error".into(), err.into());
+    let cause = if params.succeeded {
+        None
+    } else {
+        failure_cause(ctx.conn, params.run_id)
+    };
+    if let Some(cause) = &cause {
+        fields.insert("cause".into(), cause.clone());
+    }
+    if let Some(err) = merge_error_and_cause(params.error, cause.as_deref()) {
+        fields.insert("error".into(), err);
     }
 
     let (kind, title, severity) = if params.succeeded {

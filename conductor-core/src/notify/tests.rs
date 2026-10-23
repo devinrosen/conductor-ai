@@ -737,3 +737,47 @@ fn should_notify_gate_pr_approval() {
     cfg.workflows.as_mut().unwrap().on_gate_pr_review = false;
     assert!(!should_notify_gate(&cfg, Some(&GateType::PrApproval)));
 }
+
+#[test]
+fn merge_error_and_cause_appends_cause() {
+    use super::runs::merge_error_and_cause;
+    assert_eq!(
+        merge_error_and_cause(Some("Sub-workflow 'x' failed"), Some("leaf: exited 1")).as_deref(),
+        Some("Sub-workflow 'x' failed \u{2014} cause: leaf: exited 1")
+    );
+    assert_eq!(
+        merge_error_and_cause(Some("e"), None).as_deref(),
+        Some("e")
+    );
+    assert_eq!(
+        merge_error_and_cause(None, Some("c")).as_deref(),
+        Some("cause: c")
+    );
+    assert_eq!(merge_error_and_cause(None, None), None);
+}
+
+#[test]
+fn failure_cause_follows_child_workflow() {
+    let conn = crate::test_helpers::setup_db();
+    conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+    for (id, name) in [("r1", "parent"), ("r2", "child")] {
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, parent_run_id, status, dry_run, trigger, started_at, iteration) \
+             VALUES (?1, ?2, 'agent', 'failed', 0, 'manual', '2026-01-01T00:00:00Z', 0)",
+            rusqlite::params![id, name],
+        )
+        .unwrap();
+    }
+    conn.execute_batch(
+        "INSERT INTO workflow_run_steps \
+           (id, workflow_run_id, step_name, role, position, status, started_at, child_run_id, step_error) \
+         VALUES ('s1', 'r1', 'workflow:child', 'workflow', 0, 'failed', '2026-01-01T00:00:01Z', 'r2', 'Sub-workflow ''child'' failed'), \
+                ('s2', 'r2', 'submit-review', 'script', 0, 'failed', '2026-01-01T00:00:02Z', NULL, 'exited 1');",
+    )
+    .unwrap();
+    assert_eq!(
+        super::runs::failure_cause(&conn, "r1").as_deref(),
+        Some("workflow:child › submit-review: exited 1")
+    );
+}

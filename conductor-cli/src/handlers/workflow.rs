@@ -488,6 +488,17 @@ pub fn handle_workflow(
                     if let Some(ref summary) = run.result_summary {
                         println!("\n{summary}");
                     }
+                    if run.status == conductor_core::workflow::WorkflowRunStatus::Failed {
+                        if let Ok(chain) =
+                            conductor_core::workflow::run_failure_chain(conn, &run.id)
+                        {
+                            if let Some(cause) =
+                                conductor_core::workflow::format_failure_cause(&chain)
+                            {
+                                println!("\nCause: {cause}");
+                            }
+                        }
+                    }
 
                     let steps = conductor_core::workflow::get_workflow_steps(conn, &run.id)?;
                     if !steps.is_empty() {
@@ -500,8 +511,13 @@ pub fn handle_workflow(
                             } else {
                                 String::new()
                             };
+                            let is_call = conductor_core::workflow::is_workflow_call_step(step);
+                            let child_label = match (&step.child_run_id, is_call) {
+                                (Some(child), true) => format!(", child {child}"),
+                                _ => String::new(),
+                            };
                             println!(
-                                "  [{marker}] {} ({}{}){iter_label}",
+                                "  [{marker}] {} ({}{}{child_label}){iter_label}",
                                 step.step_name, step.role, commit_flag
                             );
                             if let Some(ref started) = step.started_at {
@@ -547,7 +563,15 @@ pub fn handle_workflow(
                                 }
                             }
                             if let Some(ref child) = step.child_run_id {
-                                println!("        child run: {child}");
+                                if !is_call {
+                                    println!("        child run: {child}");
+                                }
+                            }
+                            if is_call && step.status == conductor_core::workflow::WorkflowStepStatus::Failed {
+                                let chain =
+                                    conductor_core::workflow::child_failure_chain(conn, step)
+                                        .unwrap_or_default();
+                                print!("{}", render_child_failure(&chain, 8));
                             }
                             // foreach fan-out progress
                             if step.role == "foreach" {
@@ -1030,5 +1054,62 @@ fn with_waiting_gate(
             println!("No waiting gate found for workflow run: {run_id}");
             Ok(())
         }
+    }
+}
+
+/// Render a nested failure chain as an indented tree, one line per level.
+///
+/// Levels that were followed into a child run show `(child <id>)`; the leaf shows its error.
+fn render_child_failure(
+    chain: &[conductor_core::workflow::FailureLink],
+    indent: usize,
+) -> String {
+    let mut out = String::new();
+    for (depth, link) in chain.iter().enumerate() {
+        let pad = " ".repeat(indent + depth * 2);
+        match &link.child_run_id {
+            Some(child) => out.push_str(&format!(
+                "{pad}└ [FAIL] {} (child {child})\n",
+                link.step_name
+            )),
+            None => out.push_str(&format!(
+                "{pad}└ [FAIL] {}: {}\n",
+                link.step_name, link.error
+            )),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+    use conductor_core::workflow::FailureLink;
+
+    fn link(step: &str, child: Option<&str>, error: &str) -> FailureLink {
+        FailureLink {
+            run_id: "r".into(),
+            workflow_name: "wf".into(),
+            step_name: step.into(),
+            child_run_id: child.map(Into::into),
+            error: error.into(),
+        }
+    }
+
+    #[test]
+    fn renders_nested_chain() {
+        let chain = vec![
+            link("workflow:submit", Some("C2"), "Sub-workflow failed"),
+            link("submit-review", None, "exited 1: mktemp failed"),
+        ];
+        assert_eq!(
+            render_child_failure(&chain, 8),
+            "        └ [FAIL] workflow:submit (child C2)\n          └ [FAIL] submit-review: exited 1: mktemp failed\n"
+        );
+    }
+
+    #[test]
+    fn empty_chain_renders_nothing() {
+        assert_eq!(render_child_failure(&[], 8), "");
     }
 }

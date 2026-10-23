@@ -368,6 +368,12 @@ pub(crate) fn format_run_summary_line(
         "id: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\n",
         run.id, run.workflow_name, run.status, run.started_at
     );
+    if run.status == conductor_core::workflow::WorkflowRunStatus::Failed {
+        let chain = conductor_core::workflow::run_failure_chain(conn, &run.id).unwrap_or_default();
+        if let Some(cause) = conductor_core::workflow::format_failure_cause(&chain) {
+            out.push_str(&format!("cause: {cause}\n"));
+        }
+    }
     if let Some(slug) = worktree_slug {
         out.push_str(&format!("worktree_slug: {slug}\n"));
     }
@@ -393,6 +399,7 @@ pub(crate) fn format_run_summary_line_with_repo(
 }
 
 fn format_run_detail(
+    conn: &rusqlite::Connection,
     run: &conductor_core::workflow::ConductorWorkflowRun,
     steps: &[conductor_core::workflow::WorkflowRunStep],
     worktree_slug: Option<&str>,
@@ -458,6 +465,32 @@ fn format_run_detail(
             step.status,
             step.result_text.as_deref().unwrap_or("")
         ));
+        let is_call = conductor_core::workflow::is_workflow_call_step(step);
+        if let (true, Some(child)) = (is_call, step.child_run_id.as_deref()) {
+            out.push_str(&format!("    child_run_id: {child}\n"));
+        }
+        if let Some(err) = step.step_error.as_deref() {
+            if !err.is_empty() && step.result_text.as_deref() != Some(err) {
+                out.push_str(&format!("    step_error: {err}\n"));
+            }
+        }
+        if is_call && step.status == conductor_core::workflow::WorkflowStepStatus::Failed {
+            let chain =
+                conductor_core::workflow::child_failure_chain(conn, step).unwrap_or_default();
+            for (depth, link) in chain.iter().enumerate() {
+                let pad = "  ".repeat(depth + 2);
+                match &link.child_run_id {
+                    Some(child) => out.push_str(&format!(
+                        "{pad}└ {} [failed] child_run_id: {child}\n",
+                        link.step_name
+                    )),
+                    None => out.push_str(&format!(
+                        "{pad}└ {} [failed]: {}\n",
+                        link.step_name, link.error
+                    )),
+                }
+            }
+        }
     }
     out
 }
@@ -556,7 +589,7 @@ pub(crate) fn format_run_detail_with_log(
     claude_config_dir: Option<&Path>,
 ) -> String {
     let (wt_slug, wt_branch, wt_path) = resolve_worktree_info(conn, run);
-    let mut out = format_run_detail(run, steps, wt_slug.as_deref(), wt_branch.as_deref());
+    let mut out = format_run_detail(conn, run, steps, wt_slug.as_deref(), wt_branch.as_deref());
     if let Some(path) = wt_path {
         if let Some(log) = conversation_log_tail(&path, claude_config_dir) {
             out.push_str("\nconversation log (last 20 messages):\n");
@@ -605,6 +638,40 @@ mod tests {
         let conn = open_database(&path).expect("open_database");
         let config = Config::default();
         (file, Conductor { conn, config })
+    }
+
+    // -- format_run_detail ----------------------------------------------------
+
+    #[test]
+    fn test_format_run_detail_shows_child_run_and_nested_cause() {
+        let (_f, conductor) = make_test_conductor();
+        let conn = &conductor.conn;
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        for (id, name) in [("r1", "iterate-pr"), ("r2", "review-pr")] {
+            conn.execute(
+                "INSERT INTO workflow_runs \
+                 (id, workflow_name, parent_run_id, status, dry_run, trigger, started_at, iteration) \
+                 VALUES (?1, ?2, 'agent', 'failed', 0, 'manual', '2026-01-01T00:00:00Z', 0)",
+                rusqlite::params![id, name],
+            )
+            .unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO workflow_run_steps \
+               (id, workflow_run_id, step_name, role, position, status, started_at, child_run_id, step_error, result_text) \
+             VALUES ('s1', 'r1', 'workflow:review-pr', 'workflow', 0, 'failed', '2026-01-01T00:00:01Z', 'r2', 'Sub-workflow ''review-pr'' failed', 'Sub-workflow ''review-pr'' failed'), \
+                    ('s2', 'r2', 'submit-review', 'script', 0, 'failed', '2026-01-01T00:00:02Z', NULL, 'exited 1: mktemp: File exists', 'exited 1: mktemp: File exists');",
+        )
+        .unwrap();
+        let run = conductor_core::workflow::get_workflow_run(conn, "r1")
+            .unwrap()
+            .unwrap();
+        let steps = conductor_core::workflow::get_workflow_steps(conn, "r1").unwrap();
+        let out = format_run_detail(conn, &run, &steps, None, None);
+        assert!(out.contains("cause: workflow:review-pr › submit-review: exited 1: mktemp: File exists\n"));
+        assert!(out.contains("    child_run_id: r2\n"));
+        assert!(out.contains("└ submit-review [failed]: exited 1: mktemp: File exists\n"));
+        assert!(!out.contains("step_error:"), "identical step_error is not repeated");
     }
 
     // -- read_resource_by_uri -----------------------------------------------
