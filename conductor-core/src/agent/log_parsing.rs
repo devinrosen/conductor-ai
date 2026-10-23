@@ -1197,7 +1197,10 @@ mod tests {
         assert!(line.len() >= 16 * 1024);
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("run.log");
-        write_log_lines(&path, &["{\"type\":\"system\"}", "{\"type\":\"assistant\"}", &line]);
+        write_log_lines(
+            &path,
+            &["{\"type\":\"system\"}", "{\"type\":\"assistant\"}", &line],
+        );
 
         let result = scan_log_for_result_at(&path).expect("long result line should be found");
         assert_eq!(result.result_text.as_deref(), Some(text.as_str()));
