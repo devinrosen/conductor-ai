@@ -567,7 +567,10 @@ pub fn handle_workflow(
                                     println!("        child run: {child}");
                                 }
                             }
-                            if is_call && step.status == conductor_core::workflow::WorkflowStepStatus::Failed {
+                            if is_call
+                                && step.status
+                                    == conductor_core::workflow::WorkflowStepStatus::Failed
+                            {
                                 let chain =
                                     conductor_core::workflow::child_failure_chain(conn, step)
                                         .unwrap_or_default();
@@ -1060,10 +1063,7 @@ fn with_waiting_gate(
 /// Render a nested failure chain as an indented tree, one line per level.
 ///
 /// Levels that were followed into a child run show `(child <id>)`; the leaf shows its error.
-fn render_child_failure(
-    chain: &[conductor_core::workflow::FailureLink],
-    indent: usize,
-) -> String {
+fn render_child_failure(chain: &[conductor_core::workflow::FailureLink], indent: usize) -> String {
     let mut out = String::new();
     for (depth, link) in chain.iter().enumerate() {
         let pad = " ".repeat(indent + depth * 2);

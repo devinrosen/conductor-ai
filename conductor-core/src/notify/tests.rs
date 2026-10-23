@@ -745,10 +745,7 @@ fn merge_error_and_cause_appends_cause() {
         merge_error_and_cause(Some("Sub-workflow 'x' failed"), Some("leaf: exited 1")).as_deref(),
         Some("Sub-workflow 'x' failed \u{2014} cause: leaf: exited 1")
     );
-    assert_eq!(
-        merge_error_and_cause(Some("e"), None).as_deref(),
-        Some("e")
-    );
+    assert_eq!(merge_error_and_cause(Some("e"), None).as_deref(), Some("e"));
     assert_eq!(
         merge_error_and_cause(None, Some("c")).as_deref(),
         Some("cause: c")

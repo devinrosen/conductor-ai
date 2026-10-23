@@ -631,14 +631,28 @@ mod tests {
         conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
         insert_run(&conn, "r", None, "failed", None, "-1 hours");
         insert_run(&conn, "c", Some("r"), "failed", None, "-1 hours");
-        insert_step(&conn, "s", "r", "workflow:child", "-50 minutes", Some("-49 minutes"));
+        insert_step(
+            &conn,
+            "s",
+            "r",
+            "workflow:child",
+            "-50 minutes",
+            Some("-49 minutes"),
+        );
         set_step(&conn, "s", "failed", 0, Some("Sub-workflow 'child' failed"));
         conn.execute(
             "UPDATE workflow_run_steps SET role = 'workflow', child_run_id = 'c' WHERE id = 's'",
             [],
         )
         .unwrap();
-        insert_step(&conn, "leaf", "c", "submit", "-48 minutes", Some("-47 minutes"));
+        insert_step(
+            &conn,
+            "leaf",
+            "c",
+            "submit",
+            "-48 minutes",
+            Some("-47 minutes"),
+        );
         set_step(&conn, "leaf", "failed", 0, Some("exited 1"));
         let step = eval(&conn, "r").unwrap().last_step.unwrap();
         assert_eq!(step.child_run_id.as_deref(), Some("c"));

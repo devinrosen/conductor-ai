@@ -668,10 +668,15 @@ mod tests {
             .unwrap();
         let steps = conductor_core::workflow::get_workflow_steps(conn, "r1").unwrap();
         let out = format_run_detail(conn, &run, &steps, None, None);
-        assert!(out.contains("cause: workflow:review-pr › submit-review: exited 1: mktemp: File exists\n"));
+        assert!(out.contains(
+            "cause: workflow:review-pr › submit-review: exited 1: mktemp: File exists\n"
+        ));
         assert!(out.contains("    child_run_id: r2\n"));
         assert!(out.contains("└ submit-review [failed]: exited 1: mktemp: File exists\n"));
-        assert!(!out.contains("step_error:"), "identical step_error is not repeated");
+        assert!(
+            !out.contains("step_error:"),
+            "identical step_error is not repeated"
+        );
     }
 
     // -- read_resource_by_uri -----------------------------------------------

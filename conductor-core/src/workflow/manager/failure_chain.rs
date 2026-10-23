@@ -210,13 +210,46 @@ mod tests {
         insert_run(&conn, "r1", "iterate-pr", "failed", None);
         insert_run(&conn, "r2", "review-pr", "failed", None);
         insert_run(&conn, "r3", "submit", "failed", None);
-        insert_step(&conn, "s1", "r1", "workflow:review-pr", "workflow", 0, "2026-01-01T00:00:01Z", Some("r2"), Some("Sub-workflow 'review-pr' failed"));
-        insert_step(&conn, "s2", "r2", "workflow:submit", "workflow", 0, "2026-01-01T00:00:02Z", Some("r3"), Some("Sub-workflow 'submit' failed"));
-        insert_step(&conn, "s3", "r3", "submit-review", "script", 0, "2026-01-01T00:00:03Z", None, Some("exited 1: mktemp: File exists"));
+        insert_step(
+            &conn,
+            "s1",
+            "r1",
+            "workflow:review-pr",
+            "workflow",
+            0,
+            "2026-01-01T00:00:01Z",
+            Some("r2"),
+            Some("Sub-workflow 'review-pr' failed"),
+        );
+        insert_step(
+            &conn,
+            "s2",
+            "r2",
+            "workflow:submit",
+            "workflow",
+            0,
+            "2026-01-01T00:00:02Z",
+            Some("r3"),
+            Some("Sub-workflow 'submit' failed"),
+        );
+        insert_step(
+            &conn,
+            "s3",
+            "r3",
+            "submit-review",
+            "script",
+            0,
+            "2026-01-01T00:00:03Z",
+            None,
+            Some("exited 1: mktemp: File exists"),
+        );
 
         let chain = run_failure_chain(&conn, "r1").unwrap();
         let names: Vec<_> = chain.iter().map(|l| l.step_name.as_str()).collect();
-        assert_eq!(names, ["workflow:review-pr", "workflow:submit", "submit-review"]);
+        assert_eq!(
+            names,
+            ["workflow:review-pr", "workflow:submit", "submit-review"]
+        );
         assert_eq!(chain[0].child_run_id.as_deref(), Some("r2"));
         assert_eq!(chain[2].error, "exited 1: mktemp: File exists");
 
@@ -234,19 +267,51 @@ mod tests {
         let conn = setup();
         insert_run(&conn, "r1", "wf", "failed", None);
         insert_run(&conn, "agent-child", "other", "failed", None);
-        insert_step(&conn, "s1", "r1", "build", "actor", 0, "2026-01-01T00:00:01Z", Some("agent-child"), Some("boom"));
+        insert_step(
+            &conn,
+            "s1",
+            "r1",
+            "build",
+            "actor",
+            0,
+            "2026-01-01T00:00:01Z",
+            Some("agent-child"),
+            Some("boom"),
+        );
         let chain = run_failure_chain(&conn, "r1").unwrap();
         assert_eq!(chain.len(), 1);
         assert_eq!(chain[0].child_run_id, None);
-        assert!(child_failure_chain(&conn, &top_step(&conn, "r1")).unwrap().is_empty());
+        assert!(child_failure_chain(&conn, &top_step(&conn, "r1"))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
     fn latest_retry_attempt_wins() {
         let conn = setup();
         insert_run(&conn, "r1", "wf", "failed", None);
-        insert_step(&conn, "s1", "r1", "flaky", "actor", 0, "2026-01-01T00:00:01Z", None, Some("first"));
-        insert_step(&conn, "s2", "r1", "flaky", "actor", 1, "2026-01-01T00:00:05Z", None, Some("second"));
+        insert_step(
+            &conn,
+            "s1",
+            "r1",
+            "flaky",
+            "actor",
+            0,
+            "2026-01-01T00:00:01Z",
+            None,
+            Some("first"),
+        );
+        insert_step(
+            &conn,
+            "s2",
+            "r1",
+            "flaky",
+            "actor",
+            1,
+            "2026-01-01T00:00:05Z",
+            None,
+            Some("second"),
+        );
         let chain = run_failure_chain(&conn, "r1").unwrap();
         assert_eq!(chain[0].error, "second");
     }
@@ -256,7 +321,17 @@ mod tests {
         let conn = setup();
         insert_run(&conn, "r1", "wf", "failed", None);
         insert_run(&conn, "r2", "child", "failed", Some("reaped: engine died"));
-        insert_step(&conn, "s1", "r1", "workflow:child", "workflow", 0, "2026-01-01T00:00:01Z", Some("r2"), Some("Sub-workflow 'child' failed"));
+        insert_step(
+            &conn,
+            "s1",
+            "r1",
+            "workflow:child",
+            "workflow",
+            0,
+            "2026-01-01T00:00:01Z",
+            Some("r2"),
+            Some("Sub-workflow 'child' failed"),
+        );
         let chain = run_failure_chain(&conn, "r1").unwrap();
         assert_eq!(chain.len(), 2);
         assert_eq!(chain[1].error, "reaped: engine died");
@@ -266,7 +341,17 @@ mod tests {
     fn missing_child_run_ends_chain() {
         let conn = setup();
         insert_run(&conn, "r1", "wf", "failed", None);
-        insert_step(&conn, "s1", "r1", "workflow:gone", "workflow", 0, "2026-01-01T00:00:01Z", Some("purged"), None);
+        insert_step(
+            &conn,
+            "s1",
+            "r1",
+            "workflow:gone",
+            "workflow",
+            0,
+            "2026-01-01T00:00:01Z",
+            Some("purged"),
+            None,
+        );
         let chain = run_failure_chain(&conn, "r1").unwrap();
         assert_eq!(chain.len(), 1);
         assert_eq!(chain[0].error, NO_ERROR);
@@ -278,14 +363,44 @@ mod tests {
         let conn = setup();
         insert_run(&conn, "a", "wf", "failed", None);
         insert_run(&conn, "b", "wf", "failed", None);
-        insert_step(&conn, "s1", "a", "workflow:b", "workflow", 0, "2026-01-01T00:00:01Z", Some("b"), Some("x"));
-        insert_step(&conn, "s2", "b", "workflow:a", "workflow", 0, "2026-01-01T00:00:01Z", Some("a"), Some("y"));
+        insert_step(
+            &conn,
+            "s1",
+            "a",
+            "workflow:b",
+            "workflow",
+            0,
+            "2026-01-01T00:00:01Z",
+            Some("b"),
+            Some("x"),
+        );
+        insert_step(
+            &conn,
+            "s2",
+            "b",
+            "workflow:a",
+            "workflow",
+            0,
+            "2026-01-01T00:00:01Z",
+            Some("a"),
+            Some("y"),
+        );
         assert_eq!(run_failure_chain(&conn, "a").unwrap().len(), 2);
 
         for i in 0..12 {
             let id = format!("d{i}");
             insert_run(&conn, &id, "wf", "failed", None);
-            insert_step(&conn, &format!("ds{i}"), &id, "workflow:n", "workflow", 0, "2026-01-01T00:00:01Z", Some(&format!("d{}", i + 1)), Some("x"));
+            insert_step(
+                &conn,
+                &format!("ds{i}"),
+                &id,
+                "workflow:n",
+                "workflow",
+                0,
+                "2026-01-01T00:00:01Z",
+                Some(&format!("d{}", i + 1)),
+                Some("x"),
+            );
         }
         assert_eq!(run_failure_chain(&conn, "d0").unwrap().len(), MAX_DEPTH);
     }
@@ -295,7 +410,17 @@ mod tests {
         let conn = setup();
         insert_run(&conn, "r1", "wf", "failed", None);
         let long = format!("line1\nline2 {}", "x".repeat(500));
-        insert_step(&conn, "s1", "r1", "s", "actor", 0, "2026-01-01T00:00:01Z", None, Some(&long));
+        insert_step(
+            &conn,
+            "s1",
+            "r1",
+            "s",
+            "actor",
+            0,
+            "2026-01-01T00:00:01Z",
+            None,
+            Some(&long),
+        );
         let chain = run_failure_chain(&conn, "r1").unwrap();
         assert!(!chain[0].error.contains('\n'));
         assert!(chain[0].error.starts_with("line1 line2 "));
