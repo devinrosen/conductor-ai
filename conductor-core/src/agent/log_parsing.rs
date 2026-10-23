@@ -38,33 +38,95 @@ pub fn parse_result_event(event: &serde_json::Value) -> LogResult {
     }
 }
 
+/// First tail window read by [`scan_log_for_result_at`].
+const INITIAL_TAIL_BYTES: u64 = 64 * 1024;
+/// Upper bound on the tail window, so a corrupt or newline-free log can't make
+/// recovery read without bound.
+const MAX_TAIL_BYTES: u64 = 1024 * 1024;
+
 /// Scan an agent log file at the given path for the `result` event.
 ///
-/// Reads the last 4 KB of the file (the result event is always the final line),
-/// keeping the scan O(1) regardless of log size.
+/// The result event is the final line, but it carries the agent's whole final
+/// message and can be arbitrarily long. So the scan reads a tail window that starts
+/// at 64 KiB and doubles up to a 1 MiB cap, and stops as soon as a complete line
+/// holding a `result` event is found, the window covers the whole file, or the cap
+/// is reached. A result line longer than the cap is treated as absent.
+///
+/// When the window starts mid-file its first segment is probably a partial line, so
+/// it is dropped rather than parsed. The window is read as bytes and each line is
+/// parsed with `serde_json::from_slice`: its start can land inside a multi-byte
+/// UTF-8 character, which would make a string read fail, but that only affects the
+/// dropped fragment. The window grows only when nothing was found, so every line in
+/// the window is still considered.
 pub(crate) fn scan_log_for_result_at(path: &std::path::Path) -> Option<LogResult> {
     use std::io::{Read as _, Seek, SeekFrom};
 
-    let mut file = std::fs::File::open(path).ok()?;
-    let len = file.metadata().ok()?.len();
+    let warn_io = |op: &str, e: &std::io::Error| {
+        tracing::warn!(path = %path.display(), error = %e, "agent log recovery: {op} failed");
+    };
 
-    // Read at most the last 4 KB — generous for a single JSON line.
-    const TAIL_BYTES: u64 = 4096;
-    let start = len.saturating_sub(TAIL_BYTES);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut buf = String::new();
-    file.read_to_string(&mut buf).ok()?;
-
-    // Walk lines in reverse so we find the result event quickly.
-    for line in buf.lines().rev() {
-        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        if event.get("result").is_some() {
-            return Some(parse_result_event(&event));
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        // A missing log just means the agent never wrote one.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            warn_io("open", &e);
+            return None;
         }
+    };
+    let len = match file.metadata() {
+        Ok(m) => m.len(),
+        Err(e) => {
+            warn_io("metadata", &e);
+            return None;
+        }
+    };
+
+    let mut window = INITIAL_TAIL_BYTES;
+    loop {
+        let start = len.saturating_sub(window);
+        if let Err(e) = file.seek(SeekFrom::Start(start)) {
+            warn_io("seek", &e);
+            return None;
+        }
+        let mut buf = Vec::new();
+        if let Err(e) = file.read_to_end(&mut buf) {
+            warn_io("read", &e);
+            return None;
+        }
+
+        let mut lines = buf.split(|&b| b == b'\n');
+        if start > 0 {
+            // Probably a partial line; never mistake a suffix of one for an event.
+            lines.next();
+        }
+        // Walk lines in reverse so we find the result event quickly.
+        for line in lines.rev() {
+            if line.trim_ascii().is_empty() {
+                continue;
+            }
+            let Ok(event) = serde_json::from_slice::<serde_json::Value>(line) else {
+                continue;
+            };
+            if event.get("result").is_some() {
+                return Some(parse_result_event(&event));
+            }
+        }
+
+        if start == 0 {
+            return None;
+        }
+        if window >= MAX_TAIL_BYTES {
+            tracing::warn!(
+                path = %path.display(),
+                cap_bytes = MAX_TAIL_BYTES,
+                "agent log recovery: no complete result line within the tail cap; \
+                 the result line may exceed it"
+            );
+            return None;
+        }
+        window = (window * 2).min(MAX_TAIL_BYTES);
     }
-    None
 }
 
 /// Try to recover a stuck run by scanning its log file for a result event.
@@ -1144,6 +1206,108 @@ mod tests {
         assert_eq!(still_running.status, AgentRunStatus::Running);
     }
 
+    // ---- scan_log_for_result_at: long lines and tail windows ----
+
+    /// A `result` line with a ~20 KB non-ASCII, multi-line result string.
+    fn long_result() -> (String, String) {
+        let text = format!("{}\nFLOW_OUTPUT {}", "é—x".repeat(4000), "y".repeat(8000));
+        let line = serde_json::json!({
+            "type": "result",
+            "result": text,
+            "is_error": false,
+        })
+        .to_string();
+        (text, line)
+    }
+
+    fn write_log_lines(path: &std::path::Path, lines: &[&str]) {
+        std::fs::write(path, lines.join("\n") + "\n").unwrap();
+    }
+
+    #[test]
+    fn test_scan_log_for_result_long_result_line() {
+        let (text, line) = long_result();
+        assert!(line.len() >= 16 * 1024);
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("run.log");
+        write_log_lines(
+            &path,
+            &["{\"type\":\"system\"}", "{\"type\":\"assistant\"}", &line],
+        );
+
+        let result = scan_log_for_result_at(&path).expect("long result line should be found");
+        assert_eq!(result.result_text.as_deref(), Some(text.as_str()));
+    }
+
+    #[test]
+    fn test_try_recover_from_log_at_long_result_line() {
+        let conn = crate::agent::manager::setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "test", None).unwrap();
+
+        let (text, line) = long_result();
+        let tmp = tempfile::tempdir().unwrap();
+        write_log_lines(
+            &tmp.path().join(format!("{}.log", run.id)),
+            &["{\"type\":\"system\"}", &line],
+        );
+
+        let recovered = try_recover_from_log_at(&mgr, &run.id, tmp.path()).unwrap();
+        assert_eq!(recovered.status, AgentRunStatus::Completed);
+        assert_eq!(recovered.result_text.as_deref(), Some(text.as_str()));
+    }
+
+    #[test]
+    fn test_scan_log_for_result_utf8_boundary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("run.log");
+        let result_line = "{\"type\":\"result\",\"result\":\"ok\"}";
+        // 2-byte chars filling more than the initial window, so the window start
+        // falls on a continuation byte for one of the two offsets below.
+        let mut found = 0;
+        for pad in 0..2 {
+            let filler = format!(
+                "{{\"type\":\"assistant\",\"text\":\"{}{}\"}}",
+                "a".repeat(pad),
+                "é".repeat(INITIAL_TAIL_BYTES as usize)
+            );
+            write_log_lines(&path, &[&filler, result_line]);
+            let result = scan_log_for_result_at(&path).expect("result should be found");
+            assert_eq!(result.result_text.as_deref(), Some("ok"));
+            found += 1;
+        }
+        assert_eq!(found, 2);
+    }
+
+    #[test]
+    fn test_scan_log_for_result_exceeds_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("run.log");
+        let line = serde_json::json!({
+            "type": "result",
+            "result": "z".repeat(MAX_TAIL_BYTES as usize + 100_000),
+        })
+        .to_string();
+        write_log_lines(&path, &["{\"type\":\"system\"}", &line]);
+
+        assert!(scan_log_for_result_at(&path).is_none());
+    }
+
+    #[test]
+    fn test_scan_log_for_result_window_grows_past_initial() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("run.log");
+        // A result line, then more than the initial window of non-result lines.
+        let filler = serde_json::json!({"type": "assistant", "text": "f".repeat(1000)}).to_string();
+        let mut lines = vec!["{\"type\":\"result\",\"result\":\"early\"}"];
+        let count = (INITIAL_TAIL_BYTES as usize / filler.len()) + 20;
+        lines.extend(std::iter::repeat_n(filler.as_str(), count));
+        write_log_lines(&path, &lines);
+
+        let result = scan_log_for_result_at(&path).expect("window should grow to find result");
+        assert_eq!(result.result_text.as_deref(), Some("early"));
+    }
+
     #[test]
     fn test_tool_error_summary_includes_tool_use_id() {
         let summary = tool_error_summary("toolu_abc123", "Permission denied");
@@ -1210,7 +1374,7 @@ mod tests {
 
     // ── scan_partial_token_usage ────────────────────────────────────────────
 
-    fn write_log_lines(lines: &[&str]) -> (tempfile::TempDir, String) {
+    fn write_temp_log_lines(lines: &[&str]) -> (tempfile::TempDir, String) {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("run.log");
         let content: String = lines.iter().map(|l| format!("{l}\n")).collect();
@@ -1236,7 +1400,7 @@ mod tests {
     #[test]
     fn test_scan_partial_token_usage_single_event() {
         let line = r#"{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":20,"cache_creation_input_tokens":10}}}"#;
-        let (_dir, path) = write_log_lines(&[line]);
+        let (_dir, path) = write_temp_log_lines(&[line]);
         let tokens = scan_partial_token_usage(&path);
         assert_eq!(tokens, (100, 50, 20, 10));
     }
@@ -1245,7 +1409,7 @@ mod tests {
     fn test_scan_partial_token_usage_multiple_events_summed() {
         let line1 = r#"{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":20,"cache_creation_input_tokens":10}}}"#;
         let line2 = r#"{"type":"assistant","message":{"usage":{"input_tokens":200,"output_tokens":80,"cache_read_input_tokens":30,"cache_creation_input_tokens":5}}}"#;
-        let (_dir, path) = write_log_lines(&[line1, line2]);
+        let (_dir, path) = write_temp_log_lines(&[line1, line2]);
         let tokens = scan_partial_token_usage(&path);
         assert_eq!(tokens, (300, 130, 50, 15));
     }
@@ -1255,7 +1419,7 @@ mod tests {
         let assistant = r#"{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#;
         let result_ev = r#"{"type":"result","usage":{"input_tokens":999,"output_tokens":999,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}"#;
         let system_ev = r#"{"type":"system","subtype":"init","model":"claude-opus-4-6"}"#;
-        let (_dir, path) = write_log_lines(&[assistant, result_ev, system_ev]);
+        let (_dir, path) = write_temp_log_lines(&[assistant, result_ev, system_ev]);
         let tokens = scan_partial_token_usage(&path);
         // Only the assistant event should be counted
         assert_eq!(tokens, (100, 50, 0, 0));
