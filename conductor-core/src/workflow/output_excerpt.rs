@@ -18,7 +18,10 @@ pub fn flow_output_excerpt(result_text: &str) -> Option<String> {
     let block = runkon_flow::helpers::find_flow_output_block(result_text)?;
     // `block` is a subslice of `result_text`, so its offset is a pointer difference.
     let offset = (block.as_ptr() as usize).checked_sub(result_text.as_ptr() as usize)?;
-    let line = result_text.get(..offset)?.matches('\n').count() + 1;
+    // Report the line of the opening marker, which precedes the (trimmed) block.
+    let before = result_text.get(..offset)?;
+    let marker = before.rfind("<<<FLOW_OUTPUT>>>").unwrap_or(offset);
+    let line = before[..marker].matches('\n').count() + 1;
 
     let mut shown: String = block.chars().take(EXCERPT_CHARS).collect();
     let cut = block.chars().nth(EXCERPT_CHARS).is_some();
