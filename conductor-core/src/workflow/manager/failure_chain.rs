@@ -578,4 +578,82 @@ mod tests {
         );
         assert_eq!(render_failure_tree(&[], 8), "");
     }
+
+    fn get_run(conn: &Connection, id: &str) -> crate::workflow::ConductorWorkflowRun {
+        get_workflow_run(conn, id).unwrap().unwrap()
+    }
+
+    #[test]
+    fn run_chain_if_failed_empty_for_non_failed_run() {
+        let conn = setup();
+        insert_run(&conn, "r1", "wf", "completed", None);
+        insert_step(
+            &conn,
+            "s1",
+            "r1",
+            "leaf",
+            "script",
+            0,
+            "2026-01-01T00:00:01Z",
+            None,
+            Some("boom"),
+        );
+        assert!(run_chain_if_failed(&conn, &get_run(&conn, "r1")).is_empty());
+    }
+
+    #[test]
+    fn run_chain_if_failed_matches_run_failure_chain() {
+        let conn = setup();
+        insert_run(&conn, "r1", "parent", "failed", None);
+        insert_run(&conn, "r2", "child", "failed", None);
+        insert_step(
+            &conn,
+            "s1",
+            "r1",
+            "workflow:child",
+            "workflow",
+            0,
+            "2026-01-01T00:00:01Z",
+            Some("r2"),
+            Some("Sub-workflow 'child' failed"),
+        );
+        insert_step(
+            &conn,
+            "s2",
+            "r2",
+            "leaf",
+            "script",
+            0,
+            "2026-01-01T00:00:02Z",
+            None,
+            Some("boom"),
+        );
+        let chain = run_chain_if_failed(&conn, &get_run(&conn, "r1"));
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain, run_failure_chain(&conn, "r1").unwrap());
+    }
+
+    #[test]
+    fn chain_or_empty_returns_empty_on_err() {
+        let err = Err(crate::error::ConductorError::Workflow("db down".into()));
+        assert!(chain_or_empty("r1", err).is_empty());
+    }
+
+    #[test]
+    fn chain_or_empty_passes_ok_through() {
+        let link = FailureLink {
+            run_id: "r".into(),
+            workflow_name: "wf".into(),
+            step_name: "s".into(),
+            child_run_id: None,
+            error: "e".into(),
+        };
+        assert_eq!(chain_or_empty("r", Ok(vec![link.clone()])), vec![link]);
+    }
+
+    #[test]
+    fn run_failure_cause_none_for_unknown_run() {
+        let conn = setup();
+        assert_eq!(run_failure_cause(&conn, "missing"), None);
+    }
 }

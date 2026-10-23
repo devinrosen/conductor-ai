@@ -797,7 +797,7 @@ fn failure_cause_follows_child_workflow() {
     let conn = crate::test_helpers::setup_db();
     insert_failed_parent_and_child(&conn);
     assert_eq!(
-        super::runs::failure_cause(&conn, "r1").as_deref(),
+        crate::workflow::run_failure_cause(&conn, "r1").as_deref(),
         Some("workflow:child › submit-review: exited 1")
     );
 }

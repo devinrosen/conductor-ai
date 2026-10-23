@@ -52,13 +52,6 @@ pub struct FeedbackNotificationParams<'a> {
     pub branch: &'a str,
 }
 
-/// One-line cause of a failed run, found by following failed sub-workflow steps.
-///
-/// Lookup errors are logged and ignored so they never block a notification.
-pub(crate) fn failure_cause(conn: &rusqlite::Connection, run_id: &str) -> Option<String> {
-    crate::workflow::run_failure_cause(conn, run_id)
-}
-
 /// `"<error> — cause: <cause>"`, skipping the suffix when the error already contains it.
 pub(crate) fn merge_error_and_cause(error: Option<&str>, cause: Option<&str>) -> Option<String> {
     match (error, cause) {
@@ -138,7 +131,7 @@ pub(crate) fn workflow_event(
     let cause = if params.succeeded {
         None
     } else {
-        failure_cause(ctx.conn, params.run_id)
+        crate::workflow::run_failure_cause(ctx.conn, params.run_id)
     };
     if let Some(cause) = &cause {
         fields.insert("cause".into(), cause.clone());
