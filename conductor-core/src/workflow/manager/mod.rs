@@ -13,6 +13,7 @@
 //! trait methods there. Do not add new raw-SQL helpers here for operations
 //! that should be engine-facing — extend the trait instead.
 pub(crate) mod definitions;
+pub(crate) mod failure_chain;
 pub(crate) mod fan_out;
 mod helpers;
 pub(crate) mod lifecycle;

@@ -52,6 +52,16 @@ pub struct FeedbackNotificationParams<'a> {
     pub branch: &'a str,
 }
 
+/// `"<error> — cause: <cause>"`, skipping the suffix when the error already contains it.
+pub(crate) fn merge_error_and_cause(error: Option<&str>, cause: Option<&str>) -> Option<String> {
+    match (error, cause) {
+        (Some(e), Some(c)) if !e.contains(c) => Some(format!("{e} \u{2014} cause: {c}")),
+        (Some(e), _) => Some(e.to_string()),
+        (None, Some(c)) => Some(format!("cause: {c}")),
+        (None, None) => None,
+    }
+}
+
 /// Fire a notification for a workflow run that reached a terminal state.
 ///
 /// Deduped on `(run_id, "completed"|"failed")` via SQLite.
@@ -69,6 +79,18 @@ pub fn fire_workflow_notification(
     } else {
         "failed"
     };
+    let event = workflow_event(ctx, params);
+
+    HookRunner::new(&hooks_as_runkon(ctx.hooks))
+        .with_dedup_store(ctx.dedup_store.clone())
+        .fire_with_dedup(&event, params.run_id, event_type);
+}
+
+/// Build the event for a terminal workflow run, adding the nested failure cause when failed.
+pub(crate) fn workflow_event(
+    ctx: &NotificationCtx<'_>,
+    params: &WorkflowNotificationArgs<'_>,
+) -> Event {
     let body = notification_body(params.workflow_name, params.target_label);
     let deep_link = build_workflow_deep_link(
         ctx.config.web_url.as_deref(),
@@ -106,8 +128,16 @@ pub fn fire_workflow_notification(
     .into_iter()
     .collect();
 
-    if let Some(err) = params.error {
-        fields.insert("error".into(), err.into());
+    let cause = if params.succeeded {
+        None
+    } else {
+        crate::workflow::run_failure_cause(ctx.conn, params.run_id)
+    };
+    if let Some(cause) = &cause {
+        fields.insert("cause".into(), cause.clone());
+    }
+    if let Some(err) = merge_error_and_cause(params.error, cause.as_deref()) {
+        fields.insert("error".into(), err);
     }
 
     let (kind, title, severity) = if params.succeeded {
@@ -124,17 +154,13 @@ pub fn fire_workflow_notification(
         )
     };
 
-    let event = Event {
+    Event {
         kind: kind.into(),
         title: title.into(),
         body,
         severity,
         fields,
-    };
-
-    HookRunner::new(&hooks_as_runkon(ctx.hooks))
-        .with_dedup_store(ctx.dedup_store.clone())
-        .fire_with_dedup(&event, params.run_id, event_type);
+    }
 }
 
 /// Fire a notification for an agent feedback request.
