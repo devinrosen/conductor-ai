@@ -37,6 +37,7 @@ Steps:
      | review-error-handling    | `bug`           |
      | review-test-coverage     | `enhancement`   |
      | review-db-migrations     | `bug`           |
+     | review-workflow-semantics | `bug`          |
      Additionally, if the finding has severity `critical`, add `bug` to its labels (if not already present).
      Each finding's `labels` field should be an array of strings (e.g. `["security", "bug"]`).
    - The `fetch-pr-replies` entry and the `resolve-pr-base` / `detect-*` entries are workflow scripts, not reviewers: don't classify them or list them in `reviewed_by`.
@@ -58,7 +59,7 @@ The rest of the review is unchanged: only findings you didn't move count as bloc
 2. Produce your FLOW_OUTPUT with the correct structured fields so the workflow engine can derive outcome markers automatically from the schema:
 
    - Set `overall_approved: false` if **any** reviewer is classified as blocking in Phase 1 (i.e. has `has_review_issues` marker OR has critical/warning findings in `structured_output`). Set `overall_approved: true` only if no reviewer is blocking. A reviewer whose critical/warning findings were all moved to `answered_findings` in Phase 1b no longer counts as blocking.
-   - Populate `reviewed_by` with a comma-separated string of human-readable reviewer display names (e.g. "DB Migrations, Security, Performance") for each reviewer that ran and returned results.
+   - Populate `reviewed_by` with a comma-separated string of human-readable reviewer display names (e.g. "DB Migrations, Security, Workflow Semantics") for each reviewer that ran and returned results.
    - Populate `blocking_findings` with every critical and warning finding collected across all reviewers, except those moved to `answered_findings`. Include warnings here — use `severity: "warning"` for warning-level items and `severity: "critical"` for critical items. Leave the array empty if there are no blocking findings.
    - Set `answered_findings` to the findings moved in Phase 1b (each with `reviewer`, `file`, `line`, `severity`, `message`, `answered_by`, `reply`). Leave the array empty if there are none.
    - Set `off_diff_findings` to the deduplicated list of off-diff findings collected in Phase 1 (each with `file`, `line`, `severity`, `title`, `message`, `reviewer`, `labels` fields). Leave the array empty if there are none.
