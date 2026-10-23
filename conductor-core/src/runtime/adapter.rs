@@ -641,6 +641,26 @@ mod tests {
     }
 
     #[test]
+    fn get_run_recovers_long_result_line_from_log() {
+        let run_id = "recover-long-result";
+        let (adapter, _tmp, log_dir) = setup_adapter_with_log_dir(run_id);
+        let text = format!("{}\nFLOW_OUTPUT {}", "é".repeat(10_000), "x".repeat(8_000));
+        let line = serde_json::json!({
+            "type": "result",
+            "subtype": "success",
+            "is_error": false,
+            "result": text,
+        })
+        .to_string();
+        assert!(line.len() >= 16 * 1024);
+        write_log(&log_dir, run_id, Some(&line));
+
+        let run = adapter.get_run(run_id).unwrap().unwrap();
+        assert_eq!(run.status, runkon_runtimes::RunStatus::Completed);
+        assert_eq!(run.result_text, Some(text));
+    }
+
+    #[test]
     fn get_run_recovers_failed_from_log_error_result() {
         let run_id = "recover-failed";
         let (adapter, _tmp, log_dir) = setup_adapter_with_log_dir(run_id);
