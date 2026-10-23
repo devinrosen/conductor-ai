@@ -4,7 +4,8 @@ name: Release
 #
 # Triggers:
 #   - push to main where the commit subject starts with `release: X.Y.Z` —
-#     fires automatically when a `release: X.Y.Z (#NNNN)` PR squash-merges.
+#     fires automatically when a `release: X.Y.Z` PR rebase-merges (the
+#     rebase keeps the subject as-is, with no `(#NNNN)` suffix).
 #   - workflow_dispatch — manual override for back-filling a missed release
 #     or re-running against an arbitrary commit (e.g. b1c923b0 for v0.16.0,
 #     which merged before this workflow existed).
@@ -12,12 +13,14 @@ name: Release
 # Notes:
 # - Tags are unsigned. Existing manual tags are SSH-signed, but a CI bot
 #   doesn't have access to maintainer keys. The commit on main has already
-#   been reviewed via squash-merge gate, so tag signing is not load-bearing
+#   been reviewed via the release PR, so tag signing is not load-bearing
 #   for provenance here.
-# - Release notes use `gh release create --generate-notes`, which builds from
-#   the PR / commit list since the previous tag. That's a starting point —
-#   maintainers can edit notes on the GH release page after publish if a
-#   curated changelog is desired.
+# - Release notes are the description of the merged PR that produced the
+#   release commit, found via the commits/{sha}/pulls API (works for rebase
+#   merges). The Claude Code attribution line is stripped and a Full Changelog
+#   link is appended if missing. When no merged PR is found (e.g. a
+#   workflow_dispatch on a directly-pushed commit), the release falls back to
+#   `gh release create --generate-notes`.
 
 on:
   push:
@@ -35,6 +38,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
   tag-and-release:
@@ -103,23 +107,73 @@ jobs:
           git tag -a "$TAG" -m "$TAG"
           git push origin "$TAG"
 
+      - name: Build release notes
+        id: notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          SHA=$(git rev-parse HEAD)
+          PR=$(gh api "repos/${REPO}/commits/${SHA}/pulls" \
+            --jq '[.[] | select(.merged_at != null)][0].number // empty' || true)
+          if [ -z "$PR" ]; then
+            echo "::notice::No merged PR found for ${SHA}; using generated notes"
+            echo "source=generated" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh pr view "$PR" --repo "$REPO" --json body -q .body > notes.raw
+          # Drop CRs (web-edited bodies) and the Claude Code attribution line.
+          tr -d '\r' < notes.raw | grep -v '^🤖 Generated with' > notes.md || true
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::notice::PR #${PR} has an empty description; using generated notes"
+            echo "source=generated" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Trim trailing blank lines.
+          sed -i -e :a -e '/^[[:space:]]*$/{$d;N;ba' -e '}' notes.md
+          # Previous tag by version order, excluding the tag just pushed.
+          PREV=$(git tag -l 'v*' | sort -V | awk -v t="$TAG" '$0==t{print p; exit} {p=$0}')
+          if ! grep -q '^\*\*Full Changelog\*\*:' notes.md && [ -n "$PREV" ]; then
+            printf '\n**Full Changelog**: https://github.com/%s/compare/%s...%s\n' \
+              "$REPO" "$PREV" "$TAG" >> notes.md
+          fi
+          echo "source=pr" >> "$GITHUB_OUTPUT"
+          echo "pr=$PR" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
+          NOTES_SOURCE: ${{ steps.notes.outputs.source }}
         run: |
           set -euo pipefail
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --generate-notes \
-            --verify-tag
+          if [ "$NOTES_SOURCE" = "pr" ]; then
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file notes.md \
+              --verify-tag
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --generate-notes \
+              --verify-tag
+          fi
 
       - name: Summary
         env:
           TAG: ${{ steps.version.outputs.tag }}
+          NOTES_SOURCE: ${{ steps.notes.outputs.source }}
+          NOTES_PR: ${{ steps.notes.outputs.pr }}
         run: |
           REPO_URL="https://github.com/${{ github.repository }}"
           echo "Tagged and released **$TAG**" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- Tag: $REPO_URL/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
           echo "- Release: $REPO_URL/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$NOTES_SOURCE" = "pr" ]; then
+            echo "- Notes: from PR #$NOTES_PR" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Notes: generated (no associated PR found)" >> "$GITHUB_STEP_SUMMARY"
+          fi
