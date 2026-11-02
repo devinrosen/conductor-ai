@@ -282,7 +282,7 @@ As with any migration, installed binaries older than the release that adds 087 c
 
 ## Implementation Order
 
-The phases are ordered so that each one ships something usable. The spike code on the `feat/spike-interactive-sessions` branch (`conductor-cli/src/handlers/session.rs`, `spike/rfc021/`) is throwaway and not for merge.
+The phases are ordered so that each one ships something usable. Each phase has a GitHub milestone, "RFC 021 Phase N: …" (milestones 45–51). The spike code on the `feat/spike-interactive-sessions` branch (`conductor-cli/src/handlers/session.rs`, `spike/rfc021/`) is throwaway and not for merge.
 
 **Phase 0: bugs on `main`.** These are independent and can land now: #3152, #3153, #3162.
 
