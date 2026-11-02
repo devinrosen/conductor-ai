@@ -327,7 +327,7 @@ pub(super) fn tool_run_workflow(
         conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
         force: false,
         extra_plugin_dirs: vec![],
-        db_path: None,
+        db_path: Some(conductor.conn_db_path()),
         parent_workflow_run_id: None,
         depth: 0,
         parent_step_id: None,
