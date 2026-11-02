@@ -194,6 +194,8 @@ pub fn build_synthetic_event(name: &str, now: impl Into<String>) -> Result<Event
                 ("duration_ms".into(), "1000".into()),
                 ("ticket_url".into(), ticket_url),
                 ("url".into(), url),
+                // feedback_event stamps Utc::now(); honor the injected clock.
+                ("timestamp".into(), now),
             ]);
             ev
         }
