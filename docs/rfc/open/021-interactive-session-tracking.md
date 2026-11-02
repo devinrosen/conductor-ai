@@ -70,7 +70,7 @@ There is **one `agent_runs` row per Claude Code session**, keyed by `session_id`
 | **`idle_since`** (new) | set by `Stop`, cleared by `UserPromptSubmit`; drives the idle display and `session.idle` |
 | **`subprocess_started_at`** (new) | start time of the current claude process, for the reaper's PID-reuse guard |
 | **`tmux_pane`** (new) | `TMUX_PANE` from the hook environment, so the launcher can focus the session |
-| **`transcript_path`** (new) | from every hook payload; read for metrics and (possibly) denial detection. `log_file` keeps its headless meaning, because the reaper's `try_recover_from_log` parses it as stream-json. |
+| **`transcript_path`** (new) | from every hook payload; read for metrics and denial detection. `log_file` keeps its headless meaning, because the reaper's `try_recover_from_log` parses it as stream-json. |
 
 `num_turns` counts user turns (prompts) for interactive runs. Headless runs report Claude's agentic turn count there, so the two aren't comparable.
 
@@ -181,7 +181,7 @@ Spike A measured launch at **0.6 s to the prompt** for a fresh session and **1.7
 
 - **Stop:** `AgentManager::cancel_run` refuses `runtime = 'interactive'`, because it signals `subprocess_pid`, which is the developer's claude (#3154). Spike C killed a session with the TUI's `x`. The TUI offers "focus session" instead of stop, and the web hides Stop for interactive runs.
 - **Respond:** hidden for interactive permission requests in the TUI, the web and `conductor_submit_agent_feedback`. Nothing would read the response until the phone-answer phase.
-- **Dismiss:** kept. It's the manual way to clear a request left stale by a denied permission (see the open questions).
+- **Dismiss:** kept. It's the manual way to clear a request left stale by a denied permission (see [section 11](#11-denied-permissions)).
 
 ### 8. Notifications
 
@@ -201,7 +201,7 @@ Spike A measured launch at **0.6 s to the prompt** for a fresh session and **1.7
 - **Payload:** the worktree, branch, `session_id`, a prompt preview and a last-message preview.
 - **Web Push:** opt-in with `web_push = true`. By default Web Push sends only `feedback.requested` and gate-waiting. Hooks choose events with their own `on` filter, and there is no other toggle.
 
-**`agent_run.completed` and `agent_run.failed`:** whether these should fire for interactive runs is undecided; see the open questions.
+**`agent_run.completed` is suppressed for interactive runs.** Every `SessionEnd` would otherwise fire "Agent completed" for a session the developer just closed. **`agent_run.failed` still fires**, which for interactive runs means the session crashed and was reaped. The pollers' `detect_agent_terminal_transitions` callers skip `completed` transitions when `runtime = 'interactive'`.
 
 ### 9. Metrics
 
@@ -233,6 +233,16 @@ Both transcript formats are internal to Claude Code and undocumented. The parser
 - **Stop:** hidden for interactive runs.
 - **Launching:** not available from the web, which has no terminal. It can show the attach command.
 
+### 11. Denied permissions
+
+Choosing "No" at a permission prompt interrupts the turn, and **no hook fires**: no `PostToolUse`, `PostToolUseFailure`, `Stop`, `PermissionDenied` or `StopFailure` (Spike C). The run stays `waiting_for_feedback` until the next `UserPromptSubmit` or `SessionEnd`. The transcript does record the denial, as a `tool_result` with `toolUseResult: "User rejected tool use"` followed by `[Request interrupted by user for tool use]`.
+
+The handling is staged (#3156):
+
+1. **First version: accept it and make it visible.** The TUI and web show "waiting since HH:MM", so a long wait reads as suspicious, and Dismiss clears the request by hand. The next prompt clears it automatically.
+2. **With metrics ingestion (Phase 5): detect it from the transcript.** The same incremental reader that ingests metrics also looks, for runs with a pending permission request, for a rejection or interrupt entry after the request's `created_at`. When it finds one, it dismisses the request and moves the run to `idle`. That costs nothing extra, because the reader and its offset already exist. It shares the transcript-format risk noted in section 9.
+3. **In parallel: ask upstream** for a hook on a user denial or interrupt, for example `PermissionDenied` firing for interactive denials, or `Stop` with an `interrupted` flag. If one ships, it replaces step 2.
+
 ## DB Schema Changes
 
 One migration, **087** (#3157):
@@ -259,21 +269,16 @@ As with any migration, installed binaries older than the release that adds 087 c
 8. **Sessions outside active worktrees are ignored** (2026-11-02), including main checkouts.
 9. **Conductor launches and resumes sessions** (2026-11-02, #3158). tmux session `work` by default, windows named by ticket key, and generated openers for fresh ticket sessions only. The `work` plugin shrinks to its manager skill.
 10. **Taking over a headless run is a separate action** (2026-11-02, #3163).
+11. **Denied permissions are handled in stages** (2026-11-02, #3156): visible and dismissible first, then detected from the transcript alongside metrics ingestion, with an upstream hook requested in parallel.
+12. **`agent_run.completed` is suppressed for interactive runs; `agent_run.failed` still fires** (2026-11-02).
 
 ## Open Questions
 
-1. **Denied permissions** (#3156). Choosing "No" at a permission prompt interrupts the turn, and **no hook fires**, so the run stays `waiting_for_feedback` until the next prompt. The transcript does record the denial. Options:
-   - accept it, showing "waiting since" and allowing Dismiss;
-   - detect the denial from the transcript in the pollers;
-   - ask upstream for a deny or interrupt hook.
-
-   *Recommendation:* the first in the first version, the second once metrics ingestion reads transcripts incrementally anyway (same reader, same offset), and the third in parallel.
-2. **`agent_run.completed` and `agent_run.failed` for interactive runs.** Every `SessionEnd` would fire "Agent completed", which is noise for a session the developer just closed. *Proposal:* suppress `agent_run.completed` for interactive runs, and keep `agent_run.failed`, which only fires when a session crashed and was reaped.
-3. **`/clear`, compaction and fork.** Does `/clear` start a new `session_id`? Where do `SessionStart` `source = clear | compact | fork` leave the row? Untested. *Expected:* a new session id gets a new row, and compaction keeps the row.
-4. **Esc during a turn** is untested. It probably behaves like a denial: an interrupt with no `Stop`.
-5. **Several sessions in one worktree.** Two claude windows in the same worktree create two live rows, but the worktree list shows only the latest run, so the other is hidden. The same happens with a workflow agent running where an interactive session is open. Is "newest wins" acceptable, or should the worktree row show a count?
-6. **Transcript format stability.** Metrics and (possibly) denial detection depend on an undocumented format that has changed before. Pin a tested Claude Code version range in the parser and degrade gracefully outside it?
-7. **#3163's questions:** which row owns the `session_id` after a takeover; starting in the developer's own permission mode; how the TUI shows the link between the two runs.
+1. **`/clear`, compaction and fork.** Does `/clear` start a new `session_id`? Where do `SessionStart` `source = clear | compact | fork` leave the row? Untested. *Expected:* a new session id gets a new row, and compaction keeps the row.
+2. **Esc during a turn** is untested. It probably behaves like a denial: an interrupt with no `Stop`.
+3. **Several sessions in one worktree.** Two claude windows in the same worktree create two live rows, but the worktree list shows only the latest run, so the other is hidden. The same happens with a workflow agent running where an interactive session is open. Is "newest wins" acceptable, or should the worktree row show a count?
+4. **Transcript format stability.** Metrics and denial detection depend on an undocumented format that has changed before. Pin a tested Claude Code version range in the parser and degrade gracefully outside it?
+5. **#3163's questions:** which row owns the `session_id` after a takeover; starting in the developer's own permission mode; how the TUI shows the link between the two runs.
 
 ## Implementation Order
 
@@ -292,16 +297,16 @@ The phases are ordered so that each one ships something usable. The spike code o
 
 **Phase 3: the plugin.** #3161: the marketplace layout, the hooks and the wrapper, and `setup install` guidance. After this phase, hand-run sessions show up in the TUI and web.
 
-**Phase 4: notifications.** #3159 (`session.idle`), which needs Phase 0.
+**Phase 4: notifications.** #3159 (`session.idle`) and the `agent_run.completed` suppression for interactive runs, both of which need Phase 0.
 
-**Phase 5: metrics.** Incremental transcript ingestion into the run's totals and the turn events. *No issue yet.*
+**Phase 5: metrics and denial detection.** Incremental transcript ingestion into the run's totals and the turn events, plus the denial check from section 11. *No issue yet.*
 
 **Phase 6: launching.**
 - **#3158:** the core launcher, the CLI, MCP and the TUI key.
 - **Shrinking the `work` plugin,** in its own repo.
 - **#3163** as a follow-up.
 
-**Open question 1** (denial handling) lands with Phase 3, or with Phase 5 if transcript detection is chosen.
+**Denied permissions** (section 11): "waiting since" and Dismiss land with Phase 1's TUI and web changes; transcript detection lands with Phase 5.
 
 ## Future
 
