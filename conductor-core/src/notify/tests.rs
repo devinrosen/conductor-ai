@@ -854,3 +854,78 @@ fn succeeded_workflow_event_has_no_cause() {
         Some("Sub-workflow 'child' failed")
     );
 }
+
+// --- feedback.requested event and run context lookup ---
+
+fn feedback_params<'a>(worktree_slug: Option<&'a str>) -> FeedbackNotificationParams<'a> {
+    FeedbackNotificationParams {
+        request_id: "fb1",
+        run_id: "run1",
+        prompt_preview: "Allow Bash?",
+        repo_slug: "my-repo",
+        branch: "feat/x",
+        worktree_slug,
+    }
+}
+
+#[test]
+fn feedback_event_uses_agent_run_id_and_feedback_id() {
+    let ev = runs::feedback_event(&feedback_params(Some("feat-x")));
+    assert_eq!(ev.fields["run_id"], "run1");
+    assert_eq!(ev.fields["feedback_id"], "fb1");
+    assert_eq!(ev.fields["repo_slug"], "my-repo");
+    assert_eq!(ev.fields["branch"], "feat/x");
+    assert_eq!(ev.fields["worktree_slug"], "feat-x");
+    assert_eq!(ev.body, "feat-x: Allow Bash?");
+}
+
+#[test]
+fn feedback_event_body_falls_back_to_repo_slug() {
+    let ev = runs::feedback_event(&feedback_params(None));
+    assert_eq!(ev.fields["worktree_slug"], "");
+    assert_eq!(ev.body, "my-repo: Allow Bash?");
+}
+
+#[test]
+fn feedback_event_body_is_bare_prompt_without_labels() {
+    let mut p = feedback_params(None);
+    p.repo_slug = "";
+    assert_eq!(runs::feedback_event(&p).body, "Allow Bash?");
+}
+
+#[test]
+fn feedback_run_contexts_resolves_worktree_and_repo_scoped_runs() {
+    let conn = crate::test_helpers::setup_db_with_agent_run();
+    conn.execute(
+        "INSERT INTO agent_runs (id, repo_id, prompt, status, started_at) \
+         VALUES ('ar-repo', 'r1', 'test', 'running', '2024-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+
+    let map = feedback_run_contexts(&conn, &["ar1", "ar-repo", "ar1", "missing"]).unwrap();
+    assert_eq!(map.len(), 2);
+    assert_eq!(
+        map["ar1"],
+        FeedbackRunContext {
+            repo_slug: "test-repo".into(),
+            branch: "feat/test".into(),
+            worktree_slug: Some("feat-test".into()),
+        }
+    );
+    assert_eq!(
+        map["ar-repo"],
+        FeedbackRunContext {
+            repo_slug: "test-repo".into(),
+            branch: String::new(),
+            worktree_slug: None,
+        }
+    );
+    assert!(!map.contains_key("missing"));
+}
+
+#[test]
+fn feedback_run_contexts_empty_input_returns_empty_map() {
+    let conn = crate::test_helpers::setup_db();
+    assert!(feedback_run_contexts(&conn, &[]).unwrap().is_empty());
+}
