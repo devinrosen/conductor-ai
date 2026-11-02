@@ -226,8 +226,12 @@ pub fn spawn_db_poller(
 
                         // Fire feedback-requested notifications, skipping IDs already notified
                         // this session to avoid a redundant INSERT OR IGNORE on every tick.
+                        let feedback_now = chrono::Utc::now();
+                        let feedback_max_age = chrono::Duration::seconds(FEEDBACK_NOTIFY_MAX_SECS);
                         for req in &payload.pending_feedback_requests {
-                            if notified_feedback_ids.insert(req.id.clone()) {
+                            if notified_feedback_ids.insert(req.id.clone())
+                                && is_recent(&req.created_at, feedback_now, feedback_max_age)
+                            {
                                 crate::notify::fire_feedback_notification(
                                     conn,
                                     &config.notifications,
@@ -453,6 +457,58 @@ fn query_if_enabled<T>(enabled: bool, f: impl FnOnce() -> Vec<T>) -> Vec<T> {
         f()
     } else {
         vec![]
+    }
+}
+
+/// Notification queries are needed when any sink is configured: desktop/Slack
+/// (`[notifications] enabled`) or at least one `[[notify.hooks]]` entry.
+/// Mirrors the `!config.enabled && !has_hooks` guards in the `fire_*` functions.
+fn notification_queries_needed(config: &conductor_core::config::Config) -> bool {
+    config.notifications.enabled || !config.notify.hooks.is_empty()
+}
+
+/// Load pending feedback requests and waiting gate steps for the notification loop.
+/// Both come back empty when no notification sink is configured.
+#[allow(clippy::type_complexity)]
+fn load_notification_queries(
+    conn: &rusqlite::Connection,
+    config: &conductor_core::config::Config,
+) -> (
+    Vec<conductor_core::agent::FeedbackRequest>,
+    Vec<(
+        conductor_core::workflow::WorkflowRunStep,
+        String,
+        Option<String>,
+    )>,
+) {
+    let needed = notification_queries_needed(config);
+    let pending_feedback_requests = query_if_enabled(needed, || {
+        AgentManager::new(conn)
+            .list_all_pending_feedback_requests()
+            .unwrap_or_else(|e| {
+                tracing::warn!("list_all_pending_feedback_requests failed: {e}");
+                vec![]
+            })
+    });
+    let waiting_gate_steps = query_if_enabled(needed, || {
+        conductor_core::workflow::list_all_waiting_gate_steps(conn).unwrap_or_else(|e| {
+            tracing::warn!("list_all_waiting_gate_steps failed: {e}");
+            vec![]
+        })
+    });
+    (pending_feedback_requests, waiting_gate_steps)
+}
+
+/// Feedback requests older than this are recorded as notified but not announced, so the
+/// first start with hooks configured doesn't burst for months-old pending requests.
+const FEEDBACK_NOTIFY_MAX_SECS: i64 = 24 * 60 * 60;
+
+/// True when `created_at` (RFC 3339) is within `max_age` of `now`. Fails open (true) when
+/// the timestamp can't be parsed, so a malformed value never suppresses a notification.
+fn is_recent(created_at: &str, now: chrono::DateTime<chrono::Utc>, max_age: chrono::Duration) -> bool {
+    match chrono::DateTime::parse_from_rfc3339(created_at) {
+        Ok(t) => now.signed_duration_since(t.with_timezone(&chrono::Utc)) <= max_age,
+        Err(_) => true,
     }
 }
 
@@ -767,21 +823,10 @@ pub fn poll_data(
         estimates
     };
 
-    // Only run notification-specific queries when notifications are enabled.
-    let pending_feedback_requests = query_if_enabled(config.notifications.enabled, || {
-        agent_mgr
-            .list_all_pending_feedback_requests()
-            .unwrap_or_else(|e| {
-                tracing::warn!("list_all_pending_feedback_requests failed: {e}");
-                vec![]
-            })
-    });
-    let waiting_gate_steps = query_if_enabled(config.notifications.enabled, || {
-        conductor_core::workflow::list_all_waiting_gate_steps(&conn).unwrap_or_else(|e| {
-            tracing::warn!("list_all_waiting_gate_steps failed: {e}");
-            vec![]
-        })
-    });
+    // Only run notification-specific queries when a notification sink is configured:
+    // desktop/Slack (`[notifications] enabled`) or at least one `[[notify.hooks]]` entry.
+    let (pending_feedback_requests, waiting_gate_steps) =
+        load_notification_queries(&conn, &config);
 
     // Live turn counts are computed incrementally by the background loop caller.
     // Return an empty map here; the loop merges in the incremental state.
@@ -1410,6 +1455,78 @@ pub fn spawn_blocking(tx: BackgroundSender, f: impl FnOnce() -> Action + Send + 
 mod tests {
     use super::*;
     use std::sync::atomic::Ordering;
+
+    // ── notification query gating ─────────────────────────────────────
+
+    fn hooks_only_config() -> conductor_core::config::Config {
+        let mut config = conductor_core::config::Config::default();
+        config.notifications.enabled = false;
+        config.notify.hooks = vec![conductor_core::config::HookConfig {
+            on: "*".into(),
+            run: Some("true".into()),
+            ..Default::default()
+        }];
+        config
+    }
+
+    #[test]
+    fn notification_queries_needed_cases() {
+        let mut config = conductor_core::config::Config::default();
+        assert!(!notification_queries_needed(&config));
+        config.notifications.enabled = true;
+        assert!(notification_queries_needed(&config));
+        assert!(notification_queries_needed(&hooks_only_config()));
+    }
+
+    fn seed_feedback_and_gate() -> rusqlite::Connection {
+        use conductor_core::test_helpers::{insert_test_agent_run, insert_test_wf_run, setup_db};
+        let conn = setup_db();
+        insert_test_agent_run(&conn, "ar1", "w1");
+        AgentManager::new(&conn)
+            .request_feedback("ar1", "need input", None)
+            .unwrap();
+        insert_test_wf_run(&conn, "wr1", "wf", "waiting", None);
+        conductor_core::test_helpers::insert_test_wf_step(
+            &conn, "s1", "wr1", "approval", "gate", "waiting", 0, "2026-01-01T00:00:00Z", None,
+            None,
+        );
+        conn.execute(
+            "UPDATE workflow_run_steps SET gate_type = 'human_approval' WHERE id = 's1'",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn load_notification_queries_hooks_only_returns_feedback_and_gates() {
+        let conn = seed_feedback_and_gate();
+        let (feedback, gates) = load_notification_queries(&conn, &hooks_only_config());
+        assert_eq!(feedback.len(), 1);
+        assert_eq!(gates.len(), 1);
+    }
+
+    #[test]
+    fn load_notification_queries_default_config_returns_nothing() {
+        let conn = seed_feedback_and_gate();
+        let (feedback, gates) =
+            load_notification_queries(&conn, &conductor_core::config::Config::default());
+        assert!(feedback.is_empty());
+        assert!(gates.is_empty());
+    }
+
+    #[test]
+    fn is_recent_cases() {
+        let now = chrono::Utc::now();
+        let max = chrono::Duration::seconds(FEEDBACK_NOTIFY_MAX_SECS);
+        assert!(is_recent(&now.to_rfc3339(), now, max));
+        assert!(!is_recent(
+            &(now - chrono::Duration::hours(25)).to_rfc3339(),
+            now,
+            max
+        ));
+        assert!(is_recent("garbage", now, max));
+    }
 
     // ── query_if_enabled ──────────────────────────────────────────────
 
