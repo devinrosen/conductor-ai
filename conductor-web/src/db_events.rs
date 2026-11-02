@@ -28,6 +28,45 @@ pub struct DbEventDetector {
     seen_gates: HashSet<String>,
 }
 
+/// Claim each unseen item once and push an event for those that are newly claimed and recent.
+///
+/// `created_at` returns `None` when the item has no timestamp; such items fail open (treated as
+/// recent). Afterwards `seen` is trimmed to the ids still present in `items`.
+#[allow(clippy::too_many_arguments)]
+fn collect_new<T>(
+    conn: &Connection,
+    seen: &mut HashSet<String>,
+    items: &[T],
+    event_type: &str,
+    now: DateTime<Utc>,
+    max_age: Duration,
+    id_of: impl Fn(&T) -> &str,
+    created_at: impl Fn(&T) -> Option<&str>,
+    mut build: impl FnMut(&T) -> ConductorEvent,
+    events: &mut Vec<ConductorEvent>,
+) {
+    for item in items {
+        let id = id_of(item);
+        if seen.contains(id) {
+            continue;
+        }
+        match try_claim_notification(conn, id, event_type) {
+            Ok(claimed) => {
+                seen.insert(id.to_string());
+                let recent = created_at(item).is_none_or(|t| is_recent(t, now, max_age));
+                if claimed && recent {
+                    events.push(build(item));
+                }
+            }
+            Err(e) => {
+                tracing::warn!(id = %id, event_type, "notification claim failed: {e}");
+            }
+        }
+    }
+    let current: HashSet<&str> = items.iter().map(&id_of).collect();
+    seen.retain(|id| current.contains(id.as_str()));
+}
+
 impl DbEventDetector {
     /// Run one poll tick and return the events the caller should emit on the bus.
     pub fn poll(&mut self, conn: &Connection, now: DateTime<Utc>) -> Result<Vec<ConductorEvent>> {
@@ -36,63 +75,52 @@ impl DbEventDetector {
 
         let mgr = AgentManager::new(conn);
         let pending = mgr.list_all_pending_feedback_requests()?;
-        for req in &pending {
-            if self.seen_feedback.contains(&req.id) {
-                continue;
-            }
-            match try_claim_notification(conn, &req.id, WEB_FEEDBACK_EVENT_TYPE) {
-                Ok(claimed) => {
-                    self.seen_feedback.insert(req.id.clone());
-                    if claimed && is_recent(&req.created_at, now, max_age) {
-                        let worktree_id = mgr
-                            .get_run(&req.run_id)
-                            .ok()
-                            .flatten()
-                            .and_then(|r| r.worktree_id)
-                            .unwrap_or_default();
-                        events.push(ConductorEvent::FeedbackRequested {
-                            run_id: req.run_id.clone(),
-                            worktree_id,
-                            feedback_id: req.id.clone(),
-                        });
+        collect_new(
+            conn,
+            &mut self.seen_feedback,
+            &pending,
+            WEB_FEEDBACK_EVENT_TYPE,
+            now,
+            max_age,
+            |r| r.id.as_str(),
+            |r| Some(r.created_at.as_str()),
+            |req| {
+                let worktree_id = match mgr.get_run(&req.run_id) {
+                    Ok(run) => run.and_then(|r| r.worktree_id).unwrap_or_default(),
+                    Err(e) => {
+                        tracing::warn!(
+                            run_id = %req.run_id,
+                            feedback_id = %req.id,
+                            "failed to resolve worktree for feedback request: {e}"
+                        );
+                        String::new()
                     }
+                };
+                ConductorEvent::FeedbackRequested {
+                    run_id: req.run_id.clone(),
+                    worktree_id,
+                    feedback_id: req.id.clone(),
                 }
-                Err(e) => {
-                    tracing::warn!(feedback_id = %req.id, "feedback claim failed: {e}");
-                }
-            }
-        }
-        let pending_ids: HashSet<&str> = pending.iter().map(|r| r.id.as_str()).collect();
-        self.seen_feedback
-            .retain(|id| pending_ids.contains(id.as_str()));
+            },
+            &mut events,
+        );
 
         let gates = conductor_core::workflow::list_all_waiting_gate_steps(conn)?;
-        for (step, _, _) in &gates {
-            if self.seen_gates.contains(&step.id) {
-                continue;
-            }
-            match try_claim_notification(conn, &step.id, WEB_GATE_EVENT_TYPE) {
-                Ok(claimed) => {
-                    self.seen_gates.insert(step.id.clone());
-                    // Fail open when the step has no start timestamp.
-                    let recent = step
-                        .started_at
-                        .as_deref()
-                        .is_none_or(|t| is_recent(t, now, max_age));
-                    if claimed && recent {
-                        events.push(ConductorEvent::WorkflowGateWaiting {
-                            run_id: step.workflow_run_id.clone(),
-                            step_id: step.id.clone(),
-                        });
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(step_id = %step.id, "gate claim failed: {e}");
-                }
-            }
-        }
-        let gate_ids: HashSet<&str> = gates.iter().map(|(s, _, _)| s.id.as_str()).collect();
-        self.seen_gates.retain(|id| gate_ids.contains(id.as_str()));
+        collect_new(
+            conn,
+            &mut self.seen_gates,
+            &gates,
+            WEB_GATE_EVENT_TYPE,
+            now,
+            max_age,
+            |(s, _, _)| s.id.as_str(),
+            |(s, _, _)| s.started_at.as_deref(),
+            |(step, _, _)| ConductorEvent::WorkflowGateWaiting {
+                run_id: step.workflow_run_id.clone(),
+                step_id: step.id.clone(),
+            },
+            &mut events,
+        );
 
         Ok(events)
     }
