@@ -251,8 +251,11 @@ impl<'a> AgentManager<'a> {
     pub fn update_run_failed_if_running(&self, run_id: &str, error: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE agent_runs SET status = 'failed', result_text = :error, ended_at = :ended_at \
-             WHERE id = :id AND status IN ('running', 'waiting_for_feedback', 'idle')",
+            &format!(
+                "UPDATE agent_runs SET status = 'failed', result_text = :error, ended_at = :ended_at \
+                 WHERE id = :id AND status IN {}",
+                crate::agent::status::ACTIVE_STATUSES_SQL
+            ),
             named_params! {
                 ":error": error,
                 ":ended_at": now,

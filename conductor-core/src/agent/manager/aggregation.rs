@@ -219,13 +219,15 @@ impl<'a> AgentManager<'a> {
     /// Returns counts of active agent runs (running / waiting_for_feedback / idle) per repo_id.
     /// Repos with no active runs are absent from the map.
     pub fn active_run_counts_by_repo(&self) -> Result<HashMap<String, ActiveAgentCounts>> {
-        let mut stmt = self.conn.prepare_cached(
+        let sql = format!(
             "SELECT w.repo_id, a.status, COUNT(*) AS cnt \
              FROM agent_runs a \
              JOIN worktrees w ON w.id = a.worktree_id \
-             WHERE a.status IN ('running', 'waiting_for_feedback', 'idle') \
+             WHERE a.status IN {} \
              GROUP BY w.repo_id, a.status",
-        )?;
+            crate::agent::status::ACTIVE_STATUSES_SQL
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt.query_map([], |row| {
             let repo_id: String = row.get("repo_id")?;
             let status: String = row.get("status")?;

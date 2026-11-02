@@ -105,6 +105,13 @@ impl AgentRun {
         self.status == AgentRunStatus::Idle
     }
 
+    /// Why conductor refuses to stop this run, if it does. `Some` only for idle
+    /// interactive sessions; callers surface the message to the user.
+    pub fn idle_stop_refusal(&self) -> Option<&'static str> {
+        self.is_idle()
+            .then_some("Agent is idle — an interactive session can't be stopped from conductor")
+    }
+
     /// Returns true if conductor may stop this run. Idle interactive sessions
     /// belong to the developer's terminal and are never stopped by conductor.
     pub fn is_stoppable(&self) -> bool {
@@ -491,6 +498,23 @@ mod tests {
         assert!(run.is_active(), "Running must be active");
         run.status = AgentRunStatus::WaitingForFeedback;
         assert!(run.is_active(), "WaitingForFeedback must be active");
+    }
+
+    #[test]
+    fn active_statuses_sql_matches_is_active() {
+        let mut run = make_full_run();
+        for status in [
+            AgentRunStatus::Running,
+            AgentRunStatus::WaitingForFeedback,
+            AgentRunStatus::Idle,
+            AgentRunStatus::Completed,
+            AgentRunStatus::Failed,
+            AgentRunStatus::Cancelled,
+        ] {
+            run.status = status;
+            let in_sql = crate::agent::status::ACTIVE_STATUSES_SQL.contains(&format!("'{status}'"));
+            assert_eq!(run.is_active(), in_sql, "{status}");
+        }
     }
 
     #[test]

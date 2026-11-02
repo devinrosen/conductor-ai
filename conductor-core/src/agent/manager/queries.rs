@@ -90,18 +90,15 @@ impl<'a> AgentManager<'a> {
     /// Returns true if the conversation has any currently active (running,
     /// waiting_for_feedback or idle) agent run.
     pub fn has_active_run_for_conversation(&self, conversation_id: &str) -> Result<bool> {
-        let running = AgentRunStatus::Running.to_string();
-        let waiting = AgentRunStatus::WaitingForFeedback.to_string();
-        let idle = AgentRunStatus::Idle.to_string();
         let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) AS cnt FROM agent_runs \
-             WHERE conversation_id = :conversation_id \
-               AND status IN (:running, :waiting, :idle)",
+            &format!(
+                "SELECT COUNT(*) AS cnt FROM agent_runs \
+                 WHERE conversation_id = :conversation_id \
+                   AND status IN {}",
+                crate::agent::status::ACTIVE_STATUSES_SQL
+            ),
             named_params! {
                 ":conversation_id": conversation_id,
-                ":running": running,
-                ":waiting": waiting,
-                ":idle": idle,
             },
             |row| row.get("cnt"),
         )?;

@@ -540,12 +540,8 @@ pub async fn stop_agent(
                 )
             })?;
 
-        if run.is_idle() {
-            return Err(conductor_core::error::ConductorError::Agent(
-                "Agent is idle — an interactive session can't be stopped from conductor"
-                    .to_string(),
-            )
-            .into());
+        if let Some(msg) = run.idle_stop_refusal() {
+            return Err(conductor_core::error::ConductorError::Agent(msg.to_string()).into());
         }
         if !run.is_stoppable() {
             return Err(conductor_core::error::ConductorError::Agent(
@@ -1357,12 +1353,8 @@ pub async fn stop_repo_agent(
             return Err(ConductorError::Agent("Agent run not found".to_string()).into());
         }
 
-        if run.is_idle() {
-            return Err(ConductorError::Agent(
-                "Agent is idle — an interactive session can't be stopped from conductor"
-                    .to_string(),
-            )
-            .into());
+        if let Some(msg) = run.idle_stop_refusal() {
+            return Err(ConductorError::Agent(msg.to_string()).into());
         }
         if !run.is_stoppable() {
             return Err(ConductorError::Agent("Agent is not running".to_string()).into());
@@ -2041,5 +2033,95 @@ mod tests {
         }
 
         let _ = tmp;
+    }
+
+    /// Seed an interactive run on `w1`/`r1` with the given status and return its id.
+    async fn seed_run_with_status(state: &AppState, status: &str) -> String {
+        let db = state.db.lock().await;
+        let run = AgentManager::new(&db)
+            .create_run(Some("w1"), "interactive", None)
+            .unwrap();
+        db.execute(
+            "UPDATE agent_runs SET status = ?1, repo_id = 'r1' WHERE id = ?2",
+            rusqlite::params![status, run.id],
+        )
+        .unwrap();
+        run.id
+    }
+
+    async fn post_stop(state: &AppState, uri: &str) -> (StatusCode, String) {
+        let app = api_router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    async fn status_of(state: &AppState, run_id: &str) -> AgentRunStatus {
+        let db = state.db.lock().await;
+        AgentManager::new(&db)
+            .get_run(run_id)
+            .unwrap()
+            .unwrap()
+            .status
+    }
+
+    #[tokio::test]
+    async fn stop_agent_refuses_idle_run_and_leaves_status() {
+        let (state, _tmp) = seeded_state();
+        let run_id = seed_run_with_status(&state, "idle").await;
+        let (code, body) = post_stop(&state, "/api/worktrees/w1/agent/stop").await;
+        assert!(!code.is_success(), "{code} {body}");
+        assert!(
+            body.contains("idle") && body.contains("can't be stopped"),
+            "{body}"
+        );
+        assert_eq!(status_of(&state, &run_id).await, AgentRunStatus::Idle);
+    }
+
+    #[tokio::test]
+    async fn stop_agent_completed_run_reports_not_running() {
+        let (state, _tmp) = seeded_state();
+        let run_id = seed_run_with_status(&state, "completed").await;
+        let (code, body) = post_stop(&state, "/api/worktrees/w1/agent/stop").await;
+        assert!(!code.is_success(), "{code} {body}");
+        assert!(body.contains("Agent is not running"), "{body}");
+        assert_eq!(status_of(&state, &run_id).await, AgentRunStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn stop_repo_agent_refuses_idle_run_and_leaves_status() {
+        let (state, _tmp) = seeded_state();
+        let run_id = seed_run_with_status(&state, "idle").await;
+        let uri = format!("/api/repos/r1/agent/{run_id}/stop");
+        let (code, body) = post_stop(&state, &uri).await;
+        assert!(!code.is_success(), "{code} {body}");
+        assert!(
+            body.contains("idle") && body.contains("can't be stopped"),
+            "{body}"
+        );
+        assert_eq!(status_of(&state, &run_id).await, AgentRunStatus::Idle);
+    }
+
+    #[tokio::test]
+    async fn stop_repo_agent_completed_run_reports_not_running() {
+        let (state, _tmp) = seeded_state();
+        let run_id = seed_run_with_status(&state, "completed").await;
+        let uri = format!("/api/repos/r1/agent/{run_id}/stop");
+        let (code, body) = post_stop(&state, &uri).await;
+        assert!(!code.is_success(), "{code} {body}");
+        assert!(body.contains("Agent is not running"), "{body}");
+        assert_eq!(status_of(&state, &run_id).await, AgentRunStatus::Completed);
     }
 }

@@ -1324,16 +1324,21 @@ pub fn run(conn: &Connection) -> Result<()> {
     // sqlite_master before the swap and replayed afterwards, since DROP TABLE
     // drops them. Guards keep partial-schema test fixtures working.
     if version < 87 {
+        // Only "no such table/column" means a partial test fixture; any other
+        // error (e.g. SQLITE_BUSY) must propagate so the version is not bumped
+        // without the swap.
         let can_swap: bool = table_exists(conn, "agent_runs")?
-            && conn
-                .prepare(
-                    "SELECT id, worktree_id, session_id, prompt, status, result_text, cost_usd, \
-                     num_turns, duration_ms, started_at, ended_at, log_file, model, plan, \
-                     parent_run_id, input_tokens, output_tokens, cache_read_input_tokens, \
-                     cache_creation_input_tokens, bot_name, repo_id, conversation_id, \
-                     subprocess_pid, runtime FROM agent_runs LIMIT 0",
-                )
-                .is_ok();
+            && match conn.prepare(
+                "SELECT id, worktree_id, session_id, prompt, status, result_text, cost_usd, \
+                 num_turns, duration_ms, started_at, ended_at, log_file, model, plan, \
+                 parent_run_id, input_tokens, output_tokens, cache_read_input_tokens, \
+                 cache_creation_input_tokens, bot_name, repo_id, conversation_id, \
+                 subprocess_pid, runtime FROM agent_runs LIMIT 0",
+            ) {
+                Ok(_) => true,
+                Err(e) if e.to_string().contains("no such column") => false,
+                Err(e) => return Err(e.into()),
+            };
         let already_migrated: bool = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master \
@@ -1341,23 +1346,37 @@ pub fn run(conn: &Connection) -> Result<()> {
                 [],
                 |row| row.get::<_, i64>(0),
             )
-            .map(|n| n > 0)
-            .unwrap_or(false);
+            .map(|n| n > 0)?;
         if can_swap && !already_migrated {
             with_foreign_keys_off(conn, || {
-                let triggers: Vec<String> = {
-                    let mut stmt = conn.prepare(
-                        "SELECT sql FROM sqlite_master \
-                         WHERE type='trigger' AND tbl_name='agent_runs' AND sql IS NOT NULL",
-                    )?;
-                    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-                    rows.collect::<std::result::Result<Vec<_>, _>>()?
+                // Swap and trigger replay share one transaction: a failed replay
+                // rolls back the swap, so a retry re-runs both.
+                conn.execute_batch("BEGIN IMMEDIATE;")?;
+                let body = || -> Result<()> {
+                    let triggers: Vec<String> = {
+                        let mut stmt = conn.prepare(
+                            "SELECT sql FROM sqlite_master \
+                             WHERE type='trigger' AND tbl_name='agent_runs' AND sql IS NOT NULL",
+                        )?;
+                        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+                        rows.collect::<std::result::Result<Vec<_>, _>>()?
+                    };
+                    conn.execute_batch(include_str!("migrations/087_interactive_sessions.sql"))?;
+                    for sql in triggers {
+                        conn.execute_batch(&sql)?;
+                    }
+                    Ok(())
                 };
-                conn.execute_batch(include_str!("migrations/087_interactive_sessions.sql"))?;
-                for sql in triggers {
-                    conn.execute_batch(&sql)?;
+                match body() {
+                    Ok(()) => {
+                        conn.execute_batch("COMMIT;")?;
+                        Ok(())
+                    }
+                    Err(e) => {
+                        let _ = conn.execute_batch("ROLLBACK;");
+                        Err(e)
+                    }
                 }
-                Ok(())
             })?;
         }
         if table_exists(conn, "feedback_requests")? {
@@ -3110,6 +3129,17 @@ mod tests {
             )
             .unwrap();
         assert_eq!(version, 87);
+    }
+
+    #[test]
+    fn test_migration_087_commits_swap_and_trigger_together() {
+        let conn = fixture_086(true);
+        run(&conn).unwrap();
+        assert!(conn.is_autocommit(), "migration must not leave a txn open");
+        let fk: i64 = conn
+            .pragma_query_value(None, "foreign_keys", |r| r.get(0))
+            .unwrap();
+        assert_eq!(fk, 1, "foreign_keys must be restored");
     }
 
     #[test]

@@ -104,7 +104,8 @@ impl<'a> AgentManager<'a> {
         let active_runs = query_collect(
             self.conn,
             &format!(
-                "{AGENT_RUN_SELECT} WHERE status IN ('running', 'waiting_for_feedback', 'idle')"
+                "{AGENT_RUN_SELECT} WHERE status IN {}",
+                crate::agent::status::ACTIVE_STATUSES_SQL
             ),
             [],
             row_to_agent_run,

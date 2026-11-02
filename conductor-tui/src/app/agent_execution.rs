@@ -502,9 +502,8 @@ impl App {
             return;
         };
 
-        if run.is_idle() {
-            self.state.status_message =
-                Some("Idle interactive sessions can't be stopped from conductor".to_string());
+        if let Some(msg) = run.idle_stop_refusal() {
+            self.state.status_message = Some(msg.to_string());
             return;
         }
         if !run.is_stoppable() {
@@ -1129,9 +1128,8 @@ impl App {
             .cloned();
 
         let Some(run) = run else { return };
-        if run.is_idle() {
-            self.state.status_message =
-                Some("Idle interactive sessions can't be stopped from conductor".to_string());
+        if let Some(msg) = run.idle_stop_refusal() {
+            self.state.status_message = Some(msg.to_string());
             return;
         }
         if !run.is_stoppable() {

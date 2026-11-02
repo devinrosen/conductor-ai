@@ -20,7 +20,7 @@ import { EmptyState } from "../components/shared/EmptyState";
 import { ModelPicker } from "../components/shared/ModelPicker";
 import { buildTicketTree } from "../utils/ticketDeps";
 import { deriveWorktreeSlug } from "../utils/worktreeUtils";
-import { formatIdleSince, isActiveRun, isStoppableRun } from "../utils/agentStats";
+import { idleSinceLabel, isActiveRun, isStoppableRun } from "../utils/agentStats";
 import {
   useConductorEvents,
   type ConductorEventType,
@@ -604,7 +604,7 @@ export function RepoDetailPage() {
             <div className="flex items-center gap-2">
               <span className="inline-block h-2 w-2 rounded-full bg-sky-400" />
               <span className="font-medium text-sky-800">
-                Session idle{formatIdleSince(activeRepoAgent.idle_since) ? ` since ${formatIdleSince(activeRepoAgent.idle_since)}` : ""}
+                Session idle{idleSinceLabel(activeRepoAgent)}
               </span>
               {activeRepoAgent.result_text && (
                 <span className="text-sky-700 truncate">{activeRepoAgent.result_text.slice(0, 100)}</span>

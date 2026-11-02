@@ -4,12 +4,11 @@
 -- transcript_path, transcript_offset). SQLite cannot ALTER a CHECK in place, so
 -- this is a table swap. Must run with PRAGMA foreign_keys = OFF (handled in Rust via
 -- with_foreign_keys_off). Triggers on agent_runs are captured and replayed in Rust,
--- because DROP TABLE silently drops them.
+-- because DROP TABLE silently drops them. This file has no BEGIN/COMMIT: Rust wraps
+-- the swap and the trigger replay in one transaction so they succeed or fail together.
 --
 -- The INSERT uses an explicit column list: column order in the live table differs from
 -- the CREATE below after the ALTER ADD/DROP/RENAME history.
-
-BEGIN;
 
 CREATE TABLE agent_runs_new (
     id                          TEXT PRIMARY KEY,
@@ -64,5 +63,3 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_worktree ON agent_runs(worktree_id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_repo_id ON agent_runs(repo_id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_worktree_started ON agent_runs(worktree_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_conversation_id ON agent_runs(conversation_id);
-
-COMMIT;

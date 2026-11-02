@@ -281,10 +281,7 @@ pub fn worktree_list_item_with_prefix(
 
     // Add live-run tokens only if the run is still active (not yet counted in DB aggregate).
     if let Some(run) = agent_run {
-        if matches!(
-            run.status,
-            AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback | AgentRunStatus::Idle
-        ) {
+        if run.is_active() {
             total_in += run.input_tokens.unwrap_or(0);
             total_out += run.output_tokens.unwrap_or(0);
         }
@@ -482,6 +479,23 @@ pub fn idle_detail_text(run: &conductor_core::agent::AgentRun, max_message: usiz
     format!("{since}{message}")
 }
 
+/// The `Agent: [idle] …` detail line shared by the repo and worktree detail views.
+pub fn idle_status_line<'a>(
+    run: &conductor_core::agent::AgentRun,
+    theme: &crate::theme::Theme,
+) -> ratatui::text::Line<'a> {
+    use ratatui::style::Style;
+    use ratatui::text::{Line, Span};
+    Line::from(vec![
+        Span::styled("Agent: ", Style::default().fg(theme.label_secondary)),
+        Span::styled("[idle]", Style::default().fg(theme.status_idle)),
+        Span::styled(
+            idle_detail_text(run, 80),
+            Style::default().fg(theme.label_secondary),
+        ),
+    ])
+}
+
 /// Truncate a string to at most `max` characters, appending "…" if truncated.
 pub fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
@@ -495,6 +509,73 @@ pub fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn idle_run(
+        result_text: Option<&str>,
+        idle_since: Option<&str>,
+    ) -> conductor_core::agent::AgentRun {
+        conductor_core::agent::AgentRun {
+            id: "r".into(),
+            worktree_id: Some("w".into()),
+            repo_id: None,
+            session_id: None,
+            prompt: String::new(),
+            status: conductor_core::agent::AgentRunStatus::Idle,
+            result_text: result_text.map(str::to_string),
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            started_at: "2026-01-01T00:00:00Z".into(),
+            ended_at: None,
+            log_file: None,
+            model: None,
+            plan: None,
+            parent_run_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            bot_name: None,
+            conversation_id: None,
+            subprocess_pid: None,
+            runtime: "interactive".into(),
+            idle_since: idle_since.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn idle_detail_text_since_and_message() {
+        let run = idle_run(Some("All done"), Some("2026-01-01T12:34:56Z"));
+        let text = idle_detail_text(&run, 80);
+        assert!(text.starts_with(" idle since "), "{text}");
+        assert!(text.ends_with(" — All done"), "{text}");
+    }
+
+    #[test]
+    fn idle_detail_text_missing_result_text() {
+        let run = idle_run(None, Some("2026-01-01T12:34:56Z"));
+        let text = idle_detail_text(&run, 80);
+        assert!(text.starts_with(" idle since "), "{text}");
+        assert!(!text.contains('—'), "{text}");
+        let blank = idle_run(Some("  \n "), Some("2026-01-01T12:34:56Z"));
+        assert!(!idle_detail_text(&blank, 80).contains('—'));
+    }
+
+    #[test]
+    fn idle_detail_text_truncates_and_collapses_whitespace() {
+        let run = idle_run(Some("one\n\ntwo   three four five six"), None);
+        assert_eq!(idle_detail_text(&run, 80), " — one two three four five six");
+        let long = idle_run(Some(&"x".repeat(100)), None);
+        let text = idle_detail_text(&long, 20);
+        assert_eq!(text, format!(" — {}...", "x".repeat(17)));
+    }
+
+    #[test]
+    fn idle_detail_text_invalid_timestamp_omits_since() {
+        let run = idle_run(Some("hi"), Some("not-a-time"));
+        assert_eq!(idle_detail_text(&run, 80), " — hi");
+        assert_eq!(idle_detail_text(&idle_run(None, None), 80), "");
+    }
 
     #[test]
     fn idle_symbol_differs_from_other_statuses() {

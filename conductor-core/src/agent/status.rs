@@ -24,6 +24,10 @@ pub enum AgentRunStatus {
     Cancelled,
 }
 
+/// SQL list of the statuses for which `AgentRun::is_active()` is true. Keep in
+/// sync with `is_active()` (a unit test asserts they agree); use in `status IN {..}`.
+pub const ACTIVE_STATUSES_SQL: &str = "('running', 'waiting_for_feedback', 'idle')";
+
 impl std::fmt::Display for AgentRunStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {

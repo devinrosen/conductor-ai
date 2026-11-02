@@ -1,5 +1,5 @@
 import type { AgentRun } from "../../api/types";
-import { formatIdleSince, formatTokens, isActiveRun, statusColors, statusLabels } from "../../utils/agentStats";
+import { formatTokens, idleSinceLabel, isActiveRun, statusColors, statusLabels } from "../../utils/agentStats";
 import { StatusPulseBadge } from "../shared/StatusPulseBadge";
 import { TimeAgo } from "../shared/TimeAgo";
 import { ChildRunsList } from "./ChildRunsList";
@@ -93,7 +93,7 @@ export function AgentStatusDisplay({
 
       {run.status === "idle" && (
         <p className="mb-3 text-sm text-sky-700">
-          Idle{formatIdleSince(run.idle_since) ? ` since ${formatIdleSince(run.idle_since)}` : ""}
+          Idle{idleSinceLabel(run)}
           {run.result_text ? (
             <span className="text-gray-500"> — {run.result_text.slice(0, 200)}</span>
           ) : null}

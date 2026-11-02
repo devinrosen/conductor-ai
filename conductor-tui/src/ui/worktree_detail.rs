@@ -595,14 +595,7 @@ fn render_agent_status_line(
                 Style::default().fg(theme.label_secondary),
             ),
         ]),
-        AgentRunStatus::Idle => Line::from(vec![
-            Span::styled("Agent: ", Style::default().fg(theme.label_secondary)),
-            Span::styled("[idle]", Style::default().fg(theme.status_idle)),
-            Span::styled(
-                super::common::idle_detail_text(run, 80),
-                Style::default().fg(theme.label_secondary),
-            ),
-        ]),
+        AgentRunStatus::Idle => super::common::idle_status_line(run, theme),
         AgentRunStatus::Completed => {
             let mut spans = vec![
                 Span::styled("Agent: ", Style::default().fg(theme.label_secondary)),

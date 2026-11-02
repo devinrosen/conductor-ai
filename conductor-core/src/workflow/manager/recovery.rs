@@ -290,12 +290,9 @@ pub fn reap_orphaned_workflow_runs(conn: &Connection) -> Result<usize> {
     for (run_id, parent_run_id) in waiting_runs {
         // A missing parent (None) is also treated as dead — if the agent run
         // has been purged from the DB its executor is certainly gone.
-        let dead_parent = !matches!(
-            parent_runs.get(&parent_run_id).map(|r| &r.status),
-            Some(AgentRunStatus::Running)
-                | Some(AgentRunStatus::WaitingForFeedback)
-                | Some(AgentRunStatus::Idle)
-        );
+        let dead_parent = !parent_runs
+            .get(&parent_run_id)
+            .is_some_and(|r| r.is_active());
 
         // Check if the active gate step's timeout has elapsed.
         let gate_step = gate_steps.get(&run_id);
