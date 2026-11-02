@@ -151,7 +151,7 @@ mod tests {
             None,
         )
         .unwrap();
-        (run.id, step_id)
+        (run.id.clone(), step_id)
     }
 
     #[test]
