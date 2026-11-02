@@ -1326,7 +1326,13 @@ pub fn run(conn: &Connection) -> Result<()> {
     if version < 87 {
         let can_swap: bool = table_exists(conn, "agent_runs")?
             && conn
-                .prepare("SELECT runtime, subprocess_pid, session_id FROM agent_runs LIMIT 0")
+                .prepare(
+                    "SELECT id, worktree_id, session_id, prompt, status, result_text, cost_usd, \
+                     num_turns, duration_ms, started_at, ended_at, log_file, model, plan, \
+                     parent_run_id, input_tokens, output_tokens, cache_read_input_tokens, \
+                     cache_creation_input_tokens, bot_name, repo_id, conversation_id, \
+                     subprocess_pid, runtime FROM agent_runs LIMIT 0",
+                )
                 .is_ok();
         let already_migrated: bool = conn
             .query_row(
