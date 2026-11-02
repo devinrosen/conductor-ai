@@ -180,24 +180,25 @@ pub fn build_synthetic_event(name: &str, now: impl Into<String>) -> Result<Event
             .into_iter()
             .collect(),
         },
-        "feedback.requested" => Event {
-            kind: "feedback.requested".into(),
-            title: "Conductor \u{2014} Feedback Requested".into(),
-            body: "Test Agent Run".into(),
-            severity: Severity::Info,
-            fields: [
-                ("run_id".into(), run_id),
-                ("prompt_preview".into(), "Is this correct?".into()),
-                ("repo_slug".into(), "test-repo".into()),
-                ("branch".into(), "main".into()),
+        "feedback.requested" => {
+            // Share the production event definition so the test notification cannot drift.
+            let mut ev = super::runs::feedback_event(&super::runs::FeedbackNotificationParams {
+                request_id: "01TESTFEEDBACK000000000000",
+                run_id: &run_id,
+                prompt_preview: "Is this correct?",
+                repo_slug: "test-repo",
+                branch: "main",
+                worktree_slug: Some("test-worktree"),
+            });
+            ev.fields.extend([
                 ("duration_ms".into(), "1000".into()),
                 ("ticket_url".into(), ticket_url),
                 ("url".into(), url),
+                // feedback_event stamps Utc::now(); honor the injected clock.
                 ("timestamp".into(), now),
-            ]
-            .into_iter()
-            .collect(),
-        },
+            ]);
+            ev
+        }
         other => {
             return Err(ConductorError::InvalidInput(format!(
                 "unknown event name: '{other}'. Valid events: {}",

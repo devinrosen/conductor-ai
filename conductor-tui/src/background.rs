@@ -228,10 +228,25 @@ pub fn spawn_db_poller(
                         // this session to avoid a redundant INSERT OR IGNORE on every tick.
                         let feedback_now = chrono::Utc::now();
                         let feedback_max_age = chrono::Duration::seconds(FEEDBACK_NOTIFY_MAX_SECS);
-                        for req in &payload.pending_feedback_requests {
-                            if notified_feedback_ids.insert(req.id.clone())
-                                && is_recent(&req.created_at, feedback_now, feedback_max_age)
-                            {
+                        let to_notify: Vec<_> = payload
+                            .pending_feedback_requests
+                            .iter()
+                            .filter(|req| {
+                                notified_feedback_ids.insert(req.id.clone())
+                                    && is_recent(&req.created_at, feedback_now, feedback_max_age)
+                            })
+                            .collect();
+                        if !to_notify.is_empty() {
+                            let run_ids: Vec<&str> =
+                                to_notify.iter().map(|r| r.run_id.as_str()).collect();
+                            let contexts = crate::notify::feedback_run_contexts(conn, &run_ids)
+                                .unwrap_or_else(|e| {
+                                    tracing::warn!("feedback run context lookup failed: {e}");
+                                    Default::default()
+                                });
+                            let empty = crate::notify::FeedbackRunContext::default();
+                            for req in to_notify {
+                                let ctx = contexts.get(&req.run_id).unwrap_or(&empty);
                                 crate::notify::fire_feedback_notification(
                                     conn,
                                     &config.notifications,
@@ -239,9 +254,11 @@ pub fn spawn_db_poller(
                                     dedup_store.clone(),
                                     &crate::notify::FeedbackNotificationParams {
                                         request_id: &req.id,
+                                        run_id: &req.run_id,
                                         prompt_preview: &req.prompt,
-                                        repo_slug: "",
-                                        branch: "",
+                                        repo_slug: &ctx.repo_slug,
+                                        branch: &ctx.branch,
+                                        worktree_slug: ctx.worktree_slug.as_deref(),
                                     },
                                 );
                             }

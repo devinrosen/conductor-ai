@@ -314,6 +314,12 @@ All entries in the event `fields` map are injected as `RUNKON_NOTIFY_FIELD_<UPPE
 | Variable | Example value | Notes |
 |---|---|---|
 | `RUNKON_NOTIFY_FIELD_PROMPT_PREVIEW` | First ~100 chars of prompt | `feedback.requested` |
+| `RUNKON_NOTIFY_FIELD_RUN_ID` | `"01ABCDEF..."` | `feedback.requested`: the agent run that asked (previously held the feedback request id) |
+| `RUNKON_NOTIFY_FIELD_FEEDBACK_ID` | `"01GHIJKL..."` | `feedback.requested`: the feedback request id |
+| `RUNKON_NOTIFY_FIELD_REPO_SLUG` / `RUNKON_NOTIFY_FIELD_BRANCH` | `"conductor-ai"` / `"feat/x"` | `feedback.requested`: resolved from the agent run; `BRANCH` is empty for repo-scoped agents |
+| `RUNKON_NOTIFY_FIELD_WORKTREE_SLUG` | `"feat-x"` | `feedback.requested`: empty for repo-scoped agents |
+
+The `feedback.requested` body is `<worktree slug>: <prompt>`, falling back to the repo slug, or the bare prompt when neither is known.
 
 ---
 
