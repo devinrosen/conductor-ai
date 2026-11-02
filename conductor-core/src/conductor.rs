@@ -29,6 +29,19 @@ impl Conductor {
     pub fn db_path() -> PathBuf {
         config_db_path()
     }
+
+    /// Path of the database this `Conductor`'s connection is open on.
+    ///
+    /// Use this, not [`Conductor::db_path`], when handing a path to a background
+    /// thread that opens its own connection: a `Conductor` built on a temp database
+    /// (as in tests) must not send that thread to the real `~/.conductor` database.
+    /// Falls back to the default path for an in-memory connection.
+    pub fn conn_db_path(&self) -> PathBuf {
+        match self.conn.path() {
+            Some(p) if !p.is_empty() => PathBuf::from(p),
+            _ => config_db_path(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -62,6 +75,28 @@ mod tests {
         }
         let conductor = result.unwrap_or_else(|e| panic!("{label} should succeed: {e}"));
         assert_conductor_functional(conductor);
+    }
+
+    #[test]
+    fn conn_db_path_returns_the_open_database() {
+        let tmp = NamedTempFile::new().unwrap();
+        let conductor = Conductor {
+            conn: open_database(tmp.path()).unwrap(),
+            config: Config::default(),
+        };
+        assert_eq!(
+            conductor.conn_db_path().canonicalize().unwrap(),
+            tmp.path().canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn conn_db_path_falls_back_to_default_for_in_memory() {
+        let conductor = Conductor {
+            conn: Connection::open_in_memory().unwrap(),
+            config: Config::default(),
+        };
+        assert_eq!(conductor.conn_db_path(), config_db_path());
     }
 
     #[test]
