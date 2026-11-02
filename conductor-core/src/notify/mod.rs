@@ -1,4 +1,4 @@
-use crate::config::NotificationConfig;
+use crate::config::{HookConfig, NotificationConfig};
 
 pub mod anomalies;
 pub mod dedup;
@@ -16,6 +16,15 @@ pub use gates::*;
 pub use runkon_notify::HookRunner;
 pub use runs::*;
 pub use transitions::*;
+
+/// Returns `true` when at least one notification sink is configured: the
+/// desktop/Slack sink (`[notifications] enabled`) or any `[[notify.hooks]]` entry.
+///
+/// Single source of truth for the `fire_*` early-return guards and for callers
+/// that decide whether to load notification data at all.
+pub fn notification_sink_configured(config: &NotificationConfig, hooks: &[HookConfig]) -> bool {
+    config.enabled || !hooks.is_empty()
+}
 
 /// Returns `true` if a notification should fire given the config and run outcome.
 ///

@@ -317,6 +317,8 @@ All entries in the event `fields` map are injected as `RUNKON_NOTIFY_FIELD_<UPPE
 
 ---
 
+`feedback.requested` and `gate.waiting` hooks fire from the TUI poll loop whether or not `[notifications] enabled` is set. Feedback requests older than 24h when first observed are not announced.
+
 ## HTTP hook payload
 
 HTTP hooks receive a JSON POST body built from the `runkon_notify::Event` fields. Header values starting with `$` are resolved from the process environment (e.g. `Authorization: $SLACK_TOKEN`).
