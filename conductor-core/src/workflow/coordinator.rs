@@ -907,16 +907,27 @@ fn make_panic_sinks(db_path: std::path::PathBuf) -> Vec<Arc<dyn runkon_flow::Eve
 /// Designed for the TUI/CLI watchdog callers so they are not blocked and the
 /// WorkflowManager (data-access layer) does not need to call engine-layer code.
 ///
+/// `db_path` is the database the run lives in; `None` means the default conductor
+/// database. Callers holding a connection should pass
+/// [`crate::db::connection_db_path`] so a temp database is never swapped for the
+/// real one.
+///
 /// Returns the thread `JoinHandle` so callers can optionally join for testing;
 /// production callers may drop it to detach.
 pub fn spawn_workflow_resume(
     run_id: String,
     config: Arc<Config>,
     conductor_bin_dir: Option<std::path::PathBuf>,
+    db_path: Option<std::path::PathBuf>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        let db_path = crate::config::db_path();
-        let params = make_resume_params((*config).clone(), run_id.clone(), conductor_bin_dir, None);
+        let db_path = db_path.unwrap_or_else(crate::config::db_path);
+        let params = make_resume_params(
+            (*config).clone(),
+            run_id.clone(),
+            conductor_bin_dir,
+            Some(db_path.clone()),
+        );
         let run_id_inner = run_id.clone();
         let sinks = make_panic_sinks(db_path.clone());
         runkon_flow::run_with_per_run_log(
@@ -988,14 +999,21 @@ pub fn spawn_heartbeat_resume(p: SpawnHeartbeatResumeParams) -> std::thread::Joi
 /// Spawn a resume thread for each claimed run ID.
 ///
 /// Consolidates the claim-then-spawn loop used by TUI and CLI watchdogs so
-/// the pattern lives in one place.
+/// the pattern lives in one place. `db_path` is passed to each
+/// [`spawn_workflow_resume`]; `None` means the default conductor database.
 pub fn spawn_claimed_runs(
     claimed: Vec<String>,
     config: Arc<Config>,
     conductor_bin_dir: Option<std::path::PathBuf>,
+    db_path: Option<std::path::PathBuf>,
 ) {
     for run_id in claimed {
-        spawn_workflow_resume(run_id, Arc::clone(&config), conductor_bin_dir.clone());
+        spawn_workflow_resume(
+            run_id,
+            Arc::clone(&config),
+            conductor_bin_dir.clone(),
+            db_path.clone(),
+        );
     }
 }
 
@@ -1547,10 +1565,12 @@ mod tests {
     #[test]
     fn spawn_workflow_resume_does_not_panic_on_invalid_run_id() {
         // resume_workflow_standalone fails (run not found) → warning is logged, no panic.
+        let db = tempfile::NamedTempFile::new().unwrap();
         let handle = spawn_workflow_resume(
             "nonexistent-run-id".to_string(),
             Arc::new(crate::config::Config::default()),
             None,
+            Some(db.path().to_path_buf()),
         );
         handle
             .join()
@@ -1566,7 +1586,12 @@ mod tests {
         // Passing an empty claimed list must not panic and must spawn no threads.
         // There's no observable side-effect to assert on, so this test just
         // verifies the function returns without panicking.
-        spawn_claimed_runs(vec![], Arc::new(crate::config::Config::default()), None);
+        spawn_claimed_runs(
+            vec![],
+            Arc::new(crate::config::Config::default()),
+            None,
+            None,
+        );
     }
 
     #[test]
@@ -1575,6 +1600,7 @@ mod tests {
         // log a warning, and exit cleanly.  The function must not panic.
         // We can't join the spawned threads here because spawn_claimed_runs doesn't
         // return handles; we give the threads a moment to finish.
+        let db = tempfile::NamedTempFile::new().unwrap();
         spawn_claimed_runs(
             vec![
                 "nonexistent-run-a".to_string(),
@@ -1582,6 +1608,7 @@ mod tests {
             ],
             Arc::new(crate::config::Config::default()),
             None,
+            Some(db.path().to_path_buf()),
         );
         // Brief yield so spawned threads can finish before the test process exits.
         std::thread::sleep(std::time::Duration::from_millis(100));

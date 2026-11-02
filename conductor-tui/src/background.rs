@@ -634,6 +634,7 @@ pub fn poll_data(
                         claimed,
                         Arc::new(config.clone()),
                         conductor_bin_dir.clone(),
+                        conductor_core::db::connection_db_path(&conn),
                     ),
                     Err(e) => tracing::warn!("claim_stuck_workflows failed: {e}"),
                 }
@@ -654,6 +655,7 @@ pub fn poll_data(
                             claimed,
                             Arc::new(config.clone()),
                             conductor_bin_dir.clone(),
+                            conductor_core::db::connection_db_path(&conn),
                         ),
                         Err(e) => tracing::warn!("claim_needs_resume_runs failed: {e}"),
                     }

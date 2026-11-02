@@ -24,6 +24,17 @@ fn configure_connection(conn: &Connection) -> Result<()> {
 
 /// Open (or create) the SQLite database with WAL mode enabled and a 5 s busy
 /// timeout.
+/// Path of the file `conn` is open on, or `None` for an in-memory connection.
+///
+/// Background threads that open their own connection must use this rather than
+/// [`crate::config::db_path`], so a caller working on a temp database (as tests
+/// do) never sends the thread to the real `~/.conductor` database.
+pub fn connection_db_path(conn: &Connection) -> Option<std::path::PathBuf> {
+    conn.path()
+        .filter(|p| !p.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
 pub fn open_database(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
     configure_connection(&conn)?;

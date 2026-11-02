@@ -1289,11 +1289,14 @@ fn test_spawn_workflow_resume_handles_failed_resume_gracefully() {
     )
     .unwrap();
 
-    // spawn_workflow_resume uses default db_path, so pass db_path via a
-    // WorkflowResumeStandalone directly — exercise via the standalone path
-    // by using a real db_path override through the config approach instead.
-    // Since spawn_workflow_resume now returns a JoinHandle, we can join it.
-    let handle = spawn_workflow_resume(run.id.clone(), Arc::new(Config::default()), None);
+    // Pass the temp DB: with `None` the thread would open (and migrate) the
+    // real ~/.conductor database.
+    let handle = spawn_workflow_resume(
+        run.id.clone(),
+        Arc::new(Config::default()),
+        None,
+        Some(db_path.clone()),
+    );
     handle
         .join()
         .expect("spawn_workflow_resume thread panicked");
