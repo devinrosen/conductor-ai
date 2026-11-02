@@ -63,7 +63,8 @@ impl DbEventDetector {
             }
         }
         let pending_ids: HashSet<&str> = pending.iter().map(|r| r.id.as_str()).collect();
-        self.seen_feedback.retain(|id| pending_ids.contains(id.as_str()));
+        self.seen_feedback
+            .retain(|id| pending_ids.contains(id.as_str()));
 
         let gates = conductor_core::workflow::list_all_waiting_gate_steps(conn)?;
         for (step, _, _) in &gates {
@@ -119,7 +120,13 @@ mod tests {
 
     fn add_gate(conn: &Connection) -> (String, String) {
         let run = conductor_core::workflow::create_workflow_run(
-            conn, "wf", Some("w1"), "ar1", false, "manual", None,
+            conn,
+            "wf",
+            Some("w1"),
+            "ar1",
+            false,
+            "manual",
+            None,
         )
         .unwrap();
         let step_id =

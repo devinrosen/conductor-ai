@@ -227,13 +227,18 @@ pub fn spawn_db_poller(
                         // Fire feedback-requested notifications, skipping IDs already notified
                         // this session to avoid a redundant INSERT OR IGNORE on every tick.
                         let feedback_now = chrono::Utc::now();
-                        let feedback_max_age = chrono::Duration::seconds(conductor_core::notify::NOTIFY_MAX_AGE_SECS);
+                        let feedback_max_age =
+                            chrono::Duration::seconds(conductor_core::notify::NOTIFY_MAX_AGE_SECS);
                         let to_notify: Vec<_> = payload
                             .pending_feedback_requests
                             .iter()
                             .filter(|req| {
                                 notified_feedback_ids.insert(req.id.clone())
-                                    && conductor_core::notify::is_recent(&req.created_at, feedback_now, feedback_max_age)
+                                    && conductor_core::notify::is_recent(
+                                        &req.created_at,
+                                        feedback_now,
+                                        feedback_max_age,
+                                    )
                             })
                             .collect();
                         if !to_notify.is_empty() {
