@@ -216,14 +216,14 @@ impl<'a> AgentManager<'a> {
         Ok(map)
     }
 
-    /// Returns counts of active agent runs (running / waiting_for_feedback) per repo_id.
+    /// Returns counts of active agent runs (running / waiting_for_feedback / idle) per repo_id.
     /// Repos with no active runs are absent from the map.
     pub fn active_run_counts_by_repo(&self) -> Result<HashMap<String, ActiveAgentCounts>> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT w.repo_id, a.status, COUNT(*) AS cnt \
              FROM agent_runs a \
              JOIN worktrees w ON w.id = a.worktree_id \
-             WHERE a.status IN ('running', 'waiting_for_feedback') \
+             WHERE a.status IN ('running', 'waiting_for_feedback', 'idle') \
              GROUP BY w.repo_id, a.status",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -239,6 +239,7 @@ impl<'a> AgentManager<'a> {
             match status.as_str() {
                 "running" => entry.running += cnt,
                 "waiting_for_feedback" => entry.waiting += cnt,
+                "idle" => entry.idle += cnt,
                 _ => {}
             }
         }
@@ -365,6 +366,17 @@ mod tests {
         let r1_counts = counts.get("r1").unwrap();
         assert_eq!(r1_counts.running, 2);
         assert_eq!(r1_counts.waiting, 1);
+        assert_eq!(r1_counts.idle, 0);
+
+        // An idle interactive session is counted separately.
+        let run5 = mgr.create_run(Some("w2"), "Task 5", None).unwrap();
+        conn.execute("UPDATE agent_runs SET status = 'idle' WHERE id = ?1", [&run5.id])
+            .unwrap();
+        let counts = mgr.active_run_counts_by_repo().unwrap();
+        let r1_counts = counts.get("r1").unwrap();
+        assert_eq!(r1_counts.running, 2);
+        assert_eq!(r1_counts.waiting, 1);
+        assert_eq!(r1_counts.idle, 1);
     }
 
     #[test]

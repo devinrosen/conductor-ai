@@ -540,7 +540,14 @@ pub async fn stop_agent(
                 )
             })?;
 
-        if !run.is_active() {
+        if run.is_idle() {
+            return Err(conductor_core::error::ConductorError::Agent(
+                "Agent is idle — an interactive session can't be stopped from conductor"
+                    .to_string(),
+            )
+            .into());
+        }
+        if !run.is_stoppable() {
             return Err(conductor_core::error::ConductorError::Agent(
                 "Agent is not running".to_string(),
             )
@@ -1350,7 +1357,14 @@ pub async fn stop_repo_agent(
             return Err(ConductorError::Agent("Agent run not found".to_string()).into());
         }
 
-        if !run.is_active() {
+        if run.is_idle() {
+            return Err(ConductorError::Agent(
+                "Agent is idle — an interactive session can't be stopped from conductor"
+                    .to_string(),
+            )
+            .into());
+        }
+        if !run.is_stoppable() {
             return Err(ConductorError::Agent("Agent is not running".to_string()).into());
         }
 

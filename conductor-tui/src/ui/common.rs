@@ -204,6 +204,7 @@ pub fn worktree_list_item_with_prefix(
         Some(match run.status {
             AgentRunStatus::Running => ("⚙", state.theme.status_running),
             AgentRunStatus::WaitingForFeedback => ("⏸", state.theme.status_waiting),
+            AgentRunStatus::Idle => (IDLE_SYMBOL, state.theme.status_idle),
             AgentRunStatus::Completed => ("✓", state.theme.status_completed),
             AgentRunStatus::Failed => ("✗", state.theme.status_failed),
             AgentRunStatus::Cancelled => ("⊘", state.theme.status_cancelled),
@@ -282,7 +283,7 @@ pub fn worktree_list_item_with_prefix(
     if let Some(run) = agent_run {
         if matches!(
             run.status,
-            AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback
+            AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback | AgentRunStatus::Idle
         ) {
             total_in += run.input_tokens.unwrap_or(0);
             total_out += run.output_tokens.unwrap_or(0);
@@ -451,6 +452,36 @@ fn format_duration_compact(elapsed: chrono::Duration) -> String {
     }
 }
 
+/// Status symbol for an idle interactive session (RFC 021). Distinct from the
+/// running (⚙), waiting (⏸), completed (✓), failed (✗) and cancelled (⊘) symbols.
+pub const IDLE_SYMBOL: &str = "◌";
+
+/// Format an RFC 3339 timestamp as local `HH:MM`, or `None` if unparseable.
+pub fn format_local_hhmm(ts: &str) -> Option<String> {
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M").to_string())
+}
+
+/// "idle since HH:MM" text for an idle run, followed by the last assistant
+/// message (`result_text`) collapsed to a single truncated line.
+pub fn idle_detail_text(run: &conductor_core::agent::AgentRun, max_message: usize) -> String {
+    let since = run
+        .idle_since
+        .as_deref()
+        .and_then(format_local_hhmm)
+        .map(|t| format!(" idle since {t}"))
+        .unwrap_or_default();
+    let message = run
+        .result_text
+        .as_deref()
+        .map(|m| m.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|m| !m.is_empty())
+        .map(|m| format!(" — {}", truncate(&m, max_message)))
+        .unwrap_or_default();
+    format!("{since}{message}")
+}
+
 /// Truncate a string to at most `max` characters, appending "…" if truncated.
 pub fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
@@ -464,6 +495,21 @@ pub fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_symbol_differs_from_other_statuses() {
+        for other in ["⚙", "⏸", "✓", "✗", "⊘"] {
+            assert_ne!(IDLE_SYMBOL, other);
+        }
+    }
+
+    #[test]
+    fn format_local_hhmm_parses_and_rejects() {
+        let out = format_local_hhmm("2026-01-01T12:34:56Z").unwrap();
+        assert_eq!(out.len(), 5);
+        assert_eq!(&out[2..3], ":");
+        assert!(format_local_hhmm("nope").is_none());
+    }
 
     #[test]
     fn format_elapsed_minutes() {

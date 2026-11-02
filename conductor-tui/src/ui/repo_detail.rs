@@ -719,6 +719,14 @@ fn render_repo_agent_status(
                 Style::default().fg(theme.status_waiting),
             ),
         ]),
+        AgentRunStatus::Idle => Line::from(vec![
+            Span::styled("Agent: ", Style::default().fg(theme.label_secondary)),
+            Span::styled("[idle]", Style::default().fg(theme.status_idle)),
+            Span::styled(
+                super::common::idle_detail_text(run, 80),
+                Style::default().fg(theme.label_secondary),
+            ),
+        ]),
         AgentRunStatus::Completed => {
             let turns = run.num_turns.unwrap_or(0);
             let dur_secs = run.duration_ms.unwrap_or(0) as f64 / 1000.0;

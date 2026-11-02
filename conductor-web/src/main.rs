@@ -931,6 +931,7 @@ mod tests {
             conversation_id: None,
             subprocess_pid: None,
             runtime: "claude".to_string(),
+            idle_since: None,
         }
     }
 

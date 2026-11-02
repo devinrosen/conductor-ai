@@ -302,7 +302,19 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                         | WorkflowRunStatus::Cancelled
                 )
             });
-        if has_waiting {
+        let has_idle = state
+            .data
+            .latest_agent_runs
+            .get(&wt.id)
+            .is_some_and(|run| run.is_idle());
+        if has_idle {
+            // Idle interactive sessions can't be stopped from conductor.
+            if has_resumable_wf {
+                "Tab=switch panel  y=copy  o=act  X=clear conv  w=workflow  r=resume wf  d=del  Esc=back"
+            } else {
+                "Tab=switch panel  y=copy  o=act  X=clear conv  w=workflow  d=del  Esc=back"
+            }
+        } else if has_waiting {
             if has_resumable_wf {
                 "Tab=switch panel  y=copy  o=act  f=respond  F=dismiss  x=stop  w=workflow  r=resume wf  d=del  Esc=back"
             } else {
@@ -583,6 +595,14 @@ fn render_agent_status_line(
                 Style::default().fg(theme.label_secondary),
             ),
         ]),
+        AgentRunStatus::Idle => Line::from(vec![
+            Span::styled("Agent: ", Style::default().fg(theme.label_secondary)),
+            Span::styled("[idle]", Style::default().fg(theme.status_idle)),
+            Span::styled(
+                super::common::idle_detail_text(run, 80),
+                Style::default().fg(theme.label_secondary),
+            ),
+        ]),
         AgentRunStatus::Completed => {
             let mut spans = vec![
                 Span::styled("Agent: ", Style::default().fg(theme.label_secondary)),
@@ -658,6 +678,7 @@ fn render_child_run_line(
         AgentRunStatus::Failed => ("failed", theme.status_failed),
         AgentRunStatus::Cancelled => ("cancelled", theme.status_cancelled),
         AgentRunStatus::WaitingForFeedback => ("waiting", theme.status_waiting),
+        AgentRunStatus::Idle => ("idle", theme.status_idle),
     };
     let status_str = format!("[{status_text}]");
 

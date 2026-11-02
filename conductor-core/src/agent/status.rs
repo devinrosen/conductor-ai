@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 /// so that workflow-engine states like `WaitingForFeedback` — which no
 /// runtime in `runkon-runtimes` ever emits — stay out of the portable crate.
 /// Convert to the runtime-layer [`runkon_runtimes::RunStatus`] at the
-/// boundary; `WaitingForFeedback` collapses to `RunStatus::Running` since
+/// boundary; `WaitingForFeedback` and `Idle` collapse to `RunStatus::Running` since
 /// the runtime sees a paused-for-feedback run as "logically still active,
 /// not yet terminal".
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -15,6 +15,10 @@ use serde::{Deserialize, Serialize};
 pub enum AgentRunStatus {
     Running,
     WaitingForFeedback,
+    /// Interactive session between turns (RFC 021): the turn ended and it is
+    /// the developer's move. The session is alive (PID checked by the reaper)
+    /// but conductor must not stop it.
+    Idle,
     Completed,
     Failed,
     Cancelled,
@@ -25,6 +29,7 @@ impl std::fmt::Display for AgentRunStatus {
         let s = match self {
             Self::Running => "running",
             Self::WaitingForFeedback => "waiting_for_feedback",
+            Self::Idle => "idle",
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
@@ -39,6 +44,7 @@ impl std::str::FromStr for AgentRunStatus {
         match s {
             "running" => Ok(Self::Running),
             "waiting_for_feedback" => Ok(Self::WaitingForFeedback),
+            "idle" => Ok(Self::Idle),
             "completed" => Ok(Self::Completed),
             "failed" => Ok(Self::Failed),
             "cancelled" => Ok(Self::Cancelled),
@@ -55,7 +61,11 @@ impl From<AgentRunStatus> for runkon_runtimes::RunStatus {
             // Runtime layer doesn't model "waiting for feedback" — those runs
             // appear "running" from its perspective; the actual subprocess has
             // exited but the conductor-side row hasn't reached a terminal state.
-            AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback => Self::Running,
+            // `Idle` interactive sessions never go through runkon; if one is
+            // converted it is likewise logically still active.
+            AgentRunStatus::Running
+            | AgentRunStatus::WaitingForFeedback
+            | AgentRunStatus::Idle => Self::Running,
             AgentRunStatus::Completed => Self::Completed,
             AgentRunStatus::Failed => Self::Failed,
             AgentRunStatus::Cancelled => Self::Cancelled,
@@ -265,6 +275,7 @@ mod tests {
         for status in [
             AgentRunStatus::Running,
             AgentRunStatus::WaitingForFeedback,
+            AgentRunStatus::Idle,
             AgentRunStatus::Completed,
             AgentRunStatus::Failed,
             AgentRunStatus::Cancelled,

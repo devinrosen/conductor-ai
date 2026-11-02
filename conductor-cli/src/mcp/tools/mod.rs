@@ -293,6 +293,7 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
             "List agent runs with optional filters for repo, worktree, and/or status. \
              Use status=waiting_for_feedback to discover runs that are awaiting human input; \
              pass the run_id to conductor_submit_agent_feedback to unblock them. \
+             Use status=idle for interactive sessions between turns (alive, awaiting the developer). \
              When repo is omitted, runs across all repos are returned. \
              Supports pagination via limit (default 50) and offset (default 0).",
             schema(&[
@@ -308,7 +309,7 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
                 ),
                 (
                     "status",
-                    "Filter by run status: running, waiting_for_feedback, completed, failed, cancelled (optional)",
+                    "Filter by run status: running, waiting_for_feedback, idle, completed, failed, cancelled (optional)",
                     false,
                 ),
                 ("limit", "Max runs to return (default 50)", false),

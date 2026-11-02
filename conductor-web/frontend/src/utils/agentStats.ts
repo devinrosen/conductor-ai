@@ -7,11 +7,29 @@ export const statusColors: Record<string, string> = {
   completed: "bg-green-100 text-green-700",
   failed: "bg-red-100 text-red-700",
   cancelled: "bg-gray-100 text-gray-600",
+  idle: "bg-sky-100 text-sky-700",
 };
 
-/** Returns true if the run is currently active (running or waiting for feedback). */
+/** Returns true if the run is currently active (running, waiting for feedback, or an idle interactive session). */
 export function isActiveRun(run: { status: string }): boolean {
+  return (
+    run.status === "running" ||
+    run.status === "waiting_for_feedback" ||
+    run.status === "idle"
+  );
+}
+
+/** Returns true if conductor may stop the run. Idle interactive sessions are never stopped by conductor. */
+export function isStoppableRun(run: { status: string }): boolean {
   return run.status === "running" || run.status === "waiting_for_feedback";
+}
+
+/** Format an ISO timestamp as local HH:MM, or null if missing/invalid. */
+export function formatIdleSince(ts?: string | null): string | null {
+  if (!ts) return null;
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 /** Protocol marker that agents emit to request human feedback. */

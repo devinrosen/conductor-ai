@@ -92,8 +92,8 @@ impl<'a> ConversationManager<'a> {
         }))
     }
 
-    /// Check whether the conversation has any currently active (running or
-    /// waiting_for_feedback) agent run.
+    /// Check whether the conversation has any currently active (running,
+    /// waiting_for_feedback or idle) agent run.
     pub fn has_active_run(&self, conversation_id: &str) -> Result<bool> {
         AgentManager::new(self.conn).has_active_run_for_conversation(conversation_id)
     }

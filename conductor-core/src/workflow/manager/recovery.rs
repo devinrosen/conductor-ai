@@ -292,7 +292,9 @@ pub fn reap_orphaned_workflow_runs(conn: &Connection) -> Result<usize> {
         // has been purged from the DB its executor is certainly gone.
         let dead_parent = !matches!(
             parent_runs.get(&parent_run_id).map(|r| &r.status),
-            Some(AgentRunStatus::Running) | Some(AgentRunStatus::WaitingForFeedback)
+            Some(AgentRunStatus::Running)
+                | Some(AgentRunStatus::WaitingForFeedback)
+                | Some(AgentRunStatus::Idle)
         );
 
         // Check if the active gate step's timeout has elapsed.

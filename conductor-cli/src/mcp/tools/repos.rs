@@ -35,6 +35,7 @@ pub(super) fn tool_list_repos(conductor: &Conductor) -> CallToolResult {
             + workflow_counts.get(&r.id).map_or(0, |c| c.running);
         let waiting = agent_counts.get(&r.id).map_or(0, |c| c.waiting)
             + workflow_counts.get(&r.id).map_or(0, |c| c.waiting);
+        let idle = agent_counts.get(&r.id).map_or(0, |c| c.idle);
         let pending = workflow_counts.get(&r.id).map_or(0, |c| c.pending);
         let mut parts: Vec<String> = Vec::new();
         if running > 0 {
@@ -42,6 +43,9 @@ pub(super) fn tool_list_repos(conductor: &Conductor) -> CallToolResult {
         }
         if waiting > 0 {
             parts.push(format!("{waiting} waiting"));
+        }
+        if idle > 0 {
+            parts.push(format!("{idle} idle"));
         }
         if pending > 0 {
             parts.push(format!("{pending} pending"));

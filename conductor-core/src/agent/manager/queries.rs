@@ -87,19 +87,21 @@ impl<'a> AgentManager<'a> {
         Ok(runs)
     }
 
-    /// Returns true if the conversation has any currently active (running or
-    /// waiting_for_feedback) agent run.
+    /// Returns true if the conversation has any currently active (running,
+    /// waiting_for_feedback or idle) agent run.
     pub fn has_active_run_for_conversation(&self, conversation_id: &str) -> Result<bool> {
         let running = AgentRunStatus::Running.to_string();
         let waiting = AgentRunStatus::WaitingForFeedback.to_string();
+        let idle = AgentRunStatus::Idle.to_string();
         let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) AS cnt FROM agent_runs \
              WHERE conversation_id = :conversation_id \
-               AND status IN (:running, :waiting)",
+               AND status IN (:running, :waiting, :idle)",
             named_params! {
                 ":conversation_id": conversation_id,
                 ":running": running,
                 ":waiting": waiting,
+                ":idle": idle,
             },
             |row| row.get("cnt"),
         )?;
@@ -1145,6 +1147,19 @@ mod tests {
             .create_run_for_conversation("w1", "task", None, "conv1")
             .unwrap();
         mgr.request_feedback(&run.id, "Continue?", None).unwrap();
+        assert!(mgr.has_active_run_for_conversation("conv1").unwrap());
+    }
+
+    #[test]
+    fn test_has_active_run_for_conversation_idle() {
+        let conn = setup_db();
+        insert_conversation(&conn, "conv1", "r1");
+        let mgr = AgentManager::new(&conn);
+        let run = mgr
+            .create_run_for_conversation("w1", "task", None, "conv1")
+            .unwrap();
+        conn.execute("UPDATE agent_runs SET status = 'idle' WHERE id = ?1", [&run.id])
+            .unwrap();
         assert!(mgr.has_active_run_for_conversation("conv1").unwrap());
     }
 

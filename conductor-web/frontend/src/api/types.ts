@@ -108,7 +108,7 @@ export interface AgentRun {
   repo_id?: string | null;
   claude_session_id: string | null;
   prompt: string;
-  status: "running" | "completed" | "failed" | "cancelled" | "waiting_for_feedback";
+  status: "running" | "completed" | "failed" | "cancelled" | "waiting_for_feedback" | "idle";
   result_text: string | null;
   cost_usd: number | null;
   num_turns: number | null;
@@ -124,6 +124,8 @@ export interface AgentRun {
   model: string | null;
   plan: PlanStep[] | null;
   parent_run_id: string | null;
+  /** When an interactive session entered `idle` (RFC 021); null otherwise. */
+  idle_since?: string | null;
 }
 
 export interface RunTreeTotals {
