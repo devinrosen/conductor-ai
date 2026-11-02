@@ -252,7 +252,7 @@ pub(super) fn tool_resume_run(
         runtime: None,
         from_step,
         restart: false,
-        db_path: Some(Conductor::db_path()),
+        db_path: Some(conductor.conn_db_path()),
         conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
         shutdown: None,
         event_sinks: event_sinks.to_vec(),
