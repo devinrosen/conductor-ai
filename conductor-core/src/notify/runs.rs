@@ -46,10 +46,64 @@ pub struct AgentRunNotificationArgs<'a> {
 
 /// Parameters for [`fire_feedback_notification`].
 pub struct FeedbackNotificationParams<'a> {
+    /// `feedback_requests.id`; the dedup key and the `feedback_id` field.
     pub request_id: &'a str,
+    /// The agent run that asked; the `run_id` field.
+    pub run_id: &'a str,
     pub prompt_preview: &'a str,
     pub repo_slug: &'a str,
     pub branch: &'a str,
+    /// `None` for repo-scoped agents, which have no worktree.
+    pub worktree_slug: Option<&'a str>,
+}
+
+/// Repo and worktree context of an agent run, for feedback notifications.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FeedbackRunContext {
+    pub repo_slug: String,
+    pub branch: String,
+    pub worktree_slug: Option<String>,
+}
+
+/// Resolve agent run ids to their repo slug, branch and worktree slug in one query.
+///
+/// Repo-scoped runs have no worktree, so `branch` is empty and `worktree_slug` is `None`.
+/// Ids that match no run are absent from the map.
+pub fn feedback_run_contexts(
+    conn: &rusqlite::Connection,
+    run_ids: &[&str],
+) -> crate::error::Result<std::collections::HashMap<String, FeedbackRunContext>> {
+    let mut unique: Vec<&str> = run_ids.to_vec();
+    unique.sort_unstable();
+    unique.dedup();
+    if unique.is_empty() {
+        return Ok(Default::default());
+    }
+    let sql = format!(
+        "SELECT ar.id, COALESCE(r.slug, ''), COALESCE(w.branch, ''), w.slug \
+         FROM agent_runs ar \
+         LEFT JOIN worktrees w ON w.id = ar.worktree_id \
+         LEFT JOIN repos r ON r.id = COALESCE(ar.repo_id, w.repo_id) \
+         WHERE ar.id IN ({})",
+        crate::db::sql_placeholders(unique.len())
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(unique.iter()), |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            FeedbackRunContext {
+                repo_slug: row.get(1)?,
+                branch: row.get(2)?,
+                worktree_slug: row.get(3)?,
+            },
+        ))
+    })?;
+    let mut map = std::collections::HashMap::new();
+    for row in rows {
+        let (id, ctx) = row?;
+        map.insert(id, ctx);
+    }
+    Ok(map)
 }
 
 /// `"<error> — cause: <cause>"`, skipping the suffix when the error already contains it.
@@ -163,6 +217,40 @@ pub(crate) fn workflow_event(
     }
 }
 
+/// Build the `feedback.requested` event.
+///
+/// The body is `"<worktree or repo slug>: <prompt>"`, or the bare prompt with neither.
+pub(crate) fn feedback_event(params: &FeedbackNotificationParams<'_>) -> Event {
+    let label = params
+        .worktree_slug
+        .filter(|s| !s.is_empty())
+        .or(Some(params.repo_slug).filter(|s| !s.is_empty()));
+    let body = match label {
+        Some(l) => format!("{l}: {}", params.prompt_preview),
+        None => params.prompt_preview.to_string(),
+    };
+    Event {
+        kind: "feedback.requested".into(),
+        title: "Conductor \u{2014} Feedback Requested".into(),
+        body,
+        severity: Severity::Info,
+        fields: [
+            ("run_id".into(), params.run_id.into()),
+            ("feedback_id".into(), params.request_id.into()),
+            ("prompt_preview".into(), params.prompt_preview.into()),
+            ("repo_slug".into(), params.repo_slug.into()),
+            ("branch".into(), params.branch.into()),
+            (
+                "worktree_slug".into(),
+                params.worktree_slug.unwrap_or("").into(),
+            ),
+            ("timestamp".into(), chrono::Utc::now().to_rfc3339()),
+        ]
+        .into_iter()
+        .collect(),
+    }
+}
+
 /// Fire a notification for an agent feedback request.
 ///
 /// Deduped on `(request_id, "feedback_requested")` via SQLite.
@@ -177,22 +265,7 @@ pub fn fire_feedback_notification(
         return;
     }
 
-    let now = chrono::Utc::now().to_rfc3339();
-    let event = Event {
-        kind: "feedback.requested".into(),
-        title: "Conductor \u{2014} Feedback Requested".into(),
-        body: params.prompt_preview.into(),
-        severity: Severity::Info,
-        fields: [
-            ("run_id".into(), params.request_id.into()),
-            ("prompt_preview".into(), params.prompt_preview.into()),
-            ("repo_slug".into(), params.repo_slug.into()),
-            ("branch".into(), params.branch.into()),
-            ("timestamp".into(), now),
-        ]
-        .into_iter()
-        .collect(),
-    };
+    let event = feedback_event(params);
 
     HookRunner::new(&hooks_as_runkon(notify_hooks))
         .with_dedup_store(dedup_store)
