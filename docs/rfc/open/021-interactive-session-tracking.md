@@ -212,7 +212,7 @@ No hook reports tokens or cost; the session transcript (`transcript_path`) does.
 - **Fallback:** sum the per-message usage when there's no final `cost-state` entry (after `kill -9`).
 - **Reconciliation:** per-message sums don't match `cost-state` (input 16 vs 2,252 tokens in Spike C), probably because `cost-state` also counts Claude Code's side calls. Session totals use `cost-state`. Treat per-turn figures as approximate until reconciled.
 - **On resume,** the `SessionStart` payload's `context_tokens` and `estimated_cache_write_usd` can be shown as "resuming will cost about $X".
-- **Read incrementally,** from a stored byte offset, because transcripts reach 10 MB and more.
+- **Read incrementally,** from `transcript_offset`, because transcripts reach 10 MB and more (#3165).
 
 Both transcript formats are internal to Claude Code and undocumented. The parser must tolerate missing fields and degrade to "no metrics" rather than fail. If the metric columns move off `agent_runs` (runkon/runkon#6), interactive metrics move with them.
 
@@ -248,7 +248,7 @@ The handling is staged (#3156):
 One migration, **087** (#3157):
 
 - **`agent_runs` rebuilt** with `'idle'` added to the `status` CHECK constraint. SQLite can't alter a CHECK, so the table is rebuilt as in migration 027, with its indexes and the `trg_agent_run_delete_cascade_workflow_runs` trigger recreated.
-- **New nullable columns on `agent_runs`:** `idle_since`, `subprocess_started_at`, `tmux_pane` and `transcript_path`, plus a metrics byte offset if it isn't kept elsewhere.
+- **New nullable columns on `agent_runs`:** `idle_since`, `subprocess_started_at`, `tmux_pane`, `transcript_path` and `transcript_offset` (the byte offset for incremental reads).
 - **New on `feedback_requests`:** a nullable `dedup_key` with a unique index, so a spool replay can't insert a second request.
 
 As with any migration, installed binaries older than the release that adds 087 can't open the database afterwards.
@@ -292,14 +292,14 @@ The phases are ordered so that each one ships something usable. The spike code o
 - **#3154:** `cancel_run` refuses interactive runs; hide stop and respond.
 
 **Phase 2: the hook command.**
-- **`conductor session hook` for production:** the state machine in section 2, worktree resolution, `CLAUDE_PID`, run events and the feedback natural key. *No issue yet.*
+- **#3164:** `conductor session hook` for production: the state machine in section 2, worktree resolution, `CLAUDE_PID`, run events and the feedback natural key.
 - **#3160:** the short busy timeout and the spool.
 
 **Phase 3: the plugin.** #3161: the marketplace layout, the hooks and the wrapper, and `setup install` guidance. After this phase, hand-run sessions show up in the TUI and web.
 
 **Phase 4: notifications.** #3159 (`session.idle`) and the `agent_run.completed` suppression for interactive runs, both of which need Phase 0.
 
-**Phase 5: metrics and denial detection.** Incremental transcript ingestion into the run's totals and the turn events, plus the denial check from section 11. *No issue yet.*
+**Phase 5: metrics and denial detection.** #3165: incremental transcript ingestion into the run's totals and the turn events, plus the denial check from section 11.
 
 **Phase 6: launching.**
 - **#3158:** the core launcher, the CLI, MCP and the TUI key.
@@ -329,7 +329,9 @@ The phases are ordered so that each one ships something usable. The spike code o
   - #3159: `session.idle`;
   - #3160: spool;
   - #3161: plugin;
-  - #3163: takeover.
+  - #3163: takeover;
+  - #3164: the hook command;
+  - #3165: transcript ingestion.
 
 ---
 
