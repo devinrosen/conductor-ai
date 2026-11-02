@@ -1,0 +1,108 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CONDUCTOR_HOME=$HOME/.conductor-spike /Users/devin/.conductor/workspaces/conductor-ai/feat-spike-interactive-sessions/target/release/conductor session hook"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CONDUCTOR_HOME=$HOME/.conductor-spike /Users/devin/.conductor/workspaces/conductor-ai/feat-spike-interactive-sessions/target/release/conductor session hook"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CONDUCTOR_HOME=$HOME/.conductor-spike /Users/devin/.conductor/workspaces/conductor-ai/feat-spike-interactive-sessions/target/release/conductor session hook"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CONDUCTOR_HOME=$HOME/.conductor-spike /Users/devin/.conductor/workspaces/conductor-ai/feat-spike-interactive-sessions/target/release/conductor session hook"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CONDUCTOR_HOME=$HOME/.conductor-spike /Users/devin/.conductor/workspaces/conductor-ai/feat-spike-interactive-sessions/target/release/conductor session hook"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CONDUCTOR_HOME=$HOME/.conductor-spike /Users/devin/.conductor/workspaces/conductor-ai/feat-spike-interactive-sessions/target/release/conductor session hook"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CONDUCTOR_HOME=$HOME/.conductor-spike /Users/devin/.conductor/workspaces/conductor-ai/feat-spike-interactive-sessions/target/release/conductor session hook"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CONDUCTOR_HOME=$HOME/.conductor-spike /Users/devin/.conductor/workspaces/conductor-ai/feat-spike-interactive-sessions/target/release/conductor session hook"
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CONDUCTOR_HOME=$HOME/.conductor-spike /Users/devin/.conductor/workspaces/conductor-ai/feat-spike-interactive-sessions/target/release/conductor session hook"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CONDUCTOR_HOME=$HOME/.conductor-spike /Users/devin/.conductor/workspaces/conductor-ai/feat-spike-interactive-sessions/target/release/conductor session hook"
+          }
+        ]
+      }
+    ]
+  }
+}

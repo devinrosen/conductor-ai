@@ -44,6 +44,17 @@ fn main() -> Result<()> {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    // SPIKE (RFC 021): the hook path runs on every tool call, so skip
+    // check_prerequisites (three subprocess spawns) and config loading.
+    if let Commands::Session {
+        command: commands::SessionCommands::Hook,
+    } = &cli.command
+    {
+        let started = std::time::Instant::now();
+        let conn = conductor_core::db::open_database_compat(&Conductor::db_path())?;
+        return handlers::session::handle_session_hook(&conn, started);
+    }
+
     // Headless agent subprocesses use compat mode so they tolerate a DB schema
     // that is ahead of this binary (e.g. after an implement step applied a new
     // migration and rebuilt the binary, but the subprocess was spawned with the
@@ -90,6 +101,7 @@ fn run(cli: Cli) -> Result<()> {
             &conductor.conn,
             &conductor.config,
         )?,
+        Commands::Session { .. } => unreachable!("handled above"),
     }
 
     Ok(())
