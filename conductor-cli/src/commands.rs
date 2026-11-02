@@ -62,17 +62,6 @@ pub enum Commands {
         #[command(subcommand)]
         command: ConversationCommands,
     },
-    /// Interactive Claude Code sessions (SPIKE, RFC 021)
-    Session {
-        #[command(subcommand)]
-        command: SessionCommands,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum SessionCommands {
-    /// Read a Claude Code hook payload on stdin and record the session's state
-    Hook,
 }
 
 #[derive(Subcommand)]
