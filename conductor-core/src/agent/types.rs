@@ -522,7 +522,10 @@ mod tests {
     fn to_run_handle_maps_idle_to_running() {
         let mut run = make_full_run();
         run.status = AgentRunStatus::Idle;
-        assert_eq!(run.to_run_handle().status, runkon_runtimes::RunStatus::Running);
+        assert_eq!(
+            run.to_run_handle().status,
+            runkon_runtimes::RunStatus::Running
+        );
     }
 
     #[test]

@@ -103,7 +103,9 @@ impl<'a> AgentManager<'a> {
     pub fn reap_orphaned_runs(&self) -> Result<usize> {
         let active_runs = query_collect(
             self.conn,
-            &format!("{AGENT_RUN_SELECT} WHERE status IN ('running', 'waiting_for_feedback', 'idle')"),
+            &format!(
+                "{AGENT_RUN_SELECT} WHERE status IN ('running', 'waiting_for_feedback', 'idle')"
+            ),
             [],
             row_to_agent_run,
         )?;

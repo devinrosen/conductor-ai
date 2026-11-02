@@ -1158,8 +1158,11 @@ mod tests {
         let run = mgr
             .create_run_for_conversation("w1", "task", None, "conv1")
             .unwrap();
-        conn.execute("UPDATE agent_runs SET status = 'idle' WHERE id = ?1", [&run.id])
-            .unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET status = 'idle' WHERE id = ?1",
+            [&run.id],
+        )
+        .unwrap();
         assert!(mgr.has_active_run_for_conversation("conv1").unwrap());
     }
 

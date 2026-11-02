@@ -112,7 +112,7 @@ impl Theme {
             status_completed: Color::Rgb(0xA3, 0xBE, 0x8C), // nord14 — green
             status_failed: Color::Rgb(0xBF, 0x61, 0x6A),  // nord11 — red
             status_waiting: Color::Rgb(0xB4, 0x8E, 0xAD), // nord15 — purple
-            status_idle: Color::Rgb(0x88, 0xC0, 0xD0), // nord8  — frost blue
+            status_idle: Color::Rgb(0x88, 0xC0, 0xD0),    // nord8  — frost blue
             status_cancelled: Color::Rgb(0x4C, 0x56, 0x6A), // nord3  — muted
             label_primary: Color::Rgb(0xEC, 0xEF, 0xF4),  // nord6  — bright fg
             label_secondary: Color::Rgb(0x4C, 0x56, 0x6A), // nord3  — muted
@@ -136,7 +136,7 @@ impl Theme {
             status_completed: Color::Rgb(0xB8, 0xBB, 0x26), // bright green
             status_failed: Color::Rgb(0xFB, 0x49, 0x34),  // bright red
             status_waiting: Color::Rgb(0xD3, 0x86, 0x9B), // bright purple
-            status_idle: Color::Rgb(0x8E, 0xC0, 0x7C), // bright aqua
+            status_idle: Color::Rgb(0x8E, 0xC0, 0x7C),    // bright aqua
             status_cancelled: Color::Rgb(0x66, 0x5C, 0x54), // bg3
             label_primary: Color::Rgb(0xEB, 0xDB, 0xB2),  // fg
             label_secondary: Color::Rgb(0x92, 0x83, 0x74), // gray

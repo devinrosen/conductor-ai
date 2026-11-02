@@ -1441,8 +1441,11 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
         let run = mgr.create_run(Some("w1"), "interactive", None).unwrap();
-        conn.execute("UPDATE agent_runs SET status = 'idle' WHERE id = ?1", [&run.id])
-            .unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET status = 'idle' WHERE id = ?1",
+            [&run.id],
+        )
+        .unwrap();
 
         let err = mgr.cancel_run(&run.id, None).unwrap_err();
         assert!(err.to_string().contains("idle"), "{err}");
@@ -1455,10 +1458,14 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
         let run = mgr.create_run(Some("w1"), "interactive", None).unwrap();
-        conn.execute("UPDATE agent_runs SET status = 'idle' WHERE id = ?1", [&run.id])
-            .unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET status = 'idle' WHERE id = ?1",
+            [&run.id],
+        )
+        .unwrap();
 
-        mgr.update_run_failed_if_running(&run.id, "session died").unwrap();
+        mgr.update_run_failed_if_running(&run.id, "session died")
+            .unwrap();
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.status, AgentRunStatus::Failed);
     }

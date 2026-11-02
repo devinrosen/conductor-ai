@@ -63,9 +63,9 @@ impl From<AgentRunStatus> for runkon_runtimes::RunStatus {
             // exited but the conductor-side row hasn't reached a terminal state.
             // `Idle` interactive sessions never go through runkon; if one is
             // converted it is likewise logically still active.
-            AgentRunStatus::Running
-            | AgentRunStatus::WaitingForFeedback
-            | AgentRunStatus::Idle => Self::Running,
+            AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback | AgentRunStatus::Idle => {
+                Self::Running
+            }
             AgentRunStatus::Completed => Self::Completed,
             AgentRunStatus::Failed => Self::Failed,
             AgentRunStatus::Cancelled => Self::Cancelled,

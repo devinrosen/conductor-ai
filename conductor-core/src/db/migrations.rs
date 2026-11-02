@@ -3058,7 +3058,10 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .unwrap();
-        assert_eq!((sid.as_str(), pid, runtime.as_str(), conv.as_str()), ("sess-1", 4242, "claude", "c1"));
+        assert_eq!(
+            (sid.as_str(), pid, runtime.as_str(), conv.as_str()),
+            ("sess-1", 4242, "claude", "c1")
+        );
 
         conn.execute("UPDATE agent_runs SET status='idle' WHERE id='r1'", [])
             .expect("idle must satisfy the CHECK");
@@ -3108,8 +3111,13 @@ mod tests {
         let conn = fixture_086(true);
         assert_eq!(trigger_count(&conn), 1);
         run(&conn).unwrap();
-        assert_eq!(trigger_count(&conn), 1, "trigger must be replayed after the swap");
-        conn.execute("DELETE FROM agent_runs WHERE id='r1'", []).unwrap();
+        assert_eq!(
+            trigger_count(&conn),
+            1,
+            "trigger must be replayed after the swap"
+        );
+        conn.execute("DELETE FROM agent_runs WHERE id='r1'", [])
+            .unwrap();
         let n: i64 = conn
             .query_row("SELECT COUNT(*) FROM workflow_runs", [], |r| r.get(0))
             .unwrap();
@@ -3132,10 +3140,16 @@ mod tests {
         assert!(conn
             .execute("INSERT INTO feedback_requests (id, run_id, prompt, dedup_key) VALUES ('f3','r1','q','k')", [])
             .is_err());
-        conn.execute("INSERT INTO feedback_requests (id, run_id, prompt) VALUES ('f4','r1','q')", [])
-            .unwrap();
-        conn.execute("INSERT INTO feedback_requests (id, run_id, prompt) VALUES ('f5','r1','q')", [])
-            .unwrap();
+        conn.execute(
+            "INSERT INTO feedback_requests (id, run_id, prompt) VALUES ('f4','r1','q')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO feedback_requests (id, run_id, prompt) VALUES ('f5','r1','q')",
+            [],
+        )
+        .unwrap();
     }
 
     #[test]

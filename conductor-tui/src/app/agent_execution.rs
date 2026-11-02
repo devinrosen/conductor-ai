@@ -254,9 +254,8 @@ impl App {
                 true
             }
             Some(AgentRunStatus::Idle) => {
-                self.state.status_message = Some(
-                    "Interactive session is idle — continue it in its terminal".to_string(),
-                );
+                self.state.status_message =
+                    Some("Interactive session is idle — continue it in its terminal".to_string());
                 true
             }
             _ => false,

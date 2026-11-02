@@ -357,8 +357,11 @@ mod tests {
             ).unwrap();
             let mgr = AgentManager::new(&conn);
             let idle = mgr.create_run(Some("w1"), "idle session", None).unwrap();
-            conn.execute("UPDATE agent_runs SET status = 'idle' WHERE id = ?1", [&idle.id])
-                .unwrap();
+            conn.execute(
+                "UPDATE agent_runs SET status = 'idle' WHERE id = ?1",
+                [&idle.id],
+            )
+            .unwrap();
             mgr.create_run(Some("w1"), "working", None).unwrap();
         }
 

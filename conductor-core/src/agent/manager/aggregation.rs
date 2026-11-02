@@ -370,8 +370,11 @@ mod tests {
 
         // An idle interactive session is counted separately.
         let run5 = mgr.create_run(Some("w2"), "Task 5", None).unwrap();
-        conn.execute("UPDATE agent_runs SET status = 'idle' WHERE id = ?1", [&run5.id])
-            .unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET status = 'idle' WHERE id = ?1",
+            [&run5.id],
+        )
+        .unwrap();
         let counts = mgr.active_run_counts_by_repo().unwrap();
         let r1_counts = counts.get("r1").unwrap();
         assert_eq!(r1_counts.running, 2);
