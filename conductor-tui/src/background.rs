@@ -505,7 +505,11 @@ const FEEDBACK_NOTIFY_MAX_SECS: i64 = 24 * 60 * 60;
 
 /// True when `created_at` (RFC 3339) is within `max_age` of `now`. Fails open (true) when
 /// the timestamp can't be parsed, so a malformed value never suppresses a notification.
-fn is_recent(created_at: &str, now: chrono::DateTime<chrono::Utc>, max_age: chrono::Duration) -> bool {
+fn is_recent(
+    created_at: &str,
+    now: chrono::DateTime<chrono::Utc>,
+    max_age: chrono::Duration,
+) -> bool {
     match chrono::DateTime::parse_from_rfc3339(created_at) {
         Ok(t) => now.signed_duration_since(t.with_timezone(&chrono::Utc)) <= max_age,
         Err(_) => true,
@@ -825,8 +829,7 @@ pub fn poll_data(
 
     // Only run notification-specific queries when a notification sink is configured:
     // desktop/Slack (`[notifications] enabled`) or at least one `[[notify.hooks]]` entry.
-    let (pending_feedback_requests, waiting_gate_steps) =
-        load_notification_queries(&conn, &config);
+    let (pending_feedback_requests, waiting_gate_steps) = load_notification_queries(&conn, &config);
 
     // Live turn counts are computed incrementally by the background loop caller.
     // Return an empty map here; the loop merges in the incremental state.
@@ -1487,7 +1490,15 @@ mod tests {
             .unwrap();
         insert_test_wf_run(&conn, "wr1", "wf", "waiting", None);
         conductor_core::test_helpers::insert_test_wf_step(
-            &conn, "s1", "wr1", "approval", "gate", "waiting", 0, "2026-01-01T00:00:00Z", None,
+            &conn,
+            "s1",
+            "wr1",
+            "approval",
+            "gate",
+            "waiting",
+            0,
+            "2026-01-01T00:00:00Z",
+            None,
             None,
         );
         conn.execute(
