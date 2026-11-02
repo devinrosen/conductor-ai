@@ -173,8 +173,7 @@ pub fn fire_feedback_notification(
     dedup_store: Arc<dyn DedupStore>,
     params: &FeedbackNotificationParams<'_>,
 ) {
-    let has_hooks = !notify_hooks.is_empty();
-    if !config.enabled && !has_hooks {
+    if !super::notification_sink_configured(config, notify_hooks) {
         return;
     }
 

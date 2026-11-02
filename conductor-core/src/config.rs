@@ -680,6 +680,12 @@ pub fn workflow_log_path(run_id: &str) -> Result<PathBuf> {
 }
 
 impl Config {
+    /// Returns `true` when any notification sink is configured
+    /// (`[notifications] enabled` or at least one `[[notify.hooks]]` entry).
+    pub fn notification_sink_configured(&self) -> bool {
+        crate::notify::notification_sink_configured(&self.notifications, &self.notify.hooks)
+    }
+
     /// Returns the Anthropic API key from the `ANTHROPIC_API_KEY` environment variable.
     ///
     /// Centralising this lookup here ensures that all library code reads the key
