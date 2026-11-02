@@ -929,3 +929,25 @@ fn feedback_run_contexts_empty_input_returns_empty_map() {
     let conn = crate::test_helpers::setup_db();
     assert!(feedback_run_contexts(&conn, &[]).unwrap().is_empty());
 }
+
+#[test]
+fn try_claim_notification_first_true_then_false() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = open_test_db(&dir.path().join("claim.db"));
+    assert!(crate::notify::try_claim_notification(&conn, "e1", "t").unwrap());
+    assert!(!crate::notify::try_claim_notification(&conn, "e1", "t").unwrap());
+    assert!(crate::notify::try_claim_notification(&conn, "e1", "other").unwrap());
+}
+
+#[test]
+fn is_recent_cases() {
+    let now = chrono::Utc::now();
+    let max = chrono::Duration::seconds(crate::notify::NOTIFY_MAX_AGE_SECS);
+    assert!(crate::notify::is_recent(&now.to_rfc3339(), now, max));
+    assert!(!crate::notify::is_recent(
+        &(now - chrono::Duration::hours(25)).to_rfc3339(),
+        now,
+        max
+    ));
+    assert!(crate::notify::is_recent("garbage", now, max));
+}

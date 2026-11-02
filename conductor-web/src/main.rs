@@ -651,6 +651,43 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Spawn a task that detects feedback requests and waiting gates written to the database
+    // by other processes and emits them on the EventBus (drives Web Push and SSE).
+    let db_event_state = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        let mut detector = conductor_web::db_events::DbEventDetector::default();
+        loop {
+            interval.tick().await;
+            let db = db_event_state.db.clone();
+            let events_bus = db_event_state.events.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let conn = db.blocking_lock();
+                let res = detector.poll(&conn, chrono::Utc::now());
+                (detector, res)
+            })
+            .await;
+            match result {
+                Ok((d, res)) => {
+                    detector = d;
+                    match res {
+                        Ok(events) => {
+                            for ev in events {
+                                events_bus.emit(ev);
+                            }
+                        }
+                        Err(e) => tracing::warn!("db event detector failed: {e}"),
+                    }
+                }
+                Err(e) => {
+                    // notification_log dedup prevents duplicates with a fresh detector.
+                    tracing::warn!("db event detector panicked: {e}");
+                    detector = conductor_web::db_events::DbEventDetector::default();
+                }
+            }
+        }
+    });
+
     // Spawn a task that subscribes to the EventBus and sends push notifications
     // for high-urgency gate-waiting and feedback-requested events in real time.
     let gate_state = state.clone();
@@ -687,7 +724,11 @@ async fn main() -> Result<()> {
                             title: "Agent needs your input".into(),
                             body: format!("Feedback requested for run {run_id}"),
                             tag: Some(format!("feedback-{run_id}")),
-                            url: Some(format!("/worktrees/{worktree_id}")),
+                            url: Some(if worktree_id.is_empty() {
+                                "/".to_string()
+                            } else {
+                                format!("/worktrees/{worktree_id}")
+                            }),
                         };
                         dispatch_push(
                             &db,

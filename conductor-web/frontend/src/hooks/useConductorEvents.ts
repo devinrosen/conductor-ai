@@ -15,6 +15,7 @@ export type ConductorEventType =
   | "repo_agent_stopped"
   | "feedback_requested"
   | "feedback_submitted"
+  | "workflow_gate_waiting"
   | "issue_sources_changed"
   | "lagged";
 
@@ -38,6 +39,7 @@ const ALL_EVENT_TYPES: ConductorEventType[] = [
   "repo_agent_stopped",
   "feedback_requested",
   "feedback_submitted",
+  "workflow_gate_waiting",
   "issue_sources_changed",
   "lagged",
 ];
