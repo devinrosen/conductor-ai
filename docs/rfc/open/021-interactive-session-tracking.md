@@ -62,7 +62,7 @@ Findings:
 2. **`PermissionRequest` is the waiting signal, not `Notification`.** It fires the moment the prompt appears and names the tool and its input. `Notification(permission_prompt)` arrives about 6 s later with a generic message, and can land after the developer has already answered.
 3. **`Stop` carries `last_assistant_message`**, so conductor can show what the session last said without reading the transcript. `background_tasks` distinguishes idle from idle-with-subagents-running.
 4. **Every event within a turn shares a `prompt_id`** (absent on `SessionStart`). Per-turn grouping is free.
-5. **No hook reports cost or tokens.** Per-turn or per-session cost means reading `transcript_path`.
+5. **No hook reports cost or tokens.** Per-turn or per-session cost means reading `transcript_path`. (Spike C: the transcript's `cost-state` entries carry session totals; see open question 1.)
 6. **The hook process's parent is the `claude` process**, so a hook can record its PID for the orphan reaper (same PID plus start-time guard as headless runs).
 7. **Closing the tmux window still fires `SessionEnd`** with `reason=other`. A crash or SIGKILL presumably doesn't (untested), which the reaper covers.
 8. **`TMUX_PANE` is in the hook's environment**, so conductor can record which tmux pane to focus.
@@ -154,7 +154,18 @@ That's a contained change, but not small enough for a spike.
 
 ## Open questions
 
-1. **One run per session, or one per turn?** Spike C suggests **per session**: the upsert on `session_id` survives resume (same id), the worktree row shows a single current state, and per-turn rows would multiply the `started_at`/PID problems. The `agent_run.completed` dedup is keyed on `run_id`, so per-turn notifications would need a different key either way. Per-turn detail (prompt, last message, duration) can live in `agent_run_events` grouped by `prompt_id` (RFC 020).
+1. **One run per session, or one per turn?** **Decided (2026-11-02): one run per session.** The upsert on `session_id` survives `--resume` (same id), the worktree row shows one current state, and per-turn rows would multiply the `started_at`/PID problems (#3155). The `agent_run.completed` dedup is keyed on `run_id` either way.
+
+   **Metrics.** No hook reports tokens or cost, but the transcript at `transcript_path` does. Checked against the Spike C session's transcript, it has two sources:
+
+   - **`cost-state` entries**: Claude Code's own cumulative session totals. They carry `totalCostUSD`, `totalAPIDuration`, `totalToolDuration`, lines added and removed, and per-model `modelUsage` (input, output, thinking, cache-read and cache-creation tokens). The totals accumulate across resumes (one `startTime`). That session had three entries and three exits, so they are probably written at session end; not confirmed. A `kill -9` probably leaves no final entry.
+   - **Per-message `usage`** on assistant entries (tokens and model per API request). Entries carry no `promptId`, but their `parentUuid` chain reaches the user entry that does, which allows per-turn grouping. Entries repeat per content block, so deduplicate on `message.id`: 9 entries were 8 messages. The sums don't match `cost-state` (input 16 vs 2,252 tokens), probably because `cost-state` also counts Claude Code's side calls (titles, classifiers, internal subagents). Reconcile before trusting per-turn figures.
+
+   **Where they go:**
+   - **Session totals** go on the run row's existing columns (`cost_usd`, the token columns, `duration_ms`, `num_turns`), from the latest `cost-state` entry. Read them at `Stop` or `SessionEnd`, but in a poller or detached child, not in the blocking hook (see open question 7). Fall back to summing message usage when no final entry exists.
+   - **Per-turn detail** (prompt, last message, tokens, duration) goes into `agent_run_events` keyed by `prompt_id` (RFC 020).
+   - **On resume**, `SessionStart` also carries `context_tokens` and `estimated_cache_write_usd`: an estimate of what continuing will cost.
+   - **Caveats:** both sources are Claude Code's internal transcript format, which is undocumented and has changed before (`costUSD` per entry is gone). Where the metric columns live may move with the metric-column extraction tracked in runkon/runkon#6.
 2. **How is "idle" represented?** **Decided (2026-11-02): a new `idle` status** (#3157), active for the reaper but not stoppable, with its own TUI symbol and kept out of Attention Required. Still open: whether idle notifies. That could be a per-turn "your turn" ping as a separate event kind such as `session.idle`, which the developer can turn off independently of `feedback.requested`.
 3. **Hook installation:** ship the hooks in conductor's Claude Code plugin so every session in a conductor worktree reports, however it was started? The hook must be cheap and must never block (see Hook cost), and it must no-op when `cwd` isn't in a known worktree. The spike falls back to a repo-scoped run, which may not be wanted.
 4. **Terminal ownership:** TUI key and MCP tool to open or resume a worktree's session in tmux.
