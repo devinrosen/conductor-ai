@@ -995,6 +995,16 @@ pub async fn request_feedback(
 
     let feedback = mgr.request_feedback(&run.id, &body.prompt, None)?;
 
+    // Claim under the web key while holding the DB lock so the DB poller doesn't re-emit
+    // this request. Emit regardless of the claim result.
+    if let Err(e) = conductor_core::notify::try_claim_notification(
+        &db,
+        &feedback.id,
+        crate::db_events::WEB_FEEDBACK_EVENT_TYPE,
+    ) {
+        tracing::warn!(feedback_id = %feedback.id, "feedback claim failed: {e}");
+    }
+
     state.events.emit(ConductorEvent::FeedbackRequested {
         run_id: run.id.clone(),
         worktree_id: worktree_id.clone(),

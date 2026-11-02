@@ -227,13 +227,18 @@ pub fn spawn_db_poller(
                         // Fire feedback-requested notifications, skipping IDs already notified
                         // this session to avoid a redundant INSERT OR IGNORE on every tick.
                         let feedback_now = chrono::Utc::now();
-                        let feedback_max_age = chrono::Duration::seconds(FEEDBACK_NOTIFY_MAX_SECS);
+                        let feedback_max_age =
+                            chrono::Duration::seconds(conductor_core::notify::NOTIFY_MAX_AGE_SECS);
                         let to_notify: Vec<_> = payload
                             .pending_feedback_requests
                             .iter()
                             .filter(|req| {
                                 notified_feedback_ids.insert(req.id.clone())
-                                    && is_recent(&req.created_at, feedback_now, feedback_max_age)
+                                    && conductor_core::notify::is_recent(
+                                        &req.created_at,
+                                        feedback_now,
+                                        feedback_max_age,
+                                    )
                             })
                             .collect();
                         if !to_notify.is_empty() {
@@ -507,23 +512,6 @@ fn load_notification_queries(
         })
     });
     (pending_feedback_requests, waiting_gate_steps)
-}
-
-/// Feedback requests older than this are recorded as notified but not announced, so the
-/// first start with hooks configured doesn't burst for months-old pending requests.
-const FEEDBACK_NOTIFY_MAX_SECS: i64 = 24 * 60 * 60;
-
-/// True when `created_at` (RFC 3339) is within `max_age` of `now`. Fails open (true) when
-/// the timestamp can't be parsed, so a malformed value never suppresses a notification.
-fn is_recent(
-    created_at: &str,
-    now: chrono::DateTime<chrono::Utc>,
-    max_age: chrono::Duration,
-) -> bool {
-    match chrono::DateTime::parse_from_rfc3339(created_at) {
-        Ok(t) => now.signed_duration_since(t.with_timezone(&chrono::Utc)) <= max_age,
-        Err(_) => true,
-    }
 }
 
 /// Build fallback `AgentRunEvent`s by parsing log files for runs that lack DB event records.
@@ -1534,19 +1522,6 @@ mod tests {
             load_notification_queries(&conn, &conductor_core::config::Config::default());
         assert!(feedback.is_empty());
         assert!(gates.is_empty());
-    }
-
-    #[test]
-    fn is_recent_cases() {
-        let now = chrono::Utc::now();
-        let max = chrono::Duration::seconds(FEEDBACK_NOTIFY_MAX_SECS);
-        assert!(is_recent(&now.to_rfc3339(), now, max));
-        assert!(!is_recent(
-            &(now - chrono::Duration::hours(25)).to_rfc3339(),
-            now,
-            max
-        ));
-        assert!(is_recent("garbage", now, max));
     }
 
     // ── query_if_enabled ──────────────────────────────────────────────
