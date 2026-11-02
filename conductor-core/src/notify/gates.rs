@@ -207,8 +207,7 @@ pub fn fire_grouped_gate_notification(
     dedup_store: Arc<dyn DedupStore>,
     params: &GroupedGateNotificationParams<'_>,
 ) {
-    let has_hooks = !notify_hooks.is_empty();
-    if !config.enabled && !has_hooks {
+    if !super::notification_sink_configured(config, notify_hooks) {
         return;
     }
 

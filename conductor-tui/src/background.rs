@@ -460,13 +460,6 @@ fn query_if_enabled<T>(enabled: bool, f: impl FnOnce() -> Vec<T>) -> Vec<T> {
     }
 }
 
-/// Notification queries are needed when any sink is configured: desktop/Slack
-/// (`[notifications] enabled`) or at least one `[[notify.hooks]]` entry.
-/// Mirrors the `!config.enabled && !has_hooks` guards in the `fire_*` functions.
-fn notification_queries_needed(config: &conductor_core::config::Config) -> bool {
-    config.notifications.enabled || !config.notify.hooks.is_empty()
-}
-
 /// Load pending feedback requests and waiting gate steps for the notification loop.
 /// Both come back empty when no notification sink is configured.
 #[allow(clippy::type_complexity)]
@@ -481,7 +474,7 @@ fn load_notification_queries(
         Option<String>,
     )>,
 ) {
-    let needed = notification_queries_needed(config);
+    let needed = config.notification_sink_configured();
     let pending_feedback_requests = query_if_enabled(needed, || {
         AgentManager::new(conn)
             .list_all_pending_feedback_requests()
@@ -1473,12 +1466,12 @@ mod tests {
     }
 
     #[test]
-    fn notification_queries_needed_cases() {
+    fn notification_sink_configured_cases() {
         let mut config = conductor_core::config::Config::default();
-        assert!(!notification_queries_needed(&config));
+        assert!(!config.notification_sink_configured());
         config.notifications.enabled = true;
-        assert!(notification_queries_needed(&config));
-        assert!(notification_queries_needed(&hooks_only_config()));
+        assert!(config.notification_sink_configured());
+        assert!(hooks_only_config().notification_sink_configured());
     }
 
     fn seed_feedback_and_gate() -> rusqlite::Connection {
