@@ -187,7 +187,9 @@ pub(crate) fn finish_turn_prompt(t: &UnfinishedTurn) -> String {
         for f in t.uncommitted.iter().take(MAX_LISTED) {
             p.push_str(&format!("- {f}\n"));
         }
-        p.push_str("Your instructions require you to commit. Finish the remaining steps and commit.\n\n");
+        p.push_str(
+            "Your instructions require you to commit. Finish the remaining steps and commit.\n\n",
+        );
     }
     if t.output_warning.is_some() {
         p.push_str("End with the `<<<FLOW_OUTPUT>>>` block your instructions ask for.\n\n");
@@ -239,7 +241,11 @@ fn add_run_metrics(metadata: &mut HashMap<String, String>, run: &RunHandle) {
     add_metric(metadata, k::DURATION_MS, run.duration_ms);
     add_metric(metadata, k::INPUT_TOKENS, run.input_tokens);
     add_metric(metadata, k::OUTPUT_TOKENS, run.output_tokens);
-    add_metric(metadata, k::CACHE_READ_INPUT_TOKENS, run.cache_read_input_tokens);
+    add_metric(
+        metadata,
+        k::CACHE_READ_INPUT_TOKENS,
+        run.cache_read_input_tokens,
+    );
     add_metric(
         metadata,
         k::CACHE_CREATION_INPUT_TOKENS,

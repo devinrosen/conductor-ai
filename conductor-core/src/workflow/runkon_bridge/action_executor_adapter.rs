@@ -261,9 +261,9 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                     let effective_runtime = resume_runtime
                         .clone()
                         .unwrap_or_else(|| agent_def.runtime.clone());
-                    let runtime = resume_resolver
-                        .resolve(&effective_runtime)
-                        .map_err(|e| format!("failed to resolve runtime '{effective_runtime}': {e}"))?;
+                    let runtime = resume_resolver.resolve(&effective_runtime).map_err(|e| {
+                        format!("failed to resolve runtime '{effective_runtime}': {e}")
+                    })?;
                     let extra_cli_args = match &params.as_identity {
                         Some(name) => vec![(
                             std::borrow::Cow::Borrowed("--bot-name"),
