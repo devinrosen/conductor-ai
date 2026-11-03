@@ -868,6 +868,26 @@ pub fn poll_data(
     })
 }
 
+/// Spawn the stale-process poller. Reads the process registry (file I/O and a few
+/// `stat` calls) off the main thread every `interval`, with a first check shortly
+/// after startup, and sends `StaleProcesses`.
+pub fn spawn_stale_process_poller(tx: BackgroundSender, interval: Duration) {
+    thread::spawn(move || {
+        thread::sleep(Duration::from_secs(5));
+        loop {
+            let stale = conductor_core::process_registry::stale_processes();
+            let action = Action::StaleProcesses {
+                count: stale.len(),
+                tui_is_stale: stale.iter().any(|s| s.is_self),
+            };
+            if !tx.send(action) {
+                break;
+            }
+            thread::sleep(interval);
+        }
+    });
+}
+
 /// Spawn the ticket sync timer. Syncs all repos every `interval`.
 pub fn spawn_ticket_sync(tx: BackgroundSender, interval: Duration) {
     thread::spawn(move || loop {

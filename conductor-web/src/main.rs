@@ -30,6 +30,9 @@ async fn main() -> Result<()> {
         .init();
 
     let conductor = Conductor::open()?;
+    let _process_guard = conductor_core::process_registry::register_or_warn(
+        conductor_core::process_registry::ProcessKind::Web,
+    );
 
     let mut web_cfg = load_web_config()?;
 

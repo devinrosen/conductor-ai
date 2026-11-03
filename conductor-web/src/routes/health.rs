@@ -19,7 +19,7 @@ pub struct HealthResponse {
 pub async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
-        version: env!("GIT_SHA"),
-        built_at: env!("BUILD_TIMESTAMP"),
+        version: conductor_core::build_info::GIT_SHA,
+        built_at: conductor_core::build_info::COMMIT_TIME,
     })
 }

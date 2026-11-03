@@ -998,6 +998,13 @@ impl App {
                     self.state.pr_last_fetched_at = Some(std::time::Instant::now());
                 }
             }
+            Action::StaleProcesses {
+                count,
+                tui_is_stale,
+            } => {
+                self.state.stale_process_count = count;
+                self.state.tui_is_stale = tui_is_stale;
+            }
             Action::DataRefreshed(payload) => {
                 self.state.data.repos = payload.repos;
                 self.state.data.worktrees = payload.worktrees;
