@@ -52,7 +52,7 @@ pub fn open_database(path: &Path) -> Result<Connection> {
 /// error.  Use this in headless subprocesses and drain threads that must keep
 /// running after an `implement` agent step has applied a newer migration.
 pub fn open_database_compat(path: &Path) -> Result<Connection> {
-    open_database_compat_with_busy_timeout(path, BUSY_TIMEOUT)
+    open_compat(path, BUSY_TIMEOUT, false)
 }
 
 /// Like [`open_database_compat`] but with a caller-chosen busy timeout.
@@ -69,9 +69,21 @@ pub fn open_database_compat_with_busy_timeout(
     path: &Path,
     busy_timeout: Duration,
 ) -> Result<Connection> {
+    open_compat(path, busy_timeout, true)
+}
+
+/// Shared compat opener. `skip_close_checkpoint` is set only for the hook path,
+/// so headless subprocesses and drain threads keep SQLite's default close behavior.
+fn open_compat(
+    path: &Path,
+    busy_timeout: Duration,
+    skip_close_checkpoint: bool,
+) -> Result<Connection> {
     let mut conn = Connection::open(path)?;
     trace::install(&mut conn);
-    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)?;
+    if skip_close_checkpoint {
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)?;
+    }
     configure_connection(&conn, busy_timeout)?;
     migrations::run_compat(&conn)?;
     Ok(conn)
@@ -237,6 +249,28 @@ mod tests {
         wal.push("-wal");
         let len = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
         assert!(len > 0, "WAL should survive close of the hook connection");
+    }
+
+    #[test]
+    fn plain_compat_connection_checkpoints_on_close() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("conductor.db");
+        drop(open_database(&path).unwrap());
+
+        let conn = open_database_compat(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS ckpt_probe (id INTEGER); INSERT INTO ckpt_probe VALUES (1);",
+        )
+        .unwrap();
+        drop(conn);
+
+        let mut wal = path.clone().into_os_string();
+        wal.push("-wal");
+        let len = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+        assert_eq!(
+            len, 0,
+            "non-hook compat connection should checkpoint on close"
+        );
     }
 
     #[test]

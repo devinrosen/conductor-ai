@@ -65,15 +65,17 @@ This eliminates races but loses incremental compilation sharing and uses signifi
 ## Tracing SQLite write-lock holders
 
 Set `CONDUCTOR_DB_TRACE=<absolute log path>` in every process you want to observe
-(CLI, TUI, web, and the session hook's environment). Each process appends one
+(CLI, TUI, web, and the session hook's environment). The log is created with mode 0600
+and is never opened through a symlink; keep it in a user-private directory, since it
+records the start of each slow statement's SQL. Each process appends one
 tab-separated line per slow statement (`stmt`) or long transaction (`tx`):
 `timestamp  pid  process  thread  kind  ms  sql`. `CONDUCTOR_DB_TRACE_MS` sets the
 threshold in ms (default 20). With the variable unset nothing is installed.
 
 ```bash
-export CONDUCTOR_DB_TRACE=/tmp/conductor-db-trace.log
+export CONDUCTOR_DB_TRACE=~/.conductor/db-trace.log
 # run a normal TUI + web + workflow session, then:
-sort -t$'\t' -k6 -nr /tmp/conductor-db-trace.log | head -30
+sort -t$'\t' -k6 -nr ~/.conductor/db-trace.log | head -30
 ```
 
 `tx` lines run from `BEGIN` to `COMMIT`/`ROLLBACK` and show the first statement inside,

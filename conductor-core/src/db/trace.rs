@@ -13,14 +13,15 @@
 use rusqlite::Connection;
 use std::cell::RefCell;
 use std::io::Write;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const DEFAULT_THRESHOLD_MS: u64 = 20;
 const MAX_SQL_CHARS: usize = 200;
 
 struct TraceConfig {
-    path: std::path::PathBuf,
+    /// Log opened once; `None` if it could not be opened (tracing then drops lines).
+    file: Mutex<Option<std::fs::File>>,
     threshold: Duration,
     pid: u32,
     label: String,
@@ -47,12 +48,29 @@ fn config() -> &'static Option<TraceConfig> {
             .unwrap_or(DEFAULT_THRESHOLD_MS);
         let args: Vec<String> = std::env::args().collect();
         Some(TraceConfig {
-            path: path.into(),
+            file: Mutex::new(open_log(std::path::Path::new(&path))),
             threshold: Duration::from_millis(ms),
             pid: std::process::id(),
             label: process_label(&args),
         })
     })
+}
+
+/// Open the log for append with owner-only permissions, refusing symlinks.
+fn open_log(path: &std::path::Path) -> Option<std::fs::File> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    opts.open(path).ok()
+}
+
+/// Whether a duration is long enough to be logged.
+fn over_threshold(dur: Duration, threshold: Duration) -> bool {
+    dur >= threshold
 }
 
 /// Executable basename plus up to two leading non-flag arguments.
@@ -153,13 +171,12 @@ fn append(cfg: &TraceConfig, kind: &str, dur: Duration, sql: &str) {
         dur,
         sql,
     );
-    // One write_all of one line on an O_APPEND file; errors never reach callers.
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&cfg.path)
-    {
-        let _ = f.write_all(line.as_bytes());
+    // One write_all of one line on a handle opened once with O_APPEND; errors
+    // never reach callers. try_lock: never block inside a SQLite callback.
+    if let Ok(mut guard) = cfg.file.try_lock() {
+        if let Some(f) = guard.as_mut() {
+            let _ = f.write_all(line.as_bytes());
+        }
     }
 }
 
@@ -167,7 +184,7 @@ fn on_profile(sql: &str, dur: Duration) {
     let Some(cfg) = config().as_ref() else {
         return;
     };
-    if dur >= cfg.threshold {
+    if over_threshold(dur, cfg.threshold) {
         append(cfg, "stmt", dur, sql);
     }
     let ended = TX.with(|tx| {
@@ -177,7 +194,7 @@ fn on_profile(sql: &str, dur: Duration) {
             .and_then(|mut s| track_tx(&mut s, sql, Instant::now()))
     });
     if let Some((hold, first)) = ended {
-        if hold >= cfg.threshold {
+        if over_threshold(hold, cfg.threshold) {
             append(cfg, "tx", hold, first.as_deref().unwrap_or(""));
         }
     }
@@ -235,6 +252,65 @@ mod tests {
         assert_eq!(hold, Duration::from_millis(50));
         assert_eq!(first.as_deref(), Some("UPDATE t SET a = 1"));
         assert!(state.is_none());
+    }
+
+    #[test]
+    fn rollback_and_end_terminate_transaction() {
+        for term in ["ROLLBACK", "end", "  End "] {
+            let mut state = None;
+            let t0 = Instant::now();
+            track_tx(&mut state, "BEGIN", t0);
+            let (hold, first) = track_tx(&mut state, term, t0 + Duration::from_millis(7)).unwrap();
+            assert_eq!(hold, Duration::from_millis(7));
+            assert!(first.is_none());
+            assert!(state.is_none());
+        }
+    }
+
+    #[test]
+    fn keyword_is_trimmed_and_case_insensitive() {
+        assert_eq!(keyword("  begin immediate"), "begin");
+        assert_eq!(keyword("Commit;"), "Commit");
+        assert_eq!(keyword(""), "");
+        let mut state = None;
+        let t0 = Instant::now();
+        track_tx(&mut state, " begin", t0);
+        assert!(state.is_some());
+        assert!(track_tx(&mut state, "Commit", t0).is_some());
+    }
+
+    #[test]
+    fn second_begin_resets_start() {
+        let mut state = None;
+        let t0 = Instant::now();
+        track_tx(&mut state, "BEGIN", t0);
+        track_tx(&mut state, "BEGIN", t0 + Duration::from_millis(30));
+        let (hold, _) = track_tx(&mut state, "COMMIT", t0 + Duration::from_millis(40)).unwrap();
+        assert_eq!(hold, Duration::from_millis(10));
+    }
+
+    #[test]
+    fn threshold_gating() {
+        let th = Duration::from_millis(20);
+        assert!(!over_threshold(Duration::from_millis(19), th));
+        assert!(over_threshold(th, th));
+        assert!(over_threshold(Duration::from_millis(21), th));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_log_is_private_and_refuses_symlinks() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("t.log");
+        let f = open_log(&log).expect("opens");
+        drop(f);
+        let mode = std::fs::metadata(&log).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+
+        let link = dir.path().join("link.log");
+        std::os::unix::fs::symlink(&log, &link).unwrap();
+        assert!(open_log(&link).is_none());
     }
 
     #[test]
