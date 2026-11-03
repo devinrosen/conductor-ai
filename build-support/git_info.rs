@@ -1,8 +1,13 @@
-use std::path::PathBuf;
-use std::process::Command;
+// Shared build-script helper, `include!`d by the build.rs of each binary crate
+// (conductor-cli, -tui, -web, -desktop). It is deliberately NOT part of
+// conductor-core: the git SHA changes on every commit, and a build script in
+// core would make core (and everything above it) recompile each time.
+//
+// Plain Rust with no `fn main` and no top-level `use`, so it can be included
+// anywhere. Paths are relative to the including crate's directory.
 
 fn git(args: &[&str]) -> Option<String> {
-    let out = Command::new("git").args(args).output().ok()?;
+    let out = std::process::Command::new("git").args(args).output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -14,14 +19,16 @@ fn git(args: &[&str]) -> Option<String> {
     }
 }
 
-fn main() {
+/// Emit `CONDUCTOR_GIT_SHA` and `CONDUCTOR_GIT_COMMIT_TIME` and re-run when HEAD moves.
+fn emit_git_build_info() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=../build-support/git_info.rs");
 
     // In a worktree `.git` is a file, so `.git/HEAD` does not exist. Resolve the
     // real git dir (per-worktree HEAD) and the common dir (shared refs).
-    if let Some(git_dir) = git(&["rev-parse", "--git-dir"]).map(PathBuf::from) {
+    if let Some(git_dir) = git(&["rev-parse", "--git-dir"]).map(std::path::PathBuf::from) {
         let common_dir = git(&["rev-parse", "--git-common-dir"])
-            .map(PathBuf::from)
+            .map(std::path::PathBuf::from)
             .unwrap_or_else(|| git_dir.clone());
         let head = git_dir.join("HEAD");
         println!("cargo:rerun-if-changed={}", head.display());

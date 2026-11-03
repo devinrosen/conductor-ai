@@ -100,13 +100,10 @@ fn git_output(checkout: &Path, args: &[&str]) -> Option<String> {
 }
 
 fn print_build_gap(checkout: &Path) {
-    let installed = conductor_core::build_info::GIT_SHA;
+    let installed = conductor_core::build_info::get().git_sha;
     let head =
         git_output(checkout, &["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".into());
-    println!(
-        "Installed conductor: {}",
-        conductor_core::build_info::LONG_VERSION
-    );
+    println!("Installed conductor: {}", conductor_core::long_version!());
     println!("Checkout HEAD:       {head}");
     if installed != "unknown" && installed != head {
         match git_output(

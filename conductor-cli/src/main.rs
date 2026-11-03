@@ -14,6 +14,8 @@ mod setup;
 use commands::{AgentCommands, Cli, Commands, SessionCommands};
 
 fn main() -> Result<()> {
+    conductor_core::build_info::init(conductor_core::git_build_info!());
+
     let cli = Cli::parse();
 
     // `session hook` runs on every Claude Code hook: dispatch before tracing

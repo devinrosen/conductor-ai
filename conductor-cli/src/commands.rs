@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 pub const CONDUCTOR_RUN_ID_ENV: &str = "CONDUCTOR_RUN_ID";
 
 #[derive(Parser)]
-#[command(name = "conductor", about = "Multi-repo orchestration tool", version = conductor_core::build_info::LONG_VERSION)]
+#[command(name = "conductor", about = "Multi-repo orchestration tool", version = conductor_core::long_version!())]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
