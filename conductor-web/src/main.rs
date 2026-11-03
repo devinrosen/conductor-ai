@@ -665,6 +665,8 @@ async fn main() -> Result<()> {
         let mut detector = conductor_web::db_events::DbEventDetector::default();
         // Fires `session.idle` through hooks from this 2 s loop, so the delay is precise.
         let mut idle_notifier = conductor_core::notify::SessionIdleNotifier::new();
+        // Reads interactive session transcripts (cost/token metrics, denied permissions).
+        let mut transcript_ingester = conductor_core::session::TranscriptIngester::new();
         loop {
             interval.tick().await;
             let db = db_event_state.db.clone();
@@ -677,6 +679,8 @@ async fn main() -> Result<()> {
                 // so a drained PermissionRequest notifies on this same tick.
                 conductor_core::session::spool::drain_for_db(&conn, &db_path);
                 let now = chrono::Utc::now();
+                // Bounded by a per-tick byte budget: the shared connection is held here.
+                transcript_ingester.poll(&conn, now);
                 let cfg = cfg.blocking_read();
                 let idle_cfg = &cfg.notifications.session_idle;
                 // One candidate query per tick, shared by the hook notifier and the
@@ -706,13 +710,14 @@ async fn main() -> Result<()> {
                         Ok(evs)
                     });
                 }
-                (detector, idle_notifier, res)
+                (detector, idle_notifier, transcript_ingester, res)
             })
             .await;
             match result {
-                Ok((d, n, res)) => {
+                Ok((d, n, t, res)) => {
                     detector = d;
                     idle_notifier = n;
+                    transcript_ingester = t;
                     match res {
                         Ok(events) => {
                             for ev in events {
@@ -727,6 +732,7 @@ async fn main() -> Result<()> {
                     tracing::warn!("db event detector panicked: {e}");
                     detector = conductor_web::db_events::DbEventDetector::default();
                     idle_notifier = conductor_core::notify::SessionIdleNotifier::new();
+                    transcript_ingester = conductor_core::session::TranscriptIngester::new();
                 }
             }
         }
@@ -1003,6 +1009,7 @@ mod tests {
             runtime: "claude".to_string(),
             idle_since: None,
             subprocess_started_at: None,
+            usage_estimated: false,
         }
     }
 

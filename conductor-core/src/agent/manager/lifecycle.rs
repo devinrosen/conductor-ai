@@ -129,6 +129,7 @@ impl<'a> AgentManager<'a> {
             runtime: "claude".to_string(),
             idle_since: None,
             subprocess_started_at: None,
+            usage_estimated: false,
         };
 
         self.conn.execute(

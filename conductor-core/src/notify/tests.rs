@@ -982,6 +982,7 @@ fn transition_run(status: crate::agent::AgentRunStatus, runtime: &str) -> crate:
         conversation_id: None,
         subprocess_pid: None,
         subprocess_started_at: None,
+        usage_estimated: false,
         runtime: runtime.into(),
         idle_since: None,
     }

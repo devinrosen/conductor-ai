@@ -574,6 +574,7 @@ mod tests {
             runtime: "interactive".into(),
             idle_since: idle_since.map(str::to_string),
             subprocess_started_at: None,
+            usage_estimated: false,
         }
     }
 

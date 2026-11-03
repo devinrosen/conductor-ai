@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 88;
+pub const LATEST_SCHEMA_VERSION: u32 = 89;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1409,6 +1409,19 @@ pub fn run(conn: &Connection) -> Result<()> {
             )?;
         }
         bump_version(conn, 88)?;
+    }
+
+    // 089: usage_estimated marks token totals that are per-message transcript sums
+    // (no cost-state entry yet) rather than the session's exact totals (RFC 021 §9).
+    if version < 89 {
+        if table_exists(conn, "agent_runs")?
+            && conn
+                .prepare("SELECT usage_estimated FROM agent_runs LIMIT 0")
+                .is_err()
+        {
+            conn.execute_batch("ALTER TABLE agent_runs ADD COLUMN usage_estimated INTEGER;")?;
+        }
+        bump_version(conn, 89)?;
     }
 
     Ok(())
@@ -3280,5 +3293,39 @@ mod tests {
         .unwrap();
         run(&conn).expect("088 must tolerate agent_runs without session_id/runtime");
         assert!(!index_exists(&conn, "idx_agent_runs_session_runtime"));
+    }
+
+    #[test]
+    fn test_migration_089_adds_usage_estimated() {
+        let conn = fixture_086(true);
+        conn.execute(
+            "INSERT INTO agent_runs (id, status, prompt, started_at) VALUES ('r1','completed','p','t')",
+            [],
+        )
+        .ok();
+        run(&conn).unwrap();
+        run(&conn).unwrap();
+        assert!(conn
+            .prepare("SELECT usage_estimated FROM agent_runs LIMIT 0")
+            .is_ok());
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agent_runs WHERE usage_estimated IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn test_migration_089_skips_without_agent_runs() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO _conductor_meta VALUES ('schema_version', '88');",
+        )
+        .unwrap();
+        run(&conn).expect("089 must tolerate a missing agent_runs table");
     }
 }
