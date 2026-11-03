@@ -46,12 +46,22 @@ else
 fi
 cargo fmt --all --check 2>&1 || FAILED_CHECKS+=("fmt")
 
-# Validate changed or new .wf files
+# Validate changed or new .wf files.
+#
+# Every conductor command opens the database (Conductor::open) before it runs,
+# even `workflow validate --path`, and the `cargo run` fallback is this branch's
+# own build: against the real ~/.conductor it would apply the branch's
+# migrations and lock out every installed binary (#3182). Validation needs no
+# real state, so both commands run with a throwaway CONDUCTOR_HOME.
+VALIDATE_HOME=""
+cleanup_validate_home() { if [ -n "$VALIDATE_HOME" ]; then rm -rf "$VALIDATE_HOME"; fi; }
+trap cleanup_validate_home EXIT
 for f in $(git diff --name-only "$DIFF_TARGET" -- '*.wf') $(git ls-files --others --exclude-standard -- '*.wf'); do
   [ -f "$f" ] || continue
   name=$(basename "$f" .wf)
-  (conductor workflow validate "$name" --path . 2>&1 \
-    || cargo run --bin conductor -- workflow validate "$name" --path . 2>&1) \
+  [ -n "$VALIDATE_HOME" ] || VALIDATE_HOME=$(mktemp -d)
+  (CONDUCTOR_HOME="$VALIDATE_HOME" conductor workflow validate "$name" --path . 2>&1 \
+    || CONDUCTOR_HOME="$VALIDATE_HOME" cargo run --bin conductor -- workflow validate "$name" --path . 2>&1) \
     || FAILED_CHECKS+=("wf:$name")
 done
 
