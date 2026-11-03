@@ -266,8 +266,8 @@ pub fn apply_hook_event(conn: &Connection, ev: &HookEvent) -> Result<HookOutcome
     let existed = existing.is_some();
     let run_id = match existing {
         Some((id, status)) => {
-            let closed = status == AgentRunStatus::Completed.to_string()
-                || status == AgentRunStatus::Failed.to_string();
+            let closed = status == AgentRunStatus::Completed.as_str()
+                || status == AgentRunStatus::Failed.as_str();
             if closed && !matches!(kind, HookKind::SessionStart | HookKind::UserPromptSubmit) {
                 return Ok(HookOutcome::Ignored("session closed"));
             }
@@ -344,7 +344,7 @@ fn insert_run(
             ":repo": repo_id,
             ":sid": session_id,
             ":prompt": PLACEHOLDER_PROMPT,
-            ":status": AgentRunStatus::Idle.to_string(),
+            ":status": AgentRunStatus::Idle.as_str(),
             ":now": ev.received_at,
             ":model": ev.model,
             ":runtime": RUNTIME_INTERACTIVE,
@@ -416,10 +416,10 @@ fn resolve_pending(
          WHERE run_id = ?1 AND status = ?5",
         params![
             run_id,
-            status.to_string(),
+            status.as_str(),
             response,
             now,
-            FeedbackStatus::Pending.to_string()
+            FeedbackStatus::Pending.as_str()
         ],
     )?;
     Ok(())
@@ -463,7 +463,7 @@ fn on_session_start(conn: &Connection, ev: &HookEvent, run_id: &str, existed: bo
             ev.env.tmux_pane,
             ev.transcript_path,
             ev.model,
-            AgentRunStatus::Idle.to_string()
+            AgentRunStatus::Idle.as_str()
         ],
     )?;
     let resumed = existed || ev.source.as_deref() == Some("resume");
@@ -489,7 +489,7 @@ fn on_user_prompt(conn: &Connection, ev: &HookEvent, run_id: &str) -> Result<()>
     conn.execute(
         "UPDATE agent_runs SET status = ?3, ended_at = NULL, idle_since = NULL, \
          prompt = CASE WHEN ?2 = '' THEN prompt ELSE ?2 END WHERE id = ?1",
-        params![run_id, prompt, AgentRunStatus::Running.to_string()],
+        params![run_id, prompt, AgentRunStatus::Running.as_str()],
     )?;
     insert_event(
         conn,
@@ -522,7 +522,7 @@ fn on_permission_request(
 
     conn.execute(
         "UPDATE agent_runs SET status = ?2 WHERE id = ?1",
-        params![run_id, AgentRunStatus::WaitingForFeedback.to_string()],
+        params![run_id, AgentRunStatus::WaitingForFeedback.as_str()],
     )?;
     let inserted = conn.execute(
         "INSERT INTO feedback_requests (id, run_id, prompt, status, created_at, feedback_type, dedup_key) \
@@ -558,8 +558,8 @@ fn on_post_tool_use(conn: &Connection, ev: &HookEvent, run_id: &str, kind: HookK
         "UPDATE agent_runs SET status = ?2 WHERE id = ?1 AND status = ?3",
         params![
             run_id,
-            AgentRunStatus::Running.to_string(),
-            AgentRunStatus::WaitingForFeedback.to_string()
+            AgentRunStatus::Running.as_str(),
+            AgentRunStatus::WaitingForFeedback.as_str()
         ],
     )?;
 
@@ -599,7 +599,7 @@ fn on_stop(conn: &Connection, ev: &HookEvent, run_id: &str) -> Result<()> {
             run_id,
             now,
             ev.last_assistant_message,
-            AgentRunStatus::Idle.to_string()
+            AgentRunStatus::Idle.as_str()
         ],
     )?;
     close_prompt_span(conn, run_id, ev.prompt_id.as_deref(), now)?;
@@ -619,7 +619,7 @@ fn on_session_end(conn: &Connection, ev: &HookEvent, run_id: &str) -> Result<()>
     dismiss_pending(conn, run_id, now)?;
     conn.execute(
         "UPDATE agent_runs SET status = ?3, ended_at = ?2, idle_since = NULL WHERE id = ?1",
-        params![run_id, now, AgentRunStatus::Completed.to_string()],
+        params![run_id, now, AgentRunStatus::Completed.as_str()],
     )?;
     close_prompt_span(conn, run_id, None, now)?;
     insert_event(
@@ -1104,5 +1104,144 @@ mod tests {
         let back: HookEvent = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
         assert_eq!(back.last_assistant_message.as_deref(), Some("hi"));
         assert_eq!(back.received_at, T0);
+    }
+
+    // ── HookKind ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn hook_kind_all_covers_every_variant_and_round_trips() {
+        // Exhaustive match: adding a variant breaks compilation here, forcing
+        // an update to `ALL` (checked below) and this test.
+        fn index(k: HookKind) -> usize {
+            match k {
+                HookKind::SessionStart => 0,
+                HookKind::UserPromptSubmit => 1,
+                HookKind::PermissionRequest => 2,
+                HookKind::PostToolUse => 3,
+                HookKind::PostToolUseFailure => 4,
+                HookKind::Stop => 5,
+                HookKind::SessionEnd => 6,
+            }
+        }
+        let mut seen = [false; 7];
+        for k in HookKind::ALL {
+            seen[index(k)] = true;
+            assert_eq!(k.as_str().parse::<HookKind>(), Ok(k));
+        }
+        assert!(seen.iter().all(|s| *s), "ALL is missing a HookKind variant");
+        let names: Vec<_> = handled_event_names().collect();
+        assert_eq!(names.len(), HookKind::ALL.len());
+        for n in names {
+            assert!(is_handled_event(n));
+        }
+    }
+
+    #[test]
+    fn hook_kind_rejects_unknown_names() {
+        for bad in [
+            "PreToolUse",
+            "Notification",
+            "SubagentStop",
+            "",
+            "stop",
+            "SESSIONSTART",
+        ] {
+            assert_eq!(bad.parse::<HookKind>(), Err(()), "{bad:?}");
+            assert!(!is_handled_event(bad), "{bad:?}");
+        }
+    }
+
+    // ── close_prompt_span ───────────────────────────────────────────────────
+
+    fn open_spans(conn: &Connection) -> Vec<(String, bool)> {
+        events(conn, "prompt")
+            .into_iter()
+            .map(|(_, _, ended, m)| {
+                (
+                    m["prompt_id"].as_str().unwrap().to_string(),
+                    ended.is_some(),
+                )
+            })
+            .collect()
+    }
+
+    fn two_open_spans(conn: &Connection) {
+        start(conn);
+        for (id, at) in [("p1", T1), ("p2", T2)] {
+            insert_event(
+                conn,
+                &run_col(conn, "id").unwrap(),
+                EVENT_KIND_PROMPT,
+                id,
+                at,
+                None,
+                json!({"prompt_id": id}),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn close_prompt_span_without_prompt_id_closes_latest_open() {
+        let conn = setup_db();
+        two_open_spans(&conn);
+        let run_id = run_col(&conn, "id").unwrap();
+        close_prompt_span(&conn, &run_id, None, T2).unwrap();
+        assert_eq!(
+            open_spans(&conn),
+            vec![("p1".into(), false), ("p2".into(), true)]
+        );
+    }
+
+    #[test]
+    fn close_prompt_span_prefers_matching_older_span() {
+        let conn = setup_db();
+        two_open_spans(&conn);
+        let run_id = run_col(&conn, "id").unwrap();
+        close_prompt_span(&conn, &run_id, Some("p1"), T2).unwrap();
+        assert_eq!(
+            open_spans(&conn),
+            vec![("p1".into(), true), ("p2".into(), false)]
+        );
+    }
+
+    #[test]
+    fn close_prompt_span_unmatched_prompt_id_falls_back_to_latest() {
+        let conn = setup_db();
+        two_open_spans(&conn);
+        let run_id = run_col(&conn, "id").unwrap();
+        close_prompt_span(&conn, &run_id, Some("nope"), T2).unwrap();
+        assert_eq!(
+            open_spans(&conn),
+            vec![("p1".into(), false), ("p2".into(), true)]
+        );
+    }
+
+    // ── pid_columns ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn pid_columns_leaves_start_time_null_when_unreadable() {
+        // A PID far above any pid_max: the process cannot exist.
+        let mut e = ev("SessionStart", json!({}), T0);
+        e.env.claude_pid = Some(4_000_000_000);
+        let (pid, started) = pid_columns(&e);
+        assert_eq!(pid, Some(4_000_000_000));
+        assert_eq!(started, None);
+    }
+
+    #[test]
+    fn pid_columns_none_without_pid() {
+        let mut e = ev("SessionStart", json!({}), T0);
+        e.env.claude_pid = None;
+        assert_eq!(pid_columns(&e), (None, None));
+    }
+
+    #[test]
+    fn session_start_with_dead_pid_stores_null_start_time() {
+        let conn = setup_db();
+        let mut e = ev("SessionStart", json!({"source": "startup"}), T0);
+        e.env.claude_pid = Some(4_000_000_000);
+        apply(&conn, &e);
+        assert_eq!(run_col(&conn, "subprocess_started_at"), None);
     }
 }

@@ -28,17 +28,23 @@ pub enum AgentRunStatus {
 /// sync with `is_active()` (a unit test asserts they agree); use in `status IN {..}`.
 pub const ACTIVE_STATUSES_SQL: &str = "('running', 'waiting_for_feedback', 'idle')";
 
-impl std::fmt::Display for AgentRunStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
+impl AgentRunStatus {
+    /// Allocation-free database/wire representation.
+    pub fn as_str(&self) -> &'static str {
+        match self {
             Self::Running => "running",
             Self::WaitingForFeedback => "waiting_for_feedback",
             Self::Idle => "idle",
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
-        };
-        write!(f, "{s}")
+        }
+    }
+}
+
+impl std::fmt::Display for AgentRunStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -202,14 +208,20 @@ pub enum FeedbackStatus {
     Dismissed,
 }
 
-impl std::fmt::Display for FeedbackStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
+impl FeedbackStatus {
+    /// Allocation-free database/wire representation.
+    pub fn as_str(&self) -> &'static str {
+        match self {
             Self::Pending => "pending",
             Self::Responded => "responded",
             Self::Dismissed => "dismissed",
-        };
-        write!(f, "{s}")
+        }
+    }
+}
+
+impl std::fmt::Display for FeedbackStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

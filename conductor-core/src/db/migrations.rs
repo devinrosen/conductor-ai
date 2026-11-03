@@ -3226,4 +3226,59 @@ mod tests {
         .unwrap();
         run(&conn).expect("087 must tolerate partial fixtures");
     }
+
+    // ── Migration 088 (session hook lookup index) ───────────────────────────
+
+    fn index_exists(conn: &Connection, name: &str) -> bool {
+        conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?1",
+            [name],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+            > 0
+    }
+
+    #[test]
+    fn test_migration_088_creates_session_runtime_index() {
+        let conn = fixture_086(true);
+        run(&conn).unwrap();
+        assert!(index_exists(&conn, "idx_agent_runs_session_runtime"));
+    }
+
+    #[test]
+    fn test_migration_088_idempotent() {
+        let conn = fixture_086(true);
+        run(&conn).unwrap();
+        run(&conn).unwrap();
+        assert!(index_exists(&conn, "idx_agent_runs_session_runtime"));
+    }
+
+    #[test]
+    fn test_migration_088_runs_on_db_already_at_087() {
+        let conn = fixture_086(true);
+        run(&conn).unwrap();
+        conn.execute("DROP INDEX idx_agent_runs_session_runtime", [])
+            .unwrap();
+        conn.execute(
+            "UPDATE _conductor_meta SET value='87' WHERE key='schema_version'",
+            [],
+        )
+        .unwrap();
+        run(&conn).unwrap();
+        assert!(index_exists(&conn, "idx_agent_runs_session_runtime"));
+    }
+
+    #[test]
+    fn test_migration_088_skips_when_columns_missing() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO _conductor_meta VALUES ('schema_version', '87');
+             CREATE TABLE agent_runs (id TEXT PRIMARY KEY, status TEXT);",
+        )
+        .unwrap();
+        run(&conn).expect("088 must tolerate agent_runs without session_id/runtime");
+        assert!(!index_exists(&conn, "idx_agent_runs_session_runtime"));
+    }
 }
