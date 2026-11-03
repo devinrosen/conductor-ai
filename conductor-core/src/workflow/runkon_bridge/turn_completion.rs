@@ -17,7 +17,6 @@
 //! runkon/runkon#105), but is mentioned in the prompt when a resume happens.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use runkon_flow::constants::metadata_keys as k;
@@ -27,6 +26,8 @@ use runkon_flow::traits::action_executor::ActionOutput;
 use runkon_flow_executors::correction::AgentRunOutcome;
 use runkon_runtimes::RunHandle;
 
+use crate::agent::log_parsing::{running_background_tasks, BackgroundTask};
+
 /// Maximum number of continuation runs per step.
 pub(crate) const MAX_FINISH_ATTEMPTS: u32 = 2;
 
@@ -34,79 +35,27 @@ pub(crate) const MAX_FINISH_ATTEMPTS: u32 = 2;
 pub(crate) const FINISH_TURN_ATTEMPTS: &str = "finish_turn_attempts";
 
 const MAX_LISTED: usize = 10;
-const MAX_DESCRIPTION_CHARS: usize = 120;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct BackgroundTask {
-    pub task_id: String,
-    pub task_type: String,
-    pub description: String,
-}
-
-/// Background tasks still running when the agent's last turn ended.
-///
-/// Scoped to the log segment after the last `init` event: the log is opened in
-/// append mode, so a resumed session's output follows the earlier attempt's,
-/// and a fresh process starts with no tasks. Best effort: a missing log or an
-/// unknown event shape yields no tasks.
-pub(crate) fn running_background_tasks(log_path: &Path) -> Vec<BackgroundTask> {
-    let file = match std::fs::File::open(log_path) {
-        Ok(f) => f,
-        Err(e) => {
-            tracing::warn!(
-                "turn completion: cannot read agent log {}: {e}",
-                log_path.display()
-            );
-            return Vec::new();
-        }
-    };
-    let mut tasks: Vec<BackgroundTask> = Vec::new();
-    for line in BufReader::new(file).split(b'\n').map_while(Result::ok) {
-        let Ok(v) = serde_json::from_slice::<serde_json::Value>(&line) else {
-            continue;
-        };
-        let ty = v.get("type").and_then(|t| t.as_str());
-        let sub = v.get("subtype").and_then(|t| t.as_str());
-        match (ty, sub) {
-            (Some("system"), Some("init")) => tasks.clear(),
-            (Some("system"), Some("background_tasks_changed")) => {
-                tasks = v
-                    .get("tasks")
-                    .and_then(|t| t.as_array())
-                    .map(|arr| arr.iter().map(parse_task).collect())
-                    .unwrap_or_default();
-            }
-            _ => {}
-        }
-    }
-    tasks
-}
-
-fn parse_task(v: &serde_json::Value) -> BackgroundTask {
-    let s = |key: &str| {
-        v.get(key)
-            .and_then(|x| x.as_str())
-            .unwrap_or_default()
-            .to_string()
-    };
-    let first_line = s("description").lines().next().unwrap_or("").to_string();
-    let description = if first_line.chars().count() > MAX_DESCRIPTION_CHARS {
-        let cut: String = first_line.chars().take(MAX_DESCRIPTION_CHARS).collect();
-        format!("{cut}…")
-    } else {
-        first_line
-    };
-    BackgroundTask {
-        task_id: s("task_id"),
-        task_type: s("task_type"),
-        description,
-    }
-}
 
 /// Tracked files with uncommitted changes in `dir`, or `None` when git cannot
 /// tell (the check is then skipped rather than failing the step).
 pub(crate) fn tracked_changes(dir: &Path) -> Option<Vec<String>> {
-    crate::worktree::tracked_changes(dir.to_str()?).ok()
+    let Some(path) = dir.to_str() else {
+        tracing::warn!(
+            "turn completion: working dir {} is not valid UTF-8; skipping tree check",
+            dir.display()
+        );
+        return None;
+    };
+    match crate::worktree::tracked_changes(path) {
+        Ok(files) => Some(files),
+        Err(e) => {
+            tracing::warn!(
+                "turn completion: cannot read git status in {}: {e}; skipping tree check",
+                dir.display()
+            );
+            None
+        }
+    }
 }
 
 /// Why a finished-looking turn is not actually finished.
@@ -114,8 +63,6 @@ pub(crate) fn tracked_changes(dir: &Path) -> Option<Vec<String>> {
 pub(crate) struct UnfinishedTurn {
     pub background: Vec<BackgroundTask>,
     pub uncommitted: Vec<String>,
-    /// `OUTPUT_WARNING` from the agent's output, if any. Not a trigger by itself.
-    pub output_warning: Option<String>,
 }
 
 impl UnfinishedTurn {
@@ -165,7 +112,7 @@ fn with_more(listed: Vec<String>, total: usize) -> String {
 }
 
 /// The continuation prompt sent into the resumed session.
-pub(crate) fn finish_turn_prompt(t: &UnfinishedTurn) -> String {
+pub(crate) fn finish_turn_prompt(t: &UnfinishedTurn, missing_flow_output: bool) -> String {
     let mut p = String::from(
         "You ended your turn before finishing this step. The workflow step only ends \
          when your turn does; anything unfinished is lost.\n\n",
@@ -191,7 +138,7 @@ pub(crate) fn finish_turn_prompt(t: &UnfinishedTurn) -> String {
             "Your instructions require you to commit. Finish the remaining steps and commit.\n\n",
         );
     }
-    if t.output_warning.is_some() {
+    if missing_flow_output {
         p.push_str("End with the `<<<FLOW_OUTPUT>>>` block your instructions ask for.\n\n");
     }
     p.push_str(
@@ -218,7 +165,6 @@ pub(crate) fn assess(
     UnfinishedTurn {
         background: running_background_tasks(log_path),
         uncommitted,
-        output_warning: None,
     }
 }
 
@@ -253,16 +199,23 @@ fn add_run_metrics(metadata: &mut HashMap<String, String>, run: &RunHandle) {
     );
 }
 
+fn step_err(step: &str, msg: impl std::fmt::Display) -> EngineError {
+    EngineError::Workflow(format!("step '{step}': {msg}"))
+}
+
 fn unfinished_error(step: &str, t: &UnfinishedTurn, attempts: u32) -> EngineError {
     let suffix = if attempts > 0 {
         format!(" (after {attempts} finish attempt(s))")
     } else {
         String::new()
     };
-    EngineError::Workflow(format!(
-        "step '{step}': agent ended its turn before finishing: {}{suffix}",
-        t.describe()
-    ))
+    step_err(
+        step,
+        format_args!(
+            "agent ended its turn before finishing: {}{suffix}",
+            t.describe()
+        ),
+    )
 }
 
 /// If the agent's turn ended unfinished, resume its session until it finishes
@@ -270,7 +223,7 @@ fn unfinished_error(step: &str, t: &UnfinishedTurn, attempts: u32) -> EngineErro
 /// `output`. Fails the step when the turn is still unfinished, or when there is
 /// no session to resume.
 ///
-/// - `assess` re-collects the signals (its `output_warning` is filled in here).
+/// - `assess` re-collects the signals.
 /// - `session_lookup` finds the session id of the finished run; consulted only
 ///   when the turn is unfinished.
 /// - `resume` runs the session with a prompt and the session id.
@@ -282,11 +235,7 @@ pub(crate) fn finish_unfinished_turn(
     session_lookup: impl FnOnce() -> Option<String>,
     mut resume: impl FnMut(&str, &str) -> Result<AgentRunOutcome, String>,
 ) -> Result<(), EngineError> {
-    let with_warning = |mut t: UnfinishedTurn, output: &ActionOutput| {
-        t.output_warning = output.metadata.get(k::OUTPUT_WARNING).cloned();
-        t
-    };
-    let mut turn = with_warning(assess(), output);
+    let mut turn = assess();
     if !turn.is_unfinished() {
         return Ok(());
     }
@@ -299,19 +248,25 @@ pub(crate) fn finish_unfinished_turn(
             "step '{step}': agent ended its turn early ({}); resuming (attempt {attempt}/{MAX_FINISH_ATTEMPTS})",
             turn.describe()
         );
-        let prompt = finish_turn_prompt(&turn);
+        let prompt = finish_turn_prompt(&turn, output.metadata.contains_key(k::OUTPUT_WARNING));
         let outcome = resume(&prompt, &session_id).map_err(|e| {
-            EngineError::Workflow(format!(
-                "step '{step}': finish-turn attempt {attempt} failed: {e}; original: {}",
-                turn.describe()
-            ))
+            step_err(
+                step,
+                format_args!(
+                    "finish-turn attempt {attempt} failed: {e}; original: {}",
+                    turn.describe()
+                ),
+            )
         })?;
         if outcome.run.status != runkon_runtimes::RunStatus::Completed {
-            return Err(EngineError::Workflow(format!(
-                "step '{step}': finish-turn attempt {attempt} ended with status {:?}; original: {}",
-                outcome.run.status,
-                turn.describe()
-            )));
+            return Err(step_err(
+                step,
+                format_args!(
+                    "finish-turn attempt {attempt} ended with status {:?}; original: {}",
+                    outcome.run.status,
+                    turn.describe()
+                ),
+            ));
         }
 
         output.markers = outcome.markers;
@@ -320,14 +275,10 @@ pub(crate) fn finish_unfinished_turn(
         output.result_text = outcome.run.result_text.clone();
         add_run_metrics(&mut output.metadata, &outcome.run);
         if outcome.correction_attempts > 0 {
-            let prior: u32 = output
-                .metadata
-                .get(k::OUTPUT_CORRECTION_ATTEMPTS)
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0);
-            output.metadata.insert(
-                k::OUTPUT_CORRECTION_ATTEMPTS.to_string(),
-                (prior + outcome.correction_attempts).to_string(),
+            add_metric(
+                &mut output.metadata,
+                k::OUTPUT_CORRECTION_ATTEMPTS,
+                Some(outcome.correction_attempts),
             );
         }
         output.metadata.remove(k::OUTPUT_WARNING);
@@ -343,7 +294,7 @@ pub(crate) fn finish_unfinished_turn(
             session_id = s;
         }
 
-        turn = with_warning(assess(), output);
+        turn = assess();
         if !turn.is_unfinished() {
             return Ok(());
         }
@@ -366,65 +317,10 @@ mod tests {
 
     const INIT: &str = r#"{"type":"system","subtype":"init","session_id":"s1"}"#;
     const RESULT: &str = r#"{"type":"result","subtype":"success","result":"ending turn"}"#;
-    const TWO_TASKS: &str = r#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a","task_type":"local_bash","description":"cargo test"},{"task_id":"b","task_type":"local_bash","description":"cargo clippy"}]}"#;
-    const NO_TASKS: &str = r#"{"type":"system","subtype":"background_tasks_changed","tasks":[]}"#;
 
     #[test]
-    fn tasks_before_result_are_running() {
-        let f = write_log(&[INIT, TWO_TASKS, RESULT]);
-        let t = running_background_tasks(f.path());
-        assert_eq!(t.len(), 2);
-        assert_eq!(t[0].task_id, "a");
-        assert_eq!(t[0].description, "cargo test");
-    }
-
-    #[test]
-    fn empty_last_event_means_none_running() {
-        let f = write_log(&[INIT, TWO_TASKS, NO_TASKS, RESULT]);
-        assert!(running_background_tasks(f.path()).is_empty());
-    }
-
-    #[test]
-    fn new_init_resets_tasks_from_earlier_segment() {
-        let f = write_log(&[INIT, TWO_TASKS, RESULT, INIT]);
-        assert!(running_background_tasks(f.path()).is_empty());
-    }
-
-    #[test]
-    fn missing_file_and_garbage_lines_are_tolerated() {
-        assert!(running_background_tasks(Path::new("/nonexistent/x.log")).is_empty());
-        let f = write_log(&["not json", INIT, "{{{", TWO_TASKS, RESULT]);
-        assert_eq!(running_background_tasks(f.path()).len(), 2);
-    }
-
-    #[test]
-    fn long_multiline_description_is_truncated() {
-        let long = "x".repeat(300);
-        let ev = serde_json::json!({
-            "type":"system","subtype":"background_tasks_changed",
-            "tasks":[{"task_id":"a","task_type":"local_bash","description":format!("first\n{long}")}]
-        })
-        .to_string();
-        let f = write_log(&[INIT, &ev, RESULT]);
-        assert_eq!(running_background_tasks(f.path())[0].description, "first");
-        let ev = serde_json::json!({
-            "type":"system","subtype":"background_tasks_changed",
-            "tasks":[{"task_id":"a","task_type":"local_bash","description":long}]
-        })
-        .to_string();
-        let f = write_log(&[INIT, &ev, RESULT]);
-        let d = &running_background_tasks(f.path())[0].description;
-        assert_eq!(d.chars().count(), MAX_DESCRIPTION_CHARS + 1);
-        assert!(d.ends_with('…'));
-    }
-
-    #[test]
-    fn output_warning_alone_is_not_unfinished() {
-        let t = UnfinishedTurn {
-            output_warning: Some("w".into()),
-            ..Default::default()
-        };
-        assert!(!t.is_unfinished());
+    fn default_turn_is_not_unfinished() {
+        assert!(!UnfinishedTurn::default().is_unfinished());
     }
 
     #[test]
@@ -449,16 +345,15 @@ mod tests {
             }],
             ..Default::default()
         };
-        let p = finish_turn_prompt(&bg);
+        let p = finish_turn_prompt(&bg, false);
         assert!(p.contains("cargo test") && p.contains("foreground"));
         assert!(!p.contains("uncommitted") && !p.contains("FLOW_OUTPUT"));
 
         let dirty = UnfinishedTurn {
             uncommitted: vec!["a.rs".into()],
-            output_warning: Some("w".into()),
             ..Default::default()
         };
-        let p = finish_turn_prompt(&dirty);
+        let p = finish_turn_prompt(&dirty, true);
         assert!(p.contains("a.rs") && p.contains("FLOW_OUTPUT"));
         assert!(!p.contains("Background tasks"));
     }

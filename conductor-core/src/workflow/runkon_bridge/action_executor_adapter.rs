@@ -191,6 +191,12 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             &params.plugin_dirs,
             self.config.general.default_runtime.as_deref(),
         )
+        .map_err(|e| {
+            tracing::warn!(
+                "step '{}': cannot load agent for the unfinished-turn check, skipping it: {e}",
+                params.name
+            );
+        })
         .ok();
         let tree_clean_before = !params.dry_run
             && agent_def.as_ref().is_some_and(|d| d.can_commit)
@@ -249,12 +255,26 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                     crate::agent::log_parsing::read_log_result(&log_path)
                         .and_then(|r| r.session_id)
                         .or_else(|| {
-                            let conn = self.conn.lock().ok()?;
-                            crate::agent::AgentManager::new(&conn)
-                                .get_run(&child_run_id)
-                                .ok()
-                                .flatten()
-                                .and_then(|r| r.session_id)
+                            let conn = self
+                                .conn
+                                .lock()
+                                .map_err(|e| {
+                                    tracing::warn!(
+                                        "step '{}': db lock poisoned, cannot look up session for run {child_run_id}: {e}",
+                                        params.name
+                                    );
+                                })
+                                .ok()?;
+                            match crate::agent::AgentManager::new(&conn).get_run(&child_run_id) {
+                                Ok(run) => run.and_then(|r| r.session_id),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "step '{}': cannot look up session for run {child_run_id}: {e}",
+                                        params.name
+                                    );
+                                    None
+                                }
+                            }
                         })
                 },
                 |prompt, session_id| {
@@ -264,28 +284,16 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                     let runtime = resume_resolver.resolve(&effective_runtime).map_err(|e| {
                         format!("failed to resolve runtime '{effective_runtime}': {e}")
                     })?;
-                    let extra_cli_args = match &params.as_identity {
-                        Some(name) => vec![(
-                            std::borrow::Cow::Borrowed("--bot-name"),
-                            std::borrow::Cow::Owned(name.clone()),
-                        )],
-                        None => vec![],
-                    };
-                    let request = runkon_runtimes::RuntimeRequest {
-                        run_id: child_run_id.clone(),
+                    let request = build_resume_request(ResumeRequestParts {
+                        run_id: &child_run_id,
                         effective_runtime,
-                        agent_def: agent_def.clone(),
-                        prompt: prompt.to_string(),
-                        working_dir: working_dir.clone(),
-                        model: params.model.clone(),
-                        extra_cli_args,
-                        plugin_dirs: params.plugin_dirs.clone(),
-                        resume_session_id: Some(session_id.to_string()),
-                        tracker: resume_host.clone()
-                            as std::sync::Arc<dyn runkon_runtimes::RunTracker>,
-                        event_sink: resume_host.clone()
-                            as std::sync::Arc<dyn runkon_runtimes::RunEventSink>,
-                    };
+                        agent_def: &agent_def,
+                        prompt,
+                        working_dir: &working_dir,
+                        params,
+                        session_id,
+                        host: &resume_host,
+                    });
                     runkon_flow_executors::correction::run_agent_with_output_correction(
                         &*runtime,
                         request,
@@ -330,6 +338,44 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
         }
         output.child_run_id = Some(child_run_id);
         Ok(output)
+    }
+}
+
+struct ResumeRequestParts<'a> {
+    run_id: &'a str,
+    effective_runtime: String,
+    agent_def: &'a runkon_runtimes::agent_def::AgentDef,
+    prompt: &'a str,
+    working_dir: &'a std::path::Path,
+    params: &'a runkon_flow::traits::action_executor::ActionParams,
+    session_id: &'a str,
+    host: &'a Arc<crate::runtime::adapter::SqliteHostAdapter>,
+}
+
+/// Build the `RuntimeRequest` for resuming a finished run's session. The
+/// first-run request is built inside `ClaudeAgentExecutor` (runkon-anthropic),
+/// so the conductor-side pieces — `--bot-name`, plugin dirs, tracker and event
+/// sink — are kept together here; keep them in step with that executor.
+fn build_resume_request(p: ResumeRequestParts<'_>) -> runkon_runtimes::RuntimeRequest {
+    let extra_cli_args = match &p.params.as_identity {
+        Some(name) => vec![(
+            std::borrow::Cow::Borrowed("--bot-name"),
+            std::borrow::Cow::Owned(name.clone()),
+        )],
+        None => vec![],
+    };
+    runkon_runtimes::RuntimeRequest {
+        run_id: p.run_id.to_string(),
+        effective_runtime: p.effective_runtime,
+        agent_def: p.agent_def.clone(),
+        prompt: p.prompt.to_string(),
+        working_dir: p.working_dir.to_path_buf(),
+        model: p.params.model.clone(),
+        extra_cli_args,
+        plugin_dirs: p.params.plugin_dirs.clone(),
+        resume_session_id: Some(p.session_id.to_string()),
+        tracker: p.host.clone() as Arc<dyn runkon_runtimes::RunTracker>,
+        event_sink: p.host.clone() as Arc<dyn runkon_runtimes::RunEventSink>,
     }
 }
 
