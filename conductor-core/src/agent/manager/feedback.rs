@@ -198,6 +198,20 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Dismiss every pending feedback request for a run without resuming it.
+    ///
+    /// Used when a run is reaped: its process can never consume the response. Unlike
+    /// [`Self::dismiss_feedback`], this does not flip the run back to `running`.
+    pub fn dismiss_pending_feedback_for_run(&self, run_id: &str) -> Result<usize> {
+        let now = Utc::now().to_rfc3339();
+        let changed = self.conn.execute(
+            "UPDATE feedback_requests SET status = 'dismissed', responded_at = :responded_at \
+             WHERE run_id = :run_id AND status = 'pending'",
+            named_params! { ":responded_at": now, ":run_id": run_id },
+        )?;
+        Ok(changed)
+    }
+
     /// Build a `FeedbackNotPending` error by looking up the current status (or noting not found).
     fn feedback_not_pending_error(&self, feedback_id: &str) -> ConductorError {
         let status = self

@@ -79,11 +79,28 @@ pub struct AgentRun {
     pub bot_name: Option<String>,
     pub conversation_id: Option<String>,
     pub subprocess_pid: Option<i64>,
+    /// Start time of the process in `subprocess_pid`, used by the reaper's PID-reuse guard.
+    /// `None` for rows written before migration 087 / before this was recorded.
+    #[serde(default)]
+    pub subprocess_started_at: Option<String>,
     #[serde(default = "default_runtime_field")]
     pub runtime: String,
     /// When an interactive session (RFC 021) entered `idle`; `None` otherwise.
     #[serde(default)]
     pub idle_since: Option<String>,
+}
+
+/// `agent_runs.runtime` value for hand-run Claude Code sessions tracked via hooks (RFC 021).
+pub const INTERACTIVE_RUNTIME: &str = "interactive";
+
+impl AgentRun {
+    /// Start time to compare a live `subprocess_pid` against: the recorded process start,
+    /// falling back to the run's `started_at` for rows that predate `subprocess_started_at`.
+    pub fn pid_recorded_started_at(&self) -> &str {
+        self.subprocess_started_at
+            .as_deref()
+            .unwrap_or(&self.started_at)
+    }
 }
 
 fn default_runtime_field() -> String {
@@ -456,7 +473,22 @@ mod tests {
             subprocess_pid: None,
             runtime: "claude".into(),
             idle_since: None,
+            subprocess_started_at: None,
         }
+    }
+
+    #[test]
+    fn test_pid_recorded_started_at_prefers_subprocess_started_at() {
+        let mut run = make_run("r1", None);
+        run.subprocess_started_at = Some("2025-02-02T00:00:00Z".into());
+        assert_eq!(run.pid_recorded_started_at(), "2025-02-02T00:00:00Z");
+    }
+
+    #[test]
+    fn test_pid_recorded_started_at_falls_back_to_started_at() {
+        let run = make_run("r1", None);
+        assert!(run.subprocess_started_at.is_none());
+        assert_eq!(run.pid_recorded_started_at(), "2025-01-01T00:00:00Z");
     }
 
     /// Build a fully-populated `AgentRun` so `to_run_handle` projection can be
@@ -488,6 +520,7 @@ mod tests {
             subprocess_pid: Some(12345),
             runtime: "claude".into(),
             idle_since: None,
+            subprocess_started_at: None,
         }
     }
 
