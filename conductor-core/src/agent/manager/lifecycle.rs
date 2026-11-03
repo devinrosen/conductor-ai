@@ -351,10 +351,7 @@ impl<'a> AgentManager<'a> {
         // developer's terminal; refuse before touching the DB or the process.
         // Same rule and message as the TUI and web stop paths, via
         // `AgentRun::stop_refusal`.
-        if let Some(msg) = self
-            .get_run(run_id)?
-            .and_then(|run| run.stop_refusal())
-        {
+        if let Some(msg) = self.get_run(run_id)?.and_then(|run| run.stop_refusal()) {
             return Err(ConductorError::Agent(msg.into()));
         }
 

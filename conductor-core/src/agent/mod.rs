@@ -26,7 +26,8 @@ pub use status::{
 pub use types::{
     ActiveAgentCounts, AgentCreatedIssue, AgentEvent, AgentRun, AgentRunEvent, ClaudeJsonResult,
     CostPhase, FeedbackOption, FeedbackRequest, FeedbackRequestParams, LogResult, PlanStep,
-    RunMetrics, RunTreeTotals, TicketAgentTotals, EVENT_KIND_TOOL_ERROR, INTERACTIVE_RUNTIME, META_KEY_ERROR_TEXT,
+    RunMetrics, RunTreeTotals, TicketAgentTotals, EVENT_KIND_TOOL_ERROR, INTERACTIVE_RUNTIME,
+    META_KEY_ERROR_TEXT,
 };
 
 #[cfg(test)]
