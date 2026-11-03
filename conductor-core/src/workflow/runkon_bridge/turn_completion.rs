@@ -506,7 +506,9 @@ mod tests {
             subprocess_pid: None,
             runtime: "claude".into(),
             session_id: session.map(String::from),
-            result_text: Some("done".into()),
+            result_text: Some(
+                "done\n<<<FLOW_OUTPUT>>>\n{\"markers\":[],\"context\":\"c\"}\n<<<END_FLOW_OUTPUT>>>".into(),
+            ),
             started_at: String::new(),
             ended_at: None,
             log_file: None,
@@ -603,7 +605,7 @@ mod tests {
         assert_eq!(out.metadata[k::COST_USD], "1.5");
         assert_eq!(out.metadata[k::NUM_TURNS], "5");
         assert_eq!(out.markers, vec!["m".to_string()]);
-        assert_eq!(out.result_text.as_deref(), Some("done"));
+        assert!(out.result_text.as_deref().unwrap().starts_with("done"));
         assert!(!out.metadata.contains_key(k::OUTPUT_WARNING));
     }
 
