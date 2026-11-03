@@ -291,7 +291,9 @@ pub(crate) fn parse(bytes: &[u8]) -> Parsed {
 impl Parsed {
     /// Deduplicated assistant messages in first-seen order.
     pub(crate) fn messages(&self) -> impl Iterator<Item = &AssistantUsage> {
-        self.message_order.iter().filter_map(|id| self.messages.get(id))
+        self.message_order
+            .iter()
+            .filter_map(|id| self.messages.get(id))
     }
 
     /// The `promptId` of the user entry that `m`'s `parentUuid` chain leads to. `None` when
@@ -390,7 +392,10 @@ mod tests {
         assert_eq!((c2.start, c2.end), (16, 16));
         assert!(c2.bytes.is_empty());
         // Complete it and read the rest.
-        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
         f.write_all(b"3}\n").unwrap();
         let c3 = read_chunk(&path, 16, 1 << 20).unwrap();
         assert_eq!(c3.bytes, b"{\"c\":3}\n");

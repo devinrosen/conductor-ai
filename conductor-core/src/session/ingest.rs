@@ -100,7 +100,9 @@ impl TranscriptIngester {
             match self.check_denial(conn, c, budget) {
                 Ok(true) => found += 1,
                 Ok(false) => {}
-                Err(e) => tracing::debug!(run_id = %c.run_id, "transcript denial check failed: {e}"),
+                Err(e) => {
+                    tracing::debug!(run_id = %c.run_id, "transcript denial check failed: {e}")
+                }
             }
         }
         Ok(found)
@@ -594,7 +596,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        serde_json::from_str::<Value>(&m).unwrap().get("usage").cloned()
+        serde_json::from_str::<Value>(&m)
+            .unwrap()
+            .get("usage")
+            .cloned()
     }
 
     fn status(conn: &Connection) -> String {
@@ -625,7 +630,9 @@ mod tests {
             Some(std::fs::metadata(&path).unwrap().len() as i64)
         );
         let cost: f64 = conn
-            .query_row("SELECT cost_usd FROM agent_runs WHERE id='r-1'", [], |r| r.get(0))
+            .query_row("SELECT cost_usd FROM agent_runs WHERE id='r-1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(cost, 0.5);
 
@@ -655,7 +662,11 @@ mod tests {
     fn incremental_read_leaves_partial_line_and_does_not_double_count() {
         let lines = fixture_lines();
         // Through the first cost-state, then half of the next line.
-        let cut = lines.iter().position(|l| l.contains("\"cost-state\"")).unwrap() + 1;
+        let cut = lines
+            .iter()
+            .position(|l| l.contains("\"cost-state\""))
+            .unwrap()
+            + 1;
         let first: String = lines[..cut].iter().map(|l| format!("{l}\n")).collect();
         let partial = &lines[cut][..10];
         let (conn, _d, path) = setup("idle", &format!("{first}{partial}"));
@@ -695,13 +706,22 @@ mod tests {
         assert_eq!(col_i(&conn, "cache_creation_input_tokens"), Some(60));
         assert_eq!(col_i(&conn, "usage_estimated"), Some(1));
         let cost: Option<f64> = conn
-            .query_row("SELECT cost_usd FROM agent_runs WHERE id='r-1'", [], |r| r.get(0))
+            .query_row("SELECT cost_usd FROM agent_runs WHERE id='r-1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(cost, None);
 
         // The exact cost-state arrives later and replaces the estimate.
-        let cs = lines.iter().rev().find(|l| l.contains("\"cost-state\"")).unwrap();
-        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let cs = lines
+            .iter()
+            .rev()
+            .find(|l| l.contains("\"cost-state\""))
+            .unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
         std::io::Write::write_all(&mut f, format!("{cs}\n").as_bytes()).unwrap();
         ing.poll(&conn, now());
         assert_eq!(col_i(&conn, "input_tokens"), Some(2252));
@@ -756,7 +776,10 @@ mod tests {
         std::fs::write(&path, &data).unwrap();
         let mut ing = TranscriptIngester::new();
         ing.poll(&conn, now());
-        assert_eq!(col_i(&conn, "transcript_offset"), Some(MAX_CHUNK_BYTES as i64 + 11));
+        assert_eq!(
+            col_i(&conn, "transcript_offset"),
+            Some(MAX_CHUNK_BYTES as i64 + 11)
+        );
         ing.poll(&conn, now());
         assert_eq!(col_i(&conn, "input_tokens"), Some(2252));
     }
@@ -778,15 +801,22 @@ mod tests {
     fn candidates_skip_old_ended_running_and_current_runs() {
         let (conn, _d, path) = setup("completed", FIXTURE);
         // Ended 3 days ago: not read.
-        conn.execute("UPDATE agent_runs SET ended_at = '2026-10-31T10:00:00+00:00'", [])
-            .unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET ended_at = '2026-10-31T10:00:00+00:00'",
+            [],
+        )
+        .unwrap();
         assert!(metrics_candidates(&conn, now()).unwrap().is_empty());
         // Ended an hour ago, with a `Z` suffix: read.
-        conn.execute("UPDATE agent_runs SET ended_at = '2026-11-03T17:00:00Z'", [])
-            .unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET ended_at = '2026-11-03T17:00:00Z'",
+            [],
+        )
+        .unwrap();
         assert_eq!(metrics_candidates(&conn, now()).unwrap().len(), 1);
         // Running: not read.
-        conn.execute("UPDATE agent_runs SET status = 'running'", []).unwrap();
+        conn.execute("UPDATE agent_runs SET status = 'running'", [])
+            .unwrap();
         assert!(metrics_candidates(&conn, now()).unwrap().is_empty());
         // Idle and up to date: not read.
         conn.execute(
@@ -809,9 +839,11 @@ mod tests {
     }
 
     fn fb_status(conn: &Connection) -> String {
-        conn.query_row("SELECT status FROM feedback_requests WHERE id='f1'", [], |r| {
-            r.get(0)
-        })
+        conn.query_row(
+            "SELECT status FROM feedback_requests WHERE id='f1'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap()
     }
 
@@ -823,7 +855,11 @@ mod tests {
         assert_eq!(status(&conn), "idle");
         assert_eq!(fb_status(&conn), "dismissed");
         let since: String = conn
-            .query_row("SELECT idle_since FROM agent_runs WHERE id='r-1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT idle_since FROM agent_runs WHERE id='r-1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(
             DateTime::parse_from_rfc3339(&since).unwrap(),
@@ -889,7 +925,10 @@ mod tests {
     #[test]
     fn denial_cursor_avoids_rereading_and_finds_later_denials() {
         let lines = fixture_lines();
-        let rej = lines.iter().position(|l| l.contains("User rejected tool use")).unwrap();
+        let rej = lines
+            .iter()
+            .position(|l| l.contains("User rejected tool use"))
+            .unwrap();
         let before: String = lines[..rej].iter().map(|l| format!("{l}\n")).collect();
         let (conn, _d, path) = waiting("2026-11-03T17:05:10+00:00");
         std::fs::write(&path, &before).unwrap();
