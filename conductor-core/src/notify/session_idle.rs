@@ -6,8 +6,9 @@
 //! once per idle period, deduped on `(run_id, idle_since)` in `notification_log` so the
 //! TUI and web running together still notify once.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use runkon_notify::{DedupStore, Event, HookRunner, Severity};
@@ -91,42 +92,124 @@ impl IdleCandidate {
     }
 }
 
+/// How long a period whose details failed to load is left alone before it is retried.
+pub const IDLE_LOAD_RETRY_SECS: u64 = 300;
+
+/// What a poller decided about one idle period.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdleVisit {
+    /// Fired, claimed, or intentionally dropped: never visit this period again.
+    Handled,
+    /// Not ready (e.g. the run left idle since it was listed): visit again next tick.
+    Retry,
+    /// Failed to load: visit again only after [`IDLE_LOAD_RETRY_SECS`], so a permanently
+    /// unreadable row is neither re-queried nor re-logged every tick.
+    Backoff,
+}
+
 /// Idle periods a poller has already handled, so a steady poll neither reloads details
 /// nor re-claims `notification_log` rows every tick.
 ///
 /// Shared by the hook notifier here and the web push detector so both follow one rule:
-/// a period is remembered only once `visit` reports it handled, and the set is trimmed
-/// to the periods still listed so it cannot grow without bound.
+/// a period is remembered only once `visit` reports it handled, failed loads back off,
+/// and the sets are trimmed to the periods still listed so they cannot grow without bound.
 #[derive(Debug, Default)]
-pub struct SeenIdlePeriods(HashSet<String>);
+pub struct SeenIdlePeriods {
+    handled: HashSet<String>,
+    retry_at: HashMap<String, Instant>,
+}
 
 impl SeenIdlePeriods {
-    /// Call `visit(candidate, dedup_key)` for each candidate not yet handled. `visit`
-    /// returns `true` when the period is handled (fired, claimed, or intentionally
-    /// dropped) and should not be visited again; `false` retries it next tick.
+    /// Call `visit(candidate, dedup_key)` for each candidate not yet handled and not
+    /// backing off, and record its [`IdleVisit`] outcome.
     pub fn visit_unseen(
         &mut self,
         candidates: &[IdleCandidate],
-        mut visit: impl FnMut(&IdleCandidate, &str) -> bool,
+        visit: impl FnMut(&IdleCandidate, &str) -> IdleVisit,
+    ) {
+        self.visit_unseen_at(candidates, Instant::now(), visit)
+    }
+
+    fn visit_unseen_at(
+        &mut self,
+        candidates: &[IdleCandidate],
+        now: Instant,
+        mut visit: impl FnMut(&IdleCandidate, &str) -> IdleVisit,
     ) {
         let mut current = HashSet::with_capacity(candidates.len());
         for c in candidates {
             let key = c.dedup_key();
-            if !self.0.contains(&key) && visit(c, &key) {
-                self.0.insert(key.clone());
+            let skip =
+                self.handled.contains(&key) || self.retry_at.get(&key).is_some_and(|t| now < *t);
+            if !skip {
+                match visit(c, &key) {
+                    IdleVisit::Handled => {
+                        self.retry_at.remove(&key);
+                        self.handled.insert(key.clone());
+                    }
+                    IdleVisit::Retry => {
+                        self.retry_at.remove(&key);
+                    }
+                    IdleVisit::Backoff => {
+                        self.retry_at.insert(
+                            key.clone(),
+                            now + std::time::Duration::from_secs(IDLE_LOAD_RETRY_SECS),
+                        );
+                    }
+                }
             }
             current.insert(key);
         }
-        self.0.retain(|k| current.contains(k));
+        self.handled.retain(|k| current.contains(k));
+        self.retry_at.retain(|k, _| current.contains(k));
     }
 
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.handled.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.handled.is_empty()
     }
+}
+
+/// Load a candidate's details for a poller, or say how to treat the period instead.
+///
+/// `Err(Retry)` when the run left idle since listing (the next tick sees its new state);
+/// `Err(Backoff)` after logging a load failure. Shared so every poller skips identically.
+pub fn load_idle_session_or_skip(
+    conn: &Connection,
+    c: &IdleCandidate,
+) -> std::result::Result<IdleSession, IdleVisit> {
+    match load_idle_session(conn, c) {
+        Ok(Some(s)) => Ok(s),
+        Ok(None) => Err(IdleVisit::Retry),
+        Err(e) => {
+            tracing::warn!(
+                run_id = %c.run_id, idle_since = %c.idle_since,
+                "session idle load failed, retrying in {IDLE_LOAD_RETRY_SECS}s: {e}"
+            );
+            Err(IdleVisit::Backoff)
+        }
+    }
+}
+
+/// The tick's shared idle candidates, listed once for the hook notifier and the Web Push
+/// detector (web) or the notifier alone (TUI). Empty, without a query, when neither a
+/// notification sink nor `web_push` is on.
+pub fn idle_candidates_for_tick(
+    conn: &Connection,
+    config: &NotificationConfig,
+    hooks: &[HookConfig],
+    now: DateTime<Utc>,
+) -> Vec<IdleCandidate> {
+    if !(notification_sink_configured(config, hooks) || config.session_idle.web_push) {
+        return Vec::new();
+    }
+    due_idle_candidates(conn, config.session_idle.delay_secs, now).unwrap_or_else(|e| {
+        tracing::warn!("session idle lookup failed: {e}");
+        Vec::new()
+    })
 }
 
 /// Interactive runs that are `idle` with `idle_since` at least `delay_secs` before `now`.
@@ -342,20 +425,15 @@ impl SessionIdleNotifier {
                 if let Err(e) = try_claim_notification(conn, key, SESSION_IDLE_EVENT_TYPE) {
                     tracing::warn!("session idle stale claim failed: {e}");
                 }
-                return true;
+                return IdleVisit::Handled;
             }
-            let session = match load_idle_session(conn, c) {
-                Ok(Some(s)) => s,
-                // Left idle since listed; the next tick sees its new state.
-                Ok(None) => return false,
-                Err(e) => {
-                    tracing::warn!(run_id = %c.run_id, idle_since = %c.idle_since, "session idle load failed: {e}");
-                    return false;
-                }
+            let session = match load_idle_session_or_skip(conn, c) {
+                Ok(s) => s,
+                Err(v) => return v,
             };
             runner.fire_with_dedup(&session_idle_event(&session), key, SESSION_IDLE_EVENT_TYPE);
             fired += 1;
-            true
+            IdleVisit::Handled
         });
         fired
     }
@@ -766,14 +844,19 @@ mod tests {
         let mut visited = Vec::new();
         seen.visit_unseen(&[a.clone(), b.clone()], |c, _| {
             visited.push(c.run_id.clone());
-            c.run_id == "a" // b is not handled, so it is retried
+            // b is not handled, so it is retried
+            if c.run_id == "a" {
+                IdleVisit::Handled
+            } else {
+                IdleVisit::Retry
+            }
         });
         assert_eq!(visited, ["a", "b"]);
         assert_eq!(seen.len(), 1);
         visited.clear();
         seen.visit_unseen(&[a.clone(), b.clone()], |c, _| {
             visited.push(c.run_id.clone());
-            true
+            IdleVisit::Handled
         });
         assert_eq!(visited, ["b"]);
         assert_eq!(seen.len(), 2);
@@ -781,10 +864,37 @@ mod tests {
         visited.clear();
         seen.visit_unseen(&[cand("b", "1"), cand("a", "2")], |c, _| {
             visited.push(c.dedup_key());
-            true
+            IdleVisit::Handled
         });
         assert_eq!(visited, ["a|2"]);
         assert_eq!(seen.len(), 2);
+    }
+
+    #[test]
+    fn seen_periods_back_off_failed_loads_then_retry() {
+        let mut seen = SeenIdlePeriods::default();
+        let a = [cand("a", "1")];
+        let t0 = Instant::now();
+        let mut visits = 0;
+        seen.visit_unseen_at(&a, t0, |_, _| {
+            visits += 1;
+            IdleVisit::Backoff
+        });
+        seen.visit_unseen_at(&a, t0 + std::time::Duration::from_secs(10), |_, _| {
+            visits += 1;
+            IdleVisit::Backoff
+        });
+        assert_eq!(visits, 1, "backing off: not revisited");
+        let later = t0 + std::time::Duration::from_secs(IDLE_LOAD_RETRY_SECS + 1);
+        seen.visit_unseen_at(&a, later, |_, _| {
+            visits += 1;
+            IdleVisit::Handled
+        });
+        assert_eq!(visits, 2);
+        assert_eq!(seen.len(), 1);
+        // Leaving the list prunes the backoff entry.
+        seen.visit_unseen_at(&[], later, |_, _| IdleVisit::Handled);
+        assert!(seen.is_empty() && seen.retry_at.is_empty());
     }
 
     fn poll_cands(

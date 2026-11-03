@@ -681,8 +681,12 @@ async fn main() -> Result<()> {
                 let idle_cfg = &cfg.notifications.session_idle;
                 // One candidate query per tick, shared by the hook notifier and the
                 // Web Push detector; each loads details only for periods it hasn't handled.
-                let candidates =
-                    conductor_web::db_events::idle_candidates_for_tick(&conn, &cfg, now);
+                let candidates = conductor_core::notify::idle_candidates_for_tick(
+                    &conn,
+                    &cfg.notifications,
+                    &cfg.notify.hooks,
+                    now,
+                );
                 idle_notifier.poll_candidates(
                     &conn,
                     &cfg.notifications,

@@ -15,8 +15,8 @@ use chrono::{DateTime, Duration, Utc};
 use conductor_core::agent::AgentManager;
 use conductor_core::error::Result;
 use conductor_core::notify::{
-    due_idle_candidates, is_recent, load_idle_session, preview, try_claim_notification,
-    IdleCandidate, IdleSession, SeenIdlePeriods, NOTIFY_MAX_AGE_SECS,
+    is_recent, load_idle_session_or_skip, preview, try_claim_notification, IdleCandidate,
+    IdleSession, IdleVisit, SeenIdlePeriods, NOTIFY_MAX_AGE_SECS,
 };
 use rusqlite::Connection;
 
@@ -141,7 +141,7 @@ impl DbEventDetector {
         now: DateTime<Utc>,
         delay_secs: u64,
     ) -> Result<Vec<ConductorEvent>> {
-        let candidates = due_idle_candidates(conn, delay_secs, now)?;
+        let candidates = conductor_core::notify::due_idle_candidates(conn, delay_secs, now)?;
         self.poll_session_idle_candidates(conn, now, &candidates)
     }
 
@@ -158,16 +158,13 @@ impl DbEventDetector {
         let max_age = Duration::seconds(NOTIFY_MAX_AGE_SECS);
         let mut keyed: Vec<(String, IdleSession)> = Vec::new();
         self.seen_session_idle.visit_unseen(candidates, |c, key| {
-            match load_idle_session(conn, c) {
-                Ok(Some(s)) => keyed.push((key.to_string(), s)),
-                // Left idle since listed; the next tick sees its new state.
-                Ok(None) => return false,
-                Err(e) => {
-                    tracing::warn!(run_id = %c.run_id, idle_since = %c.idle_since, "session idle load failed: {e}");
-                    return false;
+            match load_idle_session_or_skip(conn, c) {
+                Ok(s) => {
+                    keyed.push((key.to_string(), s));
+                    IdleVisit::Handled
                 }
+                Err(v) => v,
             }
-            true
         });
         // `keyed` holds only unhandled periods, so a throwaway seen set is enough here;
         // `collect_new` claims each in `notification_log` and drops the stale ones.
@@ -194,27 +191,6 @@ impl DbEventDetector {
     }
 }
 
-/// The tick's shared idle candidates: listed once and given to both the hook notifier and
-/// the Web Push detector. Empty without a query when neither consumer is on.
-pub fn idle_candidates_for_tick(
-    conn: &Connection,
-    config: &conductor_core::config::Config,
-    now: DateTime<Utc>,
-) -> Vec<IdleCandidate> {
-    let idle_cfg = &config.notifications.session_idle;
-    let hooks_on = conductor_core::notify::notification_sink_configured(
-        &config.notifications,
-        &config.notify.hooks,
-    );
-    if !(hooks_on || idle_cfg.web_push) {
-        return Vec::new();
-    }
-    due_idle_candidates(conn, idle_cfg.delay_secs, now).unwrap_or_else(|e| {
-        tracing::warn!("session idle lookup failed: {e}");
-        Vec::new()
-    })
-}
-
 #[cfg(test)]
 impl DbEventDetector {
     fn seen_session_idle_len(&self) -> usize {
@@ -226,6 +202,7 @@ impl DbEventDetector {
 mod tests {
     use super::*;
     use crate::test_helpers::seeded_state_with_agent_run;
+    use conductor_core::notify::{due_idle_candidates, idle_candidates_for_tick};
     use conductor_core::workflow::{GateType, WorkflowStepStatus};
 
     fn open() -> (tempfile::NamedTempFile, Connection) {
@@ -539,13 +516,16 @@ mod tests {
         let (_tmp, conn) = open();
         add_idle_session(&conn, "s1", IDLE_AT);
         let now = at(IDLE_AT) + Duration::seconds(60);
-        assert!(idle_candidates_for_tick(&conn, &cfg_with(false, false), now).is_empty());
+        let tick = |cfg: &conductor_core::config::Config| {
+            idle_candidates_for_tick(&conn, &cfg.notifications, &cfg.notify.hooks, now)
+        };
+        assert!(tick(&cfg_with(false, false)).is_empty());
         for cfg in [
             cfg_with(true, false),
             cfg_with(false, true),
             cfg_with(true, true),
         ] {
-            let c = idle_candidates_for_tick(&conn, &cfg, now);
+            let c = tick(&cfg);
             assert_eq!(c.len(), 1);
             assert_eq!(c[0].run_id, "s1");
         }
