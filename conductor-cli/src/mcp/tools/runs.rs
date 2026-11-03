@@ -598,11 +598,7 @@ mod tests {
             "NULL",
         );
         let over = (WAIT_MAX_TIMEOUT_NO_PROGRESS_SECS + 1) as u64;
-        let result = tool_wait_run(
-            &conductor,
-            &wait_args(&id, &[("timeout_secs", over)]),
-            None,
-        );
+        let result = tool_wait_run(&conductor, &wait_args(&id, &[("timeout_secs", over)]), None);
         let text = result_text(&result);
         assert!(text.starts_with("outcome: completed"), "got: {text}");
         assert!(

@@ -927,7 +927,14 @@ mod tests {
     #[test]
     fn progress_callback_fires_while_running() {
         let conn = setup();
-        insert_run(&conn, "r", None, "running", Some("+20 seconds"), "-1 minutes");
+        insert_run(
+            &conn,
+            "r",
+            None,
+            "running",
+            Some("+20 seconds"),
+            "-1 minutes",
+        );
         let o = WaitOptions {
             timeout: Some(Duration::from_millis(30)),
             progress_interval: Duration::ZERO,
@@ -935,10 +942,8 @@ mod tests {
             ..opts()
         };
         let mut msgs = Vec::new();
-        let s = wait_for_workflow_run_with_progress(&conn, "r", &o, &mut |p| {
-            msgs.push(p.clone())
-        })
-        .unwrap();
+        let s = wait_for_workflow_run_with_progress(&conn, "r", &o, &mut |p| msgs.push(p.clone()))
+            .unwrap();
         assert_eq!(s.outcome, WaitOutcome::Timeout);
         assert!(!msgs.is_empty());
         assert_eq!(msgs[0].run_id, "r");
@@ -968,7 +973,10 @@ mod tests {
         )
         .unwrap();
         let (path, secs) = running_step_path(&conn, "r").unwrap();
-        assert_eq!(path, vec!["workflow:child".to_string(), "submit".to_string()]);
+        assert_eq!(
+            path,
+            vec!["workflow:child".to_string(), "submit".to_string()]
+        );
         assert!(secs.is_some());
     }
 

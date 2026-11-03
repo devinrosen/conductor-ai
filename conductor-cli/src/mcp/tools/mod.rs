@@ -681,7 +681,13 @@ mod tests {
     #[test]
     fn test_dispatch_unknown_tool() {
         let (_f, conductor) = make_test_conductor();
-        let result = dispatch_tool(&conductor, "conductor_nonexistent", &empty_args(), &[], None);
+        let result = dispatch_tool(
+            &conductor,
+            "conductor_nonexistent",
+            &empty_args(),
+            &[],
+            None,
+        );
         assert_eq!(
             result.is_error,
             Some(true),
