@@ -614,10 +614,9 @@ fn session_hook_oversized_post_tool_use_still_flips_to_running() {
     assert_eq!(run_status(&conn), "waiting_for_feedback");
 
     // tool_response comes last and is several MiB, so the 1 MiB cap cuts the JSON.
-    let mut big = format!(
-        r#"{{"hook_event_name":"PostToolUse","session_id":"sess-1","cwd":"/tmp/ws/hook-wt","tool_name":"Bash","tool_response":{{"stdout":""#
-    )
-    .into_bytes();
+    let mut big = r#"{"hook_event_name":"PostToolUse","session_id":"sess-1","cwd":"/tmp/ws/hook-wt","tool_name":"Bash","tool_response":{"stdout":""#
+        .as_bytes()
+        .to_vec();
     big.extend(std::iter::repeat_n(b'x', 3 * 1024 * 1024));
     big.extend_from_slice(br#""}}"#);
 
