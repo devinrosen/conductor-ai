@@ -103,7 +103,10 @@ impl ServerHandler for ConductorMcpServer {
             list_changed: Some(false),
         });
         ServerInfo::new(caps)
-            .with_server_info(Implementation::new("conductor", conductor_core::build_info::SEMVER_WITH_BUILD))
+            .with_server_info(Implementation::new(
+                "conductor",
+                conductor_core::build_info::SEMVER_WITH_BUILD,
+            ))
             .with_instructions(
                 "Conductor MCP server: access repos, tickets, worktrees, and workflow runs.",
             )

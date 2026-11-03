@@ -538,7 +538,9 @@ mod tests {
         state.stale_process_count = 2;
         assert!(stale_footer_warning(&state).unwrap().contains("2 stale"));
         state.tui_is_stale = true;
-        assert!(stale_footer_warning(&state).unwrap().contains("TUI is on an old build"));
+        assert!(stale_footer_warning(&state)
+            .unwrap()
+            .contains("TUI is on an old build"));
     }
 
     fn idle_run(

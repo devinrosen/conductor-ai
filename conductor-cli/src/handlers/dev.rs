@@ -75,7 +75,10 @@ fn install_commands(checkout: &Path, web: bool) -> Vec<InstallStep> {
                 .collect(),
         )
     };
-    let mut steps = vec![cargo_install("conductor-cli"), cargo_install("conductor-tui")];
+    let mut steps = vec![
+        cargo_install("conductor-cli"),
+        cargo_install("conductor-tui"),
+    ];
     if web {
         let frontend = checkout.join("conductor-web").join("frontend");
         steps.push((frontend.clone(), vec!["bun".into(), "install".into()]));
@@ -98,9 +101,12 @@ fn git_output(checkout: &Path, args: &[&str]) -> Option<String> {
 
 fn print_build_gap(checkout: &Path) {
     let installed = conductor_core::build_info::GIT_SHA;
-    let head = git_output(checkout, &["rev-parse", "--short", "HEAD"])
-        .unwrap_or_else(|| "unknown".into());
-    println!("Installed conductor: {}", conductor_core::build_info::LONG_VERSION);
+    let head =
+        git_output(checkout, &["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".into());
+    println!(
+        "Installed conductor: {}",
+        conductor_core::build_info::LONG_VERSION
+    );
     println!("Checkout HEAD:       {head}");
     if installed != "unknown" && installed != head {
         match git_output(
@@ -116,7 +122,10 @@ fn print_build_gap(checkout: &Path) {
     }
     if let Ok(out) = Command::new("conductor-tui").arg("--version").output() {
         if out.status.success() {
-            println!("Installed TUI:       {}", String::from_utf8_lossy(&out.stdout).trim());
+            println!(
+                "Installed TUI:       {}",
+                String::from_utf8_lossy(&out.stdout).trim()
+            );
         }
     }
 }
@@ -183,7 +192,10 @@ fn print_processes() {
         return;
     }
     let stale = stale_processes();
-    println!("{:<9} {:<8} {:<9} {:<27} EXE", "KIND", "PID", "BUILD", "STARTED");
+    println!(
+        "{:<9} {:<8} {:<9} {:<27} EXE",
+        "KIND", "PID", "BUILD", "STARTED"
+    );
     for r in &live {
         let flag = if stale.iter().any(|s| s.record.pid == r.pid) {
             "  STALE"

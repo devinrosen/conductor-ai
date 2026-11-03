@@ -20,9 +20,10 @@ pub use server::ConductorMcpServer;
 /// Start the stdio MCP server and block until the client disconnects.
 pub async fn serve() -> anyhow::Result<()> {
     // Registered here, not in `ConductorMcpServer::new()`, so unit tests don't register.
-    let _process_guard =
-        conductor_core::process_registry::register(conductor_core::process_registry::ProcessKind::Mcp)
-            .ok();
+    let _process_guard = conductor_core::process_registry::register(
+        conductor_core::process_registry::ProcessKind::Mcp,
+    )
+    .ok();
     let server = ConductorMcpServer::new();
     // On unix, keep the JSON-RPC pipes off fd 0/1 so spawned children can't
     // read requests or write into responses (#3093). See `stdio`.

@@ -40,8 +40,7 @@ fn main() {
     }
 
     let sha = git(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".to_string());
-    let commit_time =
-        git(&["log", "-1", "--format=%cI"]).unwrap_or_else(|| "unknown".to_string());
+    let commit_time = git(&["log", "-1", "--format=%cI"]).unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=CONDUCTOR_GIT_SHA={sha}");
     println!("cargo:rustc-env=CONDUCTOR_GIT_COMMIT_TIME={commit_time}");
 }

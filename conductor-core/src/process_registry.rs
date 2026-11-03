@@ -120,7 +120,10 @@ pub fn register(kind: ProcessKind) -> Result<ProcessGuard> {
     std::fs::create_dir_all(&dir)?;
     let path = record_path(pid);
     let tmp = dir.join(format!("{pid}.json.tmp"));
-    std::fs::write(&tmp, serde_json::to_vec_pretty(&record).map_err(std::io::Error::other)?)?;
+    std::fs::write(
+        &tmp,
+        serde_json::to_vec_pretty(&record).map_err(std::io::Error::other)?,
+    )?;
     std::fs::rename(&tmp, &path)?;
     Ok(ProcessGuard { path, pid })
 }
