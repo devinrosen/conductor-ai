@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn read_capped_truncates_and_drains() {
-        let data = vec![b'a'; 100];
+        let data = [b'a'; 100];
         let (buf, truncated) = read_capped(&data[..], 10).unwrap();
         assert_eq!(buf.len(), 10);
         assert!(truncated);

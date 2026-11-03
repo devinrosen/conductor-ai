@@ -476,7 +476,7 @@ fn workflow_wait_unknown_run_fails() {
 
 /// Run `conductor session hook` with `stdin` as the payload.
 fn run_hook(home: &std::path::Path, attended: &str, stdin: &[u8]) -> std::process::Output {
-    let mut cmd = conductor_cmd(home);
+    let mut cmd = assert_cmd::Command::from_std(conductor_cmd(home));
     cmd.args(["session", "hook"])
         .env("CLAUDE_CODE_SESSION_ATTENDED", attended)
         .env("CLAUDE_PID", std::process::id().to_string())
@@ -634,7 +634,7 @@ fn session_hook_oversized_post_tool_use_still_flips_to_running() {
 fn session_hook_debug_env_reports_on_stderr() {
     let dir = tempfile::tempdir().unwrap();
     seed_hook_db(dir.path());
-    let mut cmd = conductor_cmd(dir.path());
+    let mut cmd = assert_cmd::Command::from_std(conductor_cmd(dir.path()));
     cmd.args(["session", "hook"])
         .env("CLAUDE_CODE_SESSION_ATTENDED", "1")
         .env("CONDUCTOR_SESSION_HOOK_DEBUG", "1")
