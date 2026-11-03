@@ -477,6 +477,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_pid_recorded_started_at_prefers_subprocess_started_at() {
+        let mut run = make_run("r1", None);
+        run.subprocess_started_at = Some("2025-02-02T00:00:00Z".into());
+        assert_eq!(run.pid_recorded_started_at(), "2025-02-02T00:00:00Z");
+    }
+
+    #[test]
+    fn test_pid_recorded_started_at_falls_back_to_started_at() {
+        let run = make_run("r1", None);
+        assert!(run.subprocess_started_at.is_none());
+        assert_eq!(run.pid_recorded_started_at(), "2025-01-01T00:00:00Z");
+    }
+
     /// Build a fully-populated `AgentRun` so `to_run_handle` projection can be
     /// asserted field-by-field.
     fn make_full_run() -> AgentRun {

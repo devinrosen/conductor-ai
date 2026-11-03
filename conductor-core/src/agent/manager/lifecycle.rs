@@ -250,26 +250,24 @@ impl<'a> AgentManager<'a> {
     /// runs (RFC 021) use for the last assistant message. Guarded like
     /// [`Self::update_run_failed_if_running`].
     pub fn update_run_failed_keep_result(&self, run_id: &str) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
-        self.conn.execute(
-            &format!(
-                "UPDATE agent_runs SET status = 'failed', ended_at = :ended_at \
-                 WHERE id = :id AND status IN {}",
-                crate::agent::status::ACTIVE_STATUSES_SQL
-            ),
-            named_params! { ":ended_at": now, ":id": run_id },
-        )?;
-        Ok(())
+        self.fail_if_active(run_id, None)
     }
 
     /// Mark a run as failed only if it is currently `running`, `waiting_for_feedback` or `idle`.
     /// Used by background reapers and panic monitors to avoid overwriting a run that has
     /// already been finalized (e.g. `completed`, `failed`, `cancelled`) by another path.
     pub fn update_run_failed_if_running(&self, run_id: &str, error: &str) -> Result<()> {
+        self.fail_if_active(run_id, Some(error))
+    }
+
+    /// Shared guarded failed-status UPDATE. `result_text` is set to `error` when `Some` and
+    /// left unchanged when `None`.
+    fn fail_if_active(&self, run_id: &str, error: Option<&str>) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
             &format!(
-                "UPDATE agent_runs SET status = 'failed', result_text = :error, ended_at = :ended_at \
+                "UPDATE agent_runs SET status = 'failed', \
+                 result_text = COALESCE(:error, result_text), ended_at = :ended_at \
                  WHERE id = :id AND status IN {}",
                 crate::agent::status::ACTIVE_STATUSES_SQL
             ),

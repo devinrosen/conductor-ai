@@ -1048,6 +1048,43 @@ mod tests {
         assert!(updated.result_text.unwrap().contains("PID recycled"));
     }
 
+    /// Legacy row (NULL `subprocess_started_at`): falls back to `started_at`, so a matching
+    /// start time keeps the run and a far-off one reaps it.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_reap_orphaned_runs_null_subprocess_started_at_fallback() {
+        for (started_at, expect_reaped) in [(None, 0), (Some("2020-01-01T00:00:00Z"), 1)] {
+            let conn = setup_db();
+            let mgr = AgentManager::new(&conn);
+            let mut child = spawn_sleeper();
+
+            let run = mgr.create_run(Some("w1"), "legacy", None).unwrap();
+            conn.execute(
+                "UPDATE agent_runs SET subprocess_pid = :pid, subprocess_started_at = NULL, \
+                 started_at = COALESCE(:started_at, started_at) WHERE id = :id",
+                named_params! {
+                    ":pid": child.id() as i64,
+                    ":started_at": started_at,
+                    ":id": run.id,
+                },
+            )
+            .unwrap();
+
+            let reaped = mgr.reap_orphaned_runs();
+            let _ = child.kill();
+            let _ = child.wait();
+
+            assert_eq!(reaped.unwrap(), expect_reaped);
+            let updated = mgr.get_run(&run.id).unwrap().unwrap();
+            let expected = if expect_reaped == 1 {
+                AgentRunStatus::Failed
+            } else {
+                AgentRunStatus::Running
+            };
+            assert_eq!(updated.status, expected);
+        }
+    }
+
     #[test]
     fn test_reap_orphaned_runs_dismisses_pending_feedback() {
         let conn = setup_db();
