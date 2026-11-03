@@ -126,14 +126,14 @@ pub(in crate::workflow) fn row_to_conductor_run(
 pub(super) fn waiting_gate_step_row_mapper(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<(WorkflowRunStep, String, Option<String>)> {
-    let step = row_to_workflow_step(row)?;
+    let step = crate::workflow::helpers::backfill_gate_type(row_to_workflow_step(row)?);
     let workflow_name: String = row.get("workflow_name")?;
     let target_label: Option<String> = row.get("target_label")?;
     Ok((step, workflow_name, target_label))
 }
 
 pub(super) fn pending_gate_row_mapper(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingGateRow> {
-    let step = row_to_workflow_step(row)?;
+    let step = crate::workflow::helpers::backfill_gate_type(row_to_workflow_step(row)?);
     let workflow_name: String = row.get("workflow_name")?;
     let target_label: Option<String> = row.get("target_label")?;
     let branch: Option<String> = row.get("branch")?;

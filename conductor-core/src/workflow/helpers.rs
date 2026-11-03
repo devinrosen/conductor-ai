@@ -1,3 +1,18 @@
+/// Whether a step is a gate. Engine-written gate rows may have NULL `gate_type`
+/// (#3151), so a `gate` role also counts. Quality gates complete immediately and
+/// never wait, so they are excluded when the type is unset.
+pub fn is_gate_step(step: &super::WorkflowRunStep) -> bool {
+    step.gate_type.is_some() || (step.role == "gate" && step.step_name != "quality_gate")
+}
+
+/// Fill a missing `gate_type` from the step name (the DSL guarantees they match).
+pub(crate) fn backfill_gate_type(mut step: super::WorkflowRunStep) -> super::WorkflowRunStep {
+    if step.gate_type.is_none() && is_gate_step(&step) {
+        step.gate_type = Some(step.step_name.clone());
+    }
+    step
+}
+
 /// Parse a gate timeout string (e.g. `"1h"`, `"30m"`) into seconds.
 ///
 /// Wraps `runkon_flow::dsl::parse_duration_str` so callers outside the bridge

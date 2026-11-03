@@ -410,6 +410,7 @@ fn map_engine_error(
 /// between fresh execution and resume.  Call sites then layer in the parts that
 /// differ (item_registry, script_env_provider, ExecutionState fields).
 fn build_rk_engine_components(
+    workflow: &runkon_flow::dsl::WorkflowDef,
     config: &crate::config::Config,
     shared_conn: &Arc<std::sync::Mutex<Connection>>,
     db: &std::path::Path,
@@ -417,11 +418,18 @@ fn build_rk_engine_components(
     triggered_by_hook: bool,
     runtime_override: Option<String>,
 ) -> RkEngineComponents {
-    let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> = Arc::new(
+    let inner: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> = Arc::new(
         super::persistence_sqlite::SqliteWorkflowPersistence::from_shared_connection(Arc::clone(
             shared_conn,
         )),
     );
+    // runkon-flow's gate executor persists no gate metadata; record it here (#3151).
+    let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> =
+        Arc::new(super::runkon_bridge::GateMetadataPersistence::new(
+            inner,
+            Arc::clone(shared_conn),
+            super::runkon_bridge::collect_gate_meta(workflow),
+        ));
     let action_registry = Arc::new(super::runkon_bridge::build_rk_action_registry(
         config,
         Arc::clone(shared_conn),
@@ -679,6 +687,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         action_registry,
         child_runner,
     } = build_rk_engine_components(
+        &rk_def,
         config,
         &shared_conn,
         &db,
@@ -1225,6 +1234,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         action_registry,
         child_runner,
     } = build_rk_engine_components(
+        &rk_def,
         config,
         &shared_conn,
         &db,

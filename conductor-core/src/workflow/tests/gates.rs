@@ -326,3 +326,122 @@ fn test_gate_approve_empty_selections() {
         "empty selections should not produce context_out"
     );
 }
+
+/// Poll `find_waiting_gate` until the run reaches a gate, panicking after 20s.
+fn wait_for_gate(db_path: &std::path::Path, run_id: &str) -> WorkflowRunStep {
+    let conn = crate::db::open_database(db_path).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        if let Some(step) = crate::workflow::find_waiting_gate(&conn, run_id).unwrap() {
+            return step;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for a gate on run {run_id}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Regression for #3151: gates started by the real engine must record their
+/// type, prompt and timeout so `find_waiting_gate` and `approve_gate` work, both
+/// for an unconditional gate and for one nested in an `if` body.
+#[test]
+fn test_engine_gates_are_findable_and_approvable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_tmp, db_path) = make_standalone_db();
+    let ws = tempfile::tempdir().unwrap();
+    let script = ws.path().join("emit.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho '<<<FLOW_OUTPUT>>>'\n\
+         echo '{\"markers\": [\"needs_review\"], \"context\": \"ok\"}'\n\
+         echo '<<<END_FLOW_OUTPUT>>>'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let run_path = script.to_str().unwrap();
+    let def = runkon_flow::dsl::parse_workflow_str(
+        &format!(
+            r#"workflow gate-wf {{
+                meta {{ trigger = "manual" targets = ["worktree"] }}
+                script a {{ run = "{run_path}" }}
+                gate human_approval {{ prompt = "First approval" timeout = "1h" }}
+                if a.needs_review {{
+                    gate human_review {{ prompt = "Conditional approval" timeout = "2h" }}
+                }}
+            }}"#
+        ),
+        "<test>",
+    )
+    .expect("gate workflow should parse");
+
+    let params = crate::workflow::types::WorkflowExecStandalone {
+        config: Config::default(),
+        workflow: def,
+        worktree_id: None,
+        working_dir: ws.path().to_str().unwrap().to_string(),
+        repo_path: ws.path().to_str().unwrap().to_string(),
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        runtime: None,
+        exec_config: crate::workflow::WorkflowExecConfig {
+            poll_interval: std::time::Duration::from_millis(50),
+            ..Default::default()
+        },
+        inputs: std::collections::HashMap::new(),
+        target_label: None,
+        run_id_notify: None,
+        triggered_by_hook: false,
+        conductor_bin_dir: None,
+        force: false,
+        extra_plugin_dirs: vec![],
+        db_path: Some(db_path.clone()),
+        parent_workflow_run_id: None,
+        depth: 0,
+        parent_step_id: None,
+        default_bot_name: None,
+        iteration: 0,
+    };
+    let handle = std::thread::spawn(move || crate::workflow::execute_workflow_standalone(&params));
+
+    // The run row is created before any step executes.
+    let conn = crate::db::open_database(&db_path).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let run_id = loop {
+        if let Ok(id) = conn.query_row("SELECT id FROM workflow_runs LIMIT 1", [], |r| {
+            r.get::<_, String>(0)
+        }) {
+            break id;
+        }
+        assert!(std::time::Instant::now() < deadline, "run never created");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+
+    let first = wait_for_gate(&db_path, &run_id);
+    assert_eq!(first.gate_type.as_deref(), Some("human_approval"));
+    assert_eq!(first.gate_prompt.as_deref(), Some("First approval"));
+    assert_eq!(first.gate_timeout.as_deref(), Some("3600s"));
+    crate::workflow::approve_gate(&conn, &first.id, "test", None, None, None).unwrap();
+
+    let second = loop {
+        let s = wait_for_gate(&db_path, &run_id);
+        if s.id != first.id {
+            break s;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert_eq!(second.gate_type.as_deref(), Some("human_review"));
+    assert_eq!(second.gate_prompt.as_deref(), Some("Conditional approval"));
+    assert_eq!(second.gate_timeout.as_deref(), Some("7200s"));
+    crate::workflow::approve_gate(&conn, &second.id, "test", None, None, None).unwrap();
+
+    let result = handle
+        .join()
+        .expect("workflow thread panicked")
+        .expect("workflow should complete");
+    assert!(result.all_succeeded, "run should succeed after approvals");
+}
