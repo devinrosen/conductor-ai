@@ -395,27 +395,6 @@ fn pid_columns(ev: &HookEvent) -> (Option<i64>, Option<String>) {
     }
 }
 
-fn insert_event(
-    conn: &Connection,
-    run_id: &str,
-    kind: &str,
-    summary: &str,
-    started_at: &str,
-    ended_at: Option<&str>,
-    metadata: Value,
-) -> Result<()> {
-    insert_event_with(
-        ApplyMode::Fresh,
-        conn,
-        run_id,
-        kind,
-        summary,
-        started_at,
-        ended_at,
-        metadata,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 fn insert_event_with(
     mode: ApplyMode,
@@ -1259,6 +1238,27 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    fn insert_event(
+        conn: &Connection,
+        run_id: &str,
+        kind: &str,
+        summary: &str,
+        started_at: &str,
+        ended_at: Option<&str>,
+        metadata: Value,
+    ) -> Result<()> {
+        insert_event_with(
+            ApplyMode::Fresh,
+            conn,
+            run_id,
+            kind,
+            summary,
+            started_at,
+            ended_at,
+            metadata,
+        )
     }
 
     fn two_open_spans(conn: &Connection) {
