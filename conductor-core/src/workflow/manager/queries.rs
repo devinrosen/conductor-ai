@@ -15,6 +15,7 @@ use crate::workflow::constants::{
     REGRESSION_DURATION_THRESHOLD_PCT, REGRESSION_FAILURE_RATE_THRESHOLD_PP, RUN_COLUMNS,
     STEP_COLUMNS_WITH_PREFIX,
 };
+use crate::workflow::helpers::gate_step_sql;
 use rusqlite::Connection;
 
 type WorkflowRunQueryResult = (String, String, String, String, Option<String>);
@@ -872,11 +873,12 @@ pub fn find_waiting_gates_for_runs(
     let placeholders = sql_placeholders(run_ids.len());
     let sql = format!(
         "{} \
-             WHERE s.workflow_run_id IN ({placeholders}) AND s.gate_type IS NOT NULL \
+             WHERE s.workflow_run_id IN ({placeholders}) AND {gate_pred} \
                AND s.gate_approved_at IS NULL \
                AND s.status IN ('running', 'waiting') \
              ORDER BY s.workflow_run_id, s.position DESC",
-        *STEP_SELECT_EXPANDED
+        *STEP_SELECT_EXPANDED,
+        gate_pred = gate_step_sql("s"),
     );
     let steps: Vec<WorkflowRunStep> = {
         let mut stmt = conn.prepare(&sql)?;
@@ -886,6 +888,10 @@ pub fn find_waiting_gates_for_runs(
         )?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
+    let steps: Vec<WorkflowRunStep> = steps
+        .into_iter()
+        .map(crate::workflow::helpers::backfill_gate_type)
+        .collect();
     // Keep only the highest-position step per run (ORDER BY position DESC means
     // the first row for each run_id is the one we want).
     let mut map: HashMap<String, WorkflowRunStep> = HashMap::new();
@@ -904,15 +910,17 @@ pub fn find_waiting_gate(
             .query_row(
                 &format!(
                     "{} \
-                     WHERE s.workflow_run_id = :workflow_run_id AND s.gate_type IS NOT NULL AND s.gate_approved_at IS NULL \
+                     WHERE s.workflow_run_id = :workflow_run_id AND {gate_pred} AND s.gate_approved_at IS NULL \
                        AND s.status IN ('running', 'waiting') \
                      ORDER BY s.position DESC LIMIT 1",
-                    *STEP_SELECT_EXPANDED
+                    *STEP_SELECT_EXPANDED,
+                    gate_pred = gate_step_sql("s"),
                 ),
                 named_params! { ":workflow_run_id": workflow_run_id },
                 row_to_workflow_step,
             )
-            .optional()?)
+            .optional()?
+            .map(crate::workflow::helpers::backfill_gate_type))
 }
 
 /// List all gate steps currently in `waiting` status across all workflow runs.
@@ -927,10 +935,11 @@ pub fn list_all_waiting_gate_steps(
         "SELECT {cols}, r.workflow_name, r.target_label \
              FROM workflow_run_steps s \
              JOIN workflow_runs r ON r.id = s.workflow_run_id \
-             WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
+             WHERE {gate_pred} AND s.status = 'waiting' \
              AND r.status IN ({placeholders}) \
              ORDER BY s.started_at",
         cols = *STEP_COLUMNS_WITH_PREFIX,
+        gate_pred = gate_step_sql("s"),
     );
     crate::db::query_collect(
         conn,
@@ -956,11 +965,12 @@ pub fn list_waiting_gate_steps_for_repo(
              JOIN workflow_runs r ON r.id = s.workflow_run_id \
              LEFT JOIN worktrees wt ON wt.id = r.worktree_id \
              LEFT JOIN tickets t ON t.id = r.ticket_id \
-             WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
+             WHERE {gate_pred} AND s.status = 'waiting' \
              AND r.status IN ({status_placeholders}) \
              AND (r.repo_id = ? OR wt.repo_id = ?) \
              ORDER BY s.started_at",
             cols = *STEP_COLUMNS_WITH_PREFIX,
+            gate_pred = gate_step_sql("s"),
         );
     let mut all_params: Vec<rusqlite::types::Value> = active_strings
         .iter()
@@ -1919,11 +1929,11 @@ pub fn get_gate_analytics(
 /// Cross-workflow snapshot of all currently-waiting gate steps, ordered by `started_at` ASC
 /// (longest-waiting first). `wait_ms_so_far` is computed via julianday arithmetic.
 pub fn get_all_pending_gates(conn: &Connection) -> Result<Vec<PendingGateAnalyticsRow>> {
-    let mut stmt = conn.prepare_cached(
+    let sql = format!(
             "SELECT \
                wrs.id AS step_id, \
                wrs.step_name, \
-               wrs.gate_type, \
+               COALESCE(wrs.gate_type, wrs.step_name) AS gate_type, \
                wrs.gate_prompt, \
                wr.workflow_name, \
                wr.id AS workflow_run_id, \
@@ -1932,9 +1942,11 @@ pub fn get_all_pending_gates(conn: &Connection) -> Result<Vec<PendingGateAnalyti
              FROM workflow_run_steps wrs \
              JOIN workflow_runs wr ON wr.id = wrs.workflow_run_id \
              WHERE wrs.status = 'waiting' \
-               AND wrs.gate_type IS NOT NULL \
+               AND {gate_pred} \
              ORDER BY wrs.started_at ASC",
-        )?;
+            gate_pred = gate_step_sql("wrs"),
+        );
+    let mut stmt = conn.prepare_cached(&sql)?;
     let rows = stmt.query_map([], |row| {
         Ok(PendingGateAnalyticsRow {
             step_id: row.get("step_id")?,
@@ -2164,6 +2176,68 @@ mod tests {
             result.is_empty(),
             "empty input should return empty map without querying DB"
         );
+    }
+
+    #[test]
+    fn waiting_gate_with_null_gate_type_is_found_and_backfilled() {
+        let conn = setup_db();
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, started_at, repo_id) \
+             VALUES ('run-null', 'test-wf', NULL, 'dummy-ar', 'waiting', datetime('now'), 'repo-null')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position) \
+             VALUES ('s-null', 'run-null', 'human_approval', 'gate', 'waiting', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position) \
+             VALUES ('s-actor', 'run-null', 'human_review', 'actor', 'waiting', 1)",
+            [],
+        )
+        .unwrap();
+
+        // A quality_gate row with NULL gate_type must never surface as approvable.
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position) \
+             VALUES ('s-quality', 'run-null', 'quality_gate', 'gate', 'waiting', 2)",
+            [],
+        )
+        .unwrap();
+
+        let step = super::find_waiting_gate(&conn, "run-null")
+            .unwrap()
+            .expect("NULL-type gate row must be found");
+        assert_eq!(step.id, "s-null");
+        assert_eq!(step.gate_type.as_deref(), Some("human_approval"));
+
+        let map = super::find_waiting_gates_for_runs(&conn, &["run-null"]).unwrap();
+        assert_eq!(map["run-null"].id, "s-null");
+        assert_eq!(map["run-null"].gate_type.as_deref(), Some("human_approval"));
+
+        let all = super::list_all_waiting_gate_steps(&conn).unwrap();
+        assert_eq!(all.len(), 1, "non-gate waiting rows must be excluded");
+        assert_eq!(all[0].0.gate_type.as_deref(), Some("human_approval"));
+
+        let repo_rows = super::list_waiting_gate_steps_for_repo(&conn, "repo-null").unwrap();
+        assert_eq!(repo_rows.len(), 1, "quality_gate and actor rows excluded");
+        assert_eq!(repo_rows[0].step.id, "s-null");
+        assert_eq!(
+            repo_rows[0].step.gate_type.as_deref(),
+            Some("human_approval")
+        );
+
+        let pending = super::get_all_pending_gates(&conn).unwrap();
+        assert_eq!(pending.len(), 1, "quality_gate and actor rows excluded");
+        assert_eq!(pending[0].step_id, "s-null");
+        assert_eq!(pending[0].gate_type, "human_approval");
     }
 
     #[test]
