@@ -88,6 +88,7 @@ fn main() {
                                 run_id,
                                 Arc::new(config.clone()),
                                 conductor_bin_dir.clone(),
+                                conductor_core::db::connection_db_path(&conn),
                             );
                         }
                     }
@@ -197,6 +198,7 @@ fn main() {
                                                 run_id,
                                                 Arc::new(cfg.clone()),
                                                 conductor_bin_dir.clone(),
+                                                conductor_core::db::connection_db_path(&conn),
                                             );
                                         }
                                     }
