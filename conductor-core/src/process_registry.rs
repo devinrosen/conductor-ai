@@ -2,8 +2,11 @@
 //!
 //! Each long-running process (MCP server, TUI, web, foreground workflow run)
 //! writes `<conductor_dir>/processes/<pid>.json` at startup and removes it on
-//! exit. A process is **stale** when the binary it was started from was
-//! modified after the process started — i.e. it is running old code.
+//! exit. A process is **stale** when the binary on disk reports a different
+//! commit than the one the process recorded (read via `<exe> --version`) —
+//! i.e. it is running old code. A same-commit rebuild is not stale. When the
+//! on-disk commit can't be read (binary missing, too old, web, `--version`
+//! fails), it falls back to "binary modified after the process started".
 //!
 //! A file registry (rather than a DB table) avoids SQLite write-lock
 //! contention and works before the database opens. Entries left behind by a
@@ -12,8 +15,10 @@
 //! `process_started_at` is macOS-only. Elsewhere, staleness falls back to the
 //! `started_at` recorded at registration, and PID recycling is not detected.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
@@ -63,6 +68,8 @@ pub struct StaleInfo {
     pub record: ProcessRecord,
     /// Modification time of the binary, `None` when the binary no longer exists.
     pub exe_modified_at: Option<SystemTime>,
+    /// Commit reported by the binary on disk, when it could be read.
+    pub disk_git_sha: Option<String>,
     pub reason: String,
     /// True when this is the calling process itself.
     pub is_self: bool,
@@ -190,14 +197,6 @@ pub fn list_live() -> Vec<ProcessRecord> {
     out
 }
 
-/// Stale when the binary was modified after the process started, or removed.
-fn is_stale(started_at: SystemTime, exe_mtime: Option<SystemTime>) -> bool {
-    match exe_mtime {
-        Some(m) => m > started_at,
-        None => true,
-    }
-}
-
 fn parse_started_at(s: &str) -> Option<SystemTime> {
     chrono::DateTime::parse_from_rfc3339(s)
         .ok()
@@ -208,27 +207,169 @@ fn exe_mtime(exe: &Path) -> Option<SystemTime> {
     std::fs::metadata(exe).and_then(|m| m.modified()).ok()
 }
 
-/// Staleness of one record, or `None` when it is up to date. A record whose
-/// `started_at` cannot be parsed is reported stale, since it cannot be verified.
-fn staleness_of(record: &ProcessRecord) -> Option<StaleInfo> {
-    let mtime = exe_mtime(&record.exe);
-    let reason = match parse_started_at(&record.started_at) {
-        None => format!("unparseable start time {:?}", record.started_at),
-        Some(started) => {
-            if !is_stale(started, mtime) {
+/// How long `<exe> --version` may run before the probe gives up.
+const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Extract the commit from `<name> <version> (<sha> <commit time>)`. Accepts
+/// 7-40 lowercase hex characters; `unknown` and anything else give `None`.
+fn parse_version_sha(stdout: &str) -> Option<String> {
+    let line = stdout.lines().next()?;
+    let open = line.rfind('(')?;
+    let inner = line[open + 1..].split(')').next()?;
+    let token = inner.split_whitespace().next()?;
+    let valid = (7..=40).contains(&token.len())
+        && token
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c));
+    valid.then(|| token.to_string())
+}
+
+/// Run `<exe> --version` and parse the commit, killing the child on timeout.
+fn probe_disk_sha(exe: &Path) -> Option<String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(exe)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + VERSION_PROBE_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20))
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
                 return None;
             }
-            if mtime.is_none() {
-                "binary removed".to_string()
-            } else {
-                "binary rebuilt after process started".to_string()
+        }
+    };
+    if !status.success() {
+        return None;
+    }
+    let mut out = String::new();
+    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    parse_version_sha(&out)
+}
+
+/// Whether `<exe> --version` is safe to run for this kind. `conductor-web` has
+/// no `--version` handling, so running it would start the server.
+fn kind_supports_version_flag(kind: ProcessKind) -> bool {
+    !matches!(kind, ProcessKind::Web)
+}
+
+struct CacheEntry {
+    mtime: SystemTime,
+    len: u64,
+    sha: Option<String>,
+}
+
+static DISK_SHA_CACHE: Mutex<Option<HashMap<PathBuf, CacheEntry>>> = Mutex::new(None);
+
+/// Commit embedded in the binary at `exe`, or `None` when it is missing or
+/// can't report one. Cached per path by the file's (mtime, size), so a binary
+/// is only run again after it changes.
+pub fn disk_build_sha(exe: &Path) -> Option<String> {
+    let meta = std::fs::metadata(exe).ok()?;
+    let mtime = meta.modified().ok()?;
+    let len = meta.len();
+    {
+        let cache = DISK_SHA_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = cache.as_ref().and_then(|c| c.get(exe)) {
+            if entry.mtime == mtime && entry.len == len {
+                return entry.sha.clone();
             }
         }
+    }
+    let sha = probe_disk_sha(exe);
+    DISK_SHA_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(HashMap::new)
+        .insert(
+            exe.to_path_buf(),
+            CacheEntry {
+                mtime,
+                len,
+                sha: sha.clone(),
+            },
+        );
+    sha
+}
+
+/// [`disk_build_sha`] for a record, applying the kind gate.
+pub fn disk_build_sha_for(record: &ProcessRecord) -> Option<String> {
+    if kind_supports_version_flag(record.kind) {
+        disk_build_sha(&record.exe)
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict {
+    Current,
+    Stale(String),
+}
+
+/// Decide staleness. When both commits are known only they count (compared by
+/// prefix, since short hashes can grow); otherwise fall back to file times.
+fn judge(
+    record_sha: &str,
+    disk_sha: Option<&str>,
+    started: Option<SystemTime>,
+    mtime: Option<SystemTime>,
+) -> Verdict {
+    if record_sha != "unknown" {
+        if let Some(disk) = disk_sha {
+            return if disk.starts_with(record_sha) || record_sha.starts_with(disk) {
+                Verdict::Current
+            } else {
+                Verdict::Stale(format!(
+                    "binary on disk is build {disk} (running {record_sha})"
+                ))
+            };
+        }
+    }
+    match (started, mtime) {
+        (_, None) => Verdict::Stale("binary removed".to_string()),
+        (None, Some(_)) => Verdict::Stale("unparseable start time".to_string()),
+        (Some(s), Some(m)) if m > s => {
+            Verdict::Stale("binary rebuilt after process started".to_string())
+        }
+        _ => Verdict::Current,
+    }
+}
+
+/// Staleness of one record, or `None` when it is up to date. A record whose
+/// `started_at` cannot be parsed and can't be judged by commit is reported
+/// stale, since it cannot be verified.
+fn staleness_of(record: &ProcessRecord) -> Option<StaleInfo> {
+    let mtime = exe_mtime(&record.exe);
+    let disk_sha = if record.git_sha != "unknown" {
+        disk_build_sha_for(record)
+    } else {
+        None
+    };
+    let started = parse_started_at(&record.started_at);
+    let reason = match judge(&record.git_sha, disk_sha.as_deref(), started, mtime) {
+        Verdict::Current => return None,
+        Verdict::Stale(r) if r == "unparseable start time" => {
+            format!("unparseable start time {:?}", record.started_at)
+        }
+        Verdict::Stale(r) => r,
     };
     Some(StaleInfo {
         is_self: record.pid == std::process::id(),
         record: record.clone(),
         exe_modified_at: mtime,
+        disk_git_sha: disk_sha,
         reason,
     })
 }
@@ -265,11 +406,14 @@ pub fn format_stale_warning(stale: &[StaleInfo]) -> Option<String> {
                 _ => "; restart it",
             };
             let me = if s.is_self { " (this process)" } else { "" };
+            let build = match &s.disk_git_sha {
+                Some(disk) => format!("build {} → {disk} on disk", r.git_sha),
+                None => format!("build {}", r.git_sha),
+            };
             format!(
-                "- {} pid {}{me} (build {}, started {}) — {}: {}{hint}",
+                "- {} pid {}{me} ({build}, started {}) — {}: {}{hint}",
                 r.kind,
                 r.pid,
-                r.git_sha,
                 r.started_at,
                 s.reason,
                 r.exe.display()
@@ -285,14 +429,156 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn is_stale_truth_table() {
+    fn parse_version_sha_cases() {
+        assert_eq!(
+            parse_version_sha("conductor 0.17.1 (98a7cdb 2026-11-03T10:00:00Z)\n").as_deref(),
+            Some("98a7cdb")
+        );
+        assert_eq!(
+            parse_version_sha("conductor-tui 0.17.1 (98a7cdb2 2026-11-03)").as_deref(),
+            Some("98a7cdb2")
+        );
+        assert_eq!(parse_version_sha("conductor 0.1.0 (unknown unknown)"), None);
+        assert_eq!(parse_version_sha("garbage"), None);
+        assert_eq!(parse_version_sha("x 1 (zzzzzzz 2026)"), None);
+        assert_eq!(parse_version_sha(""), None);
+    }
+
+    #[test]
+    fn judge_truth_table() {
         let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
         let later = t0 + Duration::from_secs(10);
         let earlier = t0 - Duration::from_secs(10);
-        assert!(is_stale(t0, Some(later)));
-        assert!(!is_stale(t0, Some(earlier)));
-        assert!(!is_stale(t0, Some(t0)));
-        assert!(is_stale(t0, None));
+        // Same commit with a newer mtime is current (the bug).
+        assert_eq!(
+            judge("abc1234", Some("abc1234"), Some(t0), Some(later)),
+            Verdict::Current
+        );
+        // Prefix-equal shas are the same commit.
+        assert_eq!(
+            judge("98a7cdb", Some("98a7cdb2"), Some(t0), Some(later)),
+            Verdict::Current
+        );
+        // Different commit is stale and names both.
+        match judge("abc1234", Some("def5678"), Some(t0), Some(earlier)) {
+            Verdict::Stale(r) => assert!(r.contains("abc1234") && r.contains("def5678")),
+            v => panic!("{v:?}"),
+        }
+        // Fallbacks.
+        assert!(matches!(
+            judge("abc1234", None, Some(t0), Some(later)),
+            Verdict::Stale(_)
+        ));
+        assert!(matches!(
+            judge("unknown", Some("def5678"), Some(t0), Some(later)),
+            Verdict::Stale(_)
+        ));
+        assert_eq!(
+            judge("abc1234", None, Some(t0), Some(earlier)),
+            Verdict::Current
+        );
+        assert_eq!(
+            judge("abc1234", None, Some(t0), None),
+            Verdict::Stale("binary removed".into())
+        );
+    }
+
+    #[cfg(unix)]
+    fn write_script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    fn script_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "conductor-procreg-{}-{}",
+            std::process::id(),
+            ulid::Ulid::new()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn same_commit_rebuild_is_not_stale_and_different_commit_is() {
+        let dir = script_dir();
+        let exe = write_script(
+            &dir,
+            "conductor",
+            "echo 'conductor 0.0.0 (abc1234 2026-01-01T00:00:00Z)'",
+        );
+        let mut r = fake_record(4242);
+        r.exe = exe;
+        r.started_at = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+        assert!(staleness_of(&r).is_none());
+        r.git_sha = "def5678".into();
+        let info = staleness_of(&r).unwrap();
+        assert_eq!(info.disk_git_sha.as_deref(), Some("abc1234"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_timeout_falls_back_to_mtime() {
+        let dir = script_dir();
+        let exe = write_script(&dir, "conductor", "exec sleep 30");
+        let mut r = fake_record(4242);
+        r.exe = exe;
+        r.started_at = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+        let t = Instant::now();
+        let info = staleness_of(&r).unwrap();
+        assert!(t.elapsed() < Duration::from_secs(5));
+        assert!(info.disk_git_sha.is_none());
+        assert_eq!(info.reason, "binary rebuilt after process started");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn disk_sha_is_cached_until_binary_changes() {
+        let dir = script_dir();
+        let counter = dir.join("count");
+        let body = format!(
+            "echo x >> {}\necho 'conductor 0.0.0 (abc1234 2026-01-01T00:00:00Z)'",
+            counter.display()
+        );
+        let exe = write_script(&dir, "conductor", &body);
+        let runs = || std::fs::read_to_string(&counter).unwrap().lines().count();
+        assert_eq!(disk_build_sha(&exe).as_deref(), Some("abc1234"));
+        assert_eq!(disk_build_sha(&exe).as_deref(), Some("abc1234"));
+        assert_eq!(runs(), 1);
+        write_script(&dir, "conductor", &format!("{body}\n# changed"));
+        assert_eq!(disk_build_sha(&exe).as_deref(), Some("abc1234"));
+        assert_eq!(runs(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn web_kind_is_never_probed() {
+        let dir = script_dir();
+        let marker = dir.join("ran");
+        let exe = write_script(
+            &dir,
+            "conductor-web",
+            &format!(
+                "touch {}\necho 'conductor 0.0.0 (abc1234 2026-01-01T00:00:00Z)'",
+                marker.display()
+            ),
+        );
+        let mut r = fake_record(4242);
+        r.kind = ProcessKind::Web;
+        r.exe = exe;
+        r.started_at = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+        let info = staleness_of(&r).unwrap();
+        assert_eq!(info.reason, "binary rebuilt after process started");
+        assert!(!marker.exists());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     fn fake_record(pid: u32) -> ProcessRecord {
@@ -392,6 +678,7 @@ mod tests {
     fn staleness_of_fresh_binary_is_none() {
         let mut r = fake_record(4242);
         r.exe = std::env::current_exe().unwrap();
+        r.git_sha = "unknown".into();
         r.started_at = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
         assert!(staleness_of(&r).is_none());
     }
@@ -416,11 +703,13 @@ mod tests {
         let info = StaleInfo {
             record: fake_record(4242),
             exe_modified_at: None,
+            disk_git_sha: Some("def5678".into()),
             reason: "binary removed".into(),
             is_self: false,
         };
         let text = format_stale_warning(&[info]).unwrap();
         assert!(text.contains("mcp pid 4242"));
+        assert!(text.contains("def5678 on disk"));
         assert!(text.contains("/mcp"));
     }
 }

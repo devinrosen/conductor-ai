@@ -399,6 +399,7 @@ mod tests {
                 cwd: None,
             },
             exe_modified_at: None,
+            disk_git_sha: None,
             reason: "binary removed".into(),
             is_self,
         }
