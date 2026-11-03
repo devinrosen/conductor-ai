@@ -343,9 +343,65 @@ fn wait_for_gate(db_path: &std::path::Path, run_id: &str) -> WorkflowRunStep {
     }
 }
 
+/// Start `def` through the real engine on a background thread and wait until
+/// its run row exists. Returns the thread handle and the run id.
+fn spawn_standalone(
+    def: runkon_flow::dsl::WorkflowDef,
+    ws: &std::path::Path,
+    db_path: &std::path::Path,
+) -> (
+    std::thread::JoinHandle<crate::error::Result<crate::workflow::WorkflowResult>>,
+    String,
+) {
+    let params = crate::workflow::types::WorkflowExecStandalone {
+        config: Config::default(),
+        workflow: def,
+        worktree_id: None,
+        working_dir: ws.to_str().unwrap().to_string(),
+        repo_path: ws.to_str().unwrap().to_string(),
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        runtime: None,
+        exec_config: crate::workflow::WorkflowExecConfig {
+            poll_interval: std::time::Duration::from_millis(50),
+            ..Default::default()
+        },
+        inputs: std::collections::HashMap::new(),
+        target_label: None,
+        run_id_notify: None,
+        triggered_by_hook: false,
+        conductor_bin_dir: None,
+        force: false,
+        extra_plugin_dirs: vec![],
+        db_path: Some(db_path.to_path_buf()),
+        parent_workflow_run_id: None,
+        depth: 0,
+        parent_step_id: None,
+        default_bot_name: None,
+        iteration: 0,
+    };
+    let handle = std::thread::spawn(move || crate::workflow::execute_workflow_standalone(&params));
+
+    // The run row is created before any step executes.
+    let conn = crate::db::open_database(db_path).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let run_id = loop {
+        if let Ok(id) = conn.query_row("SELECT id FROM workflow_runs LIMIT 1", [], |r| {
+            r.get::<_, String>(0)
+        }) {
+            break id;
+        }
+        assert!(std::time::Instant::now() < deadline, "run never created");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    (handle, run_id)
+}
+
 /// Regression for #3151: gates started by the real engine must record their
 /// type, prompt and timeout so `find_waiting_gate` and `approve_gate` work, both
-/// for an unconditional gate and for one nested in an `if` body.
+/// for an unconditional gate and for one nested in an `if` body. runkon-flow
+/// writes the metadata in the same insert that creates the step (#3196).
 #[test]
 fn test_engine_gates_are_findable_and_approvable() {
     use std::os::unix::fs::PermissionsExt;
@@ -378,48 +434,8 @@ fn test_engine_gates_are_findable_and_approvable() {
     )
     .expect("gate workflow should parse");
 
-    let params = crate::workflow::types::WorkflowExecStandalone {
-        config: Config::default(),
-        workflow: def,
-        worktree_id: None,
-        working_dir: ws.path().to_str().unwrap().to_string(),
-        repo_path: ws.path().to_str().unwrap().to_string(),
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        runtime: None,
-        exec_config: crate::workflow::WorkflowExecConfig {
-            poll_interval: std::time::Duration::from_millis(50),
-            ..Default::default()
-        },
-        inputs: std::collections::HashMap::new(),
-        target_label: None,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        force: false,
-        extra_plugin_dirs: vec![],
-        db_path: Some(db_path.clone()),
-        parent_workflow_run_id: None,
-        depth: 0,
-        parent_step_id: None,
-        default_bot_name: None,
-        iteration: 0,
-    };
-    let handle = std::thread::spawn(move || crate::workflow::execute_workflow_standalone(&params));
-
-    // The run row is created before any step executes.
+    let (handle, run_id) = spawn_standalone(def, ws.path(), &db_path);
     let conn = crate::db::open_database(&db_path).unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    let run_id = loop {
-        if let Ok(id) = conn.query_row("SELECT id FROM workflow_runs LIMIT 1", [], |r| {
-            r.get::<_, String>(0)
-        }) {
-            break id;
-        }
-        assert!(std::time::Instant::now() < deadline, "run never created");
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    };
 
     let first = wait_for_gate(&db_path, &run_id);
     assert_eq!(first.gate_type.as_deref(), Some("human_approval"));
@@ -436,6 +452,50 @@ fn test_engine_gates_are_findable_and_approvable() {
     };
     assert_eq!(second.gate_type.as_deref(), Some("human_review"));
     assert_eq!(second.gate_prompt.as_deref(), Some("Conditional approval"));
+    assert_eq!(second.gate_timeout.as_deref(), Some("7200s"));
+    crate::workflow::approve_gate(&conn, &second.id, "test", None, None, None).unwrap();
+
+    let result = handle
+        .join()
+        .expect("workflow thread panicked")
+        .expect("workflow should complete");
+    assert!(result.all_succeeded, "run should succeed after approvals");
+}
+
+/// Two gates of the same type with different prompts and timeouts each record
+/// their own metadata.
+#[test]
+fn test_engine_same_type_gates_record_their_own_prompts() {
+    let (_tmp, db_path) = make_standalone_db();
+    let ws = tempfile::tempdir().unwrap();
+    let def = runkon_flow::dsl::parse_workflow_str(
+        r#"workflow same-type-gates {
+            meta { trigger = "manual" targets = ["worktree"] }
+            gate human_approval { prompt = "First approval" timeout = "1h" }
+            gate human_approval { prompt = "Second approval" timeout = "2h" }
+        }"#,
+        "<test>",
+    )
+    .expect("gate workflow should parse");
+
+    let (handle, run_id) = spawn_standalone(def, ws.path(), &db_path);
+    let conn = crate::db::open_database(&db_path).unwrap();
+
+    let first = wait_for_gate(&db_path, &run_id);
+    assert_eq!(first.gate_type.as_deref(), Some("human_approval"));
+    assert_eq!(first.gate_prompt.as_deref(), Some("First approval"));
+    assert_eq!(first.gate_timeout.as_deref(), Some("3600s"));
+    crate::workflow::approve_gate(&conn, &first.id, "test", None, None, None).unwrap();
+
+    let second = loop {
+        let s = wait_for_gate(&db_path, &run_id);
+        if s.id != first.id {
+            break s;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert_eq!(second.gate_type.as_deref(), Some("human_approval"));
+    assert_eq!(second.gate_prompt.as_deref(), Some("Second approval"));
     assert_eq!(second.gate_timeout.as_deref(), Some("7200s"));
     crate::workflow::approve_gate(&conn, &second.id, "test", None, None, None).unwrap();
 

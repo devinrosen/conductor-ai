@@ -67,6 +67,7 @@ mod tests {
         let run = p.create_run(make_new_run(parent_id)).unwrap();
         let step_id = p
             .insert_step(NewStep {
+                gate: None,
                 workflow_run_id: run.id,
                 step_name: "approval-gate".to_string(),
                 role: "gate".to_string(),
@@ -88,6 +89,7 @@ mod tests {
         let run = p.create_run(make_new_run(parent_id)).unwrap();
         let step_id = p
             .insert_step(NewStep {
+                gate: None,
                 workflow_run_id: run.id,
                 step_name: "review-gate".to_string(),
                 role: "gate".to_string(),
@@ -198,6 +200,7 @@ mod tests {
         let run = p.create_run(make_new_run(parent.id)).unwrap();
         let step_id = p
             .insert_step(NewStep {
+                gate: None,
                 workflow_run_id: run.id.clone(),
                 step_name: "review-gate".to_string(),
                 role: "gate".to_string(),
@@ -248,6 +251,7 @@ mod tests {
         let run = p.create_run(make_new_run(parent_id)).unwrap();
         let step_id = p
             .insert_step(NewStep {
+                gate: None,
                 workflow_run_id: run.id.clone(),
                 step_name: "review-gate".to_string(),
                 role: "gate".to_string(),
@@ -276,6 +280,7 @@ mod tests {
         let run = p.create_run(make_new_run(parent_id)).unwrap();
         let step_id = p
             .insert_step(NewStep {
+                gate: None,
                 workflow_run_id: run.id,
                 step_name: "approval-gate".to_string(),
                 role: "gate".to_string(),

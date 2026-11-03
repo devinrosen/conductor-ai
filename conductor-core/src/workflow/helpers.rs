@@ -1,7 +1,7 @@
 use runkon_flow::dsl::QUALITY_GATE_TYPE;
 
-/// Whether a step is a gate. Engine-written gate rows may have NULL `gate_type`
-/// (#3151), so a `gate` role also counts. Quality gates complete immediately and
+/// Whether a step is a gate. Rows written before runkon-flow 0.8.0 (conductor
+/// < 0.18.0) have NULL `gate_type`, so a `gate` role also counts. Quality gates complete immediately and
 /// never wait, so they are excluded when the type is unset.
 ///
 /// Rust counterpart of [`gate_step_sql`]; keep the two in sync.
@@ -15,7 +15,8 @@ pub fn is_waiting_gate(step: &super::WorkflowRunStep) -> bool {
 }
 
 /// The step's gate type, falling back to the step name (the DSL guarantees they
-/// match) when `gate_type` was never recorded.
+/// match) when `gate_type` was never recorded (rows written before runkon-flow
+/// 0.8.0 / conductor 0.18.0).
 pub fn gate_type_or_name(step: &super::WorkflowRunStep) -> &str {
     step.gate_type.as_deref().unwrap_or(step.step_name.as_str())
 }
