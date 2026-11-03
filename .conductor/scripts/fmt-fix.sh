@@ -12,11 +12,22 @@ set -euo pipefail
 # artifacts that aren't gitignored, and they must not abort an otherwise clean
 # run. They are never committed (git add -u below skips them).
 #
+# Lockfiles are the exception (#3185). Implement agents don't run cargo or bun,
+# so when a change adds a dependency, the lockfile is first rewritten by a later
+# build or verify step. Those changes are committed on their own as
+# "chore(deps): update lockfiles" instead of failing the step.
+#
 # FMT_FIX_ALLOW_FAILURE=1: used before verify. If rustfmt can't format the code
 # (usually a parse error), leave it for verify to report instead of failing the
 # run. It does not relax the tracked-changes check.
 
-tracked=$(git status --porcelain --untracked-files=no)
+LOCKFILES=(Cargo.lock conductor-web/frontend/bun.lock)
+lock_excludes=()
+for f in "${LOCKFILES[@]}"; do
+  lock_excludes+=(":(exclude)${f}")
+done
+
+tracked=$(git status --porcelain --untracked-files=no -- . "${lock_excludes[@]}")
 if [ -n "${tracked}" ]; then
   {
     echo "fmt-fix: tracked files have uncommitted changes before cargo fmt ran:"
@@ -26,6 +37,17 @@ if [ -n "${tracked}" ]; then
     echo "the changes, then resume from this one."
   } >&2
   exit 1
+fi
+
+changed_locks=()
+for f in "${LOCKFILES[@]}"; do
+  if [ -n "$(git status --porcelain --untracked-files=no -- "${f}")" ]; then
+    changed_locks+=("${f}")
+  fi
+done
+if [ "${#changed_locks[@]}" -gt 0 ]; then
+  git add -- "${changed_locks[@]}"
+  git commit -m "chore(deps): update lockfiles" -- "${changed_locks[@]}"
 fi
 
 untracked=$(git ls-files --others --exclude-standard)
