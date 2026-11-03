@@ -19,6 +19,18 @@ pub(super) const AGENT_RUN_SELECT: &str =
      COALESCE(runtime, 'claude') AS runtime, idle_since, \
      subprocess_started_at, COALESCE(usage_estimated, 0) AS usage_estimated FROM agent_runs";
 
+/// The `usage_estimated` column expression, shared by every arm of [`agent_run_cols!`]
+/// so a trailing column is added in one place.
+macro_rules! usage_estimated_col {
+    ($alias:literal) => {
+        concat!(
+            "COALESCE(",
+            $alias,
+            "usage_estimated, 0) AS usage_estimated"
+        )
+    };
+}
+
 /// Generate an `agent_runs` column list with a given table alias.
 ///
 /// All three aliased variants (`a.`, `ar.`, and `a.` with NULL plan) are produced
@@ -84,9 +96,7 @@ macro_rules! agent_run_cols {
             "idle_since, ",
             $alias,
             "subprocess_started_at, ",
-            "COALESCE(",
-            $alias,
-            "usage_estimated, 0) AS usage_estimated"
+            usage_estimated_col!($alias)
         )
     };
     ($alias:literal, null_plan) => {
@@ -143,9 +153,7 @@ macro_rules! agent_run_cols {
             "idle_since, ",
             $alias,
             "subprocess_started_at, ",
-            "COALESCE(",
-            $alias,
-            "usage_estimated, 0) AS usage_estimated"
+            usage_estimated_col!($alias)
         )
     };
 }

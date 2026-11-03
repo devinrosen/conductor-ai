@@ -37,9 +37,11 @@ use crate::new_id;
 
 /// Largest chunk read for one run in one pass; also the longest line that is not skipped.
 const MAX_CHUNK_BYTES: usize = 4 * 1024 * 1024;
-/// Once a tick has read this many bytes, remaining runs wait for the next tick. The web poller
-/// holds the shared database mutex while this runs.
+/// Once a tick has read this many bytes, remaining runs wait for the next tick.
 const TICK_BYTE_BUDGET: usize = 8 * 1024 * 1024;
+/// Smaller budget for the web poller, which holds the shared database mutex while a tick
+/// runs: bounds how long other request handlers can be stalled during catch-up.
+pub const WEB_TICK_BYTE_BUDGET: usize = 1024 * 1024;
 /// Completed or failed runs are read for this long after they end.
 const RECENT_END_HOURS: i64 = 24;
 
@@ -58,26 +60,38 @@ pub struct IngestStats {
 }
 
 /// Reads interactive session transcripts. Hold one per poller thread.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TranscriptIngester {
+    /// Bytes read per tick across all runs; also caps one chunk (and so the longest line
+    /// that is not skipped).
+    tick_budget: usize,
     /// `run_id -> (latest pending request id, offset scanned to)` for the denial check.
     denial_cursors: HashMap<String, (String, u64)>,
 }
 
 impl TranscriptIngester {
     pub fn new() -> Self {
-        Self::default()
+        Self::with_tick_budget(TICK_BYTE_BUDGET)
+    }
+
+    /// Like [`new`](Self::new) with a custom per-tick byte budget.
+    pub fn with_tick_budget(tick_budget: usize) -> Self {
+        Self {
+            tick_budget,
+            denial_cursors: HashMap::new(),
+        }
     }
 
     /// Run the denial check, then the metrics pass. Never fails.
     pub fn poll(&mut self, conn: &Connection, now: DateTime<Utc>) -> IngestStats {
         let mut stats = IngestStats::default();
-        let mut budget = TICK_BYTE_BUDGET;
-        match self.denial_pass(conn, &mut budget) {
+        let mut budget = self.tick_budget;
+        let max_chunk = self.tick_budget.min(MAX_CHUNK_BYTES);
+        match self.denial_pass(conn, &mut budget, max_chunk) {
             Ok(n) => stats.denials = n,
             Err(e) => tracing::debug!("transcript denial check failed: {e}"),
         }
-        match metrics_pass(conn, now, &mut budget) {
+        match metrics_pass(conn, now, &mut budget, max_chunk) {
             Ok((applied, skipped)) => {
                 stats.metrics_applied = applied;
                 stats.metrics_skipped = skipped;
@@ -87,7 +101,12 @@ impl TranscriptIngester {
         stats
     }
 
-    fn denial_pass(&mut self, conn: &Connection, budget: &mut usize) -> Result<usize> {
+    fn denial_pass(
+        &mut self,
+        conn: &Connection,
+        budget: &mut usize,
+        max_chunk: usize,
+    ) -> Result<usize> {
         let candidates = denial_candidates(conn)?;
         let live: HashSet<&str> = candidates.iter().map(|c| c.run_id.as_str()).collect();
         self.denial_cursors.retain(|k, _| live.contains(k.as_str()));
@@ -97,7 +116,7 @@ impl TranscriptIngester {
             if *budget == 0 {
                 break;
             }
-            match self.check_denial(conn, c, budget) {
+            match self.check_denial(conn, c, budget, max_chunk) {
                 Ok(true) => found += 1,
                 Ok(false) => {}
                 Err(e) => {
@@ -113,11 +132,17 @@ impl TranscriptIngester {
         conn: &Connection,
         c: &DenialCandidate,
         budget: &mut usize,
+        max_chunk: usize,
     ) -> Result<bool> {
-        let Ok(created) = DateTime::parse_from_rfc3339(&c.created_at) else {
+        let Some(created) = transcript::parse_utc(&c.created_at) else {
+            tracing::debug!(
+                run_id = %c.run_id,
+                request_id = %c.request_id,
+                created_at = %c.created_at,
+                "unparseable feedback request timestamp; denial check skipped"
+            );
             return Ok(false);
         };
-        let created = created.with_timezone(&Utc);
         let from = match self.denial_cursors.get(&c.run_id) {
             Some((req, pos)) if *req == c.request_id => c.offset.max(*pos),
             _ => c.offset,
@@ -126,7 +151,7 @@ impl TranscriptIngester {
         if std::fs::metadata(path).map(|m| m.len()).ok() == Some(from) {
             return Ok(false);
         }
-        let chunk = transcript::read_chunk(path, from, MAX_CHUNK_BYTES)?;
+        let chunk = transcript::read_chunk(path, from, max_chunk)?;
         *budget = budget.saturating_sub(chunk.bytes.len());
         let parsed = transcript::parse(&chunk.bytes);
         let Some(denial) = parsed.denials.iter().find(|d| d.timestamp > created) else {
@@ -172,6 +197,12 @@ impl TranscriptIngester {
         tx.commit()?;
         self.denial_cursors.remove(&c.run_id);
         Ok(true)
+    }
+}
+
+impl Default for TranscriptIngester {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -248,8 +279,8 @@ fn metrics_candidates(conn: &Connection, now: DateTime<Utc>) -> Result<Vec<Metri
             // Compare parsed times: stored formats differ (`+00:00` vs `Z`).
             let recent = ended_at
                 .as_deref()
-                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                .map(|t| t.with_timezone(&Utc) >= cutoff)
+                .and_then(transcript::parse_utc)
+                .map(|t| t >= cutoff)
                 .unwrap_or(true);
             if !recent {
                 continue;
@@ -269,6 +300,7 @@ fn metrics_pass(
     conn: &Connection,
     now: DateTime<Utc>,
     budget: &mut usize,
+    max_chunk: usize,
 ) -> Result<(usize, usize)> {
     let (mut applied, mut skipped) = (0, 0);
     for c in metrics_candidates(conn, now)? {
@@ -276,7 +308,7 @@ fn metrics_pass(
             break;
         }
         let result = (|| -> Result<Option<bool>> {
-            let chunk = transcript::read_chunk(Path::new(&c.path), c.offset, MAX_CHUNK_BYTES)?;
+            let chunk = transcript::read_chunk(Path::new(&c.path), c.offset, max_chunk)?;
             *budget = budget.saturating_sub(chunk.bytes.len());
             if chunk.end == c.offset {
                 return Ok(None); // nothing complete yet
@@ -357,10 +389,7 @@ fn apply_metrics(
     for m in parsed.messages() {
         if latest.is_none() || m.line_index > after {
             any_after = true;
-            extra.input += m.tokens.input;
-            extra.output += m.tokens.output;
-            extra.cache_read += m.tokens.cache_read;
-            extra.cache_creation += m.tokens.cache_creation;
+            extra.add(&m.tokens);
         }
     }
     if any_after {
@@ -388,30 +417,67 @@ fn apply_metrics(
     Ok(true)
 }
 
-struct PromptEvent {
-    id: String,
-    prompt_id: Option<String>,
-    started_at: Option<DateTime<Utc>>,
+/// A run's `prompt` and `result` events, loaded once per pass.
+#[derive(Default)]
+struct RunEvents {
+    /// `prompt` events with a usable `started_at`, ascending, for time-based attribution.
+    timed_prompts: Vec<TimedPrompt>,
+    /// Latest `result` event id per `prompt_id`.
+    result_by_prompt: HashMap<String, String>,
+    /// Latest `prompt` event id per `prompt_id`.
+    prompt_by_prompt: HashMap<String, String>,
 }
 
-fn load_prompt_events(conn: &Connection, run_id: &str) -> Result<Vec<PromptEvent>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, json_extract(metadata, '$.prompt_id'), started_at FROM agent_run_events \
-         WHERE run_id = ?1 AND kind = ?2",
+struct TimedPrompt {
+    id: String,
+    prompt_id: Option<String>,
+    started_at: DateTime<Utc>,
+}
+
+fn load_run_events(conn: &Connection, run_id: &str) -> Result<RunEvents> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, kind, json_extract(metadata, '$.prompt_id'), started_at \
+         FROM agent_run_events WHERE run_id = ?1 AND kind IN (?2, ?3) ORDER BY started_at, id",
     )?;
-    let rows = stmt.query_map(params![run_id, EVENT_KIND_PROMPT], |r| {
-        Ok(PromptEvent {
-            id: r.get(0)?,
-            prompt_id: r.get(1)?,
-            started_at: r
-                .get::<_, String>(2)
-                .ok()
-                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-                .map(|t| t.with_timezone(&Utc)),
-        })
+    let rows = stmt.query_map(params![run_id, EVENT_KIND_PROMPT, EVENT_KIND_RESULT], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, Option<String>>(3)?,
+        ))
     })?;
-    let mut out = rows.collect::<std::result::Result<Vec<_>, _>>()?;
-    out.sort_by_key(|p| p.started_at);
+    let mut out = RunEvents::default();
+    for row in rows {
+        let (id, kind, prompt_id, started_at) = row?;
+        let is_prompt = kind == EVENT_KIND_PROMPT;
+        if let Some(pid) = &prompt_id {
+            // Ascending order: a later event for the same prompt replaces an earlier one.
+            let map = if is_prompt {
+                &mut out.prompt_by_prompt
+            } else {
+                &mut out.result_by_prompt
+            };
+            map.insert(pid.clone(), id.clone());
+        }
+        if is_prompt {
+            match started_at.as_deref().and_then(transcript::parse_utc) {
+                Some(started_at) => out.timed_prompts.push(TimedPrompt {
+                    id,
+                    prompt_id,
+                    started_at,
+                }),
+                None => tracing::debug!(
+                    run_id,
+                    event_id = %id,
+                    started_at = ?started_at,
+                    "prompt event has no usable started_at; skipped for turn attribution"
+                ),
+            }
+        }
+    }
+    // Sorted by the stored text above; times in mixed formats need a real ordering.
+    out.timed_prompts.sort_by_key(|p| p.started_at);
     Ok(out)
 }
 
@@ -420,21 +486,21 @@ fn merge_turn_usage(conn: &Connection, run_id: &str, parsed: &Parsed) -> Result<
     if parsed.messages().next().is_none() {
         return Ok(());
     }
-    let prompts = load_prompt_events(conn, run_id)?;
+    let events = load_run_events(conn, run_id)?;
     let mut turns: HashMap<TurnKey, TurnUsage> = HashMap::new();
     for m in parsed.messages() {
         let key = match parsed.prompt_id_for(m) {
             Some(p) => Some(TurnKey::Prompt(p)),
             // The chain left this chunk: attribute by time to the latest prompt at or before it.
             None => m.timestamp.and_then(|ts| {
-                prompts
-                    .iter()
-                    .rev()
-                    .find(|p| p.started_at.is_some_and(|s| s <= ts))
-                    .map(|p| match &p.prompt_id {
+                let n = events.timed_prompts.partition_point(|p| p.started_at <= ts);
+                n.checked_sub(1).map(|i| {
+                    let p = &events.timed_prompts[i];
+                    match &p.prompt_id {
                         Some(id) => TurnKey::Prompt(id.clone()),
                         None => TurnKey::Event(p.id.clone()),
-                    })
+                    }
+                })
             }),
         };
         let Some(key) = key else {
@@ -442,62 +508,50 @@ fn merge_turn_usage(conn: &Connection, run_id: &str, parsed: &Parsed) -> Result<
             continue;
         };
         let t = turns.entry(key).or_default();
-        t.tokens.input += m.tokens.input;
-        t.tokens.output += m.tokens.output;
-        t.tokens.cache_read += m.tokens.cache_read;
-        t.tokens.cache_creation += m.tokens.cache_creation;
+        t.tokens.add(&m.tokens);
         t.messages += 1;
         if m.model.is_some() {
             t.model = m.model.clone();
         }
     }
     for (key, usage) in turns {
-        let target: Option<String> = match &key {
-            TurnKey::Event(id) => Some(id.clone()),
-            TurnKey::Prompt(pid) => {
-                // The turn's result event; a crash mid-turn or a lagging Stop leaves only
-                // the prompt event.
-                let find = |kind: &str| -> rusqlite::Result<Option<String>> {
-                    conn.query_row(
-                        "SELECT id FROM agent_run_events WHERE run_id = ?1 AND kind = ?2 \
-                         AND json_extract(metadata, '$.prompt_id') = ?3 \
-                         ORDER BY started_at DESC, id DESC LIMIT 1",
-                        params![run_id, kind, pid],
-                        |r| r.get(0),
-                    )
-                    .optional()
-                };
-                match find(EVENT_KIND_RESULT)? {
-                    Some(id) => Some(id),
-                    None => find(EVENT_KIND_PROMPT)?,
-                }
-            }
+        let target: Option<&String> = match &key {
+            TurnKey::Event(id) => Some(id),
+            // The turn's result event; a crash mid-turn or a lagging Stop leaves only the
+            // prompt event.
+            TurnKey::Prompt(pid) => events
+                .result_by_prompt
+                .get(pid)
+                .or_else(|| events.prompt_by_prompt.get(pid)),
         };
         let Some(event_id) = target else {
             tracing::debug!(run_id, ?key, "no event for transcript turn usage");
             continue;
         };
-        merge_usage_into_event(conn, &event_id, &usage)?;
+        merge_usage_into_event(conn, event_id, &usage)?;
     }
     Ok(())
 }
 
 fn merge_usage_into_event(conn: &Connection, event_id: &str, add: &TurnUsage) -> Result<()> {
     let existing: Option<String> = conn
-        .query_row(
-            "SELECT metadata FROM agent_run_events WHERE id = ?1",
-            [event_id],
-            |r| r.get(0),
-        )
+        .prepare_cached("SELECT metadata FROM agent_run_events WHERE id = ?1")?
+        .query_row([event_id], |r| r.get(0))
         .optional()?
         .flatten();
-    let mut meta: Map<String, Value> = existing
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .and_then(|v| match v {
-            Value::Object(o) => Some(o),
-            _ => None,
-        })
-        .unwrap_or_default();
+    let mut meta: Map<String, Value> = match existing.as_deref().map(serde_json::from_str) {
+        None => Map::new(),
+        Some(Ok(Value::Object(o))) => o,
+        Some(other) => {
+            // Overwriting would destroy the event's other keys (`prompt_id`, `source`).
+            tracing::debug!(
+                event_id,
+                parse_error = ?other.err(),
+                "event metadata is not a JSON object; usage not merged"
+            );
+            return Ok(());
+        }
+    };
     let mut usage: Map<String, Value> = match meta.remove(META_KEY_USAGE) {
         Some(Value::Object(o)) => o,
         _ => Map::new(),
@@ -517,10 +571,8 @@ fn merge_usage_into_event(conn: &Connection, event_id: &str, add: &TurnUsage) ->
     // Per-message figures leave out Claude Code's side calls: approximate (RFC 021 §9).
     usage.insert("approximate".into(), json!(true));
     meta.insert(META_KEY_USAGE.into(), Value::Object(usage));
-    conn.execute(
-        "UPDATE agent_run_events SET metadata = ?2 WHERE id = ?1",
-        params![event_id, Value::Object(meta).to_string()],
-    )?;
+    conn.prepare_cached("UPDATE agent_run_events SET metadata = ?2 WHERE id = ?1")?
+        .execute(params![event_id, Value::Object(meta).to_string()])?;
     Ok(())
 }
 

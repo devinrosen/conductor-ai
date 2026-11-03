@@ -5,4 +5,4 @@ pub mod ingest;
 pub mod spool;
 mod transcript;
 
-pub use ingest::{IngestStats, TranscriptIngester};
+pub use ingest::{IngestStats, TranscriptIngester, WEB_TICK_BYTE_BUDGET};

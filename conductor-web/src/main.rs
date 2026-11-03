@@ -666,7 +666,9 @@ async fn main() -> Result<()> {
         // Fires `session.idle` through hooks from this 2 s loop, so the delay is precise.
         let mut idle_notifier = conductor_core::notify::SessionIdleNotifier::new();
         // Reads interactive session transcripts (cost/token metrics, denied permissions).
-        let mut transcript_ingester = conductor_core::session::TranscriptIngester::new();
+        let mut transcript_ingester = conductor_core::session::TranscriptIngester::with_tick_budget(
+            conductor_core::session::WEB_TICK_BYTE_BUDGET,
+        );
         loop {
             interval.tick().await;
             let db = db_event_state.db.clone();
@@ -679,7 +681,7 @@ async fn main() -> Result<()> {
                 // so a drained PermissionRequest notifies on this same tick.
                 conductor_core::session::spool::drain_for_db(&conn, &db_path);
                 let now = chrono::Utc::now();
-                // Bounded by a per-tick byte budget: the shared connection is held here.
+                // Bounded by the small web per-tick byte budget: the shared connection is held here.
                 transcript_ingester.poll(&conn, now);
                 let cfg = cfg.blocking_read();
                 let idle_cfg = &cfg.notifications.session_idle;
@@ -732,7 +734,10 @@ async fn main() -> Result<()> {
                     tracing::warn!("db event detector panicked: {e}");
                     detector = conductor_web::db_events::DbEventDetector::default();
                     idle_notifier = conductor_core::notify::SessionIdleNotifier::new();
-                    transcript_ingester = conductor_core::session::TranscriptIngester::new();
+                    transcript_ingester =
+                        conductor_core::session::TranscriptIngester::with_tick_budget(
+                            conductor_core::session::WEB_TICK_BYTE_BUDGET,
+                        );
                 }
             }
         }

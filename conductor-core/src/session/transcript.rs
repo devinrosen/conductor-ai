@@ -10,6 +10,8 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
+use serde_json::value::RawValue;
 use serde_json::Value;
 
 /// `toolUseResult` of the user entry written when a permission prompt is denied.
@@ -162,30 +164,42 @@ fn tok(v: &Value, key: &str) -> i64 {
     v.get(key).and_then(Value::as_i64).unwrap_or(0).max(0)
 }
 
-fn parse_ts(v: &Value) -> Option<DateTime<Utc>> {
-    v.get("timestamp")
-        .and_then(Value::as_str)
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+/// Parse an RFC 3339 timestamp (any offset) to UTC. Shared by the transcript parser and the
+/// ingester, which compare times stored in different formats (`+00:00` vs `Z`).
+pub(crate) fn parse_utc(s: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s)
+        .ok()
         .map(|d| d.with_timezone(&Utc))
 }
 
-fn cost_state(v: &Value) -> CostState {
+impl Tokens {
+    /// Add `other`'s counts into `self`.
+    pub(crate) fn add(&mut self, other: &Tokens) {
+        self.input += other.input;
+        self.output += other.output;
+        self.cache_read += other.cache_read;
+        self.cache_creation += other.cache_creation;
+    }
+}
+
+fn cost_state(e: &Entry) -> CostState {
     let mut t = Tokens::default();
-    if let Some(models) = v.get("modelUsage").and_then(Value::as_object) {
+    if let Some(Value::Object(models)) = raw_value(e.model_usage) {
         for m in models.values() {
-            t.input += tok(m, "inputTokens");
-            // `thinkingTokens` are deliberately not added to output: the API reports them
-            // inside `outputTokens` already, so adding would double count.
-            t.output += tok(m, "outputTokens");
-            t.cache_read += tok(m, "cacheReadInputTokens");
-            t.cache_creation += tok(m, "cacheCreationInputTokens");
+            t.add(&Tokens {
+                input: tok(m, "inputTokens"),
+                // `thinkingTokens` are deliberately not added to output: the API reports
+                // them inside `outputTokens` already, so adding would double count.
+                output: tok(m, "outputTokens"),
+                cache_read: tok(m, "cacheReadInputTokens"),
+                cache_creation: tok(m, "cacheCreationInputTokens"),
+            });
         }
     }
     CostState {
-        cost_usd: v.get("totalCostUSD").and_then(Value::as_f64),
-        api_duration_ms: v
-            .get("totalAPIDuration")
-            .and_then(Value::as_f64)
+        cost_usd: raw_value(e.total_cost).and_then(|v| v.as_f64()),
+        api_duration_ms: raw_value(e.total_api_duration)
+            .and_then(|v| v.as_f64())
             .map(|d| d.round() as i64),
         tokens: t,
     }
@@ -204,89 +218,154 @@ fn first_text(content: &Value) -> Option<&str> {
     }
 }
 
+/// The fields of one transcript line that are read. Everything else (tool output, file
+/// bodies, request blobs) is skipped by the deserializer without allocating. Values whose
+/// type is not known up front stay as unparsed [`RawValue`] slices and are decoded lazily,
+/// so an unexpected type in one field costs that field, not the line.
+#[derive(Deserialize)]
+struct Entry<'a> {
+    #[serde(borrow, default, rename = "type")]
+    kind: Option<&'a RawValue>,
+    #[serde(borrow, default)]
+    uuid: Option<&'a RawValue>,
+    #[serde(borrow, default, rename = "parentUuid")]
+    parent_uuid: Option<&'a RawValue>,
+    #[serde(borrow, default, rename = "promptId")]
+    prompt_id: Option<&'a RawValue>,
+    #[serde(borrow, default)]
+    timestamp: Option<&'a RawValue>,
+    #[serde(borrow, default, rename = "toolUseResult")]
+    tool_use_result: Option<&'a RawValue>,
+    #[serde(borrow, default)]
+    message: Option<&'a RawValue>,
+    #[serde(borrow, default, rename = "modelUsage")]
+    model_usage: Option<&'a RawValue>,
+    #[serde(borrow, default, rename = "totalCostUSD")]
+    total_cost: Option<&'a RawValue>,
+    #[serde(borrow, default, rename = "totalAPIDuration")]
+    total_api_duration: Option<&'a RawValue>,
+}
+
+#[derive(Deserialize)]
+struct Message<'a> {
+    #[serde(borrow, default)]
+    id: Option<&'a RawValue>,
+    #[serde(borrow, default)]
+    model: Option<&'a RawValue>,
+    #[serde(borrow, default)]
+    usage: Option<&'a RawValue>,
+    #[serde(borrow, default)]
+    content: Option<&'a RawValue>,
+}
+
+fn raw_value(r: Option<&RawValue>) -> Option<Value> {
+    serde_json::from_str(r?.get()).ok()
+}
+
+fn raw_string(r: Option<&RawValue>) -> Option<String> {
+    serde_json::from_str(r?.get()).ok()
+}
+
 pub(crate) fn parse(bytes: &[u8]) -> Parsed {
     let mut p = Parsed::default();
     for (idx, line) in bytes.split(|b| *b == b'\n').enumerate() {
-        if line.iter().all(u8::is_ascii_whitespace) {
+        let Some(first) = line.iter().find(|b| !b.is_ascii_whitespace()) else {
+            continue;
+        };
+        // A struct would also deserialize from a JSON array; only objects are entries.
+        if *first != b'{' {
+            p.skipped += 1;
             continue;
         }
-        let Ok(v) = serde_json::from_slice::<Value>(line) else {
+        let Ok(e) = serde_json::from_slice::<Entry>(line) else {
             p.skipped += 1;
             continue;
         };
-        if !v.is_object() {
-            p.skipped += 1;
-            continue;
-        }
-        let uuid = v.get("uuid").and_then(Value::as_str);
-        let parent = v
-            .get("parentUuid")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let prompt_id = v.get("promptId").and_then(Value::as_str);
-        if let Some(u) = uuid {
-            p.parents.insert(u.to_string(), parent.clone());
-            if let Some(pid) = prompt_id {
-                p.prompt_of.insert(u.to_string(), pid.to_string());
+        let uuid = raw_string(e.uuid);
+        let parent = raw_string(e.parent_uuid);
+        let prompt_id = raw_string(e.prompt_id);
+        let timestamp = raw_string(e.timestamp).as_deref().and_then(parse_utc);
+        if let Some(u) = &uuid {
+            p.parents.insert(u.clone(), parent.clone());
+            if let Some(pid) = &prompt_id {
+                p.prompt_of.insert(u.clone(), pid.clone());
             }
         }
-        match v.get("type").and_then(Value::as_str) {
-            Some("cost-state") => p.cost_states.push((idx, cost_state(&v))),
+        match raw_string(e.kind).as_deref() {
+            Some("cost-state") => p.cost_states.push((idx, cost_state(&e))),
             Some("assistant") => {
-                let Some(msg) = v.get("message") else {
-                    p.skipped += 1;
-                    continue;
-                };
-                let (Some(id), Some(usage)) =
-                    (msg.get("id").and_then(Value::as_str), msg.get("usage"))
-                else {
+                let msg: Option<Message> =
+                    e.message.and_then(|m| serde_json::from_str(m.get()).ok());
+                let (Some(id), Some(usage)) = (
+                    msg.as_ref().and_then(|m| raw_string(m.id)),
+                    msg.as_ref().and_then(|m| raw_value(m.usage)),
+                ) else {
                     p.skipped += 1;
                     continue;
                 };
                 let entry = AssistantUsage {
                     line_index: idx,
                     parent_uuid: parent,
-                    timestamp: parse_ts(&v),
-                    model: msg.get("model").and_then(Value::as_str).map(str::to_string),
+                    timestamp,
+                    model: msg.as_ref().and_then(|m| raw_string(m.model)),
                     tokens: Tokens {
-                        input: tok(usage, "input_tokens"),
-                        output: tok(usage, "output_tokens"),
-                        cache_read: tok(usage, "cache_read_input_tokens"),
-                        cache_creation: tok(usage, "cache_creation_input_tokens"),
+                        input: tok(&usage, "input_tokens"),
+                        output: tok(&usage, "output_tokens"),
+                        cache_read: tok(&usage, "cache_read_input_tokens"),
+                        cache_creation: tok(&usage, "cache_creation_input_tokens"),
                     },
                 };
-                if p.messages.insert(id.to_string(), entry).is_none() {
-                    p.message_order.push(id.to_string());
+                if p.messages.insert(id.clone(), entry).is_none() {
+                    p.message_order.push(id);
                 }
             }
             Some("user") => {
-                let kind = if v.get("toolUseResult").and_then(Value::as_str)
-                    == Some(TOOL_REJECTED_RESULT)
+                let kind = if raw_string(e.tool_use_result).as_deref() == Some(TOOL_REJECTED_RESULT)
                 {
                     Some(DenialKind::Rejected)
-                } else if v
-                    .get("message")
-                    .and_then(|m| m.get("content"))
-                    .and_then(first_text)
-                    .is_some_and(|t| t.starts_with(INTERRUPT_PREFIX))
-                {
+                } else if is_interrupt(&e) {
                     Some(DenialKind::Interrupted)
                 } else {
                     None
                 };
-                if let (Some(kind), Some(timestamp)) = (kind, parse_ts(&v)) {
-                    // A rejection entry carries no promptId itself; resolved lazily.
-                    p.denials.push(Denial {
-                        timestamp,
-                        kind,
-                        prompt_id: prompt_id.map(str::to_string),
-                    });
+                if let Some(kind) = kind {
+                    match timestamp {
+                        // A rejection entry carries no promptId itself; resolved lazily.
+                        Some(timestamp) => p.denials.push(Denial {
+                            timestamp,
+                            kind,
+                            prompt_id,
+                        }),
+                        None => {
+                            // A format change here would silently disable denial detection.
+                            tracing::debug!(
+                                ?kind,
+                                "transcript denial entry without a usable timestamp"
+                            );
+                            p.skipped += 1;
+                        }
+                    }
                 }
             }
             _ => {}
         }
     }
     p
+}
+
+/// Whether a `user` entry is the interrupt marker. The raw message is only decoded when the
+/// marker text occurs in it, so tool results (file bodies) are never parsed.
+fn is_interrupt(e: &Entry) -> bool {
+    let Some(raw) = e.message.map(RawValue::get) else {
+        return false;
+    };
+    if !raw.contains(INTERRUPT_PREFIX) {
+        return false;
+    }
+    serde_json::from_str::<Message>(raw)
+        .ok()
+        .and_then(|m| raw_value(m.content))
+        .is_some_and(|c| first_text(&c).is_some_and(|t| t.starts_with(INTERRUPT_PREFIX)))
 }
 
 impl Parsed {
