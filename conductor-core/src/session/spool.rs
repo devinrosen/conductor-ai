@@ -241,8 +241,12 @@ fn read_events(path: &Path) -> std::io::Result<Vec<HookEvent>> {
         }
         match serde_json::from_slice::<SpoolLine>(raw) {
             Ok(l) if l.v == LINE_VERSION => out.push(l.event),
-            Ok(l) => tracing::warn!(file = %path.display(), v = l.v, "skipping spool line with unknown version"),
-            Err(e) => tracing::warn!(file = %path.display(), "skipping unparseable spool line: {e}"),
+            Ok(l) => {
+                tracing::warn!(file = %path.display(), v = l.v, "skipping spool line with unknown version")
+            }
+            Err(e) => {
+                tracing::warn!(file = %path.display(), "skipping unparseable spool line: {e}")
+            }
         }
     }
     Ok(out)
@@ -349,7 +353,9 @@ pub fn drain_all(conn: &Connection, dir: &Path) -> Result<DrainStats> {
                 stats.sessions += 1;
                 stats.events += n;
             }
-            Err(e) if is_busy(&e) => tracing::debug!(session = %stem, "spool drain deferred: database busy"),
+            Err(e) if is_busy(&e) => {
+                tracing::debug!(session = %stem, "spool drain deferred: database busy")
+            }
             Err(e) => tracing::warn!(session = %stem, "spool drain failed: {e}"),
         }
     }
@@ -403,12 +409,20 @@ mod tests {
     }
 
     fn post(at: &str) -> HookEvent {
-        ev("PostToolUse", json!({"tool_name": "Bash", "prompt_id": "p1"}), at)
+        ev(
+            "PostToolUse",
+            json!({"tool_name": "Bash", "prompt_id": "p1"}),
+            at,
+        )
     }
 
     fn status(conn: &Connection) -> String {
-        conn.query_row("SELECT status FROM agent_runs WHERE session_id='s1'", [], |r| r.get(0))
-            .unwrap()
+        conn.query_row(
+            "SELECT status FROM agent_runs WHERE session_id='s1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
     }
 
     fn count(conn: &Connection, table: &str) -> i64 {
@@ -436,7 +450,9 @@ mod tests {
         for bad in ["../x", "a/b", "a.b", "", "x-61", "with space"] {
             let s = session_file_stem(bad);
             assert!(s.starts_with("x-"), "{bad} -> {s}");
-            assert!(s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
+            assert!(s
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
         }
         assert_ne!(session_file_stem("a/b"), session_file_stem("a.b"));
         let long = "é".repeat(200);
@@ -471,12 +487,20 @@ mod tests {
         append(&dir, &post(T2)).unwrap();
 
         let stats = drain_all(&conn, &dir).unwrap();
-        assert_eq!(stats, DrainStats { sessions: 1, events: 3 });
+        assert_eq!(
+            stats,
+            DrainStats {
+                sessions: 1,
+                events: 3
+            }
+        );
         assert_eq!(status(&conn), "running");
         let (st, resp_at): (String, String) = conn
-            .query_row("SELECT status, responded_at FROM feedback_requests", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row(
+                "SELECT status, responded_at FROM feedback_requests",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
         assert_eq!(st, "responded");
         assert_eq!(resp_at, T2);
@@ -528,13 +552,19 @@ mod tests {
         let live = dir.join("s1.jsonl");
         let saved = fs::read(&live).unwrap();
         drain_all(&conn, &dir).unwrap();
-        let before = (count(&conn, "feedback_requests"), count(&conn, "agent_run_events"));
+        let before = (
+            count(&conn, "feedback_requests"),
+            count(&conn, "agent_run_events"),
+        );
         assert_eq!(before.0, 1);
         fs::write(dir.join("s1.01HZZZZZZZZZZZZZZZZZZZZZZZ.draining"), saved).unwrap();
 
         let stats = drain_all(&conn, &dir).unwrap();
         assert_eq!(stats.events, 2);
-        let after = (count(&conn, "feedback_requests"), count(&conn, "agent_run_events"));
+        let after = (
+            count(&conn, "feedback_requests"),
+            count(&conn, "agent_run_events"),
+        );
         assert_eq!(before, after);
         assert!(dir_files(&dir).is_empty());
     }
@@ -625,7 +655,13 @@ mod tests {
         let db = tmp.path().join("c.db");
         let conn = crate::db::open_database(&db).unwrap();
         crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
-        crate::test_helpers::insert_test_worktree(&conn, "w1", "r1", "feat-test", "/tmp/ws/feat-test");
+        crate::test_helpers::insert_test_worktree(
+            &conn,
+            "w1",
+            "r1",
+            "feat-test",
+            "/tmp/ws/feat-test",
+        );
         append(&dir, &ev("SessionStart", json!({}), T0)).unwrap();
 
         let other = crate::db::open_database_compat_with_busy_timeout(

@@ -256,11 +256,7 @@ pub fn apply_hook_event(conn: &Connection, ev: &HookEvent) -> Result<HookOutcome
 }
 
 /// The state machine, run inside a transaction the caller owns and commits.
-pub(crate) fn apply_in_tx(
-    tx: &Connection,
-    ev: &HookEvent,
-    mode: ApplyMode,
-) -> Result<HookOutcome> {
+pub(crate) fn apply_in_tx(tx: &Connection, ev: &HookEvent, mode: ApplyMode) -> Result<HookOutcome> {
     if !ev.env.attended {
         return Ok(HookOutcome::Ignored("not attended"));
     }
@@ -505,7 +501,11 @@ fn close_prompt_span(
 
 fn on_session_start(
     conn: &Connection,
-    mode: ApplyMode, ev: &HookEvent, run_id: &str, existed: bool) -> Result<()> {
+    mode: ApplyMode,
+    ev: &HookEvent,
+    run_id: &str,
+    existed: bool,
+) -> Result<()> {
     let (pid, pid_started) = pid_columns(ev);
     // `started_at` is deliberately untouched so a resume keeps the original start.
     conn.execute(
@@ -553,9 +553,7 @@ fn on_session_start(
     )
 }
 
-fn on_user_prompt(
-    conn: &Connection,
-    mode: ApplyMode, ev: &HookEvent, run_id: &str) -> Result<()> {
+fn on_user_prompt(conn: &Connection, mode: ApplyMode, ev: &HookEvent, run_id: &str) -> Result<()> {
     let now = ev.received_at.as_str();
     dismiss_pending(conn, run_id, now)?;
     let prompt = ev.prompt.as_deref().unwrap_or("");
@@ -608,7 +606,7 @@ fn on_permission_request(
     // A replayed event leaves its original rows alone.
     if inserted > 0 {
         insert_event_with(
-        mode,
+            mode,
             conn,
             run_id,
             EVENT_KIND_SYSTEM,
@@ -623,7 +621,11 @@ fn on_permission_request(
 
 fn on_post_tool_use(
     conn: &Connection,
-    mode: ApplyMode, ev: &HookEvent, run_id: &str, kind: HookKind) -> Result<()> {
+    mode: ApplyMode,
+    ev: &HookEvent,
+    run_id: &str,
+    kind: HookKind,
+) -> Result<()> {
     let now = ev.received_at.as_str();
     resolve_pending(
         conn,
@@ -665,12 +667,18 @@ fn on_post_tool_use(
         )
     };
     insert_event_with(
-        mode,conn, run_id, kind, &summary, &started_at, Some(now), meta)
+        mode,
+        conn,
+        run_id,
+        kind,
+        &summary,
+        &started_at,
+        Some(now),
+        meta,
+    )
 }
 
-fn on_stop(
-    conn: &Connection,
-    mode: ApplyMode, ev: &HookEvent, run_id: &str) -> Result<()> {
+fn on_stop(conn: &Connection, mode: ApplyMode, ev: &HookEvent, run_id: &str) -> Result<()> {
     let now = ev.received_at.as_str();
     dismiss_pending(conn, run_id, now)?;
     conn.execute(
@@ -696,9 +704,7 @@ fn on_stop(
     )
 }
 
-fn on_session_end(
-    conn: &Connection,
-    mode: ApplyMode, ev: &HookEvent, run_id: &str) -> Result<()> {
+fn on_session_end(conn: &Connection, mode: ApplyMode, ev: &HookEvent, run_id: &str) -> Result<()> {
     let now = ev.received_at.as_str();
     dismiss_pending(conn, run_id, now)?;
     conn.execute(

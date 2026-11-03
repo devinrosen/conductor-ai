@@ -11,9 +11,7 @@
 use std::io::{self, Read};
 use std::time::{Duration, Instant};
 
-use conductor_core::session::hook::{
-    handled_event_names, is_handled_event, HookEnv, HookEvent,
-};
+use conductor_core::session::hook::{handled_event_names, is_handled_event, HookEnv, HookEvent};
 use conductor_core::session::spool;
 
 /// Maximum stdin bytes parsed; `tool_response` can be far larger.
