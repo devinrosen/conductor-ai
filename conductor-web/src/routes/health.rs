@@ -17,9 +17,10 @@ pub struct HealthResponse {
     tag = "health",
 )]
 pub async fn health() -> Json<HealthResponse> {
+    let info = conductor_core::build_info::get();
     Json(HealthResponse {
         status: "ok",
-        version: conductor_core::build_info::GIT_SHA,
-        built_at: conductor_core::build_info::COMMIT_TIME,
+        version: info.git_sha,
+        built_at: info.commit_time,
     })
 }

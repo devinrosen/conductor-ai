@@ -19,9 +19,11 @@ use config::{ensure_tui_dirs, load_tui_config};
 use theme::Theme;
 
 fn main() -> Result<()> {
+    conductor_core::build_info::init(conductor_core::git_build_info!());
+
     // Handled before touching the terminal; `conductor dev reinstall` uses it.
     if matches!(std::env::args().nth(1).as_deref(), Some("--version" | "-V")) {
-        println!("conductor-tui {}", conductor_core::build_info::LONG_VERSION);
+        println!("conductor-tui {}", conductor_core::long_version!());
         return Ok(());
     }
 
