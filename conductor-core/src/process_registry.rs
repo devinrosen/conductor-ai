@@ -239,7 +239,15 @@ pub fn stale_processes() -> Vec<StaleInfo> {
 
 /// Staleness of the calling process, checked directly (does not need it to be registered).
 pub fn own_staleness(kind: ProcessKind) -> Option<StaleInfo> {
-    staleness_of(&current_record(kind).ok()?)
+    match current_record(kind) {
+        Ok(record) => staleness_of(&record),
+        Err(e) => {
+            // Unlike staleness_of, we cannot even build a record to judge, so
+            // report nothing, but leave a trace of why.
+            tracing::warn!("cannot check staleness of this {kind} process: {e}");
+            None
+        }
+    }
 }
 
 /// One line per stale process; `None` when the list is empty.
@@ -300,8 +308,37 @@ mod tests {
         }
     }
 
+    /// Tests that touch this process's own record path must not interleave
+    /// under `cargo test` (threads share one pid).
+    static SELF_RECORD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn register_or_warn_returns_guard_on_success() {
+        let _lock = SELF_RECORD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let pid = std::process::id();
+        let guard = register_or_warn(ProcessKind::Workflow).expect("registration succeeds");
+        assert!(record_path(pid).exists());
+        drop(guard);
+        assert!(!record_path(pid).exists());
+    }
+
+    #[test]
+    fn register_or_warn_returns_none_when_registration_fails() {
+        let _lock = SELF_RECORD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let pid = std::process::id();
+        std::fs::create_dir_all(processes_dir()).unwrap();
+        // A directory in place of the record file makes the final rename fail.
+        let path = record_path(pid);
+        std::fs::create_dir_all(&path).unwrap();
+        assert!(register(ProcessKind::Workflow).is_err());
+        assert!(register_or_warn(ProcessKind::Workflow).is_none());
+        let _ = std::fs::remove_dir_all(&path);
+        let _ = std::fs::remove_file(processes_dir().join(format!("{pid}.json.tmp")));
+    }
+
     #[test]
     fn register_lists_self_and_drop_removes_file() {
+        let _lock = SELF_RECORD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let pid = std::process::id();
         let guard = register(ProcessKind::Workflow).unwrap();
         assert!(list_live().iter().any(|r| r.pid == pid));
