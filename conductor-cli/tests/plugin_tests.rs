@@ -95,12 +95,7 @@ fn write_script(dir: &Path, name: &str, body: &str) {
 }
 
 /// Run the wrapper with a clean environment, feeding `stdin` from a thread.
-fn run_wrapper(
-    home: &Path,
-    path_dirs: &[&Path],
-    attended: Option<&str>,
-    stdin: Vec<u8>,
-) -> Output {
+fn run_wrapper(home: &Path, path_dirs: &[&Path], attended: Option<&str>, stdin: Vec<u8>) -> Output {
     let mut path = path_dirs
         .iter()
         .map(|p| p.display().to_string())
