@@ -4,7 +4,7 @@
 //! The state machine lives here as plain functions so it is testable against an
 //! in-memory database. [`HookEvent`] is serializable and carries its own
 //! `received_at` and captured environment, and every timestamp written comes
-//! from it, never from the clock. That lets the #3160 spool replay an event
+//! from it, never from the clock. That lets the [`super::spool`] replay an event
 //! later and produce identical rows and the same dedup key.
 //!
 //! This module writes `agent_runs`, `feedback_requests` and `agent_run_events`
@@ -30,6 +30,10 @@ use crate::new_id;
 
 pub const RUNTIME_INTERACTIVE: &str = "interactive";
 
+/// Summaries of the `system` event a SessionStart writes. The replay dedup
+/// query matches on them, so the insert and the query must share them.
+const SUMMARY_SESSION_STARTED: &str = "Session started";
+const SUMMARY_SESSION_RESUMED: &str = "Session resumed";
 /// Placeholder for the NOT NULL `agent_runs.prompt` column until the first prompt arrives.
 const PLACEHOLDER_PROMPT: &str = "(interactive session)";
 
@@ -232,11 +236,31 @@ impl HookEvent {
     }
 }
 
+/// Whether an event may already have been applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApplyMode {
+    /// First application: `agent_run_events` rows are always inserted.
+    Fresh,
+    /// The event may have been applied before (a drain that committed but
+    /// crashed before deleting its file). `agent_run_events` inserts are
+    /// skipped when an identical row exists. Everything else is already
+    /// idempotent.
+    Replay,
+}
+
 /// Apply one hook event in a single IMMEDIATE transaction.
 ///
 /// IMMEDIATE takes the write lock up front, so a busy database fails at once
 /// with `SQLITE_BUSY` instead of midway through on a lock upgrade.
 pub fn apply_hook_event(conn: &Connection, ev: &HookEvent) -> Result<HookOutcome> {
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let outcome = apply_in_tx(&tx, ev, ApplyMode::Fresh)?;
+    tx.commit()?;
+    Ok(outcome)
+}
+
+/// The state machine, run inside a transaction the caller owns and commits.
+pub(crate) fn apply_in_tx(tx: &Connection, ev: &HookEvent, mode: ApplyMode) -> Result<HookOutcome> {
     if !ev.env.attended {
         return Ok(HookOutcome::Ignored("not attended"));
     }
@@ -251,8 +275,6 @@ pub fn apply_hook_event(conn: &Connection, ev: &HookEvent) -> Result<HookOutcome
         Some(s) => s,
         None => return Ok(HookOutcome::Ignored("no session_id")),
     };
-
-    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
 
     let existing: Option<(String, String)> = tx
         .query_row(
@@ -280,25 +302,24 @@ pub fn apply_hook_event(conn: &Connection, ev: &HookEvent) -> Result<HookOutcome
             let Some(cwd) = ev.cwd.as_deref() else {
                 return Ok(HookOutcome::Ignored("no cwd"));
             };
-            let Some((worktree_id, repo_id)) = resolve_worktree(&tx, cwd)? else {
+            let Some((worktree_id, repo_id)) = resolve_worktree(tx, cwd)? else {
                 return Ok(HookOutcome::Ignored("not in an active worktree"));
             };
-            insert_run(&tx, ev, session_id, &worktree_id, &repo_id)?
+            insert_run(tx, ev, session_id, &worktree_id, &repo_id)?
         }
     };
 
     match kind {
-        HookKind::SessionStart => on_session_start(&tx, ev, &run_id, existed)?,
-        HookKind::UserPromptSubmit => on_user_prompt(&tx, ev, &run_id)?,
-        HookKind::PermissionRequest => on_permission_request(&tx, ev, &run_id, session_id)?,
+        HookKind::SessionStart => on_session_start(tx, mode, ev, &run_id, existed)?,
+        HookKind::UserPromptSubmit => on_user_prompt(tx, mode, ev, &run_id)?,
+        HookKind::PermissionRequest => on_permission_request(tx, mode, ev, &run_id, session_id)?,
         HookKind::PostToolUse | HookKind::PostToolUseFailure => {
-            on_post_tool_use(&tx, ev, &run_id, kind)?
+            on_post_tool_use(tx, mode, ev, &run_id, kind)?
         }
-        HookKind::Stop => on_stop(&tx, ev, &run_id)?,
-        HookKind::SessionEnd => on_session_end(&tx, ev, &run_id)?,
+        HookKind::Stop => on_stop(tx, mode, ev, &run_id)?,
+        HookKind::SessionEnd => on_session_end(tx, mode, ev, &run_id)?,
     }
 
-    tx.commit()?;
     Ok(HookOutcome::Applied { run_id })
 }
 
@@ -378,7 +399,9 @@ fn pid_columns(ev: &HookEvent) -> (Option<i64>, Option<String>) {
     }
 }
 
-fn insert_event(
+#[allow(clippy::too_many_arguments)]
+fn insert_event_with(
+    mode: ApplyMode,
     conn: &Connection,
     run_id: &str,
     kind: &str,
@@ -387,9 +410,20 @@ fn insert_event(
     ended_at: Option<&str>,
     metadata: Value,
 ) -> Result<()> {
+    let sql = match mode {
+        ApplyMode::Fresh => {
+            "INSERT INTO agent_run_events (id, run_id, kind, summary, started_at, ended_at, metadata) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+        }
+        ApplyMode::Replay => {
+            "INSERT INTO agent_run_events (id, run_id, kind, summary, started_at, ended_at, metadata) \
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 WHERE NOT EXISTS (\
+               SELECT 1 FROM agent_run_events \
+               WHERE run_id = ?2 AND kind = ?3 AND started_at = ?5 AND summary = ?4)"
+        }
+    };
     conn.execute(
-        "INSERT INTO agent_run_events (id, run_id, kind, summary, started_at, ended_at, metadata) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        sql,
         params![
             new_id(),
             run_id,
@@ -448,7 +482,13 @@ fn close_prompt_span(
     Ok(())
 }
 
-fn on_session_start(conn: &Connection, ev: &HookEvent, run_id: &str, existed: bool) -> Result<()> {
+fn on_session_start(
+    conn: &Connection,
+    mode: ApplyMode,
+    ev: &HookEvent,
+    run_id: &str,
+    existed: bool,
+) -> Result<()> {
     let (pid, pid_started) = pid_columns(ev);
     // `started_at` is deliberately untouched so a resume keeps the original start.
     conn.execute(
@@ -466,15 +506,35 @@ fn on_session_start(conn: &Connection, ev: &HookEvent, run_id: &str, existed: bo
             AgentRunStatus::Idle.as_str()
         ],
     )?;
+    // On replay the run already exists because this very event created it, so
+    // `existed` would flip "Session started" to "Session resumed". Match either.
+    if mode == ApplyMode::Replay {
+        let seen: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM agent_run_events WHERE run_id = ?1 AND kind = ?2 \
+             AND started_at = ?3 AND summary IN (?4, ?5))",
+            params![
+                run_id,
+                EVENT_KIND_SYSTEM,
+                ev.received_at,
+                SUMMARY_SESSION_STARTED,
+                SUMMARY_SESSION_RESUMED
+            ],
+            |r| r.get(0),
+        )?;
+        if seen {
+            return Ok(());
+        }
+    }
     let resumed = existed || ev.source.as_deref() == Some("resume");
-    insert_event(
+    insert_event_with(
+        mode,
         conn,
         run_id,
         EVENT_KIND_SYSTEM,
         if resumed {
-            "Session resumed"
+            SUMMARY_SESSION_RESUMED
         } else {
-            "Session started"
+            SUMMARY_SESSION_STARTED
         },
         &ev.received_at,
         None,
@@ -482,7 +542,7 @@ fn on_session_start(conn: &Connection, ev: &HookEvent, run_id: &str, existed: bo
     )
 }
 
-fn on_user_prompt(conn: &Connection, ev: &HookEvent, run_id: &str) -> Result<()> {
+fn on_user_prompt(conn: &Connection, mode: ApplyMode, ev: &HookEvent, run_id: &str) -> Result<()> {
     let now = ev.received_at.as_str();
     dismiss_pending(conn, run_id, now)?;
     let prompt = ev.prompt.as_deref().unwrap_or("");
@@ -491,7 +551,8 @@ fn on_user_prompt(conn: &Connection, ev: &HookEvent, run_id: &str) -> Result<()>
          prompt = CASE WHEN ?2 = '' THEN prompt ELSE ?2 END WHERE id = ?1",
         params![run_id, prompt, AgentRunStatus::Running.as_str()],
     )?;
-    insert_event(
+    insert_event_with(
+        mode,
         conn,
         run_id,
         EVENT_KIND_PROMPT,
@@ -504,6 +565,7 @@ fn on_user_prompt(conn: &Connection, ev: &HookEvent, run_id: &str) -> Result<()>
 
 fn on_permission_request(
     conn: &Connection,
+    mode: ApplyMode,
     ev: &HookEvent,
     run_id: &str,
     session_id: &str,
@@ -532,7 +594,8 @@ fn on_permission_request(
     )?;
     // A replayed event leaves its original rows alone.
     if inserted > 0 {
-        insert_event(
+        insert_event_with(
+            mode,
             conn,
             run_id,
             EVENT_KIND_SYSTEM,
@@ -545,7 +608,13 @@ fn on_permission_request(
     Ok(())
 }
 
-fn on_post_tool_use(conn: &Connection, ev: &HookEvent, run_id: &str, kind: HookKind) -> Result<()> {
+fn on_post_tool_use(
+    conn: &Connection,
+    mode: ApplyMode,
+    ev: &HookEvent,
+    run_id: &str,
+    kind: HookKind,
+) -> Result<()> {
     let now = ev.received_at.as_str();
     resolve_pending(
         conn,
@@ -586,10 +655,19 @@ fn on_post_tool_use(conn: &Connection, ev: &HookEvent, run_id: &str, kind: HookK
                 .to_string(),
         )
     };
-    insert_event(conn, run_id, kind, &summary, &started_at, Some(now), meta)
+    insert_event_with(
+        mode,
+        conn,
+        run_id,
+        kind,
+        &summary,
+        &started_at,
+        Some(now),
+        meta,
+    )
 }
 
-fn on_stop(conn: &Connection, ev: &HookEvent, run_id: &str) -> Result<()> {
+fn on_stop(conn: &Connection, mode: ApplyMode, ev: &HookEvent, run_id: &str) -> Result<()> {
     let now = ev.received_at.as_str();
     dismiss_pending(conn, run_id, now)?;
     conn.execute(
@@ -603,7 +681,8 @@ fn on_stop(conn: &Connection, ev: &HookEvent, run_id: &str) -> Result<()> {
         ],
     )?;
     close_prompt_span(conn, run_id, ev.prompt_id.as_deref(), now)?;
-    insert_event(
+    insert_event_with(
+        mode,
         conn,
         run_id,
         EVENT_KIND_RESULT,
@@ -614,7 +693,7 @@ fn on_stop(conn: &Connection, ev: &HookEvent, run_id: &str) -> Result<()> {
     )
 }
 
-fn on_session_end(conn: &Connection, ev: &HookEvent, run_id: &str) -> Result<()> {
+fn on_session_end(conn: &Connection, mode: ApplyMode, ev: &HookEvent, run_id: &str) -> Result<()> {
     let now = ev.received_at.as_str();
     dismiss_pending(conn, run_id, now)?;
     conn.execute(
@@ -622,7 +701,8 @@ fn on_session_end(conn: &Connection, ev: &HookEvent, run_id: &str) -> Result<()>
         params![run_id, now, AgentRunStatus::Completed.as_str()],
     )?;
     close_prompt_span(conn, run_id, None, now)?;
-    insert_event(
+    insert_event_with(
+        mode,
         conn,
         run_id,
         EVENT_KIND_SYSTEM,
@@ -1168,6 +1248,27 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    fn insert_event(
+        conn: &Connection,
+        run_id: &str,
+        kind: &str,
+        summary: &str,
+        started_at: &str,
+        ended_at: Option<&str>,
+        metadata: Value,
+    ) -> Result<()> {
+        insert_event_with(
+            ApplyMode::Fresh,
+            conn,
+            run_id,
+            kind,
+            summary,
+            started_at,
+            ended_at,
+            metadata,
+        )
     }
 
     fn two_open_spans(conn: &Connection) {

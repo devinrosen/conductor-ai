@@ -662,8 +662,12 @@ async fn main() -> Result<()> {
             interval.tick().await;
             let db = db_event_state.db.clone();
             let events_bus = db_event_state.events.clone();
+            let db_path = db_event_state.db_path.clone();
             let result = tokio::task::spawn_blocking(move || {
                 let conn = db.blocking_lock();
+                // Apply hook events that were spooled while the database was busy,
+                // so a drained PermissionRequest notifies on this same tick.
+                conductor_core::session::spool::drain_for_db(&conn, &db_path);
                 let res = detector.poll(&conn, chrono::Utc::now());
                 (detector, res)
             })
