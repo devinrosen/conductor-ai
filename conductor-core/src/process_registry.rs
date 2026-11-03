@@ -225,7 +225,10 @@ fn parse_version_sha(stdout: &str) -> Option<String> {
 }
 
 /// Run `<exe> --version` and parse the commit, killing the child on timeout.
-fn probe_disk_sha(exe: &Path) -> Option<String> {
+/// `Ok(None)` means the binary ran but embeds no commit (a definite answer);
+/// `Err` means the probe itself failed (spawn, timeout, non-zero exit, read),
+/// which may be transient and must not be cached.
+fn probe_disk_sha(exe: &Path) -> std::result::Result<Option<String>, String> {
     use std::io::Read;
     use std::process::{Command, Stdio};
 
@@ -235,7 +238,7 @@ fn probe_disk_sha(exe: &Path) -> Option<String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .ok()?;
+        .map_err(|e| format!("spawn failed: {e}"))?;
     let deadline = Instant::now() + VERSION_PROBE_TIMEOUT;
     let status = loop {
         match child.try_wait() {
@@ -244,16 +247,21 @@ fn probe_disk_sha(exe: &Path) -> Option<String> {
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return None;
+                return Err(format!("timed out after {VERSION_PROBE_TIMEOUT:?}"));
             }
         }
     };
     if !status.success() {
-        return None;
+        return Err(format!("exited with {status}"));
     }
     let mut out = String::new();
-    child.stdout.take()?.read_to_string(&mut out).ok()?;
-    parse_version_sha(&out)
+    child
+        .stdout
+        .take()
+        .ok_or_else(|| "no stdout".to_string())?
+        .read_to_string(&mut out)
+        .map_err(|e| format!("read failed: {e}"))?;
+    Ok(parse_version_sha(&out))
 }
 
 /// Whether `<exe> --version` is safe to run for this kind. `conductor-web` has
@@ -272,7 +280,9 @@ static DISK_SHA_CACHE: Mutex<Option<HashMap<PathBuf, CacheEntry>>> = Mutex::new(
 
 /// Commit embedded in the binary at `exe`, or `None` when it is missing or
 /// can't report one. Cached per path by the file's (mtime, size), so a binary
-/// is only run again after it changes.
+/// is only run again after it changes. A failed probe (timeout, spawn error,
+/// non-zero exit) is logged and not cached, so a transient failure is retried
+/// instead of sticking until the file changes.
 pub fn disk_build_sha(exe: &Path) -> Option<String> {
     let meta = std::fs::metadata(exe).ok()?;
     let mtime = meta.modified().ok()?;
@@ -285,7 +295,13 @@ pub fn disk_build_sha(exe: &Path) -> Option<String> {
             }
         }
     }
-    let sha = probe_disk_sha(exe);
+    let sha = match probe_disk_sha(exe) {
+        Ok(sha) => sha,
+        Err(e) => {
+            tracing::warn!("cannot read build commit of {}: {e}", exe.display());
+            return None;
+        }
+    };
     DISK_SHA_CACHE
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -301,9 +317,11 @@ pub fn disk_build_sha(exe: &Path) -> Option<String> {
     sha
 }
 
-/// [`disk_build_sha`] for a record, applying the kind gate.
+/// [`disk_build_sha`] for a record. The single gate for every caller: records
+/// without a build commit (`unknown`) and kinds that can't take `--version`
+/// are never probed.
 pub fn disk_build_sha_for(record: &ProcessRecord) -> Option<String> {
-    if kind_supports_version_flag(record.kind) {
+    if record.git_sha != "unknown" && kind_supports_version_flag(record.kind) {
         disk_build_sha(&record.exe)
     } else {
         None
@@ -311,9 +329,30 @@ pub fn disk_build_sha_for(record: &ProcessRecord) -> Option<String> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+enum StaleReason {
+    UnparseableStart,
+    Removed,
+    Rebuilt,
+    DifferentBuild { disk: String, running: String },
+}
+
+impl std::fmt::Display for StaleReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnparseableStart => write!(f, "unparseable start time"),
+            Self::Removed => write!(f, "binary removed"),
+            Self::Rebuilt => write!(f, "binary rebuilt after process started"),
+            Self::DifferentBuild { disk, running } => {
+                write!(f, "binary on disk is build {disk} (running {running})")
+            }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
 enum Verdict {
     Current,
-    Stale(String),
+    Stale(StaleReason),
 }
 
 /// Decide staleness. When both commits are known only they count (compared by
@@ -329,18 +368,17 @@ fn judge(
             return if disk.starts_with(record_sha) || record_sha.starts_with(disk) {
                 Verdict::Current
             } else {
-                Verdict::Stale(format!(
-                    "binary on disk is build {disk} (running {record_sha})"
-                ))
+                Verdict::Stale(StaleReason::DifferentBuild {
+                    disk: disk.to_string(),
+                    running: record_sha.to_string(),
+                })
             };
         }
     }
     match (started, mtime) {
-        (None, _) => Verdict::Stale("unparseable start time".to_string()),
-        (_, None) => Verdict::Stale("binary removed".to_string()),
-        (Some(s), Some(m)) if m > s => {
-            Verdict::Stale("binary rebuilt after process started".to_string())
-        }
+        (None, _) => Verdict::Stale(StaleReason::UnparseableStart),
+        (_, None) => Verdict::Stale(StaleReason::Removed),
+        (Some(s), Some(m)) if m > s => Verdict::Stale(StaleReason::Rebuilt),
         _ => Verdict::Current,
     }
 }
@@ -350,18 +388,14 @@ fn judge(
 /// stale, since it cannot be verified.
 fn staleness_of(record: &ProcessRecord) -> Option<StaleInfo> {
     let mtime = exe_mtime(&record.exe);
-    let disk_sha = if record.git_sha != "unknown" {
-        disk_build_sha_for(record)
-    } else {
-        None
-    };
+    let disk_sha = disk_build_sha_for(record);
     let started = parse_started_at(&record.started_at);
     let reason = match judge(&record.git_sha, disk_sha.as_deref(), started, mtime) {
         Verdict::Current => return None,
-        Verdict::Stale(r) if r == "unparseable start time" => {
-            format!("unparseable start time {:?}", record.started_at)
+        Verdict::Stale(StaleReason::UnparseableStart) => {
+            format!("{} {:?}", StaleReason::UnparseableStart, record.started_at)
         }
-        Verdict::Stale(r) => r,
+        Verdict::Stale(r) => r.to_string(),
     };
     Some(StaleInfo {
         is_self: record.pid == std::process::id(),
@@ -459,7 +493,9 @@ mod tests {
         );
         // Different commit is stale and names both.
         match judge("abc1234", Some("def5678"), Some(t0), Some(earlier)) {
-            Verdict::Stale(r) => assert!(r.contains("abc1234") && r.contains("def5678")),
+            Verdict::Stale(StaleReason::DifferentBuild { disk, running }) => {
+                assert_eq!((disk.as_str(), running.as_str()), ("def5678", "abc1234"))
+            }
             v => panic!("{v:?}"),
         }
         // Fallbacks.
@@ -477,8 +513,40 @@ mod tests {
         );
         assert_eq!(
             judge("abc1234", None, Some(t0), None),
-            Verdict::Stale("binary removed".into())
+            Verdict::Stale(StaleReason::Removed)
         );
+        // A bad start time is reported before a missing binary.
+        let bad = Verdict::Stale(StaleReason::UnparseableStart);
+        assert_eq!(judge("abc1234", None, None, None), bad);
+        assert_eq!(judge("abc1234", None, None, Some(t0)), bad);
+        // An unknown record sha ignores the disk commit and uses file times.
+        assert_eq!(
+            judge("unknown", Some("def5678"), Some(t0), Some(earlier)),
+            Verdict::Current
+        );
+    }
+
+    #[test]
+    fn staleness_of_unparseable_start_with_missing_exe_reports_start_time() {
+        let mut r = fake_record(4242);
+        r.started_at = "garbage".into();
+        let info = staleness_of(&r).unwrap();
+        assert!(
+            info.reason.starts_with("unparseable start time"),
+            "{}",
+            info.reason
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_probe_is_not_cached() {
+        let dir = script_dir();
+        let exe = write_script(&dir, "conductor", "exit 1");
+        assert_eq!(disk_build_sha(&exe), None);
+        let cache = DISK_SHA_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(cache.as_ref().is_none_or(|c| !c.contains_key(&exe)));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[cfg(unix)]

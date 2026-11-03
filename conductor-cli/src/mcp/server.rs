@@ -337,9 +337,10 @@ mod tests {
     #[test]
     fn test_read_only_timeout_classification() {
         assert_eq!(
-            read_only_timeout("conductor_get_run"),
+            read_only_timeout("conductor_list_runs"),
             Some(READ_TOOL_TIMEOUT)
         );
+        assert_eq!(read_only_timeout("conductor_get_run"), None);
         assert_eq!(read_only_timeout("conductor_run_workflow"), None);
         assert_eq!(read_only_timeout("conductor_create_worktree"), None);
         assert_eq!(read_only_timeout("conductor_list_prs"), None);
