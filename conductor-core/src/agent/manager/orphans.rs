@@ -163,7 +163,10 @@ impl<'a> AgentManager<'a> {
                     // re-spawned processes on an old row.
                     // If start times differ by >60 s, the PID was recycled by the OS after
                     // the original subprocess exited and should be reaped.
-                    if crate::process_utils::pid_was_recycled(pid as u32, run.pid_recorded_started_at()) {
+                    if crate::process_utils::pid_was_recycled(
+                        pid as u32,
+                        run.pid_recorded_started_at(),
+                    ) {
                         tracing::warn!(
                             "reap_orphaned_runs: PID {pid} recycled for run {} (started_at={}, subprocess_started_at={:?})",
                             run.id,
@@ -946,7 +949,10 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     fn spawn_sleeper() -> std::process::Child {
-        std::process::Command::new("sleep").arg("600").spawn().unwrap()
+        std::process::Command::new("sleep")
+            .arg("600")
+            .spawn()
+            .unwrap()
     }
 
     /// A resumed session is a new process on an old row: `started_at` is far in the past but
@@ -986,8 +992,19 @@ mod tests {
         let mut child = spawn_sleeper();
 
         let run = mgr.create_run(Some("w1"), "correction", None).unwrap();
-        mgr.update_run_completed(&run.id, None, Some("first"), None, None, None, None, None, None, None)
-            .unwrap();
+        mgr.update_run_completed(
+            &run.id,
+            None,
+            Some("first"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         conn.execute(
             "UPDATE agent_runs SET started_at = '2020-01-01T00:00:00Z' WHERE id = :id",
             named_params! { ":id": run.id },
@@ -1065,7 +1082,10 @@ mod tests {
         let updated = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(updated.status, AgentRunStatus::Failed);
         assert!(updated.ended_at.is_some());
-        assert_eq!(updated.result_text.as_deref(), Some("last assistant message"));
+        assert_eq!(
+            updated.result_text.as_deref(),
+            Some("last assistant message")
+        );
         let events = mgr.list_events_for_run(&run.id).unwrap();
         let system: Vec<_> = events.iter().filter(|e| e.kind == "system").collect();
         assert_eq!(system.len(), 1);
