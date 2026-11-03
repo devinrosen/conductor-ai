@@ -886,7 +886,10 @@ pub fn find_waiting_gates_for_runs(
         )?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
-    let steps: Vec<WorkflowRunStep> = steps.into_iter().map(crate::workflow::helpers::backfill_gate_type).collect();
+    let steps: Vec<WorkflowRunStep> = steps
+        .into_iter()
+        .map(crate::workflow::helpers::backfill_gate_type)
+        .collect();
     // Keep only the highest-position step per run (ORDER BY position DESC means
     // the first row for each run_id is the one we want).
     let mut map: HashMap<String, WorkflowRunStep> = HashMap::new();
@@ -2201,10 +2204,7 @@ mod tests {
 
         let map = super::find_waiting_gates_for_runs(&conn, &["run-null"]).unwrap();
         assert_eq!(map["run-null"].id, "s-null");
-        assert_eq!(
-            map["run-null"].gate_type.as_deref(),
-            Some("human_approval")
-        );
+        assert_eq!(map["run-null"].gate_type.as_deref(), Some("human_approval"));
 
         let all = super::list_all_waiting_gate_steps(&conn).unwrap();
         assert_eq!(all.len(), 1, "non-gate waiting rows must be excluded");

@@ -10,15 +10,15 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use rusqlite::{named_params, Connection};
 use runkon_flow::dsl::{WorkflowDef, WorkflowNode, QUALITY_GATE_TYPE};
 use runkon_flow::engine_error::EngineError;
+use runkon_flow::status::WorkflowRunStatus;
 use runkon_flow::traits::persistence::{
     FanOutItemStatus, FanOutItemUpdate, GateApprovalState, GateApprovalStore, NewRun, NewStep,
     StepUpdate, WorkflowPersistence,
 };
 use runkon_flow::types::{FanOutItemRow, WorkflowRun, WorkflowRunStep};
-use runkon_flow::status::WorkflowRunStatus;
+use rusqlite::{named_params, Connection};
 
 /// Prompt and timeout for a gate name, when every gate with that name agrees.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,11 +272,8 @@ workflow w {
         let inner: Arc<dyn WorkflowPersistence> = Arc::new(
             SqliteWorkflowPersistence::from_shared_connection(Arc::clone(&shared)),
         );
-        let p = GateMetadataPersistence::new(
-            inner,
-            Arc::clone(&shared),
-            collect_gate_meta(&parse(WF)),
-        );
+        let p =
+            GateMetadataPersistence::new(inner, Arc::clone(&shared), collect_gate_meta(&parse(WF)));
         let run = p
             .create_run(NewRun {
                 workflow_name: "w".into(),
@@ -302,7 +299,10 @@ workflow w {
         }
     }
 
-    fn gate_cols(conn: &Arc<Mutex<Connection>>, id: &str) -> (Option<String>, Option<String>, Option<String>) {
+    fn gate_cols(
+        conn: &Arc<Mutex<Connection>>,
+        id: &str,
+    ) -> (Option<String>, Option<String>, Option<String>) {
         conn.lock()
             .unwrap()
             .query_row(
@@ -316,7 +316,9 @@ workflow w {
     #[test]
     fn gate_insert_records_metadata() {
         let (p, conn, run) = setup();
-        let id = p.insert_step(new_step(&run, "human_review", "gate")).unwrap();
+        let id = p
+            .insert_step(new_step(&run, "human_review", "gate"))
+            .unwrap();
         assert_eq!(
             gate_cols(&conn, &id),
             (
@@ -330,7 +332,9 @@ workflow w {
     #[test]
     fn unknown_gate_name_still_gets_type() {
         let (p, conn, run) = setup();
-        let id = p.insert_step(new_step(&run, "custom_gate", "gate")).unwrap();
+        let id = p
+            .insert_step(new_step(&run, "custom_gate", "gate"))
+            .unwrap();
         assert_eq!(
             gate_cols(&conn, &id),
             (Some("custom_gate".into()), None, None)
@@ -340,7 +344,9 @@ workflow w {
     #[test]
     fn non_gate_role_untouched() {
         let (p, conn, run) = setup();
-        let id = p.insert_step(new_step(&run, "human_review", "actor")).unwrap();
+        let id = p
+            .insert_step(new_step(&run, "human_review", "actor"))
+            .unwrap();
         assert_eq!(gate_cols(&conn, &id), (None, None, None));
     }
 }

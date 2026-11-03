@@ -1874,11 +1874,10 @@ fn render_step_list(
         }
     }
 
-    let has_waiting_gate = state
-        .data
-        .workflow_steps
-        .iter()
-        .any(|s| s.status.to_string() == "waiting" && conductor_core::workflow::is_gate_step(s));
+    let has_waiting_gate =
+        state.data.workflow_steps.iter().any(|s| {
+            s.status.to_string() == "waiting" && conductor_core::workflow::is_gate_step(s)
+        });
 
     let selected_step = state.data.workflow_steps.get(state.workflow_step_index);
     let selected_is_foreach = selected_step
@@ -2177,8 +2176,7 @@ fn run_status_icon(
     let gate_type = steps.get(&run.id).and_then(|ss| {
         ss.iter()
             .find(|s| {
-                s.status == WorkflowStepStatus::Waiting
-                    && conductor_core::workflow::is_gate_step(s)
+                s.status == WorkflowStepStatus::Waiting && conductor_core::workflow::is_gate_step(s)
             })
             .and_then(|s| s.gate_type.as_deref().or(Some(s.step_name.as_str())))
             .map(conductor_core::workflow::GateType::from)

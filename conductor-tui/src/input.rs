@@ -714,11 +714,9 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('g') => return Action::OpenWorkflowStepGraphView,
             KeyCode::Enter => {
                 // Approve a waiting gate step if one exists
-                let has_gate = state
-                    .data
-                    .workflow_steps
-                    .iter()
-                    .any(|s| s.status.to_string() == "waiting" && conductor_core::workflow::is_gate_step(s));
+                let has_gate = state.data.workflow_steps.iter().any(|s| {
+                    s.status.to_string() == "waiting" && conductor_core::workflow::is_gate_step(s)
+                });
                 if has_gate {
                     return Action::ApproveGate;
                 }
