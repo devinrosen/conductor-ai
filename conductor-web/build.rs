@@ -1,4 +1,8 @@
+include!("../build-support/git_info.rs");
+
 fn main() {
+    emit_git_build_info();
+
     // Ensure frontend/dist/ exists so rust-embed compiles in fresh worktrees.
     // CI and release builds populate it via `bun run build` before cargo build.
     let dist = std::path::Path::new("frontend/dist");

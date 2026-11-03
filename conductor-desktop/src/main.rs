@@ -38,6 +38,8 @@ fn log_reap(label: &str, result: conductor_core::error::Result<usize>) {
 }
 
 fn main() {
+    conductor_core::build_info::init(conductor_core::git_build_info!());
+
     tracing_subscriber::fmt::init();
 
     // macOS GUI apps don't inherit shell PATH — fix it early.

@@ -104,12 +104,13 @@ fn current_record(kind: ProcessKind) -> Result<ProcessRecord> {
     let pid = std::process::id();
     let exe = std::env::current_exe()?;
     let exe = exe.canonicalize().unwrap_or(exe);
+    let build_info = crate::build_info::get();
     Ok(ProcessRecord {
         pid,
         kind,
         exe,
-        git_sha: crate::build_info::GIT_SHA.to_string(),
-        commit_time: crate::build_info::COMMIT_TIME.to_string(),
+        git_sha: build_info.git_sha.to_string(),
+        commit_time: build_info.commit_time.to_string(),
         version: crate::build_info::VERSION.to_string(),
         started_at: started_at_for(pid),
         parent_pid: parent_pid(),
