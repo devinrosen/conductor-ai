@@ -368,8 +368,11 @@ mod tests {
         let now = at(IDLE_AT) + Duration::seconds(60);
         assert_eq!(d.poll_session_idle(&conn, now, 0).unwrap().len(), 1);
         let later = "2026-11-02T10:05:00+00:00";
-        conn.execute("UPDATE agent_runs SET idle_since = ?1 WHERE id = 's1'", [later])
-            .unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET idle_since = ?1 WHERE id = 's1'",
+            [later],
+        )
+        .unwrap();
         let now2 = at(later) + Duration::seconds(1);
         assert_eq!(d.poll_session_idle(&conn, now2, 0).unwrap().len(), 1);
     }

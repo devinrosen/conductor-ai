@@ -203,19 +203,20 @@ pub fn build_synthetic_event(name: &str, now: impl Into<String>) -> Result<Event
         }
         "session.idle" => {
             // Share the production event definition so the test notification cannot drift.
-            let mut ev = super::session_idle::session_idle_event(&super::session_idle::IdleSession {
-                run_id: run_id.clone(),
-                session_id: Some("test-session".into()),
-                idle_since: now.clone(),
-                worktree_id: Some("test-worktree-id".into()),
-                worktree_slug: Some("test-worktree".into()),
-                repo_slug: "test-repo".into(),
-                branch: "main".into(),
-                prompt: "Fix the flaky test".into(),
-                last_message: Some("Done. The test now passes.".into()),
-                background_tasks: Some(0),
-                turn_duration_ms: Some(1000),
-            });
+            let mut ev =
+                super::session_idle::session_idle_event(&super::session_idle::IdleSession {
+                    run_id: run_id.clone(),
+                    session_id: Some("test-session".into()),
+                    idle_since: now.clone(),
+                    worktree_id: Some("test-worktree-id".into()),
+                    worktree_slug: Some("test-worktree".into()),
+                    repo_slug: "test-repo".into(),
+                    branch: "main".into(),
+                    prompt: "Fix the flaky test".into(),
+                    last_message: Some("Done. The test now passes.".into()),
+                    background_tasks: Some(0),
+                    turn_duration_ms: Some(1000),
+                });
             ev.fields.extend([
                 ("url".into(), url),
                 // session_idle_event stamps Utc::now(); honor the injected clock.

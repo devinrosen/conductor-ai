@@ -1106,8 +1106,8 @@ mod tests {
                 .unwrap();
         assert_eq!(config.notifications.session_idle.delay_secs, 0);
         assert!(config.notifications.session_idle.web_push);
-        let partial: Config = toml::from_str("[notifications.session_idle]\nweb_push = true\n")
-            .unwrap();
+        let partial: Config =
+            toml::from_str("[notifications.session_idle]\nweb_push = true\n").unwrap();
         assert_eq!(partial.notifications.session_idle.delay_secs, 30);
     }
 

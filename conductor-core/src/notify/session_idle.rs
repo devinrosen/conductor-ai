@@ -10,8 +10,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection};
 use runkon_notify::{DedupStore, Event, HookRunner, Severity};
+use rusqlite::{params, Connection};
 
 use crate::agent::types::{EVENT_KIND_PROMPT, EVENT_KIND_RESULT};
 use crate::config::{hooks_as_runkon, HookConfig, NotificationConfig};
@@ -177,7 +177,9 @@ pub(crate) fn session_idle_event(s: &IdleSession) -> Event {
             ),
             (
                 "turn_duration_ms".into(),
-                s.turn_duration_ms.map(|m| m.to_string()).unwrap_or_default(),
+                s.turn_duration_ms
+                    .map(|m| m.to_string())
+                    .unwrap_or_default(),
             ),
             ("idle_since".into(), s.idle_since.clone()),
             ("timestamp".into(), Utc::now().to_rfc3339()),
@@ -289,7 +291,12 @@ mod tests {
     }
 
     fn turn(conn: &Connection, start: &str, stop: &str, extra: Value) {
-        apply(conn, "UserPromptSubmit", json!({"prompt": "do it", "prompt_id": "p"}), start);
+        apply(
+            conn,
+            "UserPromptSubmit",
+            json!({"prompt": "do it", "prompt_id": "p"}),
+            start,
+        );
         let mut e = json!({"last_assistant_message": "all done", "prompt_id": "p"});
         for (k, v) in extra.as_object().unwrap() {
             e[k] = v.clone();
@@ -342,7 +349,12 @@ mod tests {
     fn prompt_within_delay_suppresses() {
         let conn = setup_db();
         turn(&conn, T0, T_STOP, json!({}));
-        apply(&conn, "UserPromptSubmit", json!({"prompt": "more"}), "2026-11-02T10:00:30+00:00");
+        apply(
+            &conn,
+            "UserPromptSubmit",
+            json!({"prompt": "more"}),
+            "2026-11-02T10:00:30+00:00",
+        );
         assert!(list_due_idle_sessions(&conn, 0, secs(T_STOP, 600))
             .unwrap()
             .is_empty());
@@ -372,7 +384,10 @@ mod tests {
         turn(&conn, T0, T_STOP, json!({}));
         let due = list_due_idle_sessions(&conn, 0, secs(T_STOP, 1)).unwrap();
         assert_eq!(due[0].turn_duration_ms, Some(20_000));
-        assert_eq!(session_idle_event(&due[0]).fields["turn_duration_ms"], "20000");
+        assert_eq!(
+            session_idle_event(&due[0]).fields["turn_duration_ms"],
+            "20000"
+        );
     }
 
     #[test]
@@ -399,8 +414,18 @@ mod tests {
         assert!(list_due_idle_sessions(&conn, 0, secs(T0, 600))
             .unwrap()
             .is_empty());
-        turn(&conn, "2026-11-02T10:01:00+00:00", "2026-11-02T10:02:00+00:00", json!({}));
-        apply(&conn, "SessionStart", json!({"source": "resume"}), "2026-11-02T10:03:00+00:00");
+        turn(
+            &conn,
+            "2026-11-02T10:01:00+00:00",
+            "2026-11-02T10:02:00+00:00",
+            json!({}),
+        );
+        apply(
+            &conn,
+            "SessionStart",
+            json!({"source": "resume"}),
+            "2026-11-02T10:03:00+00:00",
+        );
         assert!(list_due_idle_sessions(&conn, 0, secs(T0, 6000))
             .unwrap()
             .is_empty());
@@ -475,7 +500,10 @@ mod tests {
         let store = Arc::new(RecordingStore::default());
         let mut n = SessionIdleNotifier::new();
         let cfg = NotificationConfig::default();
-        assert_eq!(n.poll(&conn, &cfg, &[], store.clone(), secs(T_STOP, 600)), 0);
+        assert_eq!(
+            n.poll(&conn, &cfg, &[], store.clone(), secs(T_STOP, 600)),
+            0
+        );
         assert!(store.0.lock().unwrap().is_empty());
     }
 

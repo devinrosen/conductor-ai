@@ -780,11 +780,14 @@ async fn main() -> Result<()> {
                     let db = gate_state.db.clone();
                     let web_cfg = gate_state.web_config.clone();
                     tokio::spawn(async move {
-                        let mut body = match (worktree_slug.is_empty(), last_message_preview.is_empty()) {
-                            (_, true) => worktree_slug.clone(),
-                            (true, false) => last_message_preview.clone(),
-                            (false, false) => format!("{worktree_slug}: {last_message_preview}"),
-                        };
+                        let mut body =
+                            match (worktree_slug.is_empty(), last_message_preview.is_empty()) {
+                                (_, true) => worktree_slug.clone(),
+                                (true, false) => last_message_preview.clone(),
+                                (false, false) => {
+                                    format!("{worktree_slug}: {last_message_preview}")
+                                }
+                            };
                         if background_tasks > 0 {
                             body.push_str(&format!(", {background_tasks} background tasks"));
                         }

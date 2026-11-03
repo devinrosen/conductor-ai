@@ -956,10 +956,7 @@ fn is_recent_cases() {
 
 // --- agent terminal transitions: interactive completed suppression ---
 
-fn transition_run(
-    status: crate::agent::AgentRunStatus,
-    runtime: &str,
-) -> crate::agent::AgentRun {
+fn transition_run(status: crate::agent::AgentRunStatus, runtime: &str) -> crate::agent::AgentRun {
     crate::agent::AgentRun {
         id: "r1".into(),
         worktree_id: Some("w1".into()),
