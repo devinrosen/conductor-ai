@@ -763,7 +763,12 @@ mod tests {
             run_col(&conn, "subprocess_pid"),
             Some(std::process::id().to_string())
         );
-        assert!(run_col(&conn, "subprocess_started_at").is_some());
+        // The process start time is only readable on macOS (process_utils);
+        // elsewhere the hook stores NULL and the reaper falls back to started_at.
+        assert_eq!(
+            run_col(&conn, "subprocess_started_at").is_some(),
+            cfg!(target_os = "macos")
+        );
         let evs = events(&conn, "system");
         assert_eq!(evs.len(), 1);
         assert_eq!(evs[0].0, "Session started");
