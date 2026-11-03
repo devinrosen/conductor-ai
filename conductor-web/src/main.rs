@@ -678,18 +678,38 @@ async fn main() -> Result<()> {
                 conductor_core::session::spool::drain_for_db(&conn, &db_path);
                 let now = chrono::Utc::now();
                 let cfg = cfg.blocking_read();
-                idle_notifier.poll(
+                let idle_cfg = &cfg.notifications.session_idle;
+                // One candidate query per tick, shared by the hook notifier and the
+                // Web Push detector; each loads details only for periods it hasn't handled.
+                let hooks_on = conductor_core::notify::notification_sink_configured(
+                    &cfg.notifications,
+                    &cfg.notify.hooks,
+                );
+                let candidates = if hooks_on || idle_cfg.web_push {
+                    conductor_core::notify::due_idle_candidates(&conn, idle_cfg.delay_secs, now)
+                        .unwrap_or_else(|e| {
+                            tracing::warn!("session idle lookup failed: {e}");
+                            Vec::new()
+                        })
+                } else {
+                    Vec::new()
+                };
+                idle_notifier.poll_candidates(
                     &conn,
                     &cfg.notifications,
                     &cfg.notify.hooks,
                     Arc::new(conductor_core::notify::SqliteDedupStore::new(db_path)),
                     now,
+                    &candidates,
                 );
                 let mut res = detector.poll(&conn, now);
-                let idle_cfg = &cfg.notifications.session_idle;
                 if idle_cfg.web_push {
                     res = res.and_then(|mut evs| {
-                        evs.extend(detector.poll_session_idle(&conn, now, idle_cfg.delay_secs)?);
+                        evs.extend(detector.poll_session_idle_candidates(
+                            &conn,
+                            now,
+                            &candidates,
+                        )?);
                         Ok(evs)
                     });
                 }
@@ -780,27 +800,13 @@ async fn main() -> Result<()> {
                     let db = gate_state.db.clone();
                     let web_cfg = gate_state.web_config.clone();
                     tokio::spawn(async move {
-                        let mut body =
-                            match (worktree_slug.is_empty(), last_message_preview.is_empty()) {
-                                (_, true) => worktree_slug.clone(),
-                                (true, false) => last_message_preview.clone(),
-                                (false, false) => {
-                                    format!("{worktree_slug}: {last_message_preview}")
-                                }
-                            };
-                        if background_tasks > 0 {
-                            body.push_str(&format!(", {background_tasks} background tasks"));
-                        }
-                        let payload = PushPayload {
-                            title: "Session idle — your turn".into(),
-                            body,
-                            tag: Some(format!("session-idle-{run_id}")),
-                            url: Some(if worktree_id.is_empty() {
-                                "/".to_string()
-                            } else {
-                                format!("/worktrees/{worktree_id}")
-                            }),
-                        };
+                        let payload = push::session_idle_push_payload(
+                            &run_id,
+                            &worktree_id,
+                            &worktree_slug,
+                            &last_message_preview,
+                            background_tasks,
+                        );
                         dispatch_push(
                             &db,
                             &web_cfg,

@@ -15,8 +15,8 @@ use chrono::{DateTime, Duration, Utc};
 use conductor_core::agent::AgentManager;
 use conductor_core::error::Result;
 use conductor_core::notify::{
-    is_recent, list_due_idle_sessions, session_idle_dedup_key, try_claim_notification, IdleSession,
-    NOTIFY_MAX_AGE_SECS,
+    due_idle_candidates, is_recent, load_idle_session, preview, try_claim_notification,
+    IdleCandidate, IdleSession, NOTIFY_MAX_AGE_SECS,
 };
 use rusqlite::Connection;
 
@@ -140,17 +140,37 @@ impl DbEventDetector {
         now: DateTime<Utc>,
         delay_secs: u64,
     ) -> Result<Vec<ConductorEvent>> {
+        let candidates = due_idle_candidates(conn, delay_secs, now)?;
+        self.poll_session_idle_candidates(conn, now, &candidates)
+    }
+
+    /// Like [`Self::poll_session_idle`], for a caller that already listed this tick's
+    /// candidates. Details are loaded only for periods not yet handled.
+    pub fn poll_session_idle_candidates(
+        &mut self,
+        conn: &Connection,
+        now: DateTime<Utc>,
+        candidates: &[IdleCandidate],
+    ) -> Result<Vec<ConductorEvent>> {
         let max_age = Duration::seconds(NOTIFY_MAX_AGE_SECS);
-        let due = list_due_idle_sessions(conn, delay_secs, now)?;
-        // The key is built once per item; `collect_new` borrows it back through `id_of`.
-        let keyed: Vec<(String, IdleSession)> = due
-            .into_iter()
-            .map(|s| (session_idle_dedup_key(&s.run_id, &s.idle_since), s))
-            .collect();
+        let current: HashSet<String> = candidates.iter().map(IdleCandidate::dedup_key).collect();
+        let mut keyed: Vec<(String, IdleSession)> = Vec::new();
+        for c in candidates {
+            let key = c.dedup_key();
+            if self.seen_session_idle.contains(&key) {
+                continue;
+            }
+            if let Some(s) = load_idle_session(conn, c)? {
+                keyed.push((key, s));
+            }
+        }
+        // `collect_new` trims its seen set to `keyed`; run it on a fresh set and merge, so
+        // handled periods that were skipped above stay remembered.
+        let mut newly_seen = HashSet::new();
         let mut events = Vec::new();
         collect_new(
             conn,
-            &mut self.seen_session_idle,
+            &mut newly_seen,
             &keyed,
             WEB_SESSION_IDLE_EVENT_TYPE,
             now,
@@ -161,18 +181,13 @@ impl DbEventDetector {
                 run_id: s.run_id.clone(),
                 worktree_id: s.worktree_id.clone().unwrap_or_default(),
                 worktree_slug: s.worktree_slug.clone().unwrap_or_default(),
-                last_message_preview: s
-                    .last_message
-                    .as_deref()
-                    .map(|m| m.split_whitespace().collect::<Vec<_>>().join(" "))
-                    .unwrap_or_default()
-                    .chars()
-                    .take(100)
-                    .collect(),
+                last_message_preview: s.last_message.as_deref().map(preview).unwrap_or_default(),
                 background_tasks: s.background_tasks.unwrap_or(0),
             },
             &mut events,
         );
+        self.seen_session_idle.extend(newly_seen);
+        self.seen_session_idle.retain(|k| current.contains(k));
         Ok(events)
     }
 }
@@ -358,6 +373,26 @@ mod tests {
         // A fresh detector (restart) finds the claim in notification_log.
         let mut fresh = DbEventDetector::default();
         assert!(fresh.poll_session_idle(&conn, due, 30).unwrap().is_empty());
+    }
+
+    #[test]
+    fn session_idle_preview_matches_core_truncation() {
+        let (_tmp, conn) = open();
+        add_idle_session(&conn, "s1", IDLE_AT);
+        let long = "word ".repeat(60);
+        conn.execute("UPDATE agent_runs SET result_text = ?1", [&long])
+            .unwrap();
+        let mut d = DbEventDetector::default();
+        let evs = d
+            .poll_session_idle(&conn, at(IDLE_AT) + Duration::seconds(60), 0)
+            .unwrap();
+        match &evs[0] {
+            ConductorEvent::SessionIdle {
+                last_message_preview,
+                ..
+            } => assert_eq!(last_message_preview, &preview(&long)),
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     #[test]

@@ -11,12 +11,11 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use runkon_notify::{DedupStore, Event, HookRunner, Severity};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::agent::types::{EVENT_KIND_PROMPT, EVENT_KIND_RESULT};
 use crate::config::{hooks_as_runkon, HookConfig, NotificationConfig};
 use crate::error::Result;
-use crate::session::hook::{PLACEHOLDER_PROMPT, RUNTIME_INTERACTIVE};
+use crate::session::hook::{stop_turn_details, PLACEHOLDER_PROMPT, RUNTIME_INTERACTIVE};
 
 use super::{is_recent, notification_sink_configured, try_claim_notification, NOTIFY_MAX_AGE_SECS};
 
@@ -50,7 +49,10 @@ pub fn session_idle_dedup_key(run_id: &str, idle_since: &str) -> String {
     format!("{run_id}|{idle_since}")
 }
 
-fn preview(s: &str) -> String {
+/// Single-line, length-capped preview of `s`, ending in `…` when cut.
+///
+/// Shared by the hook event and the web push payload so both show the same text.
+pub fn preview(s: &str) -> String {
     let single: String = s
         .chars()
         .map(|c| if c.is_whitespace() { ' ' } else { c })
@@ -64,75 +66,127 @@ fn preview(s: &str) -> String {
     }
 }
 
+/// Notification body: `"<label>: <last>"`, or whichever of the two is non-empty.
+pub fn session_idle_body(label: &str, last: &str) -> String {
+    match (label.is_empty(), last.is_empty()) {
+        (_, true) => label.to_string(),
+        (true, false) => last.to_string(),
+        (false, false) => format!("{label}: {last}"),
+    }
+}
+
+/// An idle period that has passed the delay, identified but not yet loaded.
+///
+/// Cheap to produce (`agent_runs` only), so the pollers can list candidates every tick,
+/// skip the ones already handled, and load details only for the rest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdleCandidate {
+    pub run_id: String,
+    pub idle_since: String,
+}
+
+impl IdleCandidate {
+    pub fn dedup_key(&self) -> String {
+        session_idle_dedup_key(&self.run_id, &self.idle_since)
+    }
+}
+
 /// Interactive runs that are `idle` with `idle_since` at least `delay_secs` before `now`.
 ///
 /// The delay is compared in Rust: hook timestamps are RFC 3339 with an explicit offset,
 /// and string comparison in SQL is fragile across formats. Rows with an unparseable
 /// `idle_since` are skipped (never fail open, or they would fire on every tick).
+pub fn due_idle_candidates(
+    conn: &Connection,
+    delay_secs: u64,
+    now: DateTime<Utc>,
+) -> Result<Vec<IdleCandidate>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, idle_since FROM agent_runs \
+         WHERE runtime = ?1 AND status = 'idle' AND idle_since IS NOT NULL \
+         ORDER BY idle_since, id",
+    )?;
+    let rows = stmt.query_map(params![RUNTIME_INTERACTIVE], |row| {
+        Ok(IdleCandidate {
+            run_id: row.get(0)?,
+            idle_since: row.get(1)?,
+        })
+    })?;
+    let mut due = Vec::new();
+    for row in rows {
+        let c = row?;
+        let idle_at = match DateTime::parse_from_rfc3339(&c.idle_since) {
+            Ok(t) => t.with_timezone(&Utc),
+            Err(e) => {
+                tracing::warn!(run_id = %c.run_id, idle_since = %c.idle_since, "unparseable idle_since: {e}");
+                continue;
+            }
+        };
+        if now.signed_duration_since(idle_at).num_seconds() >= delay_secs as i64 {
+            due.push(c);
+        }
+    }
+    Ok(due)
+}
+
+/// Load the full [`IdleSession`] for a candidate. `None` when the run has left `idle`
+/// (or started a new idle period) since the candidate was listed.
+pub fn load_idle_session(conn: &Connection, c: &IdleCandidate) -> Result<Option<IdleSession>> {
+    let row = conn
+        .query_row(
+            "SELECT ar.session_id, ar.worktree_id, w.slug, \
+                    COALESCE(r.slug, ''), COALESCE(w.branch, ''), ar.prompt, ar.result_text \
+             FROM agent_runs ar \
+             LEFT JOIN worktrees w ON w.id = ar.worktree_id \
+             LEFT JOIN repos r ON r.id = COALESCE(ar.repo_id, w.repo_id) \
+             WHERE ar.id = ?1 AND ar.status = 'idle' AND ar.idle_since = ?2",
+            params![c.run_id, c.idle_since],
+            |row| {
+                Ok(IdleSession {
+                    run_id: c.run_id.clone(),
+                    session_id: row.get(0)?,
+                    idle_since: c.idle_since.clone(),
+                    worktree_id: row.get(1)?,
+                    worktree_slug: row.get(2)?,
+                    repo_slug: row.get(3)?,
+                    branch: row.get(4)?,
+                    prompt: row.get(5)?,
+                    last_message: row.get(6)?,
+                    background_tasks: None,
+                    turn_duration_ms: None,
+                })
+            },
+        )
+        .optional()?;
+    let Some(mut s) = row else {
+        return Ok(None);
+    };
+    let (background_tasks, prompt_started) = stop_turn_details(conn, &c.run_id, &c.idle_since)?;
+    s.background_tasks = background_tasks;
+    if s.prompt == PLACEHOLDER_PROMPT {
+        s.prompt.clear();
+    }
+    s.turn_duration_ms = prompt_started
+        .and_then(|p| DateTime::parse_from_rfc3339(&p).ok())
+        .zip(DateTime::parse_from_rfc3339(&c.idle_since).ok())
+        .map(|(p, idle_at)| idle_at.signed_duration_since(p).num_milliseconds().max(0));
+    Ok(Some(s))
+}
+
+/// Due idle sessions with details loaded. Convenience over [`due_idle_candidates`] and
+/// [`load_idle_session`]; the pollers use those directly to skip handled periods.
 pub fn list_due_idle_sessions(
     conn: &Connection,
     delay_secs: u64,
     now: DateTime<Utc>,
 ) -> Result<Vec<IdleSession>> {
-    let mut stmt = conn.prepare(
-        "SELECT ar.id, ar.session_id, ar.idle_since, ar.worktree_id, w.slug, \
-                COALESCE(r.slug, ''), COALESCE(w.branch, ''), ar.prompt, ar.result_text, \
-                (SELECT json_extract(e.metadata, '$.background_tasks') FROM agent_run_events e \
-                  WHERE e.run_id = ar.id AND e.kind = ?1 AND e.started_at = ar.idle_since \
-                  ORDER BY e.id DESC LIMIT 1), \
-                (SELECT p.started_at FROM agent_run_events p \
-                  WHERE p.run_id = ar.id AND p.kind = ?2 AND p.ended_at = ar.idle_since \
-                  ORDER BY p.id DESC LIMIT 1) \
-         FROM agent_runs ar \
-         LEFT JOIN worktrees w ON w.id = ar.worktree_id \
-         LEFT JOIN repos r ON r.id = COALESCE(ar.repo_id, w.repo_id) \
-         WHERE ar.runtime = ?3 AND ar.status = 'idle' AND ar.idle_since IS NOT NULL \
-         ORDER BY ar.idle_since, ar.id",
-    )?;
-    let rows = stmt.query_map(
-        params![EVENT_KIND_RESULT, EVENT_KIND_PROMPT, RUNTIME_INTERACTIVE],
-        |row| {
-            Ok((
-                IdleSession {
-                    run_id: row.get(0)?,
-                    session_id: row.get(1)?,
-                    idle_since: row.get(2)?,
-                    worktree_id: row.get(3)?,
-                    worktree_slug: row.get(4)?,
-                    repo_slug: row.get(5)?,
-                    branch: row.get(6)?,
-                    prompt: row.get(7)?,
-                    last_message: row.get(8)?,
-                    background_tasks: row.get(9)?,
-                    turn_duration_ms: None,
-                },
-                row.get::<_, Option<String>>(10)?,
-            ))
-        },
-    )?;
-
-    let mut due = Vec::new();
-    for row in rows {
-        let (mut s, prompt_started) = row?;
-        let idle_at = match DateTime::parse_from_rfc3339(&s.idle_since) {
-            Ok(t) => t.with_timezone(&Utc),
-            Err(e) => {
-                tracing::warn!(run_id = %s.run_id, idle_since = %s.idle_since, "unparseable idle_since: {e}");
-                continue;
-            }
-        };
-        if now.signed_duration_since(idle_at).num_seconds() < delay_secs as i64 {
-            continue;
+    let mut out = Vec::new();
+    for c in due_idle_candidates(conn, delay_secs, now)? {
+        if let Some(s) = load_idle_session(conn, &c)? {
+            out.push(s);
         }
-        if s.prompt == PLACEHOLDER_PROMPT {
-            s.prompt.clear();
-        }
-        s.turn_duration_ms = prompt_started
-            .and_then(|p| DateTime::parse_from_rfc3339(&p).ok())
-            .map(|p| idle_at.signed_duration_since(p).num_milliseconds().max(0));
-        due.push(s);
     }
-    Ok(due)
+    Ok(out)
 }
 
 /// Build the `session.idle` event.
@@ -147,11 +201,7 @@ pub(crate) fn session_idle_event(s: &IdleSession) -> Event {
         .or(Some(s.repo_slug.as_str()).filter(|l| !l.is_empty()))
         .unwrap_or("");
     let last = s.last_message.as_deref().map(preview).unwrap_or_default();
-    let body = match (label.is_empty(), last.is_empty()) {
-        (_, true) => label.to_string(),
-        (true, false) => last.clone(),
-        (false, false) => format!("{label}: {last}"),
-    };
+    let body = session_idle_body(label, &last);
     Event {
         kind: "session.idle".into(),
         title: "Conductor \u{2014} Session idle".into(),
@@ -218,33 +268,59 @@ impl SessionIdleNotifier {
         if !notification_sink_configured(config, hooks) {
             return 0;
         }
-        let due = match list_due_idle_sessions(conn, config.session_idle.delay_secs, now) {
+        let candidates = match due_idle_candidates(conn, config.session_idle.delay_secs, now) {
             Ok(d) => d,
             Err(e) => {
                 tracing::warn!("session idle lookup failed: {e}");
                 return 0;
             }
         };
-        let current: HashSet<String> = due
-            .iter()
-            .map(|s| session_idle_dedup_key(&s.run_id, &s.idle_since))
-            .collect();
+        self.poll_candidates(conn, config, hooks, dedup_store, now, &candidates)
+    }
+
+    /// Like [`Self::poll`], for a caller that already listed the tick's candidates (the
+    /// web loop shares one [`due_idle_candidates`] query with its Web Push detector).
+    /// Details are loaded only for candidates this notifier has not handled yet.
+    pub fn poll_candidates(
+        &mut self,
+        conn: &Connection,
+        config: &NotificationConfig,
+        hooks: &[HookConfig],
+        dedup_store: Arc<dyn DedupStore>,
+        now: DateTime<Utc>,
+        candidates: &[IdleCandidate],
+    ) -> usize {
+        if !notification_sink_configured(config, hooks) {
+            return 0;
+        }
+        let current: HashSet<String> = candidates.iter().map(IdleCandidate::dedup_key).collect();
         let max_age = chrono::Duration::seconds(NOTIFY_MAX_AGE_SECS);
         let runner = HookRunner::new(&hooks_as_runkon(hooks)).with_dedup_store(dedup_store);
 
         let mut fired = 0;
-        for s in &due {
-            let key = session_idle_dedup_key(&s.run_id, &s.idle_since);
-            if !self.seen.insert(key.clone()) {
+        for c in candidates {
+            let key = c.dedup_key();
+            if self.seen.contains(&key) {
                 continue;
             }
-            if !is_recent(&s.idle_since, now, max_age) {
+            if !is_recent(&c.idle_since, now, max_age) {
+                self.seen.insert(key.clone());
                 if let Err(e) = try_claim_notification(conn, &key, SESSION_IDLE_EVENT_TYPE) {
                     tracing::warn!("session idle stale claim failed: {e}");
                 }
                 continue;
             }
-            runner.fire_with_dedup(&session_idle_event(s), &key, SESSION_IDLE_EVENT_TYPE);
+            let session = match load_idle_session(conn, c) {
+                Ok(Some(s)) => s,
+                // Left idle since listed; the next tick sees its new state.
+                Ok(None) => continue,
+                Err(e) => {
+                    tracing::warn!("session idle load failed: {e}");
+                    continue;
+                }
+            };
+            self.seen.insert(key.clone());
+            runner.fire_with_dedup(&session_idle_event(&session), &key, SESSION_IDLE_EVENT_TYPE);
             fired += 1;
         }
         self.seen.retain(|k| current.contains(k));

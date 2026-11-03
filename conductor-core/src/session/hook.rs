@@ -693,6 +693,41 @@ fn on_stop(conn: &Connection, mode: ApplyMode, ev: &HookEvent, run_id: &str) -> 
     )
 }
 
+/// What `on_stop` recorded about the turn that began the idle period `idle_since`.
+///
+/// This is the read side of `on_stop`: the `result` event it inserts has
+/// `started_at = idle_since` and carries `background_tasks`, and the prompt span it closes
+/// has `ended_at = idle_since`. Keep it next to `on_stop` so a change to how those events
+/// are written updates the reader in the same place.
+///
+/// Returns `(background_tasks, prompt_started_at)`; each is `None` when not recorded.
+pub fn stop_turn_details(
+    conn: &Connection,
+    run_id: &str,
+    idle_since: &str,
+) -> Result<(Option<i64>, Option<String>)> {
+    let background_tasks = conn
+        .query_row(
+            "SELECT json_extract(metadata, '$.background_tasks') FROM agent_run_events \
+             WHERE run_id = ?1 AND kind = ?2 AND started_at = ?3 \
+             ORDER BY id DESC LIMIT 1",
+            params![run_id, EVENT_KIND_RESULT, idle_since],
+            |r| r.get::<_, Option<i64>>(0),
+        )
+        .optional()?
+        .flatten();
+    let prompt_started = conn
+        .query_row(
+            "SELECT started_at FROM agent_run_events \
+             WHERE run_id = ?1 AND kind = ?2 AND ended_at = ?3 \
+             ORDER BY id DESC LIMIT 1",
+            params![run_id, EVENT_KIND_PROMPT, idle_since],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok((background_tasks, prompt_started))
+}
+
 fn on_session_end(conn: &Connection, mode: ApplyMode, ev: &HookEvent, run_id: &str) -> Result<()> {
     let now = ev.received_at.as_str();
     dismiss_pending(conn, run_id, now)?;
