@@ -469,3 +469,166 @@ fn workflow_wait_unknown_run_fails() {
         .assert()
         .failure();
 }
+
+// ---------------------------------------------------------------------------
+// `conductor session hook`
+// ---------------------------------------------------------------------------
+
+/// Run `conductor session hook` with `stdin` as the payload.
+fn run_hook(home: &std::path::Path, attended: &str, stdin: &[u8]) -> std::process::Output {
+    let mut cmd = conductor_cmd(home);
+    cmd.args(["session", "hook"])
+        .env("CLAUDE_CODE_SESSION_ATTENDED", attended)
+        .env("CLAUDE_PID", std::process::id().to_string())
+        .env_remove("CONDUCTOR_SESSION_HOOK_DEBUG")
+        .env_remove("CONDUCTOR_DB_PATH")
+        .write_stdin(stdin.to_vec());
+    cmd.output().unwrap()
+}
+
+/// Create `<home>/conductor.db` with a repo and an active worktree at `/tmp/ws/hook-wt`.
+fn seed_hook_db(home: &std::path::Path) -> rusqlite::Connection {
+    let conn = conductor_core::db::open_database(&home.join("conductor.db")).unwrap();
+    conductor_core::test_helpers::insert_test_repo(&conn, "r1", "hook-repo", "/tmp/hook-repo");
+    conductor_core::test_helpers::insert_test_worktree(
+        &conn,
+        "w1",
+        "r1",
+        "hook-wt",
+        "/tmp/ws/hook-wt",
+    );
+    conn
+}
+
+fn payload(name: &str, extra: serde_json::Value) -> Vec<u8> {
+    let mut v = serde_json::json!({
+        "hook_event_name": name,
+        "session_id": "sess-1",
+        "cwd": "/tmp/ws/hook-wt",
+    });
+    for (k, val) in extra.as_object().unwrap() {
+        v[k] = val.clone();
+    }
+    serde_json::to_vec(&v).unwrap()
+}
+
+fn assert_silent_success(out: &std::process::Output) {
+    assert!(out.status.success(), "exit status: {:?}", out.status);
+    assert!(out.stdout.is_empty(), "stdout: {:?}", out.stdout);
+    assert!(out.stderr.is_empty(), "stderr: {:?}", out.stderr);
+}
+
+fn run_status(conn: &rusqlite::Connection) -> String {
+    conn.query_row(
+        "SELECT status FROM agent_runs WHERE session_id = 'sess-1'",
+        [],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+#[test]
+fn session_hook_malformed_json_exits_zero_silently() {
+    let dir = tempfile::tempdir().unwrap();
+    seed_hook_db(dir.path());
+    let out = run_hook(dir.path(), "1", b"{not json SessionStart");
+    assert_silent_success(&out);
+}
+
+#[test]
+fn session_hook_unattended_creates_no_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = run_hook(dir.path(), "0", &payload("SessionStart", serde_json::json!({})));
+    assert_silent_success(&out);
+    assert!(!dir.path().join("conductor.db").exists());
+}
+
+#[test]
+fn session_hook_without_database_creates_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = run_hook(dir.path(), "1", &payload("SessionStart", serde_json::json!({})));
+    assert_silent_success(&out);
+    assert!(!dir.path().join("conductor.db").exists());
+}
+
+#[test]
+fn session_hook_records_start_and_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = seed_hook_db(dir.path());
+
+    let out = run_hook(dir.path(), "1", &payload("SessionStart", serde_json::json!({"source": "startup"})));
+    assert_silent_success(&out);
+    assert_eq!(run_status(&conn), "idle");
+
+    let out = run_hook(
+        dir.path(),
+        "1",
+        &payload("UserPromptSubmit", serde_json::json!({"prompt": "hello", "prompt_id": "p1"})),
+    );
+    assert_silent_success(&out);
+    let (status, wt, pid, runtime): (String, String, i64, String) = conn
+        .query_row(
+            "SELECT status, worktree_id, subprocess_pid, runtime FROM agent_runs WHERE session_id = 'sess-1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "running");
+    assert_eq!(wt, "w1");
+    assert_eq!(pid, i64::from(std::process::id()));
+    assert_eq!(runtime, "interactive");
+}
+
+#[test]
+fn session_hook_oversized_post_tool_use_still_flips_to_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = seed_hook_db(dir.path());
+    run_hook(dir.path(), "1", &payload("SessionStart", serde_json::json!({})));
+    run_hook(
+        dir.path(),
+        "1",
+        &payload("PermissionRequest", serde_json::json!({"tool_name": "Bash"})),
+    );
+    assert_eq!(run_status(&conn), "waiting_for_feedback");
+
+    // tool_response comes last and is several MiB, so the 1 MiB cap cuts the JSON.
+    let mut big = format!(
+        r#"{{"hook_event_name":"PostToolUse","session_id":"sess-1","cwd":"/tmp/ws/hook-wt","tool_name":"Bash","tool_response":{{"stdout":""#
+    )
+    .into_bytes();
+    big.extend(std::iter::repeat_n(b'x', 3 * 1024 * 1024));
+    big.extend_from_slice(br#""}}"#);
+
+    let out = run_hook(dir.path(), "1", &big);
+    assert_silent_success(&out);
+    assert_eq!(run_status(&conn), "running");
+    let fb: String = conn
+        .query_row("SELECT status FROM feedback_requests", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(fb, "responded");
+}
+
+#[test]
+fn session_hook_debug_env_reports_on_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    seed_hook_db(dir.path());
+    let mut cmd = conductor_cmd(dir.path());
+    cmd.args(["session", "hook"])
+        .env("CLAUDE_CODE_SESSION_ATTENDED", "1")
+        .env("CONDUCTOR_SESSION_HOOK_DEBUG", "1")
+        .write_stdin(&b"SessionStart {not json"[..]);
+    let out = cmd.output().unwrap();
+    assert!(out.status.success());
+    assert!(out.stdout.is_empty());
+    assert!(!out.stderr.is_empty());
+}
+
+#[test]
+fn session_subcommand_is_hidden_from_help() {
+    let dir = tempfile::tempdir().unwrap();
+    conductor_cmd(dir.path())
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("session").not());
+}

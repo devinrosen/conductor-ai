@@ -62,6 +62,18 @@ pub enum Commands {
         #[command(subcommand)]
         command: ConversationCommands,
     },
+    /// Interactive Claude Code session tracking (called by hooks, not by humans)
+    #[command(hide = true)]
+    Session {
+        #[command(subcommand)]
+        command: SessionCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SessionCommands {
+    /// Record an interactive Claude Code session's state from a hook payload on stdin
+    Hook,
 }
 
 #[derive(Subcommand)]

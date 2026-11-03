@@ -15,8 +15,8 @@ const BUSY_TIMEOUT: Duration = Duration::from_millis(5000);
 /// Apply connection pragmas. The busy timeout is set first so that every later
 /// statement that takes a lock (notably `journal_mode=wal`) waits instead of
 /// failing immediately.
-fn configure_connection(conn: &Connection) -> Result<()> {
-    conn.busy_timeout(BUSY_TIMEOUT)?;
+fn configure_connection(conn: &Connection, busy_timeout: Duration) -> Result<()> {
+    conn.busy_timeout(busy_timeout)?;
     conn.pragma_update(None, "journal_mode", "wal")?;
     conn.pragma_update(None, "foreign_keys", "on")?;
     Ok(())
@@ -37,7 +37,7 @@ pub fn connection_db_path(conn: &Connection) -> Option<std::path::PathBuf> {
 /// timeout.
 pub fn open_database(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
-    configure_connection(&conn)?;
+    configure_connection(&conn, BUSY_TIMEOUT)?;
     migrations::run(&conn)?;
     Ok(conn)
 }
@@ -50,7 +50,21 @@ pub fn open_database(path: &Path) -> Result<Connection> {
 /// running after an `implement` agent step has applied a newer migration.
 pub fn open_database_compat(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
-    configure_connection(&conn)?;
+    configure_connection(&conn, BUSY_TIMEOUT)?;
+    migrations::run_compat(&conn)?;
+    Ok(conn)
+}
+
+/// Like [`open_database_compat`] but with a caller-chosen busy timeout.
+///
+/// Used by `conductor session hook`, which must never stall the developer's
+/// Claude Code session: it waits a fraction of a second for a lock, then gives up.
+pub fn open_database_compat_with_busy_timeout(
+    path: &Path,
+    busy_timeout: Duration,
+) -> Result<Connection> {
+    let conn = Connection::open(path)?;
+    configure_connection(&conn, busy_timeout)?;
     migrations::run_compat(&conn)?;
     Ok(conn)
 }
