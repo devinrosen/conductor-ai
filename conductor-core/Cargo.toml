@@ -7,12 +7,12 @@ repository.workspace = true
 description = "Core library for Conductor — multi-repo orchestration"
 
 [dependencies]
-runkon-flow = { version = "0.7.2-alpha", features = ["sqlite", "diagnostics"] }
-runkon-flow-executors = "0.7.2-alpha"
-runkon-runtimes = "0.7.2-alpha"
-runkon-anthropic = "0.7.2-alpha"
-runkon-google = "0.7.2-alpha"
-runkon-notify = "0.7.2-alpha"
+runkon-flow = { version = "0.8.1-alpha", features = ["sqlite", "diagnostics"] }
+runkon-flow-executors = "0.8.1-alpha"
+runkon-runtimes = "0.8.1-alpha"
+runkon-anthropic = "0.8.1-alpha"
+runkon-google = "0.8.1-alpha"
+runkon-notify = "0.8.1-alpha"
 rusqlite = { version = "0.32", features = ["bundled", "trace"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
@@ -40,5 +40,5 @@ openapi = ["dep:utoipa", "runkon-flow/utoipa", "runkon-runtimes/utoipa"]
 conductor-core = { path = ".", features = ["test-helpers"] }
 regex-lite = "0.1"
 tracing-test = "0.2"
-runkon-flow = { version = "0.7.2-alpha", features = ["test-utils"] }
+runkon-flow = { version = "0.8.1-alpha", features = ["test-utils"] }
 mockito = "0.32"
