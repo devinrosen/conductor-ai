@@ -324,6 +324,13 @@ mod tests {
     }
 
     #[test]
+    fn open_log_returns_none_for_missing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("no-such-dir").join("t.log");
+        assert!(open_log(&log).is_none());
+    }
+
+    #[test]
     fn commit_without_begin_is_ignored() {
         let mut state = None;
         assert!(track_tx(&mut state, "COMMIT", Instant::now()).is_none());
