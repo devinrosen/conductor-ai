@@ -1,14 +1,37 @@
+use runkon_flow::dsl::QUALITY_GATE_TYPE;
+
 /// Whether a step is a gate. Engine-written gate rows may have NULL `gate_type`
 /// (#3151), so a `gate` role also counts. Quality gates complete immediately and
 /// never wait, so they are excluded when the type is unset.
+///
+/// Rust counterpart of [`gate_step_sql`]; keep the two in sync.
 pub fn is_gate_step(step: &super::WorkflowRunStep) -> bool {
-    step.gate_type.is_some() || (step.role == "gate" && step.step_name != "quality_gate")
+    step.gate_type.is_some() || (step.role == "gate" && step.step_name != QUALITY_GATE_TYPE)
+}
+
+/// Whether a step is a gate that is currently waiting for approval.
+pub fn is_waiting_gate(step: &super::WorkflowRunStep) -> bool {
+    step.status == super::WorkflowStepStatus::Waiting && is_gate_step(step)
+}
+
+/// The step's gate type, falling back to the step name (the DSL guarantees they
+/// match) when `gate_type` was never recorded.
+pub fn gate_type_or_name(step: &super::WorkflowRunStep) -> &str {
+    step.gate_type.as_deref().unwrap_or(step.step_name.as_str())
+}
+
+/// SQL predicate matching gate rows for a `workflow_run_steps` table aliased as
+/// `alias`. SQL counterpart of [`is_gate_step`].
+pub(crate) fn gate_step_sql(alias: &str) -> String {
+    format!(
+        "({alias}.gate_type IS NOT NULL OR ({alias}.role = 'gate' AND {alias}.step_name != '{QUALITY_GATE_TYPE}'))"
+    )
 }
 
 /// Fill a missing `gate_type` from the step name (the DSL guarantees they match).
 pub(crate) fn backfill_gate_type(mut step: super::WorkflowRunStep) -> super::WorkflowRunStep {
     if step.gate_type.is_none() && is_gate_step(&step) {
-        step.gate_type = Some(step.step_name.clone());
+        step.gate_type = Some(gate_type_or_name(&step).to_string());
     }
     step
 }
@@ -71,6 +94,52 @@ pub fn parse_gate_options(json: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workflow::{WorkflowRunStep, WorkflowStepStatus};
+
+    fn step(name: &str, role: &str, gate_type: Option<&str>) -> WorkflowRunStep {
+        WorkflowRunStep {
+            step_name: name.into(),
+            role: role.into(),
+            gate_type: gate_type.map(String::from),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn is_gate_step_cases() {
+        assert!(is_gate_step(&step("a", "reviewer", Some("human_approval"))));
+        assert!(is_gate_step(&step("human_approval", "gate", None)));
+        assert!(!is_gate_step(&step("quality_gate", "gate", None)));
+        assert!(!is_gate_step(&step("x", "actor", None)));
+    }
+
+    #[test]
+    fn backfill_gate_type_cases() {
+        let b = backfill_gate_type(step("human_approval", "gate", None));
+        assert_eq!(b.gate_type.as_deref(), Some("human_approval"));
+        let b = backfill_gate_type(step("n", "gate", Some("human_review")));
+        assert_eq!(b.gate_type.as_deref(), Some("human_review"));
+        assert_eq!(
+            backfill_gate_type(step("quality_gate", "gate", None)).gate_type,
+            None
+        );
+        assert_eq!(backfill_gate_type(step("x", "actor", None)).gate_type, None);
+    }
+
+    #[test]
+    fn is_waiting_gate_requires_waiting_status() {
+        let mut s = step("human_approval", "gate", None);
+        s.status = WorkflowStepStatus::Waiting;
+        assert!(is_waiting_gate(&s));
+        s.status = WorkflowStepStatus::Completed;
+        assert!(!is_waiting_gate(&s));
+    }
+
+    #[test]
+    fn gate_type_or_name_falls_back_to_name() {
+        assert_eq!(gate_type_or_name(&step("n", "gate", None)), "n");
+        assert_eq!(gate_type_or_name(&step("n", "gate", Some("t"))), "t");
+    }
 
     #[test]
     fn parse_gate_options_valid_array_returns_values() {

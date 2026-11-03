@@ -77,12 +77,17 @@ impl GateMetadataPersistence {
         Self { inner, conn, gates }
     }
 
-    fn write_gate_metadata(&self, step_id: &str, step_name: &str) {
+    /// Best-effort: a failed write is logged with run/step context but does not
+    /// fail the step. `gate_type` is backfilled from the step name on read, so
+    /// approval still works; only `gate_prompt` and `gate_timeout` are lost.
+    fn write_gate_metadata(&self, run_id: &str, step_id: &str, step_name: &str) {
         let meta = self.gates.get(step_name).and_then(|m| m.as_ref());
         let conn = match self.conn.lock() {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!("gate metadata: db mutex poisoned for step {step_id}: {e}");
+                tracing::warn!(
+                    "gate metadata: db mutex poisoned for run {run_id}, step {step_name} ({step_id}): {e}"
+                );
                 return;
             }
         };
@@ -98,7 +103,9 @@ impl GateMetadataPersistence {
                 ":id": step_id,
             ],
         ) {
-            tracing::warn!("failed to record gate metadata for step {step_id}: {e}");
+            tracing::warn!(
+                "failed to record gate metadata for run {run_id}, step {step_name} ({step_id}): {e}"
+            );
         }
     }
 }
@@ -153,10 +160,11 @@ impl WorkflowPersistence for GateMetadataPersistence {
     fn insert_step(&self, new_step: NewStep) -> Result<String, EngineError> {
         let is_gate = new_step.role == "gate" && new_step.step_name != QUALITY_GATE_TYPE;
         let step_name = new_step.step_name.clone();
+        let run_id = new_step.workflow_run_id.clone();
         // Delegate first, without holding our own lock: inner locks the same mutex.
         let step_id = self.inner.insert_step(new_step)?;
         if is_gate {
-            self.write_gate_metadata(&step_id, &step_name);
+            self.write_gate_metadata(&run_id, &step_id, &step_name);
         }
         Ok(step_id)
     }
