@@ -651,7 +651,6 @@ dependencies = [
  "chrono",
  "clap",
  "conductor-core",
- "ctor",
  "dirs",
  "libc",
  "predicates",
@@ -670,6 +669,7 @@ name = "conductor-core"
 version = "0.16.8"
 dependencies = [
  "chrono",
+ "conductor-core",
  "ctor",
  "dirs",
  "jsonwebtoken",
@@ -724,7 +724,6 @@ dependencies = [
  "chrono",
  "conductor-core",
  "crossterm",
- "ctor",
  "dirs",
  "insta",
  "ratatui",
@@ -749,7 +748,6 @@ dependencies = [
  "bytes",
  "chrono",
  "conductor-core",
- "ctor",
  "futures-util",
  "hex",
  "hmac",

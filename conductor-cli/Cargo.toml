@@ -32,7 +32,6 @@ tracing = "0.1"
 libc = "0.2"
 
 [dev-dependencies]
-ctor = "0.8"
 conductor-core = { path = "../conductor-core", features = ["test-helpers"] }
 tempfile = "3"
 assert_cmd = "2"

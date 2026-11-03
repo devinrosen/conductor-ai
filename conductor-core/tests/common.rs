@@ -57,27 +57,5 @@ pub fn make_request(
     }
 }
 
-// Integration tests link the lib without `test_helpers`, so isolate here (#3172).
-// `mod common;` pulls this into every integration-test binary.
-static ISOLATED_HOME: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
-
-#[ctor::ctor]
-fn isolate_conductor_home() {
-    if std::env::var_os("CONDUCTOR_HOME").is_some_and(|h| !h.is_empty()) {
-        return;
-    }
-    let dir = tempfile::Builder::new()
-        .prefix("conductor-test-home-")
-        .tempdir()
-        .expect("create isolated CONDUCTOR_HOME")
-        .keep();
-    std::env::set_var("CONDUCTOR_HOME", &dir);
-    let _ = ISOLATED_HOME.set(dir);
-}
-
-#[ctor::dtor]
-fn cleanup_conductor_home() {
-    if let Some(dir) = ISOLATED_HOME.get() {
-        let _ = std::fs::remove_dir_all(dir);
-    }
-}
+// `mod common;` pulls this into every integration-test binary (#3172).
+conductor_core::isolate_test_home!();

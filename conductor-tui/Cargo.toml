@@ -31,7 +31,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
-ctor = "0.8"
 conductor-core = { path = "../conductor-core", features = ["test-helpers"] }
 tempfile = "3"
 insta = "1"

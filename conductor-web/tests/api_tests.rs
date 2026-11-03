@@ -1612,14 +1612,4 @@ async fn test_delete_conversation_returns_409_when_active_run_exists() {
     assert_eq!(resp.status(), 200);
 }
 
-mod test_home_init {
-    #[ctor::ctor]
-    fn init() {
-        conductor_core::test_helpers::isolate_conductor_home();
-    }
-
-    #[ctor::dtor]
-    fn fini() {
-        conductor_core::test_helpers::cleanup_isolated_conductor_home();
-    }
-}
+conductor_core::isolate_test_home!();

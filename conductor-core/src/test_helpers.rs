@@ -272,18 +272,29 @@ pub fn create_file_test_db() -> (Connection, String) {
 
 static ISOLATED_HOME: OnceLock<PathBuf> = OnceLock::new();
 
+/// Re-export so [`isolate_test_home!`] can reach `ctor` from downstream crates.
+#[doc(hidden)]
+pub use ctor as __ctor;
+
+/// Whether `CONDUCTOR_HOME` must be replaced with a temp dir: it is unset,
+/// empty, or points at the real `~/.conductor`.
+fn should_isolate(existing: Option<std::ffi::OsString>, real: Option<PathBuf>) -> bool {
+    match existing.filter(|h| !h.is_empty()) {
+        None => true,
+        Some(existing) => Some(PathBuf::from(existing)) == real,
+    }
+}
+
 /// Point `CONDUCTOR_HOME` at a per-process temp dir so tests never touch the
 /// real `~/.conductor` (#3172).
 ///
-/// Call from a `#[ctor::ctor]` in every test binary: it must run before
-/// `conductor_dir()` caches its result. A `CONDUCTOR_HOME` that is already set
-/// to something other than the real home is left alone.
+/// Call from a `#[ctor::ctor]` in every test binary (use [`isolate_test_home!`]):
+/// it must run before `conductor_dir()` caches its result. A `CONDUCTOR_HOME`
+/// that is already set to something other than the real home is left alone.
 pub fn isolate_conductor_home() {
     let real = dirs::home_dir().map(|h| h.join(".conductor"));
-    if let Some(existing) = std::env::var_os("CONDUCTOR_HOME").filter(|h| !h.is_empty()) {
-        if Some(PathBuf::from(existing)) != real {
-            return;
-        }
+    if !should_isolate(std::env::var_os("CONDUCTOR_HOME"), real) {
+        return;
     }
     let dir = tempfile::Builder::new()
         .prefix("conductor-test-home-")
@@ -300,5 +311,75 @@ pub fn isolate_conductor_home() {
 pub fn cleanup_isolated_conductor_home() {
     if let Some(dir) = ISOLATED_HOME.get() {
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// Install the `CONDUCTOR_HOME` isolation hook (ctor + dtor) in a test binary.
+/// Requires the `test-helpers` feature of `conductor-core`.
+#[macro_export]
+macro_rules! isolate_test_home {
+    () => {
+        mod test_home_init {
+            #[$crate::test_helpers::__ctor::ctor(crate_path = $crate::test_helpers::__ctor)]
+            fn init() {
+                $crate::test_helpers::isolate_conductor_home();
+            }
+
+            #[$crate::test_helpers::__ctor::dtor(crate_path = $crate::test_helpers::__ctor)]
+            fn fini() {
+                $crate::test_helpers::cleanup_isolated_conductor_home();
+            }
+        }
+    };
+}
+
+#[cfg(test)]
+mod isolate_home_tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    fn real() -> Option<PathBuf> {
+        Some(PathBuf::from("/home/u/.conductor"))
+    }
+
+    #[test]
+    fn isolates_when_unset() {
+        assert!(should_isolate(None, real()));
+    }
+
+    #[test]
+    fn isolates_when_empty() {
+        assert!(should_isolate(Some(OsString::new()), real()));
+    }
+
+    #[test]
+    fn isolates_when_real_home() {
+        assert!(should_isolate(
+            Some(OsString::from("/home/u/.conductor")),
+            real()
+        ));
+    }
+
+    #[test]
+    fn leaves_custom_path_alone() {
+        assert!(!should_isolate(Some(OsString::from("/tmp/custom")), real()));
+    }
+
+    #[test]
+    fn isolates_when_real_home_unknown_but_unset() {
+        assert!(should_isolate(None, None));
+        assert!(!should_isolate(Some(OsString::from("/tmp/x")), None));
+    }
+
+    /// The ctor hook ran for this test binary: `CONDUCTOR_HOME` is set, is not
+    /// the real home, and exists on disk.
+    #[test]
+    fn hook_sets_isolated_home() {
+        let home = PathBuf::from(std::env::var_os("CONDUCTOR_HOME").expect("CONDUCTOR_HOME set"));
+        assert_ne!(
+            Some(home.clone()),
+            dirs::home_dir().map(|h| h.join(".conductor"))
+        );
+        assert!(home.is_dir());
     }
 }
