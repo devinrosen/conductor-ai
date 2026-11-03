@@ -610,6 +610,53 @@ mod tests {
     }
 
     #[test]
+    fn test_wait_run_with_progress_uses_higher_cap_and_short_note() {
+        let (_f, conductor) = make_test_conductor();
+        let id = make_wait_run(
+            &conductor,
+            "completed",
+            "strftime('%Y-%m-%dT%H:%M:%SZ','now')",
+            "NULL",
+        );
+        let messages = std::cell::RefCell::new(Vec::<String>::new());
+        let sink = |m: String| messages.borrow_mut().push(m);
+        let over = (WAIT_MAX_TIMEOUT_SECS + 1) as u64;
+        let result = tool_wait_run(
+            &conductor,
+            &wait_args(&id, &[("timeout_secs", over)]),
+            Some(&sink),
+        );
+        let text = result_text(&result);
+        assert!(text.starts_with("outcome: completed"), "got: {text}");
+        assert!(
+            text.contains(&format!("capped at {WAIT_MAX_TIMEOUT_SECS}s")),
+            "got: {text}"
+        );
+        assert!(!text.contains("progress token"), "got: {text}");
+        // A run that is already terminal never reports progress.
+        assert!(messages.borrow().is_empty());
+    }
+
+    #[test]
+    fn test_wait_run_with_progress_below_cap_has_no_note() {
+        let (_f, conductor) = make_test_conductor();
+        let id = make_wait_run(
+            &conductor,
+            "completed",
+            "strftime('%Y-%m-%dT%H:%M:%SZ','now')",
+            "NULL",
+        );
+        // Above the no-progress cap but within the progress cap: no note.
+        let t = (WAIT_MAX_TIMEOUT_NO_PROGRESS_SECS + 1) as u64;
+        let result = tool_wait_run(
+            &conductor,
+            &wait_args(&id, &[("timeout_secs", t)]),
+            Some(&|_m: String| {}),
+        );
+        assert!(!result_text(&result).contains("capped"));
+    }
+
+    #[test]
     fn test_effective_timeout() {
         assert_eq!(effective_timeout(3600, false), (1500, Some(1500)));
         assert_eq!(effective_timeout(600, false), (600, None));

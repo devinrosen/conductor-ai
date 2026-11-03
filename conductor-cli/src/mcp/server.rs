@@ -184,11 +184,14 @@ impl ServerHandler for ConductorMcpServer {
                     let mut n: f64 = 0.0;
                     while let Some(msg) = rx.recv().await {
                         n += 1.0;
-                        let _ = peer
+                        if let Err(e) = peer
                             .notify_progress(
                                 ProgressNotificationParam::new(token.clone(), n).with_message(msg),
                             )
-                            .await;
+                            .await
+                        {
+                            tracing::warn!("failed to send wait progress notification: {e}");
+                        }
                     }
                 }));
                 progress_tx = Some(tx);
@@ -217,7 +220,9 @@ impl ServerHandler for ConductorMcpServer {
         let result = run_with_timeout(&tool_name, limit, handle).await;
         // Flush pending progress before the response goes out.
         if let Some(f) = forwarder {
-            let _ = f.await;
+            if let Err(e) = f.await {
+                tracing::warn!("progress forwarder task failed: {e}");
+            }
         }
         result
     }
