@@ -5,6 +5,7 @@ mod types;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use git_helpers::tracked_changes;
 pub use git_helpers::{list_remote_branches, MainHealthStatus};
 pub use manager::{
     get_ticket_id_by_branch, label_to_branch_prefix, SetBaseBranchOptions, WorktreeAdoptOptions,

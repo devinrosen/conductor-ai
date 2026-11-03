@@ -289,7 +289,7 @@ fn base_checkout_is_dirty(repo_path: &str) -> Result<bool> {
 /// Paths of tracked files with uncommitted changes in the checkout at `repo_path`,
 /// from `git status --porcelain --untracked-files=no`. Empty means clean.
 /// A `git status` that cannot be spawned or exits non-zero is an error, not "clean".
-fn tracked_changes(repo_path: &str) -> Result<Vec<String>> {
+pub(crate) fn tracked_changes(repo_path: &str) -> Result<Vec<String>> {
     let output = git_in(repo_path)
         .args(["status", "--porcelain", "--untracked-files=no"])
         .output()
