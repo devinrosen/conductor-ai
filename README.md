@@ -59,6 +59,8 @@ cargo install --path conductor-tui
 cargo install --path conductor-web   # requires frontend already built by ./build.sh
 ```
 
+To rebuild and reinstall the CLI and TUI from your checkout in one step, run `conductor dev reinstall` (add `--web` to also build the frontend and install the web server, `--check` to only report, `--force` to proceed while workflow runs are active). It then lists the running conductor processes (TUI, MCP servers, web) that still run the old build and need a restart. `conductor dev processes` shows the same list at any time, and `conductor --version` / `conductor-tui --version` print the embedded git commit.
+
 During development you can skip the install step and use `cargo run --bin <name>` instead (see examples below).
 
 ## Usage

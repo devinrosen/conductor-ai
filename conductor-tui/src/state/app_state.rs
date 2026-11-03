@@ -89,6 +89,11 @@ pub struct AppState {
     /// Current sort order for the Tickets pane; session-only, resets on TUI restart.
     pub detail_ticket_sort: TicketSort,
 
+    /// Registered conductor processes running an older build than their binary on disk.
+    pub stale_process_count: usize,
+    /// True when this TUI process is itself one of the stale ones.
+    pub tui_is_stale: bool,
+
     // Status bar message
     pub status_message: Option<String>,
     /// When `status_message` was last set; used to auto-clear after a timeout.
@@ -259,6 +264,8 @@ impl AppState {
             detail_ticket_filter: FilterState::default(),
             label_filter: FilterState::default(),
             detail_ticket_sort: TicketSort::default(),
+            stale_process_count: 0,
+            tui_is_stale: false,
             status_message: None,
             status_message_at: None,
             github_orgs_cache: Vec::new(),

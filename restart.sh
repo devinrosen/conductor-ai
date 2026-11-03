@@ -1,5 +1,6 @@
 #!/bin/sh
 # Pull latest changes on the current branch, rebuild, and launch the TUI.
+# To refresh the installed binaries (~/.cargo/bin) instead, use `conductor dev reinstall`.
 set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"

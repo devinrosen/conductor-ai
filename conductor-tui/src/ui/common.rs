@@ -82,6 +82,20 @@ pub fn ticket_label_spans_compact(
     spans
 }
 
+/// Footer warning for conductor processes running an older build than their binary.
+fn stale_footer_warning(state: &AppState) -> Option<String> {
+    if state.tui_is_stale {
+        Some("⚠ TUI is on an old build — restart it  ".to_string())
+    } else if state.stale_process_count > 0 {
+        Some(format!(
+            "⚠ {} stale conductor process(es) (conductor dev processes)  ",
+            state.stale_process_count
+        ))
+    } else {
+        None
+    }
+}
+
 pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
     let msg = if let Some(f) = state.active_filter() {
         format!("/{} ", f.text)
@@ -103,10 +117,17 @@ pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         }
     };
 
-    let spans: Vec<Span<'static>> = vec![Span::styled(
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    if let Some(warning) = stale_footer_warning(state) {
+        spans.push(Span::styled(
+            warning,
+            Style::default().fg(state.theme.label_warning),
+        ));
+    }
+    spans.push(Span::styled(
         msg,
         Style::default().fg(state.theme.label_secondary),
-    )];
+    ));
 
     let bar = Paragraph::new(Line::from(spans));
     frame.render_widget(bar, area);
@@ -509,6 +530,18 @@ pub fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_footer_warning_messages() {
+        let mut state = AppState::new();
+        assert!(stale_footer_warning(&state).is_none());
+        state.stale_process_count = 2;
+        assert!(stale_footer_warning(&state).unwrap().contains("2 stale"));
+        state.tui_is_stale = true;
+        assert!(stale_footer_warning(&state)
+            .unwrap()
+            .contains("TUI is on an old build"));
+    }
 
     fn idle_run(
         result_text: Option<&str>,
