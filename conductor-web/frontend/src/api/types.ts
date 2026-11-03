@@ -127,6 +127,7 @@ export interface AgentRun {
   parent_run_id: string | null;
   /** When an interactive session entered `idle` (RFC 021); null otherwise. */
   idle_since?: string | null;
+  subprocess_started_at?: string | null;
 }
 
 export interface RunTreeTotals {

@@ -128,6 +128,7 @@ impl<'a> AgentManager<'a> {
             subprocess_pid: None,
             runtime: "claude".to_string(),
             idle_since: None,
+            subprocess_started_at: None,
         };
 
         self.conn.execute(
@@ -245,14 +246,28 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Mark an active run as failed without overwriting `result_text`, which interactive
+    /// runs (RFC 021) use for the last assistant message. Guarded like
+    /// [`Self::update_run_failed_if_running`].
+    pub fn update_run_failed_keep_result(&self, run_id: &str) -> Result<()> {
+        self.fail_if_active(run_id, None)
+    }
+
     /// Mark a run as failed only if it is currently `running`, `waiting_for_feedback` or `idle`.
     /// Used by background reapers and panic monitors to avoid overwriting a run that has
     /// already been finalized (e.g. `completed`, `failed`, `cancelled`) by another path.
     pub fn update_run_failed_if_running(&self, run_id: &str, error: &str) -> Result<()> {
+        self.fail_if_active(run_id, Some(error))
+    }
+
+    /// Shared guarded failed-status UPDATE. `result_text` is set to `error` when `Some` and
+    /// left unchanged when `None`.
+    fn fail_if_active(&self, run_id: &str, error: Option<&str>) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
             &format!(
-                "UPDATE agent_runs SET status = 'failed', result_text = :error, ended_at = :ended_at \
+                "UPDATE agent_runs SET status = 'failed', \
+                 result_text = COALESCE(:error, result_text), ended_at = :ended_at \
                  WHERE id = :id AND status IN {}",
                 crate::agent::status::ACTIVE_STATUSES_SQL
             ),
@@ -467,12 +482,20 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
-    /// Store the OS PID for a headless agent run immediately after spawn.
+    /// Store the OS PID for an agent run, and the start time of that process.
+    ///
+    /// The start time (OS-reported where available, else now) feeds the reaper's PID-reuse
+    /// guard, so a resumed session or re-spawned process on an old row isn't mistaken for a
+    /// recycled PID. `started_at` is left alone: it keeps meaning when the run began.
     pub fn update_run_subprocess_pid(&self, run_id: &str, pid: u32) -> Result<()> {
+        let started = crate::process_utils::process_started_at_rfc3339(pid)
+            .unwrap_or_else(|| Utc::now().to_rfc3339());
         self.conn.execute(
-            "UPDATE agent_runs SET subprocess_pid = :pid WHERE id = :id",
+            "UPDATE agent_runs SET subprocess_pid = :pid, subprocess_started_at = :started \
+             WHERE id = :id",
             named_params! {
                 ":pid": pid as i64,
+                ":started": started,
                 ":id": run_id,
             },
         )?;

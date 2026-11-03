@@ -486,6 +486,7 @@ fn show_confirm_quit_with_running_agents_includes_count() {
             subprocess_pid: None,
             runtime: "claude".to_string(),
             idle_since: None,
+            subprocess_started_at: None,
         },
     );
     app.show_confirm_quit();
@@ -2966,6 +2967,7 @@ fn stop_agent_refuses_idle_interactive_run() {
             subprocess_pid: Some(1),
             runtime: "interactive".to_string(),
             idle_since: Some("2024-01-01T00:05:00Z".into()),
+            subprocess_started_at: None,
         },
     );
     app.handle_stop_agent();

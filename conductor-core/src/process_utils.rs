@@ -71,27 +71,44 @@ pub fn process_started_at(pid: u32) -> Option<std::time::SystemTime> {
     Some(SystemTime::UNIX_EPOCH + Duration::new(secs, nanos))
 }
 
-/// Returns `true` if the process with the given PID appears to have been recycled by the OS
-/// after the original subprocess (recorded at `run_started_at`) exited.
+/// The OS-reported start time of `pid` as an RFC 3339 string (macOS only).
 ///
-/// Compares the OS-recorded process start time against `run_started_at`. If they differ by
+/// Returns `None` on other platforms or if the process does not exist.
+#[cfg(target_os = "macos")]
+pub fn process_started_at_rfc3339(pid: u32) -> Option<String> {
+    let t = process_started_at(pid)?;
+    Some(chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
+}
+
+/// Always `None` on non-macOS platforms.
+#[cfg(not(target_os = "macos"))]
+pub fn process_started_at_rfc3339(_pid: u32) -> Option<String> {
+    None
+}
+
+/// Returns `true` if the process with the given PID appears to have been recycled by the OS
+/// after the original subprocess (whose start time was recorded as `recorded_started_at`)
+/// exited.
+///
+/// Compares the OS-recorded process start time against `recorded_started_at`, the recorded
+/// start of the process that owns the PID (not the run's start). If they differ by
 /// more than 60 seconds the PID was almost certainly reused for a different process.
 ///
 /// Always returns `false` on non-macOS platforms (only macOS exposes `process_started_at`).
-/// Returns `false` if `run_started_at` cannot be parsed as RFC 3339 (logs a warning).
+/// Returns `false` if `recorded_started_at` cannot be parsed as RFC 3339 (logs a warning).
 /// Returns `false` if the OS start time is unavailable.
 #[cfg(target_os = "macos")]
-pub fn pid_was_recycled(pid: u32, run_started_at: &str) -> bool {
+pub fn pid_was_recycled(pid: u32, recorded_started_at: &str) -> bool {
     let proc_start = match process_started_at(pid) {
         Some(t) => t,
         None => return false,
     };
-    let run_start = match chrono::DateTime::parse_from_rfc3339(run_started_at) {
+    let run_start = match chrono::DateTime::parse_from_rfc3339(recorded_started_at) {
         Ok(t) => t,
         Err(e) => {
             tracing::warn!(
-                "pid_was_recycled: failed to parse run started_at {:?}: {e}",
-                run_started_at
+                "pid_was_recycled: failed to parse recorded started_at {:?}: {e}",
+                recorded_started_at
             );
             return false;
         }
@@ -105,7 +122,7 @@ pub fn pid_was_recycled(pid: u32, run_started_at: &str) -> bool {
 
 /// Always returns `false` on non-macOS platforms.
 #[cfg(not(target_os = "macos"))]
-pub fn pid_was_recycled(_pid: u32, _run_started_at: &str) -> bool {
+pub fn pid_was_recycled(_pid: u32, _recorded_started_at: &str) -> bool {
     false
 }
 
@@ -116,6 +133,15 @@ mod tests {
     fn pid_is_alive_current_process() {
         // The current process must be alive.
         assert!(super::pid_is_alive(std::process::id()));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn process_started_at_rfc3339_current_process_not_recycled() {
+        let own = std::process::id();
+        let ts = super::process_started_at_rfc3339(own).expect("start time unavailable");
+        assert!(chrono::DateTime::parse_from_rfc3339(&ts).is_ok());
+        assert!(!super::pid_was_recycled(own, &ts));
     }
 
     #[test]
