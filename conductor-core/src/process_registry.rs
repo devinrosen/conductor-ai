@@ -270,10 +270,18 @@ fn kind_supports_version_flag(kind: ProcessKind) -> bool {
     !matches!(kind, ProcessKind::Web)
 }
 
+/// How long a failed probe is remembered. Short, so a transient failure (load,
+/// an overlapping relink) is retried soon, but a binary whose probe fails every
+/// time isn't re-spawned (up to `VERSION_PROBE_TIMEOUT` each) on every call.
+const FAILED_PROBE_TTL: Duration = Duration::from_secs(30);
+
 struct CacheEntry {
     mtime: SystemTime,
     len: u64,
     sha: Option<String>,
+    /// Set when the probe failed: the entry is a negative cache that expires
+    /// after [`FAILED_PROBE_TTL`] rather than lasting until the file changes.
+    failed_at: Option<Instant>,
 }
 
 static DISK_SHA_CACHE: Mutex<Option<HashMap<PathBuf, CacheEntry>>> = Mutex::new(None);
@@ -281,8 +289,9 @@ static DISK_SHA_CACHE: Mutex<Option<HashMap<PathBuf, CacheEntry>>> = Mutex::new(
 /// Commit embedded in the binary at `exe`, or `None` when it is missing or
 /// can't report one. Cached per path by the file's (mtime, size), so a binary
 /// is only run again after it changes. A failed probe (timeout, spawn error,
-/// non-zero exit) is logged and not cached, so a transient failure is retried
-/// instead of sticking until the file changes.
+/// non-zero exit) is logged and negatively cached for [`FAILED_PROBE_TTL`] only,
+/// so a transient failure is retried soon instead of sticking until the file
+/// changes, while a persistent one isn't re-spawned on every call.
 pub fn disk_build_sha(exe: &Path) -> Option<String> {
     let meta = std::fs::metadata(exe).ok()?;
     let mtime = meta.modified().ok()?;
@@ -291,15 +300,19 @@ pub fn disk_build_sha(exe: &Path) -> Option<String> {
         let cache = DISK_SHA_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = cache.as_ref().and_then(|c| c.get(exe)) {
             if entry.mtime == mtime && entry.len == len {
-                return entry.sha.clone();
+                match entry.failed_at {
+                    None => return entry.sha.clone(),
+                    Some(t) if t.elapsed() < FAILED_PROBE_TTL => return None,
+                    Some(_) => {}
+                }
             }
         }
     }
-    let sha = match probe_disk_sha(exe) {
-        Ok(sha) => sha,
+    let (sha, failed_at) = match probe_disk_sha(exe) {
+        Ok(sha) => (sha, None),
         Err(e) => {
             tracing::warn!("cannot read build commit of {}: {e}", exe.display());
-            return None;
+            (None, Some(Instant::now()))
         }
     };
     DISK_SHA_CACHE
@@ -312,6 +325,7 @@ pub fn disk_build_sha(exe: &Path) -> Option<String> {
                 mtime,
                 len,
                 sha: sha.clone(),
+                failed_at,
             },
         );
     sha
@@ -540,12 +554,24 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn failed_probe_is_not_cached() {
+    fn failed_probe_is_negatively_cached_until_ttl_expires() {
         let dir = script_dir();
-        let exe = write_script(&dir, "conductor", "exit 1");
+        let counter = dir.join("count");
+        let body = format!("echo x >> {}\nexit 1", counter.display());
+        let exe = write_script(&dir, "conductor", &body);
+        let runs = || std::fs::read_to_string(&counter).unwrap().lines().count();
         assert_eq!(disk_build_sha(&exe), None);
-        let cache = DISK_SHA_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        assert!(cache.as_ref().is_none_or(|c| !c.contains_key(&exe)));
+        assert_eq!(disk_build_sha(&exe), None);
+        assert_eq!(runs(), 1, "second call within the TTL must not re-probe");
+        // Age the entry past the TTL: the probe is retried.
+        {
+            let mut cache = DISK_SHA_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+            let entry = cache.as_mut().unwrap().get_mut(&exe).unwrap();
+            entry.failed_at = Instant::now().checked_sub(FAILED_PROBE_TTL + Duration::from_secs(1));
+            assert!(entry.failed_at.is_some());
+        }
+        assert_eq!(disk_build_sha(&exe), None);
+        assert_eq!(runs(), 2);
         let _ = std::fs::remove_dir_all(dir);
     }
 
