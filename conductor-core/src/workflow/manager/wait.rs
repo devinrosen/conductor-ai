@@ -389,7 +389,7 @@ pub fn wait_for_workflow_run_with_progress(
             let snapshot = load_run(conn, run_id).and_then(|run| {
                 let (step_path, step_running_secs) = running_step_path(conn, run_id)?;
                 Ok(WaitProgress {
-                    run_id: run.id,
+                    run_id: run.id.clone(),
                     status: run.status.to_string(),
                     elapsed_secs: started.elapsed().as_secs(),
                     step_path,
