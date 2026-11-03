@@ -28,12 +28,20 @@ static BUILD_INFO: OnceLock<BuildInfo> = OnceLock::new();
 
 /// Record the build identity for this process. The first call wins.
 pub fn init(info: BuildInfo) {
-    let _ = BUILD_INFO.set(info);
+    set_in(&BUILD_INFO, info);
+}
+
+fn set_in(lock: &OnceLock<BuildInfo>, info: BuildInfo) {
+    let _ = lock.set(info);
+}
+
+fn get_from(lock: &OnceLock<BuildInfo>) -> BuildInfo {
+    lock.get().copied().unwrap_or(BuildInfo::UNKNOWN)
 }
 
 /// The recorded build identity, or [`BuildInfo::UNKNOWN`] if [`init`] was never called.
 pub fn get() -> BuildInfo {
-    BUILD_INFO.get().copied().unwrap_or(BuildInfo::UNKNOWN)
+    get_from(&BUILD_INFO)
 }
 
 /// Cargo package version.
@@ -78,18 +86,45 @@ macro_rules! semver_with_build {
 mod tests {
     use super::*;
 
+    const A: BuildInfo = BuildInfo {
+        git_sha: "abc1234",
+        commit_time: "2026-01-01T00:00:00+00:00",
+    };
+    const B: BuildInfo = BuildInfo {
+        git_sha: "def5678",
+        commit_time: "2026-02-02T00:00:00+00:00",
+    };
+
     #[test]
-    fn init_then_get_roundtrips() {
-        let info = BuildInfo {
-            git_sha: "abc1234",
-            commit_time: "2026-01-01T00:00:00+00:00",
-        };
-        init(info);
-        // First call wins process-wide, so another test may have set it already;
-        // either way `get()` must return an initialised value, never panic.
+    fn uninitialised_lock_reports_unknown() {
+        let lock = OnceLock::new();
+        assert_eq!(get_from(&lock), BuildInfo::UNKNOWN);
+    }
+
+    #[test]
+    fn set_then_get_returns_exact_values() {
+        let lock = OnceLock::new();
+        set_in(&lock, A);
+        assert_eq!(get_from(&lock), A);
+    }
+
+    #[test]
+    fn first_set_wins_and_second_does_not_override() {
+        let lock = OnceLock::new();
+        set_in(&lock, A);
+        set_in(&lock, B);
+        assert_eq!(get_from(&lock), A);
+    }
+
+    #[test]
+    fn public_init_and_get_are_consistent() {
+        // Process-global: another test may have initialised it first, so only
+        // assert that `get()` matches whichever value won.
+        init(A);
         let got = get();
-        assert!(!got.git_sha.is_empty());
-        assert!(!got.commit_time.is_empty());
+        assert_ne!(got, BuildInfo::UNKNOWN);
+        init(B);
+        assert_eq!(get(), got);
         assert!(VERSION.len() > 1);
     }
 }
