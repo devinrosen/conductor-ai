@@ -211,6 +211,12 @@ No hook reports tokens or cost; the session transcript (`transcript_path`) does.
 - **Per-turn tokens** come from assistant messages' `usage`, deduplicated on `message.id`. They're grouped into turns through the `parentUuid` chain to the user entry that carries `promptId`, and written into the turn's `result` event metadata.
 - **Fallback:** sum the per-message usage when there's no final `cost-state` entry (after `kill -9`).
 - **Reconciliation:** per-message sums don't match `cost-state` (input 16 vs 2,252 tokens in Spike C), probably because `cost-state` also counts Claude Code's side calls. Session totals use `cost-state`. Treat per-turn figures as approximate until reconciled.
+- **Checked by hand (#3165, Claude Code 2.1.317, one 1,158-line session):**
+  - **When `cost-state` is written:** one entry, at line 1,153 of 1,158, so at exit. While a session is idle the exact totals don't exist yet. The reader therefore adds per-message sums to the token columns and sets `usage_estimated`. `cost_usd` stays unchanged then, because entries no longer carry cost. The exit `cost-state` replaces the estimate and clears the flag.
+  - **The gap:** `cost-state` had `claude-opus-5-5` input 2,396 / output 62,692 / cache read 15.75M and `claude-haiku-5-5` input 1,202 / output 143. Per-message sums (174 deduplicated messages, no sidechains) were opus input 174 / output 50,313 / cache read 14.36M. So the gap is Haiku side calls, plus about 25% more opus output and 10% more cache reads that transcript messages don't carry (probably internal calls and the final streaming usage).
+  - **`parentUuid` hops:** 81 of 173 assistant entries pointed at an `attachment` entry, not a user entry. The parent map has to include every entry type.
+  - **`duration_ms`** is `totalAPIDuration` (busy time), not `totalDuration` (wall time, includes waiting on the developer). `totalToolDuration` and lines changed have no column and aren't stored.
+  - **Not ingested:** `thinkingTokens` aren't added to output, on the assumption that `outputTokens` already includes them (not verified).
 - **On resume,** the `SessionStart` payload's `context_tokens` and `estimated_cache_write_usd` can be shown as "resuming will cost about $X".
 - **Read incrementally,** from `transcript_offset`, because transcripts reach 10 MB and more (#3165).
 

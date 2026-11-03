@@ -17,7 +17,19 @@ pub(super) const AGENT_RUN_SELECT: &str =
      input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
      bot_name, conversation_id, subprocess_pid, \
      COALESCE(runtime, 'claude') AS runtime, idle_since, \
-     subprocess_started_at FROM agent_runs";
+     subprocess_started_at, COALESCE(usage_estimated, 0) AS usage_estimated FROM agent_runs";
+
+/// The `usage_estimated` column expression, shared by every arm of [`agent_run_cols!`]
+/// so a trailing column is added in one place.
+macro_rules! usage_estimated_col {
+    ($alias:literal) => {
+        concat!(
+            "COALESCE(",
+            $alias,
+            "usage_estimated, 0) AS usage_estimated"
+        )
+    };
+}
 
 /// Generate an `agent_runs` column list with a given table alias.
 ///
@@ -83,7 +95,8 @@ macro_rules! agent_run_cols {
             $alias,
             "idle_since, ",
             $alias,
-            "subprocess_started_at"
+            "subprocess_started_at, ",
+            usage_estimated_col!($alias)
         )
     };
     ($alias:literal, null_plan) => {
@@ -139,7 +152,8 @@ macro_rules! agent_run_cols {
             $alias,
             "idle_since, ",
             $alias,
-            "subprocess_started_at"
+            "subprocess_started_at, ",
+            usage_estimated_col!($alias)
         )
     };
 }
@@ -249,6 +263,7 @@ pub(super) fn row_to_agent_run(row: &rusqlite::Row) -> rusqlite::Result<AgentRun
         runtime: row.get("runtime")?,
         idle_since: row.get("idle_since")?,
         subprocess_started_at: row.get("subprocess_started_at")?,
+        usage_estimated: row.get::<_, i64>("usage_estimated")? != 0,
     })
 }
 
@@ -309,6 +324,7 @@ mod tests {
         "runtime",
         "idle_since",
         "subprocess_started_at",
+        "usage_estimated",
     ];
 
     #[test]

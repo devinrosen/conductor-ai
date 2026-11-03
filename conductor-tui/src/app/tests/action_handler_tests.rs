@@ -487,6 +487,7 @@ fn show_confirm_quit_with_running_agents_includes_count() {
             runtime: "claude".to_string(),
             idle_since: None,
             subprocess_started_at: None,
+            usage_estimated: false,
         },
     );
     app.show_confirm_quit();
@@ -2968,6 +2969,7 @@ fn stop_agent_refuses_idle_interactive_run() {
             runtime: "interactive".to_string(),
             idle_since: Some("2024-01-01T00:05:00Z".into()),
             subprocess_started_at: None,
+            usage_estimated: false,
         },
     );
     app.handle_stop_agent();
@@ -3013,6 +3015,7 @@ fn make_interactive_run(
         runtime: runtime.to_string(),
         idle_since: None,
         subprocess_started_at: None,
+        usage_estimated: false,
     }
 }
 

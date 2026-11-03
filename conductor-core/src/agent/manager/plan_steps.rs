@@ -527,6 +527,7 @@ mod tests {
             runtime: "claude".to_string(),
             idle_since: None,
             subprocess_started_at: None,
+            usage_estimated: false,
         };
 
         let prompt = run.build_resume_prompt();
