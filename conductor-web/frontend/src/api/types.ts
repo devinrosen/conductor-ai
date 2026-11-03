@@ -108,6 +108,7 @@ export interface AgentRun {
   repo_id?: string | null;
   claude_session_id: string | null;
   prompt: string;
+  runtime?: string;
   status: "running" | "completed" | "failed" | "cancelled" | "waiting_for_feedback" | "idle";
   result_text: string | null;
   cost_usd: number | null;

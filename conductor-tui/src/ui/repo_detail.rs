@@ -560,8 +560,11 @@ fn render_repo_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
         if let Some(run) = latest_run {
             use conductor_core::agent::AgentRunStatus;
             match run.status {
-                AgentRunStatus::Running => " Repo Agent  x=stop ",
-                AgentRunStatus::WaitingForFeedback => " Repo Agent  f=respond F=dismiss x=stop ",
+                AgentRunStatus::Running if run.is_stoppable() => " Repo Agent  x=stop ",
+                AgentRunStatus::WaitingForFeedback if run.is_stoppable() => {
+                    " Repo Agent  f=respond F=dismiss x=stop "
+                }
+                AgentRunStatus::WaitingForFeedback => " Repo Agent  f=respond F=dismiss ",
                 _ => " Repo Agent ",
             }
         } else {
