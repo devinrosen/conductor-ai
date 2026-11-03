@@ -1086,6 +1086,19 @@ pub fn claim_needs_resume_runs(conn: &Connection, config: &Config) -> Result<Vec
     Ok(claimed)
 }
 
+/// Database path for a resume thread spawned on behalf of `conn`.
+///
+/// `None` (with a warning) for an in-memory connection: another thread can't
+/// reach that database, and falling back to the default path would resume, and
+/// migrate, the real `~/.conductor` database instead.
+fn resume_db_path(conn: &Connection) -> Option<std::path::PathBuf> {
+    let path = crate::db::connection_db_path(conn);
+    if path.is_none() {
+        tracing::warn!("not spawning workflow resume: connection has no database file");
+    }
+    path
+}
+
 /// Claim any expired-lease workflow runs, kill their stale subprocesses, and
 /// spawn a heartbeat-resume thread for each one.
 pub fn claim_and_resume_expired_leases(
@@ -1108,6 +1121,9 @@ pub fn claim_and_resume_expired_leases(
                     );
                 }
             }
+            let Some(db_path) = resume_db_path(conn) else {
+                return;
+            };
             for (run_id, wf_name, label) in claimed {
                 crate::workflow::spawn_heartbeat_resume(
                     crate::workflow::SpawnHeartbeatResumeParams {
@@ -1116,7 +1132,7 @@ pub fn claim_and_resume_expired_leases(
                         target_label: label,
                         config: config.clone(),
                         conductor_bin_dir: conductor_bin_dir.clone(),
-                        db_path: None,
+                        db_path: Some(db_path.clone()),
                     },
                 );
             }
@@ -1147,11 +1163,17 @@ pub fn run_workflow_maintenance(
             Err(e) => tracing::warn!("classify_resumable_workflows failed: {e}"),
         }
         match claim_needs_resume_runs(conn, config) {
-            Ok(claimed) => crate::workflow::spawn_claimed_runs(
-                claimed,
-                std::sync::Arc::new(config.clone()),
-                conductor_bin_dir.clone(),
-            ),
+            Ok(claimed) if !claimed.is_empty() => {
+                if let Some(db_path) = resume_db_path(conn) {
+                    crate::workflow::spawn_claimed_runs(
+                        claimed,
+                        std::sync::Arc::new(config.clone()),
+                        conductor_bin_dir.clone(),
+                        Some(db_path),
+                    );
+                }
+            }
+            Ok(_) => {}
             Err(e) => tracing::warn!("claim_needs_resume_runs failed: {e}"),
         }
     }

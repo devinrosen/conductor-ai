@@ -37,10 +37,7 @@ impl Conductor {
     /// (as in tests) must not send that thread to the real `~/.conductor` database.
     /// Falls back to the default path for an in-memory connection.
     pub fn conn_db_path(&self) -> PathBuf {
-        match self.conn.path() {
-            Some(p) if !p.is_empty() => PathBuf::from(p),
-            _ => config_db_path(),
-        }
+        crate::db::connection_db_path(&self.conn).unwrap_or_else(config_db_path)
     }
 }
 
