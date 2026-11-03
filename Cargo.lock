@@ -1011,7 +1011,7 @@ dependencies = [
  "openssl-sys",
  "pkg-config",
  "vcpkg",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1181,7 +1181,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1424,7 +1424,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3236,7 +3236,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4445,9 +4445,9 @@ dependencies = [
 
 [[package]]
 name = "runkon-anthropic"
-version = "0.7.2-alpha"
+version = "0.8.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb56163b6000dc992bbdea42acefb8f97ad18c9e9fc6902d7e172a8a7ce3811a"
+checksum = "6a1d77659fae17689b9c16f42cb1c95ae6facb216cfdb05f95ba3c47e9834aab"
 dependencies = [
  "runkon-flow",
  "runkon-flow-executors",
@@ -4460,9 +4460,9 @@ dependencies = [
 
 [[package]]
 name = "runkon-flow"
-version = "0.7.2-alpha"
+version = "0.8.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15960a0574a36d859117abbe72712b2229bad21f1957636aed3babb5ec624572"
+checksum = "2df835bbfdf282eb368dc3dc2961cba8b47566dbfc9cdc16e12063eef0ace3f6"
 dependencies = [
  "chrono",
  "rusqlite",
@@ -4481,9 +4481,9 @@ dependencies = [
 
 [[package]]
 name = "runkon-flow-executors"
-version = "0.7.2-alpha"
+version = "0.8.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "240132a18fd698fdaa5ad28eb96ebf557bbb031d0e5da2488fdb28c1da4d2f4c"
+checksum = "1feb37da26d3f67d35ea11f7e0da33cf0bcbb562531c4147ddfdafa715e46d7d"
 dependencies = [
  "runkon-flow",
  "runkon-runtimes",
@@ -4495,9 +4495,9 @@ dependencies = [
 
 [[package]]
 name = "runkon-google"
-version = "0.7.2-alpha"
+version = "0.8.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ebe275a5eb4b764098b1f5d758dbc3ff36ee312e4cd18a8b91d3f8f5bff0fca"
+checksum = "5fb7d8ae58fb3f9428fdcef68efed91f1b7f2d746eda816e0b33e7c123033d9b"
 dependencies = [
  "runkon-flow",
  "runkon-flow-executors",
@@ -4510,9 +4510,9 @@ dependencies = [
 
 [[package]]
 name = "runkon-notify"
-version = "0.7.2-alpha"
+version = "0.8.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02e6d717a36a13ef5d0bd20aadff3874a72d1fd37205aebf28eaa80f2b4f4564"
+checksum = "71086dd12ebf9bf9df117fb8491bd85939a7d9c342b63b65a426bcec845f6ae6"
 dependencies = [
  "serde",
  "serde_json",
@@ -4523,9 +4523,9 @@ dependencies = [
 
 [[package]]
 name = "runkon-runtimes"
-version = "0.7.2-alpha"
+version = "0.8.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89e1e8371eaf6ca95f4a5d468571bdffe53949dadc9d9343d00f053c7edbfe8c"
+checksum = "3a238d90dcfe4ece9d0f570ce7b814c6a4ae7146f743439ad23ce45dc48db02a"
 dependencies = [
  "libc",
  "serde",
@@ -4622,7 +4622,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5712,7 +5712,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6851,7 +6851,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
