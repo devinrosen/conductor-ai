@@ -3,6 +3,8 @@ use std::sync::{Arc, Mutex};
 use runkon_flow::engine_error::EngineError;
 
 use super::bridge_lock_err;
+use super::turn_completion;
+use runkon_runtimes::RuntimeResolver as _;
 
 /// Wraps conductor-core's `ClaudeAgentExecutor` behind the runkon-flow
 /// `ActionExecutor` trait.
@@ -175,6 +177,28 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             }
         }
 
+        // For the unfinished-turn check (#3177): the agent definition (for
+        // `can_commit` and the resume request) and whether the tree was clean
+        // before the step, so a dirty tree inherited from earlier is not blamed
+        // on the agent. A load error is left for `inner.execute` to report.
+        let working_dir = ctx.working_dir().to_path_buf();
+        let agent_def = runkon_flow_executors::agent_loader::load_agent(
+            &working_dir.to_string_lossy(),
+            &ctx.get(crate::workflow::engine_keys::REPO_PATH)
+                .unwrap_or_default(),
+            &params.name,
+            Some(ctx.workflow_name()),
+            &params.plugin_dirs,
+            self.config.general.default_runtime.as_deref(),
+        )
+        .ok();
+        let tree_clean_before = !params.dry_run
+            && agent_def.as_ref().is_some_and(|d| d.can_commit)
+            && turn_completion::tracked_changes(&working_dir).is_some_and(|f| f.is_empty());
+        let resume_resolver = resolver.clone();
+        let resume_host = host_adapter.clone();
+        let resume_runtime = runtime_override.clone();
+
         let agent_ctx = runkon_anthropic::claude_agent::ClaudeAgentContext {
             run_id: child_run_id.clone(),
             working_dir: ctx.working_dir().to_path_buf(),
@@ -212,9 +236,72 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
         let mut output = inner
             .execute(&agent_ctx, &agent_params)
             .map_err(EngineError::Workflow)?;
+        if let Some(agent_def) = agent_def {
+            let log_path = crate::config::agent_log_path(&child_run_id)
+                .unwrap_or_else(|_| std::env::temp_dir().join(format!("{child_run_id}.log")));
+            let schema = schema_arc.as_deref();
+            turn_completion::finish_unfinished_turn(
+                &params.name,
+                &mut output,
+                schema,
+                || turn_completion::assess(&log_path, &working_dir, tree_clean_before),
+                || {
+                    crate::agent::log_parsing::read_log_result(&log_path)
+                        .and_then(|r| r.session_id)
+                        .or_else(|| {
+                            let conn = self.conn.lock().ok()?;
+                            crate::agent::AgentManager::new(&conn)
+                                .get_run(&child_run_id)
+                                .ok()
+                                .flatten()
+                                .and_then(|r| r.session_id)
+                        })
+                },
+                |prompt, session_id| {
+                    let effective_runtime = resume_runtime
+                        .clone()
+                        .unwrap_or_else(|| agent_def.runtime.clone());
+                    let runtime = resume_resolver
+                        .resolve(&effective_runtime)
+                        .map_err(|e| format!("failed to resolve runtime '{effective_runtime}': {e}"))?;
+                    let extra_cli_args = match &params.as_identity {
+                        Some(name) => vec![(
+                            std::borrow::Cow::Borrowed("--bot-name"),
+                            std::borrow::Cow::Owned(name.clone()),
+                        )],
+                        None => vec![],
+                    };
+                    let request = runkon_runtimes::RuntimeRequest {
+                        run_id: child_run_id.clone(),
+                        effective_runtime,
+                        agent_def: agent_def.clone(),
+                        prompt: prompt.to_string(),
+                        working_dir: working_dir.clone(),
+                        model: params.model.clone(),
+                        extra_cli_args,
+                        plugin_dirs: params.plugin_dirs.clone(),
+                        resume_session_id: Some(session_id.to_string()),
+                        tracker: resume_host.clone()
+                            as std::sync::Arc<dyn runkon_runtimes::RunTracker>,
+                        event_sink: resume_host.clone()
+                            as std::sync::Arc<dyn runkon_runtimes::RunEventSink>,
+                    };
+                    runkon_flow_executors::correction::run_agent_with_output_correction(
+                        &*runtime,
+                        request,
+                        ctx.shutdown(),
+                        info.step_timeout,
+                        schema,
+                    )
+                },
+            )?;
+        }
         if output
             .metadata
             .contains_key(runkon_flow::constants::metadata_keys::OUTPUT_CORRECTION_ATTEMPTS)
+            || output
+                .metadata
+                .contains_key(turn_completion::FINISH_TURN_ATTEMPTS)
         {
             // Runkon summed the metrics across correction attempts; the row only
             // holds the final attempt's, so write the totals back (best-effort).

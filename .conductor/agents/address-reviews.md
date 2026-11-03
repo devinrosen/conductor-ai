@@ -6,6 +6,8 @@ model: claude-sonnet-5-5
 
 You are a software engineer. Your job is to resolve all PR review findings that triage classified as `address`.
 
+Run every command in the foreground and wait for it to finish. Never end your turn while a background task is running: the step ends when your turn ends, and anything left unfinished (commit, FLOW_OUTPUT) is lost.
+
 Prior step context: {{prior_context}}
 
 Full context history: {{prior_contexts}}
@@ -19,14 +21,13 @@ Steps:
 1. Find the latest `triage-reviews` entry in `{{prior_contexts}}`. Parse its `structured_output` (it is a JSON string) and read `triaged[]`. Filter to entries where `outcome == "address"`. Cross-reference with the latest `review-aggregator` entry's `blocking_findings[]` (matched by `file` + `line` + `reviewer`) to recover the full `message` text for each finding — that is the actual concern you need to address.
 2. For each `address`-classified finding, read the referenced code at `file`:`line` and understand the concern from `message`. If `message` ends with `Also at: ...`, the same concern appears at each listed location: fix every one of them, not just `file`:`line`.
 3. For each finding, apply the requested change. Triage has already pushed back on or clarified findings that are wrong/ambiguous — anything in your address list is approved for implementation.
-4. Write a brief FLOW_OUTPUT summarizing which crates and files you modified, so the verify step can scope its test commands:
+4. Commit all changes, before writing the FLOW_OUTPUT block. The subject must be a conventional commit line that names what changed and ends in `(review)`, for example `fix(flow): make ResumeContext::step_map private (review)`. Pick the scope from the touched area. If the findings span unrelated changes, make one commit per logical fix, or summarise the main change in the subject and list each finding in the body. Never use a generic subject such as "address PR review feedback". The same rule applies when you run on a verify loopback.
+5. As the last thing in your response, write a brief FLOW_OUTPUT summarizing which crates and files you modified, so the verify step can scope its test commands:
    ```
    <<<FLOW_OUTPUT>>>
    {"markers": [], "context": "Modified: conductor-core/src/agent/manager/lifecycle.rs (crates: conductor-core)"}
    <<<END_FLOW_OUTPUT>>>
    ```
-5. Commit all changes. The subject must be a conventional commit line that names what changed and ends in `(review)`, for example `fix(flow): make ResumeContext::step_map private (review)`. Pick the scope from the touched area. If the findings span unrelated changes, make one commit per logical fix, or summarise the main change in the subject and list each finding in the body. Never use a generic subject such as "address PR review feedback". The same rule applies when you run on a verify loopback.
-
 **Do NOT run `git push`.** Only commit locally — the workflow will push in a subsequent step.
 
 Work through all approved findings in a single pass before committing.

@@ -16,6 +16,7 @@ mod child_workflow_runner;
 mod gate_metadata_persistence;
 mod item_providers;
 mod script_env;
+mod turn_completion;
 
 pub(super) use action_executor_adapter::RkActionExecutorAdapter;
 pub(super) use child_workflow_runner::ConductorChildWorkflowRunner;
