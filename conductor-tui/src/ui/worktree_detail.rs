@@ -307,7 +307,7 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
             .data
             .latest_agent_runs
             .get(&wt.id)
-            .map_or(true, |run| run.stop_refusal().is_none());
+            .is_none_or(|run| run.stop_refusal().is_none());
         let mut hint = String::from("Tab=switch panel  y=copy  o=act");
         if has_waiting {
             hint.push_str("  f=respond  F=dismiss");
