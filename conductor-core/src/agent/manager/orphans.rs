@@ -3,17 +3,33 @@ use crate::error::Result;
 
 use super::super::db::{row_to_agent_run, AGENT_RUN_SELECT};
 use super::super::log_parsing::try_recover_from_log;
+use super::super::types::{AgentRun, INTERACTIVE_RUNTIME};
 use super::AgentManager;
 
 impl<'a> AgentManager<'a> {
-    /// Attempt log recovery for a run, falling back to marking it failed.
+    /// Reap one orphaned run.
     ///
-    /// Tries `try_recover_from_log` first; if no result is found in the log,
-    /// marks the run as `failed` with `fail_msg`.
+    /// Dismisses the run's pending feedback requests (its process can never answer them).
+    /// For interactive runs (RFC 021) there is no stream-json log to recover from, so the run
+    /// is marked `failed` keeping its `result_text`, and `fail_msg` is recorded as a `system`
+    /// event. Otherwise tries `try_recover_from_log` first and, if no result is found, marks
+    /// the run as `failed` with `fail_msg`.
     /// Either way, cascades the failure to any associated `workflow_runs` whose
     /// `parent_run_id` points to this agent run.
-    fn reap_one(&self, run_id: &str, fail_msg: &str) -> crate::error::Result<()> {
-        if try_recover_from_log(self, run_id).is_some() {
+    fn reap_one(&self, run: &AgentRun, fail_msg: &str) -> crate::error::Result<()> {
+        let run_id = run.id.as_str();
+        let dismissed = self.dismiss_pending_feedback_for_run(run_id)?;
+        if dismissed > 0 {
+            tracing::info!(
+                "reap_orphaned_runs: dismissed {dismissed} pending feedback request(s) for run {run_id}"
+            );
+        }
+        if run.runtime == INTERACTIVE_RUNTIME {
+            tracing::warn!("reap_orphaned_runs: interactive run {run_id} gone, marking as failed");
+            self.update_run_failed_keep_result(run_id)?;
+            let now = chrono::Utc::now().to_rfc3339();
+            self.create_event(run_id, "system", fail_msg, &now, None)?;
+        } else if try_recover_from_log(self, run_id).is_some() {
             tracing::info!("reap_orphaned_runs: recovered result from log for run {run_id}");
         } else {
             tracing::warn!(
@@ -95,9 +111,11 @@ impl<'a> AgentManager<'a> {
     ///
     /// Queries all runs with an active status (`running`, `waiting_for_feedback` or `idle`),
     /// checks whether their subprocess is still alive, and for any orphans:
-    /// 1. Attempts log-file recovery via `try_recover_from_log()` (the agent may
-    ///    have completed but the handler didn't fire).
-    /// 2. If no result is found in the log, marks the run as `failed`.
+    /// 1. Dismisses the run's pending feedback requests.
+    /// 2. Attempts log-file recovery via `try_recover_from_log()` (the agent may
+    ///    have completed but the handler didn't fire). Interactive runs skip this.
+    /// 3. If no result is found in the log, marks the run as `failed`. Interactive runs
+    ///    keep their `result_text` and get a `system` event with the reason instead.
     ///
     /// Returns the number of orphaned runs that were reaped.
     pub fn reap_orphaned_runs(&self) -> Result<usize> {
@@ -139,17 +157,21 @@ impl<'a> AgentManager<'a> {
             if let Some(pid) = run.subprocess_pid {
                 if crate::process_utils::pid_is_alive(pid as u32) {
                     // PID is alive — guard against PID reuse by comparing the OS-recorded
-                    // process start time against run.started_at.
+                    // process start time against the recorded start of the process we
+                    // spawned (subprocess_started_at, falling back to started_at for old
+                    // rows). run.started_at alone would misfire for resumed sessions and
+                    // re-spawned processes on an old row.
                     // If start times differ by >60 s, the PID was recycled by the OS after
                     // the original subprocess exited and should be reaped.
-                    if crate::process_utils::pid_was_recycled(pid as u32, &run.started_at) {
+                    if crate::process_utils::pid_was_recycled(pid as u32, run.pid_recorded_started_at()) {
                         tracing::warn!(
-                            "reap_orphaned_runs: PID {pid} recycled for run {} (started_at={})",
+                            "reap_orphaned_runs: PID {pid} recycled for run {} (started_at={}, subprocess_started_at={:?})",
                             run.id,
                             run.started_at,
+                            run.subprocess_started_at,
                         );
                         self.reap_one(
-                            &run.id,
+                            run,
                             "subprocess PID recycled — agent may have completed but result was not captured",
                         )?;
                         reaped += 1;
@@ -165,7 +187,7 @@ impl<'a> AgentManager<'a> {
                     run.worktree_id,
                 );
                 self.reap_one(
-                    &run.id,
+                    run,
                     "subprocess exited unexpectedly — agent may have completed but result was not captured",
                 )?;
                 reaped += 1;
@@ -202,7 +224,7 @@ impl<'a> AgentManager<'a> {
                 run.worktree_id,
             );
             self.reap_one(
-                &run.id,
+                run,
                 "agent process gone — may have completed but result was not captured",
             )?;
             reaped += 1;
@@ -920,5 +942,133 @@ mod tests {
         assert_eq!(reaped, 0, "idle run with live PID must be left alone");
         let after = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(after.status, AgentRunStatus::Idle);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn spawn_sleeper() -> std::process::Child {
+        std::process::Command::new("sleep").arg("600").spawn().unwrap()
+    }
+
+    /// A resumed session is a new process on an old row: `started_at` is far in the past but
+    /// the freshly recorded PID start time is current, so it must not be reaped.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_reap_orphaned_runs_resumed_session_live_pid_not_reaped() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let mut child = spawn_sleeper();
+
+        let run = mgr.create_run(Some("w1"), "resumed session", None).unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET started_at = '2020-01-01T00:00:00Z', \
+             status = 'waiting_for_feedback' WHERE id = :id",
+            named_params! { ":id": run.id },
+        )
+        .unwrap();
+        mgr.update_run_subprocess_pid(&run.id, child.id()).unwrap();
+
+        let reaped = mgr.reap_orphaned_runs();
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert_eq!(reaped.unwrap(), 0);
+        let updated = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(updated.status, AgentRunStatus::WaitingForFeedback);
+    }
+
+    /// Headless correction re-spawn: reopen a completed run whose first attempt started long
+    /// ago, record a new live PID, and make sure the reaper leaves it alone.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_reap_orphaned_runs_reopened_run_live_pid_not_reaped() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let mut child = spawn_sleeper();
+
+        let run = mgr.create_run(Some("w1"), "correction", None).unwrap();
+        mgr.update_run_completed(&run.id, None, Some("first"), None, None, None, None, None, None, None)
+            .unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET started_at = '2020-01-01T00:00:00Z' WHERE id = :id",
+            named_params! { ":id": run.id },
+        )
+        .unwrap();
+        assert!(mgr.reopen_run_for_resume(&run.id).unwrap());
+        mgr.update_run_subprocess_pid(&run.id, child.id()).unwrap();
+
+        let reaped = mgr.reap_orphaned_runs();
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert_eq!(reaped.unwrap(), 0);
+        let updated = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(updated.status, AgentRunStatus::Running);
+    }
+
+    /// A recorded `subprocess_started_at` far from the OS start time still means PID reuse.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_reap_orphaned_runs_subprocess_started_at_mismatch_reaped() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let mut child = spawn_sleeper();
+
+        let run = mgr.create_run(Some("w1"), "recycled", None).unwrap();
+        mgr.update_run_subprocess_pid(&run.id, child.id()).unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET subprocess_started_at = '2020-01-01T00:00:00Z' WHERE id = :id",
+            named_params! { ":id": run.id },
+        )
+        .unwrap();
+
+        let reaped = mgr.reap_orphaned_runs();
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert_eq!(reaped.unwrap(), 1);
+        let updated = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(updated.status, AgentRunStatus::Failed);
+        assert!(updated.result_text.unwrap().contains("PID recycled"));
+    }
+
+    #[test]
+    fn test_reap_orphaned_runs_dismisses_pending_feedback() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "needs input", None).unwrap();
+        let fb = mgr.request_feedback(&run.id, "proceed?", None).unwrap();
+
+        assert_eq!(mgr.reap_orphaned_runs().unwrap(), 1);
+
+        let updated = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(updated.status, AgentRunStatus::Failed);
+        let fb = mgr.get_feedback(&fb.id).unwrap().unwrap();
+        assert_eq!(fb.status, crate::agent::status::FeedbackStatus::Dismissed);
+    }
+
+    #[test]
+    fn test_reap_orphaned_runs_interactive_keeps_result_text() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "interactive", None).unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET runtime = 'interactive', status = 'idle', \
+             result_text = 'last assistant message', subprocess_pid = 999999999 WHERE id = :id",
+            named_params! { ":id": run.id },
+        )
+        .unwrap();
+
+        assert_eq!(mgr.reap_orphaned_runs().unwrap(), 1);
+
+        let updated = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(updated.status, AgentRunStatus::Failed);
+        assert!(updated.ended_at.is_some());
+        assert_eq!(updated.result_text.as_deref(), Some("last assistant message"));
+        let events = mgr.list_events_for_run(&run.id).unwrap();
+        let system: Vec<_> = events.iter().filter(|e| e.kind == "system").collect();
+        assert_eq!(system.len(), 1);
+        assert!(system[0].summary.contains("subprocess exited unexpectedly"));
     }
 }

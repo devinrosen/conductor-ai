@@ -16,7 +16,8 @@ pub(super) const AGENT_RUN_SELECT: &str =
      model, plan, parent_run_id, \
      input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
      bot_name, conversation_id, subprocess_pid, \
-     COALESCE(runtime, 'claude') AS runtime, idle_since FROM agent_runs";
+     COALESCE(runtime, 'claude') AS runtime, idle_since, \
+     subprocess_started_at FROM agent_runs";
 
 /// Generate an `agent_runs` column list with a given table alias.
 ///
@@ -80,7 +81,9 @@ macro_rules! agent_run_cols {
             $alias,
             "runtime, 'claude') AS runtime, ",
             $alias,
-            "idle_since"
+            "idle_since, ",
+            $alias,
+            "subprocess_started_at"
         )
     };
     ($alias:literal, null_plan) => {
@@ -134,7 +137,9 @@ macro_rules! agent_run_cols {
             $alias,
             "runtime, 'claude') AS runtime, ",
             $alias,
-            "idle_since"
+            "idle_since, ",
+            $alias,
+            "subprocess_started_at"
         )
     };
 }
@@ -243,6 +248,7 @@ pub(super) fn row_to_agent_run(row: &rusqlite::Row) -> rusqlite::Result<AgentRun
         subprocess_pid: row.get("subprocess_pid")?,
         runtime: row.get("runtime")?,
         idle_since: row.get("idle_since")?,
+        subprocess_started_at: row.get("subprocess_started_at")?,
     })
 }
 
@@ -302,6 +308,7 @@ mod tests {
         "subprocess_pid",
         "runtime",
         "idle_since",
+        "subprocess_started_at",
     ];
 
     #[test]

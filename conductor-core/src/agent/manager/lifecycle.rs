@@ -128,6 +128,7 @@ impl<'a> AgentManager<'a> {
             subprocess_pid: None,
             runtime: "claude".to_string(),
             idle_since: None,
+            subprocess_started_at: None,
         };
 
         self.conn.execute(
@@ -241,6 +242,22 @@ impl<'a> AgentManager<'a> {
                 ":only_if_running": only_if_running,
                 ":id": run_id,
             },
+        )?;
+        Ok(())
+    }
+
+    /// Mark an active run as failed without overwriting `result_text`, which interactive
+    /// runs (RFC 021) use for the last assistant message. Guarded like
+    /// [`Self::update_run_failed_if_running`].
+    pub fn update_run_failed_keep_result(&self, run_id: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            &format!(
+                "UPDATE agent_runs SET status = 'failed', ended_at = :ended_at \
+                 WHERE id = :id AND status IN {}",
+                crate::agent::status::ACTIVE_STATUSES_SQL
+            ),
+            named_params! { ":ended_at": now, ":id": run_id },
         )?;
         Ok(())
     }
@@ -469,12 +486,20 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
-    /// Store the OS PID for a headless agent run immediately after spawn.
+    /// Store the OS PID for an agent run, and the start time of that process.
+    ///
+    /// The start time (OS-reported where available, else now) feeds the reaper's PID-reuse
+    /// guard, so a resumed session or re-spawned process on an old row isn't mistaken for a
+    /// recycled PID. `started_at` is left alone: it keeps meaning when the run began.
     pub fn update_run_subprocess_pid(&self, run_id: &str, pid: u32) -> Result<()> {
+        let started = crate::process_utils::process_started_at_rfc3339(pid)
+            .unwrap_or_else(|| Utc::now().to_rfc3339());
         self.conn.execute(
-            "UPDATE agent_runs SET subprocess_pid = :pid WHERE id = :id",
+            "UPDATE agent_runs SET subprocess_pid = :pid, subprocess_started_at = :started \
+             WHERE id = :id",
             named_params! {
                 ":pid": pid as i64,
+                ":started": started,
                 ":id": run_id,
             },
         )?;
