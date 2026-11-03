@@ -56,3 +56,6 @@ pub fn make_request(
         event_sink,
     }
 }
+
+// `mod common;` pulls this into every integration-test binary (#3172).
+conductor_core::isolate_test_home!();

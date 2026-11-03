@@ -1021,3 +1021,6 @@ mod tests {
         assert_eq!(new_tracker["run1"], ("ev1".to_string(), 1));
     }
 }
+
+#[cfg(test)]
+conductor_core::isolate_test_home!();

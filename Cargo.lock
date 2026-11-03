@@ -669,6 +669,8 @@ name = "conductor-core"
 version = "0.16.8"
 dependencies = [
  "chrono",
+ "conductor-core",
+ "ctor",
  "dirs",
  "jsonwebtoken",
  "libc",

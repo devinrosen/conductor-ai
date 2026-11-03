@@ -107,3 +107,6 @@ fn run(cli: Cli) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+conductor_core::isolate_test_home!();

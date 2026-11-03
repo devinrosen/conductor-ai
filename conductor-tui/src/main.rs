@@ -60,3 +60,6 @@ fn main() -> Result<()> {
 
     result
 }
+
+#[cfg(test)]
+conductor_core::isolate_test_home!();

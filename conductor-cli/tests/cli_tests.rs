@@ -653,3 +653,5 @@ fn session_subcommand_is_hidden_from_help() {
         .success()
         .stdout(predicate::str::contains("session").not());
 }
+
+conductor_core::isolate_test_home!();

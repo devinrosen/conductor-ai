@@ -601,13 +601,67 @@ impl Default for DefaultsConfig {
 pub fn conductor_dir() -> &'static PathBuf {
     static CONDUCTOR_DIR: OnceLock<PathBuf> = OnceLock::new();
     CONDUCTOR_DIR.get_or_init(|| {
-        if let Ok(home) = std::env::var("CONDUCTOR_HOME") {
-            return PathBuf::from(home);
-        }
-        dirs::home_dir()
-            .expect("could not determine home directory")
-            .join(".conductor")
+        resolve_conductor_dir(
+            std::env::var_os("CONDUCTOR_HOME"),
+            std::env::var_os("NEXTEST").is_some(),
+        )
     })
+}
+
+/// Pure resolution logic behind [`conductor_dir`].
+///
+/// An empty `conductor_home` is treated as unset. Panics when it is unset and
+/// the process runs under nextest: every test binary must call
+/// `test_helpers::isolate_conductor_home()` from a `#[ctor]` so tests never
+/// touch the real `~/.conductor` (see #3172).
+fn resolve_conductor_dir(
+    conductor_home: Option<std::ffi::OsString>,
+    under_nextest: bool,
+) -> PathBuf {
+    if let Some(home) = conductor_home.filter(|h| !h.is_empty()) {
+        return PathBuf::from(home);
+    }
+    if under_nextest {
+        panic!(
+            "conductor_dir() resolved to the real home inside a nextest run: call \
+             `conductor_core::test_helpers::isolate_conductor_home()` from a `#[ctor]` \
+             in this test binary (see #3172)"
+        );
+    }
+    dirs::home_dir()
+        .expect("could not determine home directory")
+        .join(".conductor")
+}
+
+#[cfg(test)]
+mod resolve_conductor_dir_tests {
+    use super::resolve_conductor_dir;
+    use std::path::PathBuf;
+
+    #[test]
+    fn explicit_home_is_returned() {
+        assert_eq!(
+            resolve_conductor_dir(Some("/tmp/x".into()), true),
+            PathBuf::from("/tmp/x")
+        );
+        assert_eq!(
+            resolve_conductor_dir(Some("/tmp/x".into()), false),
+            PathBuf::from("/tmp/x")
+        );
+    }
+
+    #[test]
+    fn unset_home_outside_nextest_is_real_home() {
+        let expected = dirs::home_dir().unwrap().join(".conductor");
+        assert_eq!(resolve_conductor_dir(None, false), expected);
+        assert_eq!(resolve_conductor_dir(Some("".into()), false), expected);
+    }
+
+    #[test]
+    #[should_panic(expected = "isolate_conductor_home")]
+    fn unset_home_under_nextest_panics() {
+        resolve_conductor_dir(None, true);
+    }
 }
 
 /// Returns the path to the SQLite database.
