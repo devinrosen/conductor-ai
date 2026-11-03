@@ -28,3 +28,7 @@ e2e/screenshots/
 
 # Playwright test results (generated during test runs)
 test-results/
+
+# Playwright output (e2e)
+test-results
+playwright-report
