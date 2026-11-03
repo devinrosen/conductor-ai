@@ -1,5 +1,8 @@
 use rusqlite::Connection;
 
+use std::path::PathBuf;
+use std::sync::OnceLock;
+
 use crate::db;
 use crate::tickets::TicketInput;
 
@@ -265,4 +268,37 @@ pub fn create_file_test_db() -> (Connection, String) {
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     db::migrations::run(&conn).unwrap();
     (conn, path_str)
+}
+
+static ISOLATED_HOME: OnceLock<PathBuf> = OnceLock::new();
+
+/// Point `CONDUCTOR_HOME` at a per-process temp dir so tests never touch the
+/// real `~/.conductor` (#3172).
+///
+/// Call from a `#[ctor::ctor]` in every test binary: it must run before
+/// `conductor_dir()` caches its result. A `CONDUCTOR_HOME` that is already set
+/// to something other than the real home is left alone.
+pub fn isolate_conductor_home() {
+    let real = dirs::home_dir().map(|h| h.join(".conductor"));
+    if let Some(existing) = std::env::var_os("CONDUCTOR_HOME").filter(|h| !h.is_empty()) {
+        if Some(PathBuf::from(existing)) != real {
+            return;
+        }
+    }
+    let dir = tempfile::Builder::new()
+        .prefix("conductor-test-home-")
+        .tempdir()
+        .expect("create isolated CONDUCTOR_HOME")
+        .keep();
+    // Runs pre-main, before any other thread exists, so set_var is race-free.
+    std::env::set_var("CONDUCTOR_HOME", &dir);
+    let _ = ISOLATED_HOME.set(dir);
+}
+
+/// Remove the temp dir created by [`isolate_conductor_home`], if any.
+/// Call from a `#[ctor::dtor]` in every test binary.
+pub fn cleanup_isolated_conductor_home() {
+    if let Some(dir) = ISOLATED_HOME.get() {
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
