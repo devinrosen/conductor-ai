@@ -41,13 +41,16 @@ fi
 
 changed_locks=()
 for f in "${LOCKFILES[@]}"; do
-  if [ -n "$(git status --porcelain --untracked-files=no -- "${f}")" ]; then
+  # Assigned first so a git failure aborts under set -e instead of reading as "unchanged".
+  lock_status=$(git status --porcelain --untracked-files=no -- "${f}")
+  if [ -n "${lock_status}" ]; then
     changed_locks+=("${f}")
   fi
 done
 if [ "${#changed_locks[@]}" -gt 0 ]; then
   git add -- "${changed_locks[@]}"
-  git commit -m "chore(deps): update lockfiles" -- "${changed_locks[@]}"
+  git commit -q -m "chore(deps): update lockfiles" -- "${changed_locks[@]}" >&2
+  echo "fmt-fix: committed lockfile updates: ${changed_locks[*]}" >&2
 fi
 
 untracked=$(git ls-files --others --exclude-standard)
