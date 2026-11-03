@@ -4,15 +4,15 @@
 //! This runs inside the developer's Claude Code session on every hook, so it
 //! must be fast and must never get in the way: it reads stdin up to a cap,
 //! exits early before touching the database whenever the event is irrelevant,
-//! waits at most [`BUSY_TIMEOUT`] for a lock, and always exits 0 with nothing
+//! waits at most [`BUSY_TIMEOUT`] for a lock (spooling the event when it cannot
+//! get one), and always exits 0 with nothing
 //! on stdout. Errors reach stderr only when `CONDUCTOR_SESSION_HOOK_DEBUG` is set.
 
 use std::io::{self, Read};
 use std::time::{Duration, Instant};
 
-use conductor_core::session::hook::{
-    apply_hook_event, handled_event_names, is_handled_event, HookEnv, HookEvent,
-};
+use conductor_core::session::hook::{handled_event_names, is_handled_event, HookEnv, HookEvent};
+use conductor_core::session::spool;
 
 /// Maximum stdin bytes parsed; `tool_response` can be far larger.
 const STDIN_CAP: u64 = 1024 * 1024;
@@ -83,24 +83,32 @@ fn handle_session_hook(debug: bool) {
         return report("unhandled event");
     }
 
-    let result = conductor_core::db::open_database_compat_with_busy_timeout(
-        &conductor_core::config::db_path(),
-        BUSY_TIMEOUT,
-    )
-    .and_then(|conn| apply_hook_event(&conn, &ev));
+    let db = conductor_core::config::db_path();
+    let dir = spool::spool_dir_for(&db);
+    let result = conductor_core::db::open_database_compat_with_busy_timeout(&db, BUSY_TIMEOUT)
+        .and_then(|conn| spool::record_hook_event(&conn, &dir, &ev));
     match result {
-        Ok(outcome) => report(&format!("{outcome:?}")),
+        Ok(rec) => report(&format!("{:?}, drained {}", rec.outcome, rec.drained)),
         Err(e) => {
             report(&format!("write failed: {e}"));
-            on_write_error(&ev, &e);
+            on_write_error(&dir, &ev, &e, &report);
         }
     }
 }
 
-/// Seam for the #3160 spool: called when the event could not be written
-/// (typically `SQLITE_BUSY`). Until the spool lands the event is dropped.
-fn on_write_error(_ev: &HookEvent, _err: &conductor_core::error::ConductorError) {
-    // #3160: spool on error
+/// The event could not be written (typically `SQLITE_BUSY`): spool it so a
+/// later hook or the TUI/web poller applies it in order. If that fails too the
+/// event is dropped; the hook still exits 0.
+fn on_write_error(
+    dir: &std::path::Path,
+    ev: &HookEvent,
+    err: &conductor_core::error::ConductorError,
+    report: &dyn Fn(&str),
+) {
+    match spool::append(dir, ev) {
+        Ok(()) => report(&format!("spooled after: {err}")),
+        Err(e) => report(&format!("spool failed: {e}")),
+    }
 }
 
 fn capture_env() -> HookEnv {
