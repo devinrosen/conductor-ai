@@ -540,6 +540,7 @@ mod tests {
             subprocess_pid: None,
             runtime: "interactive".into(),
             idle_since: idle_since.map(str::to_string),
+            subprocess_started_at: None,
         }
     }
 

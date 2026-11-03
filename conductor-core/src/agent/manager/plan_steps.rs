@@ -526,6 +526,7 @@ mod tests {
             subprocess_pid: None,
             runtime: "claude".to_string(),
             idle_since: None,
+            subprocess_started_at: None,
         };
 
         let prompt = run.build_resume_prompt();
