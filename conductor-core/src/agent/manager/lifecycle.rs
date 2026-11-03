@@ -348,14 +348,13 @@ impl<'a> AgentManager<'a> {
     /// Returns `Err` only if the DB update fails; subprocess kill is best-effort.
     pub fn cancel_run(&self, run_id: &str, subprocess_pid: Option<i64>) -> Result<()> {
         // Idle interactive sessions belong to the developer's terminal; refuse
-        // before touching the DB or the process.
-        if self
+        // before touching the DB or the process. Same rule and message as the
+        // TUI and web stop paths, via `AgentRun::idle_stop_refusal`.
+        if let Some(msg) = self
             .get_run(run_id)?
-            .is_some_and(|run| run.status == AgentRunStatus::Idle)
+            .and_then(|run| run.idle_stop_refusal())
         {
-            return Err(ConductorError::Agent(
-                "Cannot stop an idle interactive session".into(),
-            ));
+            return Err(ConductorError::Agent(msg.into()));
         }
 
         // Step 1: persist cancellation in DB before touching the process.
@@ -1451,7 +1450,13 @@ mod tests {
         .unwrap();
 
         let err = mgr.cancel_run(&run.id, None).unwrap_err();
-        assert!(err.to_string().contains("idle"), "{err}");
+        let expected = mgr
+            .get_run(&run.id)
+            .unwrap()
+            .unwrap()
+            .idle_stop_refusal()
+            .unwrap();
+        assert!(err.to_string().contains(expected), "{err}");
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.status, AgentRunStatus::Idle);
     }
