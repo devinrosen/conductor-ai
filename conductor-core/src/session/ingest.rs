@@ -436,7 +436,8 @@ struct TimedPrompt {
 
 fn load_run_events(conn: &Connection, run_id: &str) -> Result<RunEvents> {
     let mut stmt = conn.prepare_cached(
-        "SELECT id, kind, json_extract(metadata, '$.prompt_id'), started_at \
+        "SELECT id, kind, \
+         CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.prompt_id') END, started_at \
          FROM agent_run_events WHERE run_id = ?1 AND kind IN (?2, ?3) ORDER BY started_at, id",
     )?;
     let rows = stmt.query_map(params![run_id, EVENT_KIND_PROMPT, EVENT_KIND_RESULT], |r| {
@@ -992,6 +993,188 @@ mod tests {
         std::fs::write(&path, FIXTURE).unwrap();
         assert_eq!(ing.poll(&conn, now()).denials, 1);
         assert!(ing.denial_cursors.is_empty());
+    }
+
+    fn run_offset(conn: &Connection, id: &str) -> Option<i64> {
+        conn.query_row(
+            "SELECT transcript_offset FROM agent_runs WHERE id = ?1",
+            [id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn small_tick_budget_defers_runs_to_later_ticks() {
+        let (conn, _d, path) = setup("idle", FIXTURE);
+        add_run(&conn, "r-2", "idle", &path);
+        seed_turns(&conn, "r-2");
+        // One run's worth of bytes per tick.
+        let mut ing = TranscriptIngester::with_tick_budget(FIXTURE.len());
+        let first = ing.poll(&conn, now());
+        assert_eq!(first.metrics_applied, 1);
+        let done = |id| run_offset(&conn, id).is_some();
+        assert_eq!(done("r-1") as u8 + done("r-2") as u8, 1);
+        let second = ing.poll(&conn, now());
+        assert_eq!(second.metrics_applied, 1);
+        assert!(done("r-1") && done("r-2"));
+        assert_eq!(ing.poll(&conn, now()), IngestStats::default());
+    }
+
+    #[test]
+    fn line_longer_than_small_tick_budget_is_skipped_without_wedging() {
+        let cost_state = fixture_lines()
+            .into_iter()
+            .rev()
+            .find(|l| l.contains("\"cost-state\""))
+            .unwrap();
+        let budget = 4096;
+        assert!(cost_state.len() < budget);
+        let (conn, _d, path) = setup("idle", "");
+        let mut data = vec![b'x'; budget + 904];
+        data.push(b'\n');
+        data.extend_from_slice(format!("{cost_state}\n").as_bytes());
+        std::fs::write(&path, &data).unwrap();
+        let mut ing = TranscriptIngester::with_tick_budget(budget);
+        for _ in 0..5 {
+            ing.poll(&conn, now());
+        }
+        assert_eq!(run_offset(&conn, "r-1"), Some(data.len() as i64));
+        assert_eq!(col_i(&conn, "input_tokens"), Some(2252));
+    }
+
+    #[test]
+    fn non_object_event_metadata_is_left_untouched() {
+        let usage = TurnUsage {
+            messages: 1,
+            ..Default::default()
+        };
+        for raw in ["[]", "\"x\"", "not json"] {
+            let conn = setup_db();
+            let (dir, path) = (tempfile::tempdir().unwrap(), "t.jsonl");
+            add_run(&conn, "r-1", "idle", &dir.path().join(path));
+            add_event(&conn, "r-1", "result", "2026-11-03T17:00:00+00:00", "P1");
+            conn.execute("UPDATE agent_run_events SET metadata = ?1", [raw])
+                .unwrap();
+            let id: String = conn
+                .query_row("SELECT id FROM agent_run_events", [], |r| r.get(0))
+                .unwrap();
+            merge_usage_into_event(&conn, &id, &usage).unwrap();
+            let after: String = conn
+                .query_row("SELECT metadata FROM agent_run_events", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(after, raw);
+        }
+    }
+
+    #[test]
+    fn invalid_metadata_json_does_not_stop_metrics() {
+        let (conn, _d, _p) = setup("idle", FIXTURE);
+        conn.execute(
+            "UPDATE agent_run_events SET metadata = 'not json' WHERE kind = 'result'",
+            [],
+        )
+        .unwrap();
+        let stats = TranscriptIngester::new().poll(&conn, now());
+        assert_eq!(stats.metrics_applied, 1);
+        assert_eq!(col_i(&conn, "input_tokens"), Some(2252));
+        let meta: String = conn
+            .query_row(
+                "SELECT metadata FROM agent_run_events WHERE kind = 'result'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(meta, "not json");
+    }
+
+    #[test]
+    fn malformed_request_created_at_applies_no_denial() {
+        let (conn, _d, _p) = waiting("not a timestamp");
+        let stats = TranscriptIngester::new().poll(&conn, now());
+        assert_eq!(stats.denials, 0);
+        assert_eq!(status(&conn), "waiting_for_feedback");
+        assert_eq!(fb_status(&conn), "pending");
+    }
+
+    fn add_event_at(conn: &Connection, id: &str, kind: &str, at: Option<&str>, pid: &str) {
+        conn.execute(
+            "INSERT INTO agent_run_events (id, run_id, kind, summary, started_at, metadata) \
+             VALUES (?1, 'r-1', ?2, '', ?3, ?4)",
+            params![id, kind, at, json!({ "prompt_id": pid }).to_string()],
+        )
+        .unwrap();
+    }
+
+    fn events_db() -> Connection {
+        let conn = setup_db();
+        add_run(&conn, "r-1", "idle", Path::new("/nonexistent"));
+        conn
+    }
+
+    #[test]
+    fn load_run_events_latest_event_wins_per_prompt_id() {
+        let conn = events_db();
+        add_event_at(
+            &conn,
+            "res-a",
+            "result",
+            Some("2026-11-03T17:00:00+00:00"),
+            "P",
+        );
+        add_event_at(
+            &conn,
+            "res-b",
+            "result",
+            Some("2026-11-03T17:01:00+00:00"),
+            "P",
+        );
+        add_event_at(
+            &conn,
+            "pr-a",
+            "prompt",
+            Some("2026-11-03T16:00:00+00:00"),
+            "P",
+        );
+        add_event_at(
+            &conn,
+            "pr-b",
+            "prompt",
+            Some("2026-11-03T16:30:00+00:00"),
+            "P",
+        );
+        let ev = load_run_events(&conn, "r-1").unwrap();
+        assert_eq!(ev.result_by_prompt["P"], "res-b");
+        assert_eq!(ev.prompt_by_prompt["P"], "pr-b");
+    }
+
+    #[test]
+    fn load_run_events_skips_bad_started_at_for_time_attribution() {
+        let conn = events_db();
+        add_event_at(&conn, "bad", "prompt", Some("garbage"), "PB");
+        add_event_at(&conn, "ok", "prompt", Some("2026-11-03T17:00:00Z"), "PO");
+        let ev = load_run_events(&conn, "r-1").unwrap();
+        let ids: Vec<&str> = ev.timed_prompts.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["ok"]);
+        // Still addressable by prompt_id.
+        assert_eq!(ev.prompt_by_prompt["PB"], "bad");
+    }
+
+    #[test]
+    fn load_run_events_orders_mixed_timestamp_formats_by_time() {
+        let conn = events_db();
+        // As text "17:00:00Z" sorts before "18:00:00+02:00", but the latter is 16:00Z.
+        add_event_at(&conn, "later", "prompt", Some("2026-11-03T17:00:00Z"), "L");
+        add_event_at(
+            &conn,
+            "earlier",
+            "prompt",
+            Some("2026-11-03T18:00:00+02:00"),
+            "E",
+        );
+        let ev = load_run_events(&conn, "r-1").unwrap();
+        let ids: Vec<&str> = ev.timed_prompts.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["earlier", "later"]);
     }
 
     #[test]
