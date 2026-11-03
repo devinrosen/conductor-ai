@@ -91,6 +91,12 @@ Every PR to `main` must pass:
 
 `main` requires PRs, linear history (squash or rebase only — no merge commits), and all checks green.
 
+### Releasing
+
+The `release: X.Y.Z` commit bumps the workspace version in `Cargo.toml` (and `Cargo.lock`)
+**and** `version` in `plugin/.claude-plugin/plugin.json`, so the plugin and binary from one
+release agree on the hook contract. A test in `conductor-cli/tests/plugin_tests.rs` fails if they differ.
+
 ---
 
 ## Code conventions

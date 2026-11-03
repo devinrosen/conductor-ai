@@ -1,0 +1,12 @@
+{
+  "name": "conductor-ai",
+  "description": "Conductor's Claude Code plugin",
+  "owner": { "name": "Devin Rosen" },
+  "plugins": [
+    {
+      "name": "conductor",
+      "description": "Report interactive Claude Code sessions in conductor worktrees to conductor (RFC 021)",
+      "source": "./plugin"
+    }
+  ]
+}

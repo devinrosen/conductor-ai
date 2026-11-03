@@ -24,6 +24,11 @@ fn write_settings(path: &Path, value: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
+/// Commands that install the session-tracking Claude Code plugin.
+const PLUGIN_MARKETPLACE_CMD: &str = "claude plugin marketplace add devinrosen/conductor-ai";
+const PLUGIN_INSTALL_CMD: &str = "claude plugin install conductor@conductor-ai";
+const PLUGIN_UNINSTALL_LIVELY_CMD: &str = "claude plugin uninstall conductor@lively-video";
+
 /// Core install logic, parameterised for testability.
 fn install_to(settings_path: &Path) -> Result<()> {
     // Ensure parent directory exists
@@ -67,6 +72,12 @@ fn install_to(settings_path: &Path) -> Result<()> {
     );
     println!();
     println!("Restart Claude Code to activate the MCP server.");
+    println!();
+    println!("Session tracking (Claude Code plugin):");
+    println!("  {PLUGIN_MARKETPLACE_CMD}");
+    println!("  {PLUGIN_INSTALL_CMD}");
+    println!("  If you installed conductor@lively-video, remove it first:");
+    println!("  {PLUGIN_UNINSTALL_LIVELY_CMD}");
 
     Ok(())
 }
@@ -126,7 +137,8 @@ fn claude_settings_path() -> Result<std::path::PathBuf> {
 ///
 /// Updates `<claude_config_dir>/settings.json` to add `mcpServers.conductor`.
 /// The Claude config directory is read from conductor's config (`claude_config_dir`),
-/// defaulting to `~/.claude` when unset.
+/// defaulting to `~/.claude` when unset. Also prints the commands that install the
+/// session-tracking plugin (it does not run them).
 pub fn install() -> Result<()> {
     install_to(&claude_settings_path()?)
 }
