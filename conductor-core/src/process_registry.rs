@@ -336,8 +336,8 @@ fn judge(
         }
     }
     match (started, mtime) {
+        (None, _) => Verdict::Stale("unparseable start time".to_string()),
         (_, None) => Verdict::Stale("binary removed".to_string()),
-        (None, Some(_)) => Verdict::Stale("unparseable start time".to_string()),
         (Some(s), Some(m)) if m > s => {
             Verdict::Stale("binary rebuilt after process started".to_string())
         }
