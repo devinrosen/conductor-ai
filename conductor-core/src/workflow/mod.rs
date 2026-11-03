@@ -125,7 +125,8 @@ pub use manager::steps::{
     update_step_child_run_id, update_step_status, update_step_status_full,
 };
 pub use manager::wait::{
-    format_wait_summary, wait_for_workflow_run, WaitOptions, WaitOutcome, WaitStepSummary,
+    format_wait_progress, format_wait_summary, wait_for_workflow_run,
+    wait_for_workflow_run_with_progress, WaitOptions, WaitOutcome, WaitProgress, WaitStepSummary,
     WaitSummary,
 };
 pub use manager::{InvalidWorkflowEntry, StepMetrics};

@@ -166,28 +166,60 @@ pub(super) fn tool_get_run(
 /// Default and maximum `timeout_secs` for `conductor_wait_run`.
 pub(super) const WAIT_DEFAULT_TIMEOUT_SECS: usize = 600;
 pub(super) const WAIT_MAX_TIMEOUT_SECS: usize = 3600;
+/// Maximum `timeout_secs` when the client sent no progress token. Claude Code aborts an MCP
+/// call that is silent for 1800s, and without a token the server cannot send progress, so
+/// stay well below that.
+pub(super) const WAIT_MAX_TIMEOUT_NO_PROGRESS_SECS: usize = 1500;
+
+/// Returns the timeout to use, plus the cap when one applied.
+pub(super) fn effective_timeout(requested: usize, has_progress: bool) -> (usize, Option<usize>) {
+    let cap = if has_progress {
+        WAIT_MAX_TIMEOUT_SECS
+    } else {
+        WAIT_MAX_TIMEOUT_NO_PROGRESS_SECS
+    };
+    if requested > cap {
+        (cap, Some(cap))
+    } else {
+        (requested, None)
+    }
+}
 
 pub(super) fn tool_wait_run(
     conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
+    progress: Option<&dyn Fn(String)>,
 ) -> CallToolResult {
-    use conductor_core::workflow::{format_wait_summary, wait_for_workflow_run, WaitOptions};
+    use conductor_core::workflow::{
+        format_wait_progress, format_wait_summary, wait_for_workflow_run_with_progress, WaitOptions,
+    };
     use std::time::Duration;
 
     let run_id = require_arg!(args, "run_id");
     let requested = get_arg_usize(args, "timeout_secs").unwrap_or(WAIT_DEFAULT_TIMEOUT_SECS);
-    let timeout_secs = requested.min(WAIT_MAX_TIMEOUT_SECS);
+    let (timeout_secs, capped) = effective_timeout(requested, progress.is_some());
     let opts = WaitOptions::with_overrides(
         Some(Duration::from_secs(timeout_secs as u64)),
         get_arg_usize(args, "stall_after_secs").map(|s| Duration::from_secs(s as u64)),
     );
-    match wait_for_workflow_run(&conductor.conn, run_id, &opts) {
+    let mut on_progress = |p: &conductor_core::workflow::WaitProgress| {
+        if let Some(send) = progress {
+            send(format_wait_progress(p));
+        }
+    };
+    match wait_for_workflow_run_with_progress(&conductor.conn, run_id, &opts, &mut on_progress) {
         Ok(summary) => {
             let mut text = format_wait_summary(&summary);
-            if requested > WAIT_MAX_TIMEOUT_SECS {
-                text.push_str(&format!(
-                    "note: timeout_secs was capped at {WAIT_MAX_TIMEOUT_SECS}s.\n"
-                ));
+            if let Some(cap) = capped {
+                if progress.is_some() {
+                    text.push_str(&format!("note: timeout_secs was capped at {cap}s.\n"));
+                } else {
+                    text.push_str(&format!(
+                        "note: timeout_secs was capped at {cap}s because the client sent no \
+                         progress token and clients abort silent calls after 30 minutes. \
+                         If the outcome is timeout, call conductor_wait_run again.\n"
+                    ));
+                }
             }
             tool_ok(text)
         }
@@ -414,7 +446,7 @@ mod tests {
     #[test]
     fn test_wait_run_missing_run_id_arg() {
         let (_f, conductor) = make_test_conductor();
-        let result = tool_wait_run(&conductor, &empty_args());
+        let result = tool_wait_run(&conductor, &empty_args(), None);
         assert_eq!(result.is_error, Some(true));
     }
 
@@ -422,7 +454,7 @@ mod tests {
     fn test_wait_run_nonexistent_run() {
         let (_f, conductor) = make_test_conductor();
         let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
-        let result = tool_wait_run(&conductor, &args);
+        let result = tool_wait_run(&conductor, &args, None);
         assert_eq!(result.is_error, Some(true));
     }
 
@@ -449,7 +481,7 @@ mod tests {
                 [&run.id],
             )
             .unwrap();
-        let result = tool_wait_run(&conductor, &args_with("run_id", &run.id));
+        let result = tool_wait_run(&conductor, &args_with("run_id", &run.id), None);
         assert_ne!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -515,7 +547,7 @@ mod tests {
             "strftime('%Y-%m-%dT%H:%M:%SZ','now')",
             "datetime('now','+60 seconds')",
         );
-        let result = tool_wait_run(&conductor, &wait_args(&id, &[("timeout_secs", 0)]));
+        let result = tool_wait_run(&conductor, &wait_args(&id, &[("timeout_secs", 0)]), None);
         assert_ne!(result.is_error, Some(true));
         let text = result_text(&result);
         assert!(text.starts_with("outcome: timeout"), "got: {text}");
@@ -534,6 +566,7 @@ mod tests {
         let result = tool_wait_run(
             &conductor,
             &wait_args(&id, &[("timeout_secs", 30), ("stall_after_secs", 10)]),
+            None,
         );
         let text = result_text(&result);
         assert!(text.starts_with("outcome: stalled"), "got: {text}");
@@ -552,6 +585,7 @@ mod tests {
         let result = tool_wait_run(
             &conductor,
             &wait_args(&id, &[("timeout_secs", 0), ("stall_after_secs", 100000)]),
+            None,
         );
         assert!(result_text(&result).starts_with("outcome: timeout"));
     }
@@ -565,14 +599,69 @@ mod tests {
             "strftime('%Y-%m-%dT%H:%M:%SZ','now')",
             "NULL",
         );
+        let over = (WAIT_MAX_TIMEOUT_NO_PROGRESS_SECS + 1) as u64;
+        let result = tool_wait_run(&conductor, &wait_args(&id, &[("timeout_secs", over)]), None);
+        let text = result_text(&result);
+        assert!(text.starts_with("outcome: completed"), "got: {text}");
+        assert!(
+            text.contains(&format!("capped at {WAIT_MAX_TIMEOUT_NO_PROGRESS_SECS}s")),
+            "got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_wait_run_with_progress_uses_higher_cap_and_short_note() {
+        let (_f, conductor) = make_test_conductor();
+        let id = make_wait_run(
+            &conductor,
+            "completed",
+            "strftime('%Y-%m-%dT%H:%M:%SZ','now')",
+            "NULL",
+        );
+        let messages = std::cell::RefCell::new(Vec::<String>::new());
+        let sink = |m: String| messages.borrow_mut().push(m);
         let over = (WAIT_MAX_TIMEOUT_SECS + 1) as u64;
-        let result = tool_wait_run(&conductor, &wait_args(&id, &[("timeout_secs", over)]));
+        let result = tool_wait_run(
+            &conductor,
+            &wait_args(&id, &[("timeout_secs", over)]),
+            Some(&sink),
+        );
         let text = result_text(&result);
         assert!(text.starts_with("outcome: completed"), "got: {text}");
         assert!(
             text.contains(&format!("capped at {WAIT_MAX_TIMEOUT_SECS}s")),
             "got: {text}"
         );
+        assert!(!text.contains("progress token"), "got: {text}");
+        // A run that is already terminal never reports progress.
+        assert!(messages.borrow().is_empty());
+    }
+
+    #[test]
+    fn test_wait_run_with_progress_below_cap_has_no_note() {
+        let (_f, conductor) = make_test_conductor();
+        let id = make_wait_run(
+            &conductor,
+            "completed",
+            "strftime('%Y-%m-%dT%H:%M:%SZ','now')",
+            "NULL",
+        );
+        // Above the no-progress cap but within the progress cap: no note.
+        let t = (WAIT_MAX_TIMEOUT_NO_PROGRESS_SECS + 1) as u64;
+        let result = tool_wait_run(
+            &conductor,
+            &wait_args(&id, &[("timeout_secs", t)]),
+            Some(&|_m: String| {}),
+        );
+        assert!(!result_text(&result).contains("capped"));
+    }
+
+    #[test]
+    fn test_effective_timeout() {
+        assert_eq!(effective_timeout(3600, false), (1500, Some(1500)));
+        assert_eq!(effective_timeout(600, false), (600, None));
+        assert_eq!(effective_timeout(3600, true), (3600, None));
+        assert_eq!(effective_timeout(5000, true), (3600, Some(3600)));
     }
 
     #[test]

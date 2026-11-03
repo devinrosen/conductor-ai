@@ -333,8 +333,9 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
             "Block until a workflow run (and its child runs) reaches a terminal status, its \
              engine is detected dead (stalled), or timeout_secs passes. Returns the outcome \
              (completed|failed|cancelled|timeout|stalled), error, and the last step with its \
-             context. Prefer this over polling conductor_get_run. Some MCP clients cut off long \
-             tool calls: pass a smaller timeout_secs and call again if the outcome is timeout.",
+             context. Prefer this over polling conductor_get_run. If the outcome is timeout the run is \
+             still going: call conductor_wait_run again. Without a progress token the wait is \
+             capped at 1500s so clients that abort silent calls after 30 minutes don't cut it off.",
             Arc::new({
                 let mut m = serde_json::Map::new();
                 m.insert("type".into(), json!("object"));
@@ -343,9 +344,11 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
                     "timeout_secs": {
                         "type": "integer",
                         "description": format!(
-                            "Give up after this many seconds (default {}, max {})",
+                            "Give up after this many seconds (default {}, max {} when the client sends a progress token, \
+                             otherwise capped at {}). On outcome: timeout, call again.",
                             runs::WAIT_DEFAULT_TIMEOUT_SECS,
-                            runs::WAIT_MAX_TIMEOUT_SECS
+                            runs::WAIT_MAX_TIMEOUT_SECS,
+                            runs::WAIT_MAX_TIMEOUT_NO_PROGRESS_SECS
                         )
                     },
                     "stall_after_secs": {
@@ -622,6 +625,7 @@ pub(super) fn dispatch_tool(
     name: &str,
     args: &serde_json::Map<String, Value>,
     event_sinks: &[Arc<dyn EventSink>],
+    progress: Option<&dyn Fn(String)>,
 ) -> CallToolResult {
     match name {
         "conductor_list_tickets" => tickets::tool_list_tickets(conductor, args),
@@ -639,7 +643,7 @@ pub(super) fn dispatch_tool(
         "conductor_push_worktree" => worktrees::tool_push_worktree(conductor, args),
         "conductor_set_base_branch" => worktrees::tool_set_base_branch(conductor, args),
         "conductor_cancel_run" => runs::tool_cancel_run(conductor, args),
-        "conductor_wait_run" => runs::tool_wait_run(conductor, args),
+        "conductor_wait_run" => runs::tool_wait_run(conductor, args, progress),
         "conductor_list_workflows" => workflows::tool_list_workflows(conductor, args),
         "conductor_list_repos" => repos::tool_list_repos(conductor),
         "conductor_resume_run" => runs::tool_resume_run(conductor, args, event_sinks),
@@ -677,7 +681,13 @@ mod tests {
     #[test]
     fn test_dispatch_unknown_tool() {
         let (_f, conductor) = make_test_conductor();
-        let result = dispatch_tool(&conductor, "conductor_nonexistent", &empty_args(), &[]);
+        let result = dispatch_tool(
+            &conductor,
+            "conductor_nonexistent",
+            &empty_args(),
+            &[],
+            None,
+        );
         assert_eq!(
             result.is_error,
             Some(true),
