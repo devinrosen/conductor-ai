@@ -182,7 +182,7 @@ fn reinstall(check: bool, force: bool, web: bool, path: Option<PathBuf>) -> Resu
 }
 
 fn print_processes() {
-    use conductor_core::process_registry::{list_live, stale_processes};
+    use conductor_core::process_registry::{disk_build_sha_for, list_live, stale_processes};
     let live = list_live();
     if live.is_empty() {
         println!("No registered conductor processes.");
@@ -190,8 +190,8 @@ fn print_processes() {
     }
     let stale = stale_processes();
     println!(
-        "{:<9} {:<8} {:<9} {:<27} EXE",
-        "KIND", "PID", "BUILD", "STARTED"
+        "{:<9} {:<8} {:<9} {:<9} {:<27} EXE",
+        "KIND", "PID", "BUILD", "ON DISK", "STARTED"
     );
     for r in &live {
         let flag = if stale.iter().any(|s| s.record.pid == r.pid) {
@@ -200,10 +200,11 @@ fn print_processes() {
             ""
         };
         println!(
-            "{:<9} {:<8} {:<9} {:<27} {}{flag}",
+            "{:<9} {:<8} {:<9} {:<9} {:<27} {}{flag}",
             r.kind,
             r.pid,
             r.git_sha,
+            disk_build_sha_for(r).as_deref().unwrap_or("-"),
             r.started_at,
             r.exe.display()
         );
