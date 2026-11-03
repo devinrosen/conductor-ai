@@ -777,3 +777,5 @@ fn snap_graph_view() {
 
     insta::assert_snapshot!(render_to_string(&state));
 }
+
+conductor_core::isolate_test_home!();

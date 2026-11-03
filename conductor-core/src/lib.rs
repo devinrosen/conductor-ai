@@ -85,3 +85,6 @@ pub fn new_id() -> String {
 
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_helpers;
+
+#[cfg(test)]
+crate::isolate_test_home!();
