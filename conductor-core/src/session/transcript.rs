@@ -27,6 +27,7 @@ const SKIP_BLOCK: usize = 64 * 1024;
 pub(crate) struct Chunk {
     pub bytes: Vec<u8>,
     /// Offset the read began at (after a truncation reset this may be 0).
+    #[cfg_attr(not(test), allow(dead_code))] // asserted in tests; callers only need `end`
     pub start: u64,
     /// Offset just past the last consumed byte. Equals `start` when there is nothing to
     /// consume yet (no new data, or only a partial last line).
