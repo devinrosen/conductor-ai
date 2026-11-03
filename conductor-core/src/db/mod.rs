@@ -22,8 +22,6 @@ fn configure_connection(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Open (or create) the SQLite database with WAL mode enabled and a 5 s busy
-/// timeout.
 /// Path of the file `conn` is open on, or `None` for an in-memory connection.
 ///
 /// Background threads that open their own connection must use this rather than
@@ -35,6 +33,8 @@ pub fn connection_db_path(conn: &Connection) -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
+/// Open (or create) the SQLite database with WAL mode enabled and a 5 s busy
+/// timeout.
 pub fn open_database(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
     configure_connection(&conn)?;
@@ -213,6 +213,23 @@ mod tests {
             .pragma_query_value(None, "foreign_keys", |row| row.get(0))
             .unwrap();
         assert_eq!(fk, 1);
+    }
+
+    #[test]
+    fn connection_db_path_none_for_in_memory() {
+        let conn = Connection::open_in_memory().unwrap();
+        assert_eq!(connection_db_path(&conn), None);
+    }
+
+    #[test]
+    fn connection_db_path_some_for_file_backed() {
+        let tmp = NamedTempFile::new().unwrap();
+        let conn = Connection::open(tmp.path()).unwrap();
+        let got = connection_db_path(&conn).expect("file-backed connection has a path");
+        assert_eq!(
+            got.canonicalize().unwrap(),
+            tmp.path().canonicalize().unwrap()
+        );
     }
 
     #[test]

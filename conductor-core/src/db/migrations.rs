@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 86;
+pub const LATEST_SCHEMA_VERSION: u32 = 87;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1313,6 +1313,85 @@ pub fn run(conn: &Connection) -> Result<()> {
             }
         }
         bump_version(conn, 86)?;
+    }
+
+    // Migration 087: RFC 021 interactive session tracking (#3157).
+    // Rebuilds agent_runs to add 'idle' to the status CHECK plus the nullable
+    // columns later RFC 021 tickets (#3155, #3158, #3159, #3160, #3164, #3165)
+    // need, and adds feedback_requests.dedup_key with a partial unique index.
+    // Triggers on agent_runs (e.g. trg_agent_run_delete_cascade_workflow_runs on
+    // DBs that ran the paused release/0.16.0 migration) are captured from
+    // sqlite_master before the swap and replayed afterwards, since DROP TABLE
+    // drops them. Guards keep partial-schema test fixtures working.
+    if version < 87 {
+        // Only "no such table/column" means a partial test fixture; any other
+        // error (e.g. SQLITE_BUSY) must propagate so the version is not bumped
+        // without the swap.
+        let can_swap: bool = table_exists(conn, "agent_runs")?
+            && match conn.prepare(
+                "SELECT id, worktree_id, session_id, prompt, status, result_text, cost_usd, \
+                 num_turns, duration_ms, started_at, ended_at, log_file, model, plan, \
+                 parent_run_id, input_tokens, output_tokens, cache_read_input_tokens, \
+                 cache_creation_input_tokens, bot_name, repo_id, conversation_id, \
+                 subprocess_pid, runtime FROM agent_runs LIMIT 0",
+            ) {
+                Ok(_) => true,
+                Err(e) if e.to_string().contains("no such column") => false,
+                Err(e) => return Err(e.into()),
+            };
+        let already_migrated: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='table' AND name='agent_runs' AND sql LIKE '%''idle''%'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)?;
+        if can_swap && !already_migrated {
+            with_foreign_keys_off(conn, || {
+                // Swap and trigger replay share one transaction: a failed replay
+                // rolls back the swap, so a retry re-runs both.
+                conn.execute_batch("BEGIN IMMEDIATE;")?;
+                let body = || -> Result<()> {
+                    let triggers: Vec<String> = {
+                        let mut stmt = conn.prepare(
+                            "SELECT sql FROM sqlite_master \
+                             WHERE type='trigger' AND tbl_name='agent_runs' AND sql IS NOT NULL",
+                        )?;
+                        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+                        rows.collect::<std::result::Result<Vec<_>, _>>()?
+                    };
+                    conn.execute_batch(include_str!("migrations/087_interactive_sessions.sql"))?;
+                    for sql in triggers {
+                        conn.execute_batch(&sql)?;
+                    }
+                    Ok(())
+                };
+                match body() {
+                    Ok(()) => {
+                        conn.execute_batch("COMMIT;")?;
+                        Ok(())
+                    }
+                    Err(e) => {
+                        let _ = conn.execute_batch("ROLLBACK;");
+                        Err(e)
+                    }
+                }
+            })?;
+        }
+        if table_exists(conn, "feedback_requests")? {
+            let has_dedup_key: bool = conn
+                .prepare("SELECT dedup_key FROM feedback_requests LIMIT 0")
+                .is_ok();
+            if !has_dedup_key {
+                conn.execute_batch("ALTER TABLE feedback_requests ADD COLUMN dedup_key TEXT;")?;
+            }
+            conn.execute_batch(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_requests_dedup_key \
+                 ON feedback_requests(dedup_key) WHERE dedup_key IS NOT NULL;",
+            )?;
+        }
+        bump_version(conn, 87)?;
     }
 
     Ok(())
@@ -2928,5 +3007,206 @@ mod tests {
             version, LATEST_SCHEMA_VERSION as i64,
             "schema_version must still be bumped to LATEST_SCHEMA_VERSION"
         );
+    }
+
+    // ── Migration 087 (RFC 021 / #3157) ─────────────────────────────────────
+
+    const FIXTURE_086_TRIGGER: &str = "CREATE TRIGGER trg_agent_run_delete_cascade_workflow_runs \
+         AFTER DELETE ON agent_runs BEGIN \
+         DELETE FROM workflow_runs WHERE parent_run_id = OLD.id; END;";
+
+    /// Builds a DB shaped like schema version 86 (agent_runs without 'idle').
+    fn fixture_086(with_trigger: bool) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO _conductor_meta VALUES ('schema_version', '86');
+             CREATE TABLE repos (id TEXT PRIMARY KEY);
+             CREATE TABLE worktrees (id TEXT PRIMARY KEY);
+             CREATE TABLE conversations (id TEXT PRIMARY KEY);
+             CREATE TABLE agent_runs (
+                 id TEXT PRIMARY KEY,
+                 worktree_id TEXT REFERENCES worktrees(id) ON DELETE CASCADE,
+                 prompt TEXT NOT NULL,
+                 status TEXT NOT NULL DEFAULT 'running'
+                     CHECK (status IN ('running','completed','failed','cancelled','waiting_for_feedback')),
+                 result_text TEXT, cost_usd REAL, num_turns INTEGER, duration_ms INTEGER,
+                 started_at TEXT NOT NULL, ended_at TEXT, log_file TEXT, model TEXT, plan TEXT,
+                 parent_run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+                 session_id TEXT,
+                 input_tokens INTEGER, output_tokens INTEGER,
+                 cache_read_input_tokens INTEGER, cache_creation_input_tokens INTEGER,
+                 bot_name TEXT, repo_id TEXT REFERENCES repos(id),
+                 conversation_id TEXT REFERENCES conversations(id),
+                 subprocess_pid INTEGER,
+                 runtime TEXT NOT NULL DEFAULT 'claude'
+             );
+             CREATE INDEX idx_agent_runs_parent ON agent_runs(parent_run_id);
+             CREATE TABLE workflow_runs (id TEXT PRIMARY KEY, parent_run_id TEXT NOT NULL);
+             CREATE TABLE feedback_requests (
+                 id TEXT PRIMARY KEY,
+                 run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+                 prompt TEXT NOT NULL
+             );
+             INSERT INTO conversations VALUES ('c1');
+             INSERT INTO agent_runs (id, prompt, status, started_at, session_id, subprocess_pid, runtime, conversation_id)
+                 VALUES ('r1', 'hello', 'running', '2026-01-01T00:00:00Z', 'sess-1', 4242, 'claude', 'c1');
+             INSERT INTO workflow_runs VALUES ('w1', 'r1');
+             INSERT INTO feedback_requests VALUES ('f1', 'r1', 'q');",
+        )
+        .unwrap();
+        if with_trigger {
+            conn.execute_batch(FIXTURE_086_TRIGGER).unwrap();
+        }
+        conn
+    }
+
+    fn trigger_count(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' \
+             AND name='trg_agent_run_delete_cascade_workflow_runs'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_migration_087_preserves_data_and_allows_idle() {
+        let conn = fixture_086(false);
+        run(&conn).unwrap();
+
+        let (sid, pid, runtime, conv): (String, i64, String, String) = conn
+            .query_row(
+                "SELECT session_id, subprocess_pid, runtime, conversation_id FROM agent_runs WHERE id='r1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (sid.as_str(), pid, runtime.as_str(), conv.as_str()),
+            ("sess-1", 4242, "claude", "c1")
+        );
+
+        conn.execute("UPDATE agent_runs SET status='idle' WHERE id='r1'", [])
+            .expect("idle must satisfy the CHECK");
+        assert!(conn
+            .execute("UPDATE agent_runs SET status='bogus' WHERE id='r1'", [])
+            .is_err());
+
+        let nulls: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agent_runs WHERE idle_since IS NULL AND subprocess_started_at IS NULL \
+                 AND tmux_pane IS NULL AND transcript_path IS NULL AND transcript_offset IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(nulls, 1);
+
+        for idx in [
+            "idx_agent_runs_parent",
+            "idx_agent_runs_worktree",
+            "idx_agent_runs_repo_id",
+            "idx_agent_runs_worktree_started",
+            "idx_agent_runs_conversation_id",
+        ] {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?1",
+                    [idx],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "missing index {idx}");
+        }
+
+        let version: i64 = conn
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM _conductor_meta WHERE key='schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 87);
+    }
+
+    #[test]
+    fn test_migration_087_commits_swap_and_trigger_together() {
+        let conn = fixture_086(true);
+        run(&conn).unwrap();
+        assert!(conn.is_autocommit(), "migration must not leave a txn open");
+        let fk: i64 = conn
+            .pragma_query_value(None, "foreign_keys", |r| r.get(0))
+            .unwrap();
+        assert_eq!(fk, 1, "foreign_keys must be restored");
+    }
+
+    #[test]
+    fn test_migration_087_preserves_existing_trigger() {
+        let conn = fixture_086(true);
+        assert_eq!(trigger_count(&conn), 1);
+        run(&conn).unwrap();
+        assert_eq!(
+            trigger_count(&conn),
+            1,
+            "trigger must be replayed after the swap"
+        );
+        conn.execute("DELETE FROM agent_runs WHERE id='r1'", [])
+            .unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM workflow_runs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0, "replayed trigger must still cascade");
+    }
+
+    #[test]
+    fn test_migration_087_does_not_invent_trigger() {
+        let conn = fixture_086(false);
+        run(&conn).unwrap();
+        assert_eq!(trigger_count(&conn), 0);
+    }
+
+    #[test]
+    fn test_migration_087_feedback_dedup_key_unique() {
+        let conn = fixture_086(false);
+        run(&conn).unwrap();
+        conn.execute("INSERT INTO feedback_requests (id, run_id, prompt, dedup_key) VALUES ('f2','r1','q','k')", [])
+            .unwrap();
+        assert!(conn
+            .execute("INSERT INTO feedback_requests (id, run_id, prompt, dedup_key) VALUES ('f3','r1','q','k')", [])
+            .is_err());
+        conn.execute(
+            "INSERT INTO feedback_requests (id, run_id, prompt) VALUES ('f4','r1','q')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO feedback_requests (id, run_id, prompt) VALUES ('f5','r1','q')",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_migration_087_idempotent() {
+        let conn = fixture_086(true);
+        run(&conn).unwrap();
+        run(&conn).unwrap();
+        assert_eq!(trigger_count(&conn), 1);
+        conn.execute("UPDATE agent_runs SET status='idle' WHERE id='r1'", [])
+            .unwrap();
+    }
+
+    #[test]
+    fn test_migration_087_skips_swap_for_partial_schema() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO _conductor_meta VALUES ('schema_version', '86');
+             CREATE TABLE agent_runs (id TEXT PRIMARY KEY, status TEXT);",
+        )
+        .unwrap();
+        run(&conn).expect("087 must tolerate partial fixtures");
     }
 }

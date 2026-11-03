@@ -72,6 +72,7 @@ export function ActivityPage() {
         if (wt.status !== "active") continue;
         const repoId = wt.repo_id;
         const slug = repoSlugById[repoId] ?? "";
+        // Attention Required is waiting_for_feedback only; idle sessions are the developer's move, not a request for attention.
         if (wt.agent_status === "waiting_for_feedback") {
           feedbackWorktrees.push({ worktreeId: wt.id, ctx: { repoId, repoSlug: slug, branch: wt.branch, worktreeId: wt.id } });
         }
@@ -244,6 +245,7 @@ export function ActivityPage() {
                   {activeWorktrees.map((wt, index) => {
                     const overallStatus = wt.agent_status === "running" ? "running"
                       : wt.agent_status === "waiting_for_feedback" ? "waiting"
+                      : wt.agent_status === "idle" ? "idle"
                       : wt.agent_status === "failed" ? "failed"
                       : wt.status;
                     return (

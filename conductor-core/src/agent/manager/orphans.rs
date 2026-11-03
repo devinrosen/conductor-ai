@@ -93,7 +93,7 @@ impl<'a> AgentManager<'a> {
 
     /// Reap orphaned agent runs whose subprocess has exited.
     ///
-    /// Queries all runs with an active status (`running` or `waiting_for_feedback`),
+    /// Queries all runs with an active status (`running`, `waiting_for_feedback` or `idle`),
     /// checks whether their subprocess is still alive, and for any orphans:
     /// 1. Attempts log-file recovery via `try_recover_from_log()` (the agent may
     ///    have completed but the handler didn't fire).
@@ -103,7 +103,10 @@ impl<'a> AgentManager<'a> {
     pub fn reap_orphaned_runs(&self) -> Result<usize> {
         let active_runs = query_collect(
             self.conn,
-            &format!("{AGENT_RUN_SELECT} WHERE status IN ('running', 'waiting_for_feedback')"),
+            &format!(
+                "{AGENT_RUN_SELECT} WHERE status IN {}",
+                crate::agent::status::ACTIVE_STATUSES_SQL
+            ),
             [],
             row_to_agent_run,
         )?;
@@ -868,5 +871,54 @@ mod tests {
 
         let after = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(after.status, AgentRunStatus::Running);
+    }
+
+    #[test]
+    fn test_reap_orphaned_runs_idle_dead_pid_reaped() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run(Some("w1"), "interactive", None).unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET status = 'idle', subprocess_pid = 999999999 WHERE id = :id",
+            rusqlite::named_params! { ":id": run.id },
+        )
+        .unwrap();
+
+        let reaped = mgr.reap_orphaned_runs().unwrap();
+        assert_eq!(reaped, 1, "idle run with dead PID must be reaped");
+        let after = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(after.status, AgentRunStatus::Failed);
+    }
+
+    #[test]
+    fn test_reap_orphaned_runs_idle_live_pid_skipped() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let live_pid = std::process::id();
+        let run = mgr.create_run(Some("w1"), "interactive", None).unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET status = 'idle', subprocess_pid = :pid WHERE id = :id",
+            rusqlite::named_params! { ":pid": live_pid as i64, ":id": run.id },
+        )
+        .unwrap();
+
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(proc_start) = crate::process_utils::process_started_at(live_pid) {
+                let started_at_str = chrono::DateTime::<chrono::Utc>::from(proc_start).to_rfc3339();
+                conn.execute(
+                    "UPDATE agent_runs SET started_at = :started_at WHERE id = :id",
+                    rusqlite::named_params! { ":started_at": started_at_str, ":id": run.id },
+                )
+                .unwrap();
+            }
+        }
+
+        let reaped = mgr.reap_orphaned_runs().unwrap();
+        assert_eq!(reaped, 0, "idle run with live PID must be left alone");
+        let after = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(after.status, AgentRunStatus::Idle);
     }
 }

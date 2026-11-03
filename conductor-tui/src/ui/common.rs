@@ -204,6 +204,7 @@ pub fn worktree_list_item_with_prefix(
         Some(match run.status {
             AgentRunStatus::Running => ("⚙", state.theme.status_running),
             AgentRunStatus::WaitingForFeedback => ("⏸", state.theme.status_waiting),
+            AgentRunStatus::Idle => (IDLE_SYMBOL, state.theme.status_idle),
             AgentRunStatus::Completed => ("✓", state.theme.status_completed),
             AgentRunStatus::Failed => ("✗", state.theme.status_failed),
             AgentRunStatus::Cancelled => ("⊘", state.theme.status_cancelled),
@@ -280,10 +281,7 @@ pub fn worktree_list_item_with_prefix(
 
     // Add live-run tokens only if the run is still active (not yet counted in DB aggregate).
     if let Some(run) = agent_run {
-        if matches!(
-            run.status,
-            AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback
-        ) {
+        if run.is_active() {
             total_in += run.input_tokens.unwrap_or(0);
             total_out += run.output_tokens.unwrap_or(0);
         }
@@ -451,6 +449,53 @@ fn format_duration_compact(elapsed: chrono::Duration) -> String {
     }
 }
 
+/// Status symbol for an idle interactive session (RFC 021). Distinct from the
+/// running (⚙), waiting (⏸), completed (✓), failed (✗) and cancelled (⊘) symbols.
+pub const IDLE_SYMBOL: &str = "◌";
+
+/// Format an RFC 3339 timestamp as local `HH:MM`, or `None` if unparseable.
+pub fn format_local_hhmm(ts: &str) -> Option<String> {
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M").to_string())
+}
+
+/// "idle since HH:MM" text for an idle run, followed by the last assistant
+/// message (`result_text`) collapsed to a single truncated line.
+pub fn idle_detail_text(run: &conductor_core::agent::AgentRun, max_message: usize) -> String {
+    let since = run
+        .idle_since
+        .as_deref()
+        .and_then(format_local_hhmm)
+        .map(|t| format!(" idle since {t}"))
+        .unwrap_or_default();
+    let message = run
+        .result_text
+        .as_deref()
+        .map(|m| m.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|m| !m.is_empty())
+        .map(|m| format!(" — {}", truncate(&m, max_message)))
+        .unwrap_or_default();
+    format!("{since}{message}")
+}
+
+/// The `Agent: [idle] …` detail line shared by the repo and worktree detail views.
+pub fn idle_status_line<'a>(
+    run: &conductor_core::agent::AgentRun,
+    theme: &crate::theme::Theme,
+) -> ratatui::text::Line<'a> {
+    use ratatui::style::Style;
+    use ratatui::text::{Line, Span};
+    Line::from(vec![
+        Span::styled("Agent: ", Style::default().fg(theme.label_secondary)),
+        Span::styled("[idle]", Style::default().fg(theme.status_idle)),
+        Span::styled(
+            idle_detail_text(run, 80),
+            Style::default().fg(theme.label_secondary),
+        ),
+    ])
+}
+
 /// Truncate a string to at most `max` characters, appending "…" if truncated.
 pub fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
@@ -464,6 +509,88 @@ pub fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn idle_run(
+        result_text: Option<&str>,
+        idle_since: Option<&str>,
+    ) -> conductor_core::agent::AgentRun {
+        conductor_core::agent::AgentRun {
+            id: "r".into(),
+            worktree_id: Some("w".into()),
+            repo_id: None,
+            session_id: None,
+            prompt: String::new(),
+            status: conductor_core::agent::AgentRunStatus::Idle,
+            result_text: result_text.map(str::to_string),
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            started_at: "2026-01-01T00:00:00Z".into(),
+            ended_at: None,
+            log_file: None,
+            model: None,
+            plan: None,
+            parent_run_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            bot_name: None,
+            conversation_id: None,
+            subprocess_pid: None,
+            runtime: "interactive".into(),
+            idle_since: idle_since.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn idle_detail_text_since_and_message() {
+        let run = idle_run(Some("All done"), Some("2026-01-01T12:34:56Z"));
+        let text = idle_detail_text(&run, 80);
+        assert!(text.starts_with(" idle since "), "{text}");
+        assert!(text.ends_with(" — All done"), "{text}");
+    }
+
+    #[test]
+    fn idle_detail_text_missing_result_text() {
+        let run = idle_run(None, Some("2026-01-01T12:34:56Z"));
+        let text = idle_detail_text(&run, 80);
+        assert!(text.starts_with(" idle since "), "{text}");
+        assert!(!text.contains('—'), "{text}");
+        let blank = idle_run(Some("  \n "), Some("2026-01-01T12:34:56Z"));
+        assert!(!idle_detail_text(&blank, 80).contains('—'));
+    }
+
+    #[test]
+    fn idle_detail_text_truncates_and_collapses_whitespace() {
+        let run = idle_run(Some("one\n\ntwo   three four five six"), None);
+        assert_eq!(idle_detail_text(&run, 80), " — one two three four five six");
+        let long = idle_run(Some(&"x".repeat(100)), None);
+        let text = idle_detail_text(&long, 20);
+        assert_eq!(text, format!(" — {}...", "x".repeat(17)));
+    }
+
+    #[test]
+    fn idle_detail_text_invalid_timestamp_omits_since() {
+        let run = idle_run(Some("hi"), Some("not-a-time"));
+        assert_eq!(idle_detail_text(&run, 80), " — hi");
+        assert_eq!(idle_detail_text(&idle_run(None, None), 80), "");
+    }
+
+    #[test]
+    fn idle_symbol_differs_from_other_statuses() {
+        for other in ["⚙", "⏸", "✓", "✗", "⊘"] {
+            assert_ne!(IDLE_SYMBOL, other);
+        }
+    }
+
+    #[test]
+    fn format_local_hhmm_parses_and_rejects() {
+        let out = format_local_hhmm("2026-01-01T12:34:56Z").unwrap();
+        assert_eq!(out.len(), 5);
+        assert_eq!(&out[2..3], ":");
+        assert!(format_local_hhmm("nope").is_none());
+    }
 
     #[test]
     fn format_elapsed_minutes() {

@@ -338,6 +338,45 @@ mod tests {
     }
 
     #[test]
+    fn test_dispatch_list_agent_runs_idle_filter() {
+        use conductor_core::agent::AgentManager;
+        use conductor_core::db::open_database;
+
+        let (_f, conductor) = make_test_conductor();
+        {
+            let conn = open_database(_f.path()).expect("open db");
+            conn.execute(
+                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+                 VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
+                [],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+                 VALUES ('w1', 'r1', 'feat-test', 'feat/test', '/tmp/ws/feat-test', 'active', '2024-01-01T00:00:00Z')",
+                [],
+            ).unwrap();
+            let mgr = AgentManager::new(&conn);
+            let idle = mgr.create_run(Some("w1"), "idle session", None).unwrap();
+            conn.execute(
+                "UPDATE agent_runs SET status = 'idle' WHERE id = ?1",
+                [&idle.id],
+            )
+            .unwrap();
+            mgr.create_run(Some("w1"), "working", None).unwrap();
+        }
+
+        let args = args_with("status", "idle");
+        let result = tool_list_agent_runs(&conductor, &args);
+        assert_ne!(result.is_error, Some(true), "should not error");
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("status: idle"), "got: {text}");
+        assert!(!text.contains("status: running"), "got: {text}");
+    }
+
+    #[test]
     fn test_dispatch_submit_agent_feedback_missing_run_id() {
         let (_f, conductor) = make_test_conductor();
         let args = args_with("feedback", "some response");

@@ -1,7 +1,7 @@
 use chrono::Utc;
 use rusqlite::named_params;
 
-use crate::error::Result;
+use crate::error::{ConductorError, Result};
 
 use super::super::status::AgentRunStatus;
 use super::super::types::{AgentRun, LogResult, RunMetrics};
@@ -127,6 +127,7 @@ impl<'a> AgentManager<'a> {
             conversation_id: conversation_id.map(String::from),
             subprocess_pid: None,
             runtime: "claude".to_string(),
+            idle_since: None,
         };
 
         self.conn.execute(
@@ -244,14 +245,17 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
-    /// Mark a run as failed only if it is currently `running` or `waiting_for_feedback`.
+    /// Mark a run as failed only if it is currently `running`, `waiting_for_feedback` or `idle`.
     /// Used by background reapers and panic monitors to avoid overwriting a run that has
     /// already been finalized (e.g. `completed`, `failed`, `cancelled`) by another path.
     pub fn update_run_failed_if_running(&self, run_id: &str, error: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE agent_runs SET status = 'failed', result_text = :error, ended_at = :ended_at \
-             WHERE id = :id AND status IN ('running', 'waiting_for_feedback')",
+            &format!(
+                "UPDATE agent_runs SET status = 'failed', result_text = :error, ended_at = :ended_at \
+                 WHERE id = :id AND status IN {}",
+                crate::agent::status::ACTIVE_STATUSES_SQL
+            ),
             named_params! {
                 ":error": error,
                 ":ended_at": now,
@@ -343,6 +347,16 @@ impl<'a> AgentManager<'a> {
     ///
     /// Returns `Err` only if the DB update fails; subprocess kill is best-effort.
     pub fn cancel_run(&self, run_id: &str, subprocess_pid: Option<i64>) -> Result<()> {
+        // Idle interactive sessions belong to the developer's terminal; refuse
+        // before touching the DB or the process. Same rule and message as the
+        // TUI and web stop paths, via `AgentRun::idle_stop_refusal`.
+        if let Some(msg) = self
+            .get_run(run_id)?
+            .and_then(|run| run.idle_stop_refusal())
+        {
+            return Err(ConductorError::Agent(msg.into()));
+        }
+
         // Step 1: persist cancellation in DB before touching the process.
         self.update_run_cancelled(run_id)?;
 
@@ -1422,5 +1436,45 @@ mod tests {
         mgr.update_run_runtime(&run.id, "gemini").unwrap();
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.runtime.as_str(), "gemini");
+    }
+
+    #[test]
+    fn test_cancel_run_refuses_idle() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "interactive", None).unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET status = 'idle' WHERE id = ?1",
+            [&run.id],
+        )
+        .unwrap();
+
+        let err = mgr.cancel_run(&run.id, None).unwrap_err();
+        let expected = mgr
+            .get_run(&run.id)
+            .unwrap()
+            .unwrap()
+            .idle_stop_refusal()
+            .unwrap();
+        assert!(err.to_string().contains(expected), "{err}");
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Idle);
+    }
+
+    #[test]
+    fn test_update_run_failed_if_running_transitions_idle() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "interactive", None).unwrap();
+        conn.execute(
+            "UPDATE agent_runs SET status = 'idle' WHERE id = ?1",
+            [&run.id],
+        )
+        .unwrap();
+
+        mgr.update_run_failed_if_running(&run.id, "session died")
+            .unwrap();
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, AgentRunStatus::Failed);
     }
 }

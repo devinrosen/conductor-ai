@@ -9,6 +9,7 @@ const colors: Record<string, string> = {
   cancelled: "bg-gray-100 text-gray-800",
   running: "bg-yellow-100 text-yellow-800",
   waiting_for_feedback: "bg-yellow-100 text-yellow-800",
+  idle: "bg-sky-100 text-sky-800",
 };
 
 export function StatusBadge({ status }: { status: string }) {

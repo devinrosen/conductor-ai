@@ -485,6 +485,7 @@ fn show_confirm_quit_with_running_agents_includes_count() {
             conversation_id: None,
             subprocess_pid: None,
             runtime: "claude".to_string(),
+            idle_since: None,
         },
     );
     app.show_confirm_quit();
@@ -2931,4 +2932,50 @@ fn is_secret_env_key_classifies_common_secret_names() {
     assert!(is_secret_env_key("MY_PASSWORD"));
     assert!(!is_secret_env_key("ANTHROPIC_BASE_URL"));
     assert!(!is_secret_env_key("PATH"));
+}
+
+#[test]
+fn stop_agent_refuses_idle_interactive_run() {
+    let mut app = make_app();
+    app.state.selected_worktree_id = Some("wt1".into());
+    app.state.data.latest_agent_runs.insert(
+        "wt1".into(),
+        conductor_core::agent::AgentRun {
+            id: "run1".into(),
+            worktree_id: Some("wt1".into()),
+            repo_id: None,
+            session_id: None,
+            prompt: String::new(),
+            status: conductor_core::agent::AgentRunStatus::Idle,
+            result_text: Some("done".into()),
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            started_at: "2024-01-01T00:00:00Z".into(),
+            ended_at: None,
+            log_file: None,
+            model: None,
+            plan: None,
+            parent_run_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            bot_name: None,
+            conversation_id: None,
+            subprocess_pid: Some(1),
+            runtime: "interactive".to_string(),
+            idle_since: Some("2024-01-01T00:05:00Z".into()),
+        },
+    );
+    app.handle_stop_agent();
+    assert!(
+        matches!(app.state.modal, Modal::None),
+        "no stop progress modal for idle runs"
+    );
+    assert!(app
+        .state
+        .status_message
+        .as_deref()
+        .is_some_and(|m| m.contains("can't be stopped")));
 }

@@ -290,10 +290,9 @@ pub fn reap_orphaned_workflow_runs(conn: &Connection) -> Result<usize> {
     for (run_id, parent_run_id) in waiting_runs {
         // A missing parent (None) is also treated as dead — if the agent run
         // has been purged from the DB its executor is certainly gone.
-        let dead_parent = !matches!(
-            parent_runs.get(&parent_run_id).map(|r| &r.status),
-            Some(AgentRunStatus::Running) | Some(AgentRunStatus::WaitingForFeedback)
-        );
+        let dead_parent = !parent_runs
+            .get(&parent_run_id)
+            .is_some_and(|r| r.is_active());
 
         // Check if the active gate step's timeout has elapsed.
         let gate_step = gate_steps.get(&run_id);
@@ -1190,6 +1189,19 @@ mod tests {
     /// Constant error string produced by the reaper — must match the classifier SQL.
     const ORPHAN_ERROR: &str =
         "parent agent run reached terminal state without completing the workflow";
+
+    #[test]
+    fn resume_db_path_skips_in_memory_connection() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        assert_eq!(super::resume_db_path(&conn), None);
+    }
+
+    #[test]
+    fn resume_db_path_returns_file_path() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = rusqlite::Connection::open(tmp.path()).unwrap();
+        assert!(super::resume_db_path(&conn).is_some());
+    }
 
     /// Create a test DB with a repo, worktree, and parent agent run.
     fn setup() -> (rusqlite::Connection, String) {
