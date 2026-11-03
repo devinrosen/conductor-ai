@@ -14,6 +14,7 @@ pub(crate) mod engine_error;
 pub mod estimation;
 pub(crate) mod executors;
 pub mod helpers;
+pub use helpers::{gate_type_or_name, is_gate_step, is_waiting_gate};
 pub(crate) mod item_provider;
 pub(crate) mod manager;
 pub(crate) mod output;

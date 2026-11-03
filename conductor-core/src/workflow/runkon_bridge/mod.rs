@@ -13,11 +13,13 @@ use crate::error::ConductorError;
 
 mod action_executor_adapter;
 mod child_workflow_runner;
+mod gate_metadata_persistence;
 mod item_providers;
 mod script_env;
 
 pub(super) use action_executor_adapter::RkActionExecutorAdapter;
 pub(super) use child_workflow_runner::ConductorChildWorkflowRunner;
+pub(super) use gate_metadata_persistence::{collect_gate_meta, GateMetadataPersistence};
 pub(super) use item_providers::{
     RkReposItemProvider, RkTicketsItemProvider, RkWorkflowRunsItemProvider, RkWorktreesItemProvider,
 };

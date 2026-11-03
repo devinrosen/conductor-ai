@@ -718,7 +718,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                     .data
                     .workflow_steps
                     .iter()
-                    .any(|s| s.status.to_string() == "waiting" && s.gate_type.is_some());
+                    .any(conductor_core::workflow::is_waiting_gate);
                 if has_gate {
                     return Action::ApproveGate;
                 }
