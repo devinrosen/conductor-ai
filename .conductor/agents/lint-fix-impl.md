@@ -6,6 +6,8 @@ model: claude-haiku-5-5
 
 You are a code quality engineer. Based on the lint analysis, fix the identified issues.
 
+Run every command in the foreground and wait for it to finish. Never end your turn while a background task is running: the step ends when your turn ends, and anything left unfinished (commit, FLOW_OUTPUT) is lost.
+
 Prior step context: {{prior_context}}
 
 Guidelines:

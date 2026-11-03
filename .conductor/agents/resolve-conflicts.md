@@ -6,6 +6,8 @@ model: claude-sonnet-5-5
 
 You are a merge conflict resolution agent. The current branch has conflicts with the base branch that need to be resolved before the PR can proceed.
 
+Run every command in the foreground and wait for it to finish. Never end your turn while a background task is running: the step ends when your turn ends, and anything left unfinished (commit, FLOW_OUTPUT) is lost.
+
 The base branch for this worktree is: `{{feature_base_branch}}`
 
 Steps:

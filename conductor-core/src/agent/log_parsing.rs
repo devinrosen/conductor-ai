@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use super::status::DEFAULT_AGENT_ERROR_MSG;
@@ -812,6 +813,85 @@ fn tool_summary(tool_name: &str, input: Option<&serde_json::Value>) -> String {
     }
 }
 
+const MAX_DESCRIPTION_CHARS: usize = 120;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackgroundTask {
+    pub task_id: String,
+    pub task_type: String,
+    pub description: String,
+}
+
+/// Background tasks still running when the agent's last turn ended.
+///
+/// Scoped to the log segment after the last `init` event: the log is opened in
+/// append mode, so a resumed session's output follows the earlier attempt's,
+/// and a fresh process starts with no tasks. Best effort: a missing log or an
+/// unknown event shape yields no tasks.
+pub fn running_background_tasks(log_path: &Path) -> Vec<BackgroundTask> {
+    let file = match std::fs::File::open(log_path) {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(
+                "turn completion: cannot read agent log {}: {e}",
+                log_path.display()
+            );
+            return Vec::new();
+        }
+    };
+    let mut tasks: Vec<BackgroundTask> = Vec::new();
+    for line in BufReader::new(file).split(b'\n') {
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(
+                    "background tasks: stopped reading agent log {}: {e}",
+                    log_path.display()
+                );
+                break;
+            }
+        };
+        let Ok(v) = serde_json::from_slice::<serde_json::Value>(&line) else {
+            continue;
+        };
+        let ty = v.get("type").and_then(|t| t.as_str());
+        let sub = v.get("subtype").and_then(|t| t.as_str());
+        match (ty, sub) {
+            (Some("system"), Some("init")) => tasks.clear(),
+            (Some("system"), Some("background_tasks_changed")) => {
+                tasks = v
+                    .get("tasks")
+                    .and_then(|t| t.as_array())
+                    .map(|arr| arr.iter().map(parse_task).collect())
+                    .unwrap_or_default();
+            }
+            _ => {}
+        }
+    }
+    tasks
+}
+
+fn parse_task(v: &serde_json::Value) -> BackgroundTask {
+    let s = |key: &str| {
+        v.get(key)
+            .and_then(|x| x.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    let first_line = s("description").lines().next().unwrap_or("").to_string();
+    let description = if first_line.chars().count() > MAX_DESCRIPTION_CHARS {
+        let cut: String = first_line.chars().take(MAX_DESCRIPTION_CHARS).collect();
+        format!("{cut}…")
+    } else {
+        first_line
+    };
+    BackgroundTask {
+        task_id: s("task_id"),
+        task_type: s("task_type"),
+        description,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1453,5 +1533,72 @@ mod tests {
         let tokens = scan_partial_token_usage(path.to_str().unwrap());
         // Only the complete line should be counted
         assert_eq!(tokens, (100, 50, 0, 0));
+    }
+}
+
+#[cfg(test)]
+mod background_task_tests {
+    use super::*;
+    use std::io::Write;
+
+    fn write_log(lines: &[&str]) -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        for l in lines {
+            writeln!(f, "{l}").unwrap();
+        }
+        f
+    }
+    const INIT: &str = r#"{"type":"system","subtype":"init","session_id":"s1"}"#;
+    const RESULT: &str = r#"{"type":"result","subtype":"success","result":"ending turn"}"#;
+    const TWO_TASKS: &str = r#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a","task_type":"local_bash","description":"cargo test"},{"task_id":"b","task_type":"local_bash","description":"cargo clippy"}]}"#;
+    const NO_TASKS: &str = r#"{"type":"system","subtype":"background_tasks_changed","tasks":[]}"#;
+
+    #[test]
+    fn tasks_before_result_are_running() {
+        let f = write_log(&[INIT, TWO_TASKS, RESULT]);
+        let t = running_background_tasks(f.path());
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[0].task_id, "a");
+        assert_eq!(t[0].description, "cargo test");
+    }
+
+    #[test]
+    fn empty_last_event_means_none_running() {
+        let f = write_log(&[INIT, TWO_TASKS, NO_TASKS, RESULT]);
+        assert!(running_background_tasks(f.path()).is_empty());
+    }
+
+    #[test]
+    fn new_init_resets_tasks_from_earlier_segment() {
+        let f = write_log(&[INIT, TWO_TASKS, RESULT, INIT]);
+        assert!(running_background_tasks(f.path()).is_empty());
+    }
+
+    #[test]
+    fn missing_file_and_garbage_lines_are_tolerated() {
+        assert!(running_background_tasks(Path::new("/nonexistent/x.log")).is_empty());
+        let f = write_log(&["not json", INIT, "{{{", TWO_TASKS, RESULT]);
+        assert_eq!(running_background_tasks(f.path()).len(), 2);
+    }
+
+    #[test]
+    fn long_multiline_description_is_truncated() {
+        let long = "x".repeat(300);
+        let ev = serde_json::json!({
+            "type":"system","subtype":"background_tasks_changed",
+            "tasks":[{"task_id":"a","task_type":"local_bash","description":format!("first\n{long}")}]
+        })
+        .to_string();
+        let f = write_log(&[INIT, &ev, RESULT]);
+        assert_eq!(running_background_tasks(f.path())[0].description, "first");
+        let ev = serde_json::json!({
+            "type":"system","subtype":"background_tasks_changed",
+            "tasks":[{"task_id":"a","task_type":"local_bash","description":long}]
+        })
+        .to_string();
+        let f = write_log(&[INIT, &ev, RESULT]);
+        let d = &running_background_tasks(f.path())[0].description;
+        assert_eq!(d.chars().count(), MAX_DESCRIPTION_CHARS + 1);
+        assert!(d.ends_with('…'));
     }
 }
