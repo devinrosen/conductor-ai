@@ -565,12 +565,7 @@ pub fn poll_data(
 
     // Apply interactive-session hook events spooled while the database was
     // busy (#3160). Every tick; a `read_dir` when there is nothing to do.
-    if let Err(e) = conductor_core::session::spool::drain_all(
-        &conn,
-        &conductor_core::session::spool::spool_dir_for(&db),
-    ) {
-        tracing::warn!("session spool drain failed: {e}");
-    }
+    conductor_core::session::spool::drain_for_db(&conn, &db);
 
     // Reap orphaned runs whose subprocess PID is no longer live and clean up
     // stale worktrees whose artifacts persist on disk after merge/abandon.

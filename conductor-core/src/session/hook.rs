@@ -30,6 +30,10 @@ use crate::new_id;
 
 pub const RUNTIME_INTERACTIVE: &str = "interactive";
 
+/// Summaries of the `system` event a SessionStart writes. The replay dedup
+/// query matches on them, so the insert and the query must share them.
+const SUMMARY_SESSION_STARTED: &str = "Session started";
+const SUMMARY_SESSION_RESUMED: &str = "Session resumed";
 /// Placeholder for the NOT NULL `agent_runs.prompt` column until the first prompt arrives.
 const PLACEHOLDER_PROMPT: &str = "(interactive session)";
 
@@ -507,8 +511,14 @@ fn on_session_start(
     if mode == ApplyMode::Replay {
         let seen: bool = conn.query_row(
             "SELECT EXISTS (SELECT 1 FROM agent_run_events WHERE run_id = ?1 AND kind = ?2 \
-             AND started_at = ?3 AND summary IN ('Session started', 'Session resumed'))",
-            params![run_id, EVENT_KIND_SYSTEM, ev.received_at],
+             AND started_at = ?3 AND summary IN (?4, ?5))",
+            params![
+                run_id,
+                EVENT_KIND_SYSTEM,
+                ev.received_at,
+                SUMMARY_SESSION_STARTED,
+                SUMMARY_SESSION_RESUMED
+            ],
             |r| r.get(0),
         )?;
         if seen {
@@ -522,9 +532,9 @@ fn on_session_start(
         run_id,
         EVENT_KIND_SYSTEM,
         if resumed {
-            "Session resumed"
+            SUMMARY_SESSION_RESUMED
         } else {
-            "Session started"
+            SUMMARY_SESSION_STARTED
         },
         &ev.received_at,
         None,

@@ -30,6 +30,11 @@
 //! inserts are deduplicated in [`ApplyMode::Replay`]. No clock-based guess
 //! about whether a drainer is still alive is needed.
 //!
+//! This is also why the claim stays inside the transaction rather than before
+//! `BEGIN IMMEDIATE`: claiming earlier would let another drainer mistake a live
+//! drainer's file for a leftover. Only the cheap `has_session_files` check runs
+//! before the lock.
+//!
 //! The flock is held only for the rename or the append, never for database
 //! work. It assumes a local filesystem; `CONDUCTOR_HOME` on NFS is unsupported.
 
@@ -115,6 +120,45 @@ pub fn session_file_stem(session_id: &str) -> String {
     format!("x-h{h:016x}-{}", bytes.len())
 }
 
+/// Wrap an I/O error with the operation and path that failed, so logs and the
+/// CLI's `spool failed:` message say which step broke.
+fn ctx<'a>(op: &'static str, path: &'a Path) -> impl FnOnce(std::io::Error) -> std::io::Error + 'a {
+    move |e| std::io::Error::new(e.kind(), format!("{op} {}: {e}", path.display()))
+}
+
+/// Create the spool directory owner-only: it holds prompts and shell commands.
+fn create_spool_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)?;
+        // A directory made by an earlier version keeps its old mode.
+        let meta = fs::metadata(dir)?;
+        if meta.permissions().mode() & 0o777 != 0o700 {
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(dir)
+    }
+}
+
+/// Open options for spool-owned files: owner read/write only on unix.
+fn private_open_options() -> OpenOptions {
+    let mut o = OpenOptions::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    o
+}
+
 /// Directory-wide advisory lock. Released on drop.
 struct DirLock {
     #[allow(dead_code)]
@@ -123,11 +167,13 @@ struct DirLock {
 
 impl DirLock {
     fn acquire(dir: &Path) -> std::io::Result<DirLock> {
-        let file = OpenOptions::new()
+        let lock_path = dir.join(LOCK_FILE);
+        let file = private_open_options()
             .create(true)
             .truncate(false)
             .write(true)
-            .open(dir.join(LOCK_FILE))?;
+            .open(&lock_path)
+            .map_err(ctx("cannot open spool lock", &lock_path))?;
         #[cfg(unix)]
         {
             use std::os::fd::AsRawFd;
@@ -139,7 +185,7 @@ impl DirLock {
                 }
                 let err = std::io::Error::last_os_error();
                 if err.kind() != std::io::ErrorKind::Interrupted {
-                    return Err(err);
+                    return Err(ctx("cannot lock", &lock_path)(err));
                 }
             }
         }
@@ -158,16 +204,24 @@ pub fn append(dir: &Path, ev: &HookEvent) -> Result<()> {
         v: LINE_VERSION,
         event: ev.clone(),
     })
-    .map_err(|e| ConductorError::Io(std::io::Error::other(e)))?;
+    .map_err(|e| {
+        ConductorError::Io(std::io::Error::other(format!(
+            "cannot serialize {:?} event for session {session_id}: {e}",
+            ev.hook_event_name
+        )))
+    })?;
     line.push(b'\n');
 
-    fs::create_dir_all(dir)?;
+    create_spool_dir(dir).map_err(ctx("cannot create spool dir", dir))?;
     let _lock = DirLock::acquire(dir)?;
-    let mut f = OpenOptions::new()
+    let path = dir.join(format!("{}{LIVE_EXT}", session_file_stem(session_id)));
+    let mut f = private_open_options()
         .create(true)
         .append(true)
-        .open(dir.join(format!("{}{LIVE_EXT}", session_file_stem(session_id))))?;
-    f.write_all(&line)?;
+        .open(&path)
+        .map_err(ctx("cannot open spool file", &path))?;
+    f.write_all(&line)
+        .map_err(ctx("cannot write spool file", &path))?;
     Ok(())
 }
 
@@ -210,7 +264,10 @@ fn claim(dir: &Path, stem: &str) -> std::io::Result<Claimed> {
     let _lock = DirLock::acquire(dir)?;
     let mut claimed = Claimed::default();
     let mut live = None;
-    for entry in fs::read_dir(dir)?.flatten() {
+    for entry in fs::read_dir(dir)
+        .map_err(ctx("cannot list spool dir", dir))?
+        .flatten()
+    {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
         if stem_of(name) != Some(stem) {
@@ -225,7 +282,7 @@ fn claim(dir: &Path, stem: &str) -> std::io::Result<Claimed> {
     claimed.leftovers.sort();
     if let Some(live) = live {
         let target = dir.join(format!("{stem}.{}{DRAINING_EXT}", new_id()));
-        fs::rename(&live, &target)?;
+        fs::rename(&live, &target).map_err(ctx("cannot claim spool file", &live))?;
         claimed.fresh = Some(target);
     }
     Ok(claimed)
@@ -233,7 +290,7 @@ fn claim(dir: &Path, stem: &str) -> std::io::Result<Claimed> {
 
 /// Parse a spool file, skipping blank, torn, unknown-version and garbage lines.
 fn read_events(path: &Path) -> std::io::Result<Vec<HookEvent>> {
-    let data = fs::read(path)?;
+    let data = fs::read(path).map_err(ctx("cannot read spool file", path))?;
     let mut out = Vec::new();
     for raw in data.split(|b| *b == b'\n') {
         if raw.iter().all(u8::is_ascii_whitespace) {
@@ -300,6 +357,16 @@ fn apply_claimed(tx: &Connection, claimed: &Claimed) -> Result<usize> {
     Ok(n)
 }
 
+/// Inside an open write transaction: claim a session's spool files and apply
+/// them. Both the hook and the poller go through here so the ordering (claim
+/// under the write lock, commit, only then delete) lives in one place. The
+/// caller commits, then calls [`remove_claimed`].
+fn claim_and_apply(tx: &Connection, dir: &Path, stem: &str) -> Result<(Claimed, usize)> {
+    let claimed = claim(dir, stem)?;
+    let n = apply_claimed(tx, &claimed)?;
+    Ok((claimed, n))
+}
+
 fn remove_claimed(claimed: &Claimed) {
     for p in claimed.all_paths() {
         if let Err(e) = fs::remove_file(p) {
@@ -317,14 +384,19 @@ fn remove_claimed(claimed: &Claimed) {
 /// leftovers. The caller should then [`append`] `ev`, which orders it after
 /// them.
 pub fn record_hook_event(conn: &Connection, dir: &Path, ev: &HookEvent) -> Result<RecordOutcome> {
+    // Checked before taking the write lock so the common case (no spool) does
+    // no file work inside the transaction. A file that appears after this
+    // check belongs to an event that raced this hook; it is drained next time.
+    let stem = ev
+        .session_id
+        .as_deref()
+        .map(session_file_stem)
+        .filter(|stem| has_session_files(dir, stem));
     let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let mut claimed = Claimed::default();
     let mut drained = 0;
-    if let Some(stem) = ev.session_id.as_deref().map(session_file_stem) {
-        if has_session_files(dir, &stem) {
-            claimed = claim(dir, &stem)?;
-            drained = apply_claimed(&tx, &claimed)?;
-        }
+    if let Some(stem) = stem {
+        (claimed, drained) = claim_and_apply(&tx, dir, &stem)?;
     }
     let outcome = apply_in_tx(&tx, ev, ApplyMode::Fresh)?;
     tx.commit()?;
@@ -339,7 +411,7 @@ pub fn drain_all(conn: &Connection, dir: &Path) -> Result<DrainStats> {
     let rd = match fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(DrainStats::default()),
-        Err(e) => return Err(e.into()),
+        Err(e) => return Err(ctx("cannot list spool dir", dir)(e).into()),
     };
     let stems: BTreeSet<String> = rd
         .flatten()
@@ -364,11 +436,22 @@ pub fn drain_all(conn: &Connection, dir: &Path) -> Result<DrainStats> {
 
 fn drain_session(conn: &Connection, dir: &Path, stem: &str) -> Result<usize> {
     let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
-    let claimed = claim(dir, stem)?;
-    let n = apply_claimed(&tx, &claimed)?;
+    let (claimed, n) = claim_and_apply(&tx, dir, stem)?;
     tx.commit()?;
     remove_claimed(&claimed);
     Ok(n)
+}
+
+/// Poller entry point: drain the spool that pairs with the database at
+/// `db_path`, logging (never returning) a failure so a tick carries on.
+pub fn drain_for_db(conn: &Connection, db_path: &Path) -> DrainStats {
+    match drain_all(conn, &spool_dir_for(db_path)) {
+        Ok(stats) => stats,
+        Err(e) => {
+            tracing::warn!("session spool drain failed: {e}");
+            DrainStats::default()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -683,5 +766,102 @@ mod tests {
         assert_eq!(status(&conn), "idle");
         // The direct path still works afterwards.
         apply_hook_event(&conn, &post(T2)).unwrap();
+    }
+
+    #[test]
+    fn append_without_session_id_errors_and_creates_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("session-spool");
+        let mut e = ev("SessionStart", json!({}), T0);
+        e.session_id = None;
+        let err = append(&dir, &e).unwrap_err();
+        assert!(err.to_string().contains("session_id"), "{err}");
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn append_errors_name_the_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A file where the directory should be.
+        let blocked = tmp.path().join("session-spool");
+        fs::write(&blocked, b"x").unwrap();
+        let err = append(&blocked, &ev("SessionStart", json!({}), T0)).unwrap_err();
+        assert!(err.to_string().contains("session-spool"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spool_dir_and_files_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("session-spool");
+        // A directory left by an older version with default modes is tightened.
+        fs::create_dir(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        append(&dir, &ev("SessionStart", json!({}), T0)).unwrap();
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(mode(&dir.join("s1.jsonl")), 0o600);
+        assert_eq!(mode(&dir.join(LOCK_FILE)), 0o600);
+    }
+
+    #[test]
+    fn failed_drain_rolls_back_and_the_next_drain_applies_once() {
+        let conn = setup_db();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("session-spool");
+        append(&dir, &ev("SessionStart", json!({}), T0)).unwrap();
+        append(&dir, &perm(T1)).unwrap();
+        // A leftover that applies cleanly, then one that cannot be read (a
+        // directory): the drain fails after applying events in the transaction.
+        fs::create_dir(&dir).ok();
+        let good = dir.join("s1.01AAAAAAAAAAAAAAAAAAAAAAAA.draining");
+        fs::rename(dir.join("s1.jsonl"), &good).unwrap();
+        append(&dir, &post(T2)).unwrap();
+        let bad = dir.join("s1.01BBBBBBBBBBBBBBBBBBBBBBBB.draining");
+        fs::create_dir(&bad).unwrap();
+
+        assert!(drain_session(&conn, &dir, "s1").is_err());
+        assert_eq!(count(&conn, "agent_runs"), 0);
+        assert_eq!(count(&conn, "feedback_requests"), 0);
+        assert!(good.exists() && bad.exists());
+        let live_claimed = dir_files(&dir)
+            .iter()
+            .filter(|n| n.ends_with(DRAINING_EXT))
+            .count();
+        assert_eq!(live_claimed, 3, "{:?}", dir_files(&dir));
+
+        fs::remove_dir(&bad).unwrap();
+        assert_eq!(drain_session(&conn, &dir, "s1").unwrap(), 3);
+        assert_eq!(count(&conn, "feedback_requests"), 1);
+        assert_eq!(status(&conn), "running");
+        assert!(dir_files(&dir).is_empty());
+    }
+
+    #[test]
+    fn drain_for_db_drains_a_quiet_sessions_spool() {
+        let conn = setup_db();
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("conductor.db");
+        let dir = spool_dir_for(&db_path);
+        append(&dir, &ev("SessionStart", json!({}), T0)).unwrap();
+        append(&dir, &perm(T1)).unwrap();
+
+        let stats = drain_for_db(&conn, &db_path);
+        assert_eq!(
+            stats,
+            DrainStats {
+                sessions: 1,
+                events: 2
+            }
+        );
+        assert_eq!(status(&conn), "waiting_for_feedback");
+        assert!(dir_files(&dir).is_empty());
+        // Nothing to do, and a missing directory, are both quiet no-ops.
+        assert_eq!(drain_for_db(&conn, &db_path), DrainStats::default());
+        assert_eq!(
+            drain_for_db(&conn, &tmp.path().join("nope/c.db")),
+            DrainStats::default()
+        );
     }
 }
