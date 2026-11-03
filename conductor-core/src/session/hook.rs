@@ -123,15 +123,24 @@ impl HookEvent {
         // `model` is a string in some payloads and `{id, display_name}` in others.
         let model = match v.get("model") {
             Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
-            Some(m @ Value::Object(_)) => str_field(m, "id").or_else(|| str_field(m, "display_name")),
+            Some(m @ Value::Object(_)) => {
+                str_field(m, "id").or_else(|| str_field(m, "display_name"))
+            }
             _ => None,
         };
 
         let tool_summary = v.get("tool_input").and_then(|input| {
-            ["command", "file_path", "path", "pattern", "url", "description"]
-                .iter()
-                .find_map(|k| str_field(input, k))
-                .map(|s| truncate_chars(&s, MAX_TOOL_SUMMARY_CHARS))
+            [
+                "command",
+                "file_path",
+                "path",
+                "pattern",
+                "url",
+                "description",
+            ]
+            .iter()
+            .find_map(|k| str_field(input, k))
+            .map(|s| truncate_chars(&s, MAX_TOOL_SUMMARY_CHARS))
         });
 
         let duration_ms = v.get("duration_ms").and_then(Value::as_i64).or_else(|| {
@@ -246,7 +255,8 @@ pub fn apply_hook_event(conn: &Connection, ev: &HookEvent) -> Result<HookOutcome
 /// `/ws/foo-bar` is not inside `/ws/foo`). Retries with the canonicalized `cwd`
 /// when the raw path matches nothing (symlinked `/var` vs `/private/var`).
 fn resolve_worktree(conn: &Connection, cwd: &str) -> Result<Option<(String, String)>> {
-    let mut stmt = conn.prepare("SELECT id, repo_id, path FROM worktrees WHERE status = 'active'")?;
+    let mut stmt =
+        conn.prepare("SELECT id, repo_id, path FROM worktrees WHERE status = 'active'")?;
     let rows: Vec<(String, String, String)> = stmt
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<std::result::Result<_, _>>()?;
@@ -481,10 +491,11 @@ fn on_post_tool_use(conn: &Connection, ev: &HookEvent, run_id: &str, name: &str)
     )?;
 
     let tool = ev.tool_name.as_deref().unwrap_or("tool");
-    let started_at = match ev
-        .duration_ms
-        .and_then(|ms| chrono::DateTime::parse_from_rfc3339(now).ok().map(|t| (t, ms)))
-    {
+    let started_at = match ev.duration_ms.and_then(|ms| {
+        chrono::DateTime::parse_from_rfc3339(now)
+            .ok()
+            .map(|t| (t, ms))
+    }) {
         Some((t, ms)) => (t - chrono::Duration::milliseconds(ms.max(0))).to_rfc3339(),
         None => now.to_string(),
     };
@@ -537,7 +548,10 @@ fn on_session_end(conn: &Connection, ev: &HookEvent, run_id: &str) -> Result<()>
         conn,
         run_id,
         "system",
-        &format!("Session ended ({})", ev.reason.as_deref().unwrap_or("unknown")),
+        &format!(
+            "Session ended ({})",
+            ev.reason.as_deref().unwrap_or("unknown")
+        ),
         now,
         None,
         json!({ "reason": ev.reason }),
@@ -582,12 +596,20 @@ mod tests {
             conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0))
                 .unwrap()
         };
-        (c("agent_runs"), c("feedback_requests"), c("agent_run_events"))
+        (
+            c("agent_runs"),
+            c("feedback_requests"),
+            c("agent_run_events"),
+        )
     }
 
     fn run_status(conn: &Connection) -> String {
-        conn.query_row("SELECT status FROM agent_runs WHERE session_id='s1'", [], |r| r.get(0))
-            .unwrap()
+        conn.query_row(
+            "SELECT status FROM agent_runs WHERE session_id='s1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
     }
 
     fn run_col(conn: &Connection, col: &str) -> Option<String> {
@@ -609,7 +631,12 @@ mod tests {
             .unwrap();
         stmt.query_map([kind], |r| {
             let m: String = r.get(3)?;
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, serde_json::from_str(&m).unwrap()))
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                serde_json::from_str(&m).unwrap(),
+            ))
         })
         .unwrap()
         .map(|r| r.unwrap())
@@ -618,7 +645,9 @@ mod tests {
 
     fn feedback(conn: &Connection) -> Vec<(String, String, Option<String>)> {
         let mut stmt = conn
-            .prepare("SELECT prompt, status, response FROM feedback_requests ORDER BY created_at, id")
+            .prepare(
+                "SELECT prompt, status, response FROM feedback_requests ORDER BY created_at, id",
+            )
             .unwrap();
         stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .unwrap()
@@ -648,7 +677,10 @@ mod tests {
         assert_eq!(run_col(&conn, "repo_id").as_deref(), Some("r1"));
         assert_eq!(run_col(&conn, "model").as_deref(), Some("claude-opus"));
         assert_eq!(run_col(&conn, "tmux_pane").as_deref(), Some("%3"));
-        assert_eq!(run_col(&conn, "transcript_path").as_deref(), Some("/t/s1.jsonl"));
+        assert_eq!(
+            run_col(&conn, "transcript_path").as_deref(),
+            Some("/t/s1.jsonl")
+        );
         assert_eq!(
             run_col(&conn, "subprocess_pid"),
             Some(std::process::id().to_string())
@@ -663,7 +695,14 @@ mod tests {
     fn user_prompt_runs_and_opens_span() {
         let conn = setup_db();
         start(&conn);
-        apply(&conn, &ev("UserPromptSubmit", json!({"prompt": "fix it", "prompt_id": "p1"}), T1));
+        apply(
+            &conn,
+            &ev(
+                "UserPromptSubmit",
+                json!({"prompt": "fix it", "prompt_id": "p1"}),
+                T1,
+            ),
+        );
         assert_eq!(run_status(&conn), "running");
         assert_eq!(run_col(&conn, "prompt").as_deref(), Some("fix it"));
         assert_eq!(run_col(&conn, "idle_since"), None);
@@ -688,7 +727,10 @@ mod tests {
         );
         assert_eq!(run_status(&conn), "waiting_for_feedback");
         let fb = feedback(&conn);
-        assert_eq!(fb, vec![("Permission: Bash rm -rf x".into(), "pending".into(), None)]);
+        assert_eq!(
+            fb,
+            vec![("Permission: Bash rm -rf x".into(), "pending".into(), None)]
+        );
         let evs = events(&conn, "system");
         assert_eq!(evs.last().unwrap().0, "Waiting: Permission: Bash rm -rf x");
     }
@@ -697,7 +739,14 @@ mod tests {
     fn post_tool_use_answers_and_resumes_running() {
         let conn = setup_db();
         start(&conn);
-        apply(&conn, &ev("PermissionRequest", json!({"tool_name": "Edit", "tool_input": {"file_path": "/a.rs"}}), T1));
+        apply(
+            &conn,
+            &ev(
+                "PermissionRequest",
+                json!({"tool_name": "Edit", "tool_input": {"file_path": "/a.rs"}}),
+                T1,
+            ),
+        );
         apply(
             &conn,
             &ev(
@@ -724,7 +773,11 @@ mod tests {
         start(&conn);
         apply(
             &conn,
-            &ev("PostToolUseFailure", json!({"tool_name": "Bash", "error": "boom"}), T1),
+            &ev(
+                "PostToolUseFailure",
+                json!({"tool_name": "Bash", "error": "boom"}),
+                T1,
+            ),
         );
         let evs = events(&conn, EVENT_KIND_TOOL_ERROR);
         assert_eq!(evs.len(), 1);
@@ -745,7 +798,14 @@ mod tests {
     fn stop_goes_idle_and_closes_span() {
         let conn = setup_db();
         start(&conn);
-        apply(&conn, &ev("UserPromptSubmit", json!({"prompt": "go", "prompt_id": "p1"}), T1));
+        apply(
+            &conn,
+            &ev(
+                "UserPromptSubmit",
+                json!({"prompt": "go", "prompt_id": "p1"}),
+                T1,
+            ),
+        );
         apply(
             &conn,
             &ev(
@@ -767,13 +827,19 @@ mod tests {
     fn session_end_completes_and_dismisses() {
         let conn = setup_db();
         start(&conn);
-        apply(&conn, &ev("PermissionRequest", json!({"tool_name": "Bash"}), T1));
+        apply(
+            &conn,
+            &ev("PermissionRequest", json!({"tool_name": "Bash"}), T1),
+        );
         apply(&conn, &ev("SessionEnd", json!({"reason": "logout"}), T2));
         assert_eq!(run_status(&conn), "completed");
         assert_eq!(run_col(&conn, "ended_at").as_deref(), Some(T2));
         assert_eq!(run_col(&conn, "idle_since"), None);
         assert_eq!(feedback(&conn)[0].1, "dismissed");
-        assert_eq!(events(&conn, "system").last().unwrap().0, "Session ended (logout)");
+        assert_eq!(
+            events(&conn, "system").last().unwrap().0,
+            "Session ended (logout)"
+        );
     }
 
     #[test]
@@ -796,9 +862,19 @@ mod tests {
     fn permission_approved_then_stop() {
         let conn = setup_db();
         start(&conn);
-        apply(&conn, &ev("PermissionRequest", json!({"tool_name": "Bash", "tool_input": {"command": "ls"}}), T1));
+        apply(
+            &conn,
+            &ev(
+                "PermissionRequest",
+                json!({"tool_name": "Bash", "tool_input": {"command": "ls"}}),
+                T1,
+            ),
+        );
         apply(&conn, &ev("PostToolUse", json!({"tool_name": "Bash"}), T1));
-        apply(&conn, &ev("Stop", json!({"last_assistant_message": "ok"}), T2));
+        apply(
+            &conn,
+            &ev("Stop", json!({"last_assistant_message": "ok"}), T2),
+        );
         assert_eq!(feedback(&conn)[0].1, "responded");
         assert_eq!(run_status(&conn), "idle");
     }
@@ -807,8 +883,14 @@ mod tests {
     fn permission_denied_then_next_prompt_dismisses() {
         let conn = setup_db();
         start(&conn);
-        apply(&conn, &ev("PermissionRequest", json!({"tool_name": "Bash"}), T1));
-        apply(&conn, &ev("UserPromptSubmit", json!({"prompt": "never mind"}), T2));
+        apply(
+            &conn,
+            &ev("PermissionRequest", json!({"tool_name": "Bash"}), T1),
+        );
+        apply(
+            &conn,
+            &ev("UserPromptSubmit", json!({"prompt": "never mind"}), T2),
+        );
         assert_eq!(feedback(&conn)[0].1, "dismissed");
         assert_eq!(run_status(&conn), "running");
     }
@@ -817,7 +899,11 @@ mod tests {
     fn replayed_permission_request_is_deduped() {
         let conn = setup_db();
         start(&conn);
-        let e = ev("PermissionRequest", json!({"tool_name": "Bash", "prompt_id": "p1"}), T1);
+        let e = ev(
+            "PermissionRequest",
+            json!({"tool_name": "Bash", "prompt_id": "p1"}),
+            T1,
+        );
         apply(&conn, &e);
         let before = counts(&conn);
         assert!(matches!(apply(&conn, &e), HookOutcome::Applied { .. }));
@@ -839,19 +925,26 @@ mod tests {
         let mut e = ev("SessionStart", json!({}), T0);
         e.session_id = Some("s2".into());
         e.cwd = Some("/tmp/ws/feat-test-other".into());
-        assert_eq!(apply(&conn, &e), HookOutcome::Ignored("not in an active worktree"));
+        assert_eq!(
+            apply(&conn, &e),
+            HookOutcome::Ignored("not in an active worktree")
+        );
     }
 
     #[test]
     fn noops_write_nothing() {
         let conn = setup_db();
         insert_test_repo(&conn, "r2", "other", "/tmp/main-checkout");
-        conn.execute("UPDATE worktrees SET status = 'merged' WHERE id = 'w1'", []).unwrap();
+        conn.execute("UPDATE worktrees SET status = 'merged' WHERE id = 'w1'", [])
+            .unwrap();
         insert_test_worktree(&conn, "w9", "r2", "live", "/tmp/ws/live");
         let before = counts(&conn);
 
         // merged worktree
-        assert!(matches!(apply(&conn, &ev("SessionStart", json!({}), T0)), HookOutcome::Ignored(_)));
+        assert!(matches!(
+            apply(&conn, &ev("SessionStart", json!({}), T0)),
+            HookOutcome::Ignored(_)
+        ));
         // main checkout
         let mut e = ev("SessionStart", json!({}), T0);
         e.cwd = Some("/tmp/main-checkout".into());
@@ -879,7 +972,10 @@ mod tests {
         let conn = setup_db();
         start(&conn);
         apply(&conn, &ev("SessionEnd", json!({}), T1));
-        assert_eq!(apply(&conn, &ev("Stop", json!({}), T2)), HookOutcome::Ignored("session closed"));
+        assert_eq!(
+            apply(&conn, &ev("Stop", json!({}), T2)),
+            HookOutcome::Ignored("session closed")
+        );
         assert_eq!(run_status(&conn), "completed");
     }
 
@@ -903,7 +999,8 @@ mod tests {
         assert_eq!(e.model.as_deref(), Some("m-1"));
         assert_eq!(e.background_tasks, Some(3));
 
-        let e = HookEvent::from_payload(&json!({"background_tasks": [1, 2, 3, 4]}), env(), T0.into());
+        let e =
+            HookEvent::from_payload(&json!({"background_tasks": [1, 2, 3, 4]}), env(), T0.into());
         assert_eq!(e.background_tasks, Some(4));
     }
 
@@ -912,7 +1009,14 @@ mod tests {
         let conn = setup_db();
         start(&conn);
         let long = "y".repeat(1000);
-        apply(&conn, &ev("PermissionRequest", json!({"tool_name": "Bash", "tool_input": {"command": long}}), T1));
+        apply(
+            &conn,
+            &ev(
+                "PermissionRequest",
+                json!({"tool_name": "Bash", "tool_input": {"command": long}}),
+                T1,
+            ),
+        );
         assert_eq!(feedback(&conn)[0].0.chars().count(), 200);
     }
 

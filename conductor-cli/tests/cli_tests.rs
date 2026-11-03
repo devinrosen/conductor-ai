@@ -538,7 +538,11 @@ fn session_hook_malformed_json_exits_zero_silently() {
 #[test]
 fn session_hook_unattended_creates_no_database() {
     let dir = tempfile::tempdir().unwrap();
-    let out = run_hook(dir.path(), "0", &payload("SessionStart", serde_json::json!({})));
+    let out = run_hook(
+        dir.path(),
+        "0",
+        &payload("SessionStart", serde_json::json!({})),
+    );
     assert_silent_success(&out);
     assert!(!dir.path().join("conductor.db").exists());
 }
@@ -546,7 +550,11 @@ fn session_hook_unattended_creates_no_database() {
 #[test]
 fn session_hook_without_database_creates_none() {
     let dir = tempfile::tempdir().unwrap();
-    let out = run_hook(dir.path(), "1", &payload("SessionStart", serde_json::json!({})));
+    let out = run_hook(
+        dir.path(),
+        "1",
+        &payload("SessionStart", serde_json::json!({})),
+    );
     assert_silent_success(&out);
     assert!(!dir.path().join("conductor.db").exists());
 }
@@ -556,14 +564,21 @@ fn session_hook_records_start_and_prompt() {
     let dir = tempfile::tempdir().unwrap();
     let conn = seed_hook_db(dir.path());
 
-    let out = run_hook(dir.path(), "1", &payload("SessionStart", serde_json::json!({"source": "startup"})));
+    let out = run_hook(
+        dir.path(),
+        "1",
+        &payload("SessionStart", serde_json::json!({"source": "startup"})),
+    );
     assert_silent_success(&out);
     assert_eq!(run_status(&conn), "idle");
 
     let out = run_hook(
         dir.path(),
         "1",
-        &payload("UserPromptSubmit", serde_json::json!({"prompt": "hello", "prompt_id": "p1"})),
+        &payload(
+            "UserPromptSubmit",
+            serde_json::json!({"prompt": "hello", "prompt_id": "p1"}),
+        ),
     );
     assert_silent_success(&out);
     let (status, wt, pid, runtime): (String, String, i64, String) = conn
@@ -583,11 +598,18 @@ fn session_hook_records_start_and_prompt() {
 fn session_hook_oversized_post_tool_use_still_flips_to_running() {
     let dir = tempfile::tempdir().unwrap();
     let conn = seed_hook_db(dir.path());
-    run_hook(dir.path(), "1", &payload("SessionStart", serde_json::json!({})));
     run_hook(
         dir.path(),
         "1",
-        &payload("PermissionRequest", serde_json::json!({"tool_name": "Bash"})),
+        &payload("SessionStart", serde_json::json!({})),
+    );
+    run_hook(
+        dir.path(),
+        "1",
+        &payload(
+            "PermissionRequest",
+            serde_json::json!({"tool_name": "Bash"}),
+        ),
     );
     assert_eq!(run_status(&conn), "waiting_for_feedback");
 

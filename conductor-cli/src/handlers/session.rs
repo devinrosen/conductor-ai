@@ -219,6 +219,8 @@ mod tests {
     #[test]
     fn handled_event_prefilter() {
         assert!(mentions_handled_event(br#"{"hook_event_name":"Stop"}"#));
-        assert!(!mentions_handled_event(br#"{"hook_event_name":"PreToolUse"}"#));
+        assert!(!mentions_handled_event(
+            br#"{"hook_event_name":"PreToolUse"}"#
+        ));
     }
 }
