@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 87;
+pub const LATEST_SCHEMA_VERSION: u32 = 88;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -1392,6 +1392,23 @@ pub fn run(conn: &Connection) -> Result<()> {
             )?;
         }
         bump_version(conn, 87)?;
+    }
+
+    // Migration 088: index for the `conductor session hook` per-event lookup
+    // (`WHERE session_id = ? AND runtime = ? ORDER BY started_at DESC`). A separate
+    // step from 087 so databases that already ran 087 get it too.
+    if version < 88 {
+        if table_exists(conn, "agent_runs")?
+            && conn
+                .prepare("SELECT session_id, runtime, started_at FROM agent_runs LIMIT 0")
+                .is_ok()
+        {
+            conn.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_agent_runs_session_runtime \
+                 ON agent_runs(session_id, runtime, started_at) WHERE session_id IS NOT NULL;",
+            )?;
+        }
+        bump_version(conn, 88)?;
     }
 
     Ok(())
@@ -3128,7 +3145,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, 87);
+        assert_eq!(version, LATEST_SCHEMA_VERSION as i64);
     }
 
     #[test]

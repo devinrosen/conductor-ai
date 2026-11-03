@@ -304,6 +304,12 @@ pub struct AgentRunEvent {
     pub metadata: Option<String>,
 }
 
+/// Event kinds the TUI's Agent Activity panel renders.
+pub const EVENT_KIND_SYSTEM: &str = "system";
+pub const EVENT_KIND_PROMPT: &str = "prompt";
+pub const EVENT_KIND_TOOL: &str = "tool";
+pub const EVENT_KIND_RESULT: &str = "result";
+
 /// Event kind for tool errors captured from agent output.
 pub const EVENT_KIND_TOOL_ERROR: &str = "tool_error";
 

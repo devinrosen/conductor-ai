@@ -6,6 +6,13 @@
 //! `received_at` and captured environment, and every timestamp written comes
 //! from it, never from the clock. That lets the #3160 spool replay an event
 //! later and produce identical rows and the same dedup key.
+//!
+//! This module writes `agent_runs`, `feedback_requests` and `agent_run_events`
+//! with raw SQL on purpose rather than through `AgentManager`: the hook is a
+//! fast path (no `Conductor::open()`, no config) that must run the whole
+//! transition inside one IMMEDIATE transaction on a bare `&Connection`. To keep
+//! the two write paths from drifting, status values and event kinds come from
+//! `agent::types` / `agent::status` and are not redefined here.
 
 use std::path::Path;
 
@@ -13,7 +20,11 @@ use rusqlite::{named_params, params, Connection, OptionalExtension, TransactionB
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::agent::types::{EVENT_KIND_TOOL_ERROR, META_KEY_ERROR_TEXT};
+use crate::agent::status::{AgentRunStatus, FeedbackStatus};
+use crate::agent::types::{
+    EVENT_KIND_PROMPT, EVENT_KIND_RESULT, EVENT_KIND_SYSTEM, EVENT_KIND_TOOL,
+    EVENT_KIND_TOOL_ERROR, META_KEY_ERROR_TEXT,
+};
 use crate::error::Result;
 use crate::new_id;
 
@@ -28,20 +39,57 @@ const MAX_FEEDBACK_PROMPT_CHARS: usize = 200;
 const MAX_ERROR_CHARS: usize = 500;
 const MAX_TOOL_SUMMARY_CHARS: usize = 200;
 
-/// Hook names this module acts on. Everything else is ignored.
-pub const HANDLED_EVENTS: &[&str] = &[
-    "SessionStart",
-    "UserPromptSubmit",
-    "PermissionRequest",
-    "PostToolUse",
-    "PostToolUseFailure",
-    "Stop",
-    "SessionEnd",
-];
+/// Hook events this module acts on. Everything else is ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookKind {
+    SessionStart,
+    UserPromptSubmit,
+    PermissionRequest,
+    PostToolUse,
+    PostToolUseFailure,
+    Stop,
+    SessionEnd,
+}
+
+impl HookKind {
+    pub const ALL: [HookKind; 7] = [
+        HookKind::SessionStart,
+        HookKind::UserPromptSubmit,
+        HookKind::PermissionRequest,
+        HookKind::PostToolUse,
+        HookKind::PostToolUseFailure,
+        HookKind::Stop,
+        HookKind::SessionEnd,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HookKind::SessionStart => "SessionStart",
+            HookKind::UserPromptSubmit => "UserPromptSubmit",
+            HookKind::PermissionRequest => "PermissionRequest",
+            HookKind::PostToolUse => "PostToolUse",
+            HookKind::PostToolUseFailure => "PostToolUseFailure",
+            HookKind::Stop => "Stop",
+            HookKind::SessionEnd => "SessionEnd",
+        }
+    }
+}
+
+impl std::str::FromStr for HookKind {
+    type Err = ();
+    fn from_str(s: &str) -> std::result::Result<Self, ()> {
+        Self::ALL.into_iter().find(|k| k.as_str() == s).ok_or(())
+    }
+}
+
+/// Names of the hook events the state machine handles.
+pub fn handled_event_names() -> impl Iterator<Item = &'static str> {
+    HookKind::ALL.into_iter().map(HookKind::as_str)
+}
 
 /// Whether `name` is a hook event the state machine handles.
 pub fn is_handled_event(name: &str) -> bool {
-    HANDLED_EVENTS.contains(&name)
+    name.parse::<HookKind>().is_ok()
 }
 
 /// Environment captured from the hook process.
@@ -192,9 +240,12 @@ pub fn apply_hook_event(conn: &Connection, ev: &HookEvent) -> Result<HookOutcome
     if !ev.env.attended {
         return Ok(HookOutcome::Ignored("not attended"));
     }
-    let name = match ev.hook_event_name.as_deref() {
-        Some(n) if is_handled_event(n) => n,
-        _ => return Ok(HookOutcome::Ignored("unhandled event")),
+    let Some(kind) = ev
+        .hook_event_name
+        .as_deref()
+        .and_then(|n| n.parse::<HookKind>().ok())
+    else {
+        return Ok(HookOutcome::Ignored("unhandled event"));
     };
     let session_id = match ev.session_id.as_deref() {
         Some(s) => s,
@@ -215,16 +266,15 @@ pub fn apply_hook_event(conn: &Connection, ev: &HookEvent) -> Result<HookOutcome
     let existed = existing.is_some();
     let run_id = match existing {
         Some((id, status)) => {
-            if (status == "completed" || status == "failed")
-                && name != "SessionStart"
-                && name != "UserPromptSubmit"
-            {
+            let closed = status == AgentRunStatus::Completed.to_string()
+                || status == AgentRunStatus::Failed.to_string();
+            if closed && !matches!(kind, HookKind::SessionStart | HookKind::UserPromptSubmit) {
                 return Ok(HookOutcome::Ignored("session closed"));
             }
             id
         }
         None => {
-            if name == "SessionEnd" {
+            if kind == HookKind::SessionEnd {
                 return Ok(HookOutcome::Ignored("unknown session"));
             }
             let Some(cwd) = ev.cwd.as_deref() else {
@@ -237,14 +287,15 @@ pub fn apply_hook_event(conn: &Connection, ev: &HookEvent) -> Result<HookOutcome
         }
     };
 
-    match name {
-        "SessionStart" => on_session_start(&tx, ev, &run_id, existed)?,
-        "UserPromptSubmit" => on_user_prompt(&tx, ev, &run_id)?,
-        "PermissionRequest" => on_permission_request(&tx, ev, &run_id, session_id)?,
-        "PostToolUse" | "PostToolUseFailure" => on_post_tool_use(&tx, ev, &run_id, name)?,
-        "Stop" => on_stop(&tx, ev, &run_id)?,
-        "SessionEnd" => on_session_end(&tx, ev, &run_id)?,
-        _ => unreachable!("is_handled_event filtered {name}"),
+    match kind {
+        HookKind::SessionStart => on_session_start(&tx, ev, &run_id, existed)?,
+        HookKind::UserPromptSubmit => on_user_prompt(&tx, ev, &run_id)?,
+        HookKind::PermissionRequest => on_permission_request(&tx, ev, &run_id, session_id)?,
+        HookKind::PostToolUse | HookKind::PostToolUseFailure => {
+            on_post_tool_use(&tx, ev, &run_id, kind)?
+        }
+        HookKind::Stop => on_stop(&tx, ev, &run_id)?,
+        HookKind::SessionEnd => on_session_end(&tx, ev, &run_id)?,
     }
 
     tx.commit()?;
@@ -286,13 +337,14 @@ fn insert_run(
     conn.execute(
         "INSERT INTO agent_runs (id, worktree_id, repo_id, session_id, prompt, status, started_at, \
          model, runtime, transcript_path, tmux_pane, subprocess_pid, subprocess_started_at) \
-         VALUES (:id, :wt, :repo, :sid, :prompt, 'idle', :now, :model, :runtime, :tp, :pane, :pid, :pid_started)",
+         VALUES (:id, :wt, :repo, :sid, :prompt, :status, :now, :model, :runtime, :tp, :pane, :pid, :pid_started)",
         named_params! {
             ":id": id,
             ":wt": worktree_id,
             ":repo": repo_id,
             ":sid": session_id,
             ":prompt": PLACEHOLDER_PROMPT,
+            ":status": AgentRunStatus::Idle.to_string(),
             ":now": ev.received_at,
             ":model": ev.model,
             ":runtime": RUNTIME_INTERACTIVE,
@@ -306,15 +358,22 @@ fn insert_run(
 }
 
 /// `(subprocess_pid, subprocess_started_at)` for the reaper's PID-reuse guard.
+///
+/// When the process start time can't be read, `subprocess_started_at` is NULL so
+/// the reaper falls back to the run's `started_at` instead of trusting a made-up
+/// baseline. The failure is reported when `CONDUCTOR_SESSION_HOOK_DEBUG` is set.
 fn pid_columns(ev: &HookEvent) -> (Option<i64>, Option<String>) {
     match ev.env.claude_pid {
-        Some(pid) if pid > 0 => (
-            Some(i64::from(pid)),
-            Some(
-                crate::process_utils::process_started_at_rfc3339(pid)
-                    .unwrap_or_else(|| ev.received_at.clone()),
-            ),
-        ),
+        Some(pid) if pid > 0 => {
+            let started = crate::process_utils::process_started_at_rfc3339(pid);
+            if started.is_none() && std::env::var_os("CONDUCTOR_SESSION_HOOK_DEBUG").is_some() {
+                eprintln!(
+                    "conductor session hook: no start time for pid {pid} ({}); subprocess_started_at left NULL",
+                    ev.hook_event_name.as_deref().unwrap_or("?")
+                );
+            }
+            (Some(i64::from(pid)), started)
+        }
         _ => (None, None),
     }
 }
@@ -344,13 +403,30 @@ fn insert_event(
     Ok(())
 }
 
-fn dismiss_pending(conn: &Connection, run_id: &str, now: &str) -> Result<()> {
+/// Move the run's pending feedback requests to `status`, recording `response`.
+fn resolve_pending(
+    conn: &Connection,
+    run_id: &str,
+    status: FeedbackStatus,
+    response: Option<&str>,
+    now: &str,
+) -> Result<()> {
     conn.execute(
-        "UPDATE feedback_requests SET status = 'dismissed', responded_at = ?2 \
-         WHERE run_id = ?1 AND status = 'pending'",
-        params![run_id, now],
+        "UPDATE feedback_requests SET status = ?2, response = ?3, responded_at = ?4 \
+         WHERE run_id = ?1 AND status = ?5",
+        params![
+            run_id,
+            status.to_string(),
+            response,
+            now,
+            FeedbackStatus::Pending.to_string()
+        ],
     )?;
     Ok(())
+}
+
+fn dismiss_pending(conn: &Connection, run_id: &str, now: &str) -> Result<()> {
+    resolve_pending(conn, run_id, FeedbackStatus::Dismissed, None, now)
 }
 
 /// Set `ended_at` on the run's open prompt span, preferring the one with
@@ -361,23 +437,13 @@ fn close_prompt_span(
     prompt_id: Option<&str>,
     now: &str,
 ) -> Result<()> {
-    if let Some(pid) = prompt_id {
-        let n = conn.execute(
-            "UPDATE agent_run_events SET ended_at = ?3 WHERE id = (\
-               SELECT id FROM agent_run_events WHERE run_id = ?1 AND kind = 'prompt' \
-               AND ended_at IS NULL AND json_extract(metadata, '$.prompt_id') = ?2 \
-               ORDER BY started_at DESC, id DESC LIMIT 1)",
-            params![run_id, pid, now],
-        )?;
-        if n > 0 {
-            return Ok(());
-        }
-    }
     conn.execute(
-        "UPDATE agent_run_events SET ended_at = ?2 WHERE id = (\
+        "UPDATE agent_run_events SET ended_at = ?3 WHERE id = (\
            SELECT id FROM agent_run_events WHERE run_id = ?1 AND kind = 'prompt' \
-           AND ended_at IS NULL ORDER BY started_at DESC, id DESC LIMIT 1)",
-        params![run_id, now],
+           AND ended_at IS NULL \
+           ORDER BY COALESCE(json_extract(metadata, '$.prompt_id') = ?2, 0) DESC, \
+           started_at DESC, id DESC LIMIT 1)",
+        params![run_id, prompt_id, now],
     )?;
     Ok(())
 }
@@ -386,7 +452,7 @@ fn on_session_start(conn: &Connection, ev: &HookEvent, run_id: &str, existed: bo
     let (pid, pid_started) = pid_columns(ev);
     // `started_at` is deliberately untouched so a resume keeps the original start.
     conn.execute(
-        "UPDATE agent_runs SET status = 'idle', idle_since = NULL, ended_at = NULL, \
+        "UPDATE agent_runs SET status = ?7, idle_since = NULL, ended_at = NULL, \
          subprocess_pid = ?2, subprocess_started_at = ?3, tmux_pane = ?4, \
          transcript_path = COALESCE(?5, transcript_path), model = COALESCE(?6, model) \
          WHERE id = ?1",
@@ -396,14 +462,15 @@ fn on_session_start(conn: &Connection, ev: &HookEvent, run_id: &str, existed: bo
             pid_started,
             ev.env.tmux_pane,
             ev.transcript_path,
-            ev.model
+            ev.model,
+            AgentRunStatus::Idle.to_string()
         ],
     )?;
     let resumed = existed || ev.source.as_deref() == Some("resume");
     insert_event(
         conn,
         run_id,
-        "system",
+        EVENT_KIND_SYSTEM,
         if resumed {
             "Session resumed"
         } else {
@@ -420,14 +487,14 @@ fn on_user_prompt(conn: &Connection, ev: &HookEvent, run_id: &str) -> Result<()>
     dismiss_pending(conn, run_id, now)?;
     let prompt = ev.prompt.as_deref().unwrap_or("");
     conn.execute(
-        "UPDATE agent_runs SET status = 'running', ended_at = NULL, idle_since = NULL, \
+        "UPDATE agent_runs SET status = ?3, ended_at = NULL, idle_since = NULL, \
          prompt = CASE WHEN ?2 = '' THEN prompt ELSE ?2 END WHERE id = ?1",
-        params![run_id, prompt],
+        params![run_id, prompt, AgentRunStatus::Running.to_string()],
     )?;
     insert_event(
         conn,
         run_id,
-        "prompt",
+        EVENT_KIND_PROMPT,
         prompt,
         now,
         None,
@@ -454,8 +521,8 @@ fn on_permission_request(
     );
 
     conn.execute(
-        "UPDATE agent_runs SET status = 'waiting_for_feedback' WHERE id = ?1",
-        params![run_id],
+        "UPDATE agent_runs SET status = ?2 WHERE id = ?1",
+        params![run_id, AgentRunStatus::WaitingForFeedback.to_string()],
     )?;
     let inserted = conn.execute(
         "INSERT INTO feedback_requests (id, run_id, prompt, status, created_at, feedback_type, dedup_key) \
@@ -468,7 +535,7 @@ fn on_permission_request(
         insert_event(
             conn,
             run_id,
-            "system",
+            EVENT_KIND_SYSTEM,
             &format!("Waiting: {prompt}"),
             now,
             None,
@@ -478,16 +545,22 @@ fn on_permission_request(
     Ok(())
 }
 
-fn on_post_tool_use(conn: &Connection, ev: &HookEvent, run_id: &str, name: &str) -> Result<()> {
+fn on_post_tool_use(conn: &Connection, ev: &HookEvent, run_id: &str, kind: HookKind) -> Result<()> {
     let now = ev.received_at.as_str();
-    conn.execute(
-        "UPDATE feedback_requests SET status = 'responded', response = 'answered in terminal', \
-         responded_at = ?2 WHERE run_id = ?1 AND status = 'pending'",
-        params![run_id, now],
+    resolve_pending(
+        conn,
+        run_id,
+        FeedbackStatus::Responded,
+        Some("answered in terminal"),
+        now,
     )?;
     conn.execute(
-        "UPDATE agent_runs SET status = 'running' WHERE id = ?1 AND status = 'waiting_for_feedback'",
-        params![run_id],
+        "UPDATE agent_runs SET status = ?2 WHERE id = ?1 AND status = ?3",
+        params![
+            run_id,
+            AgentRunStatus::Running.to_string(),
+            AgentRunStatus::WaitingForFeedback.to_string()
+        ],
     )?;
 
     let tool = ev.tool_name.as_deref().unwrap_or("tool");
@@ -500,14 +573,14 @@ fn on_post_tool_use(conn: &Connection, ev: &HookEvent, run_id: &str, name: &str)
         None => now.to_string(),
     };
     let mut meta = json!({ "prompt_id": ev.prompt_id, "duration_ms": ev.duration_ms });
-    let (kind, summary) = if name == "PostToolUseFailure" {
+    let (kind, summary) = if kind == HookKind::PostToolUseFailure {
         if let Some(err) = &ev.error {
             meta[META_KEY_ERROR_TEXT] = json!(err);
         }
         (EVENT_KIND_TOOL_ERROR, tool.to_string())
     } else {
         (
-            "tool",
+            EVENT_KIND_TOOL,
             format!("{tool} {}", ev.tool_summary.as_deref().unwrap_or(""))
                 .trim_end()
                 .to_string(),
@@ -520,15 +593,20 @@ fn on_stop(conn: &Connection, ev: &HookEvent, run_id: &str) -> Result<()> {
     let now = ev.received_at.as_str();
     dismiss_pending(conn, run_id, now)?;
     conn.execute(
-        "UPDATE agent_runs SET status = 'idle', idle_since = ?2, \
+        "UPDATE agent_runs SET status = ?4, idle_since = ?2, \
          result_text = COALESCE(?3, result_text) WHERE id = ?1",
-        params![run_id, now, ev.last_assistant_message],
+        params![
+            run_id,
+            now,
+            ev.last_assistant_message,
+            AgentRunStatus::Idle.to_string()
+        ],
     )?;
     close_prompt_span(conn, run_id, ev.prompt_id.as_deref(), now)?;
     insert_event(
         conn,
         run_id,
-        "result",
+        EVENT_KIND_RESULT,
         ev.last_assistant_message.as_deref().unwrap_or(""),
         now,
         Some(now),
@@ -540,14 +618,14 @@ fn on_session_end(conn: &Connection, ev: &HookEvent, run_id: &str) -> Result<()>
     let now = ev.received_at.as_str();
     dismiss_pending(conn, run_id, now)?;
     conn.execute(
-        "UPDATE agent_runs SET status = 'completed', ended_at = ?2, idle_since = NULL WHERE id = ?1",
-        params![run_id, now],
+        "UPDATE agent_runs SET status = ?3, ended_at = ?2, idle_since = NULL WHERE id = ?1",
+        params![run_id, now, AgentRunStatus::Completed.to_string()],
     )?;
     close_prompt_span(conn, run_id, None, now)?;
     insert_event(
         conn,
         run_id,
-        "system",
+        EVENT_KIND_SYSTEM,
         &format!(
             "Session ended ({})",
             ev.reason.as_deref().unwrap_or("unknown")

@@ -49,10 +49,7 @@ pub fn open_database(path: &Path) -> Result<Connection> {
 /// error.  Use this in headless subprocesses and drain threads that must keep
 /// running after an `implement` agent step has applied a newer migration.
 pub fn open_database_compat(path: &Path) -> Result<Connection> {
-    let conn = Connection::open(path)?;
-    configure_connection(&conn, BUSY_TIMEOUT)?;
-    migrations::run_compat(&conn)?;
-    Ok(conn)
+    open_database_compat_with_busy_timeout(path, BUSY_TIMEOUT)
 }
 
 /// Like [`open_database_compat`] but with a caller-chosen busy timeout.

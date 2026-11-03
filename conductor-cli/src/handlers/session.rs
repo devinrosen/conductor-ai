@@ -11,7 +11,7 @@ use std::io::{self, Read};
 use std::time::{Duration, Instant};
 
 use conductor_core::session::hook::{
-    apply_hook_event, is_handled_event, HookEnv, HookEvent, HANDLED_EVENTS,
+    apply_hook_event, handled_event_names, is_handled_event, HookEnv, HookEvent,
 };
 
 /// Maximum stdin bytes parsed; `tool_response` can be far larger.
@@ -138,9 +138,7 @@ fn read_capped<R: Read>(mut reader: R, cap: u64) -> io::Result<(Vec<u8>, bool)> 
 
 /// Cheap pre-parse filter: does the payload name any event we handle?
 fn mentions_handled_event(input: &[u8]) -> bool {
-    HANDLED_EVENTS
-        .iter()
-        .any(|name| input.windows(name.len()).any(|w| w == name.as_bytes()))
+    handled_event_names().any(|name| input.windows(name.len()).any(|w| w == name.as_bytes()))
 }
 
 /// Recover top-level string fields from the prefix of a truncated JSON payload.
