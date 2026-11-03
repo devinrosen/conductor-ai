@@ -65,7 +65,17 @@ fn open_log(path: &std::path::Path) -> Option<std::fs::File> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
-    opts.open(path).ok()
+    match opts.open(path) {
+        Ok(f) => Some(f),
+        Err(e) => {
+            // Runs once per process (OnceLock initializer), so this warns once.
+            eprintln!(
+                "conductor: CONDUCTOR_DB_TRACE: cannot open {} (symlinks are refused): {e}",
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 /// Whether a duration is long enough to be logged.

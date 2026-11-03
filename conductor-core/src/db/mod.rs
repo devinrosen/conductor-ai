@@ -231,42 +231,39 @@ mod tests {
         holder.execute_batch("COMMIT").unwrap();
     }
 
-    #[test]
-    fn hook_connection_skips_checkpoint_on_close() {
+    /// Migrate a fresh DB, write through a connection from `open`, close it, and
+    /// return the `-wal` file length left behind.
+    fn wal_len_after_compat_write(
+        open: impl FnOnce(&std::path::Path) -> Result<rusqlite::Connection>,
+    ) -> u64 {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("conductor.db");
         // Create and migrate, then make sure the next open is the only connection.
         drop(open_database(&path).unwrap());
 
-        let conn = open_database_compat_with_busy_timeout(&path, Duration::ZERO).unwrap();
+        let conn = open(&path).unwrap();
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS ckpt_probe (id INTEGER); INSERT INTO ckpt_probe VALUES (1);",
         )
         .unwrap();
         drop(conn);
 
-        let mut wal = path.clone().into_os_string();
+        let mut wal = path.into_os_string();
         wal.push("-wal");
-        let len = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+        std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0)
+    }
+
+    #[test]
+    fn hook_connection_skips_checkpoint_on_close() {
+        let len = wal_len_after_compat_write(|p| {
+            open_database_compat_with_busy_timeout(p, Duration::ZERO)
+        });
         assert!(len > 0, "WAL should survive close of the hook connection");
     }
 
     #[test]
     fn plain_compat_connection_checkpoints_on_close() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("conductor.db");
-        drop(open_database(&path).unwrap());
-
-        let conn = open_database_compat(&path).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS ckpt_probe (id INTEGER); INSERT INTO ckpt_probe VALUES (1);",
-        )
-        .unwrap();
-        drop(conn);
-
-        let mut wal = path.clone().into_os_string();
-        wal.push("-wal");
-        let len = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+        let len = wal_len_after_compat_write(open_database_compat);
         assert_eq!(
             len, 0,
             "non-hook compat connection should checkpoint on close"
