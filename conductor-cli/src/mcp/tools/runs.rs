@@ -566,6 +566,7 @@ mod tests {
         let result = tool_wait_run(
             &conductor,
             &wait_args(&id, &[("timeout_secs", 30), ("stall_after_secs", 10)]),
+            None,
         );
         let text = result_text(&result);
         assert!(text.starts_with("outcome: stalled"), "got: {text}");
@@ -584,6 +585,7 @@ mod tests {
         let result = tool_wait_run(
             &conductor,
             &wait_args(&id, &[("timeout_secs", 0), ("stall_after_secs", 100000)]),
+            None,
         );
         assert!(result_text(&result).starts_with("outcome: timeout"));
     }
