@@ -32,6 +32,12 @@ use super::queries::{get_workflow_run, get_workflow_steps};
 /// How often the wait loop re-checks the run.
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
+/// How often [`wait_for_workflow_run_with_progress`] reports progress.
+pub const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Deepest chain of `call workflow` steps followed when naming the running step.
+const MAX_STEP_PATH_DEPTH: usize = 8;
+
 /// How a wait ended. Maps to the `conductor workflow wait` exit code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -72,6 +78,8 @@ pub struct WaitOptions {
     /// A non-terminal run with no sign of life for this long is reported as stalled.
     pub stall_after: Duration,
     pub poll_interval: Duration,
+    /// How often the progress callback fires while the run is still going.
+    pub progress_interval: Duration,
 }
 
 impl Default for WaitOptions {
@@ -81,6 +89,7 @@ impl Default for WaitOptions {
             timeout: None,
             stall_after: Duration::from_secs((lease_ttl.max(1) as u64) * 2),
             poll_interval: DEFAULT_POLL_INTERVAL,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
         }
     }
 }
@@ -124,6 +133,19 @@ pub struct WaitSummary {
     /// Seconds since the newest sign of life in the run tree, if any.
     pub last_signal_age_secs: Option<i64>,
     pub last_step: Option<WaitStepSummary>,
+}
+
+/// Snapshot passed to the progress callback while a wait is in flight.
+#[derive(Debug, Clone, Serialize)]
+pub struct WaitProgress {
+    pub run_id: String,
+    /// Raw run status.
+    pub status: String,
+    pub elapsed_secs: u64,
+    /// Running step names from the root run down through `call workflow` children.
+    pub step_path: Vec<String>,
+    /// Seconds the deepest step has been running, if known.
+    pub step_running_secs: Option<i64>,
 }
 
 /// Recursive CTE yielding `tree(id)` for `:root` and all its descendant runs.
@@ -265,6 +287,68 @@ fn evaluate(
     Ok(None)
 }
 
+/// Names the step currently running, following `call workflow` steps into child runs.
+///
+/// Returns the step names from the root down, plus seconds since the deepest step started.
+fn running_step_path(conn: &Connection, run_id: &str) -> Result<(Vec<String>, Option<i64>)> {
+    let mut path = Vec::new();
+    let mut running_secs = None;
+    let mut current = run_id.to_string();
+    for _ in 0..MAX_STEP_PATH_DEPTH {
+        let steps = get_workflow_steps(conn, &current)?;
+        let pick = steps
+            .iter()
+            .filter(|s| s.status == WorkflowStepStatus::Running)
+            .max_by(|a, b| {
+                a.started_at
+                    .cmp(&b.started_at)
+                    .then(a.position.cmp(&b.position))
+            });
+        let Some(step) = pick else {
+            break;
+        };
+        path.push(step.step_name.clone());
+        // Never compare timestamp strings; normalize with datetime() (#3076).
+        running_secs = match &step.started_at {
+            Some(ts) => conn.query_row(
+                "SELECT CAST((julianday('now') - julianday(datetime(:ts))) * 86400 AS INTEGER)",
+                named_params![":ts": ts],
+                |row| row.get::<_, Option<i64>>(0),
+            )?,
+            None => None,
+        };
+        match (&step.child_run_id, is_workflow_call_step(step)) {
+            (Some(child), true) => current = child.clone(),
+            _ => break,
+        }
+    }
+    Ok((path, running_secs))
+}
+
+fn format_minutes(secs: u64) -> String {
+    let mins = secs / 60;
+    if mins < 1 {
+        "<1m".into()
+    } else if mins < 60 {
+        format!("{mins}m")
+    } else {
+        format!("{}h {:02}m", mins / 60, mins % 60)
+    }
+}
+
+/// One-line progress message, e.g. `iterate-pr › verify (running 3m)`.
+pub fn format_wait_progress(p: &WaitProgress) -> String {
+    if p.step_path.is_empty() {
+        return format!("{} (waited {})", p.status, format_minutes(p.elapsed_secs));
+    }
+    let running = p.step_running_secs.unwrap_or(0).max(0) as u64;
+    format!(
+        "{} (running {})",
+        p.step_path.join(" › "),
+        format_minutes(running)
+    )
+}
+
 /// Block until the run (and its child runs) finish, the run stalls, or `opts.timeout` passes.
 ///
 /// Returns `WorkflowRunNotFound` for an unknown run ID.
@@ -273,7 +357,19 @@ pub fn wait_for_workflow_run(
     run_id: &str,
     opts: &WaitOptions,
 ) -> Result<WaitSummary> {
+    wait_for_workflow_run_with_progress(conn, run_id, opts, &mut |_| {})
+}
+
+/// Like [`wait_for_workflow_run`], but calls `on_progress` every `opts.progress_interval`
+/// while the run is still going.
+pub fn wait_for_workflow_run_with_progress(
+    conn: &Connection,
+    run_id: &str,
+    opts: &WaitOptions,
+    on_progress: &mut dyn FnMut(&WaitProgress),
+) -> Result<WaitSummary> {
     let started = Instant::now();
+    let mut last_progress = Instant::now();
     loop {
         if let Some(summary) = evaluate(conn, run_id, opts, started)? {
             return Ok(summary);
@@ -286,6 +382,23 @@ pub fn wait_for_workflow_run(
                     WaitOutcome::Timeout,
                     started,
                 );
+            }
+        }
+        if last_progress.elapsed() >= opts.progress_interval {
+            last_progress = Instant::now();
+            let snapshot = load_run(conn, run_id).and_then(|run| {
+                let (step_path, step_running_secs) = running_step_path(conn, run_id)?;
+                Ok(WaitProgress {
+                    run_id: run.id,
+                    status: run.status.to_string(),
+                    elapsed_secs: started.elapsed().as_secs(),
+                    step_path,
+                    step_running_secs,
+                })
+            });
+            match snapshot {
+                Ok(p) => on_progress(&p),
+                Err(e) => tracing::warn!("wait progress lookup failed for {run_id}: {e}"),
             }
         }
         std::thread::sleep(opts.poll_interval);
@@ -418,6 +531,7 @@ mod tests {
             timeout: None,
             stall_after: Duration::from_secs(60),
             poll_interval: Duration::ZERO,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
         }
     }
 
@@ -808,5 +922,83 @@ mod tests {
             "-1 hours",
         );
         assert_eq!(run_tree_liveness(&conn, "root").unwrap().1, 1);
+    }
+
+    #[test]
+    fn progress_callback_fires_while_running() {
+        let conn = setup();
+        insert_run(&conn, "r", None, "running", Some("+20 seconds"), "-1 minutes");
+        let o = WaitOptions {
+            timeout: Some(Duration::from_millis(30)),
+            progress_interval: Duration::ZERO,
+            poll_interval: Duration::from_millis(5),
+            ..opts()
+        };
+        let mut msgs = Vec::new();
+        let s = wait_for_workflow_run_with_progress(&conn, "r", &o, &mut |p| {
+            msgs.push(p.clone())
+        })
+        .unwrap();
+        assert_eq!(s.outcome, WaitOutcome::Timeout);
+        assert!(!msgs.is_empty());
+        assert_eq!(msgs[0].run_id, "r");
+        assert_eq!(msgs[0].status, "running");
+    }
+
+    #[test]
+    fn progress_callback_silent_for_terminal_run() {
+        let conn = setup();
+        insert_run(&conn, "r", None, "completed", None, "-1 hours");
+        let o = WaitOptions {
+            progress_interval: Duration::ZERO,
+            ..opts()
+        };
+        let mut calls = 0;
+        let s = wait_for_workflow_run_with_progress(&conn, "r", &o, &mut |_| calls += 1).unwrap();
+        assert_eq!(s.outcome, WaitOutcome::Completed);
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn running_step_path_follows_call_workflow_into_child() {
+        let conn = setup_parent_with_child("workflow", "running");
+        conn.execute(
+            "UPDATE workflow_run_steps SET status = 'running' WHERE id = 'leaf'",
+            [],
+        )
+        .unwrap();
+        let (path, secs) = running_step_path(&conn, "r").unwrap();
+        assert_eq!(path, vec!["workflow:child".to_string(), "submit".to_string()]);
+        assert!(secs.is_some());
+    }
+
+    #[test]
+    fn running_step_path_empty_when_nothing_running() {
+        let conn = setup();
+        insert_run(&conn, "r", None, "running", Some("+20 seconds"), "-1 hours");
+        insert_step(&conn, "s", "r", "done", "-50 minutes", Some("-49 minutes"));
+        let (path, secs) = running_step_path(&conn, "r").unwrap();
+        assert!(path.is_empty());
+        assert_eq!(secs, None);
+    }
+
+    #[test]
+    fn format_progress_with_and_without_steps() {
+        let p = WaitProgress {
+            run_id: "r".into(),
+            status: "running".into(),
+            elapsed_secs: 300,
+            step_path: vec!["iterate-pr".into(), "verify".into()],
+            step_running_secs: Some(190),
+        };
+        assert_eq!(format_wait_progress(&p), "iterate-pr › verify (running 3m)");
+        let p = WaitProgress {
+            step_path: vec![],
+            step_running_secs: None,
+            ..p
+        };
+        assert_eq!(format_wait_progress(&p), "running (waited 5m)");
+        assert_eq!(format_minutes(30), "<1m");
+        assert_eq!(format_minutes(3900), "1h 05m");
     }
 }

@@ -2,7 +2,7 @@ use anyhow::Result;
 use conductor_core::workflow::WorkflowRunStatus;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, Implementation, ListResourcesResult, ListToolsResult,
-    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
+    PaginatedRequestParams, ProgressNotificationParam, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
     ResourcesCapability, ServerCapabilities, ServerInfo, SubscribeRequestParams, ToolsCapability,
     UnsubscribeRequestParams,
 };
@@ -162,21 +162,64 @@ impl ServerHandler for ConductorMcpServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let name = request.name.to_string();
         let args = request.arguments.unwrap_or_default();
         let event_sinks = vec![self.hub.channel_sink()];
         let limit = read_only_timeout(&name);
         let tool_name = name.clone();
+
+        // Only conductor_wait_run reports progress. Clients abort a call that stays silent
+        // for 30 minutes, so forward its progress as `notifications/progress`. The blocking
+        // thread sends over an unbounded channel so a slow stdout write never stalls polling.
+        let mut forwarder = None;
+        let mut progress_tx = None;
+        if name == "conductor_wait_run" {
+            if let Some(token) = context.meta.get_progress_token() {
+                tracing::debug!("conductor_wait_run request carries a progress token");
+                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                let peer = context.peer.clone();
+                forwarder = Some(tokio::spawn(async move {
+                    let mut n: f64 = 0.0;
+                    while let Some(msg) = rx.recv().await {
+                        n += 1.0;
+                        let _ = peer
+                            .notify_progress(
+                                ProgressNotificationParam::new(token.clone(), n).with_message(msg),
+                            )
+                            .await;
+                    }
+                }));
+                progress_tx = Some(tx);
+            }
+        }
+
         let handle = tokio::task::spawn_blocking(move || {
             let conductor = conductor_core::Conductor::open().map_err(anyhow::Error::from);
+            // The sender drops when this closure ends, which stops the forwarder.
+            let sink = progress_tx.map(|tx| {
+                move |m: String| {
+                    let _ = tx.send(m);
+                }
+            });
             match conductor {
-                Ok(c) => super::tools::dispatch_tool(&c, &name, &args, &event_sinks),
+                Ok(c) => super::tools::dispatch_tool(
+                    &c,
+                    &name,
+                    &args,
+                    &event_sinks,
+                    sink.as_ref().map(|f| f as &dyn Fn(String)),
+                ),
                 Err(e) => crate::mcp::helpers::tool_err(e),
             }
         });
-        run_with_timeout(&tool_name, limit, handle).await
+        let result = run_with_timeout(&tool_name, limit, handle).await;
+        // Flush pending progress before the response goes out.
+        if let Some(f) = forwarder {
+            let _ = f.await;
+        }
+        result
     }
 
     async fn subscribe(
