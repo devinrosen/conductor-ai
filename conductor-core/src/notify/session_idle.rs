@@ -91,6 +91,44 @@ impl IdleCandidate {
     }
 }
 
+/// Idle periods a poller has already handled, so a steady poll neither reloads details
+/// nor re-claims `notification_log` rows every tick.
+///
+/// Shared by the hook notifier here and the web push detector so both follow one rule:
+/// a period is remembered only once `visit` reports it handled, and the set is trimmed
+/// to the periods still listed so it cannot grow without bound.
+#[derive(Debug, Default)]
+pub struct SeenIdlePeriods(HashSet<String>);
+
+impl SeenIdlePeriods {
+    /// Call `visit(candidate, dedup_key)` for each candidate not yet handled. `visit`
+    /// returns `true` when the period is handled (fired, claimed, or intentionally
+    /// dropped) and should not be visited again; `false` retries it next tick.
+    pub fn visit_unseen(
+        &mut self,
+        candidates: &[IdleCandidate],
+        mut visit: impl FnMut(&IdleCandidate, &str) -> bool,
+    ) {
+        let mut current = HashSet::with_capacity(candidates.len());
+        for c in candidates {
+            let key = c.dedup_key();
+            if !self.0.contains(&key) && visit(c, &key) {
+                self.0.insert(key.clone());
+            }
+            current.insert(key);
+        }
+        self.0.retain(|k| current.contains(k));
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 /// Interactive runs that are `idle` with `idle_since` at least `delay_secs` before `now`.
 ///
 /// The delay is compared in Rust: hook timestamps are RFC 3339 with an explicit offset,
@@ -173,9 +211,11 @@ pub fn load_idle_session(conn: &Connection, c: &IdleCandidate) -> Result<Option<
     Ok(Some(s))
 }
 
-/// Due idle sessions with details loaded. Convenience over [`due_idle_candidates`] and
-/// [`load_idle_session`]; the pollers use those directly to skip handled periods.
-pub fn list_due_idle_sessions(
+/// Due idle sessions with details loaded. A test convenience over
+/// [`due_idle_candidates`] and [`load_idle_session`]; the pollers use those directly to
+/// skip handled periods.
+#[cfg(test)]
+fn list_due_idle_sessions(
     conn: &Connection,
     delay_secs: u64,
     now: DateTime<Utc>,
@@ -244,7 +284,7 @@ pub(crate) fn session_idle_event(s: &IdleSession) -> Event {
 /// every tick.
 #[derive(Debug, Default)]
 pub struct SessionIdleNotifier {
-    seen: HashSet<String>,
+    seen: SeenIdlePeriods,
 }
 
 impl SessionIdleNotifier {
@@ -293,37 +333,30 @@ impl SessionIdleNotifier {
         if !notification_sink_configured(config, hooks) {
             return 0;
         }
-        let current: HashSet<String> = candidates.iter().map(IdleCandidate::dedup_key).collect();
         let max_age = chrono::Duration::seconds(NOTIFY_MAX_AGE_SECS);
         let runner = HookRunner::new(&hooks_as_runkon(hooks)).with_dedup_store(dedup_store);
 
         let mut fired = 0;
-        for c in candidates {
-            let key = c.dedup_key();
-            if self.seen.contains(&key) {
-                continue;
-            }
+        self.seen.visit_unseen(candidates, |c, key| {
             if !is_recent(&c.idle_since, now, max_age) {
-                self.seen.insert(key.clone());
-                if let Err(e) = try_claim_notification(conn, &key, SESSION_IDLE_EVENT_TYPE) {
+                if let Err(e) = try_claim_notification(conn, key, SESSION_IDLE_EVENT_TYPE) {
                     tracing::warn!("session idle stale claim failed: {e}");
                 }
-                continue;
+                return true;
             }
             let session = match load_idle_session(conn, c) {
                 Ok(Some(s)) => s,
                 // Left idle since listed; the next tick sees its new state.
-                Ok(None) => continue,
+                Ok(None) => return false,
                 Err(e) => {
-                    tracing::warn!("session idle load failed: {e}");
-                    continue;
+                    tracing::warn!(run_id = %c.run_id, idle_since = %c.idle_since, "session idle load failed: {e}");
+                    return false;
                 }
             };
-            self.seen.insert(key.clone());
-            runner.fire_with_dedup(&session_idle_event(&session), &key, SESSION_IDLE_EVENT_TYPE);
+            runner.fire_with_dedup(&session_idle_event(&session), key, SESSION_IDLE_EVENT_TYPE);
             fired += 1;
-        }
-        self.seen.retain(|k| current.contains(k));
+            true
+        });
         fired
     }
 }
@@ -610,5 +643,235 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM notification_log", [], |r| r.get(0))
             .unwrap();
         assert_eq!(claimed, 1);
+    }
+
+    fn candidate(conn: &Connection) -> IdleCandidate {
+        let c = due_idle_candidates(conn, 0, secs(T_STOP, 1)).unwrap();
+        assert_eq!(c.len(), 1);
+        c.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn dedup_key_combines_run_and_idle_since() {
+        let c = IdleCandidate {
+            run_id: "r".into(),
+            idle_since: "t".into(),
+        };
+        assert_eq!(c.dedup_key(), session_idle_dedup_key("r", "t"));
+        assert_eq!(c.dedup_key(), "r|t");
+    }
+
+    #[test]
+    fn load_idle_session_returns_fields() {
+        let conn = setup_db();
+        turn(&conn, T0, T_STOP, json!({"background_tasks": [1]}));
+        let c = candidate(&conn);
+        let s = load_idle_session(&conn, &c).unwrap().unwrap();
+        assert_eq!(s.run_id, c.run_id);
+        assert_eq!(s.idle_since, T_STOP);
+        assert_eq!(s.session_id.as_deref(), Some("s1"));
+        assert_eq!(s.worktree_slug.as_deref(), Some("feat-test"));
+        assert_eq!(s.repo_slug, "test-repo");
+        assert_eq!(s.prompt, "do it");
+        assert_eq!(s.last_message.as_deref(), Some("all done"));
+        assert_eq!(s.background_tasks, Some(1));
+        assert_eq!(s.turn_duration_ms, Some(20_000));
+    }
+
+    #[test]
+    fn load_idle_session_none_after_run_leaves_idle() {
+        let conn = setup_db();
+        turn(&conn, T0, T_STOP, json!({}));
+        let c = candidate(&conn);
+        apply(
+            &conn,
+            "UserPromptSubmit",
+            json!({"prompt": "more"}),
+            "2026-11-02T10:00:30+00:00",
+        );
+        assert_eq!(load_idle_session(&conn, &c).unwrap(), None);
+    }
+
+    #[test]
+    fn load_idle_session_none_when_idle_since_changed() {
+        let conn = setup_db();
+        turn(&conn, T0, T_STOP, json!({}));
+        let c = candidate(&conn);
+        turn(
+            &conn,
+            "2026-11-02T10:01:00+00:00",
+            "2026-11-02T10:02:00+00:00",
+            json!({}),
+        );
+        // Idle again, but in a new period: the stale candidate must not load.
+        assert_eq!(load_idle_session(&conn, &c).unwrap(), None);
+    }
+
+    #[test]
+    fn load_idle_session_clears_placeholder_prompt() {
+        let conn = setup_db();
+        turn(&conn, T0, T_STOP, json!({}));
+        conn.execute("UPDATE agent_runs SET prompt = ?1", [PLACEHOLDER_PROMPT])
+            .unwrap();
+        let s = load_idle_session(&conn, &candidate(&conn))
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.prompt, "");
+    }
+
+    #[test]
+    fn load_idle_session_without_prompt_event_has_no_duration() {
+        let conn = setup_db();
+        turn(&conn, T0, T_STOP, json!({}));
+        conn.execute("DELETE FROM agent_run_events WHERE kind = 'prompt'", [])
+            .unwrap();
+        let s = load_idle_session(&conn, &candidate(&conn))
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.turn_duration_ms, None);
+    }
+
+    #[test]
+    fn due_idle_candidates_respects_delay_and_skips_unparseable() {
+        let conn = setup_db();
+        turn(&conn, T0, T_STOP, json!({}));
+        assert!(due_idle_candidates(&conn, 30, secs(T_STOP, 29))
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            due_idle_candidates(&conn, 30, secs(T_STOP, 30))
+                .unwrap()
+                .len(),
+            1
+        );
+        conn.execute("UPDATE agent_runs SET idle_since = 'garbage'", [])
+            .unwrap();
+        assert!(due_idle_candidates(&conn, 0, secs(T_STOP, 600))
+            .unwrap()
+            .is_empty());
+    }
+
+    fn cand(run: &str, since: &str) -> IdleCandidate {
+        IdleCandidate {
+            run_id: run.into(),
+            idle_since: since.into(),
+        }
+    }
+
+    #[test]
+    fn seen_periods_skip_handled_retry_unhandled_and_prune() {
+        let mut seen = SeenIdlePeriods::default();
+        let a = cand("a", "1");
+        let b = cand("b", "1");
+        let mut visited = Vec::new();
+        seen.visit_unseen(&[a.clone(), b.clone()], |c, _| {
+            visited.push(c.run_id.clone());
+            c.run_id == "a" // b is not handled, so it is retried
+        });
+        assert_eq!(visited, ["a", "b"]);
+        assert_eq!(seen.len(), 1);
+        visited.clear();
+        seen.visit_unseen(&[a.clone(), b.clone()], |c, _| {
+            visited.push(c.run_id.clone());
+            true
+        });
+        assert_eq!(visited, ["b"]);
+        assert_eq!(seen.len(), 2);
+        // `a` leaves the list: pruned, and a new period for the same run is visited.
+        visited.clear();
+        seen.visit_unseen(&[cand("b", "1"), cand("a", "2")], |c, _| {
+            visited.push(c.dedup_key());
+            true
+        });
+        assert_eq!(visited, ["a|2"]);
+        assert_eq!(seen.len(), 2);
+    }
+
+    fn poll_cands(
+        n: &mut SessionIdleNotifier,
+        conn: &Connection,
+        store: &Arc<RecordingStore>,
+        cands: &[IdleCandidate],
+        now: DateTime<Utc>,
+    ) -> usize {
+        n.poll_candidates(conn, &enabled(), &[], store.clone(), now, cands)
+    }
+
+    #[test]
+    fn poll_candidates_left_idle_is_not_marked_seen() {
+        let conn = setup_db();
+        turn(&conn, T0, T_STOP, json!({}));
+        let c = candidate(&conn);
+        let store = Arc::new(RecordingStore::default());
+        let mut n = SessionIdleNotifier::new();
+        // The run leaves idle between listing and loading.
+        apply(
+            &conn,
+            "UserPromptSubmit",
+            json!({"prompt": "more"}),
+            "2026-11-02T10:00:30+00:00",
+        );
+        let now = secs(T_STOP, 31);
+        assert_eq!(
+            poll_cands(&mut n, &conn, &store, std::slice::from_ref(&c), now),
+            0
+        );
+        assert_eq!(n.seen.len(), 0);
+        // It returns to the same idle_since (e.g. the listing was merely stale): it can fire.
+        conn.execute(
+            "UPDATE agent_runs SET status = 'idle', idle_since = ?1",
+            [T_STOP],
+        )
+        .unwrap();
+        assert_eq!(poll_cands(&mut n, &conn, &store, &[c], now), 1);
+    }
+
+    #[test]
+    fn poll_candidates_does_not_reload_handled_period() {
+        let conn = setup_db();
+        turn(&conn, T0, T_STOP, json!({}));
+        let c = candidate(&conn);
+        let store = Arc::new(RecordingStore::default());
+        let mut n = SessionIdleNotifier::new();
+        let now = secs(T_STOP, 31);
+        assert_eq!(
+            poll_cands(&mut n, &conn, &store, std::slice::from_ref(&c), now),
+            1
+        );
+        // Break the detail query: a handled period is skipped before it is ever loaded.
+        conn.execute("DROP TABLE agent_run_events", []).unwrap();
+        assert_eq!(poll_cands(&mut n, &conn, &store, &[c], now), 0);
+        assert_eq!(store.0.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn poll_candidates_stale_period_is_claimed_and_not_fired() {
+        let conn = setup_db();
+        turn(&conn, T0, T_STOP, json!({}));
+        let c = candidate(&conn);
+        let store = Arc::new(RecordingStore::default());
+        let mut n = SessionIdleNotifier::new();
+        let later = secs(T_STOP, NOTIFY_MAX_AGE_SECS + 60);
+        assert_eq!(
+            poll_cands(&mut n, &conn, &store, std::slice::from_ref(&c), later),
+            0
+        );
+        assert!(store.0.lock().unwrap().is_empty());
+        assert!(!try_claim_notification(&conn, &c.dedup_key(), SESSION_IDLE_EVENT_TYPE).unwrap());
+        assert_eq!(n.seen.len(), 1);
+    }
+
+    #[test]
+    fn poll_candidates_prunes_when_candidate_leaves_list() {
+        let conn = setup_db();
+        turn(&conn, T0, T_STOP, json!({}));
+        let c = candidate(&conn);
+        let store = Arc::new(RecordingStore::default());
+        let mut n = SessionIdleNotifier::new();
+        let now = secs(T_STOP, 31);
+        assert_eq!(poll_cands(&mut n, &conn, &store, &[c], now), 1);
+        assert_eq!(n.seen.len(), 1);
+        assert_eq!(poll_cands(&mut n, &conn, &store, &[], now), 0);
+        assert_eq!(n.seen.len(), 0);
     }
 }

@@ -681,19 +681,8 @@ async fn main() -> Result<()> {
                 let idle_cfg = &cfg.notifications.session_idle;
                 // One candidate query per tick, shared by the hook notifier and the
                 // Web Push detector; each loads details only for periods it hasn't handled.
-                let hooks_on = conductor_core::notify::notification_sink_configured(
-                    &cfg.notifications,
-                    &cfg.notify.hooks,
-                );
-                let candidates = if hooks_on || idle_cfg.web_push {
-                    conductor_core::notify::due_idle_candidates(&conn, idle_cfg.delay_secs, now)
-                        .unwrap_or_else(|e| {
-                            tracing::warn!("session idle lookup failed: {e}");
-                            Vec::new()
-                        })
-                } else {
-                    Vec::new()
-                };
+                let candidates =
+                    conductor_web::db_events::idle_candidates_for_tick(&conn, &cfg, now);
                 idle_notifier.poll_candidates(
                     &conn,
                     &cfg.notifications,

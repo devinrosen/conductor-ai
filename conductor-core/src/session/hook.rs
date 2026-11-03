@@ -1022,6 +1022,61 @@ mod tests {
     }
 
     #[test]
+    fn stop_turn_details_reads_what_on_stop_wrote() {
+        let conn = setup_db();
+        start(&conn);
+        let run_id = run_col(&conn, "id").unwrap();
+        // Nothing recorded yet: SessionStart alone writes no result or prompt span.
+        assert_eq!(stop_turn_details(&conn, &run_id, T2).unwrap(), (None, None));
+        apply(
+            &conn,
+            &ev(
+                "UserPromptSubmit",
+                json!({"prompt": "go", "prompt_id": "p1"}),
+                T1,
+            ),
+        );
+        apply(
+            &conn,
+            &ev(
+                "Stop",
+                json!({"last_assistant_message": "done", "background_tasks": [1, 2], "prompt_id": "p1"}),
+                T2,
+            ),
+        );
+        assert_eq!(
+            stop_turn_details(&conn, &run_id, T2).unwrap(),
+            (Some(2), Some(T1.to_string()))
+        );
+        // A later turn's idle_since must not match the earlier turn's events.
+        let t3 = "2026-11-02T10:00:20+00:00";
+        assert_eq!(stop_turn_details(&conn, &run_id, t3).unwrap(), (None, None));
+        // Stop without background_tasks records no count but still yields the span start.
+        let t4 = "2026-11-02T10:00:30+00:00";
+        let t5 = "2026-11-02T10:00:40+00:00";
+        apply(
+            &conn,
+            &ev(
+                "UserPromptSubmit",
+                json!({"prompt": "again", "prompt_id": "p2"}),
+                t4,
+            ),
+        );
+        apply(
+            &conn,
+            &ev(
+                "Stop",
+                json!({"last_assistant_message": "ok", "prompt_id": "p2"}),
+                t5,
+            ),
+        );
+        assert_eq!(
+            stop_turn_details(&conn, &run_id, t5).unwrap(),
+            (None, Some(t4.to_string()))
+        );
+    }
+
+    #[test]
     fn session_end_completes_and_dismisses() {
         let conn = setup_db();
         start(&conn);
