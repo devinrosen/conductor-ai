@@ -540,7 +540,7 @@ pub async fn stop_agent(
                 )
             })?;
 
-        if let Some(msg) = run.idle_stop_refusal() {
+        if let Some(msg) = run.stop_refusal() {
             return Err(conductor_core::error::ConductorError::Agent(msg.to_string()).into());
         }
         if !run.is_stoppable() {
@@ -1353,7 +1353,7 @@ pub async fn stop_repo_agent(
             return Err(ConductorError::Agent("Agent run not found".to_string()).into());
         }
 
-        if let Some(msg) = run.idle_stop_refusal() {
+        if let Some(msg) = run.stop_refusal() {
             return Err(ConductorError::Agent(msg.to_string()).into());
         }
         if !run.is_stoppable() {
@@ -2123,5 +2123,35 @@ mod tests {
         assert!(!code.is_success(), "{code} {body}");
         assert!(body.contains("Agent is not running"), "{body}");
         assert_eq!(status_of(&state, &run_id).await, AgentRunStatus::Completed);
+    }
+
+    async fn seed_interactive_runtime_run(state: &AppState, status: &str) -> String {
+        let run_id = seed_run_with_status(state, status).await;
+        let db = state.db.lock().await;
+        AgentManager::new(&db)
+            .update_run_runtime(&run_id, "interactive")
+            .unwrap();
+        run_id
+    }
+
+    #[tokio::test]
+    async fn stop_agent_refuses_interactive_running_run() {
+        let (state, _tmp) = seeded_state();
+        let run_id = seed_interactive_runtime_run(&state, "running").await;
+        let (code, body) = post_stop(&state, "/api/worktrees/w1/agent/stop").await;
+        assert!(!code.is_success(), "{code} {body}");
+        assert!(body.contains("can't be stopped"), "{body}");
+        assert_eq!(status_of(&state, &run_id).await, AgentRunStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn stop_repo_agent_refuses_interactive_running_run() {
+        let (state, _tmp) = seeded_state();
+        let run_id = seed_interactive_runtime_run(&state, "running").await;
+        let uri = format!("/api/repos/r1/agent/{run_id}/stop");
+        let (code, body) = post_stop(&state, &uri).await;
+        assert!(!code.is_success(), "{code} {body}");
+        assert!(body.contains("can't be stopped"), "{body}");
+        assert_eq!(status_of(&state, &run_id).await, AgentRunStatus::Running);
     }
 }

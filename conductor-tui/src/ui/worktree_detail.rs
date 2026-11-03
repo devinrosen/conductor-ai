@@ -302,31 +302,30 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                         | WorkflowRunStatus::Cancelled
                 )
             });
-        let has_idle = state
+        // Interactive sessions (and idle ones) can't be stopped from conductor.
+        let show_stop = state
             .data
             .latest_agent_runs
             .get(&wt.id)
-            .is_some_and(|run| run.is_idle());
-        if has_idle {
-            // Idle interactive sessions can't be stopped from conductor.
-            if has_resumable_wf {
-                "Tab=switch panel  y=copy  o=act  X=clear conv  w=workflow  r=resume wf  d=del  Esc=back"
-            } else {
-                "Tab=switch panel  y=copy  o=act  X=clear conv  w=workflow  d=del  Esc=back"
-            }
-        } else if has_waiting {
-            if has_resumable_wf {
-                "Tab=switch panel  y=copy  o=act  f=respond  F=dismiss  x=stop  w=workflow  r=resume wf  d=del  Esc=back"
-            } else {
-                "Tab=switch panel  y=copy  o=act  f=respond  F=dismiss  x=stop  w=workflow  d=del  Esc=back"
-            }
-        } else if has_resumable_wf {
-            "Tab=switch panel  y=copy  o=act  x=stop  X=clear conv  w=workflow  r=resume wf  d=del  Esc=back"
-        } else {
-            "Tab=switch panel  y=copy  o=act  x=stop  X=clear conv  w=workflow  d=del  Esc=back"
+            .is_none_or(|run| run.stop_refusal().is_none());
+        let mut hint = String::from("Tab=switch panel  y=copy  o=act");
+        if has_waiting {
+            hint.push_str("  f=respond  F=dismiss");
         }
+        if show_stop {
+            hint.push_str("  x=stop");
+        }
+        if !has_waiting {
+            hint.push_str("  X=clear conv");
+        }
+        hint.push_str("  w=workflow");
+        if has_resumable_wf {
+            hint.push_str("  r=resume wf");
+        }
+        hint.push_str("  d=del  Esc=back");
+        hint
     } else {
-        "Tab=switch panel  y=copy  o=act  X=clear conv  Esc=back  (archived)"
+        "Tab=switch panel  y=copy  o=act  X=clear conv  Esc=back  (archived)".to_string()
     };
     lines.push(Line::from(Span::styled(
         actions_text,
@@ -579,7 +578,11 @@ fn render_agent_status_line(
                 Span::styled("[running]", Style::default().fg(theme.status_running)),
                 Span::styled(stats, Style::default().fg(theme.label_secondary)),
                 Span::styled(
-                    " — press x to stop",
+                    if run.is_stoppable() {
+                        " — press x to stop"
+                    } else {
+                        " — interactive session"
+                    },
                     Style::default().fg(theme.label_secondary),
                 ),
             ])

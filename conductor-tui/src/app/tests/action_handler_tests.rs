@@ -2981,3 +2981,107 @@ fn stop_agent_refuses_idle_interactive_run() {
         .as_deref()
         .is_some_and(|m| m.contains("can't be stopped")));
 }
+
+fn make_interactive_run(
+    status: conductor_core::agent::AgentRunStatus,
+    runtime: &str,
+) -> conductor_core::agent::AgentRun {
+    conductor_core::agent::AgentRun {
+        id: "run1".into(),
+        worktree_id: Some("wt1".into()),
+        repo_id: None,
+        session_id: None,
+        prompt: String::new(),
+        status,
+        result_text: None,
+        cost_usd: None,
+        num_turns: None,
+        duration_ms: None,
+        started_at: "2024-01-01T00:00:00Z".into(),
+        ended_at: None,
+        log_file: None,
+        model: None,
+        plan: None,
+        parent_run_id: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
+        bot_name: None,
+        conversation_id: None,
+        subprocess_pid: Some(1),
+        runtime: runtime.to_string(),
+        idle_since: None,
+        subprocess_started_at: None,
+    }
+}
+
+#[test]
+fn stop_agent_refuses_running_and_waiting_interactive_run() {
+    use conductor_core::agent::AgentRunStatus;
+    for status in [AgentRunStatus::Running, AgentRunStatus::WaitingForFeedback] {
+        let mut app = make_app();
+        app.state.selected_worktree_id = Some("wt1".into());
+        app.state
+            .data
+            .latest_agent_runs
+            .insert("wt1".into(), make_interactive_run(status, "interactive"));
+        app.handle_stop_agent();
+        assert!(
+            matches!(app.state.modal, Modal::None),
+            "no stop progress modal for interactive {status}"
+        );
+        assert!(app
+            .state
+            .status_message
+            .as_deref()
+            .is_some_and(|m| m.contains("interactive Claude Code session")));
+    }
+}
+
+#[test]
+fn stop_repo_agent_refuses_interactive_run() {
+    use conductor_core::agent::AgentRunStatus;
+    for status in [AgentRunStatus::Running, AgentRunStatus::WaitingForFeedback] {
+        let mut app = make_app();
+        app.state.selected_repo_id = Some("r1".into());
+        app.state
+            .data
+            .latest_repo_agent_runs
+            .insert("r1".into(), make_interactive_run(status, "interactive"));
+        app.handle_stop_repo_agent();
+        assert!(
+            matches!(app.state.modal, Modal::None),
+            "no stop progress modal for interactive {status}"
+        );
+        assert!(app
+            .state
+            .status_message
+            .as_deref()
+            .is_some_and(|m| m.contains("interactive Claude Code session")));
+    }
+}
+
+#[test]
+fn agent_busy_guard_message_depends_on_runtime() {
+    use conductor_core::agent::AgentRunStatus;
+    let mut app = make_app();
+    app.state.data.latest_agent_runs.insert(
+        "wt1".into(),
+        make_interactive_run(AgentRunStatus::Running, "interactive"),
+    );
+    assert!(app.agent_busy_guard("wt1"));
+    let msg = app.state.status_message.clone().unwrap();
+    assert!(msg.contains("interactive Claude Code session"), "{msg}");
+    assert!(!msg.contains("press x"), "{msg}");
+
+    app.state.data.latest_agent_runs.insert(
+        "wt1".into(),
+        make_interactive_run(AgentRunStatus::Running, "claude"),
+    );
+    assert!(app.agent_busy_guard("wt1"));
+    assert_eq!(
+        app.state.status_message.as_deref(),
+        Some("Agent already running — press x to stop")
+    );
+}
