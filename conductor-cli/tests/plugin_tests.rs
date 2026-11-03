@@ -192,19 +192,6 @@ fn real_bin_dir() -> PathBuf {
         .to_path_buf()
 }
 
-fn seed_db(home: &Path) -> rusqlite::Connection {
-    let conn = conductor_core::db::open_database(&home.join("conductor.db")).unwrap();
-    conductor_core::test_helpers::insert_test_repo(&conn, "r1", "hook-repo", "/tmp/hook-repo");
-    conductor_core::test_helpers::insert_test_worktree(
-        &conn,
-        "w1",
-        "r1",
-        "hook-wt",
-        "/tmp/ws/hook-wt",
-    );
-    conn
-}
-
 fn session_start(cwd: &str) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "hook_event_name": "SessionStart",
@@ -214,15 +201,10 @@ fn session_start(cwd: &str) -> Vec<u8> {
     .unwrap()
 }
 
-fn run_count(conn: &rusqlite::Connection) -> i64 {
-    conn.query_row("SELECT COUNT(*) FROM agent_runs", [], |r| r.get(0))
-        .unwrap()
-}
-
 #[test]
 fn wrapper_with_real_binary_ignores_cwd_outside_worktree() {
     let home = tempfile::tempdir().unwrap();
-    let conn = seed_db(home.path());
+    let conn = conductor_core::test_helpers::seed_hook_db(home.path());
     let bin = real_bin_dir();
     let out = run_wrapper(
         home.path(),
@@ -231,13 +213,16 @@ fn wrapper_with_real_binary_ignores_cwd_outside_worktree() {
         session_start("/tmp/elsewhere"),
     );
     assert_silent_success(&out);
-    assert_eq!(run_count(&conn), 0);
+    assert_eq!(
+        conductor_core::test_helpers::count_rows(&conn, "agent_runs"),
+        0
+    );
 }
 
 #[test]
 fn wrapper_with_real_binary_forwards_to_active_worktree() {
     let home = tempfile::tempdir().unwrap();
-    let conn = seed_db(home.path());
+    let conn = conductor_core::test_helpers::seed_hook_db(home.path());
     let bin = real_bin_dir();
     let out = run_wrapper(
         home.path(),
@@ -246,5 +231,8 @@ fn wrapper_with_real_binary_forwards_to_active_worktree() {
         session_start("/tmp/ws/hook-wt"),
     );
     assert_silent_success(&out);
-    assert_eq!(run_count(&conn), 1);
+    assert_eq!(
+        conductor_core::test_helpers::count_rows(&conn, "agent_runs"),
+        1
+    );
 }

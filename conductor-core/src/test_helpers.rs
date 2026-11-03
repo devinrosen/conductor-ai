@@ -270,6 +270,21 @@ pub fn create_file_test_db() -> (Connection, String) {
     (conn, path_str)
 }
 
+/// Create `<home>/conductor.db` with repo `r1`/`hook-repo` and an active
+/// worktree `w1`/`hook-wt` at `/tmp/ws/hook-wt` (session-hook test fixture).
+pub fn seed_hook_db(home: &std::path::Path) -> Connection {
+    let conn = db::open_database(&home.join("conductor.db")).unwrap();
+    insert_test_repo(&conn, "r1", "hook-repo", "/tmp/hook-repo");
+    insert_test_worktree(&conn, "w1", "r1", "hook-wt", "/tmp/ws/hook-wt");
+    conn
+}
+
+/// `SELECT COUNT(*)` over `table`.
+pub fn count_rows(conn: &Connection, table: &str) -> i64 {
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+        .unwrap()
+}
+
 static ISOLATED_HOME: OnceLock<PathBuf> = OnceLock::new();
 
 /// Re-export so [`isolate_test_home!`] can reach `ctor` from downstream crates.
