@@ -11,9 +11,23 @@ mod helpers;
 mod mcp;
 mod setup;
 
-use commands::{AgentCommands, Cli, Commands};
+use commands::{AgentCommands, Cli, Commands, SessionCommands};
 
 fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    // `session hook` runs on every Claude Code hook: dispatch before tracing
+    // init (a stray warning must not reach stderr), config loading,
+    // `Conductor::open()` and `check_prerequisites()`. It never returns.
+    if matches!(
+        cli.command,
+        Commands::Session {
+            command: SessionCommands::Hook
+        }
+    ) {
+        handlers::session::run_hook_and_exit();
+    }
+
     // Initialize tracing subscriber so workflow engine log events appear on
     // stderr for CLI users.  Respects RUST_LOG; defaults to `info`.  The
     // explicit stderr writer matters: the tracing_subscriber default is
@@ -27,8 +41,6 @@ fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .with_target(false)
         .init();
-
-    let cli = Cli::parse();
 
     // When this process is the child started by `workflow run --background`, a
     // failure before the run starts must reach the parent through the notify
@@ -85,6 +97,7 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Notifications { command } => {
             handlers::notifications::handle_notifications(command, &conductor.config)?
         }
+        Commands::Session { .. } => unreachable!("session hook is dispatched in main()"),
         Commands::Conversation { command } => handlers::conversation::handle_conversation(
             command,
             &conductor.conn,

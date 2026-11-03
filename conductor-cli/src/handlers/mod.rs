@@ -4,6 +4,7 @@ pub mod dev;
 pub mod mcp;
 pub mod notifications;
 pub mod repo;
+pub mod session;
 pub mod setup;
 pub mod tickets;
 pub mod workflow;
