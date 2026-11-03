@@ -86,7 +86,20 @@ fn handle_session_hook(debug: bool) {
     let db = conductor_core::config::db_path();
     let dir = spool::spool_dir_for(&db);
     let result = conductor_core::db::open_database_compat_with_busy_timeout(&db, BUSY_TIMEOUT)
-        .and_then(|conn| spool::record_hook_event(&conn, &dir, &ev));
+        .map(|conn| {
+            report("opened");
+            conn
+        })
+        .and_then(|conn| {
+            let rec = spool::record_hook_event(&conn, &dir, &ev)?;
+            report("recorded");
+            if let Err((_, e)) = conn.close() {
+                report(&format!("close failed: {e}"));
+            } else {
+                report("closed");
+            }
+            Ok(rec)
+        });
     match result {
         Ok(rec) => report(&format!("{:?}, drained {}", rec.outcome, rec.drained)),
         Err(e) => {

@@ -1,7 +1,9 @@
 pub mod migrations;
 pub mod seed;
+pub(crate) mod trace;
 
 use rusqlite::types::ToSql;
+use rusqlite::config::DbConfig;
 use rusqlite::Connection;
 use std::collections::HashSet;
 use std::path::Path;
@@ -36,7 +38,8 @@ pub fn connection_db_path(conn: &Connection) -> Option<std::path::PathBuf> {
 /// Open (or create) the SQLite database with WAL mode enabled and a 5 s busy
 /// timeout.
 pub fn open_database(path: &Path) -> Result<Connection> {
-    let conn = Connection::open(path)?;
+    let mut conn = Connection::open(path)?;
+    trace::install(&mut conn);
     configure_connection(&conn, BUSY_TIMEOUT)?;
     migrations::run(&conn)?;
     Ok(conn)
@@ -56,11 +59,19 @@ pub fn open_database_compat(path: &Path) -> Result<Connection> {
 ///
 /// Used by `conductor session hook`, which must never stall the developer's
 /// Claude Code session: it waits a fraction of a second for a lock, then gives up.
+///
+/// Also disables the checkpoint SQLite runs when the last connection closes
+/// (`SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`). A hook that is the only open connection
+/// would otherwise checkpoint the whole WAL under an exclusive lock on close, making
+/// a concurrent hook get busy and spool. The WAL is still checkpointed by the
+/// auto-checkpoint after a later commit in any process, so it stays bounded.
 pub fn open_database_compat_with_busy_timeout(
     path: &Path,
     busy_timeout: Duration,
 ) -> Result<Connection> {
-    let conn = Connection::open(path)?;
+    let mut conn = Connection::open(path)?;
+    trace::install(&mut conn);
+    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)?;
     configure_connection(&conn, busy_timeout)?;
     migrations::run_compat(&conn)?;
     Ok(conn)
@@ -186,6 +197,46 @@ mod tests {
             .pragma_query_value(None, "busy_timeout", |row| row.get(0))
             .unwrap();
         assert_eq!(timeout, 5000);
+    }
+
+    #[test]
+    fn migration_check_takes_no_write_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("conductor.db");
+        drop(open_database(&path).unwrap());
+
+        let holder = Connection::open(&path).unwrap();
+        holder
+            .execute_batch(
+                "BEGIN IMMEDIATE; UPDATE _conductor_meta SET value = value WHERE key = 'schema_version';",
+            )
+            .unwrap();
+
+        // A zero timeout fails at once with SQLITE_BUSY if anything wants the write lock.
+        let conn = open_database_compat_with_busy_timeout(&path, Duration::ZERO)
+            .expect("migration check must not need the write lock");
+        drop(conn);
+        holder.execute_batch("COMMIT").unwrap();
+    }
+
+    #[test]
+    fn hook_connection_skips_checkpoint_on_close() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("conductor.db");
+        // Create and migrate, then make sure the next open is the only connection.
+        drop(open_database(&path).unwrap());
+
+        let conn = open_database_compat_with_busy_timeout(&path, Duration::ZERO).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS ckpt_probe (id INTEGER); INSERT INTO ckpt_probe VALUES (1);",
+        )
+        .unwrap();
+        drop(conn);
+
+        let mut wal = path.clone().into_os_string();
+        wal.push("-wal");
+        let len = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+        assert!(len > 0, "WAL should survive close of the hook connection");
     }
 
     #[test]

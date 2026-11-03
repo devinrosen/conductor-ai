@@ -61,3 +61,33 @@ export CARGO_TARGET_DIR=~/.conductor/workspaces/conductor-ai/<worktree-slug>/tar
 ```
 
 This eliminates races but loses incremental compilation sharing and uses significantly more disk.
+
+## Tracing SQLite write-lock holders
+
+Set `CONDUCTOR_DB_TRACE=<absolute log path>` in every process you want to observe
+(CLI, TUI, web, and the session hook's environment). Each process appends one
+tab-separated line per slow statement (`stmt`) or long transaction (`tx`):
+`timestamp  pid  process  thread  kind  ms  sql`. `CONDUCTOR_DB_TRACE_MS` sets the
+threshold in ms (default 20). With the variable unset nothing is installed.
+
+```bash
+export CONDUCTOR_DB_TRACE=/tmp/conductor-db-trace.log
+# run a normal TUI + web + workflow session, then:
+sort -t$'\t' -k6 -nr /tmp/conductor-db-trace.log | head -30
+```
+
+`tx` lines run from `BEGIN` to `COMMIT`/`ROLLBACK` and show the first statement inside,
+so they name the code path holding the lock. `BEGIN DEFERRED` transactions only take the
+write lock at their first write, so their `tx` lines over-approximate the hold.
+`CONDUCTOR_SESSION_HOOK_DEBUG=1` also prints the hook's open / record / close timings.
+
+### Findings so far (#3189)
+
+- The startup migration check takes no write lock on an up-to-date database (a test keeps
+  it that way).
+- A hook that is the only open connection checkpointed the whole WAL on close under an
+  exclusive lock, so a concurrent hook got `SQLITE_BUSY` and spooled. The hook connection
+  now sets `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`.
+- Other possible holders, to be confirmed with a trace: the explicit transactions in
+  `tickets/syncer.rs` and `workflow/manager/lifecycle.rs`, and large autocommit deletes
+  that cascade into `agent_run_events`.
