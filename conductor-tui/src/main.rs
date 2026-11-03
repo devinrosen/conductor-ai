@@ -46,10 +46,9 @@ fn main() -> Result<()> {
     }
 
     let conductor = Conductor::open()?;
-    let _process_guard = conductor_core::process_registry::register(
+    let _process_guard = conductor_core::process_registry::register_or_warn(
         conductor_core::process_registry::ProcessKind::Tui,
-    )
-    .ok();
+    );
 
     let tui_config = load_tui_config()?;
     // ensure_tui_dirs must run before Theme::from_name so custom themes can be found.

@@ -166,15 +166,19 @@ pub(super) fn tool_get_run(
 /// Warning text listing conductor processes running an older build than their
 /// binary on disk. This MCP server's own staleness comes first.
 fn stale_process_warning() -> Option<String> {
-    use conductor_core::process_registry::{
-        format_stale_warning, own_staleness, stale_processes, ProcessKind,
-    };
-    let mut stale = stale_processes();
+    use conductor_core::process_registry::{own_staleness, stale_processes, ProcessKind};
+    build_stale_warning(stale_processes(), own_staleness(ProcessKind::Mcp))
+}
+
+fn build_stale_warning(
+    mut stale: Vec<conductor_core::process_registry::StaleInfo>,
+    own: Option<conductor_core::process_registry::StaleInfo>,
+) -> Option<String> {
     stale.retain(|s| !s.is_self);
-    if let Some(own) = own_staleness(ProcessKind::Mcp) {
+    if let Some(own) = own {
         stale.insert(0, own);
     }
-    let body = format_stale_warning(&stale)?;
+    let body = conductor_core::process_registry::format_stale_warning(&stale)?;
     Some(format!(
         "⚠ Stale conductor processes (running an older build than their binary; \
          this MCP server is listed first if it is one of them):\n{body}"
@@ -379,6 +383,47 @@ mod tests {
     use super::super::test_helpers::make_test_conductor;
     use super::*;
     use serde_json::Value;
+
+    fn stale_info(pid: u32, is_self: bool) -> conductor_core::process_registry::StaleInfo {
+        use conductor_core::process_registry::{ProcessKind, ProcessRecord, StaleInfo};
+        StaleInfo {
+            record: ProcessRecord {
+                pid,
+                kind: ProcessKind::Tui,
+                exe: "/x/conductor".into(),
+                git_sha: "abc".into(),
+                commit_time: "unknown".into(),
+                version: "0".into(),
+                started_at: "2026-01-01T00:00:00+00:00".into(),
+                parent_pid: None,
+                cwd: None,
+            },
+            exe_modified_at: None,
+            reason: "binary removed".into(),
+            is_self,
+        }
+    }
+
+    #[test]
+    fn build_stale_warning_none_when_nothing_stale() {
+        assert!(build_stale_warning(vec![], None).is_none());
+        // A self entry from the registry alone is dropped.
+        assert!(build_stale_warning(vec![stale_info(1, true)], None).is_none());
+    }
+
+    #[test]
+    fn build_stale_warning_lists_own_first_and_drops_self_duplicates() {
+        let text = build_stale_warning(
+            vec![stale_info(10, false), stale_info(20, true)],
+            Some(stale_info(20, true)),
+        )
+        .unwrap();
+        assert!(text.starts_with("⚠ Stale conductor processes"));
+        let own = text.find("pid 20").unwrap();
+        let other = text.find("pid 10").unwrap();
+        assert!(own < other);
+        assert_eq!(text.matches("pid 20").count(), 1);
+    }
 
     fn empty_args() -> serde_json::Map<String, Value> {
         serde_json::Map::new()

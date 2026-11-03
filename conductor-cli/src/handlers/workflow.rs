@@ -8,6 +8,13 @@ use conductor_core::workflow::{is_workflow_call_step, WorkflowExecConfig};
 use conductor_core::workflow_config;
 use conductor_core::worktree::WorktreeManager;
 
+/// Registered so stale-process checks cover foreground runs (the reaper runs here too).
+fn register_foreground_run() -> Option<conductor_core::process_registry::ProcessGuard> {
+    conductor_core::process_registry::register_or_warn(
+        conductor_core::process_registry::ProcessKind::Workflow,
+    )
+}
+
 use crate::commands::WorkflowCommands;
 use crate::helpers::{report_workflow_result, truncate_str};
 
@@ -147,11 +154,7 @@ pub fn handle_workflow(
             background_notify_fd,
             plugin_dirs,
         } => {
-            // Registered so stale-process checks cover foreground runs (the reaper runs here too).
-            let _process_guard = conductor_core::process_registry::register(
-                conductor_core::process_registry::ProcessKind::Workflow,
-            )
-            .ok();
+            let _process_guard = register_foreground_run();
             // Parse input key=value pairs (shared by both paths)
             let mut input_map = std::collections::HashMap::new();
             for input_str in &inputs {
@@ -720,11 +723,7 @@ pub fn handle_workflow(
             model,
             restart,
         } => {
-            // Registered so stale-process checks cover foreground runs (the reaper runs here too).
-            let _process_guard = conductor_core::process_registry::register(
-                conductor_core::process_registry::ProcessKind::Workflow,
-            )
-            .ok();
+            let _process_guard = register_foreground_run();
             let resume_input = conductor_core::workflow::WorkflowResumeInput {
                 config,
                 workflow_run_id: &id,

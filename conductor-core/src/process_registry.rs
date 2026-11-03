@@ -99,13 +99,12 @@ fn started_at_for(pid: u32) -> String {
     process_started_at_rfc3339(pid).unwrap_or_else(|| chrono::Utc::now().to_rfc3339())
 }
 
-/// Register the current process. Keep the returned guard alive for the
-/// lifetime of the process.
-pub fn register(kind: ProcessKind) -> Result<ProcessGuard> {
+/// Record describing the calling process, built from its build metadata.
+fn current_record(kind: ProcessKind) -> Result<ProcessRecord> {
     let pid = std::process::id();
     let exe = std::env::current_exe()?;
     let exe = exe.canonicalize().unwrap_or(exe);
-    let record = ProcessRecord {
+    Ok(ProcessRecord {
         pid,
         kind,
         exe,
@@ -115,7 +114,27 @@ pub fn register(kind: ProcessKind) -> Result<ProcessGuard> {
         started_at: started_at_for(pid),
         parent_pid: parent_pid(),
         cwd: std::env::current_dir().ok(),
-    };
+    })
+}
+
+/// Register the current process, logging a warning on failure. A failed
+/// registration only removes the process from stale-build tracking, so it
+/// must not stop startup; the warning keeps that gap visible.
+pub fn register_or_warn(kind: ProcessKind) -> Option<ProcessGuard> {
+    match register(kind) {
+        Ok(guard) => Some(guard),
+        Err(e) => {
+            tracing::warn!("failed to register {kind} process for stale-build tracking: {e}");
+            None
+        }
+    }
+}
+
+/// Register the current process. Keep the returned guard alive for the
+/// lifetime of the process.
+pub fn register(kind: ProcessKind) -> Result<ProcessGuard> {
+    let record = current_record(kind)?;
+    let pid = record.pid;
     let dir = processes_dir();
     std::fs::create_dir_all(&dir)?;
     let path = record_path(pid);
@@ -150,11 +169,15 @@ pub fn list_live() -> Vec<ProcessRecord> {
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let Some(record) = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<ProcessRecord>(&s).ok())
-        else {
-            continue;
+        let record = match std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|s| serde_json::from_str::<ProcessRecord>(&s).map_err(|e| e.to_string()))
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("skipping unreadable process record {}: {e}", path.display());
+                continue;
+            }
         };
         if !pid_is_alive(record.pid) || pid_was_recycled(record.pid, &record.started_at) {
             let _ = std::fs::remove_file(&path);
@@ -184,17 +207,22 @@ fn exe_mtime(exe: &Path) -> Option<SystemTime> {
     std::fs::metadata(exe).and_then(|m| m.modified()).ok()
 }
 
-/// Staleness of one record, or `None` when it is up to date.
+/// Staleness of one record, or `None` when it is up to date. A record whose
+/// `started_at` cannot be parsed is reported stale, since it cannot be verified.
 fn staleness_of(record: &ProcessRecord) -> Option<StaleInfo> {
-    let started = parse_started_at(&record.started_at)?;
     let mtime = exe_mtime(&record.exe);
-    if !is_stale(started, mtime) {
-        return None;
-    }
-    let reason = if mtime.is_none() {
-        "binary removed".to_string()
-    } else {
-        "binary rebuilt after process started".to_string()
+    let reason = match parse_started_at(&record.started_at) {
+        None => format!("unparseable start time {:?}", record.started_at),
+        Some(started) => {
+            if !is_stale(started, mtime) {
+                return None;
+            }
+            if mtime.is_none() {
+                "binary removed".to_string()
+            } else {
+                "binary rebuilt after process started".to_string()
+            }
+        }
     };
     Some(StaleInfo {
         is_self: record.pid == std::process::id(),
@@ -211,21 +239,7 @@ pub fn stale_processes() -> Vec<StaleInfo> {
 
 /// Staleness of the calling process, checked directly (does not need it to be registered).
 pub fn own_staleness(kind: ProcessKind) -> Option<StaleInfo> {
-    let pid = std::process::id();
-    let exe = std::env::current_exe().ok()?;
-    let exe = exe.canonicalize().unwrap_or(exe);
-    let record = ProcessRecord {
-        pid,
-        kind,
-        exe,
-        git_sha: crate::build_info::GIT_SHA.to_string(),
-        commit_time: crate::build_info::COMMIT_TIME.to_string(),
-        version: crate::build_info::VERSION.to_string(),
-        started_at: started_at_for(pid),
-        parent_pid: None,
-        cwd: None,
-    };
-    staleness_of(&record)
+    staleness_of(&current_record(kind).ok()?)
 }
 
 /// One line per stale process; `None` when the list is empty.
@@ -316,6 +330,46 @@ mod tests {
         assert!(!dead_path.exists());
         assert!(garbage.exists());
         let _ = std::fs::remove_file(garbage);
+    }
+
+    #[test]
+    fn staleness_of_flags_missing_exe_and_marks_self() {
+        let info = staleness_of(&fake_record(std::process::id())).unwrap();
+        assert!(info.is_self);
+        assert!(info.exe_modified_at.is_none());
+        assert_eq!(info.reason, "binary removed");
+        let other = staleness_of(&fake_record(std::process::id().wrapping_add(1))).unwrap();
+        assert!(!other.is_self);
+    }
+
+    #[test]
+    fn staleness_of_unparseable_started_at_is_stale() {
+        let mut r = fake_record(4242);
+        r.started_at = "garbage".into();
+        let info = staleness_of(&r).unwrap();
+        assert!(info.reason.contains("unparseable"));
+    }
+
+    #[test]
+    fn staleness_of_fresh_binary_is_none() {
+        let mut r = fake_record(4242);
+        r.exe = std::env::current_exe().unwrap();
+        r.started_at = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        assert!(staleness_of(&r).is_none());
+    }
+
+    #[test]
+    fn own_staleness_is_none_for_unmodified_test_binary() {
+        // The test binary was built before this process started.
+        assert!(own_staleness(ProcessKind::Workflow).is_none());
+    }
+
+    #[test]
+    fn stale_processes_is_subset_of_live() {
+        let live: Vec<u32> = list_live().iter().map(|r| r.pid).collect();
+        assert!(stale_processes()
+            .iter()
+            .all(|s| live.contains(&s.record.pid)));
     }
 
     #[test]
