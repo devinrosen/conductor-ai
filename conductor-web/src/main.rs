@@ -663,23 +663,56 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
         let mut detector = conductor_web::db_events::DbEventDetector::default();
+        // Fires `session.idle` through hooks from this 2 s loop, so the delay is precise.
+        let mut idle_notifier = conductor_core::notify::SessionIdleNotifier::new();
         loop {
             interval.tick().await;
             let db = db_event_state.db.clone();
             let events_bus = db_event_state.events.clone();
             let db_path = db_event_state.db_path.clone();
+            let cfg = db_event_state.config.clone();
             let result = tokio::task::spawn_blocking(move || {
                 let conn = db.blocking_lock();
                 // Apply hook events that were spooled while the database was busy,
                 // so a drained PermissionRequest notifies on this same tick.
                 conductor_core::session::spool::drain_for_db(&conn, &db_path);
-                let res = detector.poll(&conn, chrono::Utc::now());
-                (detector, res)
+                let now = chrono::Utc::now();
+                let cfg = cfg.blocking_read();
+                let idle_cfg = &cfg.notifications.session_idle;
+                // One candidate query per tick, shared by the hook notifier and the
+                // Web Push detector; each loads details only for periods it hasn't handled.
+                let candidates = conductor_core::notify::idle_candidates_for_tick(
+                    &conn,
+                    &cfg.notifications,
+                    &cfg.notify.hooks,
+                    now,
+                );
+                idle_notifier.poll_candidates(
+                    &conn,
+                    &cfg.notifications,
+                    &cfg.notify.hooks,
+                    Arc::new(conductor_core::notify::SqliteDedupStore::new(db_path)),
+                    now,
+                    &candidates,
+                );
+                let mut res = detector.poll(&conn, now);
+                if idle_cfg.web_push {
+                    res = res.and_then(|mut evs| {
+                        evs.extend(detector.poll_session_idle_candidates(
+                            &conn,
+                            now,
+                            &candidates,
+                        )?);
+                        Ok(evs)
+                    });
+                }
+                (detector, idle_notifier, res)
             })
             .await;
             match result {
-                Ok((d, res)) => {
+                Ok((d, n, res)) => {
                     detector = d;
+                    idle_notifier = n;
                     match res {
                         Ok(events) => {
                             for ev in events {
@@ -693,6 +726,7 @@ async fn main() -> Result<()> {
                     // notification_log dedup prevents duplicates with a fresh detector.
                     tracing::warn!("db event detector panicked: {e}");
                     detector = conductor_web::db_events::DbEventDetector::default();
+                    idle_notifier = conductor_core::notify::SessionIdleNotifier::new();
                 }
             }
         }
@@ -745,6 +779,32 @@ async fn main() -> Result<()> {
                             &web_cfg,
                             &payload,
                             &format!(" for feedback run {run_id}"),
+                        )
+                        .await;
+                    });
+                }
+                Ok(ConductorEvent::SessionIdle {
+                    run_id,
+                    worktree_id,
+                    worktree_slug,
+                    last_message_preview,
+                    background_tasks,
+                }) => {
+                    let db = gate_state.db.clone();
+                    let web_cfg = gate_state.web_config.clone();
+                    tokio::spawn(async move {
+                        let payload = push::session_idle_push_payload(
+                            &run_id,
+                            &worktree_id,
+                            &worktree_slug,
+                            &last_message_preview,
+                            background_tasks,
+                        );
+                        dispatch_push(
+                            &db,
+                            &web_cfg,
+                            &payload,
+                            &format!(" for idle session {run_id}"),
                         )
                         .await;
                     });

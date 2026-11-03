@@ -46,6 +46,7 @@ mod tests {
             "agent_run.failed",
             "gate.waiting",
             "feedback.requested",
+            "session.idle",
         ];
         for name in names {
             let result = build_synthetic_event(name, "2024-01-01T00:00:00Z");

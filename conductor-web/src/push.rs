@@ -16,6 +16,34 @@ pub struct PushPayload {
     pub url: Option<String>,
 }
 
+/// Web Push payload for a `session.idle` event.
+///
+/// `last_message_preview` is already the shared core preview. The body uses the same
+/// composition as the hook event, plus a background-task suffix.
+pub fn session_idle_push_payload(
+    run_id: &str,
+    worktree_id: &str,
+    worktree_slug: &str,
+    last_message_preview: &str,
+    background_tasks: i64,
+) -> PushPayload {
+    let mut body = conductor_core::notify::session_idle_body(worktree_slug, last_message_preview);
+    if background_tasks > 0 {
+        let sep = if body.is_empty() { "" } else { ", " };
+        body.push_str(&format!("{sep}{background_tasks} background tasks"));
+    }
+    PushPayload {
+        title: "Session idle \u{2014} your turn".into(),
+        body,
+        tag: Some(format!("session-idle-{run_id}")),
+        url: Some(if worktree_id.is_empty() {
+            "/".to_string()
+        } else {
+            format!("/worktrees/{worktree_id}")
+        }),
+    }
+}
+
 pub async fn send_all(
     subscriptions: &[PushSubscription],
     vapid: &WebPushConfig,
@@ -104,6 +132,52 @@ async fn send_to_subscription(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn session_idle_payload_both_fields() {
+        let p = super::session_idle_push_payload("r1", "w1", "feat-x", "all done", 0);
+        assert_eq!(p.body, "feat-x: all done");
+        assert_eq!(p.tag.as_deref(), Some("session-idle-r1"));
+        assert_eq!(p.url.as_deref(), Some("/worktrees/w1"));
+    }
+
+    #[test]
+    fn session_idle_payload_empty_slug_or_preview() {
+        assert_eq!(
+            super::session_idle_push_payload("r", "w", "", "all done", 0).body,
+            "all done"
+        );
+        assert_eq!(
+            super::session_idle_push_payload("r", "w", "feat-x", "", 0).body,
+            "feat-x"
+        );
+        assert_eq!(
+            super::session_idle_push_payload("r", "w", "", "", 0).body,
+            ""
+        );
+    }
+
+    #[test]
+    fn session_idle_payload_background_tasks_suffix() {
+        assert_eq!(
+            super::session_idle_push_payload("r", "w", "feat-x", "done", 2).body,
+            "feat-x: done, 2 background tasks"
+        );
+        assert_eq!(
+            super::session_idle_push_payload("r", "w", "feat-x", "", 1).body,
+            "feat-x, 1 background tasks"
+        );
+        assert_eq!(
+            super::session_idle_push_payload("r", "w", "", "", 3).body,
+            "3 background tasks"
+        );
+    }
+
+    #[test]
+    fn session_idle_payload_empty_worktree_id_links_home() {
+        let p = super::session_idle_push_payload("r", "", "feat-x", "done", 0);
+        assert_eq!(p.url.as_deref(), Some("/"));
+    }
+
     use super::*;
     use crate::config::WebPushConfig;
 

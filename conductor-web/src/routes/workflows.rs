@@ -2284,6 +2284,7 @@ mod tests {
             }),
             slack: conductor_core::config::SlackConfig::default(),
             web_url: None,
+            session_idle: Default::default(),
         }
     }
 
