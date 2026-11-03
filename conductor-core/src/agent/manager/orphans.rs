@@ -3,7 +3,7 @@ use crate::error::Result;
 
 use super::super::db::{row_to_agent_run, AGENT_RUN_SELECT};
 use super::super::log_parsing::try_recover_from_log;
-use super::super::types::{AgentRun, INTERACTIVE_RUNTIME};
+use super::super::types::AgentRun;
 use super::AgentManager;
 
 impl<'a> AgentManager<'a> {
@@ -24,7 +24,7 @@ impl<'a> AgentManager<'a> {
                 "reap_orphaned_runs: dismissed {dismissed} pending feedback request(s) for run {run_id}"
             );
         }
-        if run.runtime == INTERACTIVE_RUNTIME {
+        if run.is_interactive() {
             tracing::warn!("reap_orphaned_runs: interactive run {run_id} gone, marking as failed");
             self.update_run_failed_keep_result(run_id)?;
             let now = chrono::Utc::now().to_rfc3339();

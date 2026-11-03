@@ -3012,6 +3012,7 @@ fn make_interactive_run(
         subprocess_pid: Some(1),
         runtime: runtime.to_string(),
         idle_since: None,
+        subprocess_started_at: None,
     }
 }
 

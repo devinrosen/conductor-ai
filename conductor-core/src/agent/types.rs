@@ -5,9 +5,6 @@ use serde::{Deserialize, Serialize};
 use super::status::{AgentRunStatus, FeedbackStatus, FeedbackType, StepStatus};
 use crate::error::Result;
 
-/// `agent_runs.runtime` value for a developer's own Claude Code session (RFC 021).
-pub const INTERACTIVE_RUNTIME: &str = "interactive";
-
 /// A single step in an agent's two-phase execution plan.
 ///
 /// Defined natively in conductor-core (not re-exported from runkon-runtimes)
