@@ -116,6 +116,8 @@ SQLite at `~/.conductor/conductor.db` with WAL mode, foreign keys on, 5s busy ti
 - **Workflows:** `workflow_runs`, `workflow_run_steps`, `workflow_run_step_fan_out_items`
 - **Misc:** `notification_log`, `push_subscriptions`
 
+**Schema compatibility:** a binary refuses to open a database whose schema version is newer than it knows. So the first binary built from a branch with a new migration that opens `~/.conductor/conductor.db` migrates it and locks out every older installed binary: the MCP server, TUI, web and the `conductor` that workflow script steps call. Upgrade them together (see **Releases and milestones**), and never run a new-migration branch's build against the real home.
+
 ### Data Directory
 
 ```
@@ -133,6 +135,20 @@ GitHub Actions runs on PRs to `main` (`.github/workflows/ci.yml`):
 - **Test** — `cargo test --workspace`
 
 Branch ruleset on `main`: PRs required, linear history (squash/rebase only), `Clippy` + `Test` must pass. Tag ruleset: `v*` tags cannot be deleted or overwritten.
+
+### Tests never touch the real conductor home
+
+Every test binary sets `CONDUCTOR_HOME` to its own temp dir before `main` runs, through `conductor_core::isolate_test_home!()`, and under nextest `conductor_dir()` panics when `CONDUCTOR_HOME` is unset. A **new** test binary (a new `tests/*.rs` file or a new crate) must invoke `conductor_core::isolate_test_home!();` at the top level, which needs conductor-core's `test-helpers` feature, or it fails CI. Code that spawns a thread which opens its own connection must pass the caller's database path down (`db::connection_db_path(conn)`, `Conductor::conn_db_path()`), never fall back to `config::db_path()`: before this was enforced, such threads made `cargo test` migrate the developer's real database (#3171, #3175).
+
+## Releases and milestones
+
+Each release has a GitHub milestone and a `release/X.Y.Z` branch cut from `main`.
+
+- **Per-issue PRs** target the release branch and are squash-merged, one issue per PR, with a written commit message (not the default list of commits).
+- **Parallel PRs can conflict without a textual conflict.** GitHub's mergeability check doesn't compile anything. After one PR merges into the release branch, merge the release branch into the next PR, build and test it, and let CI run again before merging. Two PRs that each add the same constant, or one that adds a struct field another's test doesn't set, both show as cleanly mergeable.
+- **Release commit:** the last commit on the release branch is `release: X.Y.Z`. It bumps `[workspace.package] version` in `Cargo.toml` (then `cargo update -w`) **and** `plugin/.claude-plugin/plugin.json`, because `plugin_tests` fails when the two differ.
+- **Release PR:** `release/X.Y.Z` → `main`. Its description becomes the GitHub release notes, so write it as the notes, following the previous release's format. **Rebase-merge** it, so each issue's commit lands on `main` individually. The Release workflow (`.github/workflows/release.yml`) tags `vX.Y.Z` when a `release: ` commit reaches `main`.
+- **After pulling a release:** run `./install-cli.sh`, then reconnect the conductor MCP server (`/mcp`). The installed `conductor` in `~/.cargo/bin` is also the MCP server, and `./restart.sh` only rebuilds and launches the TUI, warning when the installed CLI is stale. `conductor dev reinstall` does the same from an installed 0.17.1 or later, and `conductor dev processes` lists running processes on an older build.
 
 ## Project Context
 
@@ -212,6 +228,7 @@ gh pr create ...
 
 - All record IDs are ULIDs (sortable, collision-resistant)
 - All timestamps are ISO 8601 strings
-- Worktree branch naming auto-detects `feat-`/`fix-` prefix and normalizes to `feat/`/`fix/` branches
+- Worktree branch naming auto-detects `feat-`/`fix-` prefix and normalizes to `feat/`/`fix/` branches. Other prefixes normalize the same way, so a worktree named `release-X.Y.Z` maps to the `release/X.Y.Z` branch and collides with a release branch; use a name like `bump-XYZ` for release-commit worktrees
+- A GitHub issue filed after the last ticket sync isn't known to conductor yet: run a full `conductor_sync_tickets` (syncing that single ticket fails) before passing its number as `ticket_id`
 - JS dep auto-install detects package manager via lockfile: bun > pnpm > yarn > npm
 - Ticket upserts use `ON CONFLICT DO UPDATE` on `(repo_id, source_type, source_id)` for idempotency
