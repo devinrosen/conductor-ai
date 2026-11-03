@@ -14,18 +14,23 @@ use std::collections::HashSet;
 use chrono::{DateTime, Duration, Utc};
 use conductor_core::agent::AgentManager;
 use conductor_core::error::Result;
-use conductor_core::notify::{is_recent, try_claim_notification, NOTIFY_MAX_AGE_SECS};
+use conductor_core::notify::{
+    is_recent, list_due_idle_sessions, session_idle_dedup_key, try_claim_notification, IdleSession,
+    NOTIFY_MAX_AGE_SECS,
+};
 use rusqlite::Connection;
 
 use crate::events::ConductorEvent;
 
 pub const WEB_FEEDBACK_EVENT_TYPE: &str = "web_event.feedback_requested";
 pub const WEB_GATE_EVENT_TYPE: &str = "web_event.gate_waiting";
+pub const WEB_SESSION_IDLE_EVENT_TYPE: &str = "web_event.session_idle";
 
 #[derive(Default)]
 pub struct DbEventDetector {
     seen_feedback: HashSet<String>,
     seen_gates: HashSet<String>,
+    seen_session_idle: HashSet<String>,
 }
 
 /// Claim each unseen item once and push an event for those that are newly claimed and recent.
@@ -122,6 +127,52 @@ impl DbEventDetector {
             &mut events,
         );
 
+        Ok(events)
+    }
+
+    /// Emit [`ConductorEvent::SessionIdle`] for interactive sessions idle at least
+    /// `delay_secs`, once per idle period. Call only when
+    /// `[notifications.session_idle] web_push` is on; it is separate from [`Self::poll`]
+    /// so the extra query is skipped when push is off.
+    pub fn poll_session_idle(
+        &mut self,
+        conn: &Connection,
+        now: DateTime<Utc>,
+        delay_secs: u64,
+    ) -> Result<Vec<ConductorEvent>> {
+        let max_age = Duration::seconds(NOTIFY_MAX_AGE_SECS);
+        let due = list_due_idle_sessions(conn, delay_secs, now)?;
+        // The key is built once per item; `collect_new` borrows it back through `id_of`.
+        let keyed: Vec<(String, IdleSession)> = due
+            .into_iter()
+            .map(|s| (session_idle_dedup_key(&s.run_id, &s.idle_since), s))
+            .collect();
+        let mut events = Vec::new();
+        collect_new(
+            conn,
+            &mut self.seen_session_idle,
+            &keyed,
+            WEB_SESSION_IDLE_EVENT_TYPE,
+            now,
+            max_age,
+            |(k, _)| k.as_str(),
+            |(_, s)| Some(s.idle_since.as_str()),
+            |(_, s)| ConductorEvent::SessionIdle {
+                run_id: s.run_id.clone(),
+                worktree_id: s.worktree_id.clone().unwrap_or_default(),
+                worktree_slug: s.worktree_slug.clone().unwrap_or_default(),
+                last_message_preview: s
+                    .last_message
+                    .as_deref()
+                    .map(|m| m.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .unwrap_or_default()
+                    .chars()
+                    .take(100)
+                    .collect(),
+                background_tasks: s.background_tasks.unwrap_or(0),
+            },
+            &mut events,
+        );
         Ok(events)
     }
 }
@@ -261,5 +312,76 @@ mod tests {
         assert!(try_claim_notification(&conn, &id, "feedback_requested").unwrap());
         let mut d = DbEventDetector::default();
         assert_eq!(d.poll(&conn, Utc::now()).unwrap().len(), 1);
+    }
+
+    const IDLE_AT: &str = "2026-11-02T10:00:00+00:00";
+
+    fn add_idle_session(conn: &Connection, id: &str, idle_since: &str) {
+        conn.execute(
+            "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, runtime, idle_since, result_text) \
+             VALUES (?1, 'w1', 'p', 'idle', '2026-11-02T09:00:00+00:00', 'interactive', ?2, 'all done')",
+            rusqlite::params![id, idle_since],
+        )
+        .unwrap();
+    }
+
+    fn at(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    #[test]
+    fn session_idle_emits_once_after_delay() {
+        let (_tmp, conn) = open();
+        add_idle_session(&conn, "s1", IDLE_AT);
+        let mut d = DbEventDetector::default();
+        let early = at(IDLE_AT) + Duration::seconds(10);
+        assert!(d.poll_session_idle(&conn, early, 30).unwrap().is_empty());
+        let due = at(IDLE_AT) + Duration::seconds(30);
+        let evs = d.poll_session_idle(&conn, due, 30).unwrap();
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            ConductorEvent::SessionIdle {
+                run_id,
+                worktree_id,
+                last_message_preview,
+                background_tasks,
+                ..
+            } => {
+                assert_eq!(run_id, "s1");
+                assert_eq!(worktree_id, "w1");
+                assert_eq!(last_message_preview, "all done");
+                assert_eq!(*background_tasks, 0);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(d.poll_session_idle(&conn, due, 30).unwrap().is_empty());
+        // A fresh detector (restart) finds the claim in notification_log.
+        let mut fresh = DbEventDetector::default();
+        assert!(fresh.poll_session_idle(&conn, due, 30).unwrap().is_empty());
+    }
+
+    #[test]
+    fn session_idle_new_period_emits_again() {
+        let (_tmp, conn) = open();
+        add_idle_session(&conn, "s1", IDLE_AT);
+        let mut d = DbEventDetector::default();
+        let now = at(IDLE_AT) + Duration::seconds(60);
+        assert_eq!(d.poll_session_idle(&conn, now, 0).unwrap().len(), 1);
+        let later = "2026-11-02T10:05:00+00:00";
+        conn.execute("UPDATE agent_runs SET idle_since = ?1 WHERE id = 's1'", [later])
+            .unwrap();
+        let now2 = at(later) + Duration::seconds(1);
+        assert_eq!(d.poll_session_idle(&conn, now2, 0).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn plain_poll_never_emits_session_idle() {
+        let (_tmp, conn) = open();
+        add_idle_session(&conn, "s1", IDLE_AT);
+        let mut d = DbEventDetector::default();
+        let evs = d.poll(&conn, at(IDLE_AT) + Duration::seconds(600)).unwrap();
+        assert!(evs
+            .iter()
+            .all(|e| !matches!(e, ConductorEvent::SessionIdle { .. })));
     }
 }

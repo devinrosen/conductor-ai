@@ -116,6 +116,36 @@ pub struct NotificationConfig {
     /// `url` field of the form `{web_url}/repos/{repo_id}/worktrees/{worktree_id}/workflows/runs/{run_id}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_url: Option<String>,
+    /// `session.idle` notification settings for interactive sessions.
+    #[serde(default)]
+    pub session_idle: SessionIdleNotificationConfig,
+}
+
+/// `[notifications.session_idle]`: when an interactive session that finished a turn
+/// notifies. Hooks choose `session.idle` with their own `on` filter; there is no
+/// separate on/off switch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionIdleNotificationConfig {
+    /// Seconds a session must stay idle before `session.idle` fires. `0` fires immediately.
+    #[serde(default = "default_session_idle_delay_secs")]
+    pub delay_secs: u64,
+    /// Also send `session.idle` as a Web Push. Off by default: one push per turn per
+    /// open session is too much for a phone.
+    #[serde(default)]
+    pub web_push: bool,
+}
+
+fn default_session_idle_delay_secs() -> u64 {
+    30
+}
+
+impl Default for SessionIdleNotificationConfig {
+    fn default() -> Self {
+        Self {
+            delay_secs: default_session_idle_delay_secs(),
+            web_push: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1061,6 +1091,25 @@ mod tests {
 
     /// Serializes tests that mutate CONDUCTOR_DB_PATH to prevent races.
     static DB_PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn session_idle_config_defaults_when_absent() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.notifications.session_idle.delay_secs, 30);
+        assert!(!config.notifications.session_idle.web_push);
+    }
+
+    #[test]
+    fn session_idle_config_parses_overrides() {
+        let config: Config =
+            toml::from_str("[notifications.session_idle]\ndelay_secs = 0\nweb_push = true\n")
+                .unwrap();
+        assert_eq!(config.notifications.session_idle.delay_secs, 0);
+        assert!(config.notifications.session_idle.web_push);
+        let partial: Config = toml::from_str("[notifications.session_idle]\nweb_push = true\n")
+            .unwrap();
+        assert_eq!(partial.notifications.session_idle.delay_secs, 30);
+    }
 
     #[test]
     fn test_auto_start_agent_default() {

@@ -5,6 +5,7 @@ pub mod dedup;
 pub mod event;
 pub mod gates;
 pub mod runs;
+pub mod session_idle;
 #[cfg(test)]
 mod tests;
 pub mod transitions;
@@ -15,6 +16,7 @@ pub use event::{build_synthetic_event, build_synthetic_for_pattern, ALL_EVENTS};
 pub use gates::*;
 pub use runkon_notify::HookRunner;
 pub use runs::*;
+pub use session_idle::*;
 pub use transitions::*;
 
 /// Pending feedback requests and waiting gates older than this are recorded as notified but

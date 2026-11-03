@@ -37,9 +37,13 @@ flowchart TD
     subgraph FB["feedback domain"]
         FR["feedback.requested"]
     end
+
+    subgraph SS["session domain"]
+        SI["session.idle"]
+    end
 ```
 
-The `ALL_EVENTS` constant in `conductor-core/src/notify/event.rs` lists the nine non-threshold events used to populate the hook × event matrix UI. `workflow_run.cost_spike`, `workflow_run.duration_spike`, and `gate.pending_too_long` require threshold filter fields and are excluded from that list.
+The `ALL_EVENTS` constant in `conductor-core/src/notify/event.rs` lists the ten non-threshold events used to populate the hook × event matrix UI. `workflow_run.cost_spike`, `workflow_run.duration_spike`, and `gate.pending_too_long` require threshold filter fields and are excluded from that list.
 
 ---
 
@@ -219,6 +223,7 @@ The `on` field accepts a comma-separated list of patterns. Each sub-pattern may 
 | `agent_run.*` | Any `agent_run.` event |
 | `gate.*` | Any `gate.` event |
 | `gate.waiting` | Exact event name |
+| `session.*` | Any `session.` event (`session.idle`) |
 | `workflow_run.completed:root` | Only root workflow completions (no parent) |
 | `workflow_run.*:root` | All workflow events, root runs only |
 | `feature/*` | Branch glob (used in `branch` filter, not `on`) |
@@ -320,6 +325,42 @@ All entries in the event `fields` map are injected as `RUNKON_NOTIFY_FIELD_<UPPE
 | `RUNKON_NOTIFY_FIELD_WORKTREE_SLUG` | `"feat-x"` | `feedback.requested`: empty for repo-scoped agents |
 
 The `feedback.requested` body is `<worktree slug>: <prompt>`, falling back to the repo slug, or the bare prompt when neither is known.
+
+### `session.idle`
+
+Fires when an interactive Claude Code session (RFC 021) finished a turn and has stayed idle for `delay_secs`: the developer's move. It is separate from `feedback.requested` (blocked on a permission prompt), so a hook can route or silence it with its own `on` filter.
+
+| Field | Example | Notes |
+|---|---|---|
+| `RUNKON_NOTIFY_FIELD_RUN_ID` | `"01ABCDEF..."` | The agent run |
+| `RUNKON_NOTIFY_FIELD_SESSION_ID` | | Claude Code session id |
+| `RUNKON_NOTIFY_FIELD_REPO_SLUG` / `RUNKON_NOTIFY_FIELD_BRANCH` / `RUNKON_NOTIFY_FIELD_WORKTREE_SLUG` | | Where the session runs |
+| `RUNKON_NOTIFY_FIELD_PROMPT_PREVIEW` | | First ~100 chars of the turn's prompt |
+| `RUNKON_NOTIFY_FIELD_LAST_MESSAGE_PREVIEW` | | First ~100 chars of the last assistant message |
+| `RUNKON_NOTIFY_FIELD_BACKGROUND_TASKS` | `"2"` | Background tasks still running at `Stop` (`"0"` when none) |
+| `RUNKON_NOTIFY_FIELD_TURN_DURATION_MS` | `"20000"` | Prompt to `Stop`; empty when unknown |
+| `RUNKON_NOTIFY_FIELD_IDLE_SINCE` | | RFC 3339 time of the `Stop` |
+
+The body is `<worktree slug>: <last message preview>`.
+
+Firing rules:
+
+- Only after a `Stop`; never on `SessionStart` (a new or resumed session is idle before any turn), and never for headless runs.
+- Only once the session has been idle for `delay_secs`. A prompt within the delay clears the idle period and nothing fires.
+- Once per idle period, deduped on `(run_id, idle_since)` in `notification_log`, so the TUI and web running together notify once. A later turn is a new period.
+- Sessions with background tasks still notify; the count is in `background_tasks`.
+- Idle periods older than 24h when first observed are not announced.
+- Needs a sink: `[notifications] enabled = true` or at least one `[[notify.hooks]]`.
+
+```toml
+[notifications.session_idle]
+delay_secs = 30     # default; 0 fires immediately
+web_push = false    # default; true also sends a Web Push
+```
+
+Web Push sends `feedback.requested` and gate-waiting by default but not `session.idle`; set `web_push = true` to opt in. Hooks are unaffected by `web_push`.
+
+`agent_run.completed` no longer fires for interactive sessions (closing one is not news); `agent_run.failed` still does.
 
 ---
 

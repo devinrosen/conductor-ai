@@ -35,7 +35,7 @@ pub const RUNTIME_INTERACTIVE: &str = "interactive";
 const SUMMARY_SESSION_STARTED: &str = "Session started";
 const SUMMARY_SESSION_RESUMED: &str = "Session resumed";
 /// Placeholder for the NOT NULL `agent_runs.prompt` column until the first prompt arrives.
-const PLACEHOLDER_PROMPT: &str = "(interactive session)";
+pub(crate) const PLACEHOLDER_PROMPT: &str = "(interactive session)";
 
 const MAX_PROMPT_CHARS: usize = 500;
 const MAX_RESULT_CHARS: usize = 2000;

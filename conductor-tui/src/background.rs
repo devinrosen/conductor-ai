@@ -45,6 +45,8 @@ pub fn spawn_db_poller(
         let mut notified_feedback_ids: HashSet<String> = HashSet::new();
         let mut notified_gate_ids: HashSet<String> = HashSet::new();
         let mut notified_grouped_run_ids: HashSet<String> = HashSet::new();
+        // `session.idle` queries the DB itself and remembers which idle periods it handled.
+        let mut session_idle_notifier = conductor_core::notify::SessionIdleNotifier::new();
         // Agent run terminal transition tracking (similar to workflow transitions).
         let mut seen_agent_statuses: HashMap<String, conductor_core::agent::AgentRunStatus> =
             HashMap::new();
@@ -268,6 +270,15 @@ pub fn spawn_db_poller(
                                 );
                             }
                         }
+
+                        // Fire session.idle for interactive sessions idle past the delay.
+                        session_idle_notifier.poll(
+                            conn,
+                            &config.notifications,
+                            &config.notify.hooks,
+                            dedup_store.clone(),
+                            chrono::Utc::now(),
+                        );
 
                         // Fire gate-waiting notifications, grouping by workflow_run_id.
                         // For runs with >1 waiting gate, fire a single grouped notification
