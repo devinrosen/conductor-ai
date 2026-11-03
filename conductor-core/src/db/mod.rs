@@ -2,8 +2,8 @@ pub mod migrations;
 pub mod seed;
 pub(crate) mod trace;
 
-use rusqlite::types::ToSql;
 use rusqlite::config::DbConfig;
+use rusqlite::types::ToSql;
 use rusqlite::Connection;
 use std::collections::HashSet;
 use std::path::Path;
