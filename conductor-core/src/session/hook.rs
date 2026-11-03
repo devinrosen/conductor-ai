@@ -459,13 +459,13 @@ fn resolve_pending(
     Ok(())
 }
 
-fn dismiss_pending(conn: &Connection, run_id: &str, now: &str) -> Result<()> {
+pub(crate) fn dismiss_pending(conn: &Connection, run_id: &str, now: &str) -> Result<()> {
     resolve_pending(conn, run_id, FeedbackStatus::Dismissed, None, now)
 }
 
 /// Set `ended_at` on the run's open prompt span, preferring the one with
 /// `prompt_id`, else the latest open one.
-fn close_prompt_span(
+pub(crate) fn close_prompt_span(
     conn: &Connection,
     run_id: &str,
     prompt_id: Option<&str>,

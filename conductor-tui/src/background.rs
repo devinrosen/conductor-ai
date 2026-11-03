@@ -47,6 +47,9 @@ pub fn spawn_db_poller(
         let mut notified_grouped_run_ids: HashSet<String> = HashSet::new();
         // `session.idle` queries the DB itself and remembers which idle periods it handled.
         let mut session_idle_notifier = conductor_core::notify::SessionIdleNotifier::new();
+        // Reads interactive session transcripts for cost/token metrics and denied
+        // permissions (RFC 021 §9, §11). Keeps a denial-scan cursor between ticks.
+        let mut transcript_ingester = conductor_core::session::TranscriptIngester::new();
         // Agent run terminal transition tracking (similar to workflow transitions).
         let mut seen_agent_statuses: HashMap<String, conductor_core::agent::AgentRunStatus> =
             HashMap::new();
@@ -95,6 +98,10 @@ pub fn spawn_db_poller(
                     turn_state.retain(|run_id, _| live_run_ids.contains(run_id));
 
                     payload.live_turns_by_worktree = live_turns;
+
+                    // Ingest before notifications so a denial that moves a session to idle
+                    // can notify on this tick. This is the poller thread, not the UI thread.
+                    transcript_ingester.poll(&conn, chrono::Utc::now());
 
                     // Reuse the connection returned by poll_data() — no need to open a
                     // second connection just for notification claims.

@@ -88,6 +88,10 @@ pub struct AgentRun {
     /// When an interactive session (RFC 021) entered `idle`; `None` otherwise.
     #[serde(default)]
     pub idle_since: Option<String>,
+    /// True when the token columns are per-message sums from a transcript rather than the
+    /// session's `cost-state` totals (RFC 021 §9): approximate, and `cost_usd` may be stale.
+    #[serde(default)]
+    pub usage_estimated: bool,
 }
 
 /// `agent_runs.runtime` value for hand-run Claude Code sessions tracked via hooks (RFC 021).
@@ -314,6 +318,8 @@ pub const EVENT_KIND_RESULT: &str = "result";
 pub const EVENT_KIND_TOOL_ERROR: &str = "tool_error";
 
 /// Metadata JSON key that holds the error detail text.
+/// `agent_run_events.metadata` key holding per-turn token usage merged from the transcript.
+pub const META_KEY_USAGE: &str = "usage";
 pub const META_KEY_ERROR_TEXT: &str = "error_text";
 
 impl AgentRunEvent {
@@ -497,6 +503,7 @@ mod tests {
             runtime: "claude".into(),
             idle_since: None,
             subprocess_started_at: None,
+            usage_estimated: false,
         }
     }
 
@@ -544,6 +551,7 @@ mod tests {
             runtime: "claude".into(),
             idle_since: None,
             subprocess_started_at: None,
+            usage_estimated: false,
         }
     }
 
