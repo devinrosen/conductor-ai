@@ -654,4 +654,65 @@ fn session_subcommand_is_hidden_from_help() {
         .stdout(predicate::str::contains("session").not());
 }
 
+#[test]
+fn session_hook_spools_when_database_is_locked_then_drains_on_next_hook() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = seed_hook_db(dir.path());
+    let out = run_hook(
+        dir.path(),
+        "1",
+        &payload("SessionStart", serde_json::json!({})),
+    );
+    assert_silent_success(&out);
+
+    // Another connection holds the write lock.
+    let holder = rusqlite::Connection::open(dir.path().join("conductor.db")).unwrap();
+    holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+    let started = std::time::Instant::now();
+    let out = run_hook(
+        dir.path(),
+        "1",
+        &payload(
+            "PermissionRequest",
+            serde_json::json!({"tool_name": "Bash", "prompt_id": "p1"}),
+        ),
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "hook blocked for {:?}",
+        started.elapsed()
+    );
+    assert_silent_success(&out);
+    let spool = dir.path().join("session-spool/sess-1.jsonl");
+    let text = std::fs::read_to_string(&spool).unwrap();
+    assert_eq!(text.lines().count(), 1);
+    let line: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+    assert_eq!(line["v"], 1);
+    assert_eq!(line["hook_event_name"], "PermissionRequest");
+
+    holder.execute_batch("ROLLBACK").unwrap();
+
+    // The next hook drains the spooled event first, then applies its own.
+    let out = run_hook(
+        dir.path(),
+        "1",
+        &payload(
+            "PostToolUse",
+            serde_json::json!({"tool_name": "Bash", "prompt_id": "p1"}),
+        ),
+    );
+    assert_silent_success(&out);
+    assert_eq!(run_status(&conn), "running");
+    let fb: Vec<String> = conn
+        .prepare("SELECT status FROM feedback_requests")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(fb, vec!["responded".to_string()]);
+    assert!(!spool.exists());
+}
+
 conductor_core::isolate_test_home!();
