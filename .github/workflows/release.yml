@@ -55,6 +55,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.commit || github.sha }}
 
+      # The release commit must also bump plugin/.claude-plugin/plugin.json (see CONTRIBUTING.md).
       - name: Determine version + tag
         id: version
         run: |

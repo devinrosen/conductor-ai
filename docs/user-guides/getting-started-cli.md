@@ -189,6 +189,17 @@ conductor setup uninstall
 
 After installing, restart Claude Code. The conductor MCP server will be available for tool use.
 
+### Session tracking plugin
+
+To have interactive Claude Code sessions in conductor worktrees show up in conductor, install the plugin (`conductor setup install` prints these commands too):
+
+```bash
+claude plugin marketplace add devinrosen/conductor-ai
+claude plugin install conductor@conductor-ai
+```
+
+See [plugin/README.md](../../plugin/README.md).
+
 ## Tips
 
 - **Model override:** Pass `--model claude-opus-4-6` to any `workflow run` to use a specific model for all agent steps.

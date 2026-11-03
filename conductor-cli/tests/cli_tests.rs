@@ -716,3 +716,98 @@ fn session_hook_spools_when_database_is_locked_then_drains_on_next_hook() {
 }
 
 conductor_core::isolate_test_home!();
+
+/// Like `run_hook`, but lets the caller control `CLAUDE_PID` (None removes it).
+fn run_hook_with_pid(
+    home: &std::path::Path,
+    claude_pid: Option<u32>,
+    stdin: &[u8],
+) -> std::process::Output {
+    let mut cmd = assert_cmd::Command::from_std(conductor_cmd(home));
+    cmd.args(["session", "hook"])
+        .env("CLAUDE_CODE_SESSION_ATTENDED", "1")
+        .env_remove("CONDUCTOR_SESSION_HOOK_DEBUG")
+        .env_remove("CONDUCTOR_DB_PATH")
+        .write_stdin(stdin.to_vec());
+    match claude_pid {
+        Some(pid) => cmd.env("CLAUDE_PID", pid.to_string()),
+        None => cmd.env_remove("CLAUDE_PID"),
+    };
+    cmd.output().unwrap()
+}
+
+fn count_rows(conn: &rusqlite::Connection, table: &str) -> i64 {
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+        .unwrap()
+}
+
+#[test]
+fn session_hook_ignores_main_checkout_and_inactive_worktree() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = seed_hook_db(dir.path());
+    conductor_core::test_helpers::insert_test_worktree(
+        &conn,
+        "w2",
+        "r1",
+        "merged-wt",
+        "/tmp/ws/merged-wt",
+    );
+    conn.execute("UPDATE worktrees SET status = 'merged' WHERE id = 'w2'", [])
+        .unwrap();
+
+    for cwd in ["/tmp/hook-repo", "/tmp/ws/merged-wt"] {
+        for name in ["SessionStart", "UserPromptSubmit"] {
+            let out = run_hook(
+                dir.path(),
+                "1",
+                &payload(name, serde_json::json!({"cwd": cwd})),
+            );
+            assert_silent_success(&out);
+        }
+    }
+    assert_eq!(count_rows(&conn, "agent_runs"), 0);
+    assert_eq!(count_rows(&conn, "agent_run_events"), 0);
+}
+
+#[test]
+fn session_hook_uses_claude_pid_when_present() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = seed_hook_db(dir.path());
+    let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+    let out = run_hook_with_pid(
+        dir.path(),
+        Some(child.id()),
+        &payload("SessionStart", serde_json::json!({})),
+    );
+    let pid: i64 = conn
+        .query_row(
+            "SELECT subprocess_pid FROM agent_runs WHERE session_id = 'sess-1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_silent_success(&out);
+    assert_eq!(pid, i64::from(child.id()));
+}
+
+#[test]
+fn session_hook_falls_back_to_parent_pid() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = seed_hook_db(dir.path());
+    let out = run_hook_with_pid(
+        dir.path(),
+        None,
+        &payload("SessionStart", serde_json::json!({})),
+    );
+    assert_silent_success(&out);
+    let pid: i64 = conn
+        .query_row(
+            "SELECT subprocess_pid FROM agent_runs WHERE session_id = 'sess-1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(pid, i64::from(std::process::id()));
+}
