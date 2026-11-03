@@ -474,30 +474,25 @@ fn workflow_wait_unknown_run_fails() {
 // `conductor session hook`
 // ---------------------------------------------------------------------------
 
-/// Run `conductor session hook` with `stdin` as the payload.
-fn run_hook(home: &std::path::Path, attended: &str, stdin: &[u8]) -> std::process::Output {
+/// Run `conductor session hook` with `stdin` as the payload. `claude_pid` sets
+/// `CLAUDE_PID` (None removes it).
+fn run_hook(
+    home: &std::path::Path,
+    attended: &str,
+    claude_pid: Option<u32>,
+    stdin: &[u8],
+) -> std::process::Output {
     let mut cmd = assert_cmd::Command::from_std(conductor_cmd(home));
     cmd.args(["session", "hook"])
         .env("CLAUDE_CODE_SESSION_ATTENDED", attended)
-        .env("CLAUDE_PID", std::process::id().to_string())
         .env_remove("CONDUCTOR_SESSION_HOOK_DEBUG")
         .env_remove("CONDUCTOR_DB_PATH")
         .write_stdin(stdin.to_vec());
+    match claude_pid {
+        Some(pid) => cmd.env("CLAUDE_PID", pid.to_string()),
+        None => cmd.env_remove("CLAUDE_PID"),
+    };
     cmd.output().unwrap()
-}
-
-/// Create `<home>/conductor.db` with a repo and an active worktree at `/tmp/ws/hook-wt`.
-fn seed_hook_db(home: &std::path::Path) -> rusqlite::Connection {
-    let conn = conductor_core::db::open_database(&home.join("conductor.db")).unwrap();
-    conductor_core::test_helpers::insert_test_repo(&conn, "r1", "hook-repo", "/tmp/hook-repo");
-    conductor_core::test_helpers::insert_test_worktree(
-        &conn,
-        "w1",
-        "r1",
-        "hook-wt",
-        "/tmp/ws/hook-wt",
-    );
-    conn
 }
 
 fn payload(name: &str, extra: serde_json::Value) -> Vec<u8> {
@@ -530,8 +525,13 @@ fn run_status(conn: &rusqlite::Connection) -> String {
 #[test]
 fn session_hook_malformed_json_exits_zero_silently() {
     let dir = tempfile::tempdir().unwrap();
-    seed_hook_db(dir.path());
-    let out = run_hook(dir.path(), "1", b"{not json SessionStart");
+    conductor_core::test_helpers::seed_hook_db(dir.path());
+    let out = run_hook(
+        dir.path(),
+        "1",
+        Some(std::process::id()),
+        b"{not json SessionStart",
+    );
     assert_silent_success(&out);
 }
 
@@ -541,6 +541,7 @@ fn session_hook_unattended_creates_no_database() {
     let out = run_hook(
         dir.path(),
         "0",
+        Some(std::process::id()),
         &payload("SessionStart", serde_json::json!({})),
     );
     assert_silent_success(&out);
@@ -553,6 +554,7 @@ fn session_hook_without_database_creates_none() {
     let out = run_hook(
         dir.path(),
         "1",
+        Some(std::process::id()),
         &payload("SessionStart", serde_json::json!({})),
     );
     assert_silent_success(&out);
@@ -562,11 +564,12 @@ fn session_hook_without_database_creates_none() {
 #[test]
 fn session_hook_records_start_and_prompt() {
     let dir = tempfile::tempdir().unwrap();
-    let conn = seed_hook_db(dir.path());
+    let conn = conductor_core::test_helpers::seed_hook_db(dir.path());
 
     let out = run_hook(
         dir.path(),
         "1",
+        Some(std::process::id()),
         &payload("SessionStart", serde_json::json!({"source": "startup"})),
     );
     assert_silent_success(&out);
@@ -575,6 +578,7 @@ fn session_hook_records_start_and_prompt() {
     let out = run_hook(
         dir.path(),
         "1",
+        Some(std::process::id()),
         &payload(
             "UserPromptSubmit",
             serde_json::json!({"prompt": "hello", "prompt_id": "p1"}),
@@ -597,15 +601,17 @@ fn session_hook_records_start_and_prompt() {
 #[test]
 fn session_hook_oversized_post_tool_use_still_flips_to_running() {
     let dir = tempfile::tempdir().unwrap();
-    let conn = seed_hook_db(dir.path());
+    let conn = conductor_core::test_helpers::seed_hook_db(dir.path());
     run_hook(
         dir.path(),
         "1",
+        Some(std::process::id()),
         &payload("SessionStart", serde_json::json!({})),
     );
     run_hook(
         dir.path(),
         "1",
+        Some(std::process::id()),
         &payload(
             "PermissionRequest",
             serde_json::json!({"tool_name": "Bash"}),
@@ -620,7 +626,7 @@ fn session_hook_oversized_post_tool_use_still_flips_to_running() {
     big.extend(std::iter::repeat_n(b'x', 3 * 1024 * 1024));
     big.extend_from_slice(br#""}}"#);
 
-    let out = run_hook(dir.path(), "1", &big);
+    let out = run_hook(dir.path(), "1", Some(std::process::id()), &big);
     assert_silent_success(&out);
     assert_eq!(run_status(&conn), "running");
     let fb: String = conn
@@ -632,7 +638,7 @@ fn session_hook_oversized_post_tool_use_still_flips_to_running() {
 #[test]
 fn session_hook_debug_env_reports_on_stderr() {
     let dir = tempfile::tempdir().unwrap();
-    seed_hook_db(dir.path());
+    conductor_core::test_helpers::seed_hook_db(dir.path());
     let mut cmd = assert_cmd::Command::from_std(conductor_cmd(dir.path()));
     cmd.args(["session", "hook"])
         .env("CLAUDE_CODE_SESSION_ATTENDED", "1")
@@ -657,10 +663,11 @@ fn session_subcommand_is_hidden_from_help() {
 #[test]
 fn session_hook_spools_when_database_is_locked_then_drains_on_next_hook() {
     let dir = tempfile::tempdir().unwrap();
-    let conn = seed_hook_db(dir.path());
+    let conn = conductor_core::test_helpers::seed_hook_db(dir.path());
     let out = run_hook(
         dir.path(),
         "1",
+        Some(std::process::id()),
         &payload("SessionStart", serde_json::json!({})),
     );
     assert_silent_success(&out);
@@ -673,6 +680,7 @@ fn session_hook_spools_when_database_is_locked_then_drains_on_next_hook() {
     let out = run_hook(
         dir.path(),
         "1",
+        Some(std::process::id()),
         &payload(
             "PermissionRequest",
             serde_json::json!({"tool_name": "Bash", "prompt_id": "p1"}),
@@ -697,6 +705,7 @@ fn session_hook_spools_when_database_is_locked_then_drains_on_next_hook() {
     let out = run_hook(
         dir.path(),
         "1",
+        Some(std::process::id()),
         &payload(
             "PostToolUse",
             serde_json::json!({"tool_name": "Bash", "prompt_id": "p1"}),
@@ -716,3 +725,83 @@ fn session_hook_spools_when_database_is_locked_then_drains_on_next_hook() {
 }
 
 conductor_core::isolate_test_home!();
+
+#[test]
+fn session_hook_ignores_main_checkout_and_inactive_worktree() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = conductor_core::test_helpers::seed_hook_db(dir.path());
+    conductor_core::test_helpers::insert_test_worktree(
+        &conn,
+        "w2",
+        "r1",
+        "merged-wt",
+        "/tmp/ws/merged-wt",
+    );
+    conn.execute("UPDATE worktrees SET status = 'merged' WHERE id = 'w2'", [])
+        .unwrap();
+
+    for cwd in ["/tmp/hook-repo", "/tmp/ws/merged-wt"] {
+        for name in ["SessionStart", "UserPromptSubmit"] {
+            let out = run_hook(
+                dir.path(),
+                "1",
+                Some(std::process::id()),
+                &payload(name, serde_json::json!({"cwd": cwd})),
+            );
+            assert_silent_success(&out);
+        }
+    }
+    assert_eq!(
+        conductor_core::test_helpers::count_rows(&conn, "agent_runs"),
+        0
+    );
+    assert_eq!(
+        conductor_core::test_helpers::count_rows(&conn, "agent_run_events"),
+        0
+    );
+}
+
+#[test]
+fn session_hook_uses_claude_pid_when_present() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = conductor_core::test_helpers::seed_hook_db(dir.path());
+    let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+    let out = run_hook(
+        dir.path(),
+        "1",
+        Some(child.id()),
+        &payload("SessionStart", serde_json::json!({})),
+    );
+    let pid: i64 = conn
+        .query_row(
+            "SELECT subprocess_pid FROM agent_runs WHERE session_id = 'sess-1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_silent_success(&out);
+    assert_eq!(pid, i64::from(child.id()));
+}
+
+#[test]
+fn session_hook_falls_back_to_parent_pid() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = conductor_core::test_helpers::seed_hook_db(dir.path());
+    let out = run_hook(
+        dir.path(),
+        "1",
+        None,
+        &payload("SessionStart", serde_json::json!({})),
+    );
+    assert_silent_success(&out);
+    let pid: i64 = conn
+        .query_row(
+            "SELECT subprocess_pid FROM agent_runs WHERE session_id = 'sess-1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(pid, i64::from(std::process::id()));
+}

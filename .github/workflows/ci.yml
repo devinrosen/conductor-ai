@@ -38,12 +38,16 @@ jobs:
               - 'conductor-tui/**'
               - 'conductor-web/**'
               - 'conductor-desktop/**'
+              - 'plugin/**'
+              - '.claude-plugin/**'
               - '.github/workflows/ci.yml'
             core:
               - 'conductor-core/**'
               - 'Cargo.lock'
             cli:
               - 'conductor-cli/**'
+              - 'plugin/**'
+              - '.claude-plugin/**'
               - 'conductor-core/**'
               - 'Cargo.lock'
             tui:

@@ -1,0 +1,19 @@
+#!/bin/sh
+# Forwards a Claude Code hook payload to `conductor session hook` (RFC 021).
+# Must be a silent, exit-0 no-op whenever it doesn't apply.
+
+# Headless (`claude -p`) sessions and machines without conductor: do nothing.
+# Drain stdin so Claude Code never sees EPIPE on a large payload.
+if [ "${CLAUDE_CODE_SESSION_ATTENDED:-}" != "1" ] || ! command -v conductor >/dev/null 2>&1; then
+  cat >/dev/null 2>&1
+  exit 0
+fi
+
+# Swallow stdout (it can be injected into the model's context) and failures
+# (a pre-0.17 binary rejects the subcommand). Keep stderr when debugging.
+if [ -n "${CONDUCTOR_SESSION_HOOK_DEBUG:-}" ]; then
+  conductor session hook >/dev/null || true
+else
+  conductor session hook >/dev/null 2>&1 || true
+fi
+exit 0
