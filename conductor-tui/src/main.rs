@@ -19,6 +19,12 @@ use config::{ensure_tui_dirs, load_tui_config};
 use theme::Theme;
 
 fn main() -> Result<()> {
+    // Handled before touching the terminal; `conductor dev reinstall` uses it.
+    if matches!(std::env::args().nth(1).as_deref(), Some("--version" | "-V")) {
+        println!("conductor-tui {}", conductor_core::build_info::LONG_VERSION);
+        return Ok(());
+    }
+
     // Install panic hook that restores terminal before printing panic info
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -40,6 +46,9 @@ fn main() -> Result<()> {
     }
 
     let conductor = Conductor::open()?;
+    let _process_guard =
+        conductor_core::process_registry::register(conductor_core::process_registry::ProcessKind::Tui)
+            .ok();
 
     let tui_config = load_tui_config()?;
     // ensure_tui_dirs must run before Theme::from_name so custom themes can be found.

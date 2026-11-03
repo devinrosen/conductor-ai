@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 pub const CONDUCTOR_RUN_ID_ENV: &str = "CONDUCTOR_RUN_ID";
 
 #[derive(Parser)]
-#[command(name = "conductor", about = "Multi-repo orchestration tool", version)]
+#[command(name = "conductor", about = "Multi-repo orchestration tool", version = conductor_core::build_info::LONG_VERSION)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -109,6 +109,23 @@ pub enum DevCommands {
         #[arg(long)]
         reset: bool,
     },
+    /// Rebuild and install the CLI and TUI from this checkout, then list conductor processes that need a restart
+    Reinstall {
+        /// Only report: installed build vs. checkout HEAD / origin/main, and stale processes. Build nothing.
+        #[arg(long)]
+        check: bool,
+        /// Reinstall even when workflow runs are active
+        #[arg(long)]
+        force: bool,
+        /// Also build the frontend and install conductor-web
+        #[arg(long)]
+        web: bool,
+        /// Path to the conductor-ai checkout (default: git toplevel of the cwd)
+        #[arg(long)]
+        path: Option<std::path::PathBuf>,
+    },
+    /// List registered conductor processes (MCP servers, TUI, web, foreground workflows) and flag stale ones
+    Processes,
 }
 
 #[derive(Subcommand)]

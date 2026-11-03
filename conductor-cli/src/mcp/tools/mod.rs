@@ -325,7 +325,8 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
             "Get the status and step details of a workflow run. \
              For richer detail including the conversation log tail (last 20 messages from \
              the Claude Code session), read the `conductor://run/{run_id}` resource — \
-             this context is not available from this tool.",
+             this context is not available from this tool. \
+             Appends a warning when any running conductor process predates its installed binary.",
             schema(&[("run_id", "Workflow run ID", true)]),
         ),
         Tool::new(

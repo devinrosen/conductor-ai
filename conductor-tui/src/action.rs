@@ -264,6 +264,12 @@ pub enum Action {
         prs: Vec<conductor_core::github::GithubPr>,
     },
     DataRefreshed(Box<DataRefreshedPayload>),
+    /// Result of the background stale-process check: how many registered conductor
+    /// processes run an older build than their binary, and whether the TUI is one of them.
+    StaleProcesses {
+        count: usize,
+        tui_is_stale: bool,
+    },
     TicketSyncComplete {
         repo_slug: String,
         count: usize,

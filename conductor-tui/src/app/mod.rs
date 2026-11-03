@@ -91,6 +91,7 @@ impl App {
             Arc::clone(&self.selected_repo_id_shared),
         );
         let sync_mins = self.config.general.sync_interval_minutes as u64;
+        background::spawn_stale_process_poller(bg_tx.clone(), Duration::from_secs(60));
         background::spawn_ticket_sync(bg_tx, Duration::from_secs(sync_mins * 60));
 
         let mut dirty = true; // tracks whether state changed since last draw

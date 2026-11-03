@@ -155,11 +155,29 @@ pub(super) fn tool_get_run(
         Err(e) => return tool_err(e),
     };
     let claude_dir = config.general.resolve_optional_claude_dir();
-    tool_ok(format_run_detail_with_log(
-        conn,
-        &run,
-        &steps,
-        claude_dir.as_deref(),
+    let mut out = format_run_detail_with_log(conn, &run, &steps, claude_dir.as_deref());
+    if let Some(warning) = stale_process_warning() {
+        out.push_str("\n\n");
+        out.push_str(&warning);
+    }
+    tool_ok(out)
+}
+
+/// Warning text listing conductor processes running an older build than their
+/// binary on disk. This MCP server's own staleness comes first.
+fn stale_process_warning() -> Option<String> {
+    use conductor_core::process_registry::{
+        format_stale_warning, own_staleness, stale_processes, ProcessKind,
+    };
+    let mut stale = stale_processes();
+    stale.retain(|s| !s.is_self);
+    if let Some(own) = own_staleness(ProcessKind::Mcp) {
+        stale.insert(0, own);
+    }
+    let body = format_stale_warning(&stale)?;
+    Some(format!(
+        "⚠ Stale conductor processes (running an older build than their binary; \
+         this MCP server is listed first if it is one of them):\n{body}"
     ))
 }
 

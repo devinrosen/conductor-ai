@@ -147,6 +147,11 @@ pub fn handle_workflow(
             background_notify_fd,
             plugin_dirs,
         } => {
+            // Registered so stale-process checks cover foreground runs (the reaper runs here too).
+            let _process_guard = conductor_core::process_registry::register(
+                conductor_core::process_registry::ProcessKind::Workflow,
+            )
+            .ok();
             // Parse input key=value pairs (shared by both paths)
             let mut input_map = std::collections::HashMap::new();
             for input_str in &inputs {
@@ -715,6 +720,11 @@ pub fn handle_workflow(
             model,
             restart,
         } => {
+            // Registered so stale-process checks cover foreground runs (the reaper runs here too).
+            let _process_guard = conductor_core::process_registry::register(
+                conductor_core::process_registry::ProcessKind::Workflow,
+            )
+            .ok();
             let resume_input = conductor_core::workflow::WorkflowResumeInput {
                 config,
                 workflow_run_id: &id,
