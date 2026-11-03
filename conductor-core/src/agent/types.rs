@@ -122,20 +122,37 @@ impl AgentRun {
         self.status == AgentRunStatus::Idle
     }
 
-    /// Why conductor refuses to stop this run, if it does. `Some` only for idle
-    /// interactive sessions; callers surface the message to the user.
-    pub fn idle_stop_refusal(&self) -> Option<&'static str> {
-        self.is_idle()
-            .then_some("Agent is idle — an interactive session can't be stopped from conductor")
+    /// Returns true if this run tracks a developer's own Claude Code session
+    /// (RFC 021) rather than a headless agent conductor launched.
+    pub fn is_interactive(&self) -> bool {
+        self.runtime == INTERACTIVE_RUNTIME
     }
 
-    /// Returns true if conductor may stop this run. Idle interactive sessions
-    /// belong to the developer's terminal and are never stopped by conductor.
+    /// Why conductor refuses to stop this run, if it does. Interactive sessions
+    /// belong to the developer's terminal: their `subprocess_pid` is the
+    /// developer's `claude` process, so the headless stop must never signal it.
+    /// Ending one, if ever wanted, must be a separate confirmed action.
+    /// Callers surface the message to the user.
+    pub fn stop_refusal(&self) -> Option<&'static str> {
+        if self.is_idle() {
+            Some("Agent is idle — an interactive session can't be stopped from conductor")
+        } else if self.is_interactive() {
+            Some(
+                "Agent is an interactive Claude Code session — it can't be stopped from conductor; end it from its terminal",
+            )
+        } else {
+            None
+        }
+    }
+
+    /// Returns true if conductor may stop this run. Interactive sessions are
+    /// never stopped by conductor, whatever their status.
     pub fn is_stoppable(&self) -> bool {
-        matches!(
-            self.status,
-            AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback
-        )
+        !self.is_interactive()
+            && matches!(
+                self.status,
+                AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback
+            )
     }
 
     /// Returns true if this run is waiting for human feedback.
@@ -557,6 +574,38 @@ mod tests {
         assert!(run.is_active());
         assert!(run.is_idle());
         assert!(!run.is_waiting_for_feedback());
+    }
+
+    #[test]
+    fn interactive_runs_are_never_stoppable() {
+        let mut run = make_full_run();
+        run.runtime = INTERACTIVE_RUNTIME.to_string();
+        assert!(run.is_interactive());
+        for status in [
+            AgentRunStatus::Running,
+            AgentRunStatus::WaitingForFeedback,
+            AgentRunStatus::Idle,
+            AgentRunStatus::Completed,
+            AgentRunStatus::Failed,
+            AgentRunStatus::Cancelled,
+        ] {
+            run.status = status;
+            assert!(!run.is_stoppable(), "{status}");
+        }
+        for status in [AgentRunStatus::Running, AgentRunStatus::WaitingForFeedback] {
+            run.status = status;
+            assert!(run.stop_refusal().is_some(), "{status}");
+        }
+    }
+
+    #[test]
+    fn stop_refusal_idle_any_runtime_and_none_for_headless() {
+        let mut run = make_full_run();
+        run.runtime = "claude".to_string();
+        run.status = AgentRunStatus::Idle;
+        assert!(run.stop_refusal().is_some());
+        run.status = AgentRunStatus::Running;
+        assert!(run.stop_refusal().is_none());
     }
 
     #[test]

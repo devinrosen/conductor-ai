@@ -236,16 +236,15 @@ impl App {
     /// an active agent, meaning the caller should abort.
     pub(super) fn agent_busy_guard(&mut self, worktree_id: &str) -> bool {
         use conductor_core::agent::AgentRunStatus;
-        let status = self
-            .state
-            .data
-            .latest_agent_runs
-            .get(worktree_id)
-            .map(|run| &run.status);
-        match status {
+        let latest = self.state.data.latest_agent_runs.get(worktree_id);
+        let interactive = latest.is_some_and(|run| run.is_interactive());
+        match latest.map(|run| &run.status) {
             Some(AgentRunStatus::Running) => {
-                self.state.status_message =
-                    Some("Agent already running — press x to stop".to_string());
+                self.state.status_message = Some(if interactive {
+                    "An interactive Claude Code session is active in this worktree".to_string()
+                } else {
+                    "Agent already running — press x to stop".to_string()
+                });
                 true
             }
             Some(AgentRunStatus::WaitingForFeedback) => {
@@ -502,7 +501,7 @@ impl App {
             return;
         };
 
-        if let Some(msg) = run.idle_stop_refusal() {
+        if let Some(msg) = run.stop_refusal() {
             self.state.status_message = Some(msg.to_string());
             return;
         }
@@ -1128,7 +1127,7 @@ impl App {
             .cloned();
 
         let Some(run) = run else { return };
-        if let Some(msg) = run.idle_stop_refusal() {
+        if let Some(msg) = run.stop_refusal() {
             self.state.status_message = Some(msg.to_string());
             return;
         }

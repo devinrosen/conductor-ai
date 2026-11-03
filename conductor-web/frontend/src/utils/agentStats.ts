@@ -18,9 +18,16 @@ export function isActiveRun(run: { status: string }): boolean {
   return ACTIVE_STATUSES.has(run.status);
 }
 
-/** Returns true if conductor may stop the run. Idle interactive sessions are never stopped by conductor. */
-export function isStoppableRun(run: { status: string }): boolean {
-  return run.status === "running" || run.status === "waiting_for_feedback";
+/** Returns true if the run is a developer's own Claude Code session (RFC 021). */
+export function isInteractiveRun(run: { runtime?: string | null }): boolean {
+  return run.runtime === "interactive";
+}
+
+/** Returns true if conductor may stop the run. Interactive sessions are never stopped by conductor, whatever their status. */
+export function isStoppableRun(run: { status: string; runtime?: string | null }): boolean {
+  return (
+    !isInteractiveRun(run) && (run.status === "running" || run.status === "waiting_for_feedback")
+  );
 }
 
 /** Format an ISO timestamp as local HH:MM, or null if missing/invalid. */
