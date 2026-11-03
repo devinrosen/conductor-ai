@@ -1190,6 +1190,19 @@ mod tests {
     const ORPHAN_ERROR: &str =
         "parent agent run reached terminal state without completing the workflow";
 
+    #[test]
+    fn resume_db_path_skips_in_memory_connection() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        assert_eq!(super::resume_db_path(&conn), None);
+    }
+
+    #[test]
+    fn resume_db_path_returns_file_path() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = rusqlite::Connection::open(tmp.path()).unwrap();
+        assert!(super::resume_db_path(&conn).is_some());
+    }
+
     /// Create a test DB with a repo, worktree, and parent agent run.
     fn setup() -> (rusqlite::Connection, String) {
         let conn = crate::test_helpers::setup_db_with_agent_run();
