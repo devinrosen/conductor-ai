@@ -253,6 +253,11 @@ impl App {
                     Some("Agent waiting for feedback — press f to respond".to_string());
                 true
             }
+            Some(AgentRunStatus::Idle) => {
+                self.state.status_message =
+                    Some("Interactive session is idle — continue it in its terminal".to_string());
+                true
+            }
             _ => false,
         }
     }
@@ -497,7 +502,11 @@ impl App {
             return;
         };
 
-        if !run.is_active() {
+        if let Some(msg) = run.idle_stop_refusal() {
+            self.state.status_message = Some(msg.to_string());
+            return;
+        }
+        if !run.is_stoppable() {
             return;
         }
 
@@ -1119,7 +1128,11 @@ impl App {
             .cloned();
 
         let Some(run) = run else { return };
-        if !run.is_active() {
+        if let Some(msg) = run.idle_stop_refusal() {
+            self.state.status_message = Some(msg.to_string());
+            return;
+        }
+        if !run.is_stoppable() {
             return;
         }
 

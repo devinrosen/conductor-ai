@@ -10,7 +10,7 @@ import { ConfirmDialog } from "../components/shared/ConfirmDialog";
 import { ErrorBanner } from "../components/shared/ErrorBanner";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { AgentPromptModal } from "../components/agents/AgentPromptModal";
-import { isActiveRun } from "../utils/agentStats";
+import { isActiveRun, isStoppableRun } from "../utils/agentStats";
 import { ModelPicker } from "../components/shared/ModelPicker";
 import { AgentStatusDisplay } from "../components/agents/AgentStatusDisplay";
 import { AgentActivityLog } from "../components/agents/AgentActivityLog";
@@ -107,6 +107,7 @@ export function WorktreeDetailPage() {
 
   const isActive = worktree?.status === "active";
   const isRunning = latestRun ? isActiveRun(latestRun) : false;
+  const isStoppable = latestRun ? isStoppableRun(latestRun) : false;
   const isWaitingForFeedback = latestRun?.status === "waiting_for_feedback";
 
   useEffect(() => {
@@ -323,13 +324,15 @@ export function WorktreeDetailPage() {
           {isActive && (
             <div className="flex items-center gap-2 shrink-0">
               {isRunning ? (
-                <button
-                  onClick={() => setStopConfirm(true)}
-                  disabled={agentLoading}
-                  className="px-3 py-1.5 text-sm font-medium rounded-md border border-red-300 text-red-600 hover:bg-red-50 active:scale-95 transition-transform disabled:opacity-50"
-                >
-                  Stop Agent
-                </button>
+                isStoppable ? (
+                  <button
+                    onClick={() => setStopConfirm(true)}
+                    disabled={agentLoading}
+                    className="px-3 py-1.5 text-sm font-medium rounded-md border border-red-300 text-red-600 hover:bg-red-50 active:scale-95 transition-transform disabled:opacity-50"
+                  >
+                    Stop Agent
+                  </button>
+                ) : null
               ) : (
                 <>
                   <button

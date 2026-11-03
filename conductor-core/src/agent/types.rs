@@ -81,6 +81,9 @@ pub struct AgentRun {
     pub subprocess_pid: Option<i64>,
     #[serde(default = "default_runtime_field")]
     pub runtime: String,
+    /// When an interactive session (RFC 021) entered `idle`; `None` otherwise.
+    #[serde(default)]
+    pub idle_since: Option<String>,
 }
 
 fn default_runtime_field() -> String {
@@ -88,8 +91,30 @@ fn default_runtime_field() -> String {
 }
 
 impl AgentRun {
-    /// Returns true if this run is currently active (running or waiting for feedback).
+    /// Returns true if this run is currently active (running, waiting for
+    /// feedback, or an idle interactive session whose process is still alive).
     pub fn is_active(&self) -> bool {
+        matches!(
+            self.status,
+            AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback | AgentRunStatus::Idle
+        )
+    }
+
+    /// Returns true if this is an interactive session between turns (RFC 021).
+    pub fn is_idle(&self) -> bool {
+        self.status == AgentRunStatus::Idle
+    }
+
+    /// Why conductor refuses to stop this run, if it does. `Some` only for idle
+    /// interactive sessions; callers surface the message to the user.
+    pub fn idle_stop_refusal(&self) -> Option<&'static str> {
+        self.is_idle()
+            .then_some("Agent is idle — an interactive session can't be stopped from conductor")
+    }
+
+    /// Returns true if conductor may stop this run. Idle interactive sessions
+    /// belong to the developer's terminal and are never stopped by conductor.
+    pub fn is_stoppable(&self) -> bool {
         matches!(
             self.status,
             AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback
@@ -365,11 +390,12 @@ pub struct CostPhase {
     pub duration_ms: i64,
 }
 
-/// Counts of active agent runs (running / waiting_for_feedback) for a single repo.
+/// Counts of active agent runs (running / waiting_for_feedback / idle) for a single repo.
 #[derive(Debug, Clone, Default)]
 pub struct ActiveAgentCounts {
     pub running: u32,
     pub waiting: u32,
+    pub idle: u32,
 }
 
 /// Metric totals to write onto an `agent_runs` row; `None` fields are left as is.
@@ -429,6 +455,7 @@ mod tests {
             conversation_id: None,
             subprocess_pid: None,
             runtime: "claude".into(),
+            idle_since: None,
         }
     }
 
@@ -460,6 +487,7 @@ mod tests {
             conversation_id: Some("conv-1".into()),
             subprocess_pid: Some(12345),
             runtime: "claude".into(),
+            idle_since: None,
         }
     }
 
@@ -470,6 +498,58 @@ mod tests {
         assert!(run.is_active(), "Running must be active");
         run.status = AgentRunStatus::WaitingForFeedback;
         assert!(run.is_active(), "WaitingForFeedback must be active");
+    }
+
+    #[test]
+    fn active_statuses_sql_matches_is_active() {
+        let mut run = make_full_run();
+        for status in [
+            AgentRunStatus::Running,
+            AgentRunStatus::WaitingForFeedback,
+            AgentRunStatus::Idle,
+            AgentRunStatus::Completed,
+            AgentRunStatus::Failed,
+            AgentRunStatus::Cancelled,
+        ] {
+            run.status = status;
+            let in_sql = crate::agent::status::ACTIVE_STATUSES_SQL.contains(&format!("'{status}'"));
+            assert_eq!(run.is_active(), in_sql, "{status}");
+        }
+    }
+
+    #[test]
+    fn is_active_true_for_idle() {
+        let mut run = make_full_run();
+        run.status = AgentRunStatus::Idle;
+        assert!(run.is_active());
+        assert!(run.is_idle());
+        assert!(!run.is_waiting_for_feedback());
+    }
+
+    #[test]
+    fn is_stoppable_excludes_idle_and_terminal() {
+        let mut run = make_full_run();
+        for (status, expected) in [
+            (AgentRunStatus::Running, true),
+            (AgentRunStatus::WaitingForFeedback, true),
+            (AgentRunStatus::Idle, false),
+            (AgentRunStatus::Completed, false),
+            (AgentRunStatus::Failed, false),
+            (AgentRunStatus::Cancelled, false),
+        ] {
+            run.status = status;
+            assert_eq!(run.is_stoppable(), expected, "{status}");
+        }
+    }
+
+    #[test]
+    fn to_run_handle_maps_idle_to_running() {
+        let mut run = make_full_run();
+        run.status = AgentRunStatus::Idle;
+        assert_eq!(
+            run.to_run_handle().status,
+            runkon_runtimes::RunStatus::Running
+        );
     }
 
     #[test]

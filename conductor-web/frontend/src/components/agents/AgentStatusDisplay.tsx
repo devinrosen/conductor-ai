@@ -1,5 +1,5 @@
 import type { AgentRun } from "../../api/types";
-import { formatTokens, isActiveRun, statusColors, statusLabels } from "../../utils/agentStats";
+import { formatTokens, idleSinceLabel, isActiveRun, statusColors, statusLabels } from "../../utils/agentStats";
 import { StatusPulseBadge } from "../shared/StatusPulseBadge";
 import { TimeAgo } from "../shared/TimeAgo";
 import { ChildRunsList } from "./ChildRunsList";
@@ -90,6 +90,15 @@ export function AgentStatusDisplay({
           )}
         </div>
       </div>
+
+      {run.status === "idle" && (
+        <p className="mb-3 text-sm text-sky-700">
+          Idle{idleSinceLabel(run)}
+          {run.result_text ? (
+            <span className="text-gray-500"> — {run.result_text.slice(0, 200)}</span>
+          ) : null}
+        </p>
+      )}
 
       <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-sm">
         {(treeInputTokens > 0 || treeOutputTokens > 0) && (

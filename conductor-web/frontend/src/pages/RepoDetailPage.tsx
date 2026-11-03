@@ -20,6 +20,7 @@ import { EmptyState } from "../components/shared/EmptyState";
 import { ModelPicker } from "../components/shared/ModelPicker";
 import { buildTicketTree } from "../utils/ticketDeps";
 import { deriveWorktreeSlug } from "../utils/worktreeUtils";
+import { idleSinceLabel, isActiveRun, isStoppableRun } from "../utils/agentStats";
 import {
   useConductorEvents,
   type ConductorEventType,
@@ -130,7 +131,7 @@ export function RepoDetailPage() {
   const [newRepoAgentSession, setNewRepoAgentSession] = useState(false);
 
   const activeRepoAgent: AgentRun | undefined = repoAgentRuns?.find(
-    (r) => r.status === "running" || r.status === "waiting_for_feedback",
+    (r) => isActiveRun(r),
   );
 
   async function handleStartRepoAgent() {
@@ -582,7 +583,7 @@ export function RepoDetailPage() {
             <span className="ml-2 text-xs font-normal normal-case text-gray-400">(read-only)</span>
           </h3>
           <div className="flex items-center gap-2">
-            {activeRepoAgent && (
+            {activeRepoAgent && isStoppableRun(activeRepoAgent) && (
               <button
                 onClick={() => handleStopRepoAgent(activeRepoAgent.id)}
                 className="px-3 py-1.5 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
@@ -598,7 +599,20 @@ export function RepoDetailPage() {
             </button>
           </div>
         </div>
-        {activeRepoAgent && (
+        {activeRepoAgent && activeRepoAgent.status === "idle" && (
+          <div className="mb-3 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2 w-2 rounded-full bg-sky-400" />
+              <span className="font-medium text-sky-800">
+                Session idle{idleSinceLabel(activeRepoAgent)}
+              </span>
+              {activeRepoAgent.result_text && (
+                <span className="text-sky-700 truncate">{activeRepoAgent.result_text.slice(0, 100)}</span>
+              )}
+            </div>
+          </div>
+        )}
+        {activeRepoAgent && activeRepoAgent.status !== "idle" && (
           <div className="mb-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm">
             <div className="flex items-center gap-2">
               <span className="inline-block h-2 w-2 rounded-full bg-green-500 animate-pulse" />

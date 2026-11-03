@@ -11,6 +11,7 @@ pub struct Theme {
     pub status_completed: Color, // Green
     pub status_failed: Color,    // Red
     pub status_waiting: Color,   // Magenta
+    pub status_idle: Color,      // Cyan      — interactive session between turns
     pub status_cancelled: Color, // DarkGray
     pub label_primary: Color,    // White     — workflow names, PR titles, bold identifiers
     pub label_secondary: Color,  // DarkGray  — timestamps, paths, muted info
@@ -87,6 +88,7 @@ impl Theme {
             status_completed: Color::Green,
             status_failed: Color::Red,
             status_waiting: Color::Magenta,
+            status_idle: Color::Cyan,
             status_cancelled: Color::DarkGray,
             label_primary: Color::White,
             label_secondary: Color::DarkGray,
@@ -110,6 +112,7 @@ impl Theme {
             status_completed: Color::Rgb(0xA3, 0xBE, 0x8C), // nord14 — green
             status_failed: Color::Rgb(0xBF, 0x61, 0x6A),  // nord11 — red
             status_waiting: Color::Rgb(0xB4, 0x8E, 0xAD), // nord15 — purple
+            status_idle: Color::Rgb(0x88, 0xC0, 0xD0),    // nord8  — frost blue
             status_cancelled: Color::Rgb(0x4C, 0x56, 0x6A), // nord3  — muted
             label_primary: Color::Rgb(0xEC, 0xEF, 0xF4),  // nord6  — bright fg
             label_secondary: Color::Rgb(0x4C, 0x56, 0x6A), // nord3  — muted
@@ -133,6 +136,7 @@ impl Theme {
             status_completed: Color::Rgb(0xB8, 0xBB, 0x26), // bright green
             status_failed: Color::Rgb(0xFB, 0x49, 0x34),  // bright red
             status_waiting: Color::Rgb(0xD3, 0x86, 0x9B), // bright purple
+            status_idle: Color::Rgb(0x8E, 0xC0, 0x7C),    // bright aqua
             status_cancelled: Color::Rgb(0x66, 0x5C, 0x54), // bg3
             label_primary: Color::Rgb(0xEB, 0xDB, 0xB2),  // fg
             label_secondary: Color::Rgb(0x92, 0x83, 0x74), // gray
@@ -240,6 +244,7 @@ impl Theme {
             status_completed: Color::Rgb(0xA6, 0xE3, 0xA1), // Green
             status_failed: Color::Rgb(0xF3, 0x8B, 0xA8),    // Red
             status_waiting: Color::Rgb(0xCB, 0xA6, 0xF7),   // Mauve
+            status_idle: Color::Rgb(0x94, 0xE2, 0xD5),      // Teal
             status_cancelled: Color::Rgb(0x45, 0x47, 0x5A), // Surface1
             label_primary: Color::Rgb(0xCD, 0xD6, 0xF4),    // Text
             label_secondary: Color::Rgb(0x6C, 0x70, 0x86),  // Overlay0
@@ -379,6 +384,7 @@ fn build_theme_from_base16(get: impl Fn(&str) -> Result<Color, String>) -> Resul
         label_info: base0d,
         label_url: base0d,
         status_waiting: base0e,
+        status_idle: base0c,
         label_keyword: base0e,
     })
 }

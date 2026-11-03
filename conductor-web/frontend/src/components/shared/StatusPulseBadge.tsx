@@ -1,6 +1,7 @@
 const pulseColors: Partial<Record<string, { color: string; pulse: boolean; label: string }>> = {
   running: { color: "bg-yellow-400", pulse: true, label: "Running" },
   waiting_for_feedback: { color: "bg-purple-400", pulse: true, label: "Waiting for feedback" },
+  idle: { color: "bg-sky-400", pulse: false, label: "Idle" },
   waiting: { color: "bg-gray-300", pulse: false, label: "Waiting" },
 };
 
