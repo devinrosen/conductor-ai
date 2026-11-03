@@ -24,7 +24,6 @@ mod test_helpers;
 /// every tool in `conductor_tools()` must appear in exactly one of this list and
 /// `OTHER_TOOLS` (enforced by a test), so a new tool cannot go unclassified.
 pub(super) const READ_ONLY_TOOLS: &[&str] = &[
-    "conductor_get_run",
     "conductor_list_runs",
     "conductor_list_agent_runs",
     "conductor_get_step_log",
@@ -57,6 +56,8 @@ const OTHER_TOOLS: &[&str] = &[
     "conductor_list_prs",
     // Reads the DB, but also fetches PR detail with a synchronous `gh` call.
     "conductor_get_worktree",
+    // Reads the DB, but its stale-process warning spawns `<exe> --version` probes (up to 2s each).
+    "conductor_get_run",
     "conductor_validate_workflow",
     "conductor_register_repo",
     "conductor_unregister_repo",
