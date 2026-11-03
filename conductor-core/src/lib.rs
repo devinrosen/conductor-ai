@@ -54,6 +54,7 @@ pub mod repo;
 pub(crate) mod retry;
 pub mod runtime;
 pub mod schema_config;
+pub mod session;
 pub mod stats;
 pub mod text_util;
 pub mod ticket_source;
