@@ -810,6 +810,45 @@ mod tests {
     }
 
     #[test]
+    fn load_idle_session_or_skip_ok_for_valid_idle_run() {
+        let conn = setup_db();
+        turn(&conn, T0, T_STOP, json!({}));
+        let c = candidate(&conn);
+        let s = load_idle_session_or_skip(&conn, &c).unwrap();
+        assert_eq!(s.run_id, c.run_id);
+        assert_eq!(s.idle_since, T_STOP);
+    }
+
+    #[test]
+    fn load_idle_session_or_skip_retries_when_run_left_idle() {
+        let conn = setup_db();
+        turn(&conn, T0, T_STOP, json!({}));
+        let c = candidate(&conn);
+        apply(
+            &conn,
+            "UserPromptSubmit",
+            json!({"prompt": "more"}),
+            "2026-11-02T10:00:30+00:00",
+        );
+        assert_eq!(
+            load_idle_session_or_skip(&conn, &c).unwrap_err(),
+            IdleVisit::Retry
+        );
+    }
+
+    #[test]
+    fn load_idle_session_or_skip_backs_off_on_load_failure() {
+        let conn = setup_db();
+        turn(&conn, T0, T_STOP, json!({}));
+        let c = candidate(&conn);
+        conn.execute("DROP TABLE agent_run_events", []).unwrap();
+        assert_eq!(
+            load_idle_session_or_skip(&conn, &c).unwrap_err(),
+            IdleVisit::Backoff
+        );
+    }
+
+    #[test]
     fn due_idle_candidates_respects_delay_and_skips_unparseable() {
         let conn = setup_db();
         turn(&conn, T0, T_STOP, json!({}));
