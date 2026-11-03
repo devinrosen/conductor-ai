@@ -35,7 +35,7 @@ pub const RUNTIME_INTERACTIVE: &str = "interactive";
 const SUMMARY_SESSION_STARTED: &str = "Session started";
 const SUMMARY_SESSION_RESUMED: &str = "Session resumed";
 /// Placeholder for the NOT NULL `agent_runs.prompt` column until the first prompt arrives.
-const PLACEHOLDER_PROMPT: &str = "(interactive session)";
+pub(crate) const PLACEHOLDER_PROMPT: &str = "(interactive session)";
 
 const MAX_PROMPT_CHARS: usize = 500;
 const MAX_RESULT_CHARS: usize = 2000;
@@ -693,6 +693,41 @@ fn on_stop(conn: &Connection, mode: ApplyMode, ev: &HookEvent, run_id: &str) -> 
     )
 }
 
+/// What `on_stop` recorded about the turn that began the idle period `idle_since`.
+///
+/// This is the read side of `on_stop`: the `result` event it inserts has
+/// `started_at = idle_since` and carries `background_tasks`, and the prompt span it closes
+/// has `ended_at = idle_since`. Keep it next to `on_stop` so a change to how those events
+/// are written updates the reader in the same place.
+///
+/// Returns `(background_tasks, prompt_started_at)`; each is `None` when not recorded.
+pub fn stop_turn_details(
+    conn: &Connection,
+    run_id: &str,
+    idle_since: &str,
+) -> Result<(Option<i64>, Option<String>)> {
+    let background_tasks = conn
+        .query_row(
+            "SELECT json_extract(metadata, '$.background_tasks') FROM agent_run_events \
+             WHERE run_id = ?1 AND kind = ?2 AND started_at = ?3 \
+             ORDER BY id DESC LIMIT 1",
+            params![run_id, EVENT_KIND_RESULT, idle_since],
+            |r| r.get::<_, Option<i64>>(0),
+        )
+        .optional()?
+        .flatten();
+    let prompt_started = conn
+        .query_row(
+            "SELECT started_at FROM agent_run_events \
+             WHERE run_id = ?1 AND kind = ?2 AND ended_at = ?3 \
+             ORDER BY id DESC LIMIT 1",
+            params![run_id, EVENT_KIND_PROMPT, idle_since],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok((background_tasks, prompt_started))
+}
+
 fn on_session_end(conn: &Connection, mode: ApplyMode, ev: &HookEvent, run_id: &str) -> Result<()> {
     let now = ev.received_at.as_str();
     dismiss_pending(conn, run_id, now)?;
@@ -984,6 +1019,61 @@ mod tests {
         let res = events(&conn, "result");
         assert_eq!(res[0].0, "done");
         assert_eq!(res[0].3["background_tasks"], 2);
+    }
+
+    #[test]
+    fn stop_turn_details_reads_what_on_stop_wrote() {
+        let conn = setup_db();
+        start(&conn);
+        let run_id = run_col(&conn, "id").unwrap();
+        // Nothing recorded yet: SessionStart alone writes no result or prompt span.
+        assert_eq!(stop_turn_details(&conn, &run_id, T2).unwrap(), (None, None));
+        apply(
+            &conn,
+            &ev(
+                "UserPromptSubmit",
+                json!({"prompt": "go", "prompt_id": "p1"}),
+                T1,
+            ),
+        );
+        apply(
+            &conn,
+            &ev(
+                "Stop",
+                json!({"last_assistant_message": "done", "background_tasks": [1, 2], "prompt_id": "p1"}),
+                T2,
+            ),
+        );
+        assert_eq!(
+            stop_turn_details(&conn, &run_id, T2).unwrap(),
+            (Some(2), Some(T1.to_string()))
+        );
+        // A later turn's idle_since must not match the earlier turn's events.
+        let t3 = "2026-11-02T10:00:20+00:00";
+        assert_eq!(stop_turn_details(&conn, &run_id, t3).unwrap(), (None, None));
+        // Stop without background_tasks records no count but still yields the span start.
+        let t4 = "2026-11-02T10:00:30+00:00";
+        let t5 = "2026-11-02T10:00:40+00:00";
+        apply(
+            &conn,
+            &ev(
+                "UserPromptSubmit",
+                json!({"prompt": "again", "prompt_id": "p2"}),
+                t4,
+            ),
+        );
+        apply(
+            &conn,
+            &ev(
+                "Stop",
+                json!({"last_assistant_message": "ok", "prompt_id": "p2"}),
+                t5,
+            ),
+        );
+        assert_eq!(
+            stop_turn_details(&conn, &run_id, t5).unwrap(),
+            (None, Some(t4.to_string()))
+        );
     }
 
     #[test]

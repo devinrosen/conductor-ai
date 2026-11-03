@@ -2,6 +2,8 @@ use crate::agent::{AgentRun, AgentRunStatus};
 use crate::workflow::types::ConductorWorkflowRun;
 use crate::workflow::WorkflowRunStatus;
 
+use crate::session::hook::RUNTIME_INTERACTIVE;
+
 use super::parse_target_label;
 
 /// A workflow run that freshly transitioned to a terminal state.
@@ -117,6 +119,12 @@ pub fn detect_agent_terminal_transitions<'a>(
             let changed = prev.map(|s| s != &run.status).unwrap_or(true);
             if now_terminal && changed {
                 let succeeded = run.status == AgentRunStatus::Completed;
+                // An interactive session "completes" when the developer closes it, which
+                // they already know. Failures (reaped sessions) still notify.
+                if succeeded && run.runtime == RUNTIME_INTERACTIVE {
+                    seen.insert(run.id.clone(), run.status);
+                    continue;
+                }
                 let duration_ms = run.duration_ms.map(|ms| ms as u64);
                 transitions.push(AgentTerminalTransition {
                     run_id: run.id.clone(),

@@ -37,6 +37,16 @@ pub enum ConductorEvent {
         worktree_id: String,
         feedback_id: String,
     },
+    /// An interactive session has been idle past `[notifications.session_idle] delay_secs`.
+    /// Emitted only when `web_push = true`; drives Web Push.
+    #[serde(rename = "session_idle")]
+    SessionIdle {
+        run_id: String,
+        worktree_id: String,
+        worktree_slug: String,
+        last_message_preview: String,
+        background_tasks: i64,
+    },
     #[serde(rename = "feedback_submitted")]
     FeedbackSubmitted {
         run_id: String,
@@ -92,6 +102,7 @@ impl ConductorEvent {
             Self::AgentRestarted { .. } => "agent_restarted",
             Self::AgentEvent { .. } => "agent_event",
             Self::FeedbackRequested { .. } => "feedback_requested",
+            Self::SessionIdle { .. } => "session_idle",
             Self::FeedbackSubmitted { .. } => "feedback_submitted",
             Self::IssueSourcesChanged { .. } => "issue_sources_changed",
             Self::WorkflowRunStatusChanged { .. } => "workflow_run_status_changed",
@@ -238,6 +249,16 @@ mod tests {
                     feedback_id: "".into(),
                 },
                 "feedback_requested",
+            ),
+            (
+                ConductorEvent::SessionIdle {
+                    run_id: "".into(),
+                    worktree_id: "".into(),
+                    worktree_slug: "".into(),
+                    last_message_preview: "".into(),
+                    background_tasks: 0,
+                },
+                "session_idle",
             ),
             (
                 ConductorEvent::FeedbackSubmitted {

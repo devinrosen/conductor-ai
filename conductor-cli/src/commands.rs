@@ -95,7 +95,7 @@ pub enum NotificationsCommands {
     /// Fire a synthetic notification event through all configured hooks (for testing)
     Test {
         /// Event name to fire. Valid values: workflow_run.completed, workflow_run.failed,
-        /// agent_run.completed, agent_run.failed, gate.waiting, feedback.requested
+        /// agent_run.completed, agent_run.failed, gate.waiting, feedback.requested, session.idle
         #[arg(default_value = "workflow_run.completed")]
         event: String,
     },

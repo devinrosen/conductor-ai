@@ -23,6 +23,7 @@ fn config(enabled: bool, on_success: bool, on_failure: bool) -> NotificationConf
         }),
         slack: SlackConfig::default(),
         web_url: None,
+        session_idle: Default::default(),
     }
 }
 
@@ -281,6 +282,7 @@ fn build_synthetic_event_all_valid_kinds() {
         "agent_run.failed",
         "gate.waiting",
         "feedback.requested",
+        "session.idle",
     ];
     for kind in kinds {
         let result = build_synthetic_event(kind, "2024-01-01T00:00:00Z");
@@ -950,4 +952,81 @@ fn is_recent_cases() {
         max
     ));
     assert!(crate::notify::is_recent("garbage", now, max));
+}
+
+// --- agent terminal transitions: interactive completed suppression ---
+
+fn transition_run(status: crate::agent::AgentRunStatus, runtime: &str) -> crate::agent::AgentRun {
+    crate::agent::AgentRun {
+        id: "r1".into(),
+        worktree_id: Some("w1".into()),
+        repo_id: None,
+        session_id: None,
+        prompt: String::new(),
+        status,
+        result_text: None,
+        cost_usd: None,
+        num_turns: None,
+        duration_ms: None,
+        started_at: "2026-01-01T00:00:00Z".into(),
+        ended_at: None,
+        log_file: None,
+        model: None,
+        plan: None,
+        parent_run_id: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_input_tokens: None,
+        cache_creation_input_tokens: None,
+        bot_name: None,
+        conversation_id: None,
+        subprocess_pid: None,
+        subprocess_started_at: None,
+        runtime: runtime.into(),
+        idle_since: None,
+    }
+}
+
+/// Seed with `before`, then report transitions when the run becomes `after`.
+fn agent_transitions(
+    runtime: &str,
+    before: crate::agent::AgentRunStatus,
+    after: crate::agent::AgentRunStatus,
+) -> Vec<AgentTerminalTransition> {
+    let mut seen = std::collections::HashMap::new();
+    let mut initialized = false;
+    let r0 = transition_run(before, runtime);
+    detect_agent_terminal_transitions(
+        std::iter::once((Some("wt"), &r0)),
+        &mut seen,
+        &mut initialized,
+    );
+    let r1 = transition_run(after, runtime);
+    detect_agent_terminal_transitions(
+        std::iter::once((Some("wt"), &r1)),
+        &mut seen,
+        &mut initialized,
+    )
+}
+
+#[test]
+fn interactive_completed_is_suppressed() {
+    use crate::agent::AgentRunStatus::*;
+    assert!(agent_transitions("interactive", Idle, Completed).is_empty());
+}
+
+#[test]
+fn interactive_failed_still_notifies() {
+    use crate::agent::AgentRunStatus::*;
+    let t = agent_transitions("interactive", Idle, Failed);
+    assert_eq!(t.len(), 1);
+    assert!(!t[0].succeeded);
+}
+
+#[test]
+fn headless_completed_still_notifies() {
+    use crate::agent::AgentRunStatus::*;
+    let t = agent_transitions("claude", Running, Completed);
+    assert_eq!(t.len(), 1);
+    assert!(t[0].succeeded);
 }
