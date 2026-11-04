@@ -1,8 +1,10 @@
 //! Stdio isolation for `conductor mcp serve` (#3093).
 //!
-//! Workflows started through MCP run inside the server process, and the
-//! `claude` and `sh` children they spawn inherit fd 0 and fd 1 — the JSON-RPC
-//! request and response pipes. `claude` reads a non-TTY stdin, so it can swallow
+//! Workflows started through MCP used to run inside the server process, and the
+//! `claude` and `sh` children they spawn inherited fd 0 and fd 1 — the JSON-RPC
+//! request and response pipes. Runs now execute in their own process (#3124), so
+//! this no longer matters for them; it still protects the other subprocesses the
+//! server spawns (`gh`, `git`, `tmux`). `claude` reads a non-TTY stdin, so it can swallow
 //! a request such as `conductor_get_run` and the client never gets an answer.
 //! A child writing to fd 1 can equally corrupt the response stream.
 //!

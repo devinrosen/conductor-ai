@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use conductor_core::workflow::EventSink;
 use conductor_core::Conductor;
 use rmcp::model::{CallToolResult, Tool, ToolAnnotations};
 use serde_json::{json, Value};
@@ -211,6 +210,7 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
         Tool::new(
             "conductor_run_workflow",
             "Start a workflow. Returns run_id immediately; block on it with conductor_wait_run. \
+             The run executes in its own process on the installed conductor, so it survives an MCP restart. \
              Provide worktree or pr to target a specific context. \
              Use pr (PR number or URL) as a shortcut — it resolves the linked worktree automatically.",
             {
@@ -482,7 +482,7 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
         ),
         Tool::new(
             "conductor_resume_run",
-            "Resume a failed or paused workflow run from its last failed step. \
+            "Resume a failed or paused workflow run from its last failed step, in its own process on the installed conductor. \
              Use conductor_get_run to check the run status before resuming.",
             schema(&[
                 ("run_id", "Workflow run ID to resume", true),
@@ -679,7 +679,6 @@ pub(super) fn dispatch_tool(
     conductor: &Conductor,
     name: &str,
     args: &serde_json::Map<String, Value>,
-    event_sinks: &[Arc<dyn EventSink>],
     progress: Option<&dyn Fn(String)>,
 ) -> CallToolResult {
     match name {
@@ -688,7 +687,7 @@ pub(super) fn dispatch_tool(
         "conductor_create_worktree" => worktrees::tool_create_worktree(conductor, args),
         "conductor_delete_worktree" => worktrees::tool_delete_worktree(conductor, args),
         "conductor_sync_tickets" => tickets::tool_sync_tickets(conductor, args),
-        "conductor_run_workflow" => workflows::tool_run_workflow(conductor, args, event_sinks),
+        "conductor_run_workflow" => workflows::tool_run_workflow(conductor, args),
         "conductor_list_runs" => runs::tool_list_runs(conductor, args),
         "conductor_list_agent_runs" => agents::tool_list_agent_runs(conductor, args),
         "conductor_get_run" => runs::tool_get_run(conductor, args),
@@ -703,7 +702,7 @@ pub(super) fn dispatch_tool(
         "conductor_wait_run" => runs::tool_wait_run(conductor, args, progress),
         "conductor_list_workflows" => workflows::tool_list_workflows(conductor, args),
         "conductor_list_repos" => repos::tool_list_repos(conductor),
-        "conductor_resume_run" => runs::tool_resume_run(conductor, args, event_sinks),
+        "conductor_resume_run" => runs::tool_resume_run(conductor, args),
         "conductor_submit_agent_feedback" => agents::tool_submit_agent_feedback(conductor, args),
         "conductor_get_worktree" => worktrees::tool_get_worktree(conductor, args),
         "conductor_get_step_log" => runs::tool_get_step_log(conductor, args),
@@ -738,13 +737,7 @@ mod tests {
     #[test]
     fn test_dispatch_unknown_tool() {
         let (_f, conductor) = make_test_conductor();
-        let result = dispatch_tool(
-            &conductor,
-            "conductor_nonexistent",
-            &empty_args(),
-            &[],
-            None,
-        );
+        let result = dispatch_tool(&conductor, "conductor_nonexistent", &empty_args(), None);
         assert_eq!(
             result.is_error,
             Some(true),

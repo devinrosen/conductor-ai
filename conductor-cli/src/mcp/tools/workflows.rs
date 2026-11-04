@@ -1,7 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use conductor_core::workflow::EventSink;
 use conductor_core::Conductor;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
@@ -169,14 +167,9 @@ fn format_validation_result(
 pub(super) fn tool_run_workflow(
     conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
-    event_sinks: &[Arc<dyn EventSink>],
 ) -> CallToolResult {
     use conductor_core::repo::RepoManager;
-    use conductor_core::workflow::{
-        execute_workflow_standalone, RunIdSlot, WorkflowExecConfig, WorkflowExecStandalone,
-    };
     use conductor_core::worktree::WorktreeManager;
-    use std::sync::Mutex;
 
     let workflow_name = require_arg!(args, "workflow");
     let repo_slug = require_arg!(args, "repo");
@@ -295,96 +288,47 @@ pub(super) fn tool_run_workflow(
         (None, repo.local_path.clone(), repo_slug.to_string())
     };
 
-    let workflow = match load_run_workflow_def(&working_dir, &repo.local_path, workflow_name) {
-        Ok(w) => w,
-        Err(e) => return e,
-    };
+    // Validate the definition here so a bad workflow name fails before spawning.
+    if let Err(e) = load_run_workflow_def(&working_dir, &repo.local_path, workflow_name) {
+        return e;
+    }
 
-    // Condvar-based notification: the workflow engine writes the run ID here and
-    // signals the condvar once the run record is created (before any steps execute).
-    let notify_pair: RunIdSlot = Arc::new((Mutex::new(None), std::sync::Condvar::new()));
-
-    // Fire-and-forget: execute in a background thread
-    let standalone = WorkflowExecStandalone {
-        config: conductor.config.clone(),
-        workflow,
+    // The run executes in its own process on the installed binary (#3124); this
+    // call waits for that process to report the run ID, or the startup error.
+    let spec = crate::background::LaunchSpec::Run {
+        workflow_name: workflow_name.to_string(),
         worktree_id,
         working_dir,
         repo_path: repo.local_path,
         ticket_id: resolved_ticket_id,
         repo_id: Some(repo.id),
-        model: None,
-        runtime: None,
-        exec_config: WorkflowExecConfig {
-            dry_run,
-            event_sinks: event_sinks.to_vec(),
-            ..WorkflowExecConfig::default()
-        },
         inputs,
+        dry_run,
         target_label: Some(target_label),
-        run_id_notify: Some(Arc::clone(&notify_pair)),
-        triggered_by_hook: false,
-        conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-        force: false,
-        extra_plugin_dirs: vec![],
         db_path: Some(conductor.conn_db_path()),
-        parent_workflow_run_id: None,
-        depth: 0,
-        parent_step_id: None,
-        default_bot_name: None,
-        iteration: 0,
+    };
+    let launched = match crate::mcp::launch::launch(&spec) {
+        Ok(l) => l,
+        Err(e) => return tool_err(format!("Workflow failed to start: {e:#}")),
     };
 
-    // Slot receives the error message if execute_workflow_standalone fails before
-    // creating the run record (i.e., before writing to run_id_notify).
-    let error_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let error_slot_bg = Arc::clone(&error_slot);
-    let notify_pair_bg = Arc::clone(&notify_pair);
-
-    std::thread::spawn(move || {
-        if let Err(e) = execute_workflow_standalone(&standalone) {
-            *error_slot_bg.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.to_string());
-            // Wake the waiter so it surfaces the error immediately.
-            notify_pair_bg.1.notify_one();
-        }
-    });
-
-    // Block (without spinning) until the run record is created or 2 s elapses.
-    let (lock, cvar) = notify_pair.as_ref();
-    let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-    let (guard, _timed_out) = cvar
-        .wait_timeout_while(guard, std::time::Duration::from_secs(2), |v| {
-            v.is_none()
-                && error_slot
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .is_none()
-        })
-        .unwrap_or_else(|e| e.into_inner());
-
-    // Surface startup errors before checking for the run ID.
-    if let Some(err) = error_slot
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-    {
-        return tool_err(format!("Workflow failed to start: {err}"));
-    }
-
-    let run_id = match guard.as_ref() {
-        Some(id) => id.clone(),
-        None => {
-            return tool_err(
-                "Workflow started but run ID was not available within 2 s. \
-             The workflow may still be running in the background — \
-             use conductor_list_runs to check status.",
-            )
-        }
-    };
-
-    tool_ok(format!(
-        "Workflow '{workflow_name}' started.\nrun_id: {run_id}\nstatus: pending\ndry_run: {dry_run}\nWait for it with conductor_wait_run (or check progress with conductor_get_run)."
+    tool_ok(format_run_started(
+        workflow_name,
+        &launched.run_id,
+        dry_run,
+        &launched.build_line(),
     ))
+}
+
+fn format_run_started(
+    workflow_name: &str,
+    run_id: &str,
+    dry_run: bool,
+    build_line: &str,
+) -> String {
+    format!(
+        "Workflow '{workflow_name}' started.\nrun_id: {run_id}\nstatus: pending\ndry_run: {dry_run}{build_line}\nWait for it with conductor_wait_run (or check progress with conductor_get_run)."
+    )
 }
 
 pub(super) fn tool_list_templates(
@@ -786,7 +730,7 @@ workflow review {
     fn test_dispatch_run_workflow_missing_args() {
         let (_f, conductor) = make_test_conductor();
         // Missing both "workflow" and "repo"
-        let result = tool_run_workflow(&conductor, &empty_args(), &[]);
+        let result = tool_run_workflow(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
     }
 
@@ -796,7 +740,7 @@ workflow review {
         let mut args = serde_json::Map::new();
         args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
-        let result = tool_run_workflow(&conductor, &args, &[]);
+        let result = tool_run_workflow(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
     }
 
@@ -811,7 +755,7 @@ workflow review {
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         args.insert("inputs".to_string(), Value::Object(inputs_map));
         // Should fail at repo lookup, not at inputs parsing
-        let result = tool_run_workflow(&conductor, &args, &[]);
+        let result = tool_run_workflow(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let content = format!("{result:?}");
         assert!(
@@ -830,7 +774,7 @@ workflow review {
             "inputs".to_string(),
             Value::String(r#"{"key":"val"}"#.to_string()),
         );
-        let result = tool_run_workflow(&conductor, &args, &[]);
+        let result = tool_run_workflow(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let content = format!("{result:?}");
         assert!(
@@ -848,7 +792,7 @@ workflow review {
         args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         args.insert("inputs".to_string(), Value::Object(inputs_map));
-        let result = tool_run_workflow(&conductor, &args, &[]);
+        let result = tool_run_workflow(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let content = format!("{result:?}");
         assert!(
@@ -865,9 +809,7 @@ workflow review {
         let workflow_name = "my-wf";
         let run_id = "01HXXXXXXXXXXXXXXXXXXXXXXX";
         let dry_run = false;
-        let response = format!(
-            "Workflow '{workflow_name}' started.\nrun_id: {run_id}\nstatus: pending\ndry_run: {dry_run}\nWait for it with conductor_wait_run (or check progress with conductor_get_run)."
-        );
+        let response = format_run_started(workflow_name, run_id, dry_run, "");
         assert!(
             response.contains("status: pending"),
             "response must include status field: {response}"
@@ -879,6 +821,15 @@ workflow review {
     }
 
     #[test]
+    fn test_run_workflow_response_reports_the_runs_build() {
+        let response = format_run_started("wf", "r1", false, "\nbuild: conductor 0.19.0 abc1234");
+        assert!(
+            response.contains("dry_run: false\nbuild: conductor 0.19.0 abc1234\nWait for it"),
+            "{response}"
+        );
+    }
+
+    #[test]
     fn test_dispatch_run_workflow_dry_run_flag_parsed() {
         let (_f, conductor) = make_test_conductor();
         // dry_run: true should be accepted and reach the repo lookup (not fail on arg parsing)
@@ -886,7 +837,7 @@ workflow review {
         args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         args.insert("dry_run".to_string(), Value::Bool(true));
-        let result = tool_run_workflow(&conductor, &args, &[]);
+        let result = tool_run_workflow(&conductor, &args);
         // Should fail at repo lookup (ghost-repo not registered), not at arg parsing
         assert_eq!(result.is_error, Some(true));
         let content = format!("{result:?}");
@@ -900,7 +851,7 @@ workflow review {
         args2.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args2.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         args2.insert("dry_run".to_string(), Value::String("true".to_string()));
-        let result2 = tool_run_workflow(&conductor, &args2, &[]);
+        let result2 = tool_run_workflow(&conductor, &args2);
         assert_eq!(result2.is_error, Some(true));
         let content2 = format!("{result2:?}");
         assert!(
@@ -920,7 +871,7 @@ workflow review {
             "worktree".to_string(),
             Value::String("feat-something".to_string()),
         );
-        let result = tool_run_workflow(&conductor, &args, &[]);
+        let result = tool_run_workflow(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -1012,7 +963,7 @@ workflow deploy {
             "pr".to_string(),
             Value::String("not-a-pr-number-or-url".to_string()),
         );
-        let result = tool_run_workflow(&conductor, &args, &[]);
+        let result = tool_run_workflow(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -1032,7 +983,7 @@ workflow deploy {
         args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         args.insert("pr".to_string(), Value::String("42".to_string()));
-        let result = tool_run_workflow(&conductor, &args, &[]);
+        let result = tool_run_workflow(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -1056,7 +1007,7 @@ workflow deploy {
             "pr".to_string(),
             Value::String("https://github.com/owner/repo/pull/99".to_string()),
         );
-        let result = tool_run_workflow(&conductor, &args, &[]);
+        let result = tool_run_workflow(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -1538,7 +1489,7 @@ workflow wt-only-wf {
         args.insert("repo".to_string(), Value::String(repo.to_string()));
         args.insert("inputs".to_string(), Value::Object(inputs_map));
 
-        let result = tool_run_workflow(conductor, &args, &[]);
+        let result = tool_run_workflow(conductor, &args);
         let text = result.content[0]
             .as_text()
             .map(|t| t.text.to_string())

@@ -75,7 +75,16 @@ fn run(cli: Cli) -> Result<()> {
         Conductor::open()?
     };
 
-    helpers::check_prerequisites();
+    // A detached child (`workflow run --background`, `workflow launch-detached`)
+    // has its stdout and stderr on /dev/null and replies on the notify pipe, so
+    // the warning would reach nobody; the parent already ran the check.
+    #[cfg(unix)]
+    let detached_child = background::notify_fd(&cli.command).is_some();
+    #[cfg(not(unix))]
+    let detached_child = false;
+    if !detached_child {
+        helpers::check_prerequisites();
+    }
 
     match cli.command {
         Commands::Repo { command } => {

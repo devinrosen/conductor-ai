@@ -299,6 +299,14 @@ pub enum WorkflowCommands {
         #[arg(long = "plugin-dir")]
         plugin_dirs: Vec<String>,
     },
+    /// Internal: start the run or resume a JSON spec on stdin describes, detached.
+    /// Used by `conductor mcp serve`; the name and spec are a contract between builds.
+    #[command(name = "launch-detached", hide = true)]
+    LaunchDetached {
+        /// The fd to report the run ID (or an `ERROR:` line) on
+        #[arg(long)]
+        notify_fd: i32,
+    },
     /// Show details of a workflow run
     #[command(name = "run-show", alias = "show")]
     RunShow {
