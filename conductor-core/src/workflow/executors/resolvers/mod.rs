@@ -168,10 +168,28 @@ pub(super) fn run_gh_json(
 /// stdout and stderr are drained on helper threads so a large response can't
 /// fill the pipe and look like a hang. On timeout the child is killed and
 /// `None` is returned (callers treat that as `Pending`).
+/// Kill the whole process group led by `pid` (best effort).
+#[cfg(unix)]
+fn kill_process_group(pid: u32) {
+    // SAFETY: plain syscall; a negative pid targets the process group. ESRCH
+    // (group already gone) is harmless and ignored.
+    unsafe {
+        libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(_pid: u32) {}
+
 fn run_json_command(mut cmd: Command, timeout: Duration) -> Option<serde_json::Value> {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Put the child in its own process group so a timeout can kill any
+    // grandchildren that inherited the pipes; otherwise they would keep the
+    // drain threads and pipe fds alive on every timed-out poll.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
@@ -193,12 +211,14 @@ fn run_json_command(mut cmd: Command, timeout: Duration) -> Option<serde_json::V
     let out_reader = drain(child.stdout.take());
     let err_reader = drain(child.stderr.take());
 
+    let pid = child.id();
     let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
                 if Instant::now() >= deadline {
+                    kill_process_group(pid);
                     let _ = child.kill();
                     let _ = child.wait();
                     tracing::warn!(
@@ -210,6 +230,7 @@ fn run_json_command(mut cmd: Command, timeout: Duration) -> Option<serde_json::V
             }
             Err(e) => {
                 tracing::warn!("gh command wait failed: {e}");
+                kill_process_group(pid);
                 let _ = child.kill();
                 let _ = child.wait();
                 return None;
@@ -217,13 +238,14 @@ fn run_json_command(mut cmd: Command, timeout: Duration) -> Option<serde_json::V
         }
     };
     // The child has exited, but a grandchild may have inherited the pipes and
-    // kept them open. Bound the drain by the same deadline; on expiry the
-    // reader threads are left to finish on their own once the pipes close.
+    // kept them open. Bound the drain by the same deadline; on expiry kill the
+    // process group so the pipes close and the reader threads terminate.
     let remaining = |d: Instant| d.saturating_duration_since(Instant::now());
     let (Ok(stdout), Ok(stderr)) = (
         out_reader.recv_timeout(remaining(deadline)),
         err_reader.recv_timeout(remaining(deadline)),
     ) else {
+        kill_process_group(pid);
         tracing::warn!(
             "gh output pipes still open {timeout:?} after start; treating gate as pending"
         );
