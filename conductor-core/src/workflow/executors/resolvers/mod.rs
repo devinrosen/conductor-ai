@@ -179,14 +179,16 @@ fn run_json_command(mut cmd: Command, timeout: Duration) -> Option<serde_json::V
             return None;
         }
     };
-    fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
+    fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::sync::mpsc::Receiver<Vec<u8>> {
+        let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut buf = Vec::new();
             if let Some(mut p) = pipe {
                 let _ = p.read_to_end(&mut buf);
             }
-            buf
-        })
+            let _ = tx.send(buf);
+        });
+        rx
     }
     let out_reader = drain(child.stdout.take());
     let err_reader = drain(child.stderr.take());
@@ -214,8 +216,19 @@ fn run_json_command(mut cmd: Command, timeout: Duration) -> Option<serde_json::V
             }
         }
     };
-    let stdout = out_reader.join().unwrap_or_default();
-    let stderr = err_reader.join().unwrap_or_default();
+    // The child has exited, but a grandchild may have inherited the pipes and
+    // kept them open. Bound the drain by the same deadline; on expiry the
+    // reader threads are left to finish on their own once the pipes close.
+    let remaining = |d: Instant| d.saturating_duration_since(Instant::now());
+    let (Ok(stdout), Ok(stderr)) = (
+        out_reader.recv_timeout(remaining(deadline)),
+        err_reader.recv_timeout(remaining(deadline)),
+    ) else {
+        tracing::warn!(
+            "gh output pipes still open {timeout:?} after start; treating gate as pending"
+        );
+        return None;
+    };
     process_gh_output(status.success(), &stdout, &stderr)
 }
 
@@ -263,6 +276,19 @@ mod tests {
         cmd.args(["-c", "sleep 5"]);
         let start = Instant::now();
         let result = run_json_command(cmd, Duration::from_millis(200));
+        assert!(result.is_none());
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_json_command_lingering_grandchild_is_bounded() {
+        // The shell exits immediately but a backgrounded grandchild keeps the
+        // inherited stdout pipe open.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 5 & echo '{}'"]);
+        let start = Instant::now();
+        let result = run_json_command(cmd, Duration::from_millis(300));
         assert!(result.is_none());
         assert!(start.elapsed() < Duration::from_secs(3));
     }
