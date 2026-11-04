@@ -55,7 +55,7 @@ fn parse_run_uri(uri: &str) -> Option<&str> {
 /// Whether a raw DB status string represents a terminal workflow state.
 /// Defers to `WorkflowRunStatus::is_terminal()` so we don't drift from the
 /// canonical status enum if new variants are added.
-fn is_terminal(status: Option<&str>) -> bool {
+pub(super) fn is_terminal(status: Option<&str>) -> bool {
     status
         .and_then(|s| s.parse::<WorkflowRunStatus>().ok())
         .is_some_and(|s| s.is_terminal())
@@ -79,7 +79,7 @@ async fn lookup_run_status(run_id: String) -> Result<Option<String>, anyhow::Err
 /// `spawn_blocking` to avoid the `!Send` issue with `rusqlite::Connection`.
 pub struct ConductorMcpServer {
     hub: SubscriptionHub,
-    _broadcaster_handle: tokio::task::JoinHandle<()>,
+    poller_handle: tokio::task::JoinHandle<()>,
 }
 
 impl ConductorMcpServer {
@@ -87,8 +87,14 @@ impl ConductorMcpServer {
         let (hub, handle) = SubscriptionHub::new();
         Self {
             hub,
-            _broadcaster_handle: handle,
+            poller_handle: handle,
         }
+    }
+}
+
+impl Drop for ConductorMcpServer {
+    fn drop(&mut self) {
+        self.poller_handle.abort();
     }
 }
 
@@ -169,7 +175,6 @@ impl ServerHandler for ConductorMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let name = request.name.to_string();
         let args = request.arguments.unwrap_or_default();
-        let event_sinks = vec![self.hub.channel_sink()];
         let limit = read_only_timeout(&name);
         let tool_name = name.clone();
 
@@ -214,7 +219,6 @@ impl ServerHandler for ConductorMcpServer {
                     &c,
                     &name,
                     &args,
-                    &event_sinks,
                     sink.as_ref().map(|f| f as &dyn Fn(String)),
                 ),
                 Err(e) => crate::mcp::helpers::tool_err(e),
