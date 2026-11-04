@@ -99,7 +99,30 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Notifications { command } => {
             handlers::notifications::handle_notifications(command, &conductor.config)?
         }
-        Commands::Session { .. } => unreachable!("session hook is dispatched in main()"),
+        Commands::Session { command } => match command {
+            SessionCommands::Hook => unreachable!("session hook is dispatched in main()"),
+            SessionCommands::Open {
+                repo,
+                worktree,
+                new,
+                prompt,
+                prompt_file,
+                window,
+                json,
+            } => handlers::session::handle_open(
+                &conductor.conn,
+                &conductor.config,
+                handlers::session::OpenArgs {
+                    repo,
+                    worktree,
+                    new,
+                    prompt,
+                    prompt_file,
+                    window,
+                    json,
+                },
+            )?,
+        },
         Commands::Conversation { command } => handlers::conversation::handle_conversation(
             command,
             &conductor.conn,

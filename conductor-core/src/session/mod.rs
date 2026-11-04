@@ -2,6 +2,7 @@
 
 pub mod hook;
 pub mod ingest;
+pub mod launch;
 pub mod spool;
 mod transcript;
 

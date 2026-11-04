@@ -200,6 +200,29 @@ claude plugin install conductor@conductor-ai
 
 See [plugin/README.md](../../plugin/README.md).
 
+### Opening sessions from conductor
+
+`conductor session open <repo> <worktree>` focuses the worktree's live Claude Code session in tmux. If none is live it resumes the newest past session, or starts a fresh one in a new window of the tmux session (default `work`, created detached if missing).
+
+```bash
+conductor session open my-repo feat-123-thing                 # focus / resume / start
+conductor session open my-repo feat-123-thing --new           # fresh session even if one exists
+echo "status?" | conductor session open my-repo feat-123-thing --prompt-file -
+```
+
+Other flags: `--prompt <text>`, `--window <name>` (default: the ticket key, or the worktree slug) and `--json`. Inside tmux it switches to the window; elsewhere it prints `tmux attach -t work \; select-window -t <window>`. In the TUI, press `C` on a worktree. The `conductor_open_session` MCP tool does the same but never switches focus.
+
+Configure it in `~/.conductor/config.toml`; a repo's `.conductor/config.toml` can override the two templates:
+
+```toml
+[sessions]
+tmux_session = "work"
+opener_template = "Work on {{key}} ({{title}}). Read {{url}} first."  # fresh session with a linked ticket
+resume_template = "Where did we leave off?"                             # unset = no prompt on resume
+```
+
+Template variables: `key`, `title`, `url`, `source`, `branch`, `base`, `worktree_path`. Sessions launched this way always report to conductor: if the conductor plugin isn't enabled, conductor passes its hooks with `--settings`.
+
 ## Tips
 
 - **Model override:** Pass `--model claude-opus-4-6` to any `workflow run` to use a specific model for all agent steps.

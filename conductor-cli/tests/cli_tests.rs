@@ -651,13 +651,19 @@ fn session_hook_debug_env_reports_on_stderr() {
 }
 
 #[test]
-fn session_subcommand_is_hidden_from_help() {
+fn session_open_is_listed_but_session_hook_is_hidden_from_help() {
     let dir = tempfile::tempdir().unwrap();
     conductor_cmd(dir.path())
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("session").not());
+        .stdout(predicate::str::contains("session"));
+    conductor_cmd(dir.path())
+        .args(["session", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("open"))
+        .stdout(predicate::str::contains("hook").not());
 }
 
 #[test]
