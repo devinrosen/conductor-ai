@@ -797,7 +797,7 @@ mod tests {
         let out = take(&conn, &config, &r, &live, true).unwrap();
         assert!(matches!(
             out,
-            TakeOverOutcome::Focused { ref interactive_run_id: ref id, switched: true, .. }
+            TakeOverOutcome::Focused { interactive_run_id: ref id, switched: true, .. }
                 if *id == interactive_run_id
         ));
         assert!(live.called("switch:%9"));
