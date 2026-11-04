@@ -351,6 +351,98 @@ fn workflow_run_background_reports_unknown_worktree() {
         .stderr(predicate::str::contains("worktree not found"));
 }
 
+/// Run the hidden `workflow launch-detached` with `spec` on stdin. Its notify fd
+/// is 2, so what the child reports on the pipe arrives as the captured stderr.
+#[cfg(unix)]
+fn launch_detached(home: &std::path::Path, spec: &str) -> std::process::Output {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = conductor_cmd(home)
+        .args(["workflow", "launch-detached", "--notify-fd", "2"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(spec.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+/// The MCP server's launch path: the child reports the run ID and its build, and
+/// the run completes in that process (#3124).
+#[cfg(unix)]
+#[test]
+fn workflow_launch_detached_reports_run_id_and_build_and_completes() {
+    let home = tempfile::tempdir().unwrap();
+    let wt = setup_valid_workflow_fixture();
+    let dir = wt.path().to_str().unwrap();
+    let spec = serde_json::json!({
+        "kind": "run",
+        "workflow_name": "hello",
+        "working_dir": dir,
+        "repo_path": dir,
+    });
+    let out = launch_detached(home.path(), &spec.to_string());
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let reply = String::from_utf8(out.stderr).unwrap();
+    let mut words = reply.split_whitespace();
+    let run_id = words.next().unwrap();
+    assert_eq!(run_id.len(), 26, "reply: {reply:?}");
+    assert_eq!(words.next(), Some(env!("CARGO_PKG_VERSION")), "{reply:?}");
+
+    let conn = conductor_core::db::open_database(&home.path().join("conductor.db")).unwrap();
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM workflow_runs WHERE id = ?1",
+            [run_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "completed");
+}
+
+/// A workflow that does not exist is reported as an `ERROR:` line, not a silent exit.
+#[cfg(unix)]
+#[test]
+fn workflow_launch_detached_reports_a_missing_workflow() {
+    let home = tempfile::tempdir().unwrap();
+    let wt = setup_valid_workflow_fixture();
+    let dir = wt.path().to_str().unwrap();
+    let spec = serde_json::json!({
+        "kind": "run",
+        "workflow_name": "no-such-workflow",
+        "working_dir": dir,
+        "repo_path": dir,
+    });
+    let out = launch_detached(home.path(), &spec.to_string());
+    assert!(!out.status.success());
+    let reply = String::from_utf8(out.stderr).unwrap();
+    assert!(reply.starts_with("ERROR:"), "reply: {reply:?}");
+}
+
+/// A spec the child can't parse is reported the same way.
+#[cfg(unix)]
+#[test]
+fn workflow_launch_detached_reports_an_invalid_spec() {
+    let home = tempfile::tempdir().unwrap();
+    let out = launch_detached(home.path(), "not json");
+    assert!(!out.status.success());
+    let reply = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        reply.starts_with("ERROR:") && reply.contains("launch spec"),
+        "reply: {reply:?}"
+    );
+}
+
 /// Insert a workflow run with the given status/timestamps into the test DB; returns its id.
 fn insert_wait_run(
     home: &std::path::Path,

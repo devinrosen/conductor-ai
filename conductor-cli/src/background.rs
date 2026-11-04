@@ -13,6 +13,16 @@
 //!   it, writes the run ID to the pipe, redirects stdio to `/dev/null`, drives the
 //!   workflow to completion and exits.
 //!
+//! # MCP server runs
+//!
+//! `conductor mcp serve` starts runs the same way, through the hidden
+//! `workflow launch-detached --notify-fd <fd>` subcommand ([`spawn_detached`]):
+//! the server validates and resolves the target, then execs the installed
+//! binary with a [`LaunchSpec`] on stdin. The run therefore uses the binary
+//! installed when it started and survives the server being restarted (#3124).
+//! The subcommand name, the spec and the reply line are contracts between
+//! builds, because the server and the binary it execs can differ.
+//!
 //! # Why not `fork()`
 //!
 //! The parent has the SQLite database open when it starts the child. After a
@@ -24,16 +34,24 @@
 //! with exec gives the child a clean SQLite state; SQLite opens its files with
 //! `O_CLOEXEC`, so the parent's database descriptors are not inherited.
 
+use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader};
 use std::os::unix::io::FromRawFd;
 use std::os::unix::process::CommandExt;
-use std::process::{Command, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
 use conductor_core::agent::AgentManager;
-use conductor_core::workflow::{execute_workflow_standalone, WorkflowExecStandalone};
+use conductor_core::workflow::{
+    execute_workflow_standalone, resume_workflow_standalone, WorkflowExecStandalone,
+    WorkflowResumeStandalone,
+};
 
 /// Hidden flag that marks the re-executed child and names its pipe fd.
 pub const NOTIFY_FD_FLAG: &str = "--background-notify-fd";
@@ -65,8 +83,51 @@ pub fn notify_fd(command: &crate::commands::Commands) -> Option<i32> {
                     ..
                 },
         } => *background_notify_fd,
+        Commands::Workflow {
+            command: WorkflowCommands::LaunchDetached { notify_fd },
+        } => Some(*notify_fd),
         _ => None,
     }
+}
+
+/// What the MCP server sends to `workflow launch-detached` on stdin: the
+/// already-resolved target of a run or resume.
+///
+/// **This is a contract between builds.** The server execs whatever `conductor`
+/// is installed, which may be older or newer than itself. So there is no
+/// `deny_unknown_fields`, and every field added later needs `#[serde(default)]`
+/// (or must be an `Option`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LaunchSpec {
+    Run {
+        workflow_name: String,
+        #[serde(default)]
+        worktree_id: Option<String>,
+        working_dir: String,
+        repo_path: String,
+        #[serde(default)]
+        ticket_id: Option<String>,
+        #[serde(default)]
+        repo_id: Option<String>,
+        #[serde(default)]
+        inputs: HashMap<String, String>,
+        #[serde(default)]
+        dry_run: bool,
+        #[serde(default)]
+        target_label: Option<String>,
+        #[serde(default)]
+        db_path: Option<PathBuf>,
+    },
+    Resume {
+        run_id: String,
+        #[serde(default)]
+        from_step: Option<String>,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        db_path: Option<PathBuf>,
+    },
 }
 
 /// Prefix of the line the child sends instead of a run ID when it fails to start.
@@ -96,9 +157,41 @@ pub fn report_startup_error(write_fd: i32, err: &anyhow::Error) {
     let _ = send_to_parent(write_fd, &error_line(&format!("{err:#}")));
 }
 
+/// A started detached child, after it reported its run ID.
+#[derive(Debug)]
+pub struct DetachedChild {
+    pub run_id: String,
+    /// The child's `<version> <sha>`, when it reported one (older builds don't).
+    pub build: Option<String>,
+    /// Kept so a long-lived parent can `wait()` on it and not leave a zombie.
+    pub child: Child,
+}
+
 /// Start this same `conductor workflow run` invocation as a detached background
 /// process and wait for it to report the run ID. Returns the run ID string.
 pub fn spawn_background_workflow() -> Result<String> {
+    let exe = std::env::current_exe().context("Failed to locate the conductor executable")?;
+    let parent_args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let started = spawn_detached(
+        &exe,
+        |write_fd| child_args(parent_args, write_fd),
+        None,
+    )?;
+    Ok(started.run_id)
+}
+
+/// Exec `exe` in a new session with the arguments `make_args(notify_fd)` builds,
+/// optionally feed it `stdin_payload`, and wait for it to report the run ID (or
+/// an `ERROR:` line) on the notify pipe.
+///
+/// The child's stdout and stderr are `/dev/null`. With a payload, stdin is a
+/// pipe the payload is written to and then closed (so the child can read to
+/// EOF); without one it is `/dev/null`.
+pub fn spawn_detached(
+    exe: &Path,
+    make_args: impl FnOnce(i32) -> Vec<OsString>,
+    stdin_payload: Option<&[u8]>,
+) -> Result<DetachedChild> {
     // Create a pipe for the child to send the run ID back to the parent.
     let mut fds = [0i32; 2];
     // SAFETY: `pipe` writes two valid file descriptors into `fds`. We check the
@@ -120,10 +213,13 @@ pub fn spawn_background_workflow() -> Result<String> {
         anyhow::bail!("fcntl(FD_CLOEXEC) on the notify pipe failed: {err}");
     }
 
-    let exe = std::env::current_exe().context("Failed to locate the conductor executable")?;
     let mut cmd = Command::new(exe);
-    cmd.args(child_args(std::env::args_os().skip(1), write_fd))
-        .stdin(Stdio::null())
+    cmd.args(make_args(write_fd))
+        .stdin(if stdin_payload.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     // Detach from the controlling terminal so the workflow survives if the
@@ -152,15 +248,29 @@ pub fn spawn_background_workflow() -> Result<String> {
             unsafe {
                 libc::close(read_fd);
             }
-            anyhow::bail!("Failed to start background workflow process: {e}");
+            anyhow::bail!("Failed to start {}: {e}", exe.display());
         }
     };
+
+    if let Some(payload) = stdin_payload {
+        use std::io::Write;
+        // Dropping the handle closes the pipe, which is the child's EOF. A
+        // failed write means the child already exited; the reply read below
+        // reports how.
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(payload);
+        }
+    }
 
     // Wrap the read end in a File so Rust manages its lifetime.
     // SAFETY: read_fd is a valid fd from pipe(); ownership transfers to File.
     let read_file = unsafe { std::fs::File::from_raw_fd(read_fd) };
     match read_child_reply(BufReader::new(read_file))? {
-        ChildReply::RunId(id) => Ok(id),
+        ChildReply::RunId { id, build } => Ok(DetachedChild {
+            run_id: id,
+            build,
+            child,
+        }),
         ChildReply::Error(msg) => anyhow::bail!("Background workflow failed to start: {msg}"),
         ChildReply::Nothing => {
             // The child closed the pipe without reporting (crash, signal, exec
@@ -169,7 +279,12 @@ pub fn spawn_background_workflow() -> Result<String> {
                 Ok(status) => status.to_string(),
                 Err(e) => format!("unknown ({e})"),
             };
-            anyhow::bail!("Background process exited without sending a run ID ({how}).")
+            anyhow::bail!(
+                "Background process {} exited without sending a run ID ({how}). \
+                 If that conductor is older than the one starting it, it may not know \
+                 the `workflow launch-detached` command; reinstall it (`conductor dev reinstall`).",
+                exe.display()
+            )
         }
     }
 }
@@ -177,14 +292,19 @@ pub fn spawn_background_workflow() -> Result<String> {
 /// What the background child sent on the notify pipe.
 #[derive(Debug, PartialEq)]
 enum ChildReply {
-    RunId(String),
+    /// The run ID, plus the child's build when it reported one.
+    RunId {
+        id: String,
+        build: Option<String>,
+    },
     Error(String),
     /// The pipe closed without a line.
     Nothing,
 }
 
-/// Read the child's first line: the run ID, or an error prefixed with
-/// [`ERROR_PREFIX`].
+/// Read the child's first line: `<run id>` optionally followed by the child's
+/// build (`<version> <sha>`), or an error prefixed with [`ERROR_PREFIX`]. The
+/// build is optional so a child from before it was added still parses.
 fn read_child_reply(mut reader: impl BufRead) -> Result<ChildReply> {
     // A ULID is 26 chars; errors are short strings.
     let mut line = String::new();
@@ -198,55 +318,111 @@ fn read_child_reply(mut reader: impl BufRead) -> Result<ChildReply> {
     } else if let Some(msg) = line.strip_prefix(ERROR_PREFIX) {
         ChildReply::Error(msg.trim().to_string())
     } else {
-        ChildReply::RunId(line.to_string())
+        let (id, build) = match line.split_once(char::is_whitespace) {
+            Some((id, rest)) => (id, Some(rest.trim()).filter(|b| !b.is_empty())),
+            None => (line, None),
+        };
+        ChildReply::RunId {
+            id: id.to_string(),
+            build: build.map(str::to_string),
+        }
     })
 }
+
+/// The run ID slot the child shares with the engine thread.
+type RunIdPair = Arc<(Mutex<Option<String>>, Condvar)>;
 
 /// Entry point for the re-executed background child: starts the workflow,
 /// writes the run ID (or an error) to `write_fd`, then drives the workflow to
 /// completion.
 ///
 /// This function never returns -- it calls `std::process::exit`.
-pub fn run_as_background_child(mut params: WorkflowExecStandalone, write_fd: i32) -> ! {
-    // Set up the run_id_notify mechanism. When execute_workflow creates the run
-    // record, it writes the ID into the Mutex and signals the Condvar -- all
-    // synchronously within execute_workflow before any steps execute. We use a
-    // background thread to drive execution so we can wait on the condvar from
-    // the main thread and write to the pipe promptly.
-    let notify_pair: Arc<(Mutex<Option<String>>, Condvar)> =
-        Arc::new((Mutex::new(None), Condvar::new()));
+pub fn run_as_background_child(
+    mut params: WorkflowExecStandalone,
+    db_path: Option<PathBuf>,
+    write_fd: i32,
+) -> ! {
+    // When execute_workflow creates the run record, it writes the ID into the
+    // Mutex and signals the Condvar -- all synchronously within execute_workflow
+    // before any steps execute.
+    let notify_pair: RunIdPair = Arc::new((Mutex::new(None), Condvar::new()));
     params.run_id_notify = Some(Arc::clone(&notify_pair));
+    // WorkflowExecStandalone is Send (all owned types + Arc), and
+    // execute_workflow_standalone opens its own DB connection.
+    drive_detached(
+        notify_pair,
+        true,
+        Duration::from_secs(30),
+        db_path,
+        write_fd,
+        move || execute_workflow_standalone(&params).map(|_| ()),
+    )
+}
 
+/// Entry point for the child of a detached resume: like
+/// [`run_as_background_child`], except the run ID is already known, so it
+/// waits briefly only to catch a startup failure.
+///
+/// This function never returns -- it calls `std::process::exit`.
+pub fn resume_as_background_child(
+    params: WorkflowResumeStandalone,
+    db_path: Option<PathBuf>,
+    write_fd: i32,
+) -> ! {
+    let notify_pair: RunIdPair = Arc::new((
+        Mutex::new(Some(params.workflow_run_id.clone())),
+        Condvar::new(),
+    ));
+    drive_detached(
+        notify_pair,
+        false,
+        Duration::from_secs(2),
+        db_path,
+        write_fd,
+        move || resume_workflow_standalone(&params).map(|_| ()),
+    )
+}
+
+/// Shared child-side driver. Runs `exec` on a thread, waits up to `wait` for
+/// the run ID (when `wait_for_id`) or a startup error, reports the outcome on
+/// `write_fd`, then redirects stdio and waits for `exec` to finish.
+fn drive_detached<E: std::fmt::Display>(
+    notify_pair: RunIdPair,
+    wait_for_id: bool,
+    wait: Duration,
+    db_path: Option<PathBuf>,
+    write_fd: i32,
+    exec: impl FnOnce() -> std::result::Result<(), E> + Send + 'static,
+) -> ! {
     // Slot to capture early startup errors (before the run record is created).
     let error_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let error_slot_bg = Arc::clone(&error_slot);
     let notify_pair_bg = Arc::clone(&notify_pair);
 
-    // Spawn the workflow execution in a background thread. WorkflowExecStandalone
-    // is Send (all owned types + Arc), and execute_workflow_standalone opens its
-    // own DB connection.
-    //
     // Returns Ok(()) on success or Err(error_string) so the main thread can
     // detect post-notification failures and clean up the DB.
     let exec_handle = std::thread::spawn(move || -> std::result::Result<(), String> {
-        match execute_workflow_standalone(&params) {
-            Ok(_) => Ok(()),
+        match exec() {
+            Ok(()) => Ok(()),
             Err(e) => {
                 let msg = e.to_string();
                 *error_slot_bg.lock().unwrap_or_else(|e| e.into_inner()) = Some(msg.clone());
-                // Wake the main thread so it can surface the error.
+                // Wake the main thread so it can surface the error. Taking the
+                // lock first means the wakeup can't fall between the waiter's
+                // check and its wait.
+                let _guard = notify_pair_bg.0.lock().unwrap_or_else(|e| e.into_inner());
                 notify_pair_bg.1.notify_one();
                 Err(msg)
             }
         }
     });
 
-    // Wait (up to 30 s) for either the run ID or a startup error.
+    // Wait for the run ID / a startup error, up to `wait`.
     let (lock, cvar) = notify_pair.as_ref();
     let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     let (guard, _timed_out) = cvar
-        .wait_timeout_while(guard, std::time::Duration::from_secs(30), |v| {
-            v.is_none()
+        .wait_timeout_while(guard, wait, |v| {
+            (!wait_for_id || v.is_none())
                 && error_slot
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -264,9 +440,19 @@ pub fn run_as_background_child(mut params: WorkflowExecStandalone, write_fd: i32
         (error_line(err), true)
     } else {
         match guard.as_ref() {
-            Some(id) => (format!("{id}\n"), false),
+            Some(id) => (
+                format!(
+                    "{id} {} {}\n",
+                    conductor_core::build_info::VERSION,
+                    conductor_core::build_info::get().git_sha
+                ),
+                false,
+            ),
             None => (
-                error_line("Timed out waiting for workflow run ID (30s)"),
+                error_line(&format!(
+                    "Timed out waiting for workflow run ID ({}s)",
+                    wait.as_secs()
+                )),
                 true,
             ),
         }
@@ -278,7 +464,11 @@ pub fn run_as_background_child(mut params: WorkflowExecStandalone, write_fd: i32
         // The parent never learns the run ID and would otherwise wait on this
         // process for the whole workflow. Fail the run and exit now.
         if let (false, Some(id)) = (is_error, run_id.as_deref()) {
-            let _ = cleanup_failed_run(id, &format!("could not report the run ID to the CLI: {e}"));
+            let _ = cleanup_failed_run(
+                db_path.as_deref(),
+                id,
+                &format!("could not report the run ID to the CLI: {e}"),
+            );
         }
         std::process::exit(1);
     }
@@ -298,19 +488,13 @@ pub fn run_as_background_child(mut params: WorkflowExecStandalone, write_fd: i32
     // already sent the run ID to the parent. In that case the workflow_run
     // row exists in the DB but may still be in pending/running status. We
     // must mark it (and the parent agent run) as failed.
-    let exec_failed = match &exec_result {
-        Ok(Ok(())) => false,
-        Ok(Err(_)) => true, // exec thread returned an error
-        Err(_) => true,     // exec thread panicked
+    let error_msg = match &exec_result {
+        Ok(Ok(())) => None,
+        Ok(Err(e)) => Some(e.clone()),
+        Err(_) => Some("Background workflow thread panicked".to_string()),
     };
 
-    if exec_failed {
-        let error_msg = match &exec_result {
-            Ok(Err(e)) => e.clone(),
-            Err(_) => "Background workflow thread panicked".to_string(),
-            _ => unreachable!(),
-        };
-
+    if let Some(error_msg) = error_msg {
         // Extract the run ID from the notify pair (it was set before notification).
         let run_id = notify_pair
             .0
@@ -323,7 +507,7 @@ pub fn run_as_background_child(mut params: WorkflowExecStandalone, write_fd: i32
             // workflow run + parent agent run as failed. Errors here are
             // silently ignored -- we cannot do anything useful with them in
             // a detached background process.
-            let _ = cleanup_failed_run(&run_id, &error_msg);
+            let _ = cleanup_failed_run(db_path.as_deref(), &run_id, &error_msg);
         }
 
         std::process::exit(1);
@@ -337,9 +521,15 @@ pub fn run_as_background_child(mut params: WorkflowExecStandalone, write_fd: i32
 ///
 /// Opens a fresh DB connection (the exec thread's connection may be in an
 /// inconsistent state) and marks both the workflow run and its parent agent
-/// run as failed.
-fn cleanup_failed_run(workflow_run_id: &str, error_msg: &str) -> std::result::Result<(), ()> {
-    let db_path = conductor_core::config::db_path();
+/// run as failed. `db_path` is the database the run uses; `None` is the default one.
+fn cleanup_failed_run(
+    db_path: Option<&Path>,
+    workflow_run_id: &str,
+    error_msg: &str,
+) -> std::result::Result<(), ()> {
+    let db_path = db_path
+        .map(Path::to_path_buf)
+        .unwrap_or_else(conductor_core::config::db_path);
     let conn = conductor_core::db::open_database(&db_path).map_err(|_| ())?;
 
     // Fail the workflow run and get the parent run ID
@@ -484,7 +674,21 @@ mod tests {
     fn read_child_reply_returns_the_id() {
         assert_eq!(
             reply("01M5HXSKQ2VZ2052WAQ89AYSYW\n"),
-            ChildReply::RunId("01M5HXSKQ2VZ2052WAQ89AYSYW".into())
+            ChildReply::RunId {
+                id: "01M5HXSKQ2VZ2052WAQ89AYSYW".into(),
+                build: None
+            }
+        );
+    }
+
+    #[test]
+    fn read_child_reply_returns_the_build_when_sent() {
+        assert_eq!(
+            reply("01M5HXSKQ2VZ2052WAQ89AYSYW 0.19.0 abc1234\n"),
+            ChildReply::RunId {
+                id: "01M5HXSKQ2VZ2052WAQ89AYSYW".into(),
+                build: Some("0.19.0 abc1234".into())
+            }
         );
     }
 
@@ -521,6 +725,70 @@ mod tests {
             read_child_reply(BufReader::new(read)).unwrap(),
             ChildReply::Error("loading target: repo 'r' not found".into())
         );
+    }
+
+    #[test]
+    fn read_child_reply_ignores_trailing_whitespace_after_the_id() {
+        assert_eq!(
+            reply("01M5HXSKQ2VZ2052WAQ89AYSYW  \n"),
+            ChildReply::RunId {
+                id: "01M5HXSKQ2VZ2052WAQ89AYSYW".into(),
+                build: None
+            }
+        );
+    }
+
+    #[test]
+    fn launch_spec_round_trips() {
+        let run = LaunchSpec::Run {
+            workflow_name: "wf".into(),
+            worktree_id: Some("w1".into()),
+            working_dir: "/tmp/wt".into(),
+            repo_path: "/tmp/repo".into(),
+            ticket_id: None,
+            repo_id: Some("r1".into()),
+            inputs: HashMap::from([("k".to_string(), "v".to_string())]),
+            dry_run: true,
+            target_label: Some("repo/wt".into()),
+            db_path: Some(PathBuf::from("/tmp/db")),
+        };
+        let resume = LaunchSpec::Resume {
+            run_id: "01X".into(),
+            from_step: Some("plan".into()),
+            model: None,
+            db_path: None,
+        };
+        for spec in [run, resume] {
+            let json = serde_json::to_vec(&spec).unwrap();
+            assert_eq!(serde_json::from_slice::<LaunchSpec>(&json).unwrap(), spec);
+        }
+    }
+
+    #[test]
+    fn launch_spec_tolerates_unknown_and_missing_fields() {
+        let spec: LaunchSpec = serde_json::from_str(
+            r#"{"kind":"run","workflow_name":"wf","working_dir":"/w","repo_path":"/r","from_the_future":1}"#,
+        )
+        .unwrap();
+        match spec {
+            LaunchSpec::Run {
+                inputs,
+                dry_run,
+                db_path,
+                ..
+            } => {
+                assert!(inputs.is_empty());
+                assert!(!dry_run);
+                assert!(db_path.is_none());
+            }
+            _ => panic!("expected a run spec"),
+        }
+    }
+
+    #[test]
+    fn launch_detached_is_a_hidden_command_with_a_notify_fd() {
+        let cli = parse(os(&["workflow", "launch-detached", "--notify-fd", "5"])).unwrap();
+        assert_eq!(notify_fd(&cli.command), Some(5));
     }
 
     #[test]

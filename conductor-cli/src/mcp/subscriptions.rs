@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use conductor_core::workflow::{EngineEvent, EngineEventData, EventSink};
+use std::time::Duration;
+
 use rmcp::model::ResourceUpdatedNotificationParam;
 use rmcp::{Peer, RoleServer};
-use tokio::sync::mpsc;
+
+/// How often subscribed runs are checked for a terminal status.
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 struct ClientSink {
     peer: Peer<RoleServer>,
@@ -67,38 +70,35 @@ impl SubscriptionRegistry {
         }
     }
 
+    /// The run IDs that currently have subscribers.
+    fn run_ids(&self) -> Vec<String> {
+        self.lock().keys().cloned().collect()
+    }
+
     #[cfg(test)]
     fn len_for(&self, run_id: &str) -> usize {
         self.lock().get(run_id).map(|v| v.len()).unwrap_or(0)
     }
 }
 
-/// EventSink backed by a tokio unbounded channel.
-struct TokioSink(mpsc::UnboundedSender<EngineEventData>);
-
-impl EventSink for TokioSink {
-    fn emit(&self, event: &EngineEventData) {
-        let _ = self.0.send(event.clone());
-    }
-}
-
-/// Process-wide subscription hub: owns the event channel sender and the subscriber registry.
+/// Process-wide subscription hub: owns the subscriber registry and the task
+/// that watches subscribed runs.
+///
+/// Runs execute in their own processes (#3124), so their engine events never
+/// reach this server; the hub polls the database for their status instead. That
+/// also covers runs started from the CLI or the TUI.
 #[derive(Clone)]
 pub struct SubscriptionHub {
-    tx: mpsc::UnboundedSender<EngineEventData>,
     registry: SubscriptionRegistry,
 }
 
 impl SubscriptionHub {
-    /// Construct a hub and spawn its broadcaster task. The returned `JoinHandle`
-    /// keeps the task alive for the lifetime of the holder; on drop, the channel
-    /// closes and the task exits cleanly.
+    /// Construct a hub and spawn its poller task. The returned `JoinHandle`
+    /// belongs to the holder, which aborts it when it no longer needs the hub.
     pub fn new() -> (Self, tokio::task::JoinHandle<()>) {
-        let (tx, rx) = mpsc::unbounded_channel();
         let registry = SubscriptionRegistry::new();
-        let handle = spawn_broadcaster(rx, registry.clone());
-        let hub = Self { tx, registry };
-        (hub, handle)
+        let handle = spawn_poller(registry.clone(), POLL_INTERVAL, Arc::new(terminal_run_ids));
+        (Self { registry }, handle)
     }
 
     /// Register a subscriber for `run_id`.
@@ -111,43 +111,76 @@ impl SubscriptionHub {
         self.registry.remove(run_id, uri);
     }
 
-    /// Returns an `EventSink` that forwards events to the broadcaster task.
-    pub fn channel_sink(&self) -> Arc<dyn EventSink> {
-        Arc::new(TokioSink(self.tx.clone()))
-    }
-
     /// Drains all subscribers for `run_id` and fires a resource-updated notification on each.
     pub async fn notify_and_drain(&self, run_id: &str) {
         self.registry.notify_and_drain(run_id).await;
     }
 }
 
-/// Reads `EngineEventData` from the receiver, and on terminal events
-/// (`RunCompleted` / `RunCancelled`) drains the registry for that run_id
-/// and fires `notify_resource_updated` for each subscriber. Dead peers
-/// are silently swept (send errors are ignored).
-fn spawn_broadcaster(
-    mut rx: mpsc::UnboundedReceiver<EngineEventData>,
+/// Which of `run_ids` are finished, as far as the database says. A run that no
+/// longer exists counts as finished so its subscribers aren't orphaned. Blocking.
+type TerminalLookup = Arc<dyn Fn(Vec<String>) -> Vec<String> + Send + Sync>;
+
+fn terminal_run_ids(run_ids: Vec<String>) -> Vec<String> {
+    let conductor = match conductor_core::Conductor::open() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("subscription poll could not open the database: {e}");
+            return Vec::new();
+        }
+    };
+    run_ids
+        .into_iter()
+        .filter(
+            |id| match conductor_core::workflow::get_workflow_run_status(&conductor.conn, id) {
+                Ok(None) => true,
+                Ok(status) => super::server::is_terminal(status.as_deref()),
+                Err(e) => {
+                    tracing::warn!("subscription poll failed for run {id}: {e}");
+                    false
+                }
+            },
+        )
+        .collect()
+}
+
+/// One poll: look up the subscribed runs and notify and drain the finished ones.
+/// Does no database work when nothing is subscribed.
+async fn poll_once(registry: &SubscriptionRegistry, lookup: &TerminalLookup) {
+    let run_ids = registry.run_ids();
+    if run_ids.is_empty() {
+        return;
+    }
+    let lookup = Arc::clone(lookup);
+    let finished = match tokio::task::spawn_blocking(move || lookup(run_ids)).await {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::warn!("subscription poll task failed: {e}");
+            return;
+        }
+    };
+    for run_id in finished {
+        registry.notify_and_drain(&run_id).await;
+    }
+}
+
+/// Polls every `interval` until aborted. Dead peers are silently swept (send
+/// errors are ignored).
+fn spawn_poller(
     registry: SubscriptionRegistry,
+    interval: Duration,
+    lookup: TerminalLookup,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        while let Some(event_data) = rx.recv().await {
-            let is_terminal = matches!(
-                event_data.event,
-                EngineEvent::RunCompleted { .. } | EngineEvent::RunCancelled { .. }
-            );
-            if !is_terminal {
-                continue;
-            }
-            registry.notify_and_drain(&event_data.run_id).await;
+        loop {
+            tokio::time::sleep(interval).await;
+            poll_once(&registry, &lookup).await;
         }
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use conductor_core::workflow::{EngineEvent, EngineEventData};
-
     use super::*;
 
     fn make_registry() -> SubscriptionRegistry {
@@ -194,34 +227,6 @@ mod tests {
         assert!(taken.is_empty());
     }
 
-    /// Verify the broadcaster drops non-terminal events and does not stall.
-    #[tokio::test]
-    async fn test_broadcaster_ignores_nonterminal_events() {
-        let (hub, handle) = SubscriptionHub::new();
-
-        // Emit a non-terminal event.
-        let sink = hub.channel_sink();
-        sink.emit(&EngineEventData::new(
-            "run-1".to_string(),
-            EngineEvent::RunStarted {
-                workflow_name: "wf".to_string(),
-            },
-        ));
-
-        // Drop all senders (sink holds a clone of hub.tx) before awaiting the handle.
-        drop(sink);
-        drop(hub);
-        handle.await.expect("broadcaster task should exit cleanly");
-    }
-
-    /// Verify the broadcaster exits when the sender is dropped.
-    #[tokio::test]
-    async fn test_broadcaster_exits_on_channel_close() {
-        let (hub, handle) = SubscriptionHub::new();
-        drop(hub);
-        handle.await.expect("broadcaster task should exit cleanly");
-    }
-
     /// Verify notify_and_drain removes the registry slot (no sinks to notify).
     #[tokio::test]
     async fn test_notify_and_drain_removes_slot() {
@@ -246,32 +251,52 @@ mod tests {
         assert_eq!(reg.len_for("no-such-run"), 0);
     }
 
-    /// Verify that terminal events drain the registry (no panics even with empty sinks).
+    fn occupy(reg: &SubscriptionRegistry, run_id: &str) {
+        // Peer can't be built in a unit test, so an empty slot stands in for a subscriber.
+        reg.lock().entry(run_id.to_string()).or_default();
+    }
+
+    /// A poll drains the runs the lookup reports finished and keeps the others.
     #[tokio::test]
-    async fn test_broadcaster_drains_registry_on_terminal() {
-        let (hub, handle) = SubscriptionHub::new();
-        let registry = hub.registry.clone();
+    async fn test_poll_once_drains_only_finished_runs() {
+        let reg = make_registry();
+        occupy(&reg, "run-done");
+        occupy(&reg, "run-live");
+        let lookup: TerminalLookup =
+            Arc::new(|ids| ids.into_iter().filter(|id| id == "run-done").collect());
+        poll_once(&reg, &lookup).await;
+        assert!(reg.lock().get("run-done").is_none());
+        assert!(reg.lock().contains_key("run-live"));
+    }
 
-        // Manually insert a raw entry so we can verify it's consumed.
-        {
-            let mut map = registry.inner.lock().unwrap();
-            map.entry("run-term".to_string()).or_default(); // occupies slot with no sinks
-        }
-        assert_eq!(registry.len_for("run-term"), 0);
+    /// With no subscribers a poll must not touch the database.
+    #[tokio::test]
+    async fn test_poll_once_skips_lookup_when_idle() {
+        let reg = make_registry();
+        let lookup: TerminalLookup = Arc::new(|_| panic!("lookup must not run with no subscribers"));
+        poll_once(&reg, &lookup).await;
+    }
 
-        let sink = hub.channel_sink();
-        sink.emit(&EngineEventData::new(
-            "run-term".to_string(),
-            EngineEvent::RunCompleted { succeeded: true },
-        ));
-
-        // Drop all senders (sink holds a clone of hub.tx) before awaiting the handle.
-        drop(sink);
-        drop(hub);
-        handle.await.expect("broadcaster task should exit cleanly");
-
-        // Registry slot should be gone after the terminal event was processed.
-        // (The map entry was removed via take.)
-        assert_eq!(registry.len_for("run-term"), 0);
+    /// The poller task notices a run finishing without any engine event.
+    #[tokio::test]
+    async fn test_poller_drains_a_run_that_finishes() {
+        let reg = make_registry();
+        occupy(&reg, "run-later");
+        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&finished);
+        let lookup: TerminalLookup = Arc::new(move |ids| {
+            if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                ids
+            } else {
+                Vec::new()
+            }
+        });
+        let handle = spawn_poller(reg.clone(), Duration::from_millis(10), lookup);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(reg.lock().contains_key("run-later"));
+        finished.store(true, std::sync::atomic::Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(reg.lock().get("run-later").is_none());
+        handle.abort();
     }
 }

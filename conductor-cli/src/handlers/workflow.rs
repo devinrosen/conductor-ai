@@ -15,6 +15,90 @@ fn register_foreground_run() -> Option<conductor_core::process_registry::Process
     )
 }
 
+/// Handle `workflow launch-detached`: read the [`LaunchSpec`] from stdin and
+/// start it as the detached child. Only returns on a startup failure, which
+/// `main` reports on the notify pipe.
+#[cfg(unix)]
+fn launch_detached(config: &Config, notify_fd: i32) -> Result<()> {
+    use crate::background::LaunchSpec;
+    use std::io::Read;
+
+    let _process_guard = register_foreground_run();
+    let mut payload = Vec::new();
+    std::io::stdin()
+        .read_to_end(&mut payload)
+        .context("failed to read the launch spec from stdin")?;
+    let spec: LaunchSpec =
+        serde_json::from_slice(&payload).context("invalid launch spec on stdin")?;
+
+    match spec {
+        LaunchSpec::Run {
+            workflow_name,
+            worktree_id,
+            working_dir,
+            repo_path,
+            ticket_id,
+            repo_id,
+            inputs,
+            dry_run,
+            target_label,
+            db_path,
+        } => {
+            let workflow =
+                conductor_core::workflow::load_def_by_name(&working_dir, &repo_path, &workflow_name)?;
+            let params = conductor_core::workflow::WorkflowExecStandalone {
+                config: config.clone(),
+                workflow,
+                worktree_id,
+                working_dir,
+                repo_path,
+                ticket_id,
+                repo_id,
+                model: None,
+                runtime: None,
+                exec_config: WorkflowExecConfig {
+                    dry_run,
+                    ..WorkflowExecConfig::default()
+                },
+                inputs,
+                target_label,
+                run_id_notify: None,
+                triggered_by_hook: false,
+                conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+                force: false,
+                extra_plugin_dirs: vec![],
+                db_path: db_path.clone(),
+                parent_workflow_run_id: None,
+                depth: 0,
+                parent_step_id: None,
+                default_bot_name: None,
+                iteration: 0,
+            };
+            crate::background::run_as_background_child(params, db_path, notify_fd)
+        }
+        LaunchSpec::Resume {
+            run_id,
+            from_step,
+            model,
+            db_path,
+        } => {
+            let params = conductor_core::workflow::WorkflowResumeStandalone {
+                config: config.clone(),
+                workflow_run_id: run_id,
+                model,
+                runtime: None,
+                from_step,
+                restart: false,
+                db_path: db_path.clone(),
+                conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+                shutdown: None,
+                event_sinks: vec![],
+            };
+            crate::background::resume_as_background_child(params, db_path, notify_fd)
+        }
+    }
+}
+
 use crate::commands::WorkflowCommands;
 use crate::helpers::{report_workflow_result, truncate_str};
 
@@ -398,7 +482,7 @@ pub fn handle_workflow(
                         default_bot_name: None,
                         iteration: 0,
                     };
-                    crate::background::run_as_background_child(params, notify_fd);
+                    crate::background::run_as_background_child(params, None, notify_fd);
                 }
                 #[cfg(unix)]
                 if background {
@@ -772,6 +856,15 @@ pub fn handle_workflow(
                     eprintln!("Workflow resume failed: {e}");
                     std::process::exit(1);
                 }
+            }
+        }
+        WorkflowCommands::LaunchDetached { notify_fd } => {
+            #[cfg(unix)]
+            launch_detached(config, notify_fd)?;
+            #[cfg(not(unix))]
+            {
+                let _ = notify_fd;
+                anyhow::bail!("launch-detached is only supported on Unix systems");
             }
         }
         WorkflowCommands::Cancel { id } => {

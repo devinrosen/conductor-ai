@@ -1,6 +1,3 @@
-use std::sync::Arc;
-
-use conductor_core::workflow::EventSink;
 use conductor_core::Conductor;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
@@ -276,19 +273,14 @@ pub(super) fn tool_cancel_run(
 pub(super) fn tool_resume_run(
     conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
-    event_sinks: &[Arc<dyn EventSink>],
 ) -> CallToolResult {
-    use conductor_core::workflow::{
-        resume_workflow_standalone, validate_resume_preconditions, WorkflowResumeStandalone,
-    };
-    use std::sync::Mutex;
+    use conductor_core::workflow::validate_resume_preconditions;
 
     let run_id = require_arg!(args, "run_id");
     let from_step = get_arg(args, "from_step").map(str::to_string);
     let model = get_arg(args, "model").map(str::to_string);
 
     let conn = &conductor.conn;
-    let config = conductor.config.clone();
     let run = match conductor_core::workflow::get_workflow_run(conn, run_id) {
         Ok(Some(r)) => r,
         Ok(None) => return tool_err(format!("Workflow run not found: {run_id}")),
@@ -299,55 +291,23 @@ pub(super) fn tool_resume_run(
         return tool_err(e);
     }
 
-    let params = WorkflowResumeStandalone {
-        config,
-        workflow_run_id: run_id.to_string(),
-        model,
-        runtime: None,
+    // The resume runs in its own process on the installed binary (#3124).
+    let spec = crate::background::LaunchSpec::Resume {
+        run_id: run_id.to_string(),
         from_step,
-        restart: false,
+        model,
         db_path: Some(conductor.conn_db_path()),
-        conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-        shutdown: None,
-        event_sinks: event_sinks.to_vec(),
+    };
+    let launched = match crate::mcp::launch::launch(&spec) {
+        Ok(l) => l,
+        Err(e) => return tool_err(format!("Failed to resume workflow run: {e:#}")),
     };
 
-    // Error slot: captures any error that occurs before steps begin executing.
-    let error_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let error_slot_bg = Arc::clone(&error_slot);
-    // Notify pair: the background thread signals this when it fails (error = true).
-    let notify_pair: Arc<(Mutex<bool>, std::sync::Condvar)> =
-        Arc::new((Mutex::new(false), std::sync::Condvar::new()));
-    let notify_pair_bg = Arc::clone(&notify_pair);
-
-    std::thread::spawn(move || {
-        if let Err(e) = resume_workflow_standalone(&params) {
-            *error_slot_bg.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.to_string());
-            // Wake the waiter so startup errors are surfaced immediately.
-            *notify_pair_bg.0.lock().unwrap_or_else(|e| e.into_inner()) = true;
-            notify_pair_bg.1.notify_one();
-        }
-    });
-
-    // Block until an error is signalled or 2 s elapses (workflow is running in background).
-    let (lock, cvar) = notify_pair.as_ref();
-    let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-    let _ = cvar
-        .wait_timeout_while(guard, std::time::Duration::from_secs(2), |v| !*v)
-        .unwrap_or_else(|e| e.into_inner());
-
-    // Surface any startup error before reporting success.
-    if let Some(err) = error_slot
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-    {
-        return tool_err(format!("Failed to resume workflow run: {err}"));
-    }
-
     tool_ok(format!(
-        "Workflow run {} ('{}') is resuming. Use conductor_get_run to check progress.",
-        run_id, run.workflow_name
+        "Workflow run {} ('{}') is resuming. Use conductor_get_run to check progress.{}",
+        run_id,
+        run.workflow_name,
+        launched.build_line()
     ))
 }
 
@@ -1057,7 +1017,7 @@ mod tests {
     #[test]
     fn test_dispatch_resume_run_missing_arg() {
         let (_f, conductor) = make_test_conductor();
-        let result = tool_resume_run(&conductor, &empty_args(), &[]);
+        let result = tool_resume_run(&conductor, &empty_args());
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -1070,7 +1030,7 @@ mod tests {
     fn test_dispatch_resume_run_not_found() {
         let (_f, conductor) = make_test_conductor();
         let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
-        let result = tool_resume_run(&conductor, &args, &[]);
+        let result = tool_resume_run(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -1085,7 +1045,7 @@ mod tests {
         let (_f, conductor) = make_test_conductor();
         let run_id = make_workflow_run_with_status(_f.path(), WorkflowRunStatus::Running);
         let args = args_with("run_id", &run_id);
-        let result = tool_resume_run(&conductor, &args, &[]);
+        let result = tool_resume_run(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -1100,7 +1060,7 @@ mod tests {
         let (_f, conductor) = make_test_conductor();
         let run_id = make_workflow_run_with_status(_f.path(), WorkflowRunStatus::Completed);
         let args = args_with("run_id", &run_id);
-        let result = tool_resume_run(&conductor, &args, &[]);
+        let result = tool_resume_run(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -1115,7 +1075,7 @@ mod tests {
         let (_f, conductor) = make_test_conductor();
         let run_id = make_workflow_run_with_status(_f.path(), WorkflowRunStatus::Cancelled);
         let args = args_with("run_id", &run_id);
-        let result = tool_resume_run(&conductor, &args, &[]);
+        let result = tool_resume_run(&conductor, &args);
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -1130,7 +1090,7 @@ mod tests {
         let (_f, conductor) = make_test_conductor();
         let run_id = make_workflow_run_with_status(_f.path(), WorkflowRunStatus::Failed);
         let args = args_with("run_id", &run_id);
-        let result = tool_resume_run(&conductor, &args, &[]);
+        let result = tool_resume_run(&conductor, &args);
         // Status validation passes for Failed runs — any error must come from setup
         // (e.g. missing snapshot), not from the status check.
         let text = result.content[0]
@@ -1149,6 +1109,9 @@ mod tests {
             !text.contains("Cannot resume a cancelled"),
             "should not get 'cancelled' error for a Failed run; got: {text}"
         );
+        // Preconditions pass, so it reaches the launch, which fails in tests
+        // (the harness binary is never exec'd as `conductor`).
+        assert!(text.contains("Failed to resume workflow run"), "got: {text}");
     }
 
     #[test]

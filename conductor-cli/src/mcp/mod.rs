@@ -15,6 +15,8 @@ mod tools;
 
 use anyhow::Context as _;
 
+mod launch;
+
 pub use server::ConductorMcpServer;
 
 /// Start the stdio MCP server and block until the client disconnects.
@@ -23,6 +25,7 @@ pub async fn serve() -> anyhow::Result<()> {
     let _process_guard = conductor_core::process_registry::register_or_warn(
         conductor_core::process_registry::ProcessKind::Mcp,
     );
+    launch::pin_run_exe();
     let server = ConductorMcpServer::new();
     // On unix, keep the JSON-RPC pipes off fd 0/1 so spawned children can't
     // read requests or write into responses (#3093). See `stdio`.
