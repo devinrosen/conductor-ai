@@ -184,6 +184,36 @@ fn inject_repo_variables(repo: &crate::repo::Repo, merged_inputs: &mut HashMap<S
     set_input(merged_inputs, "repo_name", repo.slug.clone());
 }
 
+/// Position of the step named `name` among `(step_name, position)` pairs.
+fn step_position(steps: &[(&str, i64)], name: &str) -> Option<i64> {
+    steps.iter().find(|(n, _)| *n == name).map(|&(_, p)| p)
+}
+
+/// Which child workflows must start a fresh run on resume: all of them on
+/// restart, otherwise every `workflow:<name>` step at or after `from_step`.
+/// An unknown `from_step` yields none (the caller reports the error).
+fn fresh_children_for(
+    restart: bool,
+    from_step: Option<&str>,
+    steps: &[(&str, i64)],
+) -> super::runkon_bridge::FreshChildren {
+    use super::runkon_bridge::FreshChildren;
+    if restart {
+        return FreshChildren::All;
+    }
+    let Some(pos) = from_step.and_then(|f| step_position(steps, f)) else {
+        return FreshChildren::None;
+    };
+    FreshChildren::Named(
+        steps
+            .iter()
+            .filter(|&&(_, p)| p >= pos)
+            .filter_map(|&(n, _)| n.strip_prefix("workflow:"))
+            .map(String::from)
+            .collect(),
+    )
+}
+
 fn parent_run_id_opt(parent_run_id: &str) -> Option<String> {
     if parent_run_id.is_empty() {
         None
@@ -416,6 +446,7 @@ fn build_rk_engine_components(
     target_label: Option<String>,
     triggered_by_hook: bool,
     runtime_override: Option<String>,
+    fresh_children: super::runkon_bridge::FreshChildren,
 ) -> RkEngineComponents {
     let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> = Arc::new(
         super::persistence_sqlite::SqliteWorkflowPersistence::from_shared_connection(Arc::clone(
@@ -428,14 +459,16 @@ fn build_rk_engine_components(
         db,
         runtime_override,
     ));
-    let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> =
-        Arc::new(super::runkon_bridge::ConductorChildWorkflowRunner::new(
+    let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> = Arc::new(
+        super::runkon_bridge::ConductorChildWorkflowRunner::new(
             db.to_path_buf(),
             config.clone(),
             Arc::clone(shared_conn),
             target_label,
             triggered_by_hook,
-        ));
+        )
+        .with_fresh_children(fresh_children),
+    );
     RkEngineComponents {
         persistence,
         action_registry,
@@ -685,6 +718,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         params.target_label.clone(),
         params.triggered_by_hook,
         params.runtime.clone(),
+        super::runkon_bridge::FreshChildren::None,
     );
 
     let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(
@@ -1030,7 +1064,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
 
     // Pre-execution phase: validate, reset, and prepare. Lock shared_conn for the
     // duration so all mutations complete before the FlowEngine takes over.
-    let (wf_run, worktree_path, repo_path, snapshot_string, repo_owner) = {
+    let (wf_run, worktree_path, repo_path, snapshot_string, repo_owner, fresh_children) = {
         let guard = lock_shared(&shared_conn)?;
         let conn: &Connection = &guard;
         let wt_mgr = WorktreeManager::new(conn, config);
@@ -1154,6 +1188,15 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         // skip set. These rows carry no useful state and would otherwise pollute step history.
         crate::workflow::delete_orphaned_pending_steps(conn, &wf_run.id)?;
 
+        // Child workflows that must start fresh rather than resume their earlier
+        // run: every `workflow:<name>` step at or after `from_step`, or all of
+        // them on restart. Computed from `all_steps`, before the resets below.
+        let step_positions: Vec<(&str, i64)> = all_steps
+            .iter()
+            .map(|s| (s.step_name.as_str(), s.position))
+            .collect();
+        let fresh_children = fresh_children_for(input.restart, input.from_step, &step_positions);
+
         // Perform DB resets and count how many completed steps will be skipped (for logging).
         let skip_count: usize = if input.restart {
             // Restart: clear all step results — skip nothing
@@ -1167,16 +1210,12 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
                 .count();
 
             let skip_count = if let Some(from_step) = input.from_step {
-                let pos = all_steps
-                    .iter()
-                    .find(|s| s.step_name == from_step)
-                    .ok_or_else(|| {
-                        ConductorError::Workflow(format!(
-                            "resume step '{}' not found in run '{}'",
-                            from_step, wf_run.id
-                        ))
-                    })?
-                    .position;
+                let pos = step_position(&step_positions, from_step).ok_or_else(|| {
+                    ConductorError::Workflow(format!(
+                        "resume step '{}' not found in run '{}'",
+                        from_step, wf_run.id
+                    ))
+                })?;
 
                 let reset_count = all_steps
                     .iter()
@@ -1211,6 +1250,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
             repo_path,
             snapshot_string,
             repo_owner,
+            fresh_children,
         )
     };
 
@@ -1231,6 +1271,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         wf_run.target_label.clone(),
         wf_run.is_triggered_by_hook(),
         input.runtime.map(String::from),
+        fresh_children,
     );
 
     let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(
@@ -1326,6 +1367,59 @@ mod tests {
     use super::*;
     use runkon_flow::dsl::{InputDecl, InputType, WorkflowDef, WorkflowTrigger};
     use std::collections::HashMap;
+
+    // -------------------------------------------------------------------------
+    // fresh_children_for
+    // -------------------------------------------------------------------------
+
+    const STEPS: [(&str, i64); 4] = [
+        ("lint", 0),
+        ("workflow:child-a", 1),
+        ("mid", 2),
+        ("workflow:child-b", 3),
+    ];
+
+    #[test]
+    fn fresh_children_restart_is_all() {
+        let f = fresh_children_for(true, Some("lint"), &STEPS);
+        assert!(f.contains("child-a") && f.contains("anything"));
+    }
+
+    #[test]
+    fn fresh_children_no_from_step_is_none() {
+        let f = fresh_children_for(false, None, &STEPS);
+        assert!(!f.contains("child-a") && !f.contains("child-b"));
+    }
+
+    #[test]
+    fn fresh_children_unknown_from_step_is_none() {
+        let f = fresh_children_for(false, Some("nope"), &STEPS);
+        assert!(!f.contains("child-a") && !f.contains("child-b"));
+    }
+
+    #[test]
+    fn fresh_children_from_earlier_step_includes_later_children() {
+        let f = fresh_children_for(false, Some("lint"), &STEPS);
+        assert!(f.contains("child-a") && f.contains("child-b"));
+    }
+
+    #[test]
+    fn fresh_children_from_middle_step_excludes_earlier_children() {
+        let f = fresh_children_for(false, Some("mid"), &STEPS);
+        assert!(!f.contains("child-a") && f.contains("child-b"));
+    }
+
+    #[test]
+    fn fresh_children_from_workflow_step_includes_itself() {
+        let f = fresh_children_for(false, Some("workflow:child-a"), &STEPS);
+        assert!(f.contains("child-a") && f.contains("child-b"));
+    }
+
+    #[test]
+    fn step_position_finds_by_name() {
+        assert_eq!(step_position(&STEPS, "mid"), Some(2));
+        assert_eq!(step_position(&STEPS, "nope"), None);
+    }
 
     // -------------------------------------------------------------------------
     // apply_workflow_input_defaults

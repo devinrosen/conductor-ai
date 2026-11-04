@@ -18,7 +18,7 @@ mod script_env;
 mod turn_completion;
 
 pub(super) use action_executor_adapter::RkActionExecutorAdapter;
-pub(super) use child_workflow_runner::ConductorChildWorkflowRunner;
+pub(super) use child_workflow_runner::{ConductorChildWorkflowRunner, FreshChildren};
 pub(super) use item_providers::{
     RkReposItemProvider, RkTicketsItemProvider, RkWorkflowRunsItemProvider, RkWorktreesItemProvider,
 };
