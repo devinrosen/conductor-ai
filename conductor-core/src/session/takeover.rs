@@ -77,10 +77,11 @@ pub fn headless_resumable_session_id(run: &AgentRun, taken_over: bool) -> Option
 
 /// [`headless_resumable_session_id`] for `run`, with ownership read from the database.
 pub fn resumable_session_for_run(conn: &Connection, run: &AgentRun) -> Result<Option<String>> {
-    if run.is_interactive() {
-        return Ok(None);
-    }
-    resumable_session_id(conn, run.session_id.as_deref())
+    let taken_over = match run.session_id.as_deref().filter(|s| !s.is_empty()) {
+        Some(id) if !run.is_interactive() => session_owner(conn, id)?.is_some(),
+        _ => false,
+    };
+    Ok(headless_resumable_session_id(run, taken_over))
 }
 
 // ---------------------------------------------------------------------------
@@ -934,5 +935,30 @@ mod tests {
         let tmux = FakeTmux::new();
         take(&conn, &Config::default(), &req("h1"), &tmux, false).unwrap();
         assert_eq!(resumable_session_for_run(&conn, &h1).unwrap(), None);
+    }
+
+    #[test]
+    fn resumable_session_for_run_guards_interactive_and_empty_ids() {
+        let (conn, _config) = setup();
+        add_headless(&conn, "h1", "completed", Some("sess-1"));
+        add_headless(&conn, "h2", "completed", Some(""));
+        add_headless(&conn, "h3", "completed", Some("sess-3"));
+        conn.execute(
+            "UPDATE agent_runs SET runtime = 'interactive' WHERE id = 'h3'",
+            [],
+        )
+        .unwrap();
+        let mgr = AgentManager::new(&conn);
+        let h1 = mgr.get_run("h1").unwrap().unwrap();
+        let h2 = mgr.get_run("h2").unwrap().unwrap();
+        let h3 = mgr.get_run("h3").unwrap().unwrap();
+        assert!(h3.is_interactive());
+        // Unowned headless session resumes; empty id and interactive runs never do.
+        assert_eq!(
+            resumable_session_for_run(&conn, &h1).unwrap().as_deref(),
+            Some("sess-1")
+        );
+        assert_eq!(resumable_session_for_run(&conn, &h2).unwrap(), None);
+        assert_eq!(resumable_session_for_run(&conn, &h3).unwrap(), None);
     }
 }
