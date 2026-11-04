@@ -7,7 +7,8 @@ pub(in crate::workflow) use pr_approval::PrApprovalGateResolver;
 pub(in crate::workflow) use pr_checks::PrChecksGateResolver;
 
 use std::path::PathBuf;
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -91,6 +92,13 @@ impl GitHubTokenCache {
     }
 }
 
+/// How often the engine re-runs the `gh`-based gate resolvers.
+pub(super) const GH_GATE_POLL_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Upper bound on a single `gh` invocation. runkon polls resolvers on the
+/// engine thread and doesn't bound the call, so a hung `gh` would hang the gate.
+pub(super) const GH_TIMEOUT: Duration = Duration::from_secs(30);
+
 // ---------------------------------------------------------------------------
 // GhGateCommon
 // ---------------------------------------------------------------------------
@@ -98,7 +106,7 @@ impl GitHubTokenCache {
 /// Shared state for gate resolvers that call `gh` on behalf of a bot account.
 ///
 /// Centralises the constructor and token resolution so concrete
-/// resolver types stay thin and a single-point change (e.g. adding a timeout)
+/// resolver types stay thin and a single-point change (e.g. the timeout)
 /// applies to all of them.
 pub(super) struct GhGateCommon {
     pub(super) working_dir: String,
@@ -152,14 +160,63 @@ pub(super) fn run_gh_json(
     if let Some(t) = token {
         cmd.env("GH_TOKEN", t);
     }
-    let output = match cmd.output() {
-        Ok(o) => o,
+    run_json_command(cmd, GH_TIMEOUT)
+}
+
+/// Run `cmd`, bounded by `timeout`, and parse stdout as JSON.
+///
+/// stdout and stderr are drained on helper threads so a large response can't
+/// fill the pipe and look like a hang. On timeout the child is killed and
+/// `None` is returned (callers treat that as `Pending`).
+fn run_json_command(mut cmd: Command, timeout: Duration) -> Option<serde_json::Value> {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
         Err(e) => {
             tracing::warn!("gh command failed: {e}");
             return None;
         }
     };
-    process_gh_output(output.status.success(), &output.stdout, &output.stderr)
+    fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_end(&mut buf);
+            }
+            buf
+        })
+    }
+    let out_reader = drain(child.stdout.take());
+    let err_reader = drain(child.stderr.take());
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    tracing::warn!(
+                        "gh command timed out after {timeout:?}; treating gate as pending"
+                    );
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                tracing::warn!("gh command wait failed: {e}");
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    let stdout = out_reader.join().unwrap_or_default();
+    let stderr = err_reader.join().unwrap_or_default();
+    process_gh_output(status.success(), &stdout, &stderr)
 }
 
 /// Parse `gh` subprocess output into a JSON value.
@@ -198,6 +255,38 @@ fn process_gh_output(success: bool, stdout: &[u8], stderr: &[u8]) -> Option<serd
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_json_command_timeout_returns_none() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 5"]);
+        let start = Instant::now();
+        let result = run_json_command(cmd, Duration::from_millis(200));
+        assert!(result.is_none());
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_json_command_success_returns_json() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", r#"echo '{"ok":true}'"#]);
+        let result = run_json_command(cmd, Duration::from_secs(5));
+        assert_eq!(result, Some(json!({"ok": true})));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_json_command_large_output_does_not_deadlock() {
+        let mut cmd = Command::new("sh");
+        cmd.args([
+            "-c",
+            r#"printf '"'; head -c 300000 /dev/zero | tr '\0' 'a'; printf '"'"#,
+        ]);
+        let result = run_json_command(cmd, Duration::from_secs(10));
+        assert_eq!(result.and_then(|v| v.as_str().map(str::len)), Some(300000));
+    }
 
     #[test]
     fn test_process_gh_output_success_valid_json() {

@@ -232,22 +232,6 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
                     ))
                 })?;
 
-        // A failed child whose loop ran out can never make progress when
-        // resumed (it replays its iterations and fails again), so start fresh.
-        if let Some(r) = &core_run {
-            if r.status == crate::workflow::WorkflowRunStatus::Failed
-                && r.error
-                    .as_deref()
-                    .is_some_and(crate::workflow::manager::recovery::is_loop_exhaustion_error)
-            {
-                tracing::info!(
-                    run_id = %r.id,
-                    "prior child run exhausted its loop; starting a fresh child"
-                );
-                return Ok(None);
-            }
-        }
-
         Ok(core_run)
     }
 }

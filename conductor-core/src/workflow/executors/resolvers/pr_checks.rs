@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use runkon_flow::engine_error::EngineError;
 use runkon_flow::traits::gate_resolver::{GateParams, GatePoll, GateResolver};
 use runkon_flow::traits::run_context::RunContext;
 
-use super::{GhGateCommon, GitHubTokenCache};
+use super::{GhGateCommon, GitHubTokenCache, GH_GATE_POLL_INTERVAL};
 
 pub(in crate::workflow) struct PrChecksGateResolver {
     common: GhGateCommon,
@@ -64,6 +65,10 @@ impl GateResolver for PrChecksGateResolver {
         "pr_checks"
     }
 
+    fn poll_interval(&self) -> Option<Duration> {
+        Some(GH_GATE_POLL_INTERVAL)
+    }
+
     fn poll(
         &self,
         _run_id: &str,
@@ -82,6 +87,19 @@ impl GateResolver for PrChecksGateResolver {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn test_poll_interval_is_sixty_seconds() {
+        let resolver = PrChecksGateResolver::new(
+            "/tmp".into(),
+            None,
+            Arc::new(GitHubTokenCache::new(Some("t".into()), String::new())),
+            crate::config::Config::default(),
+            PathBuf::from("/tmp/unused.db"),
+            String::new(),
+        );
+        assert_eq!(resolver.poll_interval(), Some(Duration::from_secs(60)));
+    }
     use super::*;
     use serde_json::json;
 
