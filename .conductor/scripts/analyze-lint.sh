@@ -2,6 +2,41 @@
 set -uo pipefail
 
 FAILED_CHECKS=()
+FAILURE_DETAILS=""
+
+# Each check's output goes to a log here; failing checks report the exact
+# command and an error excerpt in the step context, so lint-fix-impl reruns the
+# same command instead of a broader one that may pass (per-crate clippy without
+# features can fail where workspace clippy, with unified features, does not).
+LOG_DIR=$(mktemp -d)
+VALIDATE_HOME=""
+cleanup() {
+  rm -rf "$LOG_DIR"
+  if [ -n "$VALIDATE_HOME" ]; then rm -rf "$VALIDATE_HOME"; fi
+}
+trap cleanup EXIT
+
+# run_check <name> <command...>
+# Runs the command, echoes its output, and on failure records <name>, the
+# command (CHECK_DISPLAY overrides how it is shown) and the first error lines.
+run_check() {
+  local name=$1
+  shift
+  local log
+  log="$LOG_DIR/$(printf '%s' "$name" | tr -c 'A-Za-z0-9_.-' '_').log"
+  "$@" >"$log" 2>&1
+  local status=$?
+  cat "$log"
+  if [ "$status" -ne 0 ]; then
+    FAILED_CHECKS+=("$name")
+    local excerpt
+    excerpt=$(grep -E -A 8 '^(error|warning)(\[[A-Z0-9]+\])?:' "$log" | head -60)
+    [ -n "$excerpt" ] || excerpt=$(head -40 "$log")
+    # rustfmt colours its diff even when writing to a file
+    excerpt=$(printf '%s\n' "$excerpt" | perl -pe 's/\e\[[0-9;]*m|\e\(B//g')
+    FAILURE_DETAILS+="### ${name}"$'\n'"Command: ${CHECK_DISPLAY:-$*}"$'\n'"${excerpt}"$'\n\n'
+  fi
+}
 
 # Build frontend if needed (required for conductor-web to compile)
 if [ ! -d conductor-web/frontend/dist ]; then
@@ -29,10 +64,10 @@ CHANGED_CRATES=$(git diff --name-only "$DIFF_TARGET" | grep '^conductor-' | cut 
 if [ -z "$CHANGED_CRATES" ]; then
   # No crate-level changes detected — fall back to full workspace (matches CI)
   if [ -d conductor-web/frontend/dist ]; then
-    cargo clippy --workspace --all-targets -- -D warnings 2>&1 || FAILED_CHECKS+=("clippy:workspace")
+    run_check "clippy:workspace" cargo clippy --workspace --all-targets -- -D warnings
   else
     echo "Warning: frontend not built, excluding conductor-web from clippy"
-    cargo clippy --workspace --all-targets --exclude conductor-web -- -D warnings 2>&1 || FAILED_CHECKS+=("clippy:workspace")
+    run_check "clippy:workspace" cargo clippy --workspace --all-targets --exclude conductor-web -- -D warnings
   fi
 else
   # Scope clippy to changed crates only
@@ -41,10 +76,10 @@ else
       echo "Warning: frontend not built, skipping conductor-web clippy"
       continue
     fi
-    cargo clippy -p "$crate" --all-targets -- -D warnings 2>&1 || FAILED_CHECKS+=("clippy:$crate")
+    run_check "clippy:$crate" cargo clippy -p "$crate" --all-targets -- -D warnings
   done
 fi
-cargo fmt --all --check 2>&1 || FAILED_CHECKS+=("fmt")
+run_check "fmt" cargo fmt --all --check
 
 # Validate changed or new .wf files.
 #
@@ -53,29 +88,27 @@ cargo fmt --all --check 2>&1 || FAILED_CHECKS+=("fmt")
 # own build: against the real ~/.conductor it would apply the branch's
 # migrations and lock out every installed binary (#3182). Validation needs no
 # real state, so both commands run with a throwaway CONDUCTOR_HOME.
-VALIDATE_HOME=""
-cleanup_validate_home() { if [ -n "$VALIDATE_HOME" ]; then rm -rf "$VALIDATE_HOME"; fi; }
-trap cleanup_validate_home EXIT
+validate_wf() {
+  CONDUCTOR_HOME="$VALIDATE_HOME" conductor workflow validate "$1" --path . \
+    || CONDUCTOR_HOME="$VALIDATE_HOME" cargo run --bin conductor -- workflow validate "$1" --path .
+}
 for f in $(git diff --name-only "$DIFF_TARGET" -- '*.wf') $(git ls-files --others --exclude-standard -- '*.wf'); do
   [ -f "$f" ] || continue
   name=$(basename "$f" .wf)
   [ -n "$VALIDATE_HOME" ] || VALIDATE_HOME=$(mktemp -d)
-  (CONDUCTOR_HOME="$VALIDATE_HOME" conductor workflow validate "$name" --path . 2>&1 \
-    || CONDUCTOR_HOME="$VALIDATE_HOME" cargo run --bin conductor -- workflow validate "$name" --path . 2>&1) \
-    || FAILED_CHECKS+=("wf:$name")
+  CHECK_DISPLAY="conductor workflow validate $name --path ." run_check "wf:$name" validate_wf "$name"
 done
 
 if [ ${#FAILED_CHECKS[@]} -gt 0 ]; then
   JOINED=$(IFS=','; echo "${FAILED_CHECKS[*]}")
-  cat <<EOF
-<<<FLOW_OUTPUT>>>
-{"markers": ["has_lint_errors"], "context": "Failing checks: ${JOINED}"}
-<<<END_FLOW_OUTPUT>>>
-EOF
+  CONTEXT="Failing checks: ${JOINED}. Rerun each failing check with the exact command below; a broader command (e.g. workspace clippy) can pass where it fails."$'\n\n'"${FAILURE_DETAILS}"
+  echo "<<<FLOW_OUTPUT>>>"
+  jq -cn --arg ctx "$CONTEXT" '{markers: ["has_lint_errors"], context: $ctx}'
+  echo "<<<END_FLOW_OUTPUT>>>"
 else
-  cat <<'EOF'
+  cat <<'OUT'
 <<<FLOW_OUTPUT>>>
 {"markers": [], "context": "All lint checks passed"}
 <<<END_FLOW_OUTPUT>>>
-EOF
+OUT
 fi
