@@ -77,11 +77,10 @@ pub fn headless_resumable_session_id(run: &AgentRun, taken_over: bool) -> Option
 
 /// [`headless_resumable_session_id`] for `run`, with ownership read from the database.
 pub fn resumable_session_for_run(conn: &Connection, run: &AgentRun) -> Result<Option<String>> {
-    let taken_over = match run.session_id.as_deref().filter(|s| !s.is_empty()) {
-        Some(sid) => session_owner(conn, sid)?.is_some(),
-        None => false,
-    };
-    Ok(headless_resumable_session_id(run, taken_over))
+    if run.is_interactive() {
+        return Ok(None);
+    }
+    resumable_session_id(conn, run.session_id.as_deref())
 }
 
 // ---------------------------------------------------------------------------

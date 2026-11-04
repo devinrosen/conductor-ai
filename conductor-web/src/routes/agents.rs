@@ -2192,22 +2192,33 @@ mod tests {
         worktree: bool,
         started_at: &str,
     ) {
-        db.execute(
-            "INSERT INTO agent_runs (id, worktree_id, repo_id, session_id, prompt, status, \
-             started_at, runtime) VALUES (?1, ?2, 'r1', ?3, 'p', ?4, ?5, 'claude')",
-            rusqlite::params![id, worktree.then_some("w1"), session, status, started_at],
-        )
-        .unwrap();
+        conductor_core::test_helpers::insert_test_agent_run_with(
+            db,
+            &conductor_core::test_helpers::TestAgentRun {
+                id,
+                worktree_id: worktree.then_some("w1"),
+                session_id: session,
+                status,
+                runtime: "claude",
+                parent_run_id: None,
+                started_at,
+            },
+        );
     }
 
     fn seed_takeover_row(db: &rusqlite::Connection, parent: &str, session: &str, started: &str) {
-        db.execute(
-            "INSERT INTO agent_runs (id, worktree_id, repo_id, session_id, prompt, status, \
-             started_at, runtime, parent_run_id) \
-             VALUES ('i-'||?1, 'w1', 'r1', ?2, 'p', 'idle', ?3, 'interactive', ?1)",
-            rusqlite::params![parent, session, started],
-        )
-        .unwrap();
+        conductor_core::test_helpers::insert_test_agent_run_with(
+            db,
+            &conductor_core::test_helpers::TestAgentRun {
+                id: &format!("i-{parent}"),
+                worktree_id: Some("w1"),
+                session_id: Some(session),
+                status: "idle",
+                runtime: "interactive",
+                parent_run_id: Some(parent),
+                started_at: started,
+            },
+        );
     }
 
     fn seed_incomplete_plan(db: &rusqlite::Connection, run_id: &str) {

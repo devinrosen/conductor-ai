@@ -1561,4 +1561,68 @@ mod tests {
         .unwrap();
         assert!(conductor_plugin_enabled(dir.path(), wt.path()));
     }
+
+    fn seed_interactive(conn: &Connection, id: &str, session: &str, started: &str) {
+        crate::test_helpers::insert_test_agent_run_with(
+            conn,
+            &crate::test_helpers::TestAgentRun {
+                id,
+                worktree_id: Some("w1"),
+                session_id: Some(session),
+                status: "idle",
+                runtime: "interactive",
+                parent_run_id: None,
+                started_at: started,
+            },
+        );
+    }
+
+    #[test]
+    fn interactive_runs_for_session_is_session_scoped_and_ordered_by_latest_activity() {
+        let (conn, _config) = setup();
+        seed_interactive(&conn, "old", "s1", "2024-01-01T00:00:00Z");
+        seed_interactive(&conn, "new", "s1", "2024-01-02T00:00:00Z");
+        seed_interactive(&conn, "other", "s2", "2024-01-03T00:00:00Z");
+        let ids = |s: &str| -> Vec<String> {
+            interactive_runs_for_session(&conn, s)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.id)
+                .collect()
+        };
+        assert_eq!(ids("s1"), vec!["new", "old"]);
+        assert_eq!(ids("s2"), vec!["other"]);
+        assert!(ids("nope").is_empty());
+
+        // A resumed row keeps its old started_at but ended later: it wins.
+        conn.execute(
+            "UPDATE agent_runs SET ended_at = '2024-02-01T00:00:00Z' WHERE id = 'old'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(ids("s1"), vec!["old", "new"]);
+        assert_eq!(
+            crate::session::takeover::session_owner(&conn, "s1")
+                .unwrap()
+                .as_deref(),
+            Some("old")
+        );
+    }
+
+    #[test]
+    fn first_free_window_branches() {
+        let none = FakeTmux::new();
+        assert_eq!(first_free_window(&none, "s", "w", "w-2").unwrap(), "w");
+        let free = FakeTmux {
+            session_exists: true,
+            ..FakeTmux::new()
+        };
+        assert_eq!(first_free_window(&free, "s", "w", "w-2").unwrap(), "w");
+        let taken = FakeTmux {
+            session_exists: true,
+            windows: vec!["w".into()],
+            ..FakeTmux::new()
+        };
+        assert_eq!(first_free_window(&taken, "s", "w", "w-2").unwrap(), "w-2");
+    }
 }

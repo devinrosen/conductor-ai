@@ -594,17 +594,25 @@ mod tests {
     }
 
     fn conn_with_headless_run(session: &str) -> std::sync::Mutex<rusqlite::Connection> {
-        use crate::test_helpers::{create_test_conn, insert_test_repo, insert_test_worktree};
+        use crate::test_helpers::{
+            create_test_conn, insert_test_agent_run_with, insert_test_repo, insert_test_worktree,
+            TestAgentRun,
+        };
         let conn = create_test_conn();
         insert_test_repo(&conn, "r1", "myrepo", "/nonexistent/myrepo");
         insert_test_worktree(&conn, "w1", "r1", "fix-1-thing", "/tmp/wt/fix-1-thing");
-        conn.execute(
-            "INSERT INTO agent_runs (id, worktree_id, repo_id, session_id, prompt, status, \
-             started_at, runtime) VALUES ('h1', 'w1', 'r1', ?1, 'p', 'completed', \
-             '2024-01-01T00:00:00Z', 'claude')",
-            [session],
-        )
-        .unwrap();
+        insert_test_agent_run_with(
+            &conn,
+            &TestAgentRun {
+                id: "h1",
+                worktree_id: Some("w1"),
+                session_id: Some(session),
+                status: "completed",
+                runtime: "claude",
+                parent_run_id: None,
+                started_at: "2024-01-01T00:00:00Z",
+            },
+        );
         std::sync::Mutex::new(conn)
     }
 
@@ -621,15 +629,18 @@ mod tests {
     #[test]
     fn finish_turn_never_resumes_a_taken_over_session() {
         let conn = conn_with_headless_run("sess-1");
-        conn.lock()
-            .unwrap()
-            .execute(
-                "INSERT INTO agent_runs (id, worktree_id, repo_id, session_id, prompt, status, \
-                 started_at, runtime, parent_run_id) VALUES ('i1', 'w1', 'r1', 'sess-1', 'p', \
-                 'idle', '2024-01-02T00:00:00Z', 'interactive', 'h1')",
-                [],
-            )
-            .unwrap();
+        crate::test_helpers::insert_test_agent_run_with(
+            &conn.lock().unwrap(),
+            &crate::test_helpers::TestAgentRun {
+                id: "i1",
+                worktree_id: Some("w1"),
+                session_id: Some("sess-1"),
+                status: "idle",
+                runtime: "interactive",
+                parent_run_id: Some("h1"),
+                started_at: "2024-01-02T00:00:00Z",
+            },
+        );
         assert_eq!(
             headless_resumable_session(&conn, "step", "h1", Some("sess-1".into())),
             None

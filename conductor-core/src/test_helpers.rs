@@ -100,6 +100,36 @@ pub fn insert_test_agent_run(conn: &Connection, id: &str, worktree_id: &str) {
     .unwrap();
 }
 
+/// Fields of an `agent_runs` row for [`insert_test_agent_run_with`]. `repo_id` is `r1`.
+pub struct TestAgentRun<'a> {
+    pub id: &'a str,
+    pub worktree_id: Option<&'a str>,
+    pub session_id: Option<&'a str>,
+    pub status: &'a str,
+    pub runtime: &'a str,
+    pub parent_run_id: Option<&'a str>,
+    pub started_at: &'a str,
+}
+
+/// Insert an `agent_runs` row on repo `r1` with the given shape: the one place tests build
+/// headless (`runtime = 'claude'`) and interactive/takeover rows.
+pub fn insert_test_agent_run_with(conn: &Connection, run: &TestAgentRun<'_>) {
+    conn.execute(
+        "INSERT INTO agent_runs (id, worktree_id, repo_id, session_id, prompt, status, \
+         started_at, runtime, parent_run_id) VALUES (?1, ?2, 'r1', ?3, 'p', ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            run.id,
+            run.worktree_id,
+            run.session_id,
+            run.status,
+            run.started_at,
+            run.runtime,
+            run.parent_run_id
+        ],
+    )
+    .unwrap();
+}
+
 /// Opens an in-memory SQLite database with migrations applied and a test repo + worktree inserted.
 ///
 /// Provides:
