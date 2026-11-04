@@ -429,15 +429,16 @@ fn build_rk_engine_components(
         db,
         runtime_override,
     ));
-    let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> =
-        Arc::new(super::runkon_bridge::ConductorChildWorkflowRunner::new(
+    let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> = Arc::new(
+        super::runkon_bridge::ConductorChildWorkflowRunner::new(
             db.to_path_buf(),
             config.clone(),
             Arc::clone(shared_conn),
             target_label,
             triggered_by_hook,
         )
-        .with_fresh_children(fresh_children));
+        .with_fresh_children(fresh_children),
+    );
     RkEngineComponents {
         persistence,
         action_registry,

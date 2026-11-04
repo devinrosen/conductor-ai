@@ -1402,7 +1402,11 @@ mod child_resume {
         drop(conn);
 
         write_script(ws.path(), "check.sh", check_body);
-        write_script(ws.path(), "after.sh", &format!("touch {ws_str}/after-ran\n"));
+        write_script(
+            ws.path(),
+            "after.sh",
+            &format!("touch {ws_str}/after-ran\n"),
+        );
         std::fs::write(ws.path().join("broken"), "").unwrap();
 
         let wf_dir = ws.path().join(".conductor/workflows");
