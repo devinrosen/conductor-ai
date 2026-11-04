@@ -237,9 +237,14 @@ pub(super) fn tool_set_base_branch(
     let wt_mgr = WorktreeManager::new(conn, config);
     let opts = conductor_core::worktree::SetBaseBranchOptions { rebase };
     match wt_mgr.set_base_branch(repo_slug, name, base_branch, opts) {
-        Ok(()) => {
+        Ok(outcome) => {
             let label = base_branch.unwrap_or("(repo default)");
-            tool_ok(format!("Base branch for '{name}' set to {label}."))
+            let mut text = format!("Base branch for '{name}' set to {label}.");
+            if let Some(notice) = outcome.active_run {
+                text.push('\n');
+                text.push_str(&notice.warning());
+            }
+            tool_ok(text)
         }
         Err(e) => tool_err(e),
     }
@@ -958,6 +963,79 @@ mod tests {
             text.contains("must not start with"),
             "expected branch-name validation error, got: {text}"
         );
+    }
+
+    /// Seed repo `r1` / worktree `w1` (slug `feat-wt`) with base `old`, and optionally a running run.
+    fn seed_worktree_with_run(conductor: &Conductor, with_run: bool) -> Option<String> {
+        let conn = &conductor.conn;
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('r1','test-repo','/tmp/repo','https://github.com/x/y.git','/tmp/ws','2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
+             VALUES ('w1','r1','feat-wt','feat/wt','/tmp/ws','active','2024-01-01T00:00:00Z','old')",
+            [],
+        )
+        .unwrap();
+        if !with_run {
+            return None;
+        }
+        let agent = conductor_core::agent::AgentManager::new(conn)
+            .create_run(Some("w1"), "workflow", None)
+            .unwrap();
+        let run = conductor_core::workflow::create_workflow_run(
+            conn,
+            "ticket-to-pr",
+            Some("w1"),
+            &agent.id,
+            false,
+            "manual",
+            None,
+        )
+        .unwrap();
+        let inputs = std::collections::HashMap::from([(
+            "feature_base_branch".to_string(),
+            "main".to_string(),
+        )]);
+        conductor_core::workflow::set_workflow_run_inputs(conn, &run.id, &inputs).unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET status = 'running' WHERE id = ?1",
+            [&run.id],
+        )
+        .unwrap();
+        Some(run.id.clone())
+    }
+
+    fn set_base_args() -> serde_json::Map<String, Value> {
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), Value::String("test-repo".into()));
+        args.insert("name".into(), Value::String("feat-wt".into()));
+        args
+    }
+
+    #[test]
+    fn test_tool_set_base_branch_warns_when_run_active() {
+        let (_f, conductor) = make_test_conductor();
+        let run_id = seed_worktree_with_run(&conductor, true).unwrap();
+        let result = tool_set_base_branch(&conductor, &set_base_args());
+        assert_ne!(result.is_error, Some(true));
+        let text = result.content[0].as_text().map(|t| t.text.clone()).unwrap();
+        assert!(text.contains(&run_id), "missing run id: {text}");
+        assert!(text.contains("'main'"), "missing run base: {text}");
+        assert!(text.contains("next run"), "missing warning: {text}");
+    }
+
+    #[test]
+    fn test_tool_set_base_branch_no_warning_without_active_run() {
+        let (_f, conductor) = make_test_conductor();
+        seed_worktree_with_run(&conductor, false);
+        let result = tool_set_base_branch(&conductor, &set_base_args());
+        assert_ne!(result.is_error, Some(true));
+        let text = result.content[0].as_text().map(|t| t.text.clone()).unwrap();
+        assert!(!text.contains("Warning"), "unexpected warning: {text}");
     }
 
     /// Assert the `rebase` parameter value is accepted (no parse error) — the tool will still

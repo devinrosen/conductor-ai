@@ -187,7 +187,7 @@ pub fn handle_worktree(
             rebase,
         } => {
             let mgr = WorktreeManager::new(conn, config);
-            mgr.set_base_branch(
+            let outcome = mgr.set_base_branch(
                 &repo,
                 &name,
                 base_branch.as_deref(),
@@ -196,6 +196,9 @@ pub fn handle_worktree(
             match base_branch {
                 Some(b) => println!("Base branch for {name} set to: {b}"),
                 None => println!("Base branch for {name} cleared (will use repo default)"),
+            }
+            if let Some(notice) = outcome.active_run {
+                eprintln!("{}", notice.warning());
             }
         }
         WorktreeCommands::Adopt {
