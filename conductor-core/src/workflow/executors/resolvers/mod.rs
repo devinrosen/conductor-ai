@@ -6,8 +6,8 @@ pub(in crate::workflow) use human_approval::{HumanApprovalGateResolver, HumanGat
 pub(in crate::workflow) use pr_approval::PrApprovalGateResolver;
 pub(in crate::workflow) use pr_checks::PrChecksGateResolver;
 
-use std::path::PathBuf;
 use std::io::Read;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
