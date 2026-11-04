@@ -14,7 +14,7 @@ expression: render_to_string(&state)
 "│Ticket: None (press Enter to link)                                          ││                                        │"
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"
-"│Tab=switch panel  y=copy  o=act  x=stop  X=clear conv  w=workflow  d=del  Es││                                        │"
+"│Tab=switch panel  y=copy  o=act  x=stop  X=clear conv  C=session  w=workflow││                                        │"
 "└────────────────────────────────────────────────────────────────────────────┘│                                        │"
 "┌ Agent Activity ────────────────────────────────────────────────────────────┐│                                        │"
 "│No agent activity                                                           ││                                        │"

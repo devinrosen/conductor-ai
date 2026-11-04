@@ -1873,6 +1873,7 @@ bot_name = "my-bot"
                 bot_name: None,
                 feature_merge_strategy: Some("merge".to_string()),
             },
+            sessions: RepoSessions::default(),
         };
         rc.save(dir.path()).unwrap();
 
@@ -1905,6 +1906,7 @@ bot_name = "my-bot"
                 bot_name: None,
                 feature_merge_strategy: None,
             },
+            sessions: RepoSessions::default(),
         };
         rc.save(dir.path()).unwrap();
         let loaded = RepoConfig::load(dir.path()).unwrap();
@@ -1919,6 +1921,7 @@ bot_name = "my-bot"
                 bot_name: None,
                 feature_merge_strategy: None,
             },
+            sessions: RepoSessions::default(),
         };
         rc2.save(dir.path()).unwrap();
         let loaded2 = RepoConfig::load(dir.path()).unwrap();
