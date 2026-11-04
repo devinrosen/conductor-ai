@@ -2437,8 +2437,11 @@ mod tests {
         let conn = create_test_conn();
         insert_repo(&conn);
         insert_wt(&conn, "wt1", "feat-test", "2024-01-01T00:00:00Z");
-        conn.execute("UPDATE worktrees SET base_branch = 'old' WHERE id = 'wt1'", [])
-            .unwrap();
+        conn.execute(
+            "UPDATE worktrees SET base_branch = 'old' WHERE id = 'wt1'",
+            [],
+        )
+        .unwrap();
         let run_id = seed_run(
             &conn,
             "ticket-to-pr",
@@ -2454,9 +2457,11 @@ mod tests {
         assert_eq!(notice.run_base.as_deref(), Some("main"));
 
         let base: Option<String> = conn
-            .query_row("SELECT base_branch FROM worktrees WHERE id = 'wt1'", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT base_branch FROM worktrees WHERE id = 'wt1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(base, None, "base is still changed");
     }
@@ -2481,7 +2486,9 @@ mod tests {
             None,
         );
 
-        let notice = set_base_none(&conn).active_run.expect("active run reported");
+        let notice = set_base_none(&conn)
+            .active_run
+            .expect("active run reported");
         assert_eq!(notice.run_id, parent_id);
         assert_eq!(notice.workflow_name, "parent-flow");
         assert_eq!(notice.run_base.as_deref(), Some("release/1.0"));
@@ -2507,7 +2514,9 @@ mod tests {
             None,
         );
 
-        let notice = set_base_none(&conn).active_run.expect("active run reported");
+        let notice = set_base_none(&conn)
+            .active_run
+            .expect("active run reported");
         assert_eq!(notice.run_id, parent_id);
         assert_eq!(notice.run_base.as_deref(), Some("main"));
     }
