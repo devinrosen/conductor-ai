@@ -288,10 +288,10 @@ pub(super) fn tool_run_workflow(
         (None, repo.local_path.clone(), repo_slug.to_string())
     };
 
-    let workflow = match load_run_workflow_def(&working_dir, &repo.local_path, workflow_name) {
-        Ok(w) => w,
-        Err(e) => return e,
-    };
+    // Validate the definition here so a bad workflow name fails before spawning.
+    if let Err(e) = load_run_workflow_def(&working_dir, &repo.local_path, workflow_name) {
+        return e;
+    }
 
     // The run executes in its own process on the installed binary (#3124); this
     // call waits for that process to report the run ID, or the startup error.
