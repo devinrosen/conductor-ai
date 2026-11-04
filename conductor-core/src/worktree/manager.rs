@@ -165,6 +165,55 @@ pub struct SetBaseBranchOptions {
     pub rebase: bool,
 }
 
+/// Result of [`WorktreeManager::set_base_branch`].
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SetBaseBranchOutcome {
+    /// Set when the worktree had an active workflow run at the time of the change.
+    pub active_run: Option<ActiveRunBaseNotice>,
+    /// Set when looking up the active run failed after the base was changed, so the caller
+    /// can't tell whether a run is active.
+    pub lookup_error: Option<String>,
+}
+
+impl SetBaseBranchOutcome {
+    /// The user-facing warning for this outcome, if any. Shared by the MCP, CLI and TUI callers.
+    pub fn warning(&self) -> Option<String> {
+        if let Some(notice) = &self.active_run {
+            Some(notice.warning())
+        } else {
+            self.lookup_error.as_ref().map(|e| {
+                format!(
+                    "Warning: could not check for an active workflow run: {e}. If one is active, it keeps its original base; the new base applies to the next run."
+                )
+            })
+        }
+    }
+}
+
+/// An active workflow run that keeps the base it started with after the worktree's base changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveRunBaseNotice {
+    /// ID of the top-level active run.
+    pub run_id: String,
+    pub workflow_name: String,
+    /// The run's `feature_base_branch` input, when it recorded one.
+    pub run_base: Option<String>,
+}
+
+impl ActiveRunBaseNotice {
+    /// One user-facing sentence shared by the MCP, CLI and TUI callers.
+    pub fn warning(&self) -> String {
+        let base = match &self.run_base {
+            Some(b) => format!("base '{b}'"),
+            None => "its original base".to_string(),
+        };
+        format!(
+            "Warning: workflow run {} ({}) is active on this worktree and keeps using {}; the new base applies to the next run.",
+            self.run_id, self.workflow_name, base
+        )
+    }
+}
+
 /// Options for creating a new worktree.
 ///
 /// Passed to [`WorktreeManager::create`] to avoid a long positional argument list.
@@ -1130,7 +1179,7 @@ impl<'a> WorktreeManager<'a> {
         name: &str,
         base_branch: Option<&str>,
         opts: SetBaseBranchOptions,
-    ) -> Result<()> {
+    ) -> Result<SetBaseBranchOutcome> {
         if let Some(new_base) = base_branch {
             if new_base.starts_with('-') {
                 return Err(ConductorError::InvalidInput(format!(
@@ -1208,7 +1257,56 @@ impl<'a> WorktreeManager<'a> {
                 slug: name.to_string(),
             });
         }
-        Ok(())
+
+        // The run keeps its `feature_base_branch` snapshot; report it so the caller can warn.
+        let (active_run, lookup_error) = match self
+            .get_by_slug(&repo.id, name)
+            .and_then(|wt| self.active_run_notice(&wt.id))
+        {
+            Ok(notice) => (notice, None),
+            Err(e) => {
+                tracing::warn!(
+                    worktree = name,
+                    repo = repo_slug,
+                    error = %e,
+                    "failed to look up active run for worktree {name} in {repo_slug} after base change: {e}"
+                );
+                (None, Some(e.to_string()))
+            }
+        };
+        Ok(SetBaseBranchOutcome {
+            active_run,
+            lookup_error,
+        })
+    }
+
+    /// Find the active workflow run on a worktree, resolved to its root run.
+    fn active_run_notice(&self, worktree_id: &str) -> Result<Option<ActiveRunBaseNotice>> {
+        let Some(active) = crate::workflow::get_active_run_for_worktree(self.conn, worktree_id)?
+        else {
+            return Ok(None);
+        };
+        let mut root = active.clone();
+        for _ in 0..16 {
+            let Some(parent_id) = root.parent_workflow_run_id.clone() else {
+                break;
+            };
+            match crate::workflow::get_workflow_run(self.conn, &parent_id)? {
+                Some(parent) => root = parent,
+                None => break,
+            }
+        }
+        let run_base = root
+            .inputs
+            .get("feature_base_branch")
+            .or_else(|| active.inputs.get("feature_base_branch"))
+            .filter(|b| !b.is_empty())
+            .cloned();
+        Ok(Some(ActiveRunBaseNotice {
+            run_id: root.id.clone(),
+            workflow_name: root.workflow_name.clone(),
+            run_base,
+        }))
     }
 
     /// Returns true if `base_ref` is an ancestor of HEAD in the given worktree directory.
@@ -2306,6 +2404,179 @@ mod tests {
             result.is_ok(),
             "clearing base_branch should always succeed: {result:?}"
         );
+    }
+
+    /// Seed a workflow run on worktree `wt1` with the given status, optional parent and base input.
+    fn seed_run(
+        conn: &Connection,
+        name: &str,
+        status: crate::workflow::WorkflowRunStatus,
+        parent_workflow_run_id: Option<&str>,
+        base: Option<&str>,
+    ) -> String {
+        crate::test_helpers::seed_workflow_run_on_worktree(
+            conn,
+            "wt1",
+            name,
+            status,
+            parent_workflow_run_id,
+            base,
+        )
+    }
+
+    fn set_base_none(conn: &Connection) -> SetBaseBranchOutcome {
+        let config = crate::config::Config::default();
+        WorktreeManager::new(conn, &config)
+            .set_base_branch(
+                "test-repo",
+                "feat-test",
+                None,
+                SetBaseBranchOptions::default(),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn test_set_base_branch_reports_active_run() {
+        let conn = create_test_conn();
+        insert_repo(&conn);
+        insert_wt(&conn, "wt1", "feat-test", "2024-01-01T00:00:00Z");
+        conn.execute(
+            "UPDATE worktrees SET base_branch = 'old' WHERE id = 'wt1'",
+            [],
+        )
+        .unwrap();
+        let run_id = seed_run(
+            &conn,
+            "ticket-to-pr",
+            crate::workflow::WorkflowRunStatus::Running,
+            None,
+            Some("main"),
+        );
+
+        let outcome = set_base_none(&conn);
+        let notice = outcome.active_run.expect("active run reported");
+        assert_eq!(notice.run_id, run_id);
+        assert_eq!(notice.workflow_name, "ticket-to-pr");
+        assert_eq!(notice.run_base.as_deref(), Some("main"));
+
+        let base: Option<String> = conn
+            .query_row(
+                "SELECT base_branch FROM worktrees WHERE id = 'wt1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(base, None, "base is still changed");
+    }
+
+    #[test]
+    fn test_set_base_branch_reports_root_of_child_run() {
+        let conn = create_test_conn();
+        insert_repo(&conn);
+        insert_wt(&conn, "wt1", "feat-test", "2024-01-01T00:00:00Z");
+        let parent_id = seed_run(
+            &conn,
+            "parent-flow",
+            crate::workflow::WorkflowRunStatus::Running,
+            None,
+            Some("release/1.0"),
+        );
+        seed_run(
+            &conn,
+            "child-flow",
+            crate::workflow::WorkflowRunStatus::Running,
+            Some(&parent_id),
+            None,
+        );
+
+        let notice = set_base_none(&conn)
+            .active_run
+            .expect("active run reported");
+        assert_eq!(notice.run_id, parent_id);
+        assert_eq!(notice.workflow_name, "parent-flow");
+        assert_eq!(notice.run_base.as_deref(), Some("release/1.0"));
+    }
+
+    #[test]
+    fn test_set_base_branch_child_only_active_names_parent() {
+        let conn = create_test_conn();
+        insert_repo(&conn);
+        insert_wt(&conn, "wt1", "feat-test", "2024-01-01T00:00:00Z");
+        let parent_id = seed_run(
+            &conn,
+            "parent-flow",
+            crate::workflow::WorkflowRunStatus::Completed,
+            None,
+            Some("main"),
+        );
+        seed_run(
+            &conn,
+            "child-flow",
+            crate::workflow::WorkflowRunStatus::Running,
+            Some(&parent_id),
+            None,
+        );
+
+        let notice = set_base_none(&conn)
+            .active_run
+            .expect("active run reported");
+        assert_eq!(notice.run_id, parent_id);
+        assert_eq!(notice.run_base.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn test_set_base_branch_no_notice_for_finished_runs() {
+        let conn = create_test_conn();
+        insert_repo(&conn);
+        insert_wt(&conn, "wt1", "feat-test", "2024-01-01T00:00:00Z");
+        seed_run(
+            &conn,
+            "done",
+            crate::workflow::WorkflowRunStatus::Completed,
+            None,
+            Some("main"),
+        );
+        seed_run(
+            &conn,
+            "bad",
+            crate::workflow::WorkflowRunStatus::Failed,
+            None,
+            Some("main"),
+        );
+        assert_eq!(set_base_none(&conn), SetBaseBranchOutcome::default());
+    }
+
+    #[test]
+    fn test_outcome_warning_reports_lookup_failure() {
+        let outcome = SetBaseBranchOutcome {
+            active_run: None,
+            lookup_error: Some("db locked".into()),
+        };
+        let w = outcome
+            .warning()
+            .expect("lookup failure surfaces a warning");
+        assert!(w.contains("could not check for an active workflow run"));
+        assert!(w.contains("db locked"));
+        assert_eq!(SetBaseBranchOutcome::default().warning(), None);
+    }
+
+    #[test]
+    fn test_active_run_notice_warning_wording() {
+        let known = ActiveRunBaseNotice {
+            run_id: "R1".into(),
+            workflow_name: "wf".into(),
+            run_base: Some("main".into()),
+        };
+        let w = known.warning();
+        assert!(w.contains("R1") && w.contains("'main'") && w.contains("next run"));
+
+        let unknown = ActiveRunBaseNotice {
+            run_base: None,
+            ..known
+        };
+        let w = unknown.warning();
+        assert!(w.contains("its original base") && w.contains("next run"));
     }
 
     #[test]

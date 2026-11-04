@@ -407,6 +407,7 @@ pub fn get_active_run_for_worktree(
     let sql = format!(
         "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
              WHERE worktree_id = ? AND status IN ({placeholders}) \
+             ORDER BY (parent_workflow_run_id IS NULL) DESC, started_at DESC \
              LIMIT 1"
     );
     let mut all_params: Vec<rusqlite::types::Value> =
