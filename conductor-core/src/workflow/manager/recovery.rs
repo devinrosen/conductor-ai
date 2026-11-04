@@ -759,25 +759,43 @@ pub fn reap_finalization_stuck_workflow_runs(
     })
 }
 
+/// True when `err` is the error runkon-flow records for a loop that ran out
+/// (`check_max_iterations` / `check_stuck` in its `engine.rs`).
+///
+/// Resuming such a run replays the completed iterations, restores their
+/// markers and fails again at once, so it can never make progress. No step row
+/// is marked failed, which is why the run's `error` text is the only signal.
+/// Remove this once runkon/runkon#133 resets the loop budget in the engine.
+pub(crate) fn is_loop_exhaustion_error(err: &str) -> bool {
+    err.contains(" reached max_iterations (")
+        || (err.contains(" stuck after ") && err.contains("identical markers"))
+}
+
+/// Find the newest child run of `parent_workflow_run_id` named
+/// `child_workflow_name` that can be resumed (`failed`, `pending`, `waiting`).
+///
+/// This is a pure query. Whether a failed child is worth resuming (see
+/// [`is_loop_exhaustion_error`]) is decided by `ConductorChildWorkflowRunner`.
 pub fn find_resumable_child_run(
     conn: &Connection,
     parent_workflow_run_id: &str,
     child_workflow_name: &str,
 ) -> Result<Option<WorkflowRun>> {
-    Ok(conn
-            .query_row(
-                &format!(
-                    "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS} FROM workflow_runs \
+    let run = conn
+        .query_row(
+            &format!(
+                "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS} FROM workflow_runs \
                      WHERE parent_workflow_run_id = :parent_workflow_run_id \
                        AND workflow_name = :child_workflow_name \
                        AND status IN ('failed', 'pending', 'waiting') \
                      ORDER BY started_at DESC \
                      LIMIT 1"
-                ),
-                named_params![":parent_workflow_run_id": parent_workflow_run_id, ":child_workflow_name": child_workflow_name],
-                row_to_workflow_run,
-            )
-            .optional()?)
+            ),
+            named_params![":parent_workflow_run_id": parent_workflow_run_id, ":child_workflow_name": child_workflow_name],
+            row_to_workflow_run,
+        )
+        .optional()?;
+    Ok(run)
 }
 
 const SQL_RESET_FAILED: &str =
