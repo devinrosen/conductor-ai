@@ -810,7 +810,9 @@ mod tests {
             _: &[(String, String)],
             argv: &[String],
         ) -> Result<String> {
-            self.calls.borrow_mut().push(format!("new-session:{window}"));
+            self.calls
+                .borrow_mut()
+                .push(format!("new-session:{window}"));
             *self.argv.borrow_mut() = argv.to_vec();
             Ok("%9".into())
         }
@@ -859,7 +861,14 @@ mod tests {
             .unwrap();
     }
 
-    fn add_run(conn: &Connection, id: &str, session: &str, status: &str, started: &str, pane: Option<&str>) {
+    fn add_run(
+        conn: &Connection,
+        id: &str,
+        session: &str,
+        status: &str,
+        started: &str,
+        pane: Option<&str>,
+    ) {
         conn.execute(
             "INSERT INTO agent_runs (id, worktree_id, session_id, prompt, status, started_at, runtime, subprocess_pid, tmux_pane) \
              VALUES (?1, 'w1', ?2, '', ?3, ?4, 'interactive', 4242, ?5)",
@@ -938,22 +947,46 @@ mod tests {
     fn resume_uses_newest_session_and_no_prompt() {
         let (conn, config) = setup();
         add_ticket(&conn, "jira", "MOB-367");
-        add_run(&conn, "a", "old-session", "completed", "2024-01-01T00:00:00Z", None);
-        add_run(&conn, "b", "new-session", "completed", "2024-02-01T00:00:00Z", None);
+        add_run(
+            &conn,
+            "a",
+            "old-session",
+            "completed",
+            "2024-01-01T00:00:00Z",
+            None,
+        );
+        add_run(
+            &conn,
+            "b",
+            "new-session",
+            "completed",
+            "2024-02-01T00:00:00Z",
+            None,
+        );
         let tmux = FakeTmux {
             session_exists: true,
             ..FakeTmux::new()
         };
         run(&conn, &config, &req(false), &tmux, false).unwrap();
         assert!(tmux.called("new-window:mob-367"));
-        assert_eq!(*tmux.argv.borrow(), vec!["claude", "--resume", "new-session"]);
+        assert_eq!(
+            *tmux.argv.borrow(),
+            vec!["claude", "--resume", "new-session"]
+        );
     }
 
     #[test]
     fn new_flag_overrides_resume() {
         let (conn, config) = setup();
         add_ticket(&conn, "jira", "MOB-367");
-        add_run(&conn, "a", "old-session", "completed", "2024-01-01T00:00:00Z", None);
+        add_run(
+            &conn,
+            "a",
+            "old-session",
+            "completed",
+            "2024-01-01T00:00:00Z",
+            None,
+        );
         let tmux = FakeTmux {
             session_exists: true,
             ..FakeTmux::new()
@@ -999,7 +1032,14 @@ mod tests {
     #[test]
     fn report_mode_never_switches() {
         let (conn, config) = setup();
-        add_run(&conn, "a", "s1", "running", "2024-01-01T00:00:00Z", Some("%3"));
+        add_run(
+            &conn,
+            "a",
+            "s1",
+            "running",
+            "2024-01-01T00:00:00Z",
+            Some("%3"),
+        );
         let tmux = FakeTmux {
             pane_target: Some(("work".into(), "2".into())),
             ..FakeTmux::new()
@@ -1022,7 +1062,14 @@ mod tests {
     #[test]
     fn dead_pid_does_not_count_as_live() {
         let (conn, config) = setup();
-        add_run(&conn, "a", "s1", "running", "2024-01-01T00:00:00Z", Some("%3"));
+        add_run(
+            &conn,
+            "a",
+            "s1",
+            "running",
+            "2024-01-01T00:00:00Z",
+            Some("%3"),
+        );
         let tmux = FakeTmux {
             session_exists: true,
             ..FakeTmux::new()
@@ -1030,7 +1077,12 @@ mod tests {
         let out = run(&conn, &config, &req(false), &tmux, false).unwrap();
         match out {
             OpenSessionOutcome::Launched { mode, .. } => {
-                assert_eq!(mode, LaunchMode::Resume { session_id: "s1".into() })
+                assert_eq!(
+                    mode,
+                    LaunchMode::Resume {
+                        session_id: "s1".into()
+                    }
+                )
             }
             o => panic!("unexpected {o:?}"),
         }
@@ -1120,8 +1172,14 @@ mod tests {
             workflow: None,
             agent_map: None,
         };
-        assert_eq!(window_name(Some(&t("jira", "MOB-367")), "r", "s"), "mob-367");
-        assert_eq!(window_name(Some(&t("github", "12")), "repo", "s"), "repo-12");
+        assert_eq!(
+            window_name(Some(&t("jira", "MOB-367")), "r", "s"),
+            "mob-367"
+        );
+        assert_eq!(
+            window_name(Some(&t("github", "12")), "repo", "s"),
+            "repo-12"
+        );
         assert_eq!(window_name(None, "repo", "fix.a b:c"), "fix-a-b-c");
     }
 
@@ -1158,7 +1216,9 @@ mod tests {
         assert!(hooks_settings_json()
             .unwrap()
             .contains("conductor session hook"));
-        assert!(!hooks_settings_json().unwrap().contains("CLAUDE_PLUGIN_ROOT"));
+        assert!(!hooks_settings_json()
+            .unwrap()
+            .contains("CLAUDE_PLUGIN_ROOT"));
     }
 
     #[test]
