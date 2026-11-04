@@ -284,7 +284,11 @@ As with any migration, installed binaries older than the release that adds 087 c
 2. **Esc during a turn** is untested. It probably behaves like a denial: an interrupt with no `Stop`.
 3. **Several sessions in one worktree.** Two claude windows in the same worktree create two live rows, but the worktree list shows only the latest run, so the other is hidden. The same happens with a workflow agent running where an interactive session is open. Is "newest wins" acceptable, or should the worktree row show a count?
 4. **Transcript format stability.** Metrics and denial detection depend on an undocumented format that has changed before. Pin a tested Claude Code version range in the parser and degrade gracefully outside it?
-5. **#3163's questions:** which row owns the `session_id` after a takeover; starting in the developer's own permission mode; how the TUI shows the link between the two runs.
+5. **#3163's questions** (resolved 2026-11-04, implemented in #3163):
+   - **Running runs are refused.** Only `completed`, `failed` and `cancelled` runs can be taken over. There is no stop-and-take-over flow.
+   - **The interactive row owns the `session_id`.** After a takeover, no headless path resumes that `session_id` (runkon's correction, conversation chaining, the finish-turn resume, the TUI and web prompts); each starts a fresh session. The guard covers every interactive row with that `session_id`, not only takeover rows.
+   - **The developer's own permission mode.** The takeover passes no permission flag and ignores `agent_permission_mode`.
+   - **Display.** The headless run shows "taken over → interactive session"; the interactive run shows "from step '<name>'" or "from run <id>".
 
 ## Implementation Order
 

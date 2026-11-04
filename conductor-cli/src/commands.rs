@@ -97,6 +97,18 @@ pub enum SessionCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Take over a finished headless agent run's Claude session in tmux
+    #[command(name = "take-over")]
+    TakeOver {
+        /// Agent run ID (must be completed, failed or cancelled)
+        run_id: String,
+        /// tmux window name (default: ticket key, or the worktree slug)
+        #[arg(long)]
+        window: Option<String>,
+        /// Print the outcome as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]

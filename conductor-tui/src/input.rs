@@ -618,6 +618,9 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('t') => return Action::PickTemplate,
             KeyCode::Char('y') => return Action::WorktreeDetailCopy,
             KeyCode::Char('o') => return Action::WorktreeDetailOpen,
+            // Take Over the latest headless run's session (the handler explains when the
+            // latest run isn't a finished headless one).
+            KeyCode::Char('O') => return Action::TakeOverRun,
             KeyCode::Char('j')
                 if focus == WorktreeDetailFocus::InfoPanel
                     && state.column_focus == ColumnFocus::Content =>
@@ -705,6 +708,15 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                     }
                 }
             }
+        }
+        // Take Over the selected step's agent run (Steps / AgentActivity focus).
+        if matches!(
+            state.workflow_run_detail_focus,
+            WorkflowRunDetailFocus::Steps | WorkflowRunDetailFocus::AgentActivity
+        ) && key.code == KeyCode::Char('O')
+            && state.selected_step_has_agent()
+        {
+            return Action::TakeOverRun;
         }
         match key.code {
             KeyCode::Char('x') => return Action::CancelWorkflow,
@@ -1375,6 +1387,28 @@ mod tests {
                 "key '{ch}' should map to Action::None after removal but did not"
             );
         }
+    }
+
+    #[test]
+    fn capital_o_takes_over_in_worktree_detail_and_step_views() {
+        let mut state = AppState::new();
+        state.view = View::WorktreeDetail;
+        assert!(matches!(
+            map_key(key(KeyCode::Char('O')), &state),
+            Action::TakeOverRun
+        ));
+
+        let mut state = workflow_run_detail_steps_state_with_foreach();
+        // No child run on the selected step: nothing to take over.
+        assert!(!matches!(
+            map_key(key(KeyCode::Char('O')), &state),
+            Action::TakeOverRun
+        ));
+        state.data.workflow_steps[0].child_run_id = Some("child".into());
+        assert!(matches!(
+            map_key(key(KeyCode::Char('O')), &state),
+            Action::TakeOverRun
+        ));
     }
 
     // --- WorkflowRunDetail: y/Y fires ApproveGate when a gate step is waiting ---

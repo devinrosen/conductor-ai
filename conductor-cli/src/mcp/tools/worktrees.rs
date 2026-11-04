@@ -346,6 +346,29 @@ pub(super) fn tool_open_session(
     }
 }
 
+/// Take over a finished headless run's session interactively. Never switches tmux focus.
+pub(super) fn tool_take_over_session(
+    conductor: &Conductor,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
+    use conductor_core::session::launch::{FocusMode, RealTmux};
+    use conductor_core::session::takeover::{take_over_run, TakeOverRequest};
+
+    let run_id = require_arg!(args, "run_id");
+    let req = TakeOverRequest {
+        run_id: run_id.to_string(),
+        window: get_arg(args, "window").map(str::to_string),
+        focus: FocusMode::Report,
+    };
+    match take_over_run(&conductor.conn, &conductor.config, &req, &RealTmux) {
+        Ok(outcome) => {
+            let json = serde_json::to_string_pretty(&outcome).unwrap_or_default();
+            tool_ok(format!("{}\n{json}", outcome.human_text()))
+        }
+        Err(e) => tool_err(e),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -600,6 +623,38 @@ mod tests {
         assert_eq!(result.is_error, Some(true));
         let result = tool_open_session(&conductor, &args_with("repo", "my-repo"));
         assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_take_over_session_missing_run_id() {
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_take_over_session(&conductor, &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        assert!(result_text(&result).contains("Missing required argument"));
+    }
+
+    #[test]
+    fn test_take_over_session_unknown_run() {
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_take_over_session(&conductor, &args_with("run_id", "ghost-run"));
+        assert_eq!(result.is_error, Some(true));
+        assert!(result_text(&result).contains("not found"));
+    }
+
+    #[test]
+    fn test_take_over_session_refuses_running_run() {
+        let (_f, conductor) = make_test_conductor();
+        conductor
+            .conn
+            .execute(
+                "INSERT INTO agent_runs (id, prompt, status, started_at, session_id) \
+                 VALUES ('run-1', 'p', 'running', '2024-01-01T00:00:00Z', 'sess-1')",
+                [],
+            )
+            .unwrap();
+        let result = tool_take_over_session(&conductor, &args_with("run_id", "run-1"));
+        assert_eq!(result.is_error, Some(true));
+        assert!(result_text(&result).contains("stop it first"));
     }
 
     #[test]

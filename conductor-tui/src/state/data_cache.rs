@@ -4,6 +4,7 @@ use conductor_core::agent::{
     AgentCreatedIssue, AgentRun, AgentRunEvent, FeedbackRequest, TicketAgentTotals,
 };
 use conductor_core::repo::Repo;
+use conductor_core::session::takeover::TakeoverLink;
 use conductor_core::tickets::{Ticket, TicketDependencies, TicketLabel};
 use conductor_core::workflow::{
     ConductorWorkflowRun, FanOutItemRow, InputDecl, LiveEstimate, WorkflowDef, WorkflowRunStep,
@@ -28,6 +29,10 @@ pub struct DataCache {
     pub repo_worktree_count: HashMap<String, usize>,
     /// worktree_id -> latest AgentRun (populated by DB poller)
     pub latest_agent_runs: HashMap<String, AgentRun>,
+    /// headless run id -> the takeover that continued it (populated by DB poller, #3163)
+    pub taken_over_by: HashMap<String, TakeoverLink>,
+    /// interactive run id -> the takeover it continues (populated by DB poller, #3163)
+    pub taken_over_from: HashMap<String, TakeoverLink>,
     /// Persisted agent events for the currently viewed worktree (from DB)
     pub agent_events: Vec<AgentRunEvent>,
     /// run_id -> (run_number, model, started_at) for per-run boundary headers
@@ -173,6 +178,28 @@ fn event_at_index<'a>(
 }
 
 impl DataCache {
+    /// Replace the takeover maps from a fresh `takeover_links` query.
+    pub fn set_takeover_links(&mut self, links: Vec<TakeoverLink>) {
+        self.taken_over_by = links
+            .iter()
+            .map(|l| (l.headless_run_id.clone(), l.clone()))
+            .collect();
+        self.taken_over_from = links
+            .into_iter()
+            .map(|l| (l.interactive_run_id.clone(), l))
+            .collect();
+    }
+
+    /// The session id a headless prompt may resume for `run`: `None` for an interactive run or
+    /// one a human has taken over (#3163). The poller-loaded maps avoid a DB query on the
+    /// render thread; the `conductor agent run` backstop still covers a race.
+    pub fn resumable_session_for(&self, run: &AgentRun) -> Option<String> {
+        conductor_core::session::takeover::headless_resumable_session_id(
+            run,
+            self.taken_over_by.contains_key(&run.id),
+        )
+    }
+
     /// Iterate the agent activity list as visual rows, interleaving run-group
     /// separators when there are multiple runs.
     pub fn visual_rows(&self) -> Vec<VisualRow<'_>> {

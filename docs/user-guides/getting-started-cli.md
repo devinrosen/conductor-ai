@@ -223,6 +223,22 @@ resume_template = "Where did we leave off?"                             # unset 
 
 Template variables: `key`, `title`, `url`, `source`, `branch`, `base`, `worktree_path`. Sessions launched this way always report to conductor: if the conductor plugin isn't enabled, conductor passes its hooks with `--settings`.
 
+#### Taking over a headless run
+
+When a workflow agent is stuck, step into its conversation instead of starting a fresh session:
+
+```bash
+conductor session take-over <run-id>            # [--window <name>] [--json]
+```
+
+This launches `claude --resume <session_id>` in the run's worktree, in a tmux window, the same way `session open` does. In the TUI, press `O` on a worktree's latest agent run, or on a workflow step's agent run. The `conductor_take_over_session` MCP tool does the same but never switches focus.
+
+- **Finished runs only.** Only `completed`, `failed` and `cancelled` runs can be taken over. A running run is refused: stop it first (`x` in the TUI).
+- **Your own permission mode.** The session starts in your normal interactive mode. It doesn't inherit `agent_permission_mode` or any flag the headless run used.
+- **A new interactive run** records the takeover, with the same `session_id` and the headless run as its parent. The headless run keeps its own history, cost and status. The TUI shows "taken over → interactive session" on the headless run and "from step '<name>'" on the interactive one.
+- **Headless never resumes it again.** Once a human has continued a session, no headless path (conversation chaining, the structured-output correction, finishing an unfinished turn, the TUI and web prompts) resumes that `session_id`. They start a fresh session instead.
+- Taking over a step's run doesn't change the workflow's state. If the run was already taken over and that session is live, the command focuses it.
+
 ## Tips
 
 - **Model override:** Pass `--model claude-opus-4-6` to any `workflow run` to use a specific model for all agent steps.

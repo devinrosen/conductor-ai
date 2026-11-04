@@ -118,6 +118,7 @@ fn data_refreshed_updates_repos() {
             ticket_labels: std::collections::HashMap::new(),
             ticket_dependencies: std::collections::HashMap::new(),
             latest_agent_runs: std::collections::HashMap::new(),
+            takeover_links: vec![],
             ticket_agent_totals: std::collections::HashMap::new(),
             latest_workflow_runs_by_worktree: std::collections::HashMap::new(),
             workflow_step_summaries: std::collections::HashMap::new(),
@@ -3020,6 +3021,35 @@ fn make_interactive_run(
 }
 
 #[test]
+fn resumable_session_for_skips_interactive_and_taken_over_runs() {
+    use conductor_core::agent::AgentRunStatus;
+    use conductor_core::session::takeover::TakeoverLink;
+    let mut app = make_app();
+
+    let mut headless = make_interactive_run(AgentRunStatus::Completed, "claude");
+    headless.session_id = Some("sess-1".into());
+    assert_eq!(
+        app.state.data.resumable_session_for(&headless).as_deref(),
+        Some("sess-1")
+    );
+
+    // Taken over: the headless run no longer resumes its session.
+    app.state.data.set_takeover_links(vec![TakeoverLink {
+        interactive_run_id: "i1".into(),
+        headless_run_id: "run1".into(),
+        interactive_status: "idle".into(),
+        step_name: None,
+    }]);
+    assert_eq!(app.state.data.resumable_session_for(&headless), None);
+    assert!(app.state.data.taken_over_from.contains_key("i1"));
+
+    // An interactive run is never resumed headless either.
+    let mut interactive = make_interactive_run(AgentRunStatus::Idle, "interactive");
+    interactive.session_id = Some("sess-2".into());
+    assert_eq!(app.state.data.resumable_session_for(&interactive), None);
+}
+
+#[test]
 fn stop_agent_refuses_running_and_waiting_interactive_run() {
     use conductor_core::agent::AgentRunStatus;
     for status in [AgentRunStatus::Running, AgentRunStatus::WaitingForFeedback] {
@@ -3087,4 +3117,125 @@ fn agent_busy_guard_message_depends_on_runtime() {
         app.state.status_message.as_deref(),
         Some("Agent already running — press x to stop")
     );
+}
+
+// --- Take over (#3163): status-message branches, none of which spawn tmux ---
+
+fn app_with_latest_run(status: conductor_core::agent::AgentRunStatus, runtime: &str) -> App {
+    let mut app = make_app();
+    app.state.selected_worktree_id = Some("wt1".into());
+    app.state
+        .data
+        .latest_agent_runs
+        .insert("wt1".into(), make_interactive_run(status, runtime));
+    app
+}
+
+#[test]
+fn take_over_without_selected_worktree_asks_to_select_one() {
+    let mut app = make_app();
+    app.handle_take_over_run();
+    assert_eq!(
+        app.state.status_message.as_deref(),
+        Some("Select a worktree first")
+    );
+    assert!(matches!(app.state.modal, Modal::None));
+}
+
+#[test]
+fn take_over_with_no_run_reports_nothing_to_take_over() {
+    let mut app = make_app();
+    app.state.selected_worktree_id = Some("wt1".into());
+    app.handle_take_over_run();
+    assert_eq!(
+        app.state.status_message.as_deref(),
+        Some("No agent run to take over")
+    );
+}
+
+#[test]
+fn take_over_of_interactive_latest_run_points_at_open_session() {
+    use conductor_core::agent::AgentRunStatus;
+    let mut app = app_with_latest_run(AgentRunStatus::Idle, "interactive");
+    app.handle_take_over_run();
+    assert_eq!(
+        app.state.status_message.as_deref(),
+        Some("Latest run is an interactive session — press C")
+    );
+}
+
+#[test]
+fn take_over_of_active_run_is_refused_before_launching() {
+    use conductor_core::agent::AgentRunStatus;
+    let mut app = app_with_latest_run(AgentRunStatus::Running, "claude");
+    app.handle_take_over_run();
+    assert_eq!(
+        app.state.status_message.as_deref(),
+        Some("Run is still active; stop it first (x) and try again")
+    );
+    assert!(matches!(app.state.modal, Modal::None));
+}
+
+#[test]
+fn take_over_of_finished_run_without_background_sender_errors() {
+    use conductor_core::agent::AgentRunStatus;
+    let mut app = app_with_latest_run(AgentRunStatus::Completed, "claude");
+    app.bg_tx = None;
+    app.handle_take_over_run();
+    assert!(matches!(app.state.modal, Modal::Error { .. }));
+}
+
+#[test]
+fn take_over_in_workflow_view_needs_a_step_with_a_child_run() {
+    use conductor_core::workflow::WorkflowRunStep;
+    let mut app = make_app();
+    app.state.view = View::WorkflowRunDetail;
+    // No steps at all.
+    app.handle_take_over_run();
+    assert_eq!(
+        app.state.status_message.as_deref(),
+        Some("The selected step has no agent run")
+    );
+    // A step that never started an agent run.
+    app.state.status_message = None;
+    let step = crate::state::tests::make_wf_step("step-1", "run-1", "review", 0);
+    app.state.data.workflow_steps = vec![WorkflowRunStep {
+        child_run_id: None,
+        ..step
+    }];
+    app.handle_take_over_run();
+    assert_eq!(
+        app.state.status_message.as_deref(),
+        Some("The selected step has no agent run")
+    );
+}
+
+#[test]
+fn take_over_complete_error_opens_error_modal() {
+    let mut app = make_app();
+    app.state.modal = Modal::Progress {
+        message: "Taking over session…".into(),
+    };
+    app.handle_take_over_complete(Err("boom".into()));
+    match &app.state.modal {
+        Modal::Error { message } => assert_eq!(message, "Take over failed: boom"),
+        _ => panic!("expected an error modal"),
+    }
+}
+
+#[test]
+fn take_over_complete_success_clears_modal_and_reports_summary() {
+    use conductor_core::session::takeover::TakeOverOutcome;
+    let mut app = make_app();
+    app.state.modal = Modal::Progress {
+        message: "Taking over session…".into(),
+    };
+    // `LiveNoPane` has no attach command, so nothing is copied to the clipboard.
+    let outcome = TakeOverOutcome::LiveNoPane {
+        interactive_run_id: "i1".into(),
+    };
+    let summary = outcome.summary();
+    app.handle_take_over_complete(Ok(outcome));
+    assert!(matches!(app.state.modal, Modal::None));
+    assert_eq!(app.state.status_message.as_deref(), Some(summary.as_str()));
 }
