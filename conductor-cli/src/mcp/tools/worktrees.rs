@@ -240,9 +240,9 @@ pub(super) fn tool_set_base_branch(
         Ok(outcome) => {
             let label = base_branch.unwrap_or("(repo default)");
             let mut text = format!("Base branch for '{name}' set to {label}.");
-            if let Some(notice) = outcome.active_run {
+            if let Some(warning) = outcome.warning() {
                 text.push('\n');
-                text.push_str(&notice.warning());
+                text.push_str(&warning);
             }
             tool_ok(text)
         }
@@ -968,45 +968,23 @@ mod tests {
     /// Seed repo `r1` / worktree `w1` (slug `feat-wt`) with base `old`, and optionally a running run.
     fn seed_worktree_with_run(conductor: &Conductor, with_run: bool) -> Option<String> {
         let conn = &conductor.conn;
+        conductor_core::test_helpers::insert_test_repo(conn, "r1", "test-repo", "/tmp/repo");
+        conductor_core::test_helpers::insert_test_worktree(conn, "w1", "r1", "feat-wt", "/tmp/ws");
         conn.execute(
-            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
-             VALUES ('r1','test-repo','/tmp/repo','https://github.com/x/y.git','/tmp/ws','2024-01-01T00:00:00Z')",
+            "UPDATE worktrees SET base_branch = 'old' WHERE id = 'w1'",
             [],
         )
         .unwrap();
-        conn.execute(
-            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, base_branch) \
-             VALUES ('w1','r1','feat-wt','feat/wt','/tmp/ws','active','2024-01-01T00:00:00Z','old')",
-            [],
-        )
-        .unwrap();
-        if !with_run {
-            return None;
-        }
-        let agent = conductor_core::agent::AgentManager::new(conn)
-            .create_run(Some("w1"), "workflow", None)
-            .unwrap();
-        let run = conductor_core::workflow::create_workflow_run(
-            conn,
-            "ticket-to-pr",
-            Some("w1"),
-            &agent.id,
-            false,
-            "manual",
-            None,
-        )
-        .unwrap();
-        let inputs = std::collections::HashMap::from([(
-            "feature_base_branch".to_string(),
-            "main".to_string(),
-        )]);
-        conductor_core::workflow::set_workflow_run_inputs(conn, &run.id, &inputs).unwrap();
-        conn.execute(
-            "UPDATE workflow_runs SET status = 'running' WHERE id = ?1",
-            [&run.id],
-        )
-        .unwrap();
-        Some(run.id.clone())
+        with_run.then(|| {
+            conductor_core::test_helpers::seed_workflow_run_on_worktree(
+                conn,
+                "w1",
+                "ticket-to-pr",
+                conductor_core::workflow::WorkflowRunStatus::Running,
+                None,
+                Some("main"),
+            )
+        })
     }
 
     fn set_base_args() -> serde_json::Map<String, Value> {

@@ -1051,10 +1051,8 @@ impl App {
                             conductor_core::worktree::SetBaseBranchOptions::default(),
                         )
                         .map_err(anyhow::Error::from)?;
-                    Ok(match outcome.active_run {
-                        Some(notice) => {
-                            format!("Base branch set to {label}. {}", notice.warning())
-                        }
+                    Ok(match outcome.warning() {
+                        Some(warning) => format!("Base branch set to {label}. {warning}"),
                         None => format!("Base branch set to {label}"),
                     })
                 })();

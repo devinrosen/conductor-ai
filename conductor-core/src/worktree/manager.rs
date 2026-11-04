@@ -170,6 +170,24 @@ pub struct SetBaseBranchOptions {
 pub struct SetBaseBranchOutcome {
     /// Set when the worktree had an active workflow run at the time of the change.
     pub active_run: Option<ActiveRunBaseNotice>,
+    /// Set when looking up the active run failed after the base was changed, so the caller
+    /// can't tell whether a run is active.
+    pub lookup_error: Option<String>,
+}
+
+impl SetBaseBranchOutcome {
+    /// The user-facing warning for this outcome, if any. Shared by the MCP, CLI and TUI callers.
+    pub fn warning(&self) -> Option<String> {
+        if let Some(notice) = &self.active_run {
+            Some(notice.warning())
+        } else {
+            self.lookup_error.as_ref().map(|e| {
+                format!(
+                    "Warning: could not check for an active workflow run: {e}. If one is active, it keeps its original base; the new base applies to the next run."
+                )
+            })
+        }
+    }
 }
 
 /// An active workflow run that keeps the base it started with after the worktree's base changes.
@@ -1241,17 +1259,25 @@ impl<'a> WorktreeManager<'a> {
         }
 
         // The run keeps its `feature_base_branch` snapshot; report it so the caller can warn.
-        let active_run = match self
+        let (active_run, lookup_error) = match self
             .get_by_slug(&repo.id, name)
             .and_then(|wt| self.active_run_notice(&wt.id))
         {
-            Ok(notice) => notice,
+            Ok(notice) => (notice, None),
             Err(e) => {
-                tracing::warn!(error = %e, "failed to look up active run after base change");
-                None
+                tracing::warn!(
+                    worktree = name,
+                    repo = repo_slug,
+                    error = %e,
+                    "failed to look up active run for worktree {name} in {repo_slug} after base change: {e}"
+                );
+                (None, Some(e.to_string()))
             }
         };
-        Ok(SetBaseBranchOutcome { active_run })
+        Ok(SetBaseBranchOutcome {
+            active_run,
+            lookup_error,
+        })
     }
 
     /// Find the active workflow run on a worktree, resolved to its root run.
@@ -2388,36 +2414,14 @@ mod tests {
         parent_workflow_run_id: Option<&str>,
         base: Option<&str>,
     ) -> String {
-        let agent = crate::agent::AgentManager::new(conn)
-            .create_run(Some("wt1"), "workflow", None)
-            .unwrap();
-        let run = crate::workflow::create_workflow_run_with_targets(
+        crate::test_helpers::seed_workflow_run_on_worktree(
             conn,
+            "wt1",
             name,
-            Some("wt1"),
-            None,
-            None,
-            &agent.id,
-            false,
-            "manual",
-            None,
+            status,
             parent_workflow_run_id,
-            None,
+            base,
         )
-        .unwrap();
-        if let Some(b) = base {
-            let inputs = std::collections::HashMap::from([(
-                "feature_base_branch".to_string(),
-                b.to_string(),
-            )]);
-            crate::workflow::set_workflow_run_inputs(conn, &run.id, &inputs).unwrap();
-        }
-        conn.execute(
-            "UPDATE workflow_runs SET status = :s WHERE id = :id",
-            rusqlite::named_params! { ":s": status.to_string(), ":id": run.id },
-        )
-        .unwrap();
-        run.id.clone()
     }
 
     fn set_base_none(conn: &Connection) -> SetBaseBranchOutcome {
@@ -2541,6 +2545,20 @@ mod tests {
             Some("main"),
         );
         assert_eq!(set_base_none(&conn), SetBaseBranchOutcome::default());
+    }
+
+    #[test]
+    fn test_outcome_warning_reports_lookup_failure() {
+        let outcome = SetBaseBranchOutcome {
+            active_run: None,
+            lookup_error: Some("db locked".into()),
+        };
+        let w = outcome
+            .warning()
+            .expect("lookup failure surfaces a warning");
+        assert!(w.contains("could not check for an active workflow run"));
+        assert!(w.contains("db locked"));
+        assert_eq!(SetBaseBranchOutcome::default().warning(), None);
     }
 
     #[test]

@@ -197,8 +197,8 @@ pub fn handle_worktree(
                 Some(b) => println!("Base branch for {name} set to: {b}"),
                 None => println!("Base branch for {name} cleared (will use repo default)"),
             }
-            if let Some(notice) = outcome.active_run {
-                eprintln!("{}", notice.warning());
+            if let Some(warning) = outcome.warning() {
+                eprintln!("{warning}");
             }
         }
         WorktreeCommands::Adopt {
