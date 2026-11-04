@@ -4,6 +4,8 @@ use conductor_core::session::launch::{
     open_session, FocusMode, OpenSessionOutcome, OpenSessionRequest, RealTmux,
 };
 
+use conductor_core::session::takeover::{take_over_run, TakeOverOutcome, TakeOverRequest};
+
 use crate::action::Action;
 use crate::state::{DashboardRow, Modal, View};
 
@@ -79,6 +81,111 @@ impl App {
                 result: result.map_err(|e| e.to_string()),
             });
         });
+    }
+
+    /// The headless run the `O` key takes over: the selected step's agent run in a workflow run
+    /// view, otherwise the selected worktree's latest run. `Err` is a status-bar message.
+    fn takeover_target_run(&self) -> Result<String, String> {
+        if self.state.view == View::WorkflowRunDetail {
+            return self
+                .selected_step_child_run_id()
+                .ok_or_else(|| "The selected step has no agent run".to_string());
+        }
+        let wt_id = self
+            .state
+            .selected_worktree_id
+            .as_ref()
+            .ok_or_else(|| "Select a worktree first".to_string())?;
+        let run = self
+            .state
+            .data
+            .latest_agent_runs
+            .get(wt_id)
+            .ok_or_else(|| "No agent run to take over".to_string())?;
+        if run.is_interactive() {
+            return Err("Latest run is an interactive session — press C".to_string());
+        }
+        Ok(run.id.clone())
+    }
+
+    /// `O`: take over a finished headless run's Claude session in tmux (#3163).
+    pub(super) fn handle_take_over_run(&mut self) {
+        let run_id = match self.takeover_target_run() {
+            Ok(id) => id,
+            Err(msg) => {
+                self.state.status_message = Some(msg);
+                return;
+            }
+        };
+        // Fast pre-check on the cached run; core validates again.
+        if self.state.view != View::WorkflowRunDetail {
+            if let Some(run) = self
+                .state
+                .selected_worktree_id
+                .as_ref()
+                .and_then(|id| self.state.data.latest_agent_runs.get(id))
+            {
+                if run.is_active() {
+                    self.state.status_message =
+                        Some("Run is still active; stop it first (x) and try again".into());
+                    return;
+                }
+            }
+        }
+        let Some(bg_tx) = self.bg_tx.clone() else {
+            self.state.modal = Modal::Error {
+                message: "Cannot take over: background sender not ready.".into(),
+            };
+            return;
+        };
+        self.state.modal = Modal::Progress {
+            message: "Taking over session…".to_string(),
+        };
+        let config = self.config.clone();
+        // The thread opens its own connection on the caller's database, never the real home's.
+        let db_path = conductor_core::db::connection_db_path(&self.conn)
+            .unwrap_or_else(conductor_core::config::db_path);
+        let focus = FocusMode::from_env();
+        std::thread::spawn(move || {
+            let result = (|| -> anyhow::Result<TakeOverOutcome> {
+                let conn = conductor_core::db::open_database(&db_path)?;
+                let req = TakeOverRequest {
+                    run_id,
+                    window: None,
+                    focus,
+                };
+                Ok(take_over_run(&conn, &config, &req, &RealTmux)?)
+            })();
+            let _ = bg_tx.send(Action::TakeOverComplete {
+                result: result.map_err(|e| e.to_string()),
+            });
+        });
+    }
+
+    pub(super) fn handle_take_over_complete(
+        &mut self,
+        result: Result<TakeOverOutcome, String>,
+    ) {
+        self.state.modal = Modal::None;
+        match result {
+            Err(e) => {
+                self.state.modal = Modal::Error {
+                    message: format!("Take over failed: {e}"),
+                }
+            }
+            Ok(outcome) => {
+                let summary = outcome.summary();
+                match outcome.attach_command() {
+                    Some(cmd) if !outcome.switched() => {
+                        let cmd = cmd.to_string();
+                        self.copy_text_to_clipboard(cmd.clone());
+                        self.state.status_message = Some(format!("{summary}. Copied: {cmd}"));
+                    }
+                    _ => self.state.status_message = Some(summary),
+                }
+                self.refresh_data();
+            }
+        }
     }
 
     pub(super) fn handle_open_session_complete(

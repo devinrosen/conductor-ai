@@ -252,30 +252,54 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                 schema,
                 || turn_completion::assess(&log_path, &working_dir, tree_clean_before),
                 || {
+                    let session = {
                     crate::agent::log_parsing::read_log_result(&log_path)
-                        .and_then(|r| r.session_id)
-                        .or_else(|| {
-                            let conn = self
-                                .conn
-                                .lock()
-                                .map_err(|e| {
-                                    tracing::warn!(
-                                        "step '{}': db lock poisoned, cannot look up session for run {child_run_id}: {e}",
-                                        params.name
-                                    );
-                                })
-                                .ok()?;
-                            match crate::agent::AgentManager::new(&conn).get_run(&child_run_id) {
-                                Ok(run) => run.and_then(|r| r.session_id),
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "step '{}': cannot look up session for run {child_run_id}: {e}",
-                                        params.name
-                                    );
-                                    None
+                            .and_then(|r| r.session_id)
+                            .or_else(|| {
+                                let conn = self
+                                    .conn
+                                    .lock()
+                                    .map_err(|e| {
+                                        tracing::warn!(
+                                            "step '{}': db lock poisoned, cannot look up session for run {child_run_id}: {e}",
+                                            params.name
+                                        );
+                                    })
+                                    .ok()?;
+                                match crate::agent::AgentManager::new(&conn).get_run(&child_run_id) {
+                                    Ok(run) => run.and_then(|r| r.session_id),
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "step '{}': cannot look up session for run {child_run_id}: {e}",
+                                            params.name
+                                        );
+                                        None
+                                    }
                                 }
+                            })
+                    };
+                    // A session a human took over interactively (#3163) must not be
+                    // resumed headless: `None` makes the step report its unfinished turn.
+                    let sid = session?;
+                    let conn = self.conn.lock().ok()?;
+                    match crate::session::takeover::resumable_session_id(&conn, Some(&sid)) {
+                        Ok(resumable) => {
+                            if resumable.is_none() {
+                                tracing::warn!(
+                                    "step '{}': session {sid} was taken over interactively; not resuming it to finish the turn",
+                                    params.name
+                                );
                             }
-                        })
+                            resumable
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "step '{}': cannot check session ownership for run {child_run_id}: {e}",
+                                params.name
+                            );
+                            None
+                        }
+                    }
                 },
                 |prompt, session_id| {
                     let effective_runtime = resume_runtime

@@ -142,6 +142,27 @@ pub fn handle_agent(command: AgentCommands, conn: &Connection, config: &Config) 
     Ok(())
 }
 
+/// The session id a headless run may resume: `None` (a fresh session) when an interactive run
+/// owns it, i.e. a human took the conversation over (#3163). Every `conductor agent run
+/// --resume` goes through [`run_agent`], so this guards runkon's structured-output correction,
+/// the finish-turn resume and the TUI/web spawns alike.
+fn headless_resume_session_id(
+    conn: &rusqlite::Connection,
+    resume_session_id: Option<&str>,
+) -> Result<Option<String>> {
+    let resumable = conductor_core::session::takeover::resumable_session_id(conn, resume_session_id)?;
+    if resumable.is_none() {
+        if let Some(sid) = resume_session_id.filter(|s| !s.is_empty()) {
+            let owner = conductor_core::session::takeover::session_owner(conn, sid)?
+                .unwrap_or_default();
+            eprintln!(
+                "[conductor] Session {sid} was taken over interactively (run {owner}); starting a fresh session"
+            );
+        }
+    }
+    Ok(resumable)
+}
+
 /// Run a Claude agent for a worktree as a headless subprocess.
 ///
 /// Uses `--output-format stream-json` to emit structured events. Claude's output is streamed
@@ -166,6 +187,10 @@ pub(crate) fn run_agent(
         Some(r) => r,
         None => anyhow::bail!("agent run not found: {run_id}"),
     };
+
+    // A session a human has taken over is never resumed headless; start fresh instead.
+    let resume_owned = headless_resume_session_id(conn, resume_session_id)?;
+    let resume_session_id = resume_owned.as_deref();
 
     // Build effective prompt with optional startup context
     let config = match load_config() {
@@ -216,7 +241,11 @@ pub(crate) fn run_agent(
             if let Ok(prev_runs) = mgr.list_for_worktree(wt_id) {
                 let prev_run = prev_runs
                     .iter()
-                    .find(|r| r.session_id.as_deref() == resume_session_id && r.id != run_id);
+                    .find(|r| {
+                        !r.is_interactive()
+                            && r.session_id.as_deref() == resume_session_id
+                            && r.id != run_id
+                    });
                 if let Some(prev) = prev_run {
                     if prev.has_incomplete_plan_steps() {
                         let incomplete: Vec<&PlanStep> = prev.incomplete_plan_steps();
@@ -296,7 +325,9 @@ pub(crate) fn run_agent(
         // stderr: verbose turn-by-turn output (inherited, visible in the terminal)
         let mut cmd = Command::new("claude");
         if let Some(ref feedback) = feedback_response_for_resume {
-            // Feedback resume turn: deliver the human response as the next message
+            // Feedback resume turn: deliver the human response as the next message. This
+            // resumes the running run's own session; a run that is still running or waiting
+            // for feedback can't be taken over (only terminal runs can), so no ownership check.
             let sid = session_id_parsed
                 .as_deref()
                 .expect("session_id always captured before a feedback resume");
@@ -803,5 +834,40 @@ fn print_event_summary(event: &serde_json::Value) {
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod takeover_tests {
+    use super::headless_resume_session_id;
+
+    #[test]
+    fn taken_over_session_is_not_resumed_headless() {
+        let conn = conductor_core::test_helpers::setup_db();
+        conn.execute(
+            "INSERT INTO agent_runs (id, prompt, status, started_at, session_id, runtime) \
+             VALUES ('h1', 'p', 'completed', '2024-01-01T00:00:00Z', 'sess-1', 'claude')",
+            [],
+        )
+        .unwrap();
+        // Not yet taken over: resumable.
+        assert_eq!(
+            headless_resume_session_id(&conn, Some("sess-1")).unwrap().as_deref(),
+            Some("sess-1")
+        );
+        assert_eq!(headless_resume_session_id(&conn, None).unwrap(), None);
+
+        conn.execute(
+            "INSERT INTO agent_runs (id, prompt, status, started_at, session_id, runtime, parent_run_id) \
+             VALUES ('i1', '', 'idle', '2024-01-02T00:00:00Z', 'sess-1', 'interactive', 'h1')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(headless_resume_session_id(&conn, Some("sess-1")).unwrap(), None);
+        // Other sessions still resume.
+        assert_eq!(
+            headless_resume_session_id(&conn, Some("sess-2")).unwrap().as_deref(),
+            Some("sess-2")
+        );
     }
 }

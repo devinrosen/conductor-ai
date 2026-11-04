@@ -51,6 +51,8 @@ pub struct DataRefreshedPayload {
     pub ticket_labels: HashMap<String, Vec<TicketLabel>>,
     pub ticket_dependencies: HashMap<String, TicketDependencies>,
     pub latest_agent_runs: HashMap<String, AgentRun>,
+    /// Takeover links between headless and interactive runs (#3163).
+    pub takeover_links: Vec<conductor_core::session::takeover::TakeoverLink>,
     pub ticket_agent_totals: HashMap<String, TicketAgentTotals>,
     /// Most recent workflow run per worktree (for inline indicators in the Worktrees panel).
     pub latest_workflow_runs_by_worktree: HashMap<String, ConductorWorkflowRun>,
@@ -105,6 +107,8 @@ pub enum Action {
     Push,
     /// Open, resume or focus the selected worktree's interactive Claude session in tmux.
     OpenSession,
+    /// Take over the selected headless run's Claude session interactively in tmux (#3163).
+    TakeOverRun,
     #[allow(dead_code)]
     CreatePr,
     SyncTickets,
@@ -368,6 +372,9 @@ pub enum Action {
     },
     OpenSessionComplete {
         result: Result<conductor_core::session::launch::OpenSessionOutcome, String>,
+    },
+    TakeOverComplete {
+        result: Result<conductor_core::session::takeover::TakeOverOutcome, String>,
     },
     PrCreateComplete {
         result: Result<String, String>,

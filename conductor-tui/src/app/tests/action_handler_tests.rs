@@ -118,6 +118,7 @@ fn data_refreshed_updates_repos() {
             ticket_labels: std::collections::HashMap::new(),
             ticket_dependencies: std::collections::HashMap::new(),
             latest_agent_runs: std::collections::HashMap::new(),
+            takeover_links: vec![],
             ticket_agent_totals: std::collections::HashMap::new(),
             latest_workflow_runs_by_worktree: std::collections::HashMap::new(),
             workflow_step_summaries: std::collections::HashMap::new(),
@@ -3017,6 +3018,35 @@ fn make_interactive_run(
         subprocess_started_at: None,
         usage_estimated: false,
     }
+}
+
+#[test]
+fn resumable_session_for_skips_interactive_and_taken_over_runs() {
+    use conductor_core::agent::AgentRunStatus;
+    use conductor_core::session::takeover::TakeoverLink;
+    let mut app = make_app();
+
+    let mut headless = make_interactive_run(AgentRunStatus::Completed, "claude");
+    headless.session_id = Some("sess-1".into());
+    assert_eq!(
+        app.state.data.resumable_session_for(&headless).as_deref(),
+        Some("sess-1")
+    );
+
+    // Taken over: the headless run no longer resumes its session.
+    app.state.data.set_takeover_links(vec![TakeoverLink {
+        interactive_run_id: "i1".into(),
+        headless_run_id: "run1".into(),
+        interactive_status: "idle".into(),
+        step_name: None,
+    }]);
+    assert_eq!(app.state.data.resumable_session_for(&headless), None);
+    assert!(app.state.data.taken_over_from.contains_key("i1"));
+
+    // An interactive run is never resumed headless either.
+    let mut interactive = make_interactive_run(AgentRunStatus::Idle, "interactive");
+    interactive.session_id = Some("sess-2".into());
+    assert_eq!(app.state.data.resumable_session_for(&interactive), None);
 }
 
 #[test]

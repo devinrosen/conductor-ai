@@ -101,7 +101,10 @@ impl<'a> ConversationManager<'a> {
     /// Return the `session_id` of the most recent *completed* run in the
     /// conversation, or `None` if no such run exists (fresh session).
     pub fn last_completed_session_id(&self, conversation_id: &str) -> Result<Option<String>> {
-        AgentManager::new(self.conn).latest_completed_session_id_for_conversation(conversation_id)
+        let latest = AgentManager::new(self.conn)
+            .latest_completed_session_id_for_conversation(conversation_id)?;
+        // A session a human took over interactively (#3163) is never resumed headless.
+        crate::session::takeover::resumable_session_id(self.conn, latest.as_deref())
     }
 
     /// Update the `last_active_at` timestamp to now.
@@ -412,6 +415,31 @@ mod tests {
 
         let session = mgr.last_completed_session_id(&conv.id).unwrap();
         assert_eq!(session.as_deref(), Some("sess-bbb"));
+    }
+
+    #[test]
+    fn test_last_completed_session_id_skips_taken_over_session() {
+        let conn = setup_db();
+        let mgr = ConversationManager::new(&conn);
+        let conv = mgr.create(ConversationScope::Repo, "r1").unwrap();
+        conn.execute(
+            "INSERT INTO agent_runs (id, repo_id, conversation_id, prompt, status, started_at, session_id, runtime) \
+             VALUES ('h1', 'r1', ?1, 'p', 'completed', '2024-01-01T00:00:00Z', 'sess-taken', 'claude')",
+            [&conv.id],
+        )
+        .unwrap();
+        assert_eq!(
+            mgr.last_completed_session_id(&conv.id).unwrap().as_deref(),
+            Some("sess-taken")
+        );
+
+        conn.execute(
+            "INSERT INTO agent_runs (id, repo_id, prompt, status, started_at, session_id, runtime, parent_run_id) \
+             VALUES ('i1', 'r1', '', 'idle', '2024-01-02T00:00:00Z', 'sess-taken', 'interactive', 'h1')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(mgr.last_completed_session_id(&conv.id).unwrap(), None);
     }
 
     #[test]

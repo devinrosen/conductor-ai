@@ -1956,10 +1956,15 @@ fn render_step_agent_activity(
     // Title with run status
     let title = if let Some(ref run) = agent_run {
         let model = run.model.as_deref().unwrap_or("default");
-        if focused {
-            format!(" Agent: {model} ({}) (Tab=switch) ", run.status)
+        let taken = if state.data.taken_over_by.contains_key(&run.id) {
+            " · taken over"
         } else {
-            format!(" Agent: {model} ({}) ", run.status)
+            ""
+        };
+        if focused {
+            format!(" Agent: {model} ({}){taken} (Tab=switch) ", run.status)
+        } else {
+            format!(" Agent: {model} ({}){taken} ", run.status)
         }
     } else if focused {
         " Agent Activity (Tab=switch) ".to_string()

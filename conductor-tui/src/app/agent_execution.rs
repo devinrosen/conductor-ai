@@ -284,8 +284,8 @@ impl App {
         // Determine resume state: either a normal resume (completed run with session_id)
         // or a needs_resume (failed/cancelled run with incomplete plan steps)
         let (resume_session_id, needs_resume) = match latest_run {
-            Some(run) if run.needs_resume() => (run.session_id.clone(), true),
-            Some(run) => (run.session_id.clone(), false),
+            Some(run) if run.needs_resume() => (self.state.data.resumable_session_for(run), true),
+            Some(run) => (self.state.data.resumable_session_for(run), false),
             None => (None, false),
         };
 
@@ -369,7 +369,7 @@ impl App {
             .data
             .latest_agent_runs
             .get(&wt.id)
-            .and_then(|r| r.session_id.clone());
+            .and_then(|r| self.state.data.resumable_session_for(r));
 
         // Resolve the default model: per-worktree → per-repo → global config.
         let wt_model = wt.model.as_deref();
@@ -481,7 +481,7 @@ impl App {
             .data
             .latest_repo_agent_runs
             .get(&repo.id)
-            .and_then(|r| r.session_id.clone());
+            .and_then(|r| self.state.data.resumable_session_for(r));
 
         self.start_repo_agent_headless(
             prompt,

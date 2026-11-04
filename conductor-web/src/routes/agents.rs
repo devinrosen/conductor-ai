@@ -783,7 +783,7 @@ pub async fn get_prompt(
     let agent_mgr = AgentManager::new(&db);
     let latest_run = agent_mgr.latest_for_worktree(&wt.id)?;
 
-    let (resume_session_id, needs_resume, incomplete_steps) = match &latest_run {
+    let (raw_session_id, needs_resume, incomplete_steps) = match &latest_run {
         Some(run) if run.needs_resume() => {
             let incomplete = run.incomplete_plan_steps().len();
             (run.session_id.clone(), true, incomplete)
@@ -791,6 +791,13 @@ pub async fn get_prompt(
         Some(run) => (run.session_id.clone(), false, 0),
         None => (None, false, 0),
     };
+    // A session a human continued interactively (e.g. a takeover, #3163) is never resumed
+    // headless; the newest row may itself be that interactive row.
+    let resume_session_id = conductor_core::session::takeover::resumable_session_id(
+        &db,
+        raw_session_id.as_deref(),
+    )?;
+    let needs_resume = needs_resume && !(raw_session_id.is_some() && resume_session_id.is_none());
 
     // Build prompt: if needs_resume, use the resume prompt; otherwise use ticket context
     let prompt = if needs_resume {
@@ -1266,9 +1273,11 @@ pub async fn start_repo_agent(
         let resume_session_id = if body.new_session {
             None
         } else {
-            agent_mgr
+            let latest = agent_mgr
                 .latest_repo_scoped(&repo_id)?
-                .and_then(|run| run.session_id)
+                .and_then(|run| run.session_id);
+            // Repo-scoped runs can't be taken over, but share the headless guard (#3163).
+            conductor_core::session::takeover::resumable_session_id(&db, latest.as_deref())?
         };
 
         let run = agent_mgr.create_repo_run(&repo_id, &body.prompt, model.as_deref())?;

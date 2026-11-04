@@ -49,6 +49,8 @@ const OTHER_TOOLS: &[&str] = &[
     "conductor_push_worktree",
     // Shells out to tmux, and sleeps briefly to confirm claude started.
     "conductor_open_session",
+    // Same tmux launch as `conductor_open_session`.
+    "conductor_take_over_session",
     "conductor_set_base_branch",
     "conductor_cancel_run",
     // Blocks by design until the run finishes or times out, so it must not get the read timeout.
@@ -431,6 +433,26 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
             ]),
         ),
         Tool::new(
+            "conductor_take_over_session",
+            "Take over a finished (completed/failed/cancelled) headless agent run's Claude \
+             session interactively in tmux; records an interactive run linked to it. Never \
+             switches the user's tmux focus; returns the attach command.",
+            schema_typed(&[
+                (
+                    "run_id",
+                    "string",
+                    "Agent run ID to take over (must be completed, failed or cancelled)",
+                    true,
+                ),
+                (
+                    "window",
+                    "string",
+                    "tmux window name (default: ticket key, or the worktree slug)",
+                    false,
+                ),
+            ]),
+        ),
+        Tool::new(
             "conductor_cancel_run",
             "Cancel a workflow run that is pending, running, or waiting. \
              In-progress steps and child agent runs are best-effort cancelled before \
@@ -675,6 +697,7 @@ pub(super) fn dispatch_tool(
         "conductor_adopt_worktree" => worktrees::tool_adopt_worktree(conductor, args),
         "conductor_push_worktree" => worktrees::tool_push_worktree(conductor, args),
         "conductor_open_session" => worktrees::tool_open_session(conductor, args),
+        "conductor_take_over_session" => worktrees::tool_take_over_session(conductor, args),
         "conductor_set_base_branch" => worktrees::tool_set_base_branch(conductor, args),
         "conductor_cancel_run" => runs::tool_cancel_run(conductor, args),
         "conductor_wait_run" => runs::tool_wait_run(conductor, args, progress),
