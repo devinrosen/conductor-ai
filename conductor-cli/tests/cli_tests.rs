@@ -353,12 +353,16 @@ fn workflow_run_background_reports_unknown_worktree() {
 
 /// Run the hidden `workflow launch-detached` with `spec` on stdin. Its notify fd
 /// is 2, so what the child reports on the pipe arrives as the captured stderr.
+///
+/// `PATH` is cut to `/usr/bin:/bin` so `claude`, `gh` and `tmux` are missing, as
+/// on CI: a prerequisite warning must never reach the notify pipe.
 #[cfg(unix)]
 fn launch_detached(home: &std::path::Path, spec: &str) -> std::process::Output {
     use std::io::Write;
     use std::process::Stdio;
     let mut child = conductor_cmd(home)
         .args(["workflow", "launch-detached", "--notify-fd", "2"])
+        .env("PATH", "/usr/bin:/bin")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
