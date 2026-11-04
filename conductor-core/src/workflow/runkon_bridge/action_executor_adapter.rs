@@ -253,7 +253,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                 || turn_completion::assess(&log_path, &working_dir, tree_clean_before),
                 || {
                     let session = {
-                    crate::agent::log_parsing::read_log_result(&log_path)
+                        crate::agent::log_parsing::read_log_result(&log_path)
                             .and_then(|r| r.session_id)
                             .or_else(|| {
                                 let conn = self

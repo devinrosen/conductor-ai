@@ -793,10 +793,8 @@ pub async fn get_prompt(
     };
     // A session a human continued interactively (e.g. a takeover, #3163) is never resumed
     // headless; the newest row may itself be that interactive row.
-    let resume_session_id = conductor_core::session::takeover::resumable_session_id(
-        &db,
-        raw_session_id.as_deref(),
-    )?;
+    let resume_session_id =
+        conductor_core::session::takeover::resumable_session_id(&db, raw_session_id.as_deref())?;
     let needs_resume = needs_resume && !(raw_session_id.is_some() && resume_session_id.is_none());
 
     // Build prompt: if needs_resume, use the resume prompt; otherwise use ticket context

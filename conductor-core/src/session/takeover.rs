@@ -25,10 +25,10 @@ use crate::agent::types::EVENT_KIND_SYSTEM;
 use crate::agent::AgentManager;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
+use crate::new_id;
 use crate::repo::RepoManager;
 use crate::tickets::TicketSyncer;
 use crate::worktree::WorktreeManager;
-use crate::new_id;
 
 // ---------------------------------------------------------------------------
 // Ownership: headless code never resumes a session a human has continued
@@ -315,7 +315,14 @@ pub(crate) fn take_over_run_with(
     )?;
 
     let pid = tmux.pane_pid(&launched.pane_id)?;
-    let interactive_run_id = record_takeover(conn, &run.id, &session_id, &wt.repo_id, &launched.pane_id, pid)?;
+    let interactive_run_id = record_takeover(
+        conn,
+        &run.id,
+        &session_id,
+        &wt.repo_id,
+        &launched.pane_id,
+        pid,
+    )?;
 
     let switched = req.focus == FocusMode::Switch;
     if switched {
@@ -764,7 +771,9 @@ mod tests {
             panic!("expected Launched");
         };
         let outcome = apply_hook_event(&conn, &start_event("sess-1", "%9")).unwrap();
-        assert!(matches!(outcome, HookOutcome::Applied { ref run_id } if *run_id == interactive_run_id));
+        assert!(
+            matches!(outcome, HookOutcome::Applied { ref run_id } if *run_id == interactive_run_id)
+        );
         assert_eq!(interactive_count(&conn), 1);
         let parent: Option<String> = conn
             .query_row(
@@ -865,7 +874,9 @@ mod tests {
         add_headless(&conn, "h1", "completed", Some("sess-1"));
         assert_eq!(session_owner(&conn, "sess-1").unwrap(), None);
         assert_eq!(
-            resumable_session_id(&conn, Some("sess-1")).unwrap().as_deref(),
+            resumable_session_id(&conn, Some("sess-1"))
+                .unwrap()
+                .as_deref(),
             Some("sess-1")
         );
         assert_eq!(resumable_session_id(&conn, Some("")).unwrap(), None);
@@ -877,11 +888,16 @@ mod tests {
             [],
         )
         .unwrap();
-        assert_eq!(session_owner(&conn, "sess-1").unwrap().as_deref(), Some("i1"));
+        assert_eq!(
+            session_owner(&conn, "sess-1").unwrap().as_deref(),
+            Some("i1")
+        );
         assert_eq!(resumable_session_id(&conn, Some("sess-1")).unwrap(), None);
         // A different session is unaffected.
         assert_eq!(
-            resumable_session_id(&conn, Some("other")).unwrap().as_deref(),
+            resumable_session_id(&conn, Some("other"))
+                .unwrap()
+                .as_deref(),
             Some("other")
         );
     }

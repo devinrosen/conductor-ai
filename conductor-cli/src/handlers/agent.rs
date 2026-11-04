@@ -150,11 +150,12 @@ fn headless_resume_session_id(
     conn: &rusqlite::Connection,
     resume_session_id: Option<&str>,
 ) -> Result<Option<String>> {
-    let resumable = conductor_core::session::takeover::resumable_session_id(conn, resume_session_id)?;
+    let resumable =
+        conductor_core::session::takeover::resumable_session_id(conn, resume_session_id)?;
     if resumable.is_none() {
         if let Some(sid) = resume_session_id.filter(|s| !s.is_empty()) {
-            let owner = conductor_core::session::takeover::session_owner(conn, sid)?
-                .unwrap_or_default();
+            let owner =
+                conductor_core::session::takeover::session_owner(conn, sid)?.unwrap_or_default();
             eprintln!(
                 "[conductor] Session {sid} was taken over interactively (run {owner}); starting a fresh session"
             );
@@ -239,13 +240,11 @@ pub(crate) fn run_agent(
         // Look up the previous run that owns this session_id
         if let Some(wt_id) = run.worktree_id.as_deref() {
             if let Ok(prev_runs) = mgr.list_for_worktree(wt_id) {
-                let prev_run = prev_runs
-                    .iter()
-                    .find(|r| {
-                        !r.is_interactive()
-                            && r.session_id.as_deref() == resume_session_id
-                            && r.id != run_id
-                    });
+                let prev_run = prev_runs.iter().find(|r| {
+                    !r.is_interactive()
+                        && r.session_id.as_deref() == resume_session_id
+                        && r.id != run_id
+                });
                 if let Some(prev) = prev_run {
                     if prev.has_incomplete_plan_steps() {
                         let incomplete: Vec<&PlanStep> = prev.incomplete_plan_steps();
@@ -852,7 +851,9 @@ mod takeover_tests {
         .unwrap();
         // Not yet taken over: resumable.
         assert_eq!(
-            headless_resume_session_id(&conn, Some("sess-1")).unwrap().as_deref(),
+            headless_resume_session_id(&conn, Some("sess-1"))
+                .unwrap()
+                .as_deref(),
             Some("sess-1")
         );
         assert_eq!(headless_resume_session_id(&conn, None).unwrap(), None);
@@ -863,10 +864,15 @@ mod takeover_tests {
             [],
         )
         .unwrap();
-        assert_eq!(headless_resume_session_id(&conn, Some("sess-1")).unwrap(), None);
+        assert_eq!(
+            headless_resume_session_id(&conn, Some("sess-1")).unwrap(),
+            None
+        );
         // Other sessions still resume.
         assert_eq!(
-            headless_resume_session_id(&conn, Some("sess-2")).unwrap().as_deref(),
+            headless_resume_session_id(&conn, Some("sess-2"))
+                .unwrap()
+                .as_deref(),
             Some("sess-2")
         );
     }

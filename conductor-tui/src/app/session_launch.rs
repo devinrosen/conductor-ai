@@ -162,10 +162,7 @@ impl App {
         });
     }
 
-    pub(super) fn handle_take_over_complete(
-        &mut self,
-        result: Result<TakeOverOutcome, String>,
-    ) {
+    pub(super) fn handle_take_over_complete(&mut self, result: Result<TakeOverOutcome, String>) {
         self.state.modal = Modal::None;
         match result {
             Err(e) => {
