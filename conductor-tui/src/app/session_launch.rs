@@ -39,7 +39,8 @@ impl App {
             return;
         };
         if !wt.is_active() {
-            self.state.status_message = Some("Cannot open a session in an archived worktree".into());
+            self.state.status_message =
+                Some("Cannot open a session in an archived worktree".into());
             return;
         }
         let Some(repo_slug) = self.state.data.repo_slug_map.get(&wt.repo_id).cloned() else {

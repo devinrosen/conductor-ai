@@ -319,7 +319,15 @@ mod open_tests {
     #[test]
     fn open_parses_flags() {
         let cli = Cli::try_parse_from([
-            "conductor", "session", "open", "repo", "wt", "--new", "--prompt-file", "-", "--json",
+            "conductor",
+            "session",
+            "open",
+            "repo",
+            "wt",
+            "--new",
+            "--prompt-file",
+            "-",
+            "--json",
         ])
         .unwrap();
         match cli.command {
@@ -342,7 +350,15 @@ mod open_tests {
     #[test]
     fn prompt_and_prompt_file_conflict() {
         assert!(Cli::try_parse_from([
-            "conductor", "session", "open", "r", "w", "--prompt", "x", "--prompt-file", "-",
+            "conductor",
+            "session",
+            "open",
+            "r",
+            "w",
+            "--prompt",
+            "x",
+            "--prompt-file",
+            "-",
         ])
         .is_err());
     }

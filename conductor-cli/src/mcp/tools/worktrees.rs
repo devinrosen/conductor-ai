@@ -325,9 +325,7 @@ pub(super) fn tool_open_session(
     conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
-    use conductor_core::session::launch::{
-        open_session, FocusMode, OpenSessionRequest, RealTmux,
-    };
+    use conductor_core::session::launch::{open_session, FocusMode, OpenSessionRequest, RealTmux};
 
     let repo_slug = require_arg!(args, "repo");
     let slug = require_arg!(args, "slug");

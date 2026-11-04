@@ -512,7 +512,7 @@ pub fn claude_args(
 
 /// `tmux attach -t <session> \; select-window -t <target>`.
 pub fn attach_command(session: &str, window_target: &str) -> String {
-    format!("tmux attach -t {session} \; select-window -t {window_target}")
+    format!("tmux attach -t {session} \\; select-window -t {window_target}")
 }
 
 // ---------------------------------------------------------------------------
@@ -989,7 +989,7 @@ mod tests {
                 assert!(switched);
                 assert_eq!(
                     attach_command,
-                    "tmux attach -t work \; select-window -t work:2"
+                    "tmux attach -t work \\; select-window -t work:2"
                 );
             }
             o => panic!("unexpected {o:?}"),
@@ -1053,7 +1053,7 @@ mod tests {
                 assert_eq!(tmux_session, "work");
                 assert_eq!(
                     attach_command,
-                    "tmux attach -t work \; select-window -t work:fix-1-thing"
+                    "tmux attach -t work \\; select-window -t work:fix-1-thing"
                 );
             }
             o => panic!("unexpected {o:?}"),
