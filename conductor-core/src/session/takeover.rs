@@ -668,6 +668,7 @@ mod tests {
             panic!("expected Launched");
         };
 
+        #[allow(clippy::type_complexity)]
         let (runtime, session, parent, pane, pid, status, model): (
             String,
             String,
