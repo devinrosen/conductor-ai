@@ -320,7 +320,12 @@ pub(super) fn tool_run_workflow(
     ))
 }
 
-fn format_run_started(workflow_name: &str, run_id: &str, dry_run: bool, build_line: &str) -> String {
+fn format_run_started(
+    workflow_name: &str,
+    run_id: &str,
+    dry_run: bool,
+    build_line: &str,
+) -> String {
     format!(
         "Workflow '{workflow_name}' started.\nrun_id: {run_id}\nstatus: pending\ndry_run: {dry_run}{build_line}\nWait for it with conductor_wait_run (or check progress with conductor_get_run)."
     )

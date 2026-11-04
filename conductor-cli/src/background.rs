@@ -172,11 +172,7 @@ pub struct DetachedChild {
 pub fn spawn_background_workflow() -> Result<String> {
     let exe = std::env::current_exe().context("Failed to locate the conductor executable")?;
     let parent_args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let started = spawn_detached(
-        &exe,
-        |write_fd| child_args(parent_args, write_fd),
-        None,
-    )?;
+    let started = spawn_detached(&exe, |write_fd| child_args(parent_args, write_fd), None)?;
     Ok(started.run_id)
 }
 

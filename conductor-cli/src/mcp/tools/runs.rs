@@ -1111,7 +1111,10 @@ mod tests {
         );
         // Preconditions pass, so it reaches the launch, which fails in tests
         // (the harness binary is never exec'd as `conductor`).
-        assert!(text.contains("Failed to resume workflow run"), "got: {text}");
+        assert!(
+            text.contains("Failed to resume workflow run"),
+            "got: {text}"
+        );
     }
 
     #[test]

@@ -273,7 +273,8 @@ mod tests {
     #[tokio::test]
     async fn test_poll_once_skips_lookup_when_idle() {
         let reg = make_registry();
-        let lookup: TerminalLookup = Arc::new(|_| panic!("lookup must not run with no subscribers"));
+        let lookup: TerminalLookup =
+            Arc::new(|_| panic!("lookup must not run with no subscribers"));
         poll_once(&reg, &lookup).await;
     }
 

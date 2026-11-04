@@ -44,8 +44,11 @@ fn launch_detached(config: &Config, notify_fd: i32) -> Result<()> {
             target_label,
             db_path,
         } => {
-            let workflow =
-                conductor_core::workflow::load_def_by_name(&working_dir, &repo_path, &workflow_name)?;
+            let workflow = conductor_core::workflow::load_def_by_name(
+                &working_dir,
+                &repo_path,
+                &workflow_name,
+            )?;
             let params = conductor_core::workflow::WorkflowExecStandalone {
                 config: config.clone(),
                 workflow,
