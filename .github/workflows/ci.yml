@@ -11,6 +11,7 @@ jobs:
   changes:
     name: Detect Changes
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       core: ${{ steps.filter.outputs.core }}
@@ -69,6 +70,7 @@ jobs:
     name: Format
     needs: [changes]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - run: rustup component add rustfmt
@@ -80,6 +82,7 @@ jobs:
     name: Clippy
     needs: [changes]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: awalsh128/cache-apt-pkgs-action@latest
@@ -104,6 +107,7 @@ jobs:
     name: Test
     needs: [changes]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: awalsh128/cache-apt-pkgs-action@latest
@@ -121,21 +125,39 @@ jobs:
         with:
           tool: nextest
         if: needs.changes.outputs.rust == 'true'
-      - run: cargo nextest run -p conductor-core
-        if: needs.changes.outputs.core == 'true'
-      - run: cargo nextest run -p conductor-cli
-        if: needs.changes.outputs.cli == 'true'
-      - run: cargo nextest run -p conductor-tui
-        if: needs.changes.outputs.tui == 'true'
-      - run: cargo nextest run -p conductor-web
-        if: needs.changes.outputs.web == 'true' && needs.changes.outputs.desktop != 'true'
-      - run: cargo nextest run -p conductor-web -p conductor-desktop
-        if: needs.changes.outputs.web == 'true' && needs.changes.outputs.desktop == 'true'
+      # One nextest invocation for every changed crate: separate invocations
+      # rebuilt conductor-core for each dependent crate (they enable its
+      # `test-helpers` feature) and ran the suites one after another (#3222).
+      # The crate selection is the same as the old per-crate steps.
+      - name: cargo nextest run (changed crates)
+        if: needs.changes.outputs.rust == 'true'
+        env:
+          CORE: ${{ needs.changes.outputs.core }}
+          CLI: ${{ needs.changes.outputs.cli }}
+          TUI: ${{ needs.changes.outputs.tui }}
+          WEB: ${{ needs.changes.outputs.web }}
+          DESKTOP: ${{ needs.changes.outputs.desktop }}
+        run: |
+          pkgs=()
+          if [ "$CORE" = true ]; then pkgs+=(-p conductor-core); fi
+          if [ "$CLI" = true ]; then pkgs+=(-p conductor-cli); fi
+          if [ "$TUI" = true ]; then pkgs+=(-p conductor-tui); fi
+          if [ "$WEB" = true ]; then
+            pkgs+=(-p conductor-web)
+            if [ "$DESKTOP" = true ]; then pkgs+=(-p conductor-desktop); fi
+          fi
+          if [ ${#pkgs[@]} -eq 0 ]; then
+            echo "No crate tests to run for this change set."
+            exit 0
+          fi
+          echo "cargo nextest run ${pkgs[*]}"
+          cargo nextest run "${pkgs[@]}"
 
   validate-workflows:
     name: Validate Workflows
     needs: [changes]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2.9.1
@@ -149,6 +171,7 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.migrations == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Check migration count matches diagram header
@@ -166,6 +189,7 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.migrations == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2.9.1
