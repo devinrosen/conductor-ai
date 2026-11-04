@@ -318,6 +318,7 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         if !has_waiting {
             hint.push_str("  X=clear conv");
         }
+        hint.push_str("  C=session");
         hint.push_str("  w=workflow");
         if has_resumable_wf {
             hint.push_str("  r=resume wf");

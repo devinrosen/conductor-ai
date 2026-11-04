@@ -47,6 +47,8 @@ const OTHER_TOOLS: &[&str] = &[
     "conductor_reject_gate",
     "conductor_adopt_worktree",
     "conductor_push_worktree",
+    // Shells out to tmux, and sleeps briefly to confirm claude started.
+    "conductor_open_session",
     "conductor_set_base_branch",
     "conductor_cancel_run",
     // Blocks by design until the run finishes or times out, so it must not get the read timeout.
@@ -400,6 +402,35 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
             schema(&[("repo", "Repo slug", true), ("slug", "Worktree slug", true)]),
         ),
         Tool::new(
+            "conductor_open_session",
+            "Open, resume or locate a worktree's interactive Claude Code session in tmux. \
+             If a session is already live, returns where it is; otherwise resumes the newest \
+             past session, or starts a fresh one (`new`). Never switches the user's tmux focus: \
+             it returns the attach command instead.",
+            schema_typed(&[
+                ("repo", "string", "Repo slug", true),
+                ("slug", "string", "Worktree slug or branch", true),
+                (
+                    "new",
+                    "boolean",
+                    "Start a fresh session even when a past session exists",
+                    false,
+                ),
+                (
+                    "prompt",
+                    "string",
+                    "Start prompt; overrides any generated opener",
+                    false,
+                ),
+                (
+                    "window",
+                    "string",
+                    "tmux window name (default: ticket key, or the worktree slug)",
+                    false,
+                ),
+            ]),
+        ),
+        Tool::new(
             "conductor_cancel_run",
             "Cancel a workflow run that is pending, running, or waiting. \
              In-progress steps and child agent runs are best-effort cancelled before \
@@ -643,6 +674,7 @@ pub(super) fn dispatch_tool(
         "conductor_reject_gate" => gates::tool_reject_gate(conductor, args),
         "conductor_adopt_worktree" => worktrees::tool_adopt_worktree(conductor, args),
         "conductor_push_worktree" => worktrees::tool_push_worktree(conductor, args),
+        "conductor_open_session" => worktrees::tool_open_session(conductor, args),
         "conductor_set_base_branch" => worktrees::tool_set_base_branch(conductor, args),
         "conductor_cancel_run" => runs::tool_cancel_run(conductor, args),
         "conductor_wait_run" => runs::tool_wait_run(conductor, args, progress),

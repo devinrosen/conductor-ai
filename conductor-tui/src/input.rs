@@ -830,6 +830,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Char('s') => Action::SyncTickets,
         KeyCode::Char('S') => Action::OpenSettings,
         KeyCode::Char('o') => Action::OpenTicketUrl,
+        KeyCode::Char('C') => Action::OpenSession,
 
         _ => Action::None,
     }

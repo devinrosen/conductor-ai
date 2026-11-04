@@ -62,8 +62,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: ConversationCommands,
     },
-    /// Interactive Claude Code session tracking (called by hooks, not by humans)
-    #[command(hide = true)]
+    /// Interactive Claude Code sessions: open, resume or focus one in tmux
     Session {
         #[command(subcommand)]
         command: SessionCommands,
@@ -73,7 +72,31 @@ pub enum Commands {
 #[derive(Subcommand)]
 pub enum SessionCommands {
     /// Record an interactive Claude Code session's state from a hook payload on stdin
+    /// (called by Claude Code hooks, not by humans)
+    #[command(hide = true)]
     Hook,
+    /// Focus a worktree's live session, resume its newest one, or start a fresh one in tmux
+    Open {
+        /// Repo slug
+        repo: String,
+        /// Worktree slug or branch
+        worktree: String,
+        /// Start a fresh session even when a past session exists
+        #[arg(long)]
+        new: bool,
+        /// Start prompt (overrides any generated opener)
+        #[arg(long, conflicts_with = "prompt_file")]
+        prompt: Option<String>,
+        /// Read the start prompt from a file, or `-` for stdin
+        #[arg(long, value_name = "PATH")]
+        prompt_file: Option<String>,
+        /// tmux window name (default: ticket key, or the worktree slug)
+        #[arg(long)]
+        window: Option<String>,
+        /// Print the outcome as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]

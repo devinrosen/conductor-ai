@@ -399,10 +399,51 @@ pub struct Config {
     pub notify: NotifyConfig,
     #[serde(default)]
     pub agents: AgentsConfig,
+    /// `[sessions]`: launching interactive Claude Code sessions in tmux (RFC 021).
+    #[serde(default)]
+    pub sessions: SessionsConfig,
     /// Named runtime configurations for non-Claude agent runtimes (RFC 007).
     /// The built-in "claude" runtime does not require an entry here.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub runtimes: HashMap<String, RuntimeConfig>,
+}
+
+/// `[sessions]`: how `conductor session open` launches interactive sessions.
+///
+/// ```toml
+/// [sessions]
+/// tmux_session = "work"
+/// opener_template = "Work on {{key}} ({{title}}). Read {{url}} first."
+/// resume_template = "Check where things stand and continue."
+/// ```
+///
+/// Templates use `{{var}}` placeholders: `key`, `title`, `url`, `source`, `branch`,
+/// `base`, `worktree_path`. A repo's `.conductor/config.toml` `[sessions]` overrides them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionsConfig {
+    /// Name of the tmux session that holds the launched windows.
+    #[serde(default = "default_tmux_session")]
+    pub tmux_session: String,
+    /// Start prompt for a fresh session on a worktree with a linked ticket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opener_template: Option<String>,
+    /// Prompt for a resumed session. Unset means no prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_template: Option<String>,
+}
+
+fn default_tmux_session() -> String {
+    "work".to_string()
+}
+
+impl Default for SessionsConfig {
+    fn default() -> Self {
+        Self {
+            tmux_session: default_tmux_session(),
+            opener_template: None,
+            resume_template: None,
+        }
+    }
 }
 
 /// Top-level `[github]` section.
@@ -1011,6 +1052,17 @@ pub fn ensure_dirs(config: &Config) -> Result<()> {
 pub struct RepoConfig {
     #[serde(default)]
     pub defaults: RepoDefaults,
+    /// Per-repo overrides of the global `[sessions]` templates.
+    #[serde(default)]
+    pub sessions: RepoSessions,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RepoSessions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opener_template: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_template: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1077,6 +1129,15 @@ impl RepoConfig {
             }
         }
 
+        if let Some(sessions) = merged.get_mut("sessions").and_then(|d| d.as_table_mut()) {
+            if self.sessions.opener_template.is_none() {
+                sessions.remove("opener_template");
+            }
+            if self.sessions.resume_template.is_none() {
+                sessions.remove("resume_template");
+            }
+        }
+
         let contents = toml::to_string_pretty(&merged)
             .map_err(|e| ConductorError::Config(format!("serialize repo config: {e}")))?;
         std::fs::write(&path, contents)?;
@@ -1091,6 +1152,20 @@ mod tests {
 
     /// Serializes tests that mutate CONDUCTOR_DB_PATH to prevent races.
     static DB_PATH_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn sessions_config_defaults_and_parses() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.sessions.tmux_session, "work");
+        assert!(config.sessions.opener_template.is_none());
+        let config: Config =
+            toml::from_str("[sessions]\ntmux_session = \"dev\"\nresume_template = \"hi\"\n")
+                .unwrap();
+        assert_eq!(config.sessions.tmux_session, "dev");
+        assert_eq!(config.sessions.resume_template.as_deref(), Some("hi"));
+        let repo: RepoConfig = toml::from_str("[sessions]\nopener_template = \"x\"\n").unwrap();
+        assert_eq!(repo.sessions.opener_template.as_deref(), Some("x"));
+    }
 
     #[test]
     fn session_idle_config_defaults_when_absent() {
@@ -1798,6 +1873,7 @@ bot_name = "my-bot"
                 bot_name: None,
                 feature_merge_strategy: Some("merge".to_string()),
             },
+            sessions: RepoSessions::default(),
         };
         rc.save(dir.path()).unwrap();
 
@@ -1830,6 +1906,7 @@ bot_name = "my-bot"
                 bot_name: None,
                 feature_merge_strategy: None,
             },
+            sessions: RepoSessions::default(),
         };
         rc.save(dir.path()).unwrap();
         let loaded = RepoConfig::load(dir.path()).unwrap();
@@ -1844,6 +1921,7 @@ bot_name = "my-bot"
                 bot_name: None,
                 feature_merge_strategy: None,
             },
+            sessions: RepoSessions::default(),
         };
         rc2.save(dir.path()).unwrap();
         let loaded2 = RepoConfig::load(dir.path()).unwrap();

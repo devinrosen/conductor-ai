@@ -241,6 +241,8 @@ impl App {
             Action::Delete => self.handle_delete(),
             Action::ClearConversation => self.handle_clear_conversation(),
             Action::Push => self.handle_push(),
+            Action::OpenSession => self.handle_open_session(),
+            Action::OpenSessionComplete { result } => self.handle_open_session_complete(result),
             Action::CreatePr => self.handle_create_pr(),
             Action::SyncTickets => self.handle_sync_tickets(),
             Action::LinkTicket => self.handle_link_ticket(),
