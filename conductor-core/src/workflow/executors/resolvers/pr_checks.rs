@@ -34,29 +34,73 @@ impl PrChecksGateResolver {
     }
 }
 
-/// Parse a `gh pr checks --json state` response and return true if all checks
-/// are `SUCCESS` or `SKIPPED` (and at least one check exists).
-fn parse_pr_checks(val: &serde_json::Value) -> bool {
-    if let Some(checks) = val.as_array() {
-        !checks.is_empty()
-            && checks.iter().all(|c| {
-                c["state"].as_str() == Some("SUCCESS") || c["state"].as_str() == Some("SKIPPED")
-            })
-    } else {
-        false
+/// How `gh pr checks` classifies a check (its `bucket` field).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckBucket {
+    Pass,
+    Skipping,
+    Fail,
+    Cancel,
+    Pending,
+}
+
+/// Classify one check from `gh pr checks --json name,state,bucket`.
+///
+/// Uses gh's own `bucket` classification, which `poll` always requests. A
+/// missing or unrecognised bucket is `Pending` (the conservative choice).
+fn check_bucket(c: &serde_json::Value) -> CheckBucket {
+    match c["bucket"].as_str() {
+        Some("pass") => CheckBucket::Pass,
+        Some("skipping") => CheckBucket::Skipping,
+        Some("fail") => CheckBucket::Fail,
+        Some("cancel") => CheckBucket::Cancel,
+        _ => CheckBucket::Pending,
     }
 }
 
 /// Convert parsed `gh pr checks` output into a `GatePoll`.
 ///
+/// - Any failed or cancelled check → `Rejected`, even if others are still
+///   running, so a red PR fails promptly instead of waiting out the timeout.
+/// - Otherwise any pending check, no checks, or non-array output → `Pending`.
+/// - Otherwise (all pass/skipping) → `Approved`.
+///
 /// Extracted so tests can exercise the check evaluation logic without invoking
 /// a real `gh` subprocess.
 fn evaluate_checks(val: &serde_json::Value, gate_name: &str) -> GatePoll {
-    if parse_pr_checks(val) {
+    let Some(checks) = val.as_array() else {
+        return GatePoll::Pending;
+    };
+    if checks.is_empty() {
+        return GatePoll::Pending;
+    }
+
+    let mut failed = Vec::new();
+    let mut any_pending = false;
+    for c in checks {
+        match check_bucket(c) {
+            CheckBucket::Pass | CheckBucket::Skipping => {}
+            CheckBucket::Pending => any_pending = true,
+            bucket @ (CheckBucket::Fail | CheckBucket::Cancel) => {
+                let name = c["name"].as_str().unwrap_or("<unnamed>");
+                let state = c["state"]
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("{bucket:?}").to_lowercase());
+                failed.push(format!("{name} ({state})"));
+            }
+        }
+    }
+
+    if !failed.is_empty() {
+        let msg = format!("{} PR check(s) failed: {}", failed.len(), failed.join(", "));
+        tracing::warn!("Gate '{}': {}", gate_name, msg);
+        GatePoll::Rejected(msg)
+    } else if any_pending {
+        GatePoll::Pending
+    } else {
         tracing::info!("Gate '{}': all checks passing", gate_name);
         GatePoll::Approved(None)
-    } else {
-        GatePoll::Pending
     }
 }
 
@@ -76,7 +120,7 @@ impl GateResolver for PrChecksGateResolver {
         _ctx: &dyn RunContext,
     ) -> Result<GatePoll, EngineError> {
         if let Some(val) = self.common.run_gh(
-            &["pr", "checks", "--json", "state"],
+            &["pr", "checks", "--json", "name,state,bucket"],
             params.as_identity.as_deref(),
         ) {
             return Ok(evaluate_checks(&val, &params.gate_name));
@@ -87,6 +131,15 @@ impl GateResolver for PrChecksGateResolver {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn rejected_msg(val: &serde_json::Value) -> String {
+        match evaluate_checks(val, "test-gate") {
+            GatePoll::Rejected(m) => m,
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_poll_interval_is_sixty_seconds() {
@@ -100,90 +153,120 @@ mod tests {
         );
         assert_eq!(resolver.poll_interval(), Some(Duration::from_secs(60)));
     }
-    use super::*;
-    use serde_json::json;
 
     #[test]
-    fn test_evaluate_checks_all_success_approved() {
+    fn test_all_pass_approved() {
         let val = json!([
-            { "state": "SUCCESS" },
-            { "state": "SUCCESS" }
+            { "name": "a", "state": "SUCCESS", "bucket": "pass" },
+            { "name": "b", "state": "SUCCESS", "bucket": "pass" }
         ]);
         assert!(matches!(
-            evaluate_checks(&val, "test-gate"),
+            evaluate_checks(&val, "g"),
             GatePoll::Approved(None)
         ));
     }
 
     #[test]
-    fn test_evaluate_checks_with_failure_pending() {
+    fn test_pass_and_skipping_approved() {
         let val = json!([
-            { "state": "SUCCESS" },
-            { "state": "FAILURE" }
+            { "name": "a", "state": "SUCCESS", "bucket": "pass" },
+            { "name": "b", "state": "SKIPPED", "bucket": "skipping" }
         ]);
         assert!(matches!(
-            evaluate_checks(&val, "test-gate"),
+            evaluate_checks(&val, "g"),
+            GatePoll::Approved(None)
+        ));
+        let val = json!([{ "name": "b", "state": "SKIPPED", "bucket": "skipping" }]);
+        assert!(matches!(
+            evaluate_checks(&val, "g"),
+            GatePoll::Approved(None)
+        ));
+    }
+
+    #[test]
+    fn test_fail_rejected_names_check_and_state() {
+        let val = json!([
+            { "name": "Test", "state": "SUCCESS", "bucket": "pass" },
+            { "name": "Clippy", "state": "FAILURE", "bucket": "fail" }
+        ]);
+        let msg = rejected_msg(&val);
+        assert!(msg.contains("Clippy"), "{msg}");
+        assert!(msg.contains("FAILURE"), "{msg}");
+        assert!(!msg.contains("Test"), "{msg}");
+    }
+
+    #[test]
+    fn test_cancel_rejected() {
+        let val = json!([{ "name": "Build", "state": "CANCELLED", "bucket": "cancel" }]);
+        assert!(rejected_msg(&val).contains("Build"));
+    }
+
+    #[test]
+    fn test_fail_with_pending_rejected() {
+        let val = json!([
+            { "name": "Slow", "state": "IN_PROGRESS", "bucket": "pending" },
+            { "name": "Clippy", "state": "FAILURE", "bucket": "fail" }
+        ]);
+        assert!(rejected_msg(&val).contains("Clippy"));
+    }
+
+    #[test]
+    fn test_multiple_failures_all_named() {
+        let val = json!([
+            { "name": "Clippy", "state": "FAILURE", "bucket": "fail" },
+            { "name": "Test", "state": "TIMED_OUT", "bucket": "fail" }
+        ]);
+        let msg = rejected_msg(&val);
+        assert!(msg.starts_with("2 PR check(s) failed"), "{msg}");
+        assert!(msg.contains("Clippy (FAILURE)") && msg.contains("Test (TIMED_OUT)"));
+    }
+
+    #[test]
+    fn test_pending_with_pass_is_pending() {
+        let val = json!([
+            { "name": "a", "state": "SUCCESS", "bucket": "pass" },
+            { "name": "b", "state": "QUEUED", "bucket": "pending" }
+        ]);
+        assert!(matches!(evaluate_checks(&val, "g"), GatePoll::Pending));
+    }
+
+    #[test]
+    fn test_empty_and_non_array_pending() {
+        assert!(matches!(
+            evaluate_checks(&json!([]), "g"),
+            GatePoll::Pending
+        ));
+        assert!(matches!(
+            evaluate_checks(&json!({ "state": "SUCCESS" }), "g"),
             GatePoll::Pending
         ));
     }
 
     #[test]
-    fn test_evaluate_checks_empty_pending() {
-        let val = json!([]);
-        assert!(matches!(
-            evaluate_checks(&val, "test-gate"),
-            GatePoll::Pending
-        ));
+    fn test_bucket_mapping_and_missing_bucket_pending() {
+        for (bucket, expected) in [
+            ("pass", CheckBucket::Pass),
+            ("skipping", CheckBucket::Skipping),
+            ("fail", CheckBucket::Fail),
+            ("cancel", CheckBucket::Cancel),
+            ("pending", CheckBucket::Pending),
+        ] {
+            assert_eq!(
+                check_bucket(&json!({ "bucket": bucket })),
+                expected,
+                "{bucket}"
+            );
+        }
+        // No bucket: never classified from state, so stays Pending.
+        assert_eq!(
+            check_bucket(&json!({ "state": "FAILURE" })),
+            CheckBucket::Pending
+        );
     }
 
     #[test]
-    fn test_parse_pr_checks_all_success() {
-        let val = json!([
-            { "state": "SUCCESS" },
-            { "state": "SUCCESS" }
-        ]);
-        assert!(parse_pr_checks(&val), "all SUCCESS should pass");
-    }
-
-    #[test]
-    fn test_parse_pr_checks_mixed_success_and_skipped() {
-        let val = json!([
-            { "state": "SUCCESS" },
-            { "state": "SKIPPED" }
-        ]);
-        assert!(parse_pr_checks(&val), "SUCCESS + SKIPPED should pass");
-    }
-
-    #[test]
-    fn test_parse_pr_checks_all_skipped() {
-        let val = json!([{ "state": "SKIPPED" }]);
-        assert!(parse_pr_checks(&val), "all SKIPPED should pass");
-    }
-
-    #[test]
-    fn test_parse_pr_checks_with_failure() {
-        let val = json!([
-            { "state": "SUCCESS" },
-            { "state": "FAILURE" }
-        ]);
-        assert!(!parse_pr_checks(&val), "any FAILURE should not pass");
-    }
-
-    #[test]
-    fn test_parse_pr_checks_with_pending() {
-        let val = json!([{ "state": "PENDING" }]);
-        assert!(!parse_pr_checks(&val), "PENDING should not pass");
-    }
-
-    #[test]
-    fn test_parse_pr_checks_empty() {
-        let val = json!([]);
-        assert!(!parse_pr_checks(&val), "empty checks array should not pass");
-    }
-
-    #[test]
-    fn test_parse_pr_checks_not_array() {
-        let val = json!({ "state": "SUCCESS" });
-        assert!(!parse_pr_checks(&val), "non-array JSON should not pass");
+    fn test_unknown_bucket_pending() {
+        let val = json!([{ "name": "x", "state": "SUCCESS", "bucket": "weird" }]);
+        assert!(matches!(evaluate_checks(&val, "g"), GatePoll::Pending));
     }
 }
