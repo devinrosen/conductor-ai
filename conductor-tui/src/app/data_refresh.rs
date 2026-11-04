@@ -31,6 +31,9 @@ impl App {
         }
 
         self.state.data.latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
+        self.state.data.set_takeover_links(
+            conductor_core::session::takeover::takeover_links(&self.conn).unwrap_or_default(),
+        );
 
         self.refresh_pending_feedback();
 

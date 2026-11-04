@@ -16,6 +16,7 @@ use conductor_core::config::Config;
 use conductor_core::session::launch::{
     open_session, resolve_prompt, FocusMode, OpenSessionOutcome, OpenSessionRequest, RealTmux,
 };
+use conductor_core::session::takeover::{take_over_run, TakeOverRequest};
 use rusqlite::Connection;
 
 use conductor_core::session::hook::{handled_event_names, is_handled_event, HookEnv, HookEvent};
@@ -70,6 +71,32 @@ pub fn handle_open(conn: &Connection, config: &Config, args: OpenArgs) -> Result
         &RealTmux,
     )?;
     print_outcome(&outcome, args.json)
+}
+
+pub struct TakeOverArgs {
+    pub run_id: String,
+    pub window: Option<String>,
+    pub json: bool,
+}
+
+/// `conductor session take-over`: resume a finished headless run's Claude session interactively.
+pub fn handle_take_over(conn: &Connection, config: &Config, args: TakeOverArgs) -> Result<()> {
+    let outcome = take_over_run(
+        conn,
+        config,
+        &TakeOverRequest {
+            run_id: args.run_id,
+            window: args.window,
+            focus: FocusMode::from_env(),
+        },
+        &RealTmux,
+    )?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&outcome)?);
+    } else {
+        println!("{}", outcome.human_text());
+    }
+    Ok(())
 }
 
 fn print_outcome(outcome: &OpenSessionOutcome, json: bool) -> Result<()> {

@@ -134,6 +134,7 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
         help_line("p", "Prompt Claude agent", theme),
         help_line("x", "Stop running agent", theme),
         help_line("C", "Open / focus Claude session in tmux", theme),
+        help_line("O", "Take over a finished run's session in tmux", theme),
         help_line("f", "Submit feedback to agent", theme),
         help_line("F", "Dismiss feedback request", theme),
         Line::from(""),
@@ -147,6 +148,7 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
         help_line("x", "Cancel workflow run", theme),
         help_line("r", "Resume workflow run", theme),
         help_line("Enter", "Approve waiting gate step", theme),
+        help_line("O", "Take over the step's agent session in tmux", theme),
         Line::from(""),
         Line::from(Span::styled(
             "Workflow Definition Detail",

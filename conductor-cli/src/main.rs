@@ -122,6 +122,19 @@ fn run(cli: Cli) -> Result<()> {
                     json,
                 },
             )?,
+            SessionCommands::TakeOver {
+                run_id,
+                window,
+                json,
+            } => handlers::session::handle_take_over(
+                &conductor.conn,
+                &conductor.config,
+                handlers::session::TakeOverArgs {
+                    run_id,
+                    window,
+                    json,
+                },
+            )?,
         },
         Commands::Conversation { command } => handlers::conversation::handle_conversation(
             command,

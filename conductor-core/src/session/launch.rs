@@ -232,6 +232,8 @@ pub trait Tmux {
     /// Switch the current client to `pane`'s window and select the pane.
     fn switch_to(&self, pane: &str) -> Result<()>;
     fn pane_alive(&self, pane: &str) -> Result<bool>;
+    /// PID of the process running in `pane`, when tmux reports one.
+    fn pane_pid(&self, pane: &str) -> Result<Option<u32>>;
 }
 
 /// [`Tmux`] backed by the real `tmux` binary.
@@ -366,6 +368,14 @@ impl Tmux for RealTmux {
         let out = Self::run(&["display-message", "-p", "-t", pane, "#{pane_dead}"])?;
         Ok(out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "0")
     }
+
+    fn pane_pid(&self, pane: &str) -> Result<Option<u32>> {
+        let out = Self::run(&["display-message", "-p", "-t", pane, "#{pane_pid}"])?;
+        if !out.status.success() {
+            return Ok(None);
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().parse().ok())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -384,21 +394,25 @@ pub struct InteractiveRunRow {
     pub tmux_pane: Option<String>,
 }
 
-/// Interactive runs for a worktree, most recent activity first.
+/// Interactive runs matching `filter` (a `WHERE` fragment over `agent_runs` with one `?1`
+/// parameter), most recent activity first.
 ///
-/// A resumed session reopens its existing row and `started_at` keeps its original
-/// value, so order by the latest of end / idle / start.
-pub fn interactive_runs_for_worktree(
+/// The single place that owns the interactive-row SELECT, its row mapping and its ordering, so
+/// every "which row owns this" question agrees. A resumed session reopens its existing row and
+/// `started_at` keeps its original value, so order by the latest of end / idle / start.
+fn interactive_rows_where(
     conn: &Connection,
-    worktree_id: &str,
+    filter: &str,
+    param: &str,
 ) -> Result<Vec<InteractiveRunRow>> {
-    let mut stmt = conn.prepare(
+    let sql = format!(
         "SELECT id, session_id, status, subprocess_pid, subprocess_started_at, started_at, tmux_pane \
-         FROM agent_runs WHERE worktree_id = ?1 AND runtime = 'interactive' \
-         ORDER BY COALESCE(ended_at, idle_since, started_at) DESC, id DESC",
-    )?;
+         FROM agent_runs WHERE {filter} AND runtime = 'interactive' \
+         ORDER BY COALESCE(ended_at, idle_since, started_at) DESC, id DESC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
-        .query_map([worktree_id], |r| {
+        .query_map([param], |r| {
             Ok(InteractiveRunRow {
                 id: r.get(0)?,
                 session_id: r.get(1)?,
@@ -413,7 +427,23 @@ pub fn interactive_runs_for_worktree(
     Ok(rows)
 }
 
-fn is_live_status(status: &str) -> bool {
+/// Interactive runs for a worktree, most recent activity first.
+pub fn interactive_runs_for_worktree(
+    conn: &Connection,
+    worktree_id: &str,
+) -> Result<Vec<InteractiveRunRow>> {
+    interactive_rows_where(conn, "worktree_id = ?1", worktree_id)
+}
+
+/// Interactive runs holding Claude session `session_id`, most recent activity first.
+pub fn interactive_runs_for_session(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<InteractiveRunRow>> {
+    interactive_rows_where(conn, "session_id = ?1", session_id)
+}
+
+pub(crate) fn is_live_status(status: &str) -> bool {
     matches!(status, "running" | "waiting_for_feedback" | "idle")
 }
 
@@ -450,7 +480,7 @@ pub fn newest_session_id(rows: &[InteractiveRunRow]) -> Option<String> {
 }
 
 /// `.` and `:` are tmux target separators; whitespace is awkward. Replace them with `-`.
-fn sanitize_window_name(name: &str) -> String {
+pub(crate) fn sanitize_window_name(name: &str) -> String {
     name.chars()
         .map(|c| {
             if c == '.' || c == ':' || c.is_whitespace() {
@@ -630,7 +660,7 @@ pub fn hooks_settings_json() -> Result<String> {
 }
 
 /// Write `<conductor_dir>/session-hooks.json` atomically and return its path.
-fn write_hooks_settings_file() -> Result<PathBuf> {
+pub(crate) fn write_hooks_settings_file() -> Result<PathBuf> {
     let dir = conductor_dir();
     std::fs::create_dir_all(dir)?;
     let path = dir.join("session-hooks.json");
@@ -640,7 +670,7 @@ fn write_hooks_settings_file() -> Result<PathBuf> {
     Ok(path)
 }
 
-fn claude_dir(config: &Config) -> Option<PathBuf> {
+pub(crate) fn claude_dir(config: &Config) -> Option<PathBuf> {
     config
         .general
         .resolve_optional_claude_dir()
@@ -648,7 +678,7 @@ fn claude_dir(config: &Config) -> Option<PathBuf> {
         .or_else(|| dirs::home_dir().map(|h| h.join(".claude")))
 }
 
-fn launch_env(config: &Config) -> Vec<(String, String)> {
+pub(crate) fn launch_env(config: &Config) -> Vec<(String, String)> {
     let mut env = Vec::new();
     if let Some(dir) = config.general.resolve_optional_claude_dir() {
         env.push((
@@ -681,15 +711,7 @@ pub fn open_session(
         req,
         tmux,
         &process_is_alive,
-        &|wt_path| {
-            let enabled = claude_dir(config)
-                .is_some_and(|d| conductor_plugin_enabled(&d, Path::new(wt_path)));
-            if enabled {
-                Ok(None)
-            } else {
-                write_hooks_settings_file().map(Some)
-            }
-        },
+        &|wt_path| real_hooks_settings(config, wt_path),
         POST_LAUNCH_SETTLE,
     )
 }
@@ -792,36 +814,24 @@ fn open_session_with(
         Some(w) => sanitize_window_name(w),
         None => window_name(ticket.as_ref(), &repo.slug, &wt.slug),
     };
-    let session_exists = tmux.has_session(&session)?;
-    if session_exists && tmux.window_exists(&session, &window)? {
-        return Err(ConductorError::InvalidInput(format!(
-            "tmux window '{window}' already exists in session '{session}'; \
-             pass a different window name"
-        )));
-    }
 
-    let settings = hooks_settings(&wt.path)?;
-    let argv = claude_args(resume_id.as_deref(), settings.as_deref(), prompt.as_deref());
-    let env = launch_env(config);
-    let pane_id = if session_exists {
-        tmux.new_window_detached(&session, &window, &wt.path, &env, &argv)?
-    } else {
-        tmux.new_session_detached(&session, &window, &wt.path, &env, &argv)?
-    };
-
-    if !settle.is_zero() {
-        std::thread::sleep(settle);
-    }
-    if !tmux.pane_alive(&pane_id)? {
-        return Err(ConductorError::Agent(format!(
-            "claude exited right after launch in window '{window}'; run `claude` in {} to see why",
-            wt.path
-        )));
-    }
+    let launched = launch_window(
+        tmux,
+        config,
+        &LaunchSpec {
+            session: &session,
+            window: &window,
+            cwd: &wt.path,
+            resume: resume_id.as_deref(),
+            prompt: prompt.as_deref(),
+        },
+        hooks_settings,
+        settle,
+    )?;
 
     let switched = req.focus == FocusMode::Switch;
     if switched {
-        tmux.switch_to(&pane_id)?;
+        tmux.switch_to(&launched.pane_id)?;
     }
     let mode = match resume_id {
         Some(session_id) => LaunchMode::Resume { session_id },
@@ -832,12 +842,183 @@ fn open_session_with(
         attach_command: attach_command(&session, &format!("{session}:{window}")),
         tmux_session: session,
         window,
-        pane_id,
+        pane_id: launched.pane_id,
         cwd: wt.path.clone(),
-        created_session: !session_exists,
+        created_session: launched.created_session,
         prompt_used: prompt.is_some(),
         switched,
     })
+}
+
+/// What [`launch_window`] should start.
+pub(crate) struct LaunchSpec<'a> {
+    pub session: &'a str,
+    pub window: &'a str,
+    pub cwd: &'a str,
+    pub resume: Option<&'a str>,
+    pub prompt: Option<&'a str>,
+}
+
+/// A window [`launch_window`] opened.
+pub(crate) struct LaunchedWindow {
+    pub pane_id: String,
+    pub created_session: bool,
+}
+
+/// The first free window name in `session`: `base`, else `fallback`. A missing tmux session
+/// has no windows, so `base` is free. [`launch_window`] still refuses an explicit name that is
+/// taken; this only chooses between two candidates.
+pub(crate) fn first_free_window(
+    tmux: &dyn Tmux,
+    session: &str,
+    base: &str,
+    fallback: &str,
+) -> Result<String> {
+    if tmux.has_session(session)? && tmux.window_exists(session, base)? {
+        Ok(fallback.to_string())
+    } else {
+        Ok(base.to_string())
+    }
+}
+
+/// Open a detached tmux window running `claude`: refuses a window name that is already taken,
+/// writes the hooks settings when needed, creates the window (and the session if missing),
+/// waits for `settle` and checks that claude is still running. Never switches focus.
+pub(crate) fn launch_window(
+    tmux: &dyn Tmux,
+    config: &Config,
+    spec: &LaunchSpec<'_>,
+    hooks_settings: &dyn Fn(&str) -> Result<Option<PathBuf>>,
+    settle: Duration,
+) -> Result<LaunchedWindow> {
+    let session_exists = tmux.has_session(spec.session)?;
+    if session_exists && tmux.window_exists(spec.session, spec.window)? {
+        return Err(ConductorError::InvalidInput(format!(
+            "tmux window '{}' already exists in session '{}'; \
+             pass a different window name",
+            spec.window, spec.session
+        )));
+    }
+
+    let settings = hooks_settings(spec.cwd)?;
+    let argv = claude_args(spec.resume, settings.as_deref(), spec.prompt);
+    let env = launch_env(config);
+    let pane_id = if session_exists {
+        tmux.new_window_detached(spec.session, spec.window, spec.cwd, &env, &argv)?
+    } else {
+        tmux.new_session_detached(spec.session, spec.window, spec.cwd, &env, &argv)?
+    };
+
+    if !settle.is_zero() {
+        std::thread::sleep(settle);
+    }
+    if !tmux.pane_alive(&pane_id)? {
+        return Err(ConductorError::Agent(format!(
+            "claude exited right after launch in window '{}'; run `claude` in {} to see why",
+            spec.window, spec.cwd
+        )));
+    }
+    Ok(LaunchedWindow {
+        pane_id,
+        created_session: !session_exists,
+    })
+}
+
+/// The hooks-settings seam used by the real entry points.
+pub(crate) fn real_hooks_settings(config: &Config, wt_path: &str) -> Result<Option<PathBuf>> {
+    let enabled =
+        claude_dir(config).is_some_and(|d| conductor_plugin_enabled(&d, Path::new(wt_path)));
+    if enabled {
+        Ok(None)
+    } else {
+        write_hooks_settings_file().map(Some)
+    }
+}
+
+/// Settle time used after a real launch.
+pub(crate) const LAUNCH_SETTLE: Duration = POST_LAUNCH_SETTLE;
+
+/// A recording [`Tmux`] fake shared by the launcher and takeover tests.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use std::cell::RefCell;
+
+    #[derive(Default)]
+    pub(crate) struct FakeTmux {
+        pub session_exists: bool,
+        pub windows: Vec<String>,
+        pub pane_target: Option<(String, String)>,
+        pub pane_alive: bool,
+        pub calls: RefCell<Vec<String>>,
+        pub argv: RefCell<Vec<String>>,
+        pub cwd: RefCell<String>,
+    }
+
+    impl FakeTmux {
+        pub(crate) fn new() -> Self {
+            Self {
+                pane_alive: true,
+                ..Default::default()
+            }
+        }
+        pub(crate) fn called(&self, s: &str) -> bool {
+            self.calls.borrow().iter().any(|c| c == s)
+        }
+    }
+
+    /// The pid the fake reports for every pane.
+    pub(crate) const FAKE_PANE_PID: u32 = 31337;
+
+    impl Tmux for FakeTmux {
+        fn has_session(&self, _: &str) -> Result<bool> {
+            Ok(self.session_exists)
+        }
+        fn new_session_detached(
+            &self,
+            _: &str,
+            window: &str,
+            cwd: &str,
+            _: &[(String, String)],
+            argv: &[String],
+        ) -> Result<String> {
+            self.calls
+                .borrow_mut()
+                .push(format!("new-session:{window}"));
+            *self.argv.borrow_mut() = argv.to_vec();
+            *self.cwd.borrow_mut() = cwd.to_string();
+            Ok("%9".into())
+        }
+        fn new_window_detached(
+            &self,
+            _: &str,
+            window: &str,
+            cwd: &str,
+            _: &[(String, String)],
+            argv: &[String],
+        ) -> Result<String> {
+            self.calls.borrow_mut().push(format!("new-window:{window}"));
+            *self.argv.borrow_mut() = argv.to_vec();
+            *self.cwd.borrow_mut() = cwd.to_string();
+            Ok("%9".into())
+        }
+        fn window_exists(&self, _: &str, window: &str) -> Result<bool> {
+            Ok(self.windows.iter().any(|w| w == window))
+        }
+        fn pane_target(&self, _: &str) -> Result<Option<(String, String)>> {
+            Ok(self.pane_target.clone())
+        }
+        fn switch_to(&self, pane: &str) -> Result<()> {
+            self.calls.borrow_mut().push(format!("switch:{pane}"));
+            Ok(())
+        }
+        fn pane_alive(&self, _: &str) -> Result<bool> {
+            Ok(self.pane_alive)
+        }
+        fn pane_pid(&self, _: &str) -> Result<Option<u32>> {
+            Ok(Some(FAKE_PANE_PID))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -886,76 +1067,9 @@ mod tests {
         assert_eq!(resolve_template(None, None), None);
     }
 
+    use super::test_support::FakeTmux;
     use super::*;
     use crate::test_helpers::{create_test_conn, insert_test_repo, insert_test_worktree};
-    use std::cell::RefCell;
-
-    #[derive(Default)]
-    struct FakeTmux {
-        session_exists: bool,
-        windows: Vec<String>,
-        pane_target: Option<(String, String)>,
-        pane_alive: bool,
-        calls: RefCell<Vec<String>>,
-        argv: RefCell<Vec<String>>,
-    }
-
-    impl FakeTmux {
-        fn new() -> Self {
-            Self {
-                pane_alive: true,
-                ..Default::default()
-            }
-        }
-        fn called(&self, s: &str) -> bool {
-            self.calls.borrow().iter().any(|c| c == s)
-        }
-    }
-
-    impl Tmux for FakeTmux {
-        fn has_session(&self, _: &str) -> Result<bool> {
-            Ok(self.session_exists)
-        }
-        fn new_session_detached(
-            &self,
-            _: &str,
-            window: &str,
-            _: &str,
-            _: &[(String, String)],
-            argv: &[String],
-        ) -> Result<String> {
-            self.calls
-                .borrow_mut()
-                .push(format!("new-session:{window}"));
-            *self.argv.borrow_mut() = argv.to_vec();
-            Ok("%9".into())
-        }
-        fn new_window_detached(
-            &self,
-            _: &str,
-            window: &str,
-            _: &str,
-            _: &[(String, String)],
-            argv: &[String],
-        ) -> Result<String> {
-            self.calls.borrow_mut().push(format!("new-window:{window}"));
-            *self.argv.borrow_mut() = argv.to_vec();
-            Ok("%9".into())
-        }
-        fn window_exists(&self, _: &str, window: &str) -> Result<bool> {
-            Ok(self.windows.iter().any(|w| w == window))
-        }
-        fn pane_target(&self, _: &str) -> Result<Option<(String, String)>> {
-            Ok(self.pane_target.clone())
-        }
-        fn switch_to(&self, pane: &str) -> Result<()> {
-            self.calls.borrow_mut().push(format!("switch:{pane}"));
-            Ok(())
-        }
-        fn pane_alive(&self, _: &str) -> Result<bool> {
-            Ok(self.pane_alive)
-        }
-    }
 
     fn setup() -> (Connection, Config) {
         let conn = create_test_conn();
@@ -1446,5 +1560,69 @@ mod tests {
         )
         .unwrap();
         assert!(conductor_plugin_enabled(dir.path(), wt.path()));
+    }
+
+    fn seed_interactive(conn: &Connection, id: &str, session: &str, started: &str) {
+        crate::test_helpers::insert_test_agent_run_with(
+            conn,
+            &crate::test_helpers::TestAgentRun {
+                id,
+                worktree_id: Some("w1"),
+                session_id: Some(session),
+                status: "idle",
+                runtime: "interactive",
+                parent_run_id: None,
+                started_at: started,
+            },
+        );
+    }
+
+    #[test]
+    fn interactive_runs_for_session_is_session_scoped_and_ordered_by_latest_activity() {
+        let (conn, _config) = setup();
+        seed_interactive(&conn, "old", "s1", "2024-01-01T00:00:00Z");
+        seed_interactive(&conn, "new", "s1", "2024-01-02T00:00:00Z");
+        seed_interactive(&conn, "other", "s2", "2024-01-03T00:00:00Z");
+        let ids = |s: &str| -> Vec<String> {
+            interactive_runs_for_session(&conn, s)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.id)
+                .collect()
+        };
+        assert_eq!(ids("s1"), vec!["new", "old"]);
+        assert_eq!(ids("s2"), vec!["other"]);
+        assert!(ids("nope").is_empty());
+
+        // A resumed row keeps its old started_at but ended later: it wins.
+        conn.execute(
+            "UPDATE agent_runs SET ended_at = '2024-02-01T00:00:00Z' WHERE id = 'old'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(ids("s1"), vec!["old", "new"]);
+        assert_eq!(
+            crate::session::takeover::session_owner(&conn, "s1")
+                .unwrap()
+                .as_deref(),
+            Some("old")
+        );
+    }
+
+    #[test]
+    fn first_free_window_branches() {
+        let none = FakeTmux::new();
+        assert_eq!(first_free_window(&none, "s", "w", "w-2").unwrap(), "w");
+        let free = FakeTmux {
+            session_exists: true,
+            ..FakeTmux::new()
+        };
+        assert_eq!(first_free_window(&free, "s", "w", "w-2").unwrap(), "w");
+        let taken = FakeTmux {
+            session_exists: true,
+            windows: vec!["w".into()],
+            ..FakeTmux::new()
+        };
+        assert_eq!(first_free_window(&taken, "s", "w", "w-2").unwrap(), "w-2");
     }
 }

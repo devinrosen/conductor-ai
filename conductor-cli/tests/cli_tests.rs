@@ -663,6 +663,7 @@ fn session_open_is_listed_but_session_hook_is_hidden_from_help() {
         .assert()
         .success()
         .stdout(predicate::str::contains("open"))
+        .stdout(predicate::str::contains("take-over"))
         .stdout(predicate::str::contains("hook").not());
 }
 

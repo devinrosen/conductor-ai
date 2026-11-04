@@ -177,6 +177,12 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
             &state.data.agent_totals,
             &state.theme,
         ));
+        if let Some(text) = takeover_link_text(state, run) {
+            lines.push(Line::from(Span::styled(
+                format!("  {text}"),
+                Style::default().fg(state.theme.label_secondary),
+            )));
+        }
 
         // Show pending feedback request prompt
         if let Some(ref fb) = state.data.pending_feedback {
@@ -715,4 +721,23 @@ fn render_child_run_line(
     }
 
     Line::from(spans)
+}
+
+/// How a run relates to a takeover (#3163): "taken over → interactive session (<status>)" on
+/// the headless run, "from step '<name>'" / "from run <id>" on the interactive one.
+fn takeover_link_text(state: &AppState, run: &conductor_core::agent::AgentRun) -> Option<String> {
+    if let Some(link) = state.data.taken_over_by.get(&run.id) {
+        return Some(format!(
+            "taken over → interactive session ({})",
+            link.interactive_status
+        ));
+    }
+    let link = state.data.taken_over_from.get(&run.id)?;
+    Some(match &link.step_name {
+        Some(step) => format!("from step '{step}'"),
+        None => format!(
+            "from run {}",
+            link.headless_run_id.chars().take(8).collect::<String>()
+        ),
+    })
 }

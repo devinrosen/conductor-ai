@@ -242,6 +242,8 @@ impl App {
             Action::ClearConversation => self.handle_clear_conversation(),
             Action::Push => self.handle_push(),
             Action::OpenSession => self.handle_open_session(),
+            Action::TakeOverRun => self.handle_take_over_run(),
+            Action::TakeOverComplete { result } => self.handle_take_over_complete(result),
             Action::OpenSessionComplete { result } => self.handle_open_session_complete(result),
             Action::CreatePr => self.handle_create_pr(),
             Action::SyncTickets => self.handle_sync_tickets(),
@@ -1014,6 +1016,7 @@ impl App {
                 self.state.data.ticket_labels = payload.ticket_labels;
                 self.state.data.ticket_dependencies = payload.ticket_dependencies;
                 self.state.data.latest_agent_runs = payload.latest_agent_runs;
+                self.state.data.set_takeover_links(payload.takeover_links);
                 self.state.data.ticket_agent_totals = payload.ticket_agent_totals;
                 self.state.data.latest_workflow_runs_by_worktree =
                     payload.latest_workflow_runs_by_worktree;
