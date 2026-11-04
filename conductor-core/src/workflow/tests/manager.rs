@@ -1764,7 +1764,7 @@ fn set_child_failed_with_error(conn: &Connection, id: &str, err: &str) {
 }
 
 #[test]
-fn test_find_resumable_child_run_skips_loop_exhausted_child() {
+fn test_find_resumable_child_run_is_pure_for_loop_exhausted_child() {
     let conn = setup_db();
     insert_workflow_run(&conn, "parent1", "parent-wf", "failed", None);
     insert_workflow_run(&conn, "child1", "child-wf", "failed", Some("parent1"));
@@ -1773,12 +1773,13 @@ fn test_find_resumable_child_run_skips_loop_exhausted_child() {
         "child1",
         "workflow error: do analyze-lint.has_lint_errors reached max_iterations (3)",
     );
+    // The query is pure; the runner decides not to resume (see its tests).
     let result = crate::workflow::find_resumable_child_run(&conn, "parent1", "child-wf").unwrap();
-    assert!(result.is_none(), "loop-exhausted child must not be resumed");
+    assert!(result.is_some());
 }
 
 #[test]
-fn test_find_resumable_child_run_skips_stuck_child() {
+fn test_find_resumable_child_run_is_pure_for_stuck_child() {
     let conn = setup_db();
     insert_workflow_run(&conn, "parent1", "parent-wf", "failed", None);
     insert_workflow_run(&conn, "child1", "child-wf", "failed", Some("parent1"));
@@ -1788,7 +1789,7 @@ fn test_find_resumable_child_run_skips_stuck_child() {
         "do check.has_errors stuck after 3 iterations with identical markers",
     );
     let result = crate::workflow::find_resumable_child_run(&conn, "parent1", "child-wf").unwrap();
-    assert!(result.is_none(), "stuck child must not be resumed");
+    assert!(result.is_some());
 }
 
 #[test]
@@ -1809,6 +1810,40 @@ fn test_is_loop_exhaustion_error() {
     assert!(!f("step 'x' failed"));
     assert!(!f("max_iterations must be positive"));
     assert!(!f("stuck after a while"));
+}
+
+/// Guard against runkon-flow rewording its loop-exhaustion errors: build the
+/// errors through runkon's own `check_max_iterations` / `check_stuck` and
+/// require `is_loop_exhaustion_error` to recognise them. Remove once
+/// runkon/runkon#133 provides a structured signal.
+#[test]
+fn test_is_loop_exhaustion_error_matches_runkon_engine_errors() {
+    use crate::workflow::manager::recovery::is_loop_exhaustion_error;
+    use runkon_flow::dsl::OnMaxIter;
+    use runkon_flow::engine::{check_max_iterations, check_stuck};
+    use runkon_flow::test_helpers::{make_test_execution_state, CountingPersistence};
+    use std::collections::{HashSet, VecDeque};
+    use std::sync::Arc;
+
+    let mut state = make_test_execution_state(Arc::new(CountingPersistence::new()), "r".into());
+
+    let err = check_max_iterations(&mut state, 3, 3, &OnMaxIter::Fail, "a", "b", "do")
+        .expect_err("loop at max_iterations must fail")
+        .to_string();
+    assert!(
+        is_loop_exhaustion_error(&err),
+        "max_iterations error not recognised: {err}"
+    );
+
+    let mut prev: VecDeque<HashSet<String>> = VecDeque::new();
+    check_stuck(&mut state, &mut prev, "a", "b", 2, "do").unwrap();
+    let err = check_stuck(&mut state, &mut prev, "a", "b", 2, "do")
+        .expect_err("identical marker sets must be reported as stuck")
+        .to_string();
+    assert!(
+        is_loop_exhaustion_error(&err),
+        "stuck error not recognised: {err}"
+    );
 }
 
 #[test]

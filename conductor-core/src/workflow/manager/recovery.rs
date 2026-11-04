@@ -774,8 +774,8 @@ pub(crate) fn is_loop_exhaustion_error(err: &str) -> bool {
 /// Find the newest child run of `parent_workflow_run_id` named
 /// `child_workflow_name` that can be resumed (`failed`, `pending`, `waiting`).
 ///
-/// A failed child whose failure was a loop running out is not offered, so the
-/// engine starts a fresh child instead (see [`is_loop_exhaustion_error`]).
+/// This is a pure query. Whether a failed child is worth resuming (see
+/// [`is_loop_exhaustion_error`]) is decided by `ConductorChildWorkflowRunner`.
 pub fn find_resumable_child_run(
     conn: &Connection,
     parent_workflow_run_id: &str,
@@ -795,17 +795,6 @@ pub fn find_resumable_child_run(
             row_to_workflow_run,
         )
         .optional()?;
-    if let Some(r) = &run {
-        if r.status == WorkflowRunStatus::Failed
-            && r.error.as_deref().is_some_and(is_loop_exhaustion_error)
-        {
-            tracing::info!(
-                run_id = %r.id,
-                "prior child run exhausted its loop; starting a fresh child"
-            );
-            return Ok(None);
-        }
-    }
     Ok(run)
 }
 
