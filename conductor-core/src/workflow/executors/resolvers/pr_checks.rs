@@ -46,25 +46,14 @@ enum CheckBucket {
 
 /// Classify one check from `gh pr checks --json name,state,bucket`.
 ///
-/// Uses `bucket` when present; otherwise maps the raw `state` with the same
-/// table gh uses. Anything unrecognised is `Pending` (the conservative choice).
+/// Uses gh's own `bucket` classification, which `poll` always requests. A
+/// missing or unrecognised bucket is `Pending` (the conservative choice).
 fn check_bucket(c: &serde_json::Value) -> CheckBucket {
-    if let Some(b) = c["bucket"].as_str() {
-        return match b {
-            "pass" => CheckBucket::Pass,
-            "skipping" => CheckBucket::Skipping,
-            "fail" => CheckBucket::Fail,
-            "cancel" => CheckBucket::Cancel,
-            _ => CheckBucket::Pending,
-        };
-    }
-    match c["state"].as_str() {
-        Some("SUCCESS") => CheckBucket::Pass,
-        Some("SKIPPED") | Some("NEUTRAL") => CheckBucket::Skipping,
-        Some("ERROR") | Some("FAILURE") | Some("TIMED_OUT") | Some("ACTION_REQUIRED") => {
-            CheckBucket::Fail
-        }
-        Some("CANCELLED") => CheckBucket::Cancel,
+    match c["bucket"].as_str() {
+        Some("pass") => CheckBucket::Pass,
+        Some("skipping") => CheckBucket::Skipping,
+        Some("fail") => CheckBucket::Fail,
+        Some("cancel") => CheckBucket::Cancel,
         _ => CheckBucket::Pending,
     }
 }
@@ -254,29 +243,25 @@ mod tests {
     }
 
     #[test]
-    fn test_state_only_fallback() {
-        for (state, expected) in [
-            ("SUCCESS", CheckBucket::Pass),
-            ("SKIPPED", CheckBucket::Skipping),
-            ("NEUTRAL", CheckBucket::Skipping),
-            ("FAILURE", CheckBucket::Fail),
-            ("ERROR", CheckBucket::Fail),
-            ("TIMED_OUT", CheckBucket::Fail),
-            ("ACTION_REQUIRED", CheckBucket::Fail),
-            ("CANCELLED", CheckBucket::Cancel),
-            ("PENDING", CheckBucket::Pending),
-            ("IN_PROGRESS", CheckBucket::Pending),
+    fn test_bucket_mapping_and_missing_bucket_pending() {
+        for (bucket, expected) in [
+            ("pass", CheckBucket::Pass),
+            ("skipping", CheckBucket::Skipping),
+            ("fail", CheckBucket::Fail),
+            ("cancel", CheckBucket::Cancel),
+            ("pending", CheckBucket::Pending),
         ] {
             assert_eq!(
-                check_bucket(&json!({ "state": state })),
+                check_bucket(&json!({ "bucket": bucket })),
                 expected,
-                "{state}"
+                "{bucket}"
             );
         }
-        assert!(matches!(
-            evaluate_checks(&json!([{ "name": "x", "state": "FAILURE" }]), "g"),
-            GatePoll::Rejected(_)
-        ));
+        // No bucket: never classified from state, so stays Pending.
+        assert_eq!(
+            check_bucket(&json!({ "state": "FAILURE" })),
+            CheckBucket::Pending
+        );
     }
 
     #[test]
