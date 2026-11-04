@@ -50,6 +50,46 @@ pub fn insert_test_worktree(conn: &Connection, id: &str, repo_id: &str, slug: &s
     .unwrap();
 }
 
+/// Seed a workflow run on `worktree_id` with the given status, optional parent run and
+/// `feature_base_branch` input. Returns the run ID.
+pub fn seed_workflow_run_on_worktree(
+    conn: &Connection,
+    worktree_id: &str,
+    workflow_name: &str,
+    status: crate::workflow::WorkflowRunStatus,
+    parent_workflow_run_id: Option<&str>,
+    base: Option<&str>,
+) -> String {
+    let agent = crate::agent::AgentManager::new(conn)
+        .create_run(Some(worktree_id), "workflow", None)
+        .unwrap();
+    let run = crate::workflow::create_workflow_run_with_targets(
+        conn,
+        workflow_name,
+        Some(worktree_id),
+        None,
+        None,
+        &agent.id,
+        false,
+        "manual",
+        None,
+        parent_workflow_run_id,
+        None,
+    )
+    .unwrap();
+    if let Some(b) = base {
+        let inputs =
+            std::collections::HashMap::from([("feature_base_branch".to_string(), b.to_string())]);
+        crate::workflow::set_workflow_run_inputs(conn, &run.id, &inputs).unwrap();
+    }
+    conn.execute(
+        "UPDATE workflow_runs SET status = :s WHERE id = :id",
+        rusqlite::named_params! { ":s": status.to_string(), ":id": run.id },
+    )
+    .unwrap();
+    run.id.clone()
+}
+
 /// Insert a single agent_run row with `status = 'running'`.
 pub fn insert_test_agent_run(conn: &Connection, id: &str, worktree_id: &str) {
     conn.execute(
