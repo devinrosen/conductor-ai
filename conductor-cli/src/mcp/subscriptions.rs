@@ -97,7 +97,7 @@ impl SubscriptionHub {
     /// belongs to the holder, which aborts it when it no longer needs the hub.
     pub fn new() -> (Self, tokio::task::JoinHandle<()>) {
         let registry = SubscriptionRegistry::new();
-        let handle = spawn_poller(registry.clone(), POLL_INTERVAL, Arc::new(terminal_run_ids));
+        let handle = spawn_poller(registry.clone(), POLL_INTERVAL, terminal_lookup());
         (Self { registry }, handle)
     }
 
@@ -121,18 +121,35 @@ impl SubscriptionHub {
 /// longer exists counts as finished so its subscribers aren't orphaned. Blocking.
 type TerminalLookup = Arc<dyn Fn(Vec<String>) -> Vec<String> + Send + Sync>;
 
-fn terminal_run_ids(run_ids: Vec<String>) -> Vec<String> {
-    let conductor = match conductor_core::Conductor::open() {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("subscription poll could not open the database: {e}");
-            return Vec::new();
+/// A lookup that opens the database on first use and reuses the connection on
+/// later polls, instead of reloading config and reopening SQLite every tick. A
+/// failed open is retried on the next poll.
+fn terminal_lookup() -> TerminalLookup {
+    let conductor: Arc<std::sync::Mutex<Option<conductor_core::Conductor>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    Arc::new(move |run_ids| {
+        let mut guard = conductor.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_none() {
+            match conductor_core::Conductor::open() {
+                Ok(c) => *guard = Some(c),
+                Err(e) => {
+                    tracing::warn!("subscription poll could not open the database: {e}");
+                    return Vec::new();
+                }
+            }
         }
-    };
+        match guard.as_ref() {
+            Some(c) => terminal_run_ids(&c.conn, run_ids),
+            None => Vec::new(),
+        }
+    })
+}
+
+fn terminal_run_ids(conn: &rusqlite::Connection, run_ids: Vec<String>) -> Vec<String> {
     run_ids
         .into_iter()
         .filter(
-            |id| match conductor_core::workflow::get_workflow_run_status(&conductor.conn, id) {
+            |id| match conductor_core::workflow::get_workflow_run_status(conn, id) {
                 Ok(None) => true,
                 Ok(status) => super::server::is_terminal(status.as_deref()),
                 Err(e) => {

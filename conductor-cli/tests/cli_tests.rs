@@ -429,6 +429,41 @@ fn workflow_launch_detached_reports_a_missing_workflow() {
     assert!(reply.starts_with("ERROR:"), "reply: {reply:?}");
 }
 
+/// A resume of a run that doesn't exist is reported as an `ERROR:` line.
+#[cfg(unix)]
+#[test]
+fn workflow_launch_detached_resume_reports_an_unknown_run() {
+    let home = tempfile::tempdir().unwrap();
+    let spec = serde_json::json!({"kind": "resume", "run_id": "01NOSUCHRUN0000000000000A"});
+    let out = launch_detached(home.path(), &spec.to_string());
+    assert!(!out.status.success());
+    let reply = String::from_utf8(out.stderr).unwrap();
+    assert!(reply.starts_with("ERROR:"), "reply: {reply:?}");
+}
+
+/// A resume of a run that already completed can't be resumed: the child reports
+/// the reason instead of exiting silently.
+#[cfg(unix)]
+#[test]
+fn workflow_launch_detached_resume_reports_a_non_resumable_run() {
+    let home = tempfile::tempdir().unwrap();
+    let wt = setup_valid_workflow_fixture();
+    let dir = wt.path().to_str().unwrap();
+    let run_spec = serde_json::json!({
+        "kind": "run", "workflow_name": "hello", "working_dir": dir, "repo_path": dir,
+    });
+    let out = launch_detached(home.path(), &run_spec.to_string());
+    assert!(out.status.success());
+    let reply = String::from_utf8(out.stderr).unwrap();
+    let run_id = reply.split_whitespace().next().unwrap().to_string();
+
+    let spec = serde_json::json!({"kind": "resume", "run_id": run_id});
+    let out = launch_detached(home.path(), &spec.to_string());
+    assert!(!out.status.success());
+    let reply = String::from_utf8(out.stderr).unwrap();
+    assert!(reply.starts_with("ERROR:"), "reply: {reply:?}");
+}
+
 /// A spec the child can't parse is reported the same way.
 #[cfg(unix)]
 #[test]

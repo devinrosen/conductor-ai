@@ -15,6 +15,60 @@ fn register_foreground_run() -> Option<conductor_core::process_registry::Process
     )
 }
 
+/// Where a standalone workflow run executes.
+struct ExecTarget {
+    worktree_id: Option<String>,
+    working_dir: String,
+    repo_path: String,
+    ticket_id: Option<String>,
+    repo_id: Option<String>,
+    target_label: Option<String>,
+}
+
+/// The per-run options that vary between standalone run call sites.
+struct ExecOptions {
+    model: Option<String>,
+    exec_config: WorkflowExecConfig,
+    inputs: std::collections::HashMap<String, String>,
+    extra_plugin_dirs: Vec<String>,
+    db_path: Option<std::path::PathBuf>,
+}
+
+/// Build a top-level (depth 0, no parent) `WorkflowExecStandalone`, filling
+/// the defaults every call site shares.
+fn exec_params(
+    config: &Config,
+    workflow: conductor_core::workflow::WorkflowDef,
+    target: ExecTarget,
+    opts: ExecOptions,
+) -> conductor_core::workflow::WorkflowExecStandalone {
+    conductor_core::workflow::WorkflowExecStandalone {
+        config: config.clone(),
+        workflow,
+        worktree_id: target.worktree_id,
+        working_dir: target.working_dir,
+        repo_path: target.repo_path,
+        ticket_id: target.ticket_id,
+        repo_id: target.repo_id,
+        model: opts.model,
+        runtime: None,
+        exec_config: opts.exec_config,
+        inputs: opts.inputs,
+        target_label: target.target_label,
+        run_id_notify: None,
+        triggered_by_hook: false,
+        conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+        force: false,
+        extra_plugin_dirs: opts.extra_plugin_dirs,
+        db_path: opts.db_path,
+        parent_workflow_run_id: None,
+        depth: 0,
+        parent_step_id: None,
+        default_bot_name: None,
+        iteration: 0,
+    }
+}
+
 /// Handle `workflow launch-detached`: read the [`LaunchSpec`] from stdin and
 /// start it as the detached child. Only returns on a startup failure, which
 /// `main` reports on the notify pipe.
@@ -49,34 +103,28 @@ fn launch_detached(config: &Config, notify_fd: i32) -> Result<()> {
                 &repo_path,
                 &workflow_name,
             )?;
-            let params = conductor_core::workflow::WorkflowExecStandalone {
-                config: config.clone(),
+            let params = exec_params(
+                config,
                 workflow,
-                worktree_id,
-                working_dir,
-                repo_path,
-                ticket_id,
-                repo_id,
-                model: None,
-                runtime: None,
-                exec_config: WorkflowExecConfig {
-                    dry_run,
-                    ..WorkflowExecConfig::default()
+                ExecTarget {
+                    worktree_id,
+                    working_dir,
+                    repo_path,
+                    ticket_id,
+                    repo_id,
+                    target_label,
                 },
-                inputs,
-                target_label,
-                run_id_notify: None,
-                triggered_by_hook: false,
-                conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                force: false,
-                extra_plugin_dirs: vec![],
-                db_path: db_path.clone(),
-                parent_workflow_run_id: None,
-                depth: 0,
-                parent_step_id: None,
-                default_bot_name: None,
-                iteration: 0,
-            };
+                ExecOptions {
+                    model: None,
+                    exec_config: WorkflowExecConfig {
+                        dry_run,
+                        ..WorkflowExecConfig::default()
+                    },
+                    inputs,
+                    extra_plugin_dirs: vec![],
+                    db_path: db_path.clone(),
+                },
+            );
             crate::background::run_as_background_child(params, db_path, notify_fd)
         }
         LaunchSpec::Resume {
@@ -317,31 +365,25 @@ pub fn handle_workflow(
                     workflow.name, node_count, repo_slug
                 );
 
-                run_and_report(conductor_core::workflow::WorkflowExecStandalone {
-                    config: config.clone(),
+                run_and_report(exec_params(
+                    config,
                     workflow,
-                    worktree_id: None,
-                    working_dir: r.local_path.clone(),
-                    repo_path: r.local_path.clone(),
-                    ticket_id: None,
-                    repo_id: Some(r.id.clone()),
-                    model: model.clone(),
-                    runtime: None,
-                    exec_config: exec_config.clone(),
-                    inputs: input_map,
-                    depth: 0,
-                    parent_workflow_run_id: None,
-                    target_label: Some(r.slug.clone()),
-                    default_bot_name: None,
-                    iteration: 0,
-                    run_id_notify: None,
-                    triggered_by_hook: false,
-                    conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                    force: false,
-                    extra_plugin_dirs: plugin_dirs.clone(),
-                    parent_step_id: None,
-                    db_path: None,
-                })?;
+                    ExecTarget {
+                        worktree_id: None,
+                        working_dir: r.local_path.clone(),
+                        repo_path: r.local_path.clone(),
+                        ticket_id: None,
+                        repo_id: Some(r.id.clone()),
+                        target_label: Some(r.slug.clone()),
+                    },
+                    ExecOptions {
+                        model: model.clone(),
+                        exec_config: exec_config.clone(),
+                        inputs: input_map,
+                        extra_plugin_dirs: plugin_dirs.clone(),
+                        db_path: None,
+                    },
+                ))?;
             } else if let Some(run_id) = workflow_run {
                 // Workflow-run targeted run (e.g. postmortem workflows)
                 let ctx = conductor_core::workflow::resolve_run_context(conn, &run_id, config)?;
@@ -365,31 +407,25 @@ pub fn handle_workflow(
                     workflow.name, node_count, run_id
                 );
 
-                run_and_report(conductor_core::workflow::WorkflowExecStandalone {
-                    config: config.clone(),
+                run_and_report(exec_params(
+                    config,
                     workflow,
-                    worktree_id: ctx.worktree_id.clone(),
-                    working_dir: ctx.working_dir.clone(),
-                    repo_path: ctx.repo_path.clone(),
-                    ticket_id: None,
-                    repo_id: ctx.repo_id.clone(),
-                    model: model.clone(),
-                    runtime: None,
-                    exec_config: exec_config.clone(),
-                    inputs: input_map,
-                    depth: 0,
-                    parent_workflow_run_id: None,
-                    target_label: Some(run_id.clone()),
-                    default_bot_name: None,
-                    iteration: 0,
-                    run_id_notify: None,
-                    triggered_by_hook: false,
-                    conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                    force: false,
-                    extra_plugin_dirs: plugin_dirs.clone(),
-                    parent_step_id: None,
-                    db_path: None,
-                })?;
+                    ExecTarget {
+                        worktree_id: ctx.worktree_id.clone(),
+                        working_dir: ctx.working_dir.clone(),
+                        repo_path: ctx.repo_path.clone(),
+                        ticket_id: None,
+                        repo_id: ctx.repo_id.clone(),
+                        target_label: Some(run_id.clone()),
+                    },
+                    ExecOptions {
+                        model: model.clone(),
+                        exec_config: exec_config.clone(),
+                        inputs: input_map,
+                        extra_plugin_dirs: plugin_dirs.clone(),
+                        db_path: None,
+                    },
+                ))?;
             } else if let Some(ticket_id) = ticket {
                 let syncer = TicketSyncer::new(conn);
                 let ticket = syncer.get_by_id(&ticket_id)?;
@@ -411,31 +447,25 @@ pub fn handle_workflow(
                     ticket_id
                 );
 
-                run_and_report(conductor_core::workflow::WorkflowExecStandalone {
-                    config: config.clone(),
+                run_and_report(exec_params(
+                    config,
                     workflow,
-                    worktree_id: None,
-                    working_dir: repo.local_path.clone(),
-                    repo_path: repo.local_path.clone(),
-                    ticket_id: Some(ticket_id.clone()),
-                    repo_id: Some(ticket.repo_id.clone()),
-                    model: model.clone(),
-                    runtime: None,
-                    exec_config: exec_config.clone(),
-                    inputs: input_map,
-                    depth: 0,
-                    parent_workflow_run_id: None,
-                    target_label: Some(repo.slug.clone()),
-                    default_bot_name: None,
-                    iteration: 0,
-                    run_id_notify: None,
-                    triggered_by_hook: false,
-                    conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                    force: false,
-                    extra_plugin_dirs: plugin_dirs.clone(),
-                    parent_step_id: None,
-                    db_path: None,
-                })?;
+                    ExecTarget {
+                        worktree_id: None,
+                        working_dir: repo.local_path.clone(),
+                        repo_path: repo.local_path.clone(),
+                        ticket_id: Some(ticket_id.clone()),
+                        repo_id: Some(ticket.repo_id.clone()),
+                        target_label: Some(repo.slug.clone()),
+                    },
+                    ExecOptions {
+                        model: model.clone(),
+                        exec_config: exec_config.clone(),
+                        inputs: input_map,
+                        extra_plugin_dirs: plugin_dirs.clone(),
+                        db_path: None,
+                    },
+                ))?;
             } else {
                 // Normal registered repo/worktree run
                 let repo_slug = repo
@@ -460,31 +490,25 @@ pub fn handle_workflow(
 
                 #[cfg(unix)]
                 if let Some(notify_fd) = background_notify_fd {
-                    let params = conductor_core::workflow::WorkflowExecStandalone {
-                        config: config.clone(),
+                    let params = exec_params(
+                        config,
                         workflow,
-                        worktree_id: Some(wt.id.clone()),
-                        working_dir: wt.path.clone(),
-                        repo_path: r.local_path.clone(),
-                        ticket_id: wt.ticket_id.clone(),
-                        repo_id: Some(r.id.clone()),
-                        model,
-                        runtime: None,
-                        exec_config,
-                        inputs: input_map,
-                        target_label: Some(wt_label),
-                        run_id_notify: None,
-                        triggered_by_hook: false,
-                        conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                        force: false,
-                        extra_plugin_dirs: plugin_dirs,
-                        db_path: None,
-                        parent_workflow_run_id: None,
-                        depth: 0,
-                        parent_step_id: None,
-                        default_bot_name: None,
-                        iteration: 0,
-                    };
+                        ExecTarget {
+                            worktree_id: Some(wt.id.clone()),
+                            working_dir: wt.path.clone(),
+                            repo_path: r.local_path.clone(),
+                            ticket_id: wt.ticket_id.clone(),
+                            repo_id: Some(r.id.clone()),
+                            target_label: Some(wt_label),
+                        },
+                        ExecOptions {
+                            model,
+                            exec_config,
+                            inputs: input_map,
+                            extra_plugin_dirs: plugin_dirs,
+                            db_path: None,
+                        },
+                    );
                     crate::background::run_as_background_child(params, None, notify_fd);
                 }
                 #[cfg(unix)]
@@ -503,31 +527,25 @@ pub fn handle_workflow(
                     workflow.name, node_count, repo_slug, worktree_slug
                 );
 
-                run_and_report(conductor_core::workflow::WorkflowExecStandalone {
-                    config: config.clone(),
+                run_and_report(exec_params(
+                    config,
                     workflow,
-                    worktree_id: Some(wt.id.clone()),
-                    working_dir: wt.path.clone(),
-                    repo_path: r.local_path.clone(),
-                    ticket_id: wt.ticket_id.clone(),
-                    repo_id: Some(r.id.clone()),
-                    model: model.clone(),
-                    runtime: None,
-                    exec_config: exec_config.clone(),
-                    inputs: input_map,
-                    depth: 0,
-                    parent_workflow_run_id: None,
-                    target_label: Some(wt_label.clone()),
-                    default_bot_name: None,
-                    iteration: 0,
-                    run_id_notify: None,
-                    triggered_by_hook: false,
-                    conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                    force: false,
-                    extra_plugin_dirs: plugin_dirs,
-                    parent_step_id: None,
-                    db_path: None,
-                })?;
+                    ExecTarget {
+                        worktree_id: Some(wt.id.clone()),
+                        working_dir: wt.path.clone(),
+                        repo_path: r.local_path.clone(),
+                        ticket_id: wt.ticket_id.clone(),
+                        repo_id: Some(r.id.clone()),
+                        target_label: Some(wt_label.clone()),
+                    },
+                    ExecOptions {
+                        model: model.clone(),
+                        exec_config: exec_config.clone(),
+                        inputs: input_map,
+                        extra_plugin_dirs: plugin_dirs,
+                        db_path: None,
+                    },
+                ))?;
             }
         }
         WorkflowCommands::Wait {

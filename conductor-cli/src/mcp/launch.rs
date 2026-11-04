@@ -5,6 +5,7 @@
 //! `workflow launch-detached` command. The run is owned by that process, so it
 //! uses the binary installed when it started and survives the server restarting.
 
+use anyhow::Context;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -27,7 +28,8 @@ pub(super) fn pin_run_exe() {
 fn run_exe() -> anyhow::Result<PathBuf> {
     match RUN_EXE.get() {
         Some(exe) => Ok(exe.clone()),
-        None => Ok(std::env::current_exe()?),
+        None => std::env::current_exe()
+            .context("failed to locate the conductor executable to launch the run"),
     }
 }
 
@@ -46,7 +48,7 @@ pub(super) fn launch(spec: &LaunchSpec) -> anyhow::Result<LaunchedRun> {
 }
 
 fn launch_with(exe: &std::path::Path, spec: &LaunchSpec) -> anyhow::Result<LaunchedRun> {
-    let payload = serde_json::to_vec(spec)?;
+    let payload = serde_json::to_vec(spec).context("failed to serialize the launch spec")?;
     let DetachedChild {
         run_id,
         build,

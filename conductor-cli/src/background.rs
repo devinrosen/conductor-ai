@@ -325,6 +325,18 @@ fn read_child_reply(mut reader: impl BufRead) -> Result<ChildReply> {
     })
 }
 
+/// The message of a thread panic payload, for the failed run's recorded error.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    let detail = payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned());
+    match detail {
+        Some(msg) => format!("Background workflow thread panicked: {msg}"),
+        None => "Background workflow thread panicked".to_string(),
+    }
+}
+
 /// The run ID slot the child shares with the engine thread.
 type RunIdPair = Arc<(Mutex<Option<String>>, Condvar)>;
 
@@ -487,7 +499,7 @@ fn drive_detached<E: std::fmt::Display>(
     let error_msg = match &exec_result {
         Ok(Ok(())) => None,
         Ok(Err(e)) => Some(e.clone()),
-        Err(_) => Some("Background workflow thread panicked".to_string()),
+        Err(payload) => Some(panic_message(payload.as_ref())),
     };
 
     if let Some(error_msg) = error_msg {
@@ -732,6 +744,100 @@ mod tests {
                 build: None
             }
         );
+    }
+
+    /// `sh -c <script>` as the detached child, with the notify fd as `$FD`.
+    fn sh_child(script: &'static str) -> Result<DetachedChild> {
+        spawn_detached(
+            Path::new("/bin/sh"),
+            move |fd| vec!["-c".into(), script.replace("$FD", &fd.to_string()).into()],
+            None,
+        )
+    }
+
+    #[test]
+    fn spawn_detached_reports_a_child_that_exits_without_replying() {
+        let err = sh_child("exit 0").unwrap_err();
+        assert!(
+            err.to_string().contains("exited without sending a run ID"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn spawn_detached_returns_the_run_id_and_build() {
+        let mut started = sh_child("echo 'RUN1 0.19.0 abc1234' >&$FD").unwrap();
+        assert_eq!(started.run_id, "RUN1");
+        assert_eq!(started.build.as_deref(), Some("0.19.0 abc1234"));
+        started.child.wait().unwrap();
+    }
+
+    #[test]
+    fn spawn_detached_surfaces_a_child_error_line() {
+        let err = sh_child("echo 'ERROR:no such workflow' >&$FD").unwrap_err();
+        assert!(err.to_string().contains("no such workflow"), "{err:#}");
+    }
+
+    #[test]
+    fn spawn_detached_feeds_the_payload_to_stdin_and_closes_it() {
+        // The child reads the payload to EOF and echoes it back as its reply.
+        let mut started = spawn_detached(
+            Path::new("/bin/sh"),
+            |fd| {
+                vec![
+                    "-c".into(),
+                    format!("read line; cat >/dev/null; echo \"$line\" >&{fd}").into(),
+                ]
+            },
+            Some(b"RUN2 1.0 sha\n"),
+        )
+        .unwrap();
+        assert_eq!(started.run_id, "RUN2");
+        assert_eq!(started.build.as_deref(), Some("1.0 sha"));
+        started.child.wait().unwrap();
+    }
+
+    #[test]
+    fn panic_message_includes_the_payload() {
+        let p = std::thread::spawn(|| panic!("boom {}", 1))
+            .join()
+            .unwrap_err();
+        assert_eq!(
+            panic_message(p.as_ref()),
+            "Background workflow thread panicked: boom 1"
+        );
+        let p = std::thread::spawn(|| panic!("static boom"))
+            .join()
+            .unwrap_err();
+        assert_eq!(
+            panic_message(p.as_ref()),
+            "Background workflow thread panicked: static boom"
+        );
+        assert_eq!(panic_message(&42u32), "Background workflow thread panicked");
+    }
+
+    #[test]
+    fn cleanup_failed_run_fails_the_run_in_the_given_database_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("scratch.db");
+        let conn = conductor_core::db::open_database(&db).unwrap();
+        let parent = AgentManager::new(&conn)
+            .create_run(None, "workflow", None)
+            .unwrap();
+        let run = conductor_core::workflow::create_workflow_run(
+            &conn, "wf", None, &parent.id, false, "manual", None,
+        )
+        .unwrap();
+
+        cleanup_failed_run(Some(&db), &run.id, "engine exploded").unwrap();
+
+        let status = conductor_core::workflow::get_workflow_run_status(&conn, &run.id).unwrap();
+        assert_eq!(status.as_deref(), Some("failed"));
+        let agent = AgentManager::new(&conn)
+            .get_run(&parent.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(agent.status.to_string(), "failed");
     }
 
     #[test]
