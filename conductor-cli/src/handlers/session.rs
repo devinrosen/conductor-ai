@@ -11,6 +11,13 @@
 use std::io::{self, Read};
 use std::time::{Duration, Instant};
 
+use anyhow::{Context, Result};
+use conductor_core::config::Config;
+use conductor_core::session::launch::{
+    open_session, FocusMode, OpenSessionOutcome, OpenSessionRequest, RealTmux,
+};
+use rusqlite::Connection;
+
 use conductor_core::session::hook::{handled_event_names, is_handled_event, HookEnv, HookEvent};
 use conductor_core::session::spool;
 
@@ -30,6 +37,69 @@ const SALVAGE_KEYS: &[&str] = &[
     "tool_name",
     "prompt_id",
 ];
+
+pub struct OpenArgs {
+    pub repo: String,
+    pub worktree: String,
+    pub new: bool,
+    pub prompt: Option<String>,
+    pub prompt_file: Option<String>,
+    pub window: Option<String>,
+    pub json: bool,
+}
+
+/// `conductor session open`: focus, resume or start a worktree's interactive session.
+pub fn handle_open(conn: &Connection, config: &Config, args: OpenArgs) -> Result<()> {
+    let prompt = match args.prompt_file.as_deref() {
+        Some("-") => {
+            let mut buf = String::new();
+            io::stdin()
+                .read_to_string(&mut buf)
+                .context("reading prompt from stdin")?;
+            Some(buf)
+        }
+        Some(path) => {
+            Some(std::fs::read_to_string(path).with_context(|| format!("reading {path}"))?)
+        }
+        None => args.prompt,
+    }
+    .map(|p| p.trim().to_string())
+    .filter(|p| !p.is_empty());
+
+    let focus = if std::env::var_os("TMUX").is_some() {
+        FocusMode::Switch
+    } else {
+        FocusMode::Report
+    };
+    let outcome = open_session(
+        conn,
+        config,
+        &OpenSessionRequest {
+            repo_slug: args.repo,
+            worktree_slug: args.worktree,
+            new_session: args.new,
+            prompt,
+            window: args.window,
+            focus,
+        },
+        &RealTmux,
+    )?;
+    print_outcome(&outcome, args.json)
+}
+
+fn print_outcome(outcome: &OpenSessionOutcome, json: bool) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(outcome)?);
+        return Ok(());
+    }
+    println!("{}", outcome.summary());
+    if !outcome.switched() {
+        if let Some(cmd) = outcome.attach_command() {
+            println!("Attach with: {cmd}");
+        }
+    }
+    Ok(())
+}
 
 /// Entry point from `main`: run the hook and exit 0, whatever happens.
 pub fn run_hook_and_exit() -> ! {
@@ -238,5 +308,42 @@ mod tests {
         assert!(!mentions_handled_event(
             br#"{"hook_event_name":"PreToolUse"}"#
         ));
+    }
+}
+
+#[cfg(test)]
+mod open_tests {
+    use crate::commands::{Cli, Commands, SessionCommands};
+    use clap::Parser;
+
+    #[test]
+    fn open_parses_flags() {
+        let cli = Cli::try_parse_from([
+            "conductor", "session", "open", "repo", "wt", "--new", "--prompt-file", "-", "--json",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Session {
+                command:
+                    SessionCommands::Open {
+                        new,
+                        prompt_file,
+                        json,
+                        ..
+                    },
+            } => {
+                assert!(new && json);
+                assert_eq!(prompt_file.as_deref(), Some("-"));
+            }
+            _ => panic!("wrong command"),
+        }
+    }
+
+    #[test]
+    fn prompt_and_prompt_file_conflict() {
+        assert!(Cli::try_parse_from([
+            "conductor", "session", "open", "r", "w", "--prompt", "x", "--prompt-file", "-",
+        ])
+        .is_err());
     }
 }

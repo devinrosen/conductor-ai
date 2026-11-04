@@ -103,6 +103,8 @@ pub enum Action {
     Delete,
     #[allow(dead_code)]
     Push,
+    /// Open, resume or focus the selected worktree's interactive Claude session in tmux.
+    OpenSession,
     #[allow(dead_code)]
     CreatePr,
     SyncTickets,
@@ -363,6 +365,9 @@ pub enum Action {
     // Background results for async blocking operations
     PushComplete {
         result: Result<String, String>,
+    },
+    OpenSessionComplete {
+        result: Result<conductor_core::session::launch::OpenSessionOutcome, String>,
     },
     PrCreateComplete {
         result: Result<String, String>,

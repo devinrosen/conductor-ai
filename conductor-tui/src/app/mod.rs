@@ -29,6 +29,7 @@ mod info_pane;
 mod input_handling;
 mod modal_dialog;
 mod navigation;
+mod session_launch;
 mod settings_management;
 mod theme_management;
 mod url_operations;

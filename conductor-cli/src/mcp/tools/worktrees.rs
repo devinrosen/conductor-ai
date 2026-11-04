@@ -320,6 +320,41 @@ pub(super) fn tool_push_worktree(
     }
 }
 
+/// Open, resume or locate a worktree's interactive session. Never switches tmux focus.
+pub(super) fn tool_open_session(
+    conductor: &Conductor,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
+    use conductor_core::session::launch::{
+        open_session, FocusMode, OpenSessionRequest, RealTmux,
+    };
+
+    let repo_slug = require_arg!(args, "repo");
+    let slug = require_arg!(args, "slug");
+    let req = OpenSessionRequest {
+        repo_slug: repo_slug.to_string(),
+        worktree_slug: slug.to_string(),
+        new_session: get_bool_arg(args, "new"),
+        prompt: get_arg(args, "prompt")
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_string),
+        window: get_arg(args, "window").map(str::to_string),
+        focus: FocusMode::Report,
+    };
+    match open_session(&conductor.conn, &conductor.config, &req, &RealTmux) {
+        Ok(outcome) => {
+            let json = serde_json::to_string_pretty(&outcome).unwrap_or_default();
+            let mut text = outcome.summary();
+            if let Some(cmd) = outcome.attach_command() {
+                text.push_str(&format!("\nAttach with: {cmd}"));
+            }
+            tool_ok(format!("{text}\n{json}"))
+        }
+        Err(e) => tool_err(e),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -565,6 +600,24 @@ mod tests {
             .map(|t| t.text.as_str())
             .unwrap_or("");
         assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_open_session_missing_args() {
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_open_session(&conductor, &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let result = tool_open_session(&conductor, &args_with("repo", "my-repo"));
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_open_session_unknown_repo() {
+        let (_f, conductor) = make_test_conductor();
+        let mut args = args_with("repo", "ghost-repo");
+        args.insert("slug".to_string(), Value::String("wt".to_string()));
+        let result = tool_open_session(&conductor, &args);
+        assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
