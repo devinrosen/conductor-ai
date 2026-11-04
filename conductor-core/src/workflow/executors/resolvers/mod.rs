@@ -163,11 +163,6 @@ pub(super) fn run_gh_json(
     run_json_command(cmd, GH_TIMEOUT)
 }
 
-/// Run `cmd`, bounded by `timeout`, and parse stdout as JSON.
-///
-/// stdout and stderr are drained on helper threads so a large response can't
-/// fill the pipe and look like a hang. On timeout the child is killed and
-/// `None` is returned (callers treat that as `Pending`).
 /// Kill the whole process group led by `pid` (best effort).
 #[cfg(unix)]
 fn kill_process_group(pid: u32) {
@@ -181,6 +176,18 @@ fn kill_process_group(pid: u32) {
 #[cfg(not(unix))]
 fn kill_process_group(_pid: u32) {}
 
+/// Kill the child's process group, then the child itself, and reap it.
+fn kill_and_reap(child: &mut std::process::Child) {
+    kill_process_group(child.id());
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Run `cmd`, bounded by `timeout`, and parse stdout as JSON.
+///
+/// stdout and stderr are drained on helper threads so a large response can't
+/// fill the pipe and look like a hang. On timeout the child is killed and
+/// `None` is returned (callers treat that as `Pending`).
 fn run_json_command(mut cmd: Command, timeout: Duration) -> Option<serde_json::Value> {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -218,9 +225,7 @@ fn run_json_command(mut cmd: Command, timeout: Duration) -> Option<serde_json::V
             Ok(Some(status)) => break status,
             Ok(None) => {
                 if Instant::now() >= deadline {
-                    kill_process_group(pid);
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    kill_and_reap(&mut child);
                     tracing::warn!(
                         "gh command timed out after {timeout:?}; treating gate as pending"
                     );
@@ -230,9 +235,7 @@ fn run_json_command(mut cmd: Command, timeout: Duration) -> Option<serde_json::V
             }
             Err(e) => {
                 tracing::warn!("gh command wait failed: {e}");
-                kill_process_group(pid);
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_and_reap(&mut child);
                 return None;
             }
         }
@@ -313,6 +316,72 @@ mod tests {
         let result = run_json_command(cmd, Duration::from_millis(300));
         assert!(result.is_none());
         assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    /// Poll until `pid` no longer exists (or ~3 s pass).
+    #[cfg(unix)]
+    fn wait_until_gone(pid: i32) -> bool {
+        for _ in 0..60 {
+            // SAFETY: signal 0 only probes for existence.
+            let alive = unsafe { libc::kill(pid, 0) } == 0;
+            if !alive {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+
+    #[cfg(unix)]
+    fn read_pid(path: &std::path::Path) -> i32 {
+        for _ in 0..60 {
+            if let Ok(s) = std::fs::read_to_string(path) {
+                if let Ok(pid) = s.trim().parse() {
+                    return pid;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("grandchild pid file never written");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_json_command_timeout_kills_grandchild() {
+        let dir = std::env::temp_dir().join(format!("rjc-timeout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid_file = dir.join("pid");
+        let mut cmd = Command::new("sh");
+        cmd.args([
+            "-c",
+            &format!("sleep 30 & echo $! > {}; wait", pid_file.display()),
+        ]);
+        let result = run_json_command(cmd, Duration::from_millis(500));
+        assert!(result.is_none());
+        let pid = read_pid(&pid_file);
+        assert!(wait_until_gone(pid), "grandchild {pid} survived timeout");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_json_command_drain_expiry_kills_grandchild() {
+        let dir = std::env::temp_dir().join(format!("rjc-drain-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid_file = dir.join("pid");
+        let mut cmd = Command::new("sh");
+        cmd.args([
+            "-c",
+            &format!("sleep 30 & echo $! > {}; echo '{{}}'", pid_file.display()),
+        ]);
+        let result = run_json_command(cmd, Duration::from_millis(500));
+        assert!(result.is_none());
+        let pid = read_pid(&pid_file);
+        assert!(
+            wait_until_gone(pid),
+            "grandchild {pid} survived drain expiry"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]
