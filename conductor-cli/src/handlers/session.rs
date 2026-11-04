@@ -11,10 +11,10 @@
 use std::io::{self, Read};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use conductor_core::config::Config;
 use conductor_core::session::launch::{
-    open_session, FocusMode, OpenSessionOutcome, OpenSessionRequest, RealTmux,
+    open_session, resolve_prompt, FocusMode, OpenSessionOutcome, OpenSessionRequest, RealTmux,
 };
 use rusqlite::Connection;
 
@@ -50,27 +50,12 @@ pub struct OpenArgs {
 
 /// `conductor session open`: focus, resume or start a worktree's interactive session.
 pub fn handle_open(conn: &Connection, config: &Config, args: OpenArgs) -> Result<()> {
-    let prompt = match args.prompt_file.as_deref() {
-        Some("-") => {
-            let mut buf = String::new();
-            io::stdin()
-                .read_to_string(&mut buf)
-                .context("reading prompt from stdin")?;
-            Some(buf)
-        }
-        Some(path) => {
-            Some(std::fs::read_to_string(path).with_context(|| format!("reading {path}"))?)
-        }
-        None => args.prompt,
-    }
-    .map(|p| p.trim().to_string())
-    .filter(|p| !p.is_empty());
-
-    let focus = if std::env::var_os("TMUX").is_some() {
-        FocusMode::Switch
-    } else {
-        FocusMode::Report
-    };
+    let prompt = resolve_prompt(
+        args.prompt.as_deref(),
+        args.prompt_file.as_deref(),
+        &mut io::stdin(),
+    )?;
+    let focus = FocusMode::from_env();
     let outcome = open_session(
         conn,
         config,
@@ -92,12 +77,7 @@ fn print_outcome(outcome: &OpenSessionOutcome, json: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(outcome)?);
         return Ok(());
     }
-    println!("{}", outcome.summary());
-    if !outcome.switched() {
-        if let Some(cmd) = outcome.attach_command() {
-            println!("Attach with: {cmd}");
-        }
-    }
+    println!("{}", outcome.human_text());
     Ok(())
 }
 

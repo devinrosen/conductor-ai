@@ -333,21 +333,14 @@ pub(super) fn tool_open_session(
         repo_slug: repo_slug.to_string(),
         worktree_slug: slug.to_string(),
         new_session: get_bool_arg(args, "new"),
-        prompt: get_arg(args, "prompt")
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
-            .map(str::to_string),
+        prompt: get_arg(args, "prompt").map(str::to_string),
         window: get_arg(args, "window").map(str::to_string),
         focus: FocusMode::Report,
     };
     match open_session(&conductor.conn, &conductor.config, &req, &RealTmux) {
         Ok(outcome) => {
             let json = serde_json::to_string_pretty(&outcome).unwrap_or_default();
-            let mut text = outcome.summary();
-            if let Some(cmd) = outcome.attach_command() {
-                text.push_str(&format!("\nAttach with: {cmd}"));
-            }
-            tool_ok(format!("{text}\n{json}"))
+            tool_ok(format!("{}\n{json}", outcome.human_text()))
         }
         Err(e) => tool_err(e),
     }

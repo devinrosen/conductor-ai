@@ -60,11 +60,7 @@ impl App {
         // The thread opens its own connection on the caller's database, never the real home's.
         let db_path = conductor_core::db::connection_db_path(&self.conn)
             .unwrap_or_else(conductor_core::config::db_path);
-        let focus = if std::env::var_os("TMUX").is_some() {
-            FocusMode::Switch
-        } else {
-            FocusMode::Report
-        };
+        let focus = FocusMode::from_env();
         let wt_slug = wt.slug.clone();
         std::thread::spawn(move || {
             let result = (|| -> anyhow::Result<OpenSessionOutcome> {

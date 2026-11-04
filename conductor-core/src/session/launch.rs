@@ -36,6 +36,51 @@ pub enum FocusMode {
     Report,
 }
 
+impl FocusMode {
+    /// `Switch` when running inside tmux (`$TMUX` set), otherwise `Report`.
+    pub fn from_env() -> Self {
+        if std::env::var_os("TMUX").is_some() {
+            Self::Switch
+        } else {
+            Self::Report
+        }
+    }
+}
+
+/// Trim a prompt and drop it when blank.
+pub fn normalize_prompt(prompt: Option<&str>) -> Option<String> {
+    prompt
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+}
+
+/// Resolve the explicit start prompt: `prompt_file` (`-` reads `stdin`) wins over `prompt`.
+/// The result is trimmed; blank prompts become `None`.
+pub fn resolve_prompt(
+    prompt: Option<&str>,
+    prompt_file: Option<&str>,
+    stdin: &mut impl std::io::Read,
+) -> Result<Option<String>> {
+    let raw = match prompt_file {
+        Some("-") => {
+            let mut buf = String::new();
+            stdin.read_to_string(&mut buf)?;
+            Some(buf)
+        }
+        Some(path) => Some(std::fs::read_to_string(path).map_err(|e| {
+            ConductorError::InvalidInput(format!("reading prompt file {path}: {e}"))
+        })?),
+        None => prompt.map(str::to_string),
+    };
+    Ok(normalize_prompt(raw.as_deref()))
+}
+
+/// The repo-level template when set, otherwise the global one.
+fn resolve_template<'a>(repo: Option<&'a str>, global: Option<&'a str>) -> Option<&'a str> {
+    repo.or(global)
+}
+
 #[derive(Debug, Clone)]
 pub struct OpenSessionRequest {
     pub repo_slug: String,
@@ -85,6 +130,17 @@ pub enum OpenSessionOutcome {
 }
 
 impl OpenSessionOutcome {
+    /// Summary plus, when the client was not switched, the attach command.
+    pub fn human_text(&self) -> String {
+        let mut text = self.summary();
+        if !self.switched() {
+            if let Some(cmd) = self.attach_command() {
+                text.push_str(&format!("\nAttach with: {cmd}"));
+            }
+        }
+        text
+    }
+
     /// One-line human summary, shared by the CLI and the MCP tool.
     pub fn summary(&self) -> String {
         match self {
@@ -460,8 +516,8 @@ pub fn start_prompt(
     resume_template: Option<&str>,
     ctx: &PromptContext<'_>,
 ) -> Option<String> {
-    if let Some(p) = explicit.filter(|p| !p.trim().is_empty()) {
-        return Some(p.to_string());
+    if let Some(p) = normalize_prompt(explicit) {
+        return Some(p);
     }
     let template = if resuming {
         resume_template?
@@ -685,26 +741,38 @@ fn open_session_with(
     }
 
     // 2./3. Resume the newest past session, or start fresh.
-    let ticket = wt
-        .ticket_id
-        .as_deref()
-        .and_then(|id| TicketSyncer::new(conn).get_by_id(id).ok());
-    let repo_cfg = RepoConfig::load(Path::new(&repo.local_path)).unwrap_or_default();
+    let ticket = match wt.ticket_id.as_deref() {
+        None => None,
+        Some(id) => match TicketSyncer::new(conn).get_by_id(id) {
+            Ok(t) => Some(t),
+            Err(ConductorError::TicketNotFound { .. }) => None,
+            Err(e) => return Err(e),
+        },
+    };
+    let repo_cfg = match RepoConfig::load(Path::new(&repo.local_path)) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                repo_path = %repo.local_path,
+                error = %e,
+                "could not load repo config; ignoring per-repo session settings"
+            );
+            RepoConfig::default()
+        }
+    };
     let resume_id = if req.new_session {
         None
     } else {
         newest_session_id(&rows)
     };
-    let opener = repo_cfg
-        .sessions
-        .opener_template
-        .as_deref()
-        .or(config.sessions.opener_template.as_deref());
-    let resume_tpl = repo_cfg
-        .sessions
-        .resume_template
-        .as_deref()
-        .or(config.sessions.resume_template.as_deref());
+    let opener = resolve_template(
+        repo_cfg.sessions.opener_template.as_deref(),
+        config.sessions.opener_template.as_deref(),
+    );
+    let resume_tpl = resolve_template(
+        repo_cfg.sessions.resume_template.as_deref(),
+        config.sessions.resume_template.as_deref(),
+    );
     let prompt = start_prompt(
         req.prompt.as_deref(),
         resume_id.is_some(),
@@ -772,6 +840,50 @@ fn open_session_with(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resolve_prompt_sources_and_normalization() {
+        let mut empty: &[u8] = b"";
+        assert_eq!(
+            resolve_prompt(Some("  hi \n"), None, &mut empty).unwrap(),
+            Some("hi".into())
+        );
+        assert_eq!(
+            resolve_prompt(Some("  \n"), None, &mut empty).unwrap(),
+            None
+        );
+        assert_eq!(resolve_prompt(None, None, &mut empty).unwrap(), None);
+        let mut stdin: &[u8] = b"  from stdin\n";
+        assert_eq!(
+            resolve_prompt(Some("flag"), Some("-"), &mut stdin).unwrap(),
+            Some("from stdin".into())
+        );
+        let mut blank: &[u8] = b"\n\n";
+        assert_eq!(resolve_prompt(None, Some("-"), &mut blank).unwrap(), None);
+    }
+
+    #[test]
+    fn resolve_prompt_file_wins_over_flag_and_missing_file_errors() {
+        let dir = std::env::temp_dir().join(format!("conductor-prompt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("p.txt");
+        std::fs::write(&f, "  from file \n").unwrap();
+        let mut empty: &[u8] = b"";
+        assert_eq!(
+            resolve_prompt(Some("flag"), f.to_str(), &mut empty).unwrap(),
+            Some("from file".into())
+        );
+        let missing = dir.join("nope.txt");
+        assert!(resolve_prompt(None, missing.to_str(), &mut empty).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_template_prefers_repo() {
+        assert_eq!(resolve_template(Some("r"), Some("g")), Some("r"));
+        assert_eq!(resolve_template(None, Some("g")), Some("g"));
+        assert_eq!(resolve_template(None, None), None);
+    }
+
     use super::*;
     use crate::test_helpers::{create_test_conn, insert_test_repo, insert_test_worktree};
     use std::cell::RefCell;
