@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use rusqlite::Connection;
+
 use super::*;
 use crate::agent::AgentManager;
 
