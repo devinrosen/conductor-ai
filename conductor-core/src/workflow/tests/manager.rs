@@ -1752,6 +1752,65 @@ fn test_find_resumable_child_run_picks_most_recent() {
     );
 }
 
+fn set_child_failed_with_error(conn: &Connection, id: &str, err: &str) {
+    crate::workflow::update_workflow_status(
+        conn,
+        id,
+        crate::workflow::WorkflowRunStatus::Failed,
+        None,
+        Some(err),
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_find_resumable_child_run_skips_loop_exhausted_child() {
+    let conn = setup_db();
+    insert_workflow_run(&conn, "parent1", "parent-wf", "failed", None);
+    insert_workflow_run(&conn, "child1", "child-wf", "failed", Some("parent1"));
+    set_child_failed_with_error(
+        &conn,
+        "child1",
+        "workflow error: do analyze-lint.has_lint_errors reached max_iterations (3)",
+    );
+    let result = crate::workflow::find_resumable_child_run(&conn, "parent1", "child-wf").unwrap();
+    assert!(result.is_none(), "loop-exhausted child must not be resumed");
+}
+
+#[test]
+fn test_find_resumable_child_run_skips_stuck_child() {
+    let conn = setup_db();
+    insert_workflow_run(&conn, "parent1", "parent-wf", "failed", None);
+    insert_workflow_run(&conn, "child1", "child-wf", "failed", Some("parent1"));
+    set_child_failed_with_error(
+        &conn,
+        "child1",
+        "do check.has_errors stuck after 3 iterations with identical markers",
+    );
+    let result = crate::workflow::find_resumable_child_run(&conn, "parent1", "child-wf").unwrap();
+    assert!(result.is_none(), "stuck child must not be resumed");
+}
+
+#[test]
+fn test_find_resumable_child_run_returns_child_failed_on_step() {
+    let conn = setup_db();
+    insert_workflow_run(&conn, "parent1", "parent-wf", "failed", None);
+    insert_workflow_run(&conn, "child1", "child-wf", "failed", Some("parent1"));
+    set_child_failed_with_error(&conn, "child1", "step 'build' failed with exit code 1");
+    let result = crate::workflow::find_resumable_child_run(&conn, "parent1", "child-wf").unwrap();
+    assert_eq!(result.map(|r| r.id), Some("child1".to_string()));
+}
+
+#[test]
+fn test_is_loop_exhaustion_error() {
+    use crate::workflow::manager::recovery::is_loop_exhaustion_error as f;
+    assert!(f("do a.b reached max_iterations (3)"));
+    assert!(f("do a.b stuck after 3 iterations with identical markers"));
+    assert!(!f("step 'x' failed"));
+    assert!(!f("max_iterations must be positive"));
+    assert!(!f("stuck after a while"));
+}
+
 #[test]
 fn test_reap_orphaned_workflow_runs_dead_parent() {
     let conn = setup_db();

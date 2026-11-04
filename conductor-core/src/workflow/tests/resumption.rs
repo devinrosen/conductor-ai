@@ -1354,3 +1354,242 @@ fn test_spawn_heartbeat_resume_handles_failed_resume_gracefully() {
         "run should remain Failed after unsuccessful resume attempt"
     );
 }
+
+// ---------------------------------------------------------------------------
+// End-to-end: resuming a parent whose `call workflow` child failed (#3211)
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+mod child_resume {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    const EMIT_ERRORS: &str = "echo '<<<FLOW_OUTPUT>>>'\n\
+         echo '{\"markers\": [\"has_errors\"], \"context\": \"broken\"}'\n\
+         echo '<<<END_FLOW_OUTPUT>>>'\n";
+    const EMIT_CLEAN: &str = "echo '<<<FLOW_OUTPUT>>>'\n\
+         echo '{\"markers\": [], \"context\": \"clean\"}'\n\
+         echo '<<<END_FLOW_OUTPUT>>>'\n";
+
+    fn write_script(dir: &std::path::Path, name: &str, body: &str) -> String {
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path.to_str().unwrap().to_string()
+    }
+
+    struct Fixture {
+        _tmp: tempfile::NamedTempFile,
+        db_path: std::path::PathBuf,
+        ws: tempfile::TempDir,
+        parent_def: runkon_flow::dsl::WorkflowDef,
+    }
+
+    /// Build a workspace with a `loop-child` workflow and a parent that calls it
+    /// and then runs an `after` script. `child_body` is the child's `.wf` body;
+    /// `check.sh` fails the child while `<ws>/broken` exists.
+    fn fixture(child_body: &str, check_body: &str) -> Fixture {
+        let (tmp, db_path) = make_standalone_db();
+        let ws = tempfile::tempdir().unwrap();
+        let ws_str = ws.path().to_str().unwrap().to_string();
+        // Make the registered repo and worktree point at the workspace so the
+        // run is resumable and the child `.wf` is found on resume.
+        let conn = crate::db::open_database(&db_path).unwrap();
+        conn.execute("UPDATE repos SET local_path = ?1", [&ws_str])
+            .unwrap();
+        conn.execute("UPDATE worktrees SET path = ?1", [&ws_str])
+            .unwrap();
+        drop(conn);
+
+        write_script(ws.path(), "check.sh", check_body);
+        write_script(ws.path(), "after.sh", &format!("touch {ws_str}/after-ran\n"));
+        std::fs::write(ws.path().join("broken"), "").unwrap();
+
+        let wf_dir = ws.path().join(".conductor/workflows");
+        std::fs::create_dir_all(&wf_dir).unwrap();
+        std::fs::write(
+            wf_dir.join("loop-child.wf"),
+            format!(
+                "workflow loop-child {{\n  meta {{ trigger = \"manual\" targets = [\"worktree\"] }}\n{child_body}\n}}\n"
+            ),
+        )
+        .unwrap();
+
+        let parent_def = runkon_flow::dsl::parse_workflow_str(
+            &format!(
+                r#"workflow parent-wf {{
+                    meta {{ trigger = "manual" targets = ["worktree"] }}
+                    call workflow loop-child
+                    script after {{ run = "{ws_str}/after.sh" }}
+                }}"#
+            ),
+            "<test>",
+        )
+        .expect("parent workflow should parse");
+
+        Fixture {
+            _tmp: tmp,
+            db_path,
+            ws,
+            parent_def,
+        }
+    }
+
+    fn run_parent(f: &Fixture) -> crate::workflow::WorkflowResult {
+        let ws_str = f.ws.path().to_str().unwrap().to_string();
+        let params = crate::workflow::types::WorkflowExecStandalone {
+            config: Config::default(),
+            workflow: f.parent_def.clone(),
+            worktree_id: Some("w1".to_string()),
+            working_dir: ws_str.clone(),
+            repo_path: ws_str,
+            ticket_id: None,
+            repo_id: Some("r1".to_string()),
+            model: None,
+            runtime: None,
+            exec_config: crate::workflow::WorkflowExecConfig {
+                poll_interval: std::time::Duration::from_millis(50),
+                ..Default::default()
+            },
+            inputs: HashMap::new(),
+            target_label: None,
+            run_id_notify: None,
+            triggered_by_hook: false,
+            conductor_bin_dir: None,
+            force: false,
+            extra_plugin_dirs: vec![],
+            db_path: Some(f.db_path.clone()),
+            parent_workflow_run_id: None,
+            depth: 0,
+            parent_step_id: None,
+            default_bot_name: None,
+            iteration: 0,
+        };
+        crate::workflow::execute_workflow_standalone(&params).expect("parent run should start")
+    }
+
+    fn parent_run_id(conn: &Connection) -> String {
+        conn.query_row(
+            "SELECT id FROM workflow_runs WHERE parent_workflow_run_id IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// `(id, status, error)` of every `loop-child` run, oldest first.
+    fn child_runs(conn: &Connection) -> Vec<(String, String, Option<String>)> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, status, error FROM workflow_runs \
+                 WHERE workflow_name = 'loop-child' ORDER BY started_at, id",
+            )
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    }
+
+    const LOOP_CHILD: &str = "  do {\n    max_iterations = 2\n    on_max_iter = fail\n    script check { run = \"CHECK\" }\n  } while check.has_errors";
+
+    fn loop_fixture() -> Fixture {
+        // check.sh emits `has_errors` while `broken` exists, nothing afterwards.
+        let f = fixture("", "");
+        let ws = f.ws.path().to_str().unwrap().to_string();
+        write_script(
+            f.ws.path(),
+            "check.sh",
+            &format!("if [ -e {ws}/broken ]; then\n{EMIT_ERRORS}else\n{EMIT_CLEAN}fi\n"),
+        );
+        std::fs::write(
+            f.ws.path().join(".conductor/workflows/loop-child.wf"),
+            format!(
+                "workflow loop-child {{\n  meta {{ trigger = \"manual\" targets = [\"worktree\"] }}\n{}\n}}\n",
+                LOOP_CHILD.replace("CHECK", &format!("{ws}/check.sh"))
+            ),
+        )
+        .unwrap();
+        f
+    }
+
+    fn step_fail_fixture() -> Fixture {
+        let f = fixture("", "");
+        let ws = f.ws.path().to_str().unwrap().to_string();
+        write_script(
+            f.ws.path(),
+            "check.sh",
+            &format!("if [ -e {ws}/broken ]; then exit 1; fi\n{EMIT_CLEAN}"),
+        );
+        std::fs::write(
+            f.ws.path().join(".conductor/workflows/loop-child.wf"),
+            format!(
+                "workflow loop-child {{\n  meta {{ trigger = \"manual\" targets = [\"worktree\"] }}\n  script check {{ run = \"{ws}/check.sh\" }}\n}}\n"
+            ),
+        )
+        .unwrap();
+        f
+    }
+
+    fn fail_then_fix_and_resume(
+        f: &Fixture,
+        from_step: Option<&str>,
+    ) -> (Connection, crate::workflow::WorkflowResult) {
+        let first = run_parent(f);
+        assert!(!first.all_succeeded, "first run must fail");
+        let conn = crate::db::open_database(&f.db_path).unwrap();
+        assert_eq!(child_runs(&conn).len(), 1);
+        std::fs::remove_file(f.ws.path().join("broken")).unwrap();
+
+        let config = make_resume_config();
+        let parent_id = parent_run_id(&conn);
+        let input = make_resume_input(config, &parent_id, &f.db_path, from_step, false);
+        let result = resume_workflow(&input).expect("resume should run");
+        (conn, result)
+    }
+
+    #[test]
+    fn resume_after_child_loop_exhausted_starts_fresh_child() {
+        let f = loop_fixture();
+        let (conn, result) = fail_then_fix_and_resume(&f, None);
+
+        let children = child_runs(&conn);
+        assert!(
+            children[0]
+                .2
+                .as_deref()
+                .is_some_and(|e| e.contains("reached max_iterations (2)")),
+            "first child should fail on its loop, got {:?}",
+            children[0]
+        );
+        assert!(result.all_succeeded, "resumed parent should succeed");
+        assert_eq!(children.len(), 2, "a new child run must be started");
+        assert_eq!(children[1].1, "completed");
+        assert!(f.ws.path().join("after-ran").exists());
+    }
+
+    #[test]
+    fn resume_from_workflow_step_starts_fresh_child() {
+        let f = step_fail_fixture();
+        let (conn, result) = fail_then_fix_and_resume(&f, Some("workflow:loop-child"));
+
+        let children = child_runs(&conn);
+        assert!(result.all_succeeded, "resumed parent should succeed");
+        assert_eq!(children.len(), 2, "from_step must start a new child run");
+        assert_eq!(children[0].1, "failed");
+        assert_eq!(children[1].1, "completed");
+        assert!(f.ws.path().join("after-ran").exists());
+    }
+
+    #[test]
+    fn resume_after_child_step_failure_reuses_child_run() {
+        let f = step_fail_fixture();
+        let (conn, result) = fail_then_fix_and_resume(&f, None);
+
+        let children = child_runs(&conn);
+        assert!(result.all_succeeded, "resumed parent should succeed");
+        assert_eq!(children.len(), 1, "the failed child run must be resumed");
+        assert_eq!(children[0].1, "completed");
+        assert!(f.ws.path().join("after-ran").exists());
+    }
+}

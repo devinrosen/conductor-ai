@@ -416,6 +416,7 @@ fn build_rk_engine_components(
     target_label: Option<String>,
     triggered_by_hook: bool,
     runtime_override: Option<String>,
+    fresh_children: super::runkon_bridge::FreshChildren,
 ) -> RkEngineComponents {
     let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> = Arc::new(
         super::persistence_sqlite::SqliteWorkflowPersistence::from_shared_connection(Arc::clone(
@@ -435,7 +436,8 @@ fn build_rk_engine_components(
             Arc::clone(shared_conn),
             target_label,
             triggered_by_hook,
-        ));
+        )
+        .with_fresh_children(fresh_children));
     RkEngineComponents {
         persistence,
         action_registry,
@@ -685,6 +687,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         params.target_label.clone(),
         params.triggered_by_hook,
         params.runtime.clone(),
+        super::runkon_bridge::FreshChildren::None,
     );
 
     let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(
@@ -1030,7 +1033,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
 
     // Pre-execution phase: validate, reset, and prepare. Lock shared_conn for the
     // duration so all mutations complete before the FlowEngine takes over.
-    let (wf_run, worktree_path, repo_path, snapshot_string, repo_owner) = {
+    let (wf_run, worktree_path, repo_path, snapshot_string, repo_owner, fresh_children) = {
         let guard = lock_shared(&shared_conn)?;
         let conn: &Connection = &guard;
         let wt_mgr = WorktreeManager::new(conn, config);
@@ -1154,6 +1157,31 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         // skip set. These rows carry no useful state and would otherwise pollute step history.
         crate::workflow::delete_orphaned_pending_steps(conn, &wf_run.id)?;
 
+        // Child workflows that must start fresh rather than resume their earlier
+        // run: every `workflow:<name>` step at or after `from_step`, or all of
+        // them on restart. Computed from `all_steps`, before the resets below.
+        let fresh_children = if input.restart {
+            super::runkon_bridge::FreshChildren::All
+        } else if let Some(from_step) = input.from_step {
+            let pos = all_steps
+                .iter()
+                .find(|s| s.step_name == from_step)
+                .map(|s| s.position);
+            match pos {
+                Some(pos) => super::runkon_bridge::FreshChildren::Named(
+                    all_steps
+                        .iter()
+                        .filter(|s| s.position >= pos)
+                        .filter_map(|s| s.step_name.strip_prefix("workflow:"))
+                        .map(String::from)
+                        .collect(),
+                ),
+                None => super::runkon_bridge::FreshChildren::None,
+            }
+        } else {
+            super::runkon_bridge::FreshChildren::None
+        };
+
         // Perform DB resets and count how many completed steps will be skipped (for logging).
         let skip_count: usize = if input.restart {
             // Restart: clear all step results — skip nothing
@@ -1211,6 +1239,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
             repo_path,
             snapshot_string,
             repo_owner,
+            fresh_children,
         )
     };
 
@@ -1231,6 +1260,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         wf_run.target_label.clone(),
         wf_run.is_triggered_by_hook(),
         input.runtime.map(String::from),
+        fresh_children,
     );
 
     let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(

@@ -1,8 +1,29 @@
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use runkon_flow::engine_error::EngineError;
 
 use super::{bridge_lock_err, wrap_child_workflow_err};
+
+/// Child workflows that must start a new run on resume instead of resuming
+/// their earlier run (set when the parent is resumed from a step or restarted).
+#[derive(Debug, Clone, Default)]
+pub(crate) enum FreshChildren {
+    #[default]
+    None,
+    All,
+    Named(HashSet<String>),
+}
+
+impl FreshChildren {
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        match self {
+            FreshChildren::None => false,
+            FreshChildren::All => true,
+            FreshChildren::Named(names) => names.contains(name),
+        }
+    }
+}
 
 /// Implements `runkon_flow::engine::ChildWorkflowRunner` by delegating to
 /// conductor-core's `execute_workflow` / `resume_workflow` functions.
@@ -13,6 +34,7 @@ pub(crate) struct ConductorChildWorkflowRunner {
     /// Cached from the parent run at construction time to avoid a per-child DB round-trip.
     target_label: Option<String>,
     triggered_by_hook: bool,
+    fresh_children: FreshChildren,
 }
 
 impl ConductorChildWorkflowRunner {
@@ -29,7 +51,15 @@ impl ConductorChildWorkflowRunner {
             conn,
             target_label,
             triggered_by_hook,
+            fresh_children: FreshChildren::None,
         }
+    }
+
+    /// Make `find_resumable_child` answer `None` for the given children, so the
+    /// engine starts them fresh.
+    pub(crate) fn with_fresh_children(mut self, fresh_children: FreshChildren) -> Self {
+        self.fresh_children = fresh_children;
+        self
     }
 
     /// Build the `WorkflowExecStandalone` params for a new child workflow run.
@@ -185,6 +215,14 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         parent_run_id: &str,
         workflow_name: &str,
     ) -> runkon_flow::engine_error::Result<Option<runkon_flow::types::WorkflowRun>> {
+        if self.fresh_children.contains(workflow_name) {
+            tracing::info!(
+                parent_run_id,
+                workflow_name,
+                "resume requested a fresh child run; not resuming the earlier one"
+            );
+            return Ok(None);
+        }
         let conn = self.conn.lock().map_err(bridge_lock_err)?;
         let core_run =
             crate::workflow::find_resumable_child_run(&conn, parent_run_id, workflow_name)
@@ -332,5 +370,40 @@ mod tests {
 
         let input = runner.build_resume_input("child-run-2", None, &parent_ctx);
         assert!(input.event_sinks.is_empty());
+    }
+
+    #[test]
+    fn find_resumable_child_honours_fresh_children() {
+        use runkon_flow::engine::ChildWorkflowRunner;
+
+        let conn = crate::test_helpers::setup_db();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = OFF; \
+             INSERT INTO workflow_runs (id, workflow_name, status, dry_run, trigger, started_at, parent_workflow_run_id) \
+             VALUES ('child-1', 'child-wf', 'failed', 0, 'manual', '2026-01-01T00:00:00Z', 'parent-1');",
+        )
+        .unwrap();
+        let conn = Arc::new(Mutex::new(conn));
+
+        let make = |fresh: FreshChildren| {
+            ConductorChildWorkflowRunner::new(
+                std::path::PathBuf::from("/tmp/test.db"),
+                crate::config::Config::default(),
+                Arc::clone(&conn),
+                None,
+                false,
+            )
+            .with_fresh_children(fresh)
+        };
+
+        let found = |r: &ConductorChildWorkflowRunner| {
+            r.find_resumable_child("parent-1", "child-wf").unwrap()
+        };
+        assert!(found(&make(FreshChildren::None)).is_some());
+        assert!(found(&make(FreshChildren::All)).is_none());
+        let named = FreshChildren::Named(["child-wf".to_string()].into_iter().collect());
+        assert!(found(&make(named)).is_none());
+        let other = FreshChildren::Named(["other".to_string()].into_iter().collect());
+        assert!(found(&make(other)).is_some());
     }
 }

@@ -759,25 +759,54 @@ pub fn reap_finalization_stuck_workflow_runs(
     })
 }
 
+/// True when `err` is the error runkon-flow records for a loop that ran out
+/// (`check_max_iterations` / `check_stuck` in its `engine.rs`).
+///
+/// Resuming such a run replays the completed iterations, restores their
+/// markers and fails again at once, so it can never make progress. No step row
+/// is marked failed, which is why the run's `error` text is the only signal.
+/// Remove this once runkon/runkon#133 resets the loop budget in the engine.
+pub(crate) fn is_loop_exhaustion_error(err: &str) -> bool {
+    err.contains(" reached max_iterations (")
+        || (err.contains(" stuck after ") && err.contains("identical markers"))
+}
+
+/// Find the newest child run of `parent_workflow_run_id` named
+/// `child_workflow_name` that can be resumed (`failed`, `pending`, `waiting`).
+///
+/// A failed child whose failure was a loop running out is not offered, so the
+/// engine starts a fresh child instead (see [`is_loop_exhaustion_error`]).
 pub fn find_resumable_child_run(
     conn: &Connection,
     parent_workflow_run_id: &str,
     child_workflow_name: &str,
 ) -> Result<Option<WorkflowRun>> {
-    Ok(conn
-            .query_row(
-                &format!(
-                    "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS} FROM workflow_runs \
+    let run = conn
+        .query_row(
+            &format!(
+                "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS} FROM workflow_runs \
                      WHERE parent_workflow_run_id = :parent_workflow_run_id \
                        AND workflow_name = :child_workflow_name \
                        AND status IN ('failed', 'pending', 'waiting') \
                      ORDER BY started_at DESC \
                      LIMIT 1"
-                ),
-                named_params![":parent_workflow_run_id": parent_workflow_run_id, ":child_workflow_name": child_workflow_name],
-                row_to_workflow_run,
-            )
-            .optional()?)
+            ),
+            named_params![":parent_workflow_run_id": parent_workflow_run_id, ":child_workflow_name": child_workflow_name],
+            row_to_workflow_run,
+        )
+        .optional()?;
+    if let Some(r) = &run {
+        if r.status == WorkflowRunStatus::Failed
+            && r.error.as_deref().is_some_and(is_loop_exhaustion_error)
+        {
+            tracing::info!(
+                run_id = %r.id,
+                "prior child run exhausted its loop; starting a fresh child"
+            );
+            return Ok(None);
+        }
+    }
+    Ok(run)
 }
 
 const SQL_RESET_FAILED: &str =
