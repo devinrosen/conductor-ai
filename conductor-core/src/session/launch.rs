@@ -65,7 +65,9 @@ pub fn resolve_prompt(
     let raw = match prompt_file {
         Some("-") => {
             let mut buf = String::new();
-            stdin.read_to_string(&mut buf)?;
+            stdin.read_to_string(&mut buf).map_err(|e| {
+                ConductorError::InvalidInput(format!("reading prompt from stdin: {e}"))
+            })?;
             Some(buf)
         }
         Some(path) => Some(std::fs::read_to_string(path).map_err(|e| {
@@ -1016,6 +1018,106 @@ mod tests {
             &|_| Ok(None),
             Duration::ZERO,
         )
+    }
+
+    #[test]
+    fn resolve_prompt_stdin_error_has_context() {
+        struct Bad;
+        impl std::io::Read for Bad {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("boom"))
+            }
+        }
+        let err = resolve_prompt(None, Some("-"), &mut Bad).unwrap_err();
+        assert!(err.to_string().contains("reading prompt from stdin"));
+    }
+
+    #[test]
+    fn human_text_includes_attach_command_only_when_not_switched() {
+        let launched = |switched| OpenSessionOutcome::Launched {
+            mode: LaunchMode::New,
+            tmux_session: "work".into(),
+            window: "w".into(),
+            pane_id: "%1".into(),
+            cwd: "/tmp".into(),
+            created_session: false,
+            attach_command: "tmux attach -t work".into(),
+            prompt_used: false,
+            switched,
+        };
+        let report = launched(false);
+        assert!(report.human_text().contains("Attach with: "));
+        let switched = launched(true);
+        assert!(!switched.human_text().contains("Attach with:"));
+        let focused = OpenSessionOutcome::Focused {
+            run_id: "r".into(),
+            pane: "%1".into(),
+            window_target: "work:1".into(),
+            switched: true,
+            attach_command: "tmux attach -t work".into(),
+        };
+        assert!(!focused.human_text().contains("Attach with:"));
+    }
+
+    #[test]
+    fn explicit_prompt_is_trimmed_and_blank_falls_through() {
+        let (conn, config) = setup();
+        add_ticket(&conn, "github", "3158");
+        let tmux = FakeTmux {
+            session_exists: true,
+            ..FakeTmux::new()
+        };
+        let mut r = req(false);
+        r.prompt = Some("  hi \n".into());
+        run(&conn, &config, &r, &tmux, false).unwrap();
+        assert_eq!(*tmux.argv.borrow(), vec!["claude", "hi"]);
+
+        // Blank explicit prompt falls through to the generated opener.
+        let tmux = FakeTmux {
+            session_exists: true,
+            ..FakeTmux::new()
+        };
+        r.prompt = Some("  ".into());
+        run(&conn, &config, &r, &tmux, false).unwrap();
+        let argv = tmux.argv.borrow();
+        assert_eq!(argv.len(), 2);
+        assert!(argv[1].starts_with("Work on #3158"));
+    }
+
+    #[test]
+    fn missing_ticket_row_is_treated_as_no_ticket() {
+        let (conn, config) = setup();
+        conn.execute("PRAGMA foreign_keys = OFF", []).unwrap();
+        conn.execute(
+            "UPDATE worktrees SET ticket_id = 'gone' WHERE id = 'w1'",
+            [],
+        )
+        .unwrap();
+        let tmux = FakeTmux {
+            session_exists: true,
+            ..FakeTmux::new()
+        };
+        run(&conn, &config, &req(false), &tmux, false).unwrap();
+        assert!(tmux.called("new-window:fix-1-thing"));
+        assert_eq!(*tmux.argv.borrow(), vec!["claude"]);
+    }
+
+    #[test]
+    fn malformed_repo_config_falls_back_to_defaults() {
+        let dir = std::env::temp_dir().join(format!("conductor-badcfg-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".conductor")).unwrap();
+        std::fs::write(dir.join(".conductor/config.toml"), "this is = [not toml").unwrap();
+        let conn = create_test_conn();
+        insert_test_repo(&conn, "r1", "myrepo", dir.to_str().unwrap());
+        insert_test_worktree(&conn, "w1", "r1", "fix-1-thing", "/tmp/wt/fix-1-thing");
+        let tmux = FakeTmux {
+            session_exists: true,
+            ..FakeTmux::new()
+        };
+        let out = run(&conn, &Config::default(), &req(false), &tmux, false);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(matches!(out, Ok(OpenSessionOutcome::Launched { .. })));
+        assert_eq!(*tmux.argv.borrow(), vec!["claude"]);
     }
 
     #[test]
