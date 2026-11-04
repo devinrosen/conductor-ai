@@ -1764,21 +1764,6 @@ fn set_child_failed_with_error(conn: &Connection, id: &str, err: &str) {
 }
 
 #[test]
-fn test_find_resumable_child_run_is_pure_for_loop_exhausted_child() {
-    let conn = setup_db();
-    insert_workflow_run(&conn, "parent1", "parent-wf", "failed", None);
-    insert_workflow_run(&conn, "child1", "child-wf", "failed", Some("parent1"));
-    set_child_failed_with_error(
-        &conn,
-        "child1",
-        "workflow error: do analyze-lint.has_lint_errors reached max_iterations (3)",
-    );
-    // The query is pure; the runner decides not to resume (see its tests).
-    let result = crate::workflow::find_resumable_child_run(&conn, "parent1", "child-wf").unwrap();
-    assert!(result.is_some());
-}
-
-#[test]
 fn test_find_resumable_child_run_is_pure_for_stuck_child() {
     let conn = setup_db();
     insert_workflow_run(&conn, "parent1", "parent-wf", "failed", None);

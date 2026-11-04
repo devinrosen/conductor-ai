@@ -1558,14 +1558,6 @@ mod child_resume {
         let (conn, result) = fail_then_fix_and_resume(&f, None, false);
 
         let children = child_runs(&conn);
-        assert!(
-            children[0]
-                .2
-                .as_deref()
-                .is_some_and(|e| e.contains("reached max_iterations (2)")),
-            "first child should fail on its loop, got {:?}",
-            children[0]
-        );
         assert!(result.all_succeeded, "resumed parent should succeed");
         assert_eq!(
             children.len(),

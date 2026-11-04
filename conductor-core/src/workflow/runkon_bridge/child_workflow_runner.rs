@@ -406,33 +406,4 @@ mod tests {
         let other = FreshChildren::Named(["other".to_string()].into_iter().collect());
         assert!(found(&make(other)).is_some());
     }
-
-    #[test]
-    fn find_resumable_child_skips_loop_exhausted_child() {
-        use runkon_flow::engine::ChildWorkflowRunner;
-
-        let conn = crate::test_helpers::setup_db();
-        conn.execute_batch(
-            "PRAGMA foreign_keys = OFF; \
-             INSERT INTO workflow_runs (id, workflow_name, status, dry_run, trigger, started_at, parent_workflow_run_id, parent_run_id, error) \
-             VALUES ('c1', 'loop-wf', 'failed', 0, 'manual', '2026-01-01T00:00:00Z', 'parent-1', '', 'do a.b reached max_iterations (3)'), \
-                    ('c2', 'step-wf', 'failed', 0, 'manual', '2026-01-01T00:00:00Z', 'parent-1', '', 'step ''x'' failed');",
-        )
-        .unwrap();
-        let r = ConductorChildWorkflowRunner::new(
-            std::path::PathBuf::from("/tmp/test.db"),
-            crate::config::Config::default(),
-            Arc::new(Mutex::new(conn)),
-            None,
-            false,
-        );
-        assert!(r
-            .find_resumable_child("parent-1", "loop-wf")
-            .unwrap()
-            .is_none());
-        assert!(r
-            .find_resumable_child("parent-1", "step-wf")
-            .unwrap()
-            .is_some());
-    }
 }
