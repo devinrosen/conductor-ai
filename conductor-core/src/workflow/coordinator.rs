@@ -368,6 +368,8 @@ fn build_rk_execution_state(args: RkStateArgs) -> runkon_flow::engine::Execution
         current_execution_id: Arc::new(std::sync::Mutex::new(None)),
         owner_token: None,
         lease_generation: None,
+        // The engine replaces this with its own gate resolver registry.
+        gate_resolvers: Default::default(),
     }
 }
 
