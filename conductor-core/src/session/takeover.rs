@@ -16,13 +16,13 @@ use serde::Serialize;
 
 use super::hook::{PLACEHOLDER_PROMPT, RUNTIME_INTERACTIVE};
 use super::launch::{
-    attach_command, find_live, launch_window, process_is_alive, real_hooks_settings,
-    sanitize_window_name, window_name, FocusMode, InteractiveRunRow, LaunchSpec, Tmux,
-    LAUNCH_SETTLE,
+    attach_command, find_live, first_free_window, interactive_runs_for_session, launch_window,
+    process_is_alive, real_hooks_settings, sanitize_window_name, window_name, FocusMode,
+    InteractiveRunRow, LaunchSpec, Tmux, LAUNCH_SETTLE,
 };
 use crate::agent::status::AgentRunStatus;
 use crate::agent::types::EVENT_KIND_SYSTEM;
-use crate::agent::AgentManager;
+use crate::agent::{AgentManager, AgentRun};
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::new_id;
@@ -40,14 +40,10 @@ use crate::worktree::WorktreeManager;
 /// rows (those with a `parent_run_id`): a session a human has continued, however it started,
 /// must never be driven headless. That is a superset of the #3163 rule.
 pub fn session_owner(conn: &Connection, session_id: &str) -> Result<Option<String>> {
-    Ok(conn
-        .query_row(
-            "SELECT id FROM agent_runs WHERE session_id = ?1 AND runtime = ?2 \
-             ORDER BY started_at DESC, id DESC LIMIT 1",
-            params![session_id, RUNTIME_INTERACTIVE],
-            |r| r.get(0),
-        )
-        .optional()?)
+    Ok(interactive_runs_for_session(conn, session_id)?
+        .into_iter()
+        .next()
+        .map(|r| r.id))
 }
 
 /// `session_id` when a headless run may resume it: `None` when it is missing, empty, or owned
@@ -66,6 +62,26 @@ pub fn resumable_session_id(conn: &Connection, session_id: Option<&str>) -> Resu
         return Ok(None);
     }
     Ok(Some(id.to_string()))
+}
+
+/// The one rule for whether a headless run may resume its own session, given whether a human
+/// has taken it over: `None` for an interactive run, a taken-over run, or a missing/empty
+/// session id. [`resumable_session_for_run`] feeds it from the database; the TUI feeds it from
+/// its poller-loaded takeover links so the render thread never queries.
+pub fn headless_resumable_session_id(run: &AgentRun, taken_over: bool) -> Option<String> {
+    if run.is_interactive() || taken_over {
+        return None;
+    }
+    run.session_id.clone().filter(|s| !s.is_empty())
+}
+
+/// [`headless_resumable_session_id`] for `run`, with ownership read from the database.
+pub fn resumable_session_for_run(conn: &Connection, run: &AgentRun) -> Result<Option<String>> {
+    let taken_over = match run.session_id.as_deref().filter(|s| !s.is_empty()) {
+        Some(sid) => session_owner(conn, sid)?.is_some(),
+        None => false,
+    };
+    Ok(headless_resumable_session_id(run, taken_over))
 }
 
 // ---------------------------------------------------------------------------
@@ -249,7 +265,7 @@ pub(crate) fn take_over_run_with(
     let repo = RepoManager::new(conn, config).get_by_id(&wt.repo_id)?;
 
     // Already taken over and live: focus it rather than resume the transcript twice.
-    let owners = interactive_rows_for_session(conn, &session_id)?;
+    let owners = interactive_runs_for_session(conn, &session_id)?;
     if let Some(live) = find_live(&owners, is_alive) {
         let Some(pane) = live.tmux_pane.as_deref().filter(|p| !p.is_empty()) else {
             return Ok(TakeOverOutcome::LiveNoPane {
@@ -291,12 +307,7 @@ pub(crate) fn take_over_run_with(
         Some(w) => sanitize_window_name(w),
         None => {
             let base = window_name(ticket.as_ref(), &repo.slug, &wt.slug);
-            let session_exists = tmux.has_session(&tmux_session)?;
-            if session_exists && tmux.window_exists(&tmux_session, &base)? {
-                format!("{base}-takeover")
-            } else {
-                base
-            }
+            first_free_window(tmux, &tmux_session, &base, &format!("{base}-takeover"))?
         }
     };
 
@@ -342,33 +353,6 @@ pub(crate) fn take_over_run_with(
     })
 }
 
-/// Interactive rows with `session_id`, newest first, in the shape the launcher's liveness
-/// check takes.
-fn interactive_rows_for_session(
-    conn: &Connection,
-    session_id: &str,
-) -> Result<Vec<InteractiveRunRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, session_id, status, subprocess_pid, subprocess_started_at, started_at, tmux_pane \
-         FROM agent_runs WHERE session_id = ?1 AND runtime = ?2 \
-         ORDER BY COALESCE(ended_at, idle_since, started_at) DESC, id DESC",
-    )?;
-    let rows = stmt
-        .query_map(params![session_id, RUNTIME_INTERACTIVE], |r| {
-            Ok(InteractiveRunRow {
-                id: r.get(0)?,
-                session_id: r.get(1)?,
-                status: r.get(2)?,
-                subprocess_pid: r.get(3)?,
-                subprocess_started_at: r.get(4)?,
-                started_at: r.get(5)?,
-                tmux_pane: r.get(6)?,
-            })
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok(rows)
-}
-
 /// Write (or adopt) the interactive row for a takeover and return its id.
 ///
 /// The `SessionStart` hook of the resumed session looks the row up by `session_id` and
@@ -386,14 +370,10 @@ fn record_takeover(
     let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let now = chrono::Utc::now().to_rfc3339();
 
-    let existing: Option<String> = tx
-        .query_row(
-            "SELECT id FROM agent_runs WHERE session_id = ?1 AND runtime = ?2 \
-             ORDER BY started_at DESC, id DESC LIMIT 1",
-            params![session_id, RUNTIME_INTERACTIVE],
-            |r| r.get(0),
-        )
-        .optional()?;
+    let existing: Option<String> = interactive_runs_for_session(&tx, session_id)?
+        .into_iter()
+        .next()
+        .map(|r| r.id);
 
     let interactive_id = match existing {
         Some(id) => {
@@ -935,5 +915,25 @@ mod tests {
         assert_eq!(l1.interactive_status, "idle");
         let l2 = links.iter().find(|l| l.headless_run_id == "h2").unwrap();
         assert_eq!(l2.step_name, None);
+    }
+
+    #[test]
+    fn resumable_session_for_run_applies_the_shared_rule() {
+        let (conn, _config) = setup();
+        add_headless(&conn, "h1", "completed", Some("sess-1"));
+        add_headless(&conn, "h2", "completed", None);
+        let mgr = AgentManager::new(&conn);
+        let h1 = mgr.get_run("h1").unwrap().unwrap();
+        let h2 = mgr.get_run("h2").unwrap().unwrap();
+        assert_eq!(
+            resumable_session_for_run(&conn, &h1).unwrap().as_deref(),
+            Some("sess-1")
+        );
+        assert_eq!(resumable_session_for_run(&conn, &h2).unwrap(), None);
+        assert_eq!(headless_resumable_session_id(&h1, true), None);
+
+        let tmux = FakeTmux::new();
+        take(&conn, &Config::default(), &req("h1"), &tmux, false).unwrap();
+        assert_eq!(resumable_session_for_run(&conn, &h1).unwrap(), None);
     }
 }

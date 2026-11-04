@@ -280,26 +280,7 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
                     };
                     // A session a human took over interactively (#3163) must not be
                     // resumed headless: `None` makes the step report its unfinished turn.
-                    let sid = session?;
-                    let conn = self.conn.lock().ok()?;
-                    match crate::session::takeover::resumable_session_id(&conn, Some(&sid)) {
-                        Ok(resumable) => {
-                            if resumable.is_none() {
-                                tracing::warn!(
-                                    "step '{}': session {sid} was taken over interactively; not resuming it to finish the turn",
-                                    params.name
-                                );
-                            }
-                            resumable
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "step '{}': cannot check session ownership for run {child_run_id}: {e}",
-                                params.name
-                            );
-                            None
-                        }
-                    }
+                    headless_resumable_session(&self.conn, &params.name, &child_run_id, session)
                 },
                 |prompt, session_id| {
                     let effective_runtime = resume_runtime
@@ -425,6 +406,42 @@ fn schema_output_missing(
     )))
 }
 
+/// `session` when the finish-turn path may resume it headless: `None` when there is no session,
+/// a human took it over interactively (#3163), or ownership can't be determined (a `None`
+/// makes the step report its unfinished turn rather than resume blindly).
+fn headless_resumable_session(
+    conn: &std::sync::Mutex<rusqlite::Connection>,
+    step: &str,
+    child_run_id: &str,
+    session: Option<String>,
+) -> Option<String> {
+    let sid = session?;
+    let conn = conn
+        .lock()
+        .map_err(|e| {
+            tracing::warn!(
+                "step '{step}': db lock poisoned, cannot check session ownership for run {child_run_id}: {e}"
+            );
+        })
+        .ok()?;
+    match crate::session::takeover::resumable_session_id(&conn, Some(&sid)) {
+        Ok(resumable) => {
+            if resumable.is_none() {
+                tracing::warn!(
+                    "step '{step}': session {sid} was taken over interactively; not resuming it to finish the turn"
+                );
+            }
+            resumable
+        }
+        Err(e) => {
+            tracing::warn!(
+                "step '{step}': cannot check session ownership for run {child_run_id}: {e}"
+            );
+            None
+        }
+    }
+}
+
 /// Write the metrics runkon summed across output-correction attempts onto the
 /// step's `agent_runs` row. Missing or unparseable keys leave that column as is.
 fn persist_corrected_run_metrics(
@@ -453,7 +470,10 @@ fn persist_corrected_run_metrics(
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_runtime_from_model, persist_corrected_run_metrics, schema_output_missing};
+    use super::{
+        derive_runtime_from_model, headless_resumable_session, persist_corrected_run_metrics,
+        schema_output_missing,
+    };
     use runkon_runtimes::config::RuntimeConfig;
     use std::collections::HashMap;
 
@@ -571,5 +591,61 @@ mod tests {
         assert_eq!(row.num_turns, Some(9));
         assert_eq!(row.input_tokens, Some(1200));
         assert_eq!(row.output_tokens, None);
+    }
+
+    fn conn_with_headless_run(session: &str) -> std::sync::Mutex<rusqlite::Connection> {
+        use crate::test_helpers::{create_test_conn, insert_test_repo, insert_test_worktree};
+        let conn = create_test_conn();
+        insert_test_repo(&conn, "r1", "myrepo", "/nonexistent/myrepo");
+        insert_test_worktree(&conn, "w1", "r1", "fix-1-thing", "/tmp/wt/fix-1-thing");
+        conn.execute(
+            "INSERT INTO agent_runs (id, worktree_id, repo_id, session_id, prompt, status, \
+             started_at, runtime) VALUES ('h1', 'w1', 'r1', ?1, 'p', 'completed', \
+             '2024-01-01T00:00:00Z', 'claude')",
+            [session],
+        )
+        .unwrap();
+        std::sync::Mutex::new(conn)
+    }
+
+    #[test]
+    fn finish_turn_resumes_session_nobody_took_over() {
+        let conn = conn_with_headless_run("sess-1");
+        assert_eq!(
+            headless_resumable_session(&conn, "step", "h1", Some("sess-1".into())).as_deref(),
+            Some("sess-1")
+        );
+        assert_eq!(headless_resumable_session(&conn, "step", "h1", None), None);
+    }
+
+    #[test]
+    fn finish_turn_never_resumes_a_taken_over_session() {
+        let conn = conn_with_headless_run("sess-1");
+        conn.lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO agent_runs (id, worktree_id, repo_id, session_id, prompt, status, \
+                 started_at, runtime, parent_run_id) VALUES ('i1', 'w1', 'r1', 'sess-1', 'p', \
+                 'idle', '2024-01-02T00:00:00Z', 'interactive', 'h1')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            headless_resumable_session(&conn, "step", "h1", Some("sess-1".into())),
+            None
+        );
+    }
+
+    #[test]
+    fn finish_turn_does_not_resume_when_ownership_check_fails() {
+        let conn = conn_with_headless_run("sess-1");
+        conn.lock()
+            .unwrap()
+            .execute_batch("DROP TABLE agent_runs")
+            .unwrap();
+        assert_eq!(
+            headless_resumable_session(&conn, "step", "h1", Some("sess-1".into())),
+            None
+        );
     }
 }

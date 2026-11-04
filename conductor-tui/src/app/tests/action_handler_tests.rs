@@ -3118,3 +3118,124 @@ fn agent_busy_guard_message_depends_on_runtime() {
         Some("Agent already running — press x to stop")
     );
 }
+
+// --- Take over (#3163): status-message branches, none of which spawn tmux ---
+
+fn app_with_latest_run(status: conductor_core::agent::AgentRunStatus, runtime: &str) -> App {
+    let mut app = make_app();
+    app.state.selected_worktree_id = Some("wt1".into());
+    app.state
+        .data
+        .latest_agent_runs
+        .insert("wt1".into(), make_interactive_run(status, runtime));
+    app
+}
+
+#[test]
+fn take_over_without_selected_worktree_asks_to_select_one() {
+    let mut app = make_app();
+    app.handle_take_over_run();
+    assert_eq!(
+        app.state.status_message.as_deref(),
+        Some("Select a worktree first")
+    );
+    assert!(matches!(app.state.modal, Modal::None));
+}
+
+#[test]
+fn take_over_with_no_run_reports_nothing_to_take_over() {
+    let mut app = make_app();
+    app.state.selected_worktree_id = Some("wt1".into());
+    app.handle_take_over_run();
+    assert_eq!(
+        app.state.status_message.as_deref(),
+        Some("No agent run to take over")
+    );
+}
+
+#[test]
+fn take_over_of_interactive_latest_run_points_at_open_session() {
+    use conductor_core::agent::AgentRunStatus;
+    let mut app = app_with_latest_run(AgentRunStatus::Idle, "interactive");
+    app.handle_take_over_run();
+    assert_eq!(
+        app.state.status_message.as_deref(),
+        Some("Latest run is an interactive session — press C")
+    );
+}
+
+#[test]
+fn take_over_of_active_run_is_refused_before_launching() {
+    use conductor_core::agent::AgentRunStatus;
+    let mut app = app_with_latest_run(AgentRunStatus::Running, "claude");
+    app.handle_take_over_run();
+    assert_eq!(
+        app.state.status_message.as_deref(),
+        Some("Run is still active; stop it first (x) and try again")
+    );
+    assert!(matches!(app.state.modal, Modal::None));
+}
+
+#[test]
+fn take_over_of_finished_run_without_background_sender_errors() {
+    use conductor_core::agent::AgentRunStatus;
+    let mut app = app_with_latest_run(AgentRunStatus::Completed, "claude");
+    app.bg_tx = None;
+    app.handle_take_over_run();
+    assert!(matches!(app.state.modal, Modal::Error { .. }));
+}
+
+#[test]
+fn take_over_in_workflow_view_needs_a_step_with_a_child_run() {
+    use conductor_core::workflow::WorkflowRunStep;
+    let mut app = make_app();
+    app.state.view = View::WorkflowRunDetail;
+    // No steps at all.
+    app.handle_take_over_run();
+    assert_eq!(
+        app.state.status_message.as_deref(),
+        Some("The selected step has no agent run")
+    );
+    // A step that never started an agent run.
+    app.state.status_message = None;
+    let step = crate::state::tests::make_wf_step("step-1", "run-1", "review", 0);
+    app.state.data.workflow_steps = vec![WorkflowRunStep {
+        child_run_id: None,
+        ..step
+    }];
+    app.handle_take_over_run();
+    assert_eq!(
+        app.state.status_message.as_deref(),
+        Some("The selected step has no agent run")
+    );
+}
+
+#[test]
+fn take_over_complete_error_opens_error_modal() {
+    let mut app = make_app();
+    app.state.modal = Modal::Progress {
+        message: "Taking over session…".into(),
+    };
+    app.handle_take_over_complete(Err("boom".into()));
+    match &app.state.modal {
+        Modal::Error { message } => assert_eq!(message, "Take over failed: boom"),
+        _ => panic!("expected an error modal"),
+    }
+}
+
+#[test]
+fn take_over_complete_success_clears_modal_and_reports_summary() {
+    use conductor_core::session::takeover::TakeOverOutcome;
+    let mut app = make_app();
+    app.state.modal = Modal::Progress {
+        message: "Taking over session…".into(),
+    };
+    // `LiveNoPane` has no attach command, so nothing is copied to the clipboard.
+    let outcome = TakeOverOutcome::LiveNoPane {
+        interactive_run_id: "i1".into(),
+    };
+    let summary = outcome.summary();
+    app.handle_take_over_complete(Ok(outcome));
+    assert!(matches!(app.state.modal, Modal::None));
+    assert_eq!(app.state.status_message.as_deref(), Some(summary.as_str()));
+}

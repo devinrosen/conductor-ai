@@ -394,21 +394,25 @@ pub struct InteractiveRunRow {
     pub tmux_pane: Option<String>,
 }
 
-/// Interactive runs for a worktree, most recent activity first.
+/// Interactive runs matching `filter` (a `WHERE` fragment over `agent_runs` with one `?1`
+/// parameter), most recent activity first.
 ///
-/// A resumed session reopens its existing row and `started_at` keeps its original
-/// value, so order by the latest of end / idle / start.
-pub fn interactive_runs_for_worktree(
+/// The single place that owns the interactive-row SELECT, its row mapping and its ordering, so
+/// every "which row owns this" question agrees. A resumed session reopens its existing row and
+/// `started_at` keeps its original value, so order by the latest of end / idle / start.
+fn interactive_rows_where(
     conn: &Connection,
-    worktree_id: &str,
+    filter: &str,
+    param: &str,
 ) -> Result<Vec<InteractiveRunRow>> {
-    let mut stmt = conn.prepare(
+    let sql = format!(
         "SELECT id, session_id, status, subprocess_pid, subprocess_started_at, started_at, tmux_pane \
-         FROM agent_runs WHERE worktree_id = ?1 AND runtime = 'interactive' \
-         ORDER BY COALESCE(ended_at, idle_since, started_at) DESC, id DESC",
-    )?;
+         FROM agent_runs WHERE {filter} AND runtime = 'interactive' \
+         ORDER BY COALESCE(ended_at, idle_since, started_at) DESC, id DESC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
-        .query_map([worktree_id], |r| {
+        .query_map([param], |r| {
             Ok(InteractiveRunRow {
                 id: r.get(0)?,
                 session_id: r.get(1)?,
@@ -421,6 +425,22 @@ pub fn interactive_runs_for_worktree(
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+/// Interactive runs for a worktree, most recent activity first.
+pub fn interactive_runs_for_worktree(
+    conn: &Connection,
+    worktree_id: &str,
+) -> Result<Vec<InteractiveRunRow>> {
+    interactive_rows_where(conn, "worktree_id = ?1", worktree_id)
+}
+
+/// Interactive runs holding Claude session `session_id`, most recent activity first.
+pub fn interactive_runs_for_session(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<InteractiveRunRow>> {
+    interactive_rows_where(conn, "session_id = ?1", session_id)
 }
 
 pub(crate) fn is_live_status(status: &str) -> bool {
@@ -843,6 +863,22 @@ pub(crate) struct LaunchSpec<'a> {
 pub(crate) struct LaunchedWindow {
     pub pane_id: String,
     pub created_session: bool,
+}
+
+/// The first free window name in `session`: `base`, else `fallback`. A missing tmux session
+/// has no windows, so `base` is free. [`launch_window`] still refuses an explicit name that is
+/// taken; this only chooses between two candidates.
+pub(crate) fn first_free_window(
+    tmux: &dyn Tmux,
+    session: &str,
+    base: &str,
+    fallback: &str,
+) -> Result<String> {
+    if tmux.has_session(session)? && tmux.window_exists(session, base)? {
+        Ok(fallback.to_string())
+    } else {
+        Ok(base.to_string())
+    }
 }
 
 /// Open a detached tmux window running `claude`: refuses a window name that is already taken,

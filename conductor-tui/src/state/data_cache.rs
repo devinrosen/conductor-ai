@@ -194,10 +194,10 @@ impl DataCache {
     /// one a human has taken over (#3163). The poller-loaded maps avoid a DB query on the
     /// render thread; the `conductor agent run` backstop still covers a race.
     pub fn resumable_session_for(&self, run: &AgentRun) -> Option<String> {
-        if run.is_interactive() || self.taken_over_by.contains_key(&run.id) {
-            return None;
-        }
-        run.session_id.clone()
+        conductor_core::session::takeover::headless_resumable_session_id(
+            run,
+            self.taken_over_by.contains_key(&run.id),
+        )
     }
 
     /// Iterate the agent activity list as visual rows, interleaving run-group

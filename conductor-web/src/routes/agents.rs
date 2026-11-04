@@ -755,6 +755,42 @@ pub struct AgentPromptResponse {
     pub incomplete_steps: usize,
 }
 
+/// What `get_prompt` reports for the latest run: the session a headless prompt may resume,
+/// whether the run needs a resume, and its incomplete plan steps.
+///
+/// A session a human continued interactively (e.g. a takeover, #3163) is never resumed
+/// headless, and a run whose session is withheld no longer "needs resume": the next prompt
+/// starts fresh. The newest row may itself be that interactive row.
+fn resume_state(
+    db: &rusqlite::Connection,
+    latest_run: Option<&conductor_core::agent::AgentRun>,
+) -> Result<(Option<String>, bool, usize), ApiError> {
+    let Some(run) = latest_run else {
+        return Ok((None, false, 0));
+    };
+    let has_session = run.session_id.as_deref().is_some_and(|s| !s.is_empty());
+    let resume_session_id = conductor_core::session::takeover::resumable_session_for_run(db, run)?;
+    let needs_resume = run.needs_resume() && !(has_session && resume_session_id.is_none());
+    let incomplete = if needs_resume {
+        run.incomplete_plan_steps().len()
+    } else {
+        0
+    };
+    Ok((resume_session_id, needs_resume, incomplete))
+}
+
+/// The session a new repo-scoped agent run may resume: the latest repo-scoped run's, unless a
+/// human took it over. Repo-scoped runs can't be taken over today, but share the guard (#3163).
+fn repo_resume_session_id(
+    db: &rusqlite::Connection,
+    repo_id: &str,
+) -> Result<Option<String>, ApiError> {
+    let Some(run) = AgentManager::new(db).latest_repo_scoped(repo_id)? else {
+        return Ok(None);
+    };
+    Ok(conductor_core::session::takeover::resumable_session_for_run(db, &run)?)
+}
+
 /// Get a pre-filled agent prompt for a worktree (from its linked ticket).
 #[utoipa::path(
     get,
@@ -783,19 +819,8 @@ pub async fn get_prompt(
     let agent_mgr = AgentManager::new(&db);
     let latest_run = agent_mgr.latest_for_worktree(&wt.id)?;
 
-    let (raw_session_id, needs_resume, incomplete_steps) = match &latest_run {
-        Some(run) if run.needs_resume() => {
-            let incomplete = run.incomplete_plan_steps().len();
-            (run.session_id.clone(), true, incomplete)
-        }
-        Some(run) => (run.session_id.clone(), false, 0),
-        None => (None, false, 0),
-    };
-    // A session a human continued interactively (e.g. a takeover, #3163) is never resumed
-    // headless; the newest row may itself be that interactive row.
-    let resume_session_id =
-        conductor_core::session::takeover::resumable_session_id(&db, raw_session_id.as_deref())?;
-    let needs_resume = needs_resume && !(raw_session_id.is_some() && resume_session_id.is_none());
+    let (resume_session_id, needs_resume, incomplete_steps) =
+        resume_state(&db, latest_run.as_ref())?;
 
     // Build prompt: if needs_resume, use the resume prompt; otherwise use ticket context
     let prompt = if needs_resume {
@@ -1271,11 +1296,7 @@ pub async fn start_repo_agent(
         let resume_session_id = if body.new_session {
             None
         } else {
-            let latest = agent_mgr
-                .latest_repo_scoped(&repo_id)?
-                .and_then(|run| run.session_id);
-            // Repo-scoped runs can't be taken over, but share the headless guard (#3163).
-            conductor_core::session::takeover::resumable_session_id(&db, latest.as_deref())?
+            repo_resume_session_id(&db, &repo_id)?
         };
 
         let run = agent_mgr.create_repo_run(&repo_id, &body.prompt, model.as_deref())?;
@@ -2160,5 +2181,161 @@ mod tests {
         assert!(!code.is_success(), "{code} {body}");
         assert!(body.contains("can't be stopped"), "{body}");
         assert_eq!(status_of(&state, &run_id).await, AgentRunStatus::Running);
+    }
+
+    /// Seed a headless run on `w1`/`r1` (or repo-scoped when `worktree` is false).
+    fn seed_headless(
+        db: &rusqlite::Connection,
+        id: &str,
+        status: &str,
+        session: Option<&str>,
+        worktree: bool,
+        started_at: &str,
+    ) {
+        db.execute(
+            "INSERT INTO agent_runs (id, worktree_id, repo_id, session_id, prompt, status, \
+             started_at, runtime) VALUES (?1, ?2, 'r1', ?3, 'p', ?4, ?5, 'claude')",
+            rusqlite::params![id, worktree.then_some("w1"), session, status, started_at],
+        )
+        .unwrap();
+    }
+
+    fn seed_takeover_row(db: &rusqlite::Connection, parent: &str, session: &str, started: &str) {
+        db.execute(
+            "INSERT INTO agent_runs (id, worktree_id, repo_id, session_id, prompt, status, \
+             started_at, runtime, parent_run_id) \
+             VALUES ('i-'||?1, 'w1', 'r1', ?2, 'p', 'idle', ?3, 'interactive', ?1)",
+            rusqlite::params![parent, session, started],
+        )
+        .unwrap();
+    }
+
+    fn seed_incomplete_plan(db: &rusqlite::Connection, run_id: &str) {
+        AgentManager::new(db)
+            .update_run_plan(
+                run_id,
+                &[conductor_core::agent::PlanStep {
+                    description: "unfinished".into(),
+                    ..Default::default()
+                }],
+            )
+            .unwrap();
+    }
+
+    async fn get_prompt_json(state: &AppState) -> serde_json::Value {
+        let app = api_router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/worktrees/w1/agent/prompt")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn get_prompt_resumes_untaken_over_failed_run() {
+        let (state, _tmp) = seeded_state();
+        {
+            let db = state.db.lock().await;
+            seed_headless(
+                &db,
+                "h1",
+                "failed",
+                Some("sess-1"),
+                true,
+                "2024-01-01T00:00:00Z",
+            );
+            seed_incomplete_plan(&db, "h1");
+        }
+        let body = get_prompt_json(&state).await;
+        assert_eq!(body["resume_session_id"], "sess-1");
+        assert_eq!(body["needs_resume"], true);
+        assert_eq!(body["incomplete_steps"], 1);
+    }
+
+    #[tokio::test]
+    async fn get_prompt_withholds_taken_over_session_and_resume() {
+        let (state, _tmp) = seeded_state();
+        {
+            let db = state.db.lock().await;
+            seed_headless(
+                &db,
+                "h1",
+                "failed",
+                Some("sess-1"),
+                true,
+                "2024-01-01T00:00:00Z",
+            );
+            seed_incomplete_plan(&db, "h1");
+            seed_takeover_row(&db, "h1", "sess-1", "2024-01-02T00:00:00Z");
+        }
+        let body = get_prompt_json(&state).await;
+        assert!(body["resume_session_id"].is_null(), "{body}");
+        assert_eq!(body["needs_resume"], false);
+        assert_eq!(body["incomplete_steps"], 0);
+    }
+
+    #[tokio::test]
+    async fn get_prompt_taken_over_with_interactive_row_as_latest_run() {
+        // The newest worktree row is the interactive one itself.
+        let (state, _tmp) = seeded_state();
+        {
+            let db = state.db.lock().await;
+            seed_headless(
+                &db,
+                "h1",
+                "completed",
+                Some("sess-1"),
+                true,
+                "2024-01-01T00:00:00Z",
+            );
+            seed_takeover_row(&db, "h1", "sess-1", "2024-01-03T00:00:00Z");
+        }
+        let body = get_prompt_json(&state).await;
+        assert!(body["resume_session_id"].is_null(), "{body}");
+        assert_eq!(body["needs_resume"], false);
+    }
+
+    #[tokio::test]
+    async fn get_prompt_run_without_session_has_nothing_to_resume() {
+        let (state, _tmp) = seeded_state();
+        {
+            let db = state.db.lock().await;
+            seed_headless(&db, "h1", "completed", None, true, "2024-01-01T00:00:00Z");
+        }
+        let body = get_prompt_json(&state).await;
+        assert!(body["resume_session_id"].is_null(), "{body}");
+        assert_eq!(body["needs_resume"], false);
+    }
+
+    #[tokio::test]
+    async fn repo_resume_session_id_skips_taken_over_session() {
+        let (state, _tmp) = seeded_state();
+        let db = state.db.lock().await;
+        assert_eq!(super::repo_resume_session_id(&db, "r1").unwrap(), None);
+
+        seed_headless(
+            &db,
+            "rr1",
+            "completed",
+            Some("sess-r"),
+            false,
+            "2024-01-01T00:00:00Z",
+        );
+        assert_eq!(
+            super::repo_resume_session_id(&db, "r1").unwrap().as_deref(),
+            Some("sess-r")
+        );
+
+        seed_takeover_row(&db, "rr1", "sess-r", "2024-01-02T00:00:00Z");
+        assert_eq!(super::repo_resume_session_id(&db, "r1").unwrap(), None);
     }
 }
