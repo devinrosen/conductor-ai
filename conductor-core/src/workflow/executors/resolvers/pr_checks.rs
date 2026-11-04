@@ -243,7 +243,10 @@ mod tests {
 
     #[test]
     fn test_empty_and_non_array_pending() {
-        assert!(matches!(evaluate_checks(&json!([]), "g"), GatePoll::Pending));
+        assert!(matches!(
+            evaluate_checks(&json!([]), "g"),
+            GatePoll::Pending
+        ));
         assert!(matches!(
             evaluate_checks(&json!({ "state": "SUCCESS" }), "g"),
             GatePoll::Pending
@@ -264,7 +267,11 @@ mod tests {
             ("PENDING", CheckBucket::Pending),
             ("IN_PROGRESS", CheckBucket::Pending),
         ] {
-            assert_eq!(check_bucket(&json!({ "state": state })), expected, "{state}");
+            assert_eq!(
+                check_bucket(&json!({ "state": state })),
+                expected,
+                "{state}"
+            );
         }
         assert!(matches!(
             evaluate_checks(&json!([{ "name": "x", "state": "FAILURE" }]), "g"),
