@@ -13,6 +13,11 @@ pub(in crate::workflow) enum HumanGateKind {
     HumanReview,
 }
 
+/// Mirrors a manual decision already stored for the gate.
+///
+/// It never decides anything itself: before recording a resolver decision the
+/// engine re-reads the stored approval, so a decision made through
+/// `approve_gate` / `reject_gate` is returned as-is and its approver is kept.
 #[allow(dead_code)]
 pub(in crate::workflow) struct HumanApprovalGateResolver {
     persistence: Arc<dyn WorkflowPersistence>,

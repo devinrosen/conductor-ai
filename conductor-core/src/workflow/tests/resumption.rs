@@ -1358,7 +1358,9 @@ fn test_spawn_heartbeat_resume_handles_failed_resume_gracefully() {
 }
 
 // ---------------------------------------------------------------------------
-// End-to-end: resuming a parent whose `call workflow` child failed (#3211)
+// End-to-end: resuming a parent whose `call workflow` child failed (#3211).
+// runkon 0.8.2 gives an exhausted loop a fresh budget on resume (runkon#133),
+// so the existing child is resumed rather than replaced.
 // ---------------------------------------------------------------------------
 
 #[cfg(unix)]
@@ -1551,22 +1553,18 @@ mod child_resume {
     }
 
     #[test]
-    fn resume_after_child_loop_exhausted_starts_fresh_child() {
+    fn resume_after_child_loop_exhausted_resumes_child() {
         let f = loop_fixture();
         let (conn, result) = fail_then_fix_and_resume(&f, None, false);
 
         let children = child_runs(&conn);
-        assert!(
-            children[0]
-                .2
-                .as_deref()
-                .is_some_and(|e| e.contains("reached max_iterations (2)")),
-            "first child should fail on its loop, got {:?}",
-            children[0]
-        );
         assert!(result.all_succeeded, "resumed parent should succeed");
-        assert_eq!(children.len(), 2, "a new child run must be started");
-        assert_eq!(children[1].1, "completed");
+        assert_eq!(
+            children.len(),
+            1,
+            "the exhausted child run must be resumed, not replaced"
+        );
+        assert_eq!(children[0].1, "completed");
         assert!(f.ws.path().join("after-ran").exists());
     }
 

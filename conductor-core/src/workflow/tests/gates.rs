@@ -462,6 +462,39 @@ fn test_engine_gates_are_findable_and_approvable() {
     assert!(result.all_succeeded, "run should succeed after approvals");
 }
 
+/// A manually approved `human_approval` gate keeps its original approver: the
+/// polled `HumanApprovalGateResolver` only mirrors the stored decision and the
+/// engine never records a `gate_resolver:*` approver over it.
+#[test]
+fn test_engine_human_gate_manual_approval_keeps_approver() {
+    let (_tmp, db_path) = make_standalone_db();
+    let ws = tempfile::tempdir().unwrap();
+    let def = runkon_flow::dsl::parse_workflow_str(
+        r#"workflow human-gate-wf {
+            meta { trigger = "manual" targets = ["worktree"] }
+            gate human_approval { prompt = "Approve?" timeout = "1h" }
+        }"#,
+        "<test>",
+    )
+    .expect("gate workflow should parse");
+
+    let (handle, run_id) = spawn_standalone(def, ws.path(), &db_path);
+    let conn = crate::db::open_database(&db_path).unwrap();
+
+    let gate = wait_for_gate(&db_path, &run_id);
+    crate::workflow::approve_gate(&conn, &gate.id, "alice", Some("lgtm"), None, None).unwrap();
+
+    let result = handle
+        .join()
+        .expect("workflow thread panicked")
+        .expect("workflow should complete");
+    assert!(result.all_succeeded, "run should succeed after approval");
+
+    let steps = crate::workflow::get_workflow_steps(&conn, &run_id).unwrap();
+    let step = steps.iter().find(|s| s.id == gate.id).expect("gate step");
+    assert_eq!(step.gate_approved_by.as_deref(), Some("alice"));
+}
+
 /// Two gates of the same type with different prompts and timeouts each record
 /// their own metadata.
 #[test]

@@ -6,8 +6,9 @@ pub(in crate::workflow) use human_approval::{HumanApprovalGateResolver, HumanGat
 pub(in crate::workflow) use pr_approval::PrApprovalGateResolver;
 pub(in crate::workflow) use pr_checks::PrChecksGateResolver;
 
+use std::io::Read;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -91,6 +92,13 @@ impl GitHubTokenCache {
     }
 }
 
+/// How often the engine re-runs the `gh`-based gate resolvers.
+pub(super) const GH_GATE_POLL_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Upper bound on a single `gh` invocation. runkon polls resolvers on the
+/// engine thread and doesn't bound the call, so a hung `gh` would hang the gate.
+pub(super) const GH_TIMEOUT: Duration = Duration::from_secs(30);
+
 // ---------------------------------------------------------------------------
 // GhGateCommon
 // ---------------------------------------------------------------------------
@@ -98,7 +106,7 @@ impl GitHubTokenCache {
 /// Shared state for gate resolvers that call `gh` on behalf of a bot account.
 ///
 /// Centralises the constructor and token resolution so concrete
-/// resolver types stay thin and a single-point change (e.g. adding a timeout)
+/// resolver types stay thin and a single-point change (e.g. the timeout)
 /// applies to all of them.
 pub(super) struct GhGateCommon {
     pub(super) working_dir: String,
@@ -152,14 +160,101 @@ pub(super) fn run_gh_json(
     if let Some(t) = token {
         cmd.env("GH_TOKEN", t);
     }
-    let output = match cmd.output() {
-        Ok(o) => o,
+    run_json_command(cmd, GH_TIMEOUT)
+}
+
+/// Kill the whole process group led by `pid` (best effort).
+#[cfg(unix)]
+fn kill_process_group(pid: u32) {
+    // SAFETY: plain syscall; a negative pid targets the process group. ESRCH
+    // (group already gone) is harmless and ignored.
+    unsafe {
+        libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(_pid: u32) {}
+
+/// Kill the child's process group, then the child itself, and reap it.
+fn kill_and_reap(child: &mut std::process::Child) {
+    kill_process_group(child.id());
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Run `cmd`, bounded by `timeout`, and parse stdout as JSON.
+///
+/// stdout and stderr are drained on helper threads so a large response can't
+/// fill the pipe and look like a hang. On timeout the child is killed and
+/// `None` is returned (callers treat that as `Pending`).
+fn run_json_command(mut cmd: Command, timeout: Duration) -> Option<serde_json::Value> {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // Put the child in its own process group so a timeout can kill any
+    // grandchildren that inherited the pipes; otherwise they would keep the
+    // drain threads and pipe fds alive on every timed-out poll.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
         Err(e) => {
             tracing::warn!("gh command failed: {e}");
             return None;
         }
     };
-    process_gh_output(output.status.success(), &output.stdout, &output.stderr)
+    fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::sync::mpsc::Receiver<Vec<u8>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_end(&mut buf);
+            }
+            let _ = tx.send(buf);
+        });
+        rx
+    }
+    let out_reader = drain(child.stdout.take());
+    let err_reader = drain(child.stderr.take());
+
+    let pid = child.id();
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    kill_and_reap(&mut child);
+                    tracing::warn!(
+                        "gh command timed out after {timeout:?}; treating gate as pending"
+                    );
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                tracing::warn!("gh command wait failed: {e}");
+                kill_and_reap(&mut child);
+                return None;
+            }
+        }
+    };
+    // The child has exited, but a grandchild may have inherited the pipes and
+    // kept them open. Bound the drain by the same deadline; on expiry kill the
+    // process group so the pipes close and the reader threads terminate.
+    let remaining = |d: Instant| d.saturating_duration_since(Instant::now());
+    let (Ok(stdout), Ok(stderr)) = (
+        out_reader.recv_timeout(remaining(deadline)),
+        err_reader.recv_timeout(remaining(deadline)),
+    ) else {
+        kill_process_group(pid);
+        tracing::warn!(
+            "gh output pipes still open {timeout:?} after start; treating gate as pending"
+        );
+        return None;
+    };
+    process_gh_output(status.success(), &stdout, &stderr)
 }
 
 /// Parse `gh` subprocess output into a JSON value.
@@ -198,6 +293,117 @@ fn process_gh_output(success: bool, stdout: &[u8], stderr: &[u8]) -> Option<serd
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_json_command_timeout_returns_none() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 5"]);
+        let start = Instant::now();
+        let result = run_json_command(cmd, Duration::from_millis(200));
+        assert!(result.is_none());
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_json_command_lingering_grandchild_is_bounded() {
+        // The shell exits immediately but a backgrounded grandchild keeps the
+        // inherited stdout pipe open.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 5 & echo '{}'"]);
+        let start = Instant::now();
+        let result = run_json_command(cmd, Duration::from_millis(300));
+        assert!(result.is_none());
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    /// Poll until `pid` no longer exists (or ~3 s pass).
+    #[cfg(unix)]
+    fn wait_until_gone(pid: i32) -> bool {
+        for _ in 0..60 {
+            // SAFETY: signal 0 only probes for existence.
+            let alive = unsafe { libc::kill(pid, 0) } == 0;
+            if !alive {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+
+    #[cfg(unix)]
+    fn read_pid(path: &std::path::Path) -> i32 {
+        for _ in 0..60 {
+            if let Ok(s) = std::fs::read_to_string(path) {
+                if let Ok(pid) = s.trim().parse() {
+                    return pid;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("grandchild pid file never written");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_json_command_timeout_kills_grandchild() {
+        let dir = std::env::temp_dir().join(format!("rjc-timeout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid_file = dir.join("pid");
+        let mut cmd = Command::new("sh");
+        cmd.args([
+            "-c",
+            &format!("sleep 30 & echo $! > {}; wait", pid_file.display()),
+        ]);
+        let result = run_json_command(cmd, Duration::from_millis(500));
+        assert!(result.is_none());
+        let pid = read_pid(&pid_file);
+        assert!(wait_until_gone(pid), "grandchild {pid} survived timeout");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_json_command_drain_expiry_kills_grandchild() {
+        let dir = std::env::temp_dir().join(format!("rjc-drain-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid_file = dir.join("pid");
+        let mut cmd = Command::new("sh");
+        cmd.args([
+            "-c",
+            &format!("sleep 30 & echo $! > {}; echo '{{}}'", pid_file.display()),
+        ]);
+        let result = run_json_command(cmd, Duration::from_millis(500));
+        assert!(result.is_none());
+        let pid = read_pid(&pid_file);
+        assert!(
+            wait_until_gone(pid),
+            "grandchild {pid} survived drain expiry"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_json_command_success_returns_json() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", r#"echo '{"ok":true}'"#]);
+        let result = run_json_command(cmd, Duration::from_secs(5));
+        assert_eq!(result, Some(json!({"ok": true})));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_json_command_large_output_does_not_deadlock() {
+        let mut cmd = Command::new("sh");
+        cmd.args([
+            "-c",
+            r#"printf '"'; head -c 300000 /dev/zero | tr '\0' 'a'; printf '"'"#,
+        ]);
+        let result = run_json_command(cmd, Duration::from_secs(10));
+        assert_eq!(result.and_then(|v| v.as_str().map(str::len)), Some(300000));
+    }
 
     #[test]
     fn test_process_gh_output_success_valid_json() {
