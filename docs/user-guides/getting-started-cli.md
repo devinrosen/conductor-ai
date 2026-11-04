@@ -207,10 +207,11 @@ See [plugin/README.md](../../plugin/README.md).
 ```bash
 conductor session open my-repo feat-123-thing                 # focus / resume / start
 conductor session open my-repo feat-123-thing --new           # fresh session even if one exists
+conductor session open my-repo feat-123-thing --no-focus      # launch without switching the tmux client
 echo "status?" | conductor session open my-repo feat-123-thing --prompt-file -
 ```
 
-Other flags: `--prompt <text>`, `--window <name>` (default: the ticket key, or the worktree slug) and `--json`. Inside tmux it switches to the window; elsewhere it prints `tmux attach -t work \; select-window -t <window>`. In the TUI, press `C` on a worktree. The `conductor_open_session` MCP tool does the same but never switches focus.
+Other flags: `--prompt <text>`, `--window <name>` (default: the ticket key, or the worktree slug), `--no-focus` and `--json`. Inside tmux it switches to the window unless `--no-focus` is given (for scripts, or a manager session launching on someone's behalf); elsewhere, or with `--no-focus`, it prints `tmux attach -t work \; select-window -t <window>`. In the TUI, press `C` on a worktree. The `conductor_open_session` MCP tool does the same but never switches focus.
 
 Configure it in `~/.conductor/config.toml`; a repo's `.conductor/config.toml` can override the two templates:
 
