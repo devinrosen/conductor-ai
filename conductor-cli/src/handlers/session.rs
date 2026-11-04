@@ -46,7 +46,17 @@ pub struct OpenArgs {
     pub prompt: Option<String>,
     pub prompt_file: Option<String>,
     pub window: Option<String>,
+    pub no_focus: bool,
     pub json: bool,
+}
+
+/// `--no-focus` always reports; otherwise switch only when inside tmux.
+fn open_focus_mode(no_focus: bool) -> FocusMode {
+    if no_focus {
+        FocusMode::Report
+    } else {
+        FocusMode::from_env()
+    }
 }
 
 /// `conductor session open`: focus, resume or start a worktree's interactive session.
@@ -56,7 +66,7 @@ pub fn handle_open(conn: &Connection, config: &Config, args: OpenArgs) -> Result
         args.prompt_file.as_deref(),
         &mut io::stdin(),
     )?;
-    let focus = FocusMode::from_env();
+    let focus = open_focus_mode(args.no_focus);
     let outcome = open_session(
         conn,
         config,
@@ -322,6 +332,29 @@ mod tests {
 mod open_tests {
     use crate::commands::{Cli, Commands, SessionCommands};
     use clap::Parser;
+    use conductor_core::session::launch::FocusMode;
+
+    #[test]
+    fn open_parses_no_focus() {
+        let parse = |extra: &[&str]| {
+            let mut argv = vec!["conductor", "session", "open", "r", "w"];
+            argv.extend_from_slice(extra);
+            match Cli::try_parse_from(argv).unwrap().command {
+                Commands::Session {
+                    command: SessionCommands::Open { no_focus, .. },
+                } => no_focus,
+                _ => panic!("wrong command"),
+            }
+        };
+        assert!(parse(&["--no-focus"]));
+        assert!(!parse(&[]));
+    }
+
+    #[test]
+    fn no_focus_maps_to_report() {
+        // The `true` case is independent of $TMUX, so no env mutation is needed.
+        assert_eq!(super::open_focus_mode(true), FocusMode::Report);
+    }
 
     #[test]
     fn open_parses_flags() {

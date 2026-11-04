@@ -140,7 +140,7 @@ plugin/
 
 Conductor launches sessions as well as observing them (#3158). One core function backs three surfaces:
 - a TUI key on a worktree ("open session");
-- `conductor session open <repo> <worktree> [--new] [--prompt <text> | --prompt-file <path|->] [--window <name>] [--json]`;
+- `conductor session open <repo> <worktree> [--new] [--prompt <text> | --prompt-file <path|->] [--window <name>] [--no-focus] [--json]`;
 - an MCP tool, `conductor_open_session`, which never switches tmux focus (it returns the attach command), so a manager session can't steal the developer's view.
 
 **Behaviour:**

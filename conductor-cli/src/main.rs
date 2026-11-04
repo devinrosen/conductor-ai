@@ -108,6 +108,7 @@ fn run(cli: Cli) -> Result<()> {
                 prompt,
                 prompt_file,
                 window,
+                no_focus,
                 json,
             } => handlers::session::handle_open(
                 &conductor.conn,
@@ -119,6 +120,7 @@ fn run(cli: Cli) -> Result<()> {
                     prompt,
                     prompt_file,
                     window,
+                    no_focus,
                     json,
                 },
             )?,

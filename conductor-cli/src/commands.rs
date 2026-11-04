@@ -93,6 +93,9 @@ pub enum SessionCommands {
         /// tmux window name (default: ticket key, or the worktree slug)
         #[arg(long)]
         window: Option<String>,
+        /// Never switch the tmux client, even inside tmux; only report the attach command
+        #[arg(long)]
+        no_focus: bool,
         /// Print the outcome as JSON
         #[arg(long)]
         json: bool,
