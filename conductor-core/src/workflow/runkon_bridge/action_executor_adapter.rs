@@ -117,6 +117,45 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             child_run.id
         };
 
+        let result = self.run_attempt(ctx, info, params, child_run_id.clone());
+
+        // Add this attempt's usage onto the step row on every exit path: a failed
+        // attempt still cost tokens. Runs after `persist_corrected_run_metrics`
+        // (inside `run_attempt`), so the agent run row holds the correction totals.
+        if !info.step_id.is_empty() {
+            match self.conn.lock() {
+                Ok(conn) => {
+                    if let Err(e) = crate::workflow::add_step_metrics_from_agent_run(
+                        &conn,
+                        &info.step_id,
+                        &child_run_id,
+                    ) {
+                        tracing::warn!(
+                            "step '{}' (step_id={}): failed to add usage of run {child_run_id} to the step: {e}",
+                            params.name,
+                            info.step_id,
+                        );
+                    }
+                }
+                Err(e) => tracing::warn!(
+                    "step '{}': db lock poisoned, skipping step usage for run {child_run_id}: {e}",
+                    params.name,
+                ),
+            }
+        }
+        result
+    }
+}
+
+impl RkActionExecutorAdapter {
+    /// Run one agent attempt against the pre-created `child_run_id` agent run.
+    fn run_attempt(
+        &self,
+        ctx: &dyn runkon_flow::traits::run_context::RunContext,
+        info: &runkon_flow::traits::action_executor::StepInfo,
+        params: &runkon_flow::traits::action_executor::ActionParams,
+        child_run_id: String,
+    ) -> Result<runkon_flow::traits::action_executor::ActionOutput, EngineError> {
         // Build per-step RuntimeOptions — max_turns is step-level so the resolver is fresh per call.
         let options = runkon_runtimes::RuntimeOptions {
             binary_path: crate::agent_runtime::resolve_conductor_bin().into(),

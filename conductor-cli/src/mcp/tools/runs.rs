@@ -334,6 +334,59 @@ pub(super) fn tool_get_step_log(
     }
 }
 
+/// Split a comma-separated list of run ids, dropping blanks.
+fn split_run_ids(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+pub(super) fn tool_run_stats(
+    conductor: &Conductor,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
+    use conductor_core::workflow::run_stats::{
+        collect_run_stats, format_run_stats, format_run_stats_compare,
+    };
+
+    let run_ids = split_run_ids(require_arg!(args, "run_id"));
+    if run_ids.is_empty() {
+        return tool_err("run_id must contain at least one workflow run id");
+    }
+    let compare_ids = get_arg(args, "compare_run_id")
+        .map(split_run_ids)
+        .unwrap_or_default();
+    let as_json = args.get("json").and_then(Value::as_bool).unwrap_or(false);
+
+    let stats = match collect_run_stats(&conductor.conn, &run_ids) {
+        Ok(s) => s,
+        Err(e) => return tool_err(e),
+    };
+    let other = if compare_ids.is_empty() {
+        None
+    } else {
+        match collect_run_stats(&conductor.conn, &compare_ids) {
+            Ok(s) => Some(s),
+            Err(e) => return tool_err(e),
+        }
+    };
+    let text = match (other, as_json) {
+        (Some(o), true) => serde_json::to_string_pretty(&serde_json::json!({
+            "run": stats,
+            "compare": o,
+        })),
+        (None, true) => serde_json::to_string_pretty(&stats),
+        (Some(o), false) => Ok(format_run_stats_compare(&stats, &o)),
+        (None, false) => Ok(format_run_stats(&stats)),
+    };
+    match text {
+        Ok(t) => tool_ok(t),
+        Err(e) => tool_err(e),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1748,5 +1801,41 @@ mod tests {
             !text.contains("test iteration 0 log"),
             "should not contain test iteration 0 log, got: {text}"
         );
+    }
+
+    #[test]
+    fn test_run_stats_missing_run_id_arg() {
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_run_stats(&conductor, &empty_args());
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_run_stats_nonexistent_run() {
+        let (_f, conductor) = make_test_conductor();
+        let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
+        let result = tool_run_stats(&conductor, &args);
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_run_stats_happy_path_text_and_json() {
+        let (f, conductor) = make_test_conductor();
+        let (run_id, _step_id) = make_run_with_step(f.path(), "implement");
+
+        let result = tool_run_stats(&conductor, &args_with("run_id", &run_id));
+        assert_ne!(result.is_error, Some(true));
+        let text = result.content[0].as_text().map(|t| t.text.clone()).unwrap();
+        assert!(text.contains(&run_id), "{text}");
+        assert!(text.contains("implement"), "{text}");
+
+        let mut args = args_with("run_id", &run_id);
+        args.insert("compare_run_id".into(), Value::String(run_id.clone()));
+        args.insert("json".into(), Value::Bool(true));
+        let result = tool_run_stats(&conductor, &args);
+        assert_ne!(result.is_error, Some(true));
+        let text = result.content[0].as_text().map(|t| t.text.clone()).unwrap();
+        let v: Value = serde_json::from_str(&text).expect("json output");
+        assert!(v.get("run").is_some() && v.get("compare").is_some());
     }
 }

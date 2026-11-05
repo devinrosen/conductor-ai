@@ -8,21 +8,6 @@ use super::helpers::execute_sql;
 use crate::error::{ConductorError, Result};
 use crate::workflow::{GateType, WorkflowStepStatus};
 
-/// Agent-run metrics to mirror onto a linked `workflow_run_steps` row (Path X.1).
-///
-/// Grouped to avoid a positional `Option<T>` explosion at call sites.
-/// Fields left as `None` are ignored (COALESCE leaves existing DB values intact).
-#[derive(Debug, Clone, Default)]
-pub struct StepMetrics {
-    pub cost_usd: Option<f64>,
-    pub num_turns: Option<i64>,
-    pub duration_ms: Option<i64>,
-    pub input_tokens: Option<i64>,
-    pub output_tokens: Option<i64>,
-    pub cache_read_input_tokens: Option<i64>,
-    pub cache_creation_input_tokens: Option<i64>,
-}
-
 pub fn insert_step(
     conn: &Connection,
     workflow_run_id: &str,
@@ -269,32 +254,43 @@ pub fn set_step_gate_options(conn: &Connection, step_id: &str, options_json: &st
     )
 }
 
-pub fn mirror_step_metrics_from_run(
+/// Add an agent run's usage onto a `workflow_run_steps` row.
+///
+/// Additive, so a retried step (one row, several agent runs) ends up holding the
+/// total across attempts. A column whose agent-run value is NULL keeps its current
+/// value. Does nothing when either id is unknown.
+pub fn add_step_metrics_from_agent_run(
     conn: &Connection,
-    run_id: &str,
-    metrics: StepMetrics,
+    step_id: &str,
+    agent_run_id: &str,
 ) -> Result<()> {
-    execute_sql(conn,
-            "UPDATE workflow_run_steps \
-             SET cost_usd = COALESCE(:cost_usd, cost_usd), \
-                 num_turns = COALESCE(:num_turns, num_turns), \
-                 duration_ms = COALESCE(:duration_ms, duration_ms), \
-                 input_tokens = COALESCE(:input_tokens, input_tokens), \
-                 output_tokens = COALESCE(:output_tokens, output_tokens), \
-                 cache_read_input_tokens = COALESCE(:cache_read_input_tokens, cache_read_input_tokens), \
-                 cache_creation_input_tokens = COALESCE(:cache_creation_input_tokens, cache_creation_input_tokens) \
-             WHERE child_run_id = :run_id",
-            named_params![
-                ":cost_usd": metrics.cost_usd,
-                ":num_turns": metrics.num_turns,
-                ":duration_ms": metrics.duration_ms,
-                ":input_tokens": metrics.input_tokens,
-                ":output_tokens": metrics.output_tokens,
-                ":cache_read_input_tokens": metrics.cache_read_input_tokens,
-                ":cache_creation_input_tokens": metrics.cache_creation_input_tokens,
-                ":run_id": run_id,
-            ],
-        )
+    execute_sql(
+        conn,
+        "UPDATE workflow_run_steps SET \
+           cost_usd = CASE WHEN a.cost_usd IS NULL THEN workflow_run_steps.cost_usd \
+                           ELSE COALESCE(workflow_run_steps.cost_usd, 0) + a.cost_usd END, \
+           num_turns = CASE WHEN a.num_turns IS NULL THEN workflow_run_steps.num_turns \
+                           ELSE COALESCE(workflow_run_steps.num_turns, 0) + a.num_turns END, \
+           duration_ms = CASE WHEN a.duration_ms IS NULL THEN workflow_run_steps.duration_ms \
+                           ELSE COALESCE(workflow_run_steps.duration_ms, 0) + a.duration_ms END, \
+           input_tokens = CASE WHEN a.input_tokens IS NULL THEN workflow_run_steps.input_tokens \
+                           ELSE COALESCE(workflow_run_steps.input_tokens, 0) + a.input_tokens END, \
+           output_tokens = CASE WHEN a.output_tokens IS NULL THEN workflow_run_steps.output_tokens \
+                           ELSE COALESCE(workflow_run_steps.output_tokens, 0) + a.output_tokens END, \
+           cache_read_input_tokens = CASE WHEN a.cache_read_input_tokens IS NULL \
+                           THEN workflow_run_steps.cache_read_input_tokens \
+                           ELSE COALESCE(workflow_run_steps.cache_read_input_tokens, 0) \
+                                + a.cache_read_input_tokens END, \
+           cache_creation_input_tokens = CASE WHEN a.cache_creation_input_tokens IS NULL \
+                           THEN workflow_run_steps.cache_creation_input_tokens \
+                           ELSE COALESCE(workflow_run_steps.cache_creation_input_tokens, 0) \
+                                + a.cache_creation_input_tokens END \
+         FROM (SELECT cost_usd, num_turns, duration_ms, input_tokens, output_tokens, \
+                      cache_read_input_tokens, cache_creation_input_tokens \
+               FROM agent_runs WHERE id = :agent_run_id) AS a \
+         WHERE workflow_run_steps.id = :step_id",
+        named_params![":agent_run_id": agent_run_id, ":step_id": step_id],
+    )
 }
 
 /// API-layer bypass: writes a gate approval directly to SQLite.
@@ -675,162 +671,124 @@ mod tests {
         assert_eq!(step.step_error.as_deref(), Some("something went wrong"));
     }
 
-    #[test]
-    fn mirror_step_metrics_writes_all_fields() {
-        let conn = test_helpers::setup_db();
-        let (_run_id, step_id) = setup(&conn);
-
-        crate::workflow::mark_step_running(
-            &conn,
-            &step_id,
-            WorkflowStepStatus::Running,
-            Some("run-mirror-1"),
+    /// Insert an `agent_runs` row with the given usage and return its id.
+    fn insert_agent_run_with_usage(
+        conn: &Connection,
+        id: &str,
+        cost: Option<f64>,
+        turns: Option<i64>,
+        input: Option<i64>,
+        output: Option<i64>,
+    ) {
+        conn.execute(
+            "INSERT INTO agent_runs (id, prompt, status, started_at, cost_usd, num_turns, \
+             duration_ms, input_tokens, output_tokens, cache_read_input_tokens, \
+             cache_creation_input_tokens) \
+             VALUES (?1, 'Workflow step: x', 'completed', '2026-01-01T00:00:00Z', ?2, ?3, \
+             ?3, ?4, ?5, ?4, ?5)",
+            rusqlite::params![id, cost, turns, input, output],
         )
         .unwrap();
+    }
 
-        crate::workflow::mirror_step_metrics_from_run(
-            &conn,
-            "run-mirror-1",
-            StepMetrics {
-                cost_usd: Some(1.23),
-                num_turns: Some(5),
-                duration_ms: Some(1000),
-                input_tokens: Some(100),
-                output_tokens: Some(200),
-                cache_read_input_tokens: Some(50),
-                cache_creation_input_tokens: Some(25),
+    type StepUsage = (
+        Option<f64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+    );
+
+    fn step_usage(conn: &Connection, step_id: &str) -> StepUsage {
+        conn.query_row(
+            "SELECT cost_usd, num_turns, duration_ms, input_tokens, output_tokens, \
+             cache_read_input_tokens, cache_creation_input_tokens \
+             FROM workflow_run_steps WHERE id = ?1",
+            rusqlite::params![step_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
             },
         )
-        .unwrap();
+        .unwrap()
+    }
 
-        // Metric fields are not in WorkflowRunStep — verify via direct SQL.
-        type MetricsTuple = (
-            Option<f64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
+    #[test]
+    fn add_step_metrics_writes_all_fields() {
+        let conn = test_helpers::setup_db();
+        let (_run_id, step_id) = setup(&conn);
+        insert_agent_run_with_usage(&conn, "ar-1", Some(1.23), Some(5), Some(100), Some(200));
+
+        crate::workflow::add_step_metrics_from_agent_run(&conn, &step_id, "ar-1").unwrap();
+
+        assert_eq!(
+            step_usage(&conn, &step_id),
+            (
+                Some(1.23),
+                Some(5),
+                Some(5),
+                Some(100),
+                Some(200),
+                Some(100),
+                Some(200)
+            )
         );
-        let (
-            cost_usd,
-            num_turns,
-            duration_ms,
-            input_tokens,
-            output_tokens,
-            cache_read,
-            cache_creation,
-        ): MetricsTuple = conn
-            .query_row(
-                "SELECT cost_usd, num_turns, duration_ms, input_tokens, output_tokens, \
-                 cache_read_input_tokens, cache_creation_input_tokens \
-                 FROM workflow_run_steps WHERE id = ?1",
-                rusqlite::params![step_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                        row.get(6)?,
-                    ))
-                },
-            )
-            .unwrap();
-        assert_eq!(cost_usd, Some(1.23));
-        assert_eq!(num_turns, Some(5));
-        assert_eq!(duration_ms, Some(1000));
-        assert_eq!(input_tokens, Some(100));
-        assert_eq!(output_tokens, Some(200));
-        assert_eq!(cache_read, Some(50));
-        assert_eq!(cache_creation, Some(25));
     }
 
     #[test]
-    fn mirror_step_metrics_coalesce_preserves_existing_when_none() {
+    fn add_step_metrics_adds_across_attempts() {
         let conn = test_helpers::setup_db();
         let (_run_id, step_id) = setup(&conn);
+        insert_agent_run_with_usage(&conn, "ar-a", Some(1.0), Some(2), Some(10), Some(20));
+        insert_agent_run_with_usage(&conn, "ar-b", Some(0.5), Some(3), Some(1), Some(2));
 
-        crate::workflow::mark_step_running(
-            &conn,
-            &step_id,
-            WorkflowStepStatus::Running,
-            Some("run-mirror-2"),
-        )
-        .unwrap();
+        crate::workflow::add_step_metrics_from_agent_run(&conn, &step_id, "ar-a").unwrap();
+        crate::workflow::add_step_metrics_from_agent_run(&conn, &step_id, "ar-b").unwrap();
 
-        // Write full metrics first.
-        crate::workflow::mirror_step_metrics_from_run(
-            &conn,
-            "run-mirror-2",
-            StepMetrics {
-                cost_usd: Some(9.99),
-                num_turns: Some(3),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        // Second call — only token fields, cost_usd/num_turns must be preserved.
-        crate::workflow::mirror_step_metrics_from_run(
-            &conn,
-            "run-mirror-2",
-            StepMetrics {
-                input_tokens: Some(42),
-                output_tokens: Some(84),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        // Metric fields are not in WorkflowRunStep — verify via direct SQL.
-        let (cost_usd, num_turns, input_tokens, output_tokens): (
-            Option<f64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-        ) = conn
-            .query_row(
-                "SELECT cost_usd, num_turns, input_tokens, output_tokens \
-                 FROM workflow_run_steps WHERE id = ?1",
-                rusqlite::params![step_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .unwrap();
-        assert_eq!(cost_usd, Some(9.99), "cost_usd must be preserved");
-        assert_eq!(num_turns, Some(3), "num_turns must be preserved");
-        assert_eq!(input_tokens, Some(42));
-        assert_eq!(output_tokens, Some(84));
+        let u = step_usage(&conn, &step_id);
+        assert_eq!(u.0, Some(1.5));
+        assert_eq!(u.1, Some(5));
+        assert_eq!(u.3, Some(11));
+        assert_eq!(u.4, Some(22));
     }
 
     #[test]
-    fn mirror_step_metrics_no_op_for_unknown_run_id() {
+    fn add_step_metrics_keeps_columns_when_agent_run_has_none() {
         let conn = test_helpers::setup_db();
         let (_run_id, step_id) = setup(&conn);
+        insert_agent_run_with_usage(&conn, "ar-1", Some(9.99), Some(3), None, None);
+        crate::workflow::add_step_metrics_from_agent_run(&conn, &step_id, "ar-1").unwrap();
+        insert_agent_run_with_usage(&conn, "ar-2", None, None, Some(42), Some(84));
+        crate::workflow::add_step_metrics_from_agent_run(&conn, &step_id, "ar-2").unwrap();
 
-        // No step has child_run_id = "does-not-exist", so the UPDATE affects 0 rows.
-        // The method must succeed (not error) in this case.
-        crate::workflow::mirror_step_metrics_from_run(
-            &conn,
-            "does-not-exist",
-            StepMetrics {
-                cost_usd: Some(1.0),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        let u = step_usage(&conn, &step_id);
+        assert_eq!(u.0, Some(9.99), "cost_usd must be preserved");
+        assert_eq!(u.1, Some(3), "num_turns must be preserved");
+        assert_eq!(u.3, Some(42));
+        assert_eq!(u.4, Some(84));
+    }
 
-        // Original step untouched — verify via SQL since cost_usd is not on WorkflowRunStep.
-        let cost_usd: Option<f64> = conn
-            .query_row(
-                "SELECT cost_usd FROM workflow_run_steps WHERE id = ?1",
-                rusqlite::params![step_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(cost_usd.is_none());
+    #[test]
+    fn add_step_metrics_no_op_for_unknown_ids() {
+        let conn = test_helpers::setup_db();
+        let (_run_id, step_id) = setup(&conn);
+        insert_agent_run_with_usage(&conn, "ar-1", Some(1.0), Some(1), Some(1), Some(1));
+
+        crate::workflow::add_step_metrics_from_agent_run(&conn, &step_id, "missing").unwrap();
+        crate::workflow::add_step_metrics_from_agent_run(&conn, "missing", "ar-1").unwrap();
+
+        assert_eq!(
+            step_usage(&conn, &step_id),
+            (None, None, None, None, None, None, None)
+        );
     }
 }
