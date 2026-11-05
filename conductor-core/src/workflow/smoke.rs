@@ -70,6 +70,23 @@ impl SmokeStop {
         }
     }
 
+    /// Build the stop point for `step` in the running workflow, record it
+    /// (first one wins) and return it.
+    pub(crate) fn record_at(
+        &self,
+        ctx: &dyn RunContext,
+        step: &str,
+        kind: SmokeStopKind,
+    ) -> SmokeStopPoint {
+        let point = SmokeStopPoint {
+            workflow: ctx.workflow_name().to_string(),
+            step: step.to_string(),
+            kind,
+        };
+        self.record(point.clone());
+        point
+    }
+
     /// The first stop point recorded, if any.
     pub fn stopped_at(&self) -> Option<SmokeStopPoint> {
         self.point.lock().unwrap_or_else(|e| e.into_inner()).clone()
@@ -110,12 +127,9 @@ impl ActionExecutor for SmokeStopActionExecutor {
         _info: &StepInfo,
         params: &ActionParams,
     ) -> Result<ActionOutput, EngineError> {
-        let point = SmokeStopPoint {
-            workflow: ctx.workflow_name().to_string(),
-            step: params.name.clone(),
-            kind: SmokeStopKind::Agent,
-        };
-        self.smoke.record(point.clone());
+        let point = self
+            .smoke
+            .record_at(ctx, &params.name, SmokeStopKind::Agent);
         Err(smoke_cancellation(&point))
     }
 }
@@ -151,12 +165,9 @@ impl<R: GateResolver> GateResolver for SmokeStopGateResolver<R> {
         params: &GateParams,
         ctx: &dyn RunContext,
     ) -> Result<GatePoll, EngineError> {
-        let point = SmokeStopPoint {
-            workflow: ctx.workflow_name().to_string(),
-            step: params.gate_name.clone(),
-            kind: SmokeStopKind::Gate,
-        };
-        self.smoke.record(point.clone());
+        let point = self
+            .smoke
+            .record_at(ctx, &params.gate_name, SmokeStopKind::Gate);
         let reason = point.reason();
         match crate::db::open_database(&self.db_path) {
             Ok(conn) => {
@@ -254,6 +265,10 @@ fn ensure_cancelled(
     Ok(())
 }
 
+fn db_open_error(path: &std::path::Path, e: &dyn std::fmt::Display) -> String {
+    format!("failed to open database at {}: {e}", path.display())
+}
+
 /// Run `params` as a smoke run and classify the outcome.
 ///
 /// Sets `params.smoke`; every other field is used as given. The run executes
@@ -285,8 +300,8 @@ pub fn smoke_run_workflow(mut params: WorkflowExecStandalone) -> SmokeOutcome {
         (Err(e), _) => SmokeResult::Failed {
             step: None,
             error: format!(
-                "{error}; failing step lookup skipped: failed to open database at {}: {e}",
-                db_path.display()
+                "{error}; failing step lookup skipped: {}",
+                db_open_error(&db_path, e)
             ),
         },
     };
@@ -305,7 +320,7 @@ pub fn smoke_run_workflow(mut params: WorkflowExecStandalone) -> SmokeOutcome {
                 },
                 (Err(e), _) => SmokeResult::Failed {
                     step: Some(point.step.clone()),
-                    error: format!("failed to open database at {}: {e}", db_path.display()),
+                    error: db_open_error(&db_path, e),
                 },
                 (Ok(_), None) => SmokeResult::Passed {
                     stopped_at: Some(point),
@@ -379,6 +394,10 @@ mod tests {
         .clone()
     }
 
+    fn status_of(conn: &rusqlite::Connection, id: &str) -> Option<String> {
+        crate::workflow::get_workflow_run_status(conn, id).unwrap()
+    }
+
     #[test]
     fn ensure_cancelled_returns_ok_when_already_cancelled() {
         let conn = crate::test_helpers::setup_db();
@@ -392,12 +411,7 @@ mod tests {
         )
         .unwrap();
         assert!(ensure_cancelled(&conn, &id, "smoke").is_ok());
-        assert_eq!(
-            crate::workflow::get_workflow_run_status(&conn, &id)
-                .unwrap()
-                .as_deref(),
-            Some("cancelled")
-        );
+        assert_eq!(status_of(&conn, &id).as_deref(), Some("cancelled"));
     }
 
     #[test]
@@ -405,12 +419,7 @@ mod tests {
         let conn = crate::test_helpers::setup_db();
         let id = new_run(&conn);
         ensure_cancelled(&conn, &id, "smoke").unwrap();
-        assert_eq!(
-            crate::workflow::get_workflow_run_status(&conn, &id)
-                .unwrap()
-                .as_deref(),
-            Some("cancelled")
-        );
+        assert_eq!(status_of(&conn, &id).as_deref(), Some("cancelled"));
     }
 
     #[test]
@@ -426,12 +435,7 @@ mod tests {
         )
         .unwrap();
         ensure_cancelled(&conn, &id, "smoke").unwrap();
-        assert_eq!(
-            crate::workflow::get_workflow_run_status(&conn, &id)
-                .unwrap()
-                .as_deref(),
-            Some("cancelled")
-        );
+        assert_eq!(status_of(&conn, &id).as_deref(), Some("cancelled"));
     }
 
     #[test]
