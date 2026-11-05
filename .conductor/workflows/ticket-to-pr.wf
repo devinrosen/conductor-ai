@@ -77,6 +77,7 @@ workflow ticket-to-pr {
       FEATURE_BASE_BRANCH = "{{feature_base_branch}}"
       WORKTREE_BRANCH     = "{{worktree_branch}}"
       TICKET_SOURCE_ID    = "{{ticket_source_id}}"
+      PRIOR_CONTEXTS      = "{{prior_contexts}}"
     }
   }
 

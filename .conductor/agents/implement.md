@@ -13,10 +13,10 @@ Prior step context: {{prior_context}}
 Steps:
 1. Read `PLAN.md` thoroughly before writing any code.
 2. Implement all changes described in the plan, following the existing code style and conventions.
-3. Write a brief FLOW_OUTPUT summarizing which crates and files you modified, so the verify step can scope its test commands:
+3. Write a brief FLOW_OUTPUT. Its context starts with one to three sentences on what you changed and why, including any behaviour change a user would notice and anything you deliberately left out; the push step puts this in the PR description. Then list which crates and files you modified, so the verify step can scope its test commands:
    ```
    <<<FLOW_OUTPUT>>>
-   {"markers": [], "context": "Modified: conductor-core/src/workflow/coordinator.rs, conductor-core/src/agent/manager/mod.rs (crates: conductor-core)"}
+   {"markers": [], "context": "Resumed runs now skip completed steps by occurrence, not by name, so a repeated step name no longer skips the wrong step. Modified: conductor-core/src/workflow/coordinator.rs, conductor-core/src/agent/manager/mod.rs (crates: conductor-core)"}
    <<<END_FLOW_OUTPUT>>>
    ```
 4. Commit all changes. The subject must be a conventional commit line: `<type>(<scope>): <imperative summary> (#<ticket number>)`, for example `fix(flow): match resumed steps by occurrence within an iteration (#108)`. Types: feat, fix, refactor, docs, test, chore, perf. The push step uses the first commit's subject as the PR title, and the squash merge uses it as the commit message on the base branch, so it must read as a changelog line. Commits made on a verify-loopback retry should also name what they fixed.
