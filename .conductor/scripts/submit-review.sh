@@ -353,8 +353,12 @@ echo "${REVIEW_BODY}" > "${REVIEW_BODY_FILE}"
 
 # GitHub disallows REQUEST_CHANGES on your own PR — detect and fall back to COMMENT.
 # Retried: a lookup lost to a network blip would send REQUEST_CHANGES on an own PR.
-PR_AUTHOR=$(gh_retry gh pr view "${PR_NUMBER}" --json author -q .author.login 2>/dev/null || true)
-CURRENT_USER=$(gh_retry gh api user -q .login 2>/dev/null || true)
+# gh_retry's retry notes and the final gh error go to the step log (stderr).
+PR_AUTHOR=$(gh_retry gh pr view "${PR_NUMBER}" --json author -q .author.login || true)
+CURRENT_USER=$(gh_retry gh api user -q .login || true)
+if [ -z "${PR_AUTHOR}" ] || [ -z "${CURRENT_USER}" ]; then
+  echo "Warning: could not resolve the PR author or current gh user; assuming this is not your own PR." >&2
+fi
 IS_OWN_PR="false"
 if [ -n "${PR_AUTHOR}" ] && [ -n "${CURRENT_USER}" ] && [ "${PR_AUTHOR}" = "${CURRENT_USER}" ]; then
   IS_OWN_PR="true"
