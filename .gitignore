@@ -15,3 +15,5 @@ conductor.db
 conductor.db-wal
 conductor.db-shm
 conductor.log
+# insta writes pending snapshots here; precheck-tests.sh reports them (#3238)
+*.snap.new
