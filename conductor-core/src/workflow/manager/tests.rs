@@ -844,6 +844,13 @@ fn test_list_workflow_runs_by_repo_id_filtered_include_inactive() {
             r.get(0)
         })
         .unwrap();
+    // The filtered query matches on workflow_runs.repo_id, which real runs set
+    // but create_worktree_run leaves null.
+    conn.execute(
+        "UPDATE workflow_runs SET repo_id = ?1 WHERE id = ?2",
+        rusqlite::params![repo_id, merged_run.id],
+    )
+    .unwrap();
 
     for status in [None, Some(WorkflowRunStatus::Pending)] {
         let hidden = crate::workflow::list_workflow_runs_by_repo_id_filtered(
