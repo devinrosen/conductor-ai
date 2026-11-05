@@ -31,10 +31,19 @@ workflow agents), a repo's main checkout, unregistered projects, merged or aband
 
 The wrapper always exits 0 with no output. Set `CONDUCTOR_SESSION_HOOK_DEBUG=1` to keep stderr.
 
+## Skills
+
+- **`/session-postmortem`** (#3247): at the end of a session, reviews the session's conductor
+  runs (`conductor_list_runs`, `conductor_run_stats`) and the conversation for workflow-engine
+  and pipeline bugs and improvements. It drafts issues with evidence, routes runkon engine
+  findings to `runkon/runkon`, checks for duplicates, and files only the drafts you approve.
+  It needs the conductor MCP server and an authenticated `gh`.
+
 ## Scope
 
-Hooks only. The MCP server is still registered by `conductor setup install`, and the
-workflow skills stay project-scoped.
+Session hooks and the `session-postmortem` skill. The MCP server is still registered by
+`conductor setup install`, and the workflow authoring skills (`conductor-workflow-create`,
+`conductor-workflow-update`) stay project-scoped.
 
 The plugin version tracks the conductor release; the release commit bumps both.
 
