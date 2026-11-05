@@ -126,7 +126,8 @@ Conductor includes a workflow engine that orchestrates multi-step AI agent pipel
 ```bash
 conductor workflow list                              # list available workflows
 conductor workflow show <name>                       # ASCII step graph
-conductor workflow validate <name>                   # check agents, inputs, cycles, snippets
+conductor workflow validate <name>                   # check agents, schemas, scripts, cycles, gate types, variables
+conductor workflow validate --all --templates        # every repo workflow plus the embedded templates
 conductor workflow run <name> [--input k=v] [--dry-run]
 conductor workflow cancel <run-id>
 conductor workflow runs [--worktree id]              # run history

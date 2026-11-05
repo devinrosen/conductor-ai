@@ -3,7 +3,7 @@ mod instantiate;
 mod parser;
 pub mod types;
 
-pub use embed::{get_embedded_template, list_embedded_templates};
+pub use embed::{embedded_template_sources, get_embedded_template, list_embedded_templates};
 pub use instantiate::{
     build_instantiation_prompt, build_upgrade_prompt, collect_existing_workflow_names,
     extract_template_version, template_slug, InstantiationPrompt,

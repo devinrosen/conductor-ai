@@ -5,6 +5,7 @@ version: "1.0.0"
 target_types:
   - repo
 hints:
+  - "Write the issue_drafter agent brief (.conductor/agents/issue_drafter.md) to create the issue with the conductor_create_gh_issue MCP tool from {{title}}, use {{body}} when provided (otherwise draft a clear, actionable body with a problem statement, expected behavior and acceptance criteria), and apply {{labels}} when provided (otherwise suggest labels from the repo's taxonomy)"
   - Inspect the repo's existing labels and label taxonomy to customize label options
   - Check for issue templates in .github/ISSUE_TEMPLATE/ and adapt the workflow accordingly
   - Look at recent issues to understand naming conventions and typical structure
@@ -23,27 +24,5 @@ workflow create_issue {
         labels description = "Comma-separated labels (e.g. bug,high-priority)"
     }
 
-    call issue_drafter {
-        prompt = """
-You are creating a GitHub issue for this repository.
-
-Title: {{title}}
-{{#if body}}
-Body provided by user:
-{{body}}
-{{else}}
-Draft a clear, actionable issue body based on the title. Include:
-1. A concise problem statement or feature request
-2. Expected behavior (if applicable)
-3. Steps to reproduce or acceptance criteria
-{{/if}}
-{{#if labels}}
-Labels: {{labels}}
-{{/if}}
-
-Use the conductor_create_gh_issue MCP tool to create the issue.
-If labels were not provided, suggest appropriate labels based on the issue content
-and the repo's existing label taxonomy.
-"""
-    }
+    call issue_drafter {}
 }

@@ -63,6 +63,9 @@ jobs:
               - 'conductor-desktop/**'
             workflows:
               - '.conductor/**'
+              - 'conductor-core/templates/**'
+              - 'conductor-core/src/workflow/**'
+              - 'conductor-cli/src/handlers/workflow.rs'
             migrations:
               - 'conductor-core/src/db/migrations/**'
 
@@ -164,7 +167,7 @@ jobs:
         if: needs.changes.outputs.workflows == 'true'
       - name: Validate workflows
         if: needs.changes.outputs.workflows == 'true'
-        run: cargo run --bin conductor -- workflow validate --all --path .
+        run: cargo run --bin conductor -- workflow validate --all --templates --path .
 
   schema-diagram-count:
     name: Schema Diagram Count

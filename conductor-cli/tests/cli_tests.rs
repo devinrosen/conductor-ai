@@ -115,7 +115,7 @@ fn workflow_validate_requires_name_or_all() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "either <NAME> or --all must be provided",
+            "either <NAME>, --all or --templates must be provided",
         ));
 }
 
@@ -133,6 +133,45 @@ fn workflow_validate_all_no_workflows_found() {
         .assert()
         .success()
         .stdout(predicate::str::contains("No workflow files found"));
+}
+
+#[test]
+fn workflow_validate_unknown_gate_type_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let wf_dir = dir.path().join(".conductor").join("workflows");
+    std::fs::create_dir_all(&wf_dir).unwrap();
+    std::fs::write(
+        wf_dir.join("gated.wf"),
+        "workflow gated {\n  meta {\n    trigger = \"manual\"\n    targets = [\"worktree\"]\n  }\n  gate bogus_gate {\n    prompt = \"ok?\"\n    timeout = \"1h\"\n    on_timeout = fail\n  }\n}\n",
+    )
+    .unwrap();
+    conductor_cmd(dir.path())
+        .args([
+            "workflow",
+            "validate",
+            "--all",
+            "--path",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("bogus_gate"));
+}
+
+#[test]
+fn workflow_validate_templates_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    conductor_cmd(dir.path())
+        .args([
+            "workflow",
+            "validate",
+            "--templates",
+            "--path",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("PASS  template:ticket-to-pr"));
 }
 
 /// Create a temp dir with a valid `hello` workflow + script fixture.
