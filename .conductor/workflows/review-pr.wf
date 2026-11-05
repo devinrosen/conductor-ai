@@ -50,6 +50,16 @@ workflow review-pr {
     }
   }
 
+  // Deterministic validation of workflows and templates (#3290): an unknown
+  // gate type, agent, schema or script fails here even if every LLM reviewer
+  // misses it (#3281). Its reviewer-shaped output blocks through the aggregator.
+  if detect-workflow-changes.has_workflow_changes {
+    script validate-workflows {
+      run = ".conductor/scripts/validate-workflows.sh"
+      env = { BASE_BRANCH = "{{base_branch}}" }
+    }
+  }
+
   parallel {
     output    = "review-findings"
     with      = ["review-diff-scope", "off-diff-findings"]
@@ -93,6 +103,7 @@ workflow review-pr {
     env = {
       PRIOR_OUTPUT     = "{{prior_output}}"
       PR_NUMBER        = "{{pr_number}}"
+      BASE_BRANCH      = "{{base_branch}}"
       DRY_RUN          = "{{dry_run}}"
       FILE_OFF_DIFF    = "{{file_off_diff}}"
       TICKET_SOURCE_ID = "{{ticket_source_id}}"

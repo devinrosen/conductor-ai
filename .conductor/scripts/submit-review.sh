@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # submit-review.sh — dismiss stale conductor review, file off-diff issues, submit formal review
 # Called as a script step after review-aggregator. Env vars: PRIOR_OUTPUT, PR_NUMBER, DRY_RUN,
-# FILE_OFF_DIFF ("false" lists off-diff findings in the review body instead of filing issues)
+# FILE_OFF_DIFF ("false" lists off-diff findings in the review body instead of filing issues),
+# BASE_BRANCH (the PR's base from resolve-pr-base, falling back to `gh pr view`; used by the off-diff
+# filter and to detect a PR that changes the review pipeline itself, #3293)
 set -euo pipefail
 
 # shellcheck source=lib-gh-retry.sh
@@ -52,7 +54,12 @@ PRIOR_OUTPUT=$(echo "${PRIOR_OUTPUT}" | jq '
 # safety net: drop any blocking_findings whose `file` is not in the diff.
 # off_diff_findings are intentionally off-diff and not filtered here.
 # ---------------------------------------------------------------------------
-BASE_BRANCH=$(gh pr view "${PR_NUMBER}" --json baseRefName -q .baseRefName 2>/dev/null)
+# One base for both the off-diff filter and the self-review check (#3293):
+# review-pr passes it in from resolve-pr-base; ask GitHub only when it's
+# missing or still an unsubstituted placeholder.
+if [ -z "${BASE_BRANCH:-}" ] || [[ "${BASE_BRANCH}" == *"{{"* ]]; then
+  BASE_BRANCH=$(gh pr view "${PR_NUMBER}" --json baseRefName -q .baseRefName 2>/dev/null || true)
+fi
 if [ -z "${BASE_BRANCH}" ]; then
   echo "Warning: could not resolve PR base branch for PR #${PR_NUMBER} — skipping off-diff filter."
   echo "         Findings will pass through unfiltered (not silently filtered against the wrong base)."
@@ -68,7 +75,7 @@ if [ "${DIFF_FILE_COUNT}" -eq 0 ]; then
 else
   PRIOR_OUTPUT_FILTERED=$(echo "${PRIOR_OUTPUT}" | jq --argjson diff "${DIFF_FILES_JSON}" '
     ((.blocking_findings // []) | length) as $before
-    | .blocking_findings = ((.blocking_findings // []) | map(select(.file as $f | $diff | index($f))))
+    | .blocking_findings = ((.blocking_findings // []) | map(select(((.file // "") == "") or (.file as $f | $diff | index($f)))))
     | .blocking_findings_dropped = ($before - (.blocking_findings | length))
   ')
 
@@ -77,7 +84,7 @@ else
     echo "Dropped ${DROPPED_COUNT} hallucinated off-diff blocking finding(s) from review:"
     echo "${PRIOR_OUTPUT}" | jq -c --argjson diff "${DIFF_FILES_JSON}" '
       .blocking_findings // []
-      | map(select(.file as $f | $diff | index($f) | not))
+      | map(select(((.file // "") != "") and (.file as $f | $diff | index($f) | not)))
       | .[] | {file, line, severity, reviewer, message: (.message // "")}
     '
   fi
@@ -271,18 +278,26 @@ fi
 # ---------------------------------------------------------------------------
 # 5. Build complete review body programmatically
 # ---------------------------------------------------------------------------
-# Derive approval state purely from the post-filter blocking_findings count.
+# Approve only when nothing blocking survives the off-diff filter (step 1b)
+# AND the aggregator didn't block for a reason the filter can't see. A
+# finding with no file (a reviewer with unreadable output, or one that didn't
+# approve but listed nothing) is never dropped as off-diff (#3299): it used to
+# be, and an unreadable reviewer then produced an APPROVE.
 #
-# The aggregator's `.overall_approved` is computed on pre-filter data, so it
-# can be stale: if the off-diff filter (step 1b) drops every blocking finding,
-# the aggregator may still report `overall_approved: false`. Re-evaluating
-# here off the filtered count keeps the review body consistent — no
-# "Changes Requested" without an accompanying findings list.
+# The filter can still legitimately drop every finding (all hallucinated
+# off-diff files); then the aggregator's overall_approved is stale, and the
+# filtered count wins, as before.
 HAS_BLOCKING_CHECK=$(echo "${PRIOR_OUTPUT}" | jq -r 'if (.blocking_findings // [] | length) > 0 then "true" else "false" end')
+DROPPED_ALL=$(echo "${PRIOR_OUTPUT}" | jq -r 'if (.blocking_findings_dropped // 0) > 0 and (.blocking_findings // [] | length) == 0 then "true" else "false" end')
+AGGREGATOR_APPROVED=$(echo "${PRIOR_OUTPUT}" | jq -r 'if .overall_approved == true then "true" else "false" end')
 if [ "${HAS_BLOCKING_CHECK}" = "true" ]; then
   OVERALL_APPROVED="false"
-else
+elif [ "${AGGREGATOR_APPROVED}" = "true" ] || [ "${DROPPED_ALL}" = "true" ]; then
   OVERALL_APPROVED="true"
+else
+  # The aggregator blocked but listed no finding at all: never approve.
+  OVERALL_APPROVED="false"
+  echo "Warning: the aggregator reported overall_approved=false with no blocking findings; not approving." >&2
 fi
 
 if [ "${OVERALL_APPROVED}" = "true" ]; then
@@ -297,6 +312,43 @@ REVIEWED_BY=$(echo "${PRIOR_OUTPUT}" | jq -r '.reviewed_by // ""')
 REVIEW_BODY="${HEADING}
 
 **Reviewed by:** ${REVIEWED_BY}"
+
+# A PR that changes the review pipeline was reviewed by its own changes:
+# review-pr reads the briefs, scripts, schemas and workflow from the PR's
+# worktree (#3145). Say so, and don't count this review as an approval, so
+# auto-merge (pr_approval, merge-when-ready) waits for a person (#3293).
+# The whole PR is checked, not just an incremental range. The check fails
+# closed: if it can't run, the approval is withheld the same way.
+SELF_REVIEW_FILES=""
+SELF_REVIEW_UNCHECKED=""
+if [ -z "${BASE_BRANCH:-}" ] || [[ "${BASE_BRANCH}" == *"{{"* ]]; then
+  SELF_REVIEW_UNCHECKED="the PR base branch could not be resolved"
+# --no-renames: a pipeline file moved out of the watched paths must show its old path too.
+elif ! pr_files=$(git diff --no-renames --name-only "origin/${BASE_BRANCH}...HEAD" 2>"${TMPDIR:-/tmp}/conductor_self_review_diff.err"); then
+  SELF_REVIEW_UNCHECKED="git diff against origin/${BASE_BRANCH} failed: $(head -c 300 "${TMPDIR:-/tmp}/conductor_self_review_diff.err" | tr '\n' ' ')"
+else
+  SELF_REVIEW_FILES=$(printf '%s\n' "${pr_files}" | grep -E \
+    '^\.conductor/(agents/review-[^/]*\.md|schemas/review-[^/]*\.yaml|workflows/review-pr\.wf|scripts/(aggregate-reviews|fetch-pr-replies|submit-review|resolve-pr-base|detect-[^/]*|lib-diff-range|lib-gh-retry)\.sh)$' || true)
+fi
+rm -f "${TMPDIR:-/tmp}/conductor_self_review_diff.err"
+WITHHOLD_APPROVAL="false"
+if [ -n "${SELF_REVIEW_FILES}" ]; then
+  WITHHOLD_APPROVAL="true"
+  SELF_REVIEW_LIST=$(printf '%s\n' "${SELF_REVIEW_FILES}" | sed 's/^/- `/; s/$/`/')
+  REVIEW_BODY="${REVIEW_BODY}
+
+> [!WARNING]
+> **This PR changes the review pipeline that reviewed it.** These files were read from the PR's own branch, so the changed reviewers produced this review. Check the changes to them by hand. This review is posted as a comment, not an approval, so it can't satisfy an approval gate on its own.
+
+${SELF_REVIEW_LIST}"
+elif [ -n "${SELF_REVIEW_UNCHECKED}" ]; then
+  WITHHOLD_APPROVAL="true"
+  echo "Warning: couldn't check whether this PR changes the review pipeline (${SELF_REVIEW_UNCHECKED}); withholding approval." >&2
+  REVIEW_BODY="${REVIEW_BODY}
+
+> [!WARNING]
+> **Couldn't check whether this PR changes the review pipeline** (${SELF_REVIEW_UNCHECKED}). This review is posted as a comment, not an approval, until the check can run."
+fi
 
 # Append blocking findings section if any
 if [ "${HAS_BLOCKING_CHECK}" = "true" ]; then
@@ -366,7 +418,10 @@ fi
 
 # Posting the review is retried on transient gh failures (#3239): one network
 # blip here used to fail the whole run after every reviewer had finished.
-if [ "${OVERALL_APPROVED}" = "true" ]; then
+if [ "${OVERALL_APPROVED}" = "true" ] && [ "${WITHHOLD_APPROVAL}" = "true" ]; then
+  echo "Approval withheld (review pipeline changed or unchecked) — submitting a COMMENT review so a person must approve (#3293)…"
+  gh_retry gh pr review "${PR_NUMBER}" --comment --body-file "${REVIEW_BODY_FILE}"
+elif [ "${OVERALL_APPROVED}" = "true" ]; then
   echo "Submitting APPROVE review for PR #${PR_NUMBER}…"
   gh_retry gh pr review "${PR_NUMBER}" --approve --body-file "${REVIEW_BODY_FILE}"
 elif [ "${IS_OWN_PR}" = "true" ]; then
