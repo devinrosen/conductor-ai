@@ -577,25 +577,13 @@ pub fn handle_workflow(
             compare,
             json,
         } => {
-            use conductor_core::workflow::run_stats::{
-                collect_run_stats, format_run_stats, format_run_stats_compare,
-            };
-            let stats = collect_run_stats(conn, &run_ids)?;
-            let other = if compare.is_empty() {
-                None
+            let text = conductor_core::workflow::run_stats::render_run_stats(
+                conn, &run_ids, &compare, json,
+            )?;
+            if json {
+                println!("{text}");
             } else {
-                Some(collect_run_stats(conn, &compare)?)
-            };
-            match (other, json) {
-                (Some(other), true) => println!(
-                    "{}",
-                    serde_json::to_string_pretty(
-                        &serde_json::json!({ "run": stats, "compare": other })
-                    )?
-                ),
-                (None, true) => println!("{}", serde_json::to_string_pretty(&stats)?),
-                (Some(other), false) => print!("{}", format_run_stats_compare(&stats, &other)),
-                (None, false) => print!("{}", format_run_stats(&stats)),
+                print!("{text}");
             }
         }
         WorkflowCommands::StepLog {

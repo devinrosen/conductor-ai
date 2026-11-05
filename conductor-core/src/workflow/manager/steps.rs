@@ -254,6 +254,17 @@ pub fn set_step_gate_options(conn: &Connection, step_id: &str, options_json: &st
     )
 }
 
+/// Usage columns shared by `agent_runs` and `workflow_run_steps`.
+const STEP_USAGE_COLUMNS: [&str; 7] = [
+    "cost_usd",
+    "num_turns",
+    "duration_ms",
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+];
+
 /// Add an agent run's usage onto a `workflow_run_steps` row.
 ///
 /// Additive, so a retried step (one row, several agent runs) ends up holding the
@@ -264,31 +275,22 @@ pub fn add_step_metrics_from_agent_run(
     step_id: &str,
     agent_run_id: &str,
 ) -> Result<()> {
+    // One column list drives both the SET list and the agent_runs subselect, so a
+    // column can't be added to one and forgotten in the other.
+    let set_list = STEP_USAGE_COLUMNS
+        .iter()
+        .map(|c| format!("{c} = COALESCE(COALESCE(workflow_run_steps.{c}, 0) + a.{c}, workflow_run_steps.{c})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let select_list = STEP_USAGE_COLUMNS.join(", ");
+    let sql = format!(
+        "UPDATE workflow_run_steps SET {set_list} \
+         FROM (SELECT {select_list} FROM agent_runs WHERE id = :agent_run_id) AS a \
+         WHERE workflow_run_steps.id = :step_id"
+    );
     execute_sql(
         conn,
-        "UPDATE workflow_run_steps SET \
-           cost_usd = CASE WHEN a.cost_usd IS NULL THEN workflow_run_steps.cost_usd \
-                           ELSE COALESCE(workflow_run_steps.cost_usd, 0) + a.cost_usd END, \
-           num_turns = CASE WHEN a.num_turns IS NULL THEN workflow_run_steps.num_turns \
-                           ELSE COALESCE(workflow_run_steps.num_turns, 0) + a.num_turns END, \
-           duration_ms = CASE WHEN a.duration_ms IS NULL THEN workflow_run_steps.duration_ms \
-                           ELSE COALESCE(workflow_run_steps.duration_ms, 0) + a.duration_ms END, \
-           input_tokens = CASE WHEN a.input_tokens IS NULL THEN workflow_run_steps.input_tokens \
-                           ELSE COALESCE(workflow_run_steps.input_tokens, 0) + a.input_tokens END, \
-           output_tokens = CASE WHEN a.output_tokens IS NULL THEN workflow_run_steps.output_tokens \
-                           ELSE COALESCE(workflow_run_steps.output_tokens, 0) + a.output_tokens END, \
-           cache_read_input_tokens = CASE WHEN a.cache_read_input_tokens IS NULL \
-                           THEN workflow_run_steps.cache_read_input_tokens \
-                           ELSE COALESCE(workflow_run_steps.cache_read_input_tokens, 0) \
-                                + a.cache_read_input_tokens END, \
-           cache_creation_input_tokens = CASE WHEN a.cache_creation_input_tokens IS NULL \
-                           THEN workflow_run_steps.cache_creation_input_tokens \
-                           ELSE COALESCE(workflow_run_steps.cache_creation_input_tokens, 0) \
-                                + a.cache_creation_input_tokens END \
-         FROM (SELECT cost_usd, num_turns, duration_ms, input_tokens, output_tokens, \
-                      cache_read_input_tokens, cache_creation_input_tokens \
-               FROM agent_runs WHERE id = :agent_run_id) AS a \
-         WHERE workflow_run_steps.id = :step_id",
+        &sql,
         named_params![":agent_run_id": agent_run_id, ":step_id": step_id],
     )
 }

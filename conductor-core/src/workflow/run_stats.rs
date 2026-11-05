@@ -142,20 +142,49 @@ struct AgentRow {
 }
 
 fn parse_ts(s: Option<&str>) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(s?)
-        .ok()
-        .map(|d| d.with_timezone(&Utc))
+    let raw = s?;
+    match DateTime::parse_from_rfc3339(raw) {
+        Ok(d) => Some(d.with_timezone(&Utc)),
+        Err(e) => {
+            // Not silent: an unparseable timestamp reports as 0 ms of wall time.
+            tracing::warn!("run-stats: unparseable timestamp {raw:?}: {e}");
+            None
+        }
+    }
 }
 
 fn ms_between(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Option<i64> {
     Some((b? - a?).num_milliseconds().max(0))
 }
 
-fn parse_output(raw: Option<String>) -> Option<Value> {
-    let v: Value = serde_json::from_str(raw?.trim()).ok()?;
+fn parse_output(raw: Option<String>, run_id: &str, step_name: &str) -> Option<Value> {
+    let raw = raw?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let warn = |e: serde_json::Error| {
+        // Not silent: the step drops out of cycle, triage and verify detection.
+        tracing::warn!(
+            "run-stats: run {run_id} step '{step_name}': unparseable structured_output: {e}"
+        );
+    };
+    let v: Value = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        Err(e) => {
+            warn(e);
+            return None;
+        }
+    };
     match v {
         // Some writers store the output as a JSON string holding JSON.
-        Value::String(s) => serde_json::from_str(&s).ok(),
+        Value::String(s) => match serde_json::from_str(&s) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                warn(e);
+                None
+            }
+        },
         other => Some(other),
     }
 }
@@ -206,16 +235,18 @@ fn load_steps(conn: &Connection, run_id: &str) -> Result<Vec<StepRow>> {
         .query_map(params![run_id], |r| {
             let started: Option<String> = r.get(2)?;
             let ended: Option<String> = r.get(3)?;
+            let step_name: String = r.get(0)?;
+            let output = parse_output(r.get(7)?, run_id, &step_name);
             Ok(StepRow {
                 run_id: run_id.to_string(),
-                step_name: r.get(0)?,
+                step_name,
                 child_run_id: r.get(1)?,
                 started_at: parse_ts(started.as_deref()),
                 ended_at: parse_ts(ended.as_deref()),
                 iteration: r.get(4)?,
                 retry_count: r.get(5)?,
                 position: r.get(6)?,
-                output: parse_output(r.get(7)?),
+                output,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -838,6 +869,34 @@ fn header_block(s: &RunStats) -> String {
     out
 }
 
+/// Collect and render run stats as the CLI and MCP tool print them: text or JSON,
+/// one run or `run_ids` against `compare_ids` (empty = no comparison). The JSON for a
+/// comparison is `{"run": ..., "compare": ...}`.
+pub fn render_run_stats(
+    conn: &Connection,
+    run_ids: &[String],
+    compare_ids: &[String],
+    json: bool,
+) -> Result<String> {
+    let stats = collect_run_stats(conn, run_ids)?;
+    let other = if compare_ids.is_empty() {
+        None
+    } else {
+        Some(collect_run_stats(conn, compare_ids)?)
+    };
+    let json_err = |e: serde_json::Error| ConductorError::InvalidInput(e.to_string());
+    Ok(match (other, json) {
+        (Some(o), true) => serde_json::to_string_pretty(&serde_json::json!({
+            "run": stats,
+            "compare": o,
+        }))
+        .map_err(json_err)?,
+        (None, true) => serde_json::to_string_pretty(&stats).map_err(json_err)?,
+        (Some(o), false) => format_run_stats_compare(&stats, &o),
+        (None, false) => format_run_stats(&stats),
+    })
+}
+
 pub fn format_run_stats(s: &RunStats) -> String {
     let mut out = header_block(s);
     if !s.steps.is_empty() {
@@ -1365,5 +1424,48 @@ mod tests {
         assert_eq!(fmt_dur(750_000), "12m 30s");
         assert_eq!(fmt_tokens(1_200_000), "1.2M");
         assert_eq!(fmt_cost(4.756), "$4.76");
+    }
+
+    #[test]
+    fn render_run_stats_all_output_combinations() {
+        let conn = db();
+        two_cycle_fixture(&conn);
+        let ids = vec!["R".to_string()];
+        let none: Vec<String> = vec![];
+
+        let text = render_run_stats(&conn, &ids, &none, false).unwrap();
+        assert!(text.contains("iterate-pr"), "{text}");
+        assert!(serde_json::from_str::<Value>(&text).is_err());
+
+        let json = render_run_stats(&conn, &ids, &none, true).unwrap();
+        let v: Value = serde_json::from_str(&json).unwrap();
+        assert!(v.get("run").is_none() && v.get("steps").is_some(), "{json}");
+
+        let cmp_text = render_run_stats(&conn, &ids, &ids, false).unwrap();
+        assert!(cmp_text.contains("iterate-pr"), "{cmp_text}");
+
+        let cmp_json = render_run_stats(&conn, &ids, &ids, true).unwrap();
+        let v: Value = serde_json::from_str(&cmp_json).unwrap();
+        assert!(v.get("run").is_some() && v.get("compare").is_some());
+    }
+
+    #[test]
+    fn render_run_stats_missing_run_errors() {
+        let conn = db();
+        let err = render_run_stats(&conn, &["nope".to_string()], &[], false).unwrap_err();
+        assert!(matches!(err, ConductorError::WorkflowRunNotFound { .. }));
+        let two_cycle_err =
+            render_run_stats(&conn, &["nope".to_string()], &["x".to_string()], true);
+        assert!(two_cycle_err.is_err());
+    }
+
+    #[test]
+    fn parse_helpers_return_none_on_malformed_input() {
+        assert!(parse_ts(Some("not a date")).is_none());
+        assert!(parse_ts(None).is_none());
+        assert!(parse_output(Some("{broken".into()), "R", "s").is_none());
+        assert!(parse_output(Some("\"not json\"".into()), "R", "s").is_none());
+        assert!(parse_output(Some("  ".into()), "R", "s").is_none());
+        assert!(parse_output(Some("\"{\\\"a\\\":1}\"".into()), "R", "s").is_some());
     }
 }

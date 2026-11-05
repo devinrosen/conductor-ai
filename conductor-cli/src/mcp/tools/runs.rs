@@ -347,10 +347,6 @@ pub(super) fn tool_run_stats(
     conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
-    use conductor_core::workflow::run_stats::{
-        collect_run_stats, format_run_stats, format_run_stats_compare,
-    };
-
     let run_ids = split_run_ids(require_arg!(args, "run_id"));
     if run_ids.is_empty() {
         return tool_err("run_id must contain at least one workflow run id");
@@ -360,28 +356,12 @@ pub(super) fn tool_run_stats(
         .unwrap_or_default();
     let as_json = args.get("json").and_then(Value::as_bool).unwrap_or(false);
 
-    let stats = match collect_run_stats(&conductor.conn, &run_ids) {
-        Ok(s) => s,
-        Err(e) => return tool_err(e),
-    };
-    let other = if compare_ids.is_empty() {
-        None
-    } else {
-        match collect_run_stats(&conductor.conn, &compare_ids) {
-            Ok(s) => Some(s),
-            Err(e) => return tool_err(e),
-        }
-    };
-    let text = match (other, as_json) {
-        (Some(o), true) => serde_json::to_string_pretty(&serde_json::json!({
-            "run": stats,
-            "compare": o,
-        })),
-        (None, true) => serde_json::to_string_pretty(&stats),
-        (Some(o), false) => Ok(format_run_stats_compare(&stats, &o)),
-        (None, false) => Ok(format_run_stats(&stats)),
-    };
-    match text {
+    match conductor_core::workflow::run_stats::render_run_stats(
+        &conductor.conn,
+        &run_ids,
+        &compare_ids,
+        as_json,
+    ) {
         Ok(t) => tool_ok(t),
         Err(e) => tool_err(e),
     }
@@ -1837,5 +1817,36 @@ mod tests {
         let text = result.content[0].as_text().map(|t| t.text.clone()).unwrap();
         let v: Value = serde_json::from_str(&text).expect("json output");
         assert!(v.get("run").is_some() && v.get("compare").is_some());
+    }
+
+    #[test]
+    fn test_split_run_ids_trims_and_drops_blanks() {
+        assert_eq!(split_run_ids("a, b ,,c"), vec!["a", "b", "c"]);
+        assert_eq!(split_run_ids("  a  "), vec!["a"]);
+        assert!(split_run_ids("").is_empty());
+        assert!(split_run_ids(" , ,  ").is_empty());
+    }
+
+    #[test]
+    fn test_run_stats_blank_run_id_is_error() {
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_run_stats(&conductor, &args_with("run_id", " , "));
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0].as_text().map(|t| t.text.clone()).unwrap();
+        assert!(text.contains("at least one workflow run id"), "{text}");
+    }
+
+    #[test]
+    fn test_run_stats_multiple_comma_separated_ids() {
+        let (f, conductor) = make_test_conductor();
+        let (run_id, _) = make_run_with_step(f.path(), "implement");
+        let ids = format!("{run_id}, {run_id}");
+        let mut args = args_with("run_id", &ids);
+        args.insert(
+            "compare_run_id".into(),
+            Value::String(format!(" ,{run_id}")),
+        );
+        let result = tool_run_stats(&conductor, &args);
+        assert_ne!(result.is_error, Some(true));
     }
 }
