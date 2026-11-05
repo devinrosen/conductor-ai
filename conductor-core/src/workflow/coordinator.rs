@@ -563,6 +563,7 @@ fn map_engine_error(
 /// Build the persistence, action-registry, and child-runner that are identical
 /// between fresh execution and resume.  Call sites then layer in the parts that
 /// differ (item_registry, script_env_provider, ExecutionState fields).
+#[allow(clippy::too_many_arguments)]
 fn build_rk_engine_components(
     config: &crate::config::Config,
     shared_conn: &Arc<std::sync::Mutex<Connection>>,
