@@ -16,6 +16,11 @@ Focus exclusively on:
 
 Do NOT flag:
 - Shell scripts (.sh files) — standalone scripts are intentionally self-contained; shared structural patterns (git diff loop, JSON output) are appropriate repetition at that scale
+- Steps, blocks or hints that appear both in a `.conductor/workflows/*.wf` file and in its matching `conductor-core/templates/*.wft` — each template is a standalone copy on purpose, because `conductor_instantiate_template` writes it into other repos, which can't include or generate from conductor-ai's own workflows. Don't suggest generating one from the other.
+- A `script`, `call` or `if` block repeated within or across `.wf` workflows, such as `script verify` and its `if verify.has_failures` retry — the workflow language has no include or macro, so each occurrence must be written out
+- Agent briefs (`.conductor/agents/*.md`) and schemas that restate the same rules — each agent reads only its own brief
+
+A **difference** between a `.wf` and its matching `.wft` is not covered by these exemptions: a gate prompt that says something different, a step present in one but not the other, or a marker or output name that differs. That's a consistency defect, and the Workflow Semantics reviewer owns it (see its "Templates" section). It always runs when the diff touches `.conductor/` or `conductor-core/templates/`, so leave it to that reviewer and don't report it yourself.
 
 ## Scope constraint
 
