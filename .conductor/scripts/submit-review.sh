@@ -2,7 +2,8 @@
 # submit-review.sh — dismiss stale conductor review, file off-diff issues, submit formal review
 # Called as a script step after review-aggregator. Env vars: PRIOR_OUTPUT, PR_NUMBER, DRY_RUN,
 # FILE_OFF_DIFF ("false" lists off-diff findings in the review body instead of filing issues),
-# BASE_BRANCH (the PR's base; used to detect a PR that changes the review pipeline itself, #3293)
+# BASE_BRANCH (the PR's base from resolve-pr-base, falling back to `gh pr view`; used by the off-diff
+# filter and to detect a PR that changes the review pipeline itself, #3293)
 set -euo pipefail
 
 # shellcheck source=lib-gh-retry.sh
@@ -53,7 +54,12 @@ PRIOR_OUTPUT=$(echo "${PRIOR_OUTPUT}" | jq '
 # safety net: drop any blocking_findings whose `file` is not in the diff.
 # off_diff_findings are intentionally off-diff and not filtered here.
 # ---------------------------------------------------------------------------
-BASE_BRANCH=$(gh pr view "${PR_NUMBER}" --json baseRefName -q .baseRefName 2>/dev/null)
+# One base for both the off-diff filter and the self-review check (#3293):
+# review-pr passes it in from resolve-pr-base; ask GitHub only when it's
+# missing or still an unsubstituted placeholder.
+if [ -z "${BASE_BRANCH:-}" ] || [[ "${BASE_BRANCH}" == *"{{"* ]]; then
+  BASE_BRANCH=$(gh pr view "${PR_NUMBER}" --json baseRefName -q .baseRefName 2>/dev/null || true)
+fi
 if [ -z "${BASE_BRANCH}" ]; then
   echo "Warning: could not resolve PR base branch for PR #${PR_NUMBER} — skipping off-diff filter."
   echo "         Findings will pass through unfiltered (not silently filtered against the wrong base)."
@@ -308,8 +314,9 @@ REVIEW_BODY="${HEADING}
 SELF_REVIEW_FILES=""
 SELF_REVIEW_UNCHECKED=""
 if [ -z "${BASE_BRANCH:-}" ] || [[ "${BASE_BRANCH}" == *"{{"* ]]; then
-  SELF_REVIEW_UNCHECKED="BASE_BRANCH is not set"
-elif ! pr_files=$(git diff --name-only "origin/${BASE_BRANCH}...HEAD" 2>"${TMPDIR:-/tmp}/conductor_self_review_diff.err"); then
+  SELF_REVIEW_UNCHECKED="the PR base branch could not be resolved"
+# --no-renames: a pipeline file moved out of the watched paths must show its old path too.
+elif ! pr_files=$(git diff --no-renames --name-only "origin/${BASE_BRANCH}...HEAD" 2>"${TMPDIR:-/tmp}/conductor_self_review_diff.err"); then
   SELF_REVIEW_UNCHECKED="git diff against origin/${BASE_BRANCH} failed: $(head -c 300 "${TMPDIR:-/tmp}/conductor_self_review_diff.err" | tr '\n' ' ')"
 else
   SELF_REVIEW_FILES=$(printf '%s\n' "${pr_files}" | grep -E \
