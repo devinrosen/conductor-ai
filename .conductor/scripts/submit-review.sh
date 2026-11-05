@@ -4,6 +4,9 @@
 # FILE_OFF_DIFF ("false" lists off-diff findings in the review body instead of filing issues)
 set -euo pipefail
 
+# shellcheck source=lib-gh-retry.sh
+source "$(dirname "$0")/lib-gh-retry.sh"
+
 # ---------------------------------------------------------------------------
 # 1. Resolve PR_NUMBER (fall back to gh pr view if not injected)
 # ---------------------------------------------------------------------------
@@ -106,7 +109,7 @@ fi
 # ---------------------------------------------------------------------------
 # 3. Dismiss any existing conductor review on this PR
 # ---------------------------------------------------------------------------
-OWNER_REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+OWNER_REPO=$(gh_retry gh repo view --json nameWithOwner -q .nameWithOwner)
 
 REVIEW_IDS=$(gh api "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews" \
   --jq '[.[] | select(.body | contains("<!-- conductor-review -->")) | .id] | .[]' \
@@ -349,22 +352,25 @@ echo "${REVIEW_BODY}" > "${REVIEW_BODY_FILE}"
 # ---------------------------------------------------------------------------
 
 # GitHub disallows REQUEST_CHANGES on your own PR — detect and fall back to COMMENT.
-PR_AUTHOR=$(gh pr view "${PR_NUMBER}" --json author -q .author.login 2>/dev/null || true)
-CURRENT_USER=$(gh api user -q .login 2>/dev/null || true)
+# Retried: a lookup lost to a network blip would send REQUEST_CHANGES on an own PR.
+PR_AUTHOR=$(gh_retry gh pr view "${PR_NUMBER}" --json author -q .author.login 2>/dev/null || true)
+CURRENT_USER=$(gh_retry gh api user -q .login 2>/dev/null || true)
 IS_OWN_PR="false"
 if [ -n "${PR_AUTHOR}" ] && [ -n "${CURRENT_USER}" ] && [ "${PR_AUTHOR}" = "${CURRENT_USER}" ]; then
   IS_OWN_PR="true"
 fi
 
+# Posting the review is retried on transient gh failures (#3239): one network
+# blip here used to fail the whole run after every reviewer had finished.
 if [ "${OVERALL_APPROVED}" = "true" ]; then
   echo "Submitting APPROVE review for PR #${PR_NUMBER}…"
-  gh pr review "${PR_NUMBER}" --approve --body-file "${REVIEW_BODY_FILE}"
+  gh_retry gh pr review "${PR_NUMBER}" --approve --body-file "${REVIEW_BODY_FILE}"
 elif [ "${IS_OWN_PR}" = "true" ]; then
   echo "PR author matches current user — submitting COMMENT review (GitHub disallows REQUEST_CHANGES on own PRs)…"
-  gh pr review "${PR_NUMBER}" --comment --body-file "${REVIEW_BODY_FILE}"
+  gh_retry gh pr review "${PR_NUMBER}" --comment --body-file "${REVIEW_BODY_FILE}"
 else
   echo "Submitting REQUEST CHANGES review for PR #${PR_NUMBER}…"
-  gh pr review "${PR_NUMBER}" --request-changes --body-file "${REVIEW_BODY_FILE}"
+  gh_retry gh pr review "${PR_NUMBER}" --request-changes --body-file "${REVIEW_BODY_FILE}"
 fi
 
 echo "Review submitted successfully."
