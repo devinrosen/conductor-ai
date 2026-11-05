@@ -7,8 +7,12 @@
 #   cargo clippy -p <crate> --all-targets -- -D warnings
 #   cargo fmt --all --check
 # A root Cargo.toml or Cargo.lock change checks every crate. Only .rs files,
-# Cargo.toml, Cargo.lock and build.rs count as Rust changes; anything else
-# (.wf, .md, .sh, frontend files) skips the checks.
+# Cargo.toml, Cargo.lock and build.rs count as Rust changes. A change under
+# .conductor/ or conductor-core/templates/ also runs
+#   conductor workflow validate --all --templates
+# with the conductor just built from this worktree (#3290), so a pipeline bug
+# such as an unknown gate type (#3281) goes back to implement. Anything else
+# (.md, frontend files) skips the checks.
 #
 # Emits has_failures when any check failed or couldn't run, with a context
 # that names the failing checks, test names and the first compiler or clippy
@@ -61,21 +65,30 @@ $4}"
 # Only a successful diff can skip the checks: if the merge base or the diff
 # fails, check every crate, since skipping would hide breakage.
 crates=()
+validate_pipeline=0
 if [ -n "${VERIFY_CRATES:-}" ]; then
   read -ra crates <<< "${VERIFY_CRATES}"
 elif ! merge_base=$(git merge-base HEAD "origin/${base}" 2>/dev/null || git merge-base HEAD "${base}" 2>/dev/null); then
   echo "WARNING: could not find the merge base with ${base}; checking every crate" >&2
   crates=("${all_crates[@]}")
+  validate_pipeline=1
 elif ! changed=$(git diff --name-only "${merge_base}") || ! untracked=$(git ls-files --others --exclude-standard); then
   echo "WARNING: git could not list the changed files; checking every crate" >&2
   crates=("${all_crates[@]}")
+  validate_pipeline=1
 else
-  rust_files=$(printf '%s\n%s\n' "${changed}" "${untracked}" | grep -E '\.rs$|(^|/)Cargo\.(toml|lock)$|(^|/)build\.rs$' || true)
-  if [ -z "${rust_files}" ]; then
-    emit '[]' "PASS: no Rust changes; cargo checks skipped." true
+  all_changed=$(printf '%s\n%s\n' "${changed}" "${untracked}")
+  rust_files=$(printf '%s\n' "${all_changed}" | grep -E '\.rs$|(^|/)Cargo\.(toml|lock)$|(^|/)build\.rs$' || true)
+  if printf '%s\n' "${all_changed}" | grep -qE '^(\.conductor/|conductor-core/templates/)'; then
+    validate_pipeline=1
+  fi
+  if [ -z "${rust_files}" ] && [ "${validate_pipeline}" -eq 0 ]; then
+    emit '[]' "PASS: no Rust or pipeline changes; checks skipped." true
     exit 0
   fi
-  if printf '%s\n' "${rust_files}" | grep -qE '^Cargo\.(toml|lock)$'; then
+  if [ -z "${rust_files}" ]; then
+    : # pipeline files only: build conductor and validate, no per-crate checks
+  elif printf '%s\n' "${rust_files}" | grep -qE '^Cargo\.(toml|lock)$'; then
     crates=("${all_crates[@]}")
   else
     for crate in "${all_crates[@]}"; do
@@ -99,11 +112,13 @@ first_errors() {
 
 # --- cargo build -------------------------------------------------------------
 # The other checks would only repeat a build failure, so they're skipped then.
+build_ok=0
 if cargo build > "${logs}/build.log" 2>&1; then
+  build_ok=1
   record "cargo build" pass "ok"
 else
   record "cargo build" fail "build failed" "$(first_errors "${logs}/build.log")"
-  for crate in "${crates[@]}"; do
+  for crate in ${crates[@]+"${crates[@]}"}; do
     record "cargo nextest -p ${crate}" skipped "not run: cargo build failed"
     record "cargo clippy -p ${crate}" skipped "not run: cargo build failed"
   done
@@ -111,7 +126,7 @@ fi
 
 if [ "${failed}" -eq 0 ]; then
   # --- cargo nextest, per crate ----------------------------------------------
-  for crate in "${crates[@]}"; do
+  for crate in ${crates[@]+"${crates[@]}"}; do
     features=()
     [ "${crate}" = "conductor-core" ] && features=(--features test-helpers)
     log="${logs}/nextest-${crate}.log"
@@ -135,7 +150,7 @@ ${panics}}"
   done
 
   # --- cargo clippy, per crate -----------------------------------------------
-  for crate in "${crates[@]}"; do
+  for crate in ${crates[@]+"${crates[@]}"}; do
     log="${logs}/clippy-${crate}.log"
     if cargo clippy -p "${crate}" --all-targets -- -D warnings > "${log}" 2>&1; then
       record "cargo clippy -p ${crate}" pass "no warnings"
@@ -143,6 +158,19 @@ ${panics}}"
       record "cargo clippy -p ${crate}" fail "clippy reported errors" "$(first_errors "${log}")"
     fi
   done
+fi
+
+# --- conductor workflow validate ------------------------------------------------
+# Uses the conductor built above from this worktree, so a change to the
+# validator itself is checked by the new code.
+if [ "${validate_pipeline}" -eq 1 ]; then
+  if [ "${build_ok}" -eq 0 ]; then
+    record "conductor workflow validate" skipped "not run: cargo build failed"
+  elif cargo run -q --bin conductor -- workflow validate --all --templates --path . > "${logs}/validate.log" 2>&1; then
+    record "conductor workflow validate" pass "$(tail -n 1 "${logs}/validate.log")"
+  else
+    record "conductor workflow validate" fail "workflow or template validation failed" "$(grep -E '^(FAIL|\s*✗)' "${logs}/validate.log" | head -n 40)"
+  fi
 fi
 
 # --- cargo fmt -----------------------------------------------------------------
