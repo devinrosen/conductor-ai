@@ -72,13 +72,13 @@ REPLIES=$(jq -cn \
   --argjson maxchars "${MAX_BODY_CHARS}" '
   def trim_body: if length > $maxchars then .[0:$maxchars] + " [truncated]" else . end;
   [
-    ($issue[] | {kind: "comment", author: .user.login, author_type: .user.type,
+    ($issue[] | {kind: "comment", author: .user.login, author_type: .user.type, author_association: (.author_association // "NONE"),
                  at: .created_at, body: (.body // "")}),
     ($reviews[] | select((.body // "") != "")
                 | select((.body | contains("<!-- conductor-review -->")) | not)
-                | {kind: "review", author: .user.login, author_type: .user.type,
+                | {kind: "review", author: .user.login, author_type: .user.type, author_association: (.author_association // "NONE"),
                    at: .submitted_at, body: .body}),
-    ($inline[] | {kind: "inline", author: .user.login, author_type: .user.type,
+    ($inline[] | {kind: "inline", author: .user.login, author_type: .user.type, author_association: (.author_association // "NONE"),
                   at: .created_at, path: .path, line: (.line // .original_line),
                   body: (.body // "")})
   ]

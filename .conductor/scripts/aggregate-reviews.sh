@@ -9,13 +9,15 @@
 #
 # - Reviewer entries are the steps named in REVIEWERS below. A reviewer blocks
 #   when it has the has_review_issues marker or any critical/warning finding.
-#   A reviewer whose output can't be parsed, or that doesn't approve but lists
+#   A reviewer whose output can't be parsed or has no boolean `approved` (the
+#   review-findings schema), or that doesn't approve but lists
 #   no finding, gets a blocking finding saying so: malformed output is never
 #   read as approval.
 # - review-reply-check (a small agent that runs only when the PR has replies
 #   since the last review) lists findings a reply already answered. Those move
-#   to answered_findings, except the Security reviewer's, which block until
-#   fixed (submit-review enforces this too).
+#   to answered_findings, except: Security findings and critical findings,
+#   which block until fixed (submit-review enforces Security too), and answers
+#   from anyone but a repo owner, member or collaborator or an installed app.
 # - Off-diff findings are deduplicated by (file, line), keeping the higher
 #   severity, and labelled by reviewer (plus `bug` for critical).
 #
@@ -59,16 +61,22 @@ if ! result=$(jq -c '
   };
   def sev_rank: if . == "critical" then 2 elif . == "warning" then 1 else 0 end;
   # structured_output first, then the context string, as JSON objects.
+  def json_obj: strings | try fromjson catch empty | objects;
   def parsed:
-    ((.structured_output // empty) | strings | try fromjson catch empty | objects)
-    // ((.context // empty) | strings | try fromjson catch empty | objects)
+    ((.structured_output // empty) | json_obj)
+    // ((.context // empty) | json_obj)
     // null;
+  # A reviewer output counts only with a boolean `approved` (review-findings
+  # schema); anything else is unreadable and blocks.
+  def review_out:
+    ([ ((.structured_output // empty) | json_obj), ((.context // empty) | json_obj) ]
+     | map(select((.approved | type) == "boolean")) | first) // null;
 
   . as $all
   | [ $all[] | select(reviewers[.step] != null) ]
     # A retried or repeated reviewer: keep its last entry.
     | group_by(.step) | map(last) as $entries
-  | [ $entries[] | . as $e | reviewers[$e.step] as $r | ($e | parsed) as $out
+  | [ $entries[] | . as $e | reviewers[$e.step] as $r | ($e | review_out) as $out
       | {
           step: $e.step, name: $r.name, labels: $r.labels, out: $out,
           marker_blocks: (($e.markers // []) | index("has_review_issues") != null)
@@ -94,13 +102,23 @@ if ! result=$(jq -c '
 
   # Replies that answered a finding (review-reply-check), matched by reviewer, file and line.
   | ([ $all[] | select(.step == "review-reply-check") ] | last // null | if . == null then [] else (parsed // {} | .answered // []) end) as $answers
+  # Only a reply from someone with write access to the repo (owner, member,
+  # collaborator) or from an app installed on it (a Bot, such as the pipeline
+  # posting triage pushback) can set a finding aside; anyone can comment on a
+  # public PR.
+  | ([ $all[] | select(.step == "fetch-pr-replies") ] | last // null
+     | if . == null then [] else ((parsed // {}) | .replies // []) end
+     | [ .[]? | objects
+         | select(((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")) or .author_type == "Bot")
+         | .author ] | unique) as $trusted
   # review-reply-check names the reviewer by step name; accept the display name too.
   | [ $blocking_all[] | . as $b
       | ([ reviewers | to_entries[] | select(.value.name == $b.reviewer) | .key ] | first // "") as $b_step
       | ([ $answers[]? | objects
            | select(((.reviewer // "") | IN($b.reviewer, $b_step)) and ((.file // "") | tostring) == $b.file
                     and (((.line // 0) | tonumber? // 0)) == $b.line) ] | first) as $a
-      | if $a != null and $b.reviewer != "Security"
+      | if $a != null and $b.reviewer != "Security" and $b.severity != "critical"
+           and ((($a.answered_by // "") | tostring) | IN($trusted[]))
         then $b + {answered: true, answered_by: (($a.answered_by // "") | tostring), reply: (($a.reply // "") | tostring)}
         else $b + {answered: false} end
     ] as $marked

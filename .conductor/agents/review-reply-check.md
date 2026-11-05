@@ -20,6 +20,8 @@ A reply answers a finding when it is about the same file and the same concern (a
 
 Never list:
 - findings from the Security reviewer (`review-security`); they block until fixed;
+- `critical` findings; they block until fixed;
+- answers from a reply whose `author_association` isn't `OWNER`, `MEMBER` or `COLLABORATOR` and whose `author_type` isn't `Bot` (the script ignores those anyway);
 - findings whose message explains why the earlier answer doesn't hold.
 
 When unsure, leave the finding out: it stays blocking.
