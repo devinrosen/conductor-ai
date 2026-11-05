@@ -480,37 +480,21 @@ pub fn list_workflow_runs_by_repo_id_filtered(
     } else {
         ACTIVE_WORKTREE_GUARD
     };
-    if let Some(s) = status {
-        let status_str = s.to_string();
-        query_collect(
-            conn,
-            &format!(
-                "SELECT workflow_runs.* \
-                     FROM workflow_runs \
-                     LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                     WHERE workflow_runs.repo_id = :repo_id \
-                       AND ({guard}) \
-                       AND workflow_runs.status = :status \
-                     ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
-            ),
-            named_params! { ":repo_id": repo_id, ":status": status_str, ":limit": limit as i64, ":offset": offset as i64 },
-            row_to_conductor_run,
-        )
-    } else {
-        query_collect(
-            conn,
-            &format!(
-                "SELECT workflow_runs.* \
-                     FROM workflow_runs \
-                     LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                     WHERE workflow_runs.repo_id = :repo_id \
-                       AND ({guard}) \
-                     ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
-            ),
-            named_params! { ":repo_id": repo_id, ":limit": limit as i64, ":offset": offset as i64 },
-            row_to_conductor_run,
-        )
-    }
+    let status_str = status.map(|s| s.to_string());
+    query_collect(
+        conn,
+        &format!(
+            "SELECT workflow_runs.* \
+                 FROM workflow_runs \
+                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                 WHERE workflow_runs.repo_id = :repo_id \
+                   AND ({guard}) \
+                   AND (:status IS NULL OR workflow_runs.status = :status) \
+                 ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
+        ),
+        named_params! { ":repo_id": repo_id, ":status": status_str, ":limit": limit as i64, ":offset": offset as i64 },
+        row_to_conductor_run,
+    )
 }
 
 /// Like `list_workflow_runs_filtered` but with explicit limit and offset for pagination.
@@ -615,35 +599,20 @@ pub fn list_all_workflow_runs_filtered_paginated(
     } else {
         ACTIVE_WORKTREE_GUARD
     };
-    if let Some(s) = status {
-        let status_str = s.to_string();
-        query_collect(
-            conn,
-            &format!(
-                "SELECT workflow_runs.* \
-                     FROM workflow_runs \
-                     LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                     WHERE ({guard}) \
-                       AND workflow_runs.status = :status \
-                     ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
-            ),
-            named_params! { ":status": status_str, ":limit": limit as i64, ":offset": offset as i64 },
-            row_to_conductor_run,
-        )
-    } else {
-        query_collect(
-            conn,
-            &format!(
-                "SELECT workflow_runs.* \
-                     FROM workflow_runs \
-                     LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                     WHERE {guard} \
-                     ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
-            ),
-            named_params! { ":limit": limit as i64, ":offset": offset as i64 },
-            row_to_conductor_run,
-        )
-    }
+    let status_str = status.map(|s| s.to_string());
+    query_collect(
+        conn,
+        &format!(
+            "SELECT workflow_runs.* \
+                 FROM workflow_runs \
+                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                 WHERE ({guard}) \
+                   AND (:status IS NULL OR workflow_runs.status = :status) \
+                 ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
+        ),
+        named_params! { ":status": status_str, ":limit": limit as i64, ":offset": offset as i64 },
+        row_to_conductor_run,
+    )
 }
 
 /// List recent workflow runs for a specific repo, ordered by started_at DESC.
