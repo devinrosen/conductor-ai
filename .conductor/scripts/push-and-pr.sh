@@ -50,8 +50,9 @@ pr_title=$(git log --reverse --no-merges --format=%s "origin/$base..HEAD" | sed 
 # summary and risks, and implement's own summary of what it changed
 # (implement-ticket's in quick-fix-pr, which has no plan). PRIOR_CONTEXTS is
 # the engine's {{prior_contexts}} JSON array of {step, context,
-# structured_output, ...}. The first implement entry describes the change;
-# later ones are verify-loopback fixes. Without usable contexts, fall back to
+# structured_output, ...}, one entry per completed step in run order (the
+# engine appends, so a repeated name keeps every occurrence). The first
+# implement entry describes the change; later ones are verify-loopback fixes. Without usable contexts, fall back to
 # --fill (the commits' bodies), as before.
 build_pr_body() {
   local contexts="${PRIOR_CONTEXTS:-}"
@@ -74,13 +75,19 @@ build_pr_body() {
   '
 }
 
+# Warn (never fail) when the contexts can't be read, separately from the
+# expected case of a workflow with no plan or implement step.
 pr_body=""
-if ! pr_body=$(build_pr_body 2>/dev/null); then
+pr_body_err=$(mktemp)
+if ! pr_body=$(build_pr_body 2>"$pr_body_err"); then
   pr_body=""
+  if [ -s "$pr_body_err" ]; then
+    echo "WARNING: could not parse PRIOR_CONTEXTS ($(head -c 300 "$pr_body_err")); using the commit bodies for the PR description" >&2
+  fi
+elif [ -z "$pr_body" ]; then
+  echo "WARNING: no plan or implement summary in PRIOR_CONTEXTS; using the commit bodies for the PR description" >&2
 fi
-if [ -z "$pr_body" ] && [ -n "${PRIOR_CONTEXTS:-}" ] && [[ "${PRIOR_CONTEXTS}" != *"{{"* ]]; then
-  echo "WARNING: no plan or implement summary found in PRIOR_CONTEXTS; using the commit bodies for the PR description" >&2
-fi
+rm -f "$pr_body_err"
 
 pr_body_file=$(mktemp)
 trap 'rm -f "$pr_body_file"' EXIT
