@@ -884,7 +884,11 @@ pub fn render_run_stats(
     } else {
         Some(collect_run_stats(conn, compare_ids)?)
     };
-    let json_err = |e: serde_json::Error| ConductorError::InvalidInput(e.to_string());
+    let json_err = |e: serde_json::Error| {
+        ConductorError::Workflow(format!(
+            "failed to serialize run-stats JSON for runs {run_ids:?} (compare {compare_ids:?}): {e}"
+        ))
+    };
     Ok(match (other, json) {
         (Some(o), true) => serde_json::to_string_pretty(&serde_json::json!({
             "run": stats,
