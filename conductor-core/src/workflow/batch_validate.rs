@@ -612,7 +612,14 @@ pub fn validate_template_sources(
                 });
             }
             let report = validate_workflow_semantics(def, &loader, &ctx);
-            errors.extend(report.errors);
+            // A template may call sub-workflows that live in the repo it is
+            // instantiated into, so an unresolved one is not an error here.
+            errors.extend(
+                report
+                    .errors
+                    .into_iter()
+                    .filter(|e| !e.message.starts_with("Sub-workflow '")),
+            );
             let mut warnings: Vec<BatchValidationWarning> = report
                 .warnings
                 .into_iter()
@@ -1161,9 +1168,9 @@ mod tests {
             meta { trigger = "manual" targets = ["worktree"] }
             inputs { declared }
             script emit { run = ".conductor/scripts/emit.sh" }
-            script use {
+            script consume {
                 run = ".conductor/scripts/emit.sh"
-                env = { A = "{{nope}}", B = "{{declared}}", C = "{{prior_context}}", D = "{{exported_key}}", E = "{{emit.thing}}", F = "{{ticket_id}}" }
+                env = { A = "{{nope}}" B = "{{declared}}" C = "{{prior_context}}" D = "{{exported_key}}" E = "{{emit.thing}}" F = "{{ticket_id}}" }
             }
             call helper {}
         }"#;
