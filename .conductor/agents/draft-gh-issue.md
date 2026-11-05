@@ -74,7 +74,7 @@ User's initial idea: {{rough_idea}}
 
 ## Output
 
-Format your final output as:
+First print the draft as text so the reviewer at the gate can read it:
 
 ```
 ## Issue Draft
@@ -88,12 +88,4 @@ Format your final output as:
 <full issue body in markdown>
 ```
 
-Then emit the flow output block:
-
-```
-<<<FLOW_OUTPUT>>>
-{"markers": [], "context": "Draft issue: <title>\nLabels: <labels>\nAssignee: <assignee>\nBody:\n<full body>"}
-<<<END_FLOW_OUTPUT>>>
-```
-
-Include the complete draft in the `context` field so the next step can create the issue from it.
+Then emit structured output matching the `gh-issue-draft` schema: `title`, `labels` (an array of existing label names, empty for none), `assignee` (omit when unassigned), `body` (the complete markdown body) and a one-line `context`. The next step creates the issue from these fields, so put the complete body in `body`.

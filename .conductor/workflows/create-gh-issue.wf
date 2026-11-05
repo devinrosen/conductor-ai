@@ -11,7 +11,7 @@ workflow create-gh-issue {
     rough_idea required
   }
 
-  call draft-gh-issue
+  call draft-gh-issue { output = "gh-issue-draft" }
 
   gate human_review {
     prompt     = "Review the drafted issue above. Approve to create it, or reject with feedback to revise."
@@ -21,9 +21,12 @@ workflow create-gh-issue {
 
   script create-gh-issue {
     run = ".conductor/scripts/create-gh-issue.sh"
+    // prior_output is draft-gh-issue's structured output (the gate has none).
+    // The script resolves owner/name itself; the repo variable is the
+    // conductor slug, which gh --repo can't use (#3253).
     env = {
       PRIOR_OUTPUT = "{{prior_output}}"
-      REPO         = "{{repo}}"
+      DRY_RUN      = "{{dry_run}}"
     }
   }
 }

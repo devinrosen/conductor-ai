@@ -1,0 +1,17 @@
+fields:
+  title:
+    type: string
+    desc: "Issue title, under 80 characters"
+  labels:
+    type: array
+    desc: "Labels to apply; each must already exist in the repo. Empty for none."
+    items: string
+  assignee?:
+    type: string
+    desc: "GitHub login to assign; omit for unassigned"
+  body:
+    type: string
+    desc: "The full issue body in markdown"
+  context:
+    type: string
+    desc: "One line for the run log: the title and labels"
