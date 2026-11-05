@@ -139,13 +139,17 @@ impl ActionExecutor for SmokeStopActionExecutor {
 }
 
 /// Wraps a real gate resolver for a smoke run. It reports the same gate type,
-/// so engine validation is unchanged, but polling it never approves anything:
-/// it records the stop, marks the run cancelled and answers `Pending`, so the
-/// engine's gate loop sees the cancellation and ends the run.
+/// so engine validation is unchanged. A smoke run is an engine dry run, which
+/// auto-approves gates without polling, so this is a safeguard: if the engine
+/// does poll, the first poll records the stop and cancels the run (once), and
+/// every poll answers `Pending`, never approving anything.
 pub(crate) struct SmokeStopGateResolver<R> {
     inner: R,
     smoke: SmokeStop,
     db_path: std::path::PathBuf,
+    /// Set after the first poll cancels the run, so later polls (if the engine
+    /// polls again before it sees the cancellation) don't reopen the database.
+    cancelled: std::sync::atomic::AtomicBool,
 }
 
 impl<R: GateResolver> SmokeStopGateResolver<R> {
@@ -154,6 +158,7 @@ impl<R: GateResolver> SmokeStopGateResolver<R> {
             inner,
             smoke,
             db_path,
+            cancelled: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -169,6 +174,12 @@ impl<R: GateResolver> GateResolver for SmokeStopGateResolver<R> {
         params: &GateParams,
         ctx: &dyn RunContext,
     ) -> Result<GatePoll, EngineError> {
+        if self
+            .cancelled
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(GatePoll::Pending);
+        }
         let point = self
             .smoke
             .record_at(ctx, &params.gate_name, SmokeStopKind::Gate);
@@ -399,9 +410,7 @@ mod tests {
         .clone()
     }
 
-    fn status_of(conn: &rusqlite::Connection, id: &str) -> Option<String> {
-        crate::workflow::get_workflow_run_status(conn, id).unwrap()
-    }
+    use crate::workflow::tests::run_status_of as status_of;
 
     #[test]
     fn ensure_cancelled_returns_ok_when_already_cancelled() {

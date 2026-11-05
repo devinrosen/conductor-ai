@@ -29,3 +29,8 @@ pub(super) use crate::workflow::{
 pub(super) use common::*;
 pub(super) use runkon_flow_executors::output::interpret_agent_output;
 pub(super) use std::collections::HashMap;
+
+/// A run's status as stored, for tests (shared by the smoke tests, #3292).
+pub(crate) fn run_status_of(conn: &rusqlite::Connection, run_id: &str) -> Option<String> {
+    crate::workflow::get_workflow_run_status(conn, run_id).expect("read run status")
+}

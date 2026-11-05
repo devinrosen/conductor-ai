@@ -99,9 +99,7 @@ fn params(
 
 fn run_status(f: &Fixture, run_id: &str) -> String {
     let conn = crate::db::open_database(&f.db_path).unwrap();
-    crate::workflow::get_workflow_run_status(&conn, run_id)
-        .unwrap()
-        .expect("run row")
+    super::run_status_of(&conn, run_id).expect("run row")
 }
 
 #[test]
