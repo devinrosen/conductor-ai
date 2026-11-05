@@ -303,17 +303,22 @@ REVIEW_BODY="${HEADING}
 # review-pr reads the briefs, scripts, schemas and workflow from the PR's
 # worktree (#3145). Say so, and don't count this review as an approval, so
 # auto-merge (pr_approval, merge-when-ready) waits for a person (#3293).
-# The whole PR is checked, not just an incremental range.
+# The whole PR is checked, not just an incremental range. The check fails
+# closed: if it can't run, the approval is withheld the same way.
 SELF_REVIEW_FILES=""
-if [ -n "${BASE_BRANCH:-}" ] && [[ "${BASE_BRANCH}" != *"{{"* ]]; then
-  if pr_files=$(git diff --name-only "origin/${BASE_BRANCH}...HEAD" 2>/dev/null); then
-    SELF_REVIEW_FILES=$(printf '%s\n' "${pr_files}" | grep -E \
-      '^\.conductor/(agents/review-[^/]*\.md|schemas/review-[^/]*\.yaml|workflows/review-pr\.wf|scripts/(aggregate-reviews|fetch-pr-replies|submit-review|resolve-pr-base|detect-[^/]*|lib-diff-range)\.sh)$' || true)
-  else
-    echo "Warning: could not diff against origin/${BASE_BRANCH}; skipping the review-pipeline check." >&2
-  fi
+SELF_REVIEW_UNCHECKED=""
+if [ -z "${BASE_BRANCH:-}" ] || [[ "${BASE_BRANCH}" == *"{{"* ]]; then
+  SELF_REVIEW_UNCHECKED="BASE_BRANCH is not set"
+elif ! pr_files=$(git diff --name-only "origin/${BASE_BRANCH}...HEAD" 2>"${TMPDIR:-/tmp}/conductor_self_review_diff.err"); then
+  SELF_REVIEW_UNCHECKED="git diff against origin/${BASE_BRANCH} failed: $(head -c 300 "${TMPDIR:-/tmp}/conductor_self_review_diff.err" | tr '\n' ' ')"
+else
+  SELF_REVIEW_FILES=$(printf '%s\n' "${pr_files}" | grep -E \
+    '^\.conductor/(agents/review-[^/]*\.md|schemas/review-[^/]*\.yaml|workflows/review-pr\.wf|scripts/(aggregate-reviews|fetch-pr-replies|submit-review|resolve-pr-base|detect-[^/]*|lib-diff-range|lib-gh-retry)\.sh)$' || true)
 fi
+rm -f "${TMPDIR:-/tmp}/conductor_self_review_diff.err"
+WITHHOLD_APPROVAL="false"
 if [ -n "${SELF_REVIEW_FILES}" ]; then
+  WITHHOLD_APPROVAL="true"
   SELF_REVIEW_LIST=$(printf '%s\n' "${SELF_REVIEW_FILES}" | sed 's/^/- `/; s/$/`/')
   REVIEW_BODY="${REVIEW_BODY}
 
@@ -321,6 +326,13 @@ if [ -n "${SELF_REVIEW_FILES}" ]; then
 > **This PR changes the review pipeline that reviewed it.** These files were read from the PR's own branch, so the changed reviewers produced this review. Check the changes to them by hand. This review is posted as a comment, not an approval, so it can't satisfy an approval gate on its own.
 
 ${SELF_REVIEW_LIST}"
+elif [ -n "${SELF_REVIEW_UNCHECKED}" ]; then
+  WITHHOLD_APPROVAL="true"
+  echo "Warning: couldn't check whether this PR changes the review pipeline (${SELF_REVIEW_UNCHECKED}); withholding approval." >&2
+  REVIEW_BODY="${REVIEW_BODY}
+
+> [!WARNING]
+> **Couldn't check whether this PR changes the review pipeline** (${SELF_REVIEW_UNCHECKED}). This review is posted as a comment, not an approval, until the check can run."
 fi
 
 # Append blocking findings section if any
@@ -391,8 +403,8 @@ fi
 
 # Posting the review is retried on transient gh failures (#3239): one network
 # blip here used to fail the whole run after every reviewer had finished.
-if [ "${OVERALL_APPROVED}" = "true" ] && [ -n "${SELF_REVIEW_FILES}" ]; then
-  echo "PR changes the review pipeline — submitting the approval as a COMMENT review so a person must approve (#3293)…"
+if [ "${OVERALL_APPROVED}" = "true" ] && [ "${WITHHOLD_APPROVAL}" = "true" ]; then
+  echo "Approval withheld (review pipeline changed or unchecked) — submitting a COMMENT review so a person must approve (#3293)…"
   gh_retry gh pr review "${PR_NUMBER}" --comment --body-file "${REVIEW_BODY_FILE}"
 elif [ "${OVERALL_APPROVED}" = "true" ]; then
   echo "Submitting APPROVE review for PR #${PR_NUMBER}…"
