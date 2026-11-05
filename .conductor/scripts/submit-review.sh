@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # submit-review.sh — dismiss stale conductor review, file off-diff issues, submit formal review
 # Called as a script step after review-aggregator. Env vars: PRIOR_OUTPUT, PR_NUMBER, DRY_RUN,
-# FILE_OFF_DIFF ("false" lists off-diff findings in the review body instead of filing issues)
+# FILE_OFF_DIFF ("false" lists off-diff findings in the review body instead of filing issues),
+# BASE_BRANCH (the PR's base; used to detect a PR that changes the review pipeline itself, #3293)
 set -euo pipefail
 
 # shellcheck source=lib-gh-retry.sh
@@ -298,6 +299,30 @@ REVIEW_BODY="${HEADING}
 
 **Reviewed by:** ${REVIEWED_BY}"
 
+# A PR that changes the review pipeline was reviewed by its own changes:
+# review-pr reads the briefs, scripts, schemas and workflow from the PR's
+# worktree (#3145). Say so, and don't count this review as an approval, so
+# auto-merge (pr_approval, merge-when-ready) waits for a person (#3293).
+# The whole PR is checked, not just an incremental range.
+SELF_REVIEW_FILES=""
+if [ -n "${BASE_BRANCH:-}" ] && [[ "${BASE_BRANCH}" != *"{{"* ]]; then
+  if pr_files=$(git diff --name-only "origin/${BASE_BRANCH}...HEAD" 2>/dev/null); then
+    SELF_REVIEW_FILES=$(printf '%s\n' "${pr_files}" | grep -E \
+      '^\.conductor/(agents/review-[^/]*\.md|schemas/review-[^/]*\.yaml|workflows/review-pr\.wf|scripts/(aggregate-reviews|fetch-pr-replies|submit-review|resolve-pr-base|detect-[^/]*|lib-diff-range)\.sh)$' || true)
+  else
+    echo "Warning: could not diff against origin/${BASE_BRANCH}; skipping the review-pipeline check." >&2
+  fi
+fi
+if [ -n "${SELF_REVIEW_FILES}" ]; then
+  SELF_REVIEW_LIST=$(printf '%s\n' "${SELF_REVIEW_FILES}" | sed 's/^/- `/; s/$/`/')
+  REVIEW_BODY="${REVIEW_BODY}
+
+> [!WARNING]
+> **This PR changes the review pipeline that reviewed it.** These files were read from the PR's own branch, so the changed reviewers produced this review. Check the changes to them by hand. This review is posted as a comment, not an approval, so it can't satisfy an approval gate on its own.
+
+${SELF_REVIEW_LIST}"
+fi
+
 # Append blocking findings section if any
 if [ "${HAS_BLOCKING_CHECK}" = "true" ]; then
   BLOCKING_SECTION=$(echo "${PRIOR_OUTPUT}" | jq -r '
@@ -366,7 +391,10 @@ fi
 
 # Posting the review is retried on transient gh failures (#3239): one network
 # blip here used to fail the whole run after every reviewer had finished.
-if [ "${OVERALL_APPROVED}" = "true" ]; then
+if [ "${OVERALL_APPROVED}" = "true" ] && [ -n "${SELF_REVIEW_FILES}" ]; then
+  echo "PR changes the review pipeline — submitting the approval as a COMMENT review so a person must approve (#3293)…"
+  gh_retry gh pr review "${PR_NUMBER}" --comment --body-file "${REVIEW_BODY_FILE}"
+elif [ "${OVERALL_APPROVED}" = "true" ]; then
   echo "Submitting APPROVE review for PR #${PR_NUMBER}…"
   gh_retry gh pr review "${PR_NUMBER}" --approve --body-file "${REVIEW_BODY_FILE}"
 elif [ "${IS_OWN_PR}" = "true" ]; then
