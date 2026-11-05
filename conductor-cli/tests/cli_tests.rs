@@ -993,13 +993,7 @@ fn setup_smoke_fixture(body: &str) -> tempfile::TempDir {
     let script = root.join("scripts").join("quiet.sh");
     std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    std::fs::write(
-        root.join("workflows").join("smoke.wf"),
-        format!(
-            "workflow smoke {{\n  meta {{\n    trigger = \"manual\"\n    targets = [\"worktree\"]\n  }}\n{body}\n}}\n"
-        ),
-    )
-    .unwrap();
+    add_smoke_workflow(dir.path(), "smoke", body);
     dir
 }
 
