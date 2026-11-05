@@ -26,6 +26,22 @@ struct ExecTarget {
     target_label: Option<String>,
 }
 
+impl ExecTarget {
+    fn for_worktree(
+        wt: &conductor_core::worktree::Worktree,
+        r: &conductor_core::repo::Repo,
+    ) -> Self {
+        Self {
+            worktree_id: Some(wt.id.clone()),
+            working_dir: wt.path.clone(),
+            repo_path: r.local_path.clone(),
+            ticket_id: wt.ticket_id.clone(),
+            repo_id: Some(r.id.clone()),
+            target_label: Some(format!("{}/{}", r.slug, wt.slug)),
+        }
+    }
+}
+
 /// The per-run options that vary between standalone run call sites.
 struct ExecOptions {
     model: Option<String>,
@@ -764,14 +780,7 @@ pub fn handle_workflow(
                 let wt_mgr = WorktreeManager::new(conn, config);
                 // SAFETY: guarded by `worktree.is_some()` above
                 let wt = wt_mgr.get_by_slug(&r.id, worktree.as_deref().unwrap())?;
-                smoke_target = Some(ExecTarget {
-                    worktree_id: Some(wt.id.clone()),
-                    working_dir: wt.path.clone(),
-                    repo_path: r.local_path.clone(),
-                    ticket_id: wt.ticket_id.clone(),
-                    repo_id: Some(r.id.clone()),
-                    target_label: Some(format!("{}/{}", r.slug, wt.slug)),
-                });
+                smoke_target = Some(ExecTarget::for_worktree(&wt, &r));
                 (wt.path, r.local_path)
             } else if repo.is_some() || worktree.is_some() {
                 anyhow::bail!(
@@ -794,14 +803,7 @@ pub fn handle_workflow(
                 })?;
                 let repo_mgr = RepoManager::new(conn, config);
                 let r = repo_mgr.get_by_id(&wt.repo_id)?;
-                smoke_target = Some(ExecTarget {
-                    worktree_id: Some(wt.id.clone()),
-                    working_dir: wt.path.clone(),
-                    repo_path: r.local_path.clone(),
-                    ticket_id: wt.ticket_id.clone(),
-                    repo_id: Some(r.id.clone()),
-                    target_label: Some(format!("{}/{}", r.slug, wt.slug)),
-                });
+                smoke_target = Some(ExecTarget::for_worktree(&wt, &r));
                 (wt.path, r.local_path)
             };
 
@@ -1438,7 +1440,7 @@ fn smoke_one(
     base_inputs: &std::collections::HashMap<String, String>,
     skip_unfillable: bool,
 ) -> usize {
-    use conductor_core::workflow::{SmokeResult, SmokeStopKind};
+    use conductor_core::workflow::SmokeResult;
 
     let mut target = target.clone();
     let mut inputs = base_inputs.clone();
@@ -1481,10 +1483,7 @@ fn smoke_one(
         SmokeResult::Passed {
             stopped_at: Some(point),
         } => {
-            let kind = match point.kind {
-                SmokeStopKind::Agent => "agent",
-                SmokeStopKind::Gate => "gate",
-            };
+            let kind = point.kind;
             let child = if point.workflow == workflow.name {
                 String::new()
             } else {

@@ -76,11 +76,15 @@ impl SmokeStop {
     }
 }
 
+impl SmokeStopPoint {
+    /// The cancellation reason recorded on the run for this stop.
+    pub fn reason(&self) -> String {
+        format!("smoke: reached {} step '{}'", self.kind, self.step)
+    }
+}
+
 fn smoke_cancellation(point: &SmokeStopPoint) -> EngineError {
-    EngineError::Cancelled(CancellationReason::UserRequested(Some(format!(
-        "smoke: reached {} step '{}'",
-        point.kind, point.step
-    ))))
+    EngineError::Cancelled(CancellationReason::UserRequested(Some(point.reason())))
 }
 
 /// The catch-all action executor of a smoke run. Every `call` step lands here;
@@ -153,7 +157,7 @@ impl<R: GateResolver> GateResolver for SmokeStopGateResolver<R> {
             kind: SmokeStopKind::Gate,
         };
         self.smoke.record(point.clone());
-        let reason = format!("smoke: reached gate step '{}'", point.step);
+        let reason = point.reason();
         match crate::db::open_database(&self.db_path) {
             Ok(conn) => {
                 if let Err(e) = crate::workflow::cancel_run(&conn, run_id, &reason) {
@@ -221,23 +225,33 @@ fn find_failed_step(conn: &rusqlite::Connection, run_id: &str, depth: u32) -> Op
 
 /// Make sure a smoke run that stopped on purpose ends `cancelled`, whatever
 /// state the engine left it in.
-fn ensure_cancelled(conn: &rusqlite::Connection, run_id: &str, reason: &str) {
+fn ensure_cancelled(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+    reason: &str,
+) -> std::result::Result<(), String> {
     let status = crate::workflow::get_workflow_run_status(conn, run_id)
         .ok()
         .flatten();
     if status.as_deref() == Some("cancelled") {
-        return;
+        return Ok(());
     }
-    if crate::workflow::cancel_run(conn, run_id, reason).is_err() {
+    if let Err(e1) = crate::workflow::cancel_run(conn, run_id, reason) {
         // Terminal already (the engine marked it failed): record the stop anyway.
-        let _ = crate::workflow::update_workflow_status(
+        crate::workflow::update_workflow_status(
             conn,
             run_id,
             WorkflowRunStatus::Cancelled,
             Some(reason),
             None,
-        );
+        )
+        .map_err(|e2| {
+            format!(
+                "failed to cancel smoke run {run_id}: {e1}; fallback status update also failed: {e2}"
+            )
+        })?;
     }
+    Ok(())
 }
 
 /// Run `params` as a smoke run and classify the outcome.
@@ -259,20 +273,31 @@ pub fn smoke_run_workflow(mut params: WorkflowExecStandalone) -> SmokeOutcome {
     let run_id = slot.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let stopped_at = stop.stopped_at();
 
-    let conn = crate::db::open_database(&db_path).ok();
-    let failed_step = |conn: &Option<rusqlite::Connection>| {
-        let (conn, id) = (conn.as_ref()?, run_id.as_deref()?);
+    let conn = crate::db::open_database(&db_path);
+    let failed_step = |conn: &std::result::Result<rusqlite::Connection, _>| {
+        let (conn, id) = (conn.as_ref().ok()?, run_id.as_deref()?);
         find_failed_step(conn, id, 0)
     };
 
     let result = match (run, stopped_at) {
         (Ok(_) | Err(ConductorError::WorkflowCancelled), Some(point)) => {
-            if let (Some(conn), Some(id)) = (conn.as_ref(), run_id.as_deref()) {
-                let reason = format!("smoke: reached {} step '{}'", point.kind, point.step);
-                ensure_cancelled(conn, id, &reason);
-            }
-            SmokeResult::Passed {
-                stopped_at: Some(point),
+            match (conn.as_ref(), run_id.as_deref()) {
+                (Ok(conn), Some(id)) => match ensure_cancelled(conn, id, &point.reason()) {
+                    Ok(()) => SmokeResult::Passed {
+                        stopped_at: Some(point),
+                    },
+                    Err(error) => SmokeResult::Failed {
+                        step: Some(point.step.clone()),
+                        error,
+                    },
+                },
+                (Err(e), _) => SmokeResult::Failed {
+                    step: Some(point.step.clone()),
+                    error: format!("failed to open database at {}: {e}", db_path.display()),
+                },
+                (Ok(_), None) => SmokeResult::Passed {
+                    stopped_at: Some(point),
+                },
             }
         }
         (Ok(result), None) if result.all_succeeded => SmokeResult::Passed { stopped_at: None },
