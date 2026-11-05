@@ -26,7 +26,8 @@ fail() {
   exit 1
 }
 
-if [ -z "$PRIOR_OUTPUT" ] || [[ "$PRIOR_OUTPUT" == *"{{"* ]] \
+# An unsubstituted placeholder isn't valid JSON, so the object check covers it.
+if [ -z "$PRIOR_OUTPUT" ] \
   || ! echo "$PRIOR_OUTPUT" | jq -e 'type == "object"' >/dev/null 2>&1; then
   fail "No structured draft from draft-gh-issue (PRIOR_OUTPUT is empty or not a JSON object)"
 fi
@@ -41,10 +42,14 @@ echo "$PRIOR_OUTPUT" | jq -r '.body // "" | strings' > "$tmp"
 
 ASSIGNEE=$(echo "$PRIOR_OUTPUT" | jq -r '.assignee // "" | strings')
 
+# Capture before looping: a jq failure inside process substitution wouldn't
+# stop the script, and the issue would be filed without its labels.
+LABELS=$(echo "$PRIOR_OUTPUT" | jq -r '(.labels // []) | if type == "array" then .[] | strings else error("labels is not an array") end') \
+  || fail "The draft's labels field is not an array"
 LABEL_ARGS=()
 while IFS= read -r label; do
   [ -n "$label" ] && LABEL_ARGS+=(--label "$label")
-done < <(echo "$PRIOR_OUTPUT" | jq -r '(.labels // [])[] | strings')
+done <<< "$LABELS"
 
 ASSIGNEE_ARGS=()
 if [ -n "$ASSIGNEE" ] && [ "$ASSIGNEE" != "unassigned" ]; then
