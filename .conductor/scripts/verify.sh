@@ -17,6 +17,13 @@
 #
 # Env: FEATURE_BASE_BRANCH (default main). VERIFY_CRATES overrides the crate
 # list (space-separated), for testing.
+#
+# Call sites: ticket-to-pr.wf, iterate-pr.wf and quick-fix-pr.wf call this as
+# `script verify` with FEATURE_BASE_BRANCH = {{feature_base_branch}} (twice in
+# the first two, four times in quick-fix-pr), as does the quick-fix-pr.wft
+# template. A change to the path or env must be made in every one. A shared
+# sub-workflow would hide verify's markers behind the call's name, which the
+# callers' `if verify.has_failures` and fail-verify's resume guidance rely on.
 set -uo pipefail
 
 base="${FEATURE_BASE_BRANCH:-main}"
