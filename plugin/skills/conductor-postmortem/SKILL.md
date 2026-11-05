@@ -15,7 +15,22 @@ The most useful evidence is in this conversation, not only in conductor's databa
 2. Call `conductor_list_runs` (no repo filter, `limit` 50; page with `offset` if needed) and add runs that started during this session but weren't mentioned, for example child runs. Run IDs are ULIDs, so they sort by start time. If you can't tell when the session started, use the earliest run ID from step 1, and say so.
 3. For each top-level run, call `conductor_run_stats` (pass a ticket-to-pr run and its follow-up iterate-pr run together, comma-separated). For failed or resumed runs, also call `conductor_get_run` for the step errors.
 
-Summarize in a table: run, workflow, repo and ticket or PR, outcome, wall time, review rounds, cost. Mark runs that needed a hand fix, a resume, or a stop such as `fail-verify`.
+Summarize in a table: run, workflow, repo and ticket or PR, outcome, wall time, review rounds, blocking findings, cost. Mark runs that needed a hand fix, a resume, or a stop such as `fail-verify`.
+
+Read the numbers from `conductor_run_stats` with `json = true` (or `conductor workflow run-stats <id> --json`). Don't guess paths; these are the fields:
+
+| Column | JSON |
+|---|---|
+| Outcome | `.status` |
+| Wall time | `.wall_ms` |
+| Cost | `.usage.cost_usd` |
+| Agent runs | `.usage.agent_runs` |
+| Review rounds | `.cycles \| length` |
+| Approved | `.cycles[-1].approved` |
+| Rounds to approval | `.cycles_to_approval` (null when never approved) |
+| Blocking findings per round | `.cycles[].blocking_total`, by reviewer in `.cycles[].blocking_by_reviewer` |
+
+Cross-check: a round with `approved: false` should have a non-zero `blocking_total`. If it reads as 0 or null, the path is wrong; look at the raw JSON before filling the table.
 
 If `~/.cache/claude-notify/usage.json` exists, note the current 5-hour and 7-day usage (`rate_limits.five_hour.used_percentage`, `rate_limits.seven_day.used_percentage`). Say if its `seen_at` is stale; don't guess numbers.
 
