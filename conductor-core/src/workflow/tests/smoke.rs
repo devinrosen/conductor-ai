@@ -239,3 +239,19 @@ fn active_run_on_the_worktree_does_not_block_and_is_not_cancelled() {
     assert!(outcome.passed(), "got {:?}", outcome.result);
     assert_eq!(run_status(&f, &active.id), "running");
 }
+
+#[test]
+fn unopenable_database_is_reported_not_swallowed() {
+    let f = fixture();
+    let a = script(&f, "a", false);
+    let def = parse(&format!("script a {{ run = \"{a}\" }}"));
+    let mut p = params(&f, def);
+    p.db_path = Some(f.ws.path().join("no-such-dir/nested/db.sqlite"));
+    let outcome = smoke_run_workflow(p);
+    match outcome.result {
+        SmokeResult::Failed { error, .. } => {
+            assert!(error.contains("failed to open database"), "{error}")
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
+}

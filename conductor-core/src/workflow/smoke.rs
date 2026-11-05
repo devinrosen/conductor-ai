@@ -274,9 +274,21 @@ pub fn smoke_run_workflow(mut params: WorkflowExecStandalone) -> SmokeOutcome {
     let stopped_at = stop.stopped_at();
 
     let conn = crate::db::open_database(&db_path);
-    let failed_step = |conn: &std::result::Result<rusqlite::Connection, _>| {
-        let (conn, id) = (conn.as_ref().ok()?, run_id.as_deref()?);
-        find_failed_step(conn, id, 0)
+    // A failure outside a smoke stop: look up the failing step, and when the
+    // database can't be opened say so instead of silently dropping the step.
+    let fail = |error: String| match (&conn, run_id.as_deref()) {
+        (Ok(conn), Some(id)) => SmokeResult::Failed {
+            step: find_failed_step(conn, id, 0),
+            error,
+        },
+        (Ok(_), None) => SmokeResult::Failed { step: None, error },
+        (Err(e), _) => SmokeResult::Failed {
+            step: None,
+            error: format!(
+                "{error}; failing step lookup skipped: failed to open database at {}: {e}",
+                db_path.display()
+            ),
+        },
     };
 
     let result = match (run, stopped_at) {
@@ -301,18 +313,11 @@ pub fn smoke_run_workflow(mut params: WorkflowExecStandalone) -> SmokeOutcome {
             }
         }
         (Ok(result), None) if result.all_succeeded => SmokeResult::Passed { stopped_at: None },
-        (Ok(_), None) => SmokeResult::Failed {
-            step: failed_step(&conn),
-            error: format!("workflow '{workflow_name}' did not succeed"),
-        },
-        (Err(ConductorError::WorkflowCancelled), None) => SmokeResult::Failed {
-            step: failed_step(&conn),
-            error: format!("workflow '{workflow_name}' was cancelled before an agent or gate step"),
-        },
-        (Err(e), _) => SmokeResult::Failed {
-            step: failed_step(&conn),
-            error: e.to_string(),
-        },
+        (Ok(_), None) => fail(format!("workflow '{workflow_name}' did not succeed")),
+        (Err(ConductorError::WorkflowCancelled), None) => fail(format!(
+            "workflow '{workflow_name}' was cancelled before an agent or gate step"
+        )),
+        (Err(e), _) => fail(e.to_string()),
     };
     SmokeOutcome { run_id, result }
 }
@@ -342,6 +347,101 @@ mod tests {
     fn stop_kind_displays_lowercase() {
         assert_eq!(SmokeStopKind::Agent.to_string(), "agent");
         assert_eq!(SmokeStopKind::Gate.to_string(), "gate");
+    }
+
+    #[test]
+    fn reason_names_kind_and_step() {
+        assert_eq!(
+            point("x", SmokeStopKind::Agent).reason(),
+            "smoke: reached agent step 'x'"
+        );
+        assert_eq!(
+            point("g", SmokeStopKind::Gate).reason(),
+            "smoke: reached gate step 'g'"
+        );
+    }
+
+    fn new_run(conn: &rusqlite::Connection) -> String {
+        let parent = crate::agent::AgentManager::new(conn)
+            .create_run(Some("w1"), "workflow", None)
+            .unwrap();
+        crate::workflow::create_workflow_run(
+            conn,
+            "wf",
+            Some("w1"),
+            &parent.id,
+            false,
+            "manual",
+            None,
+        )
+        .unwrap()
+        .id
+        .clone()
+    }
+
+    #[test]
+    fn ensure_cancelled_returns_ok_when_already_cancelled() {
+        let conn = crate::test_helpers::setup_db();
+        let id = new_run(&conn);
+        crate::workflow::update_workflow_status(
+            &conn,
+            &id,
+            WorkflowRunStatus::Cancelled,
+            Some("earlier"),
+            None,
+        )
+        .unwrap();
+        assert!(ensure_cancelled(&conn, &id, "smoke").is_ok());
+        assert_eq!(
+            crate::workflow::get_workflow_run_status(&conn, &id)
+                .unwrap()
+                .as_deref(),
+            Some("cancelled")
+        );
+    }
+
+    #[test]
+    fn ensure_cancelled_cancels_a_running_run() {
+        let conn = crate::test_helpers::setup_db();
+        let id = new_run(&conn);
+        ensure_cancelled(&conn, &id, "smoke").unwrap();
+        assert_eq!(
+            crate::workflow::get_workflow_run_status(&conn, &id)
+                .unwrap()
+                .as_deref(),
+            Some("cancelled")
+        );
+    }
+
+    #[test]
+    fn ensure_cancelled_falls_back_for_a_failed_run() {
+        let conn = crate::test_helpers::setup_db();
+        let id = new_run(&conn);
+        crate::workflow::update_workflow_status(
+            &conn,
+            &id,
+            WorkflowRunStatus::Failed,
+            None,
+            Some("boom"),
+        )
+        .unwrap();
+        ensure_cancelled(&conn, &id, "smoke").unwrap();
+        assert_eq!(
+            crate::workflow::get_workflow_run_status(&conn, &id)
+                .unwrap()
+                .as_deref(),
+            Some("cancelled")
+        );
+    }
+
+    #[test]
+    fn ensure_cancelled_errors_when_both_updates_fail() {
+        let conn = crate::test_helpers::setup_db();
+        let id = new_run(&conn);
+        conn.execute_batch("PRAGMA foreign_keys = OFF; DROP TABLE workflow_runs;")
+            .unwrap();
+        let err = ensure_cancelled(&conn, &id, "smoke").unwrap_err();
+        assert!(err.contains("failed to cancel smoke run"), "{err}");
     }
 
     #[test]
