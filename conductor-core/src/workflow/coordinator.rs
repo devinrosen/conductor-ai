@@ -473,12 +473,14 @@ pub(crate) fn build_validation_engine() -> Result<runkon_flow::FlowEngine> {
         &db,
         "validate".to_string(),
     )
-    .action_fallback(Box::new(super::runkon_bridge::RkActionExecutorAdapter::new(
-        config.clone(),
-        Arc::clone(&conn),
-        db,
-        None,
-    )))
+    .action_fallback(Box::new(
+        super::runkon_bridge::RkActionExecutorAdapter::new(
+            config.clone(),
+            Arc::clone(&conn),
+            db,
+            None,
+        ),
+    ))
     .map_err(wrap)?;
     super::runkon_bridge::with_rk_item_providers(builder, conn, &config, None)
         .build()

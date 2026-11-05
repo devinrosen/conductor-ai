@@ -401,7 +401,8 @@ where
     };
 
     // The engine a run validates against, built once for the batch.
-    let validation_engine = super::coordinator::build_validation_engine().map_err(|e| e.to_string());
+    let validation_engine =
+        super::coordinator::build_validation_engine().map_err(|e| e.to_string());
 
     let mut entries = Vec::new();
     for (workflow, wf_refs) in workflows.iter().zip(per_wf_refs.iter()) {
@@ -1001,11 +1002,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let entry = run_batch(dir.path(), gate_wf("bogus_gate", r#"prompt = "x""#));
         assert!(
-            entry
-                .errors
-                .iter()
-                .any(|e| e.message.contains("bogus_gate")
-                    && e.message.contains("no registered GateResolver")),
+            entry.errors.iter().any(|e| e.message.contains("bogus_gate")
+                && e.message.contains("no registered GateResolver")),
             "expected unknown gate error naming the gate, got: {:?}",
             entry.errors
         );
@@ -1032,7 +1030,11 @@ mod tests {
     #[test]
     fn batch_call_passes_registry_check() {
         let dir = tempfile::tempdir().unwrap();
-        write_file(dir.path(), ".conductor/agents/helper.md", "---\nrole: actor\n---\nDo it.\n");
+        write_file(
+            dir.path(),
+            ".conductor/agents/helper.md",
+            "---\nrole: actor\n---\nDo it.\n",
+        );
         let wf = parse_wf(
             r#"workflow call-test {
                 meta { trigger = "manual" targets = ["worktree"] }
@@ -1059,7 +1061,10 @@ mod tests {
         );
         let entry = run_batch(dir.path(), wf);
         assert!(
-            !entry.errors.iter().any(|e| e.message.contains("missing agent")),
+            !entry
+                .errors
+                .iter()
+                .any(|e| e.message.contains("missing agent")),
             "got: {:?}",
             entry.errors
         );
@@ -1068,7 +1073,11 @@ mod tests {
     #[test]
     fn batch_workflow_local_schema_resolves() {
         let dir = tempfile::tempdir().unwrap();
-        write_file(dir.path(), ".conductor/agents/helper.md", "---\nrole: actor\n---\nDo it.\n");
+        write_file(
+            dir.path(),
+            ".conductor/agents/helper.md",
+            "---\nrole: actor\n---\nDo it.\n",
+        );
         write_file(
             dir.path(),
             ".conductor/workflows/local-schema/schemas/only-here.yaml",
@@ -1108,7 +1117,11 @@ mod tests {
     #[test]
     fn batch_non_executable_script_fails() {
         let dir = tempfile::tempdir().unwrap();
-        write_file(dir.path(), ".conductor/scripts/plain.sh", "#!/bin/sh\necho hi\n");
+        write_file(
+            dir.path(),
+            ".conductor/scripts/plain.sh",
+            "#!/bin/sh\necho hi\n",
+        );
         let file = dir.path().join(".conductor/scripts/plain.sh");
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1122,7 +1135,10 @@ mod tests {
         );
         let entry = run_batch(dir.path(), wf);
         assert!(
-            entry.errors.iter().any(|e| e.message.contains("not executable")),
+            entry
+                .errors
+                .iter()
+                .any(|e| e.message.contains("not executable")),
             "got: {:?}",
             entry.errors
         );
@@ -1157,15 +1173,28 @@ mod tests {
         let entry = run_batch(dir.path(), wf);
         assert!(entry.errors.is_empty(), "got: {:?}", entry.errors);
         let msgs: Vec<&str> = entry.warnings.iter().map(|w| w.message.as_str()).collect();
-        assert!(msgs.iter().any(|m| m.contains("'{{nope}}'")), "got: {msgs:?}");
+        assert!(
+            msgs.iter().any(|m| m.contains("'{{nope}}'")),
+            "got: {msgs:?}"
+        );
         assert!(
             msgs.iter()
                 .any(|m| m.contains("'{{bogus}}'") && m.contains("agent helper")),
             "brief variable should warn: {msgs:?}"
         );
-        for known in ["declared", "prior_context", "exported_key", "emit.thing", "ticket_id", "#if", "/if"] {
+        for known in [
+            "declared",
+            "prior_context",
+            "exported_key",
+            "emit.thing",
+            "ticket_id",
+            "#if",
+            "/if",
+        ] {
             assert!(
-                !msgs.iter().any(|m| m.contains(&format!("'{{{{{known}}}}}'"))),
+                !msgs
+                    .iter()
+                    .any(|m| m.contains(&format!("'{{{{{known}}}}}'"))),
                 "{known} must not warn: {msgs:?}"
             );
         }
@@ -1174,9 +1203,7 @@ mod tests {
     fn template_source(name: &str, body: &str) -> (String, String) {
         (
             format!("{name}.wft"),
-            format!(
-                "---\nname: {name}\ndescription: test\nversion: \"1.0.0\"\n---\n{body}\n"
-            ),
+            format!("---\nname: {name}\ndescription: test\nversion: \"1.0.0\"\n---\n{body}\n"),
         )
     }
 
