@@ -22,22 +22,31 @@ workflow review-pr {
     run     = ".conductor/scripts/resolve-pr-base.sh"
     retries = 1
   }
+  // The detect steps decide which conditional reviewers run. An incremental
+  // review (scope + since) decides from the commits since the last review,
+  // not the whole PR (#3252).
   script detect-db-migrations {
     run = ".conductor/scripts/detect-db-migrations.sh"
     env = {
       BASE_BRANCH = "{{base_branch}}"
+      SCOPE       = "{{scope}}"
+      SINCE       = "{{since}}"
     }
   }
   script detect-file-types {
     run = ".conductor/scripts/detect-file-types.sh"
     env = {
       BASE_BRANCH = "{{base_branch}}"
+      SCOPE       = "{{scope}}"
+      SINCE       = "{{since}}"
     }
   }
   script detect-workflow-changes {
     run = ".conductor/scripts/detect-workflow-changes.sh"
     env = {
       BASE_BRANCH = "{{base_branch}}"
+      SCOPE       = "{{scope}}"
+      SINCE       = "{{since}}"
     }
   }
 
