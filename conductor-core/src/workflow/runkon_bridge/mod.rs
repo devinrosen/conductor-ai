@@ -121,6 +121,34 @@ pub(super) fn build_rk_item_provider_registry(
     registry
 }
 
+/// Register the four built-in item providers on an engine builder.
+///
+/// Must list the same providers as [`build_rk_item_provider_registry`]; the
+/// validation engine uses this one because a builder owns its own registry.
+pub(super) fn with_rk_item_providers(
+    builder: runkon_flow::FlowEngineBuilder,
+    conn: Arc<Mutex<rusqlite::Connection>>,
+    config: &crate::config::Config,
+    repo_id: Option<String>,
+) -> runkon_flow::FlowEngineBuilder {
+    builder
+        .item_provider(RkTicketsItemProvider::new(
+            Arc::clone(&conn),
+            config.clone(),
+            repo_id.clone(),
+        ))
+        .item_provider(RkReposItemProvider::new(Arc::clone(&conn), config.clone()))
+        .item_provider(RkWorkflowRunsItemProvider::new(
+            Arc::clone(&conn),
+            config.clone(),
+        ))
+        .item_provider(RkWorktreesItemProvider::new(
+            Arc::clone(&conn),
+            config.clone(),
+            repo_id,
+        ))
+}
+
 /// Build a `ScriptEnvProvider` for use with runkon-flow.
 ///
 /// Uses `ConductorScriptEnvProvider` so that script steps inherit:
