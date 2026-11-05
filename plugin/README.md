@@ -33,15 +33,16 @@ The wrapper always exits 0 with no output. Set `CONDUCTOR_SESSION_HOOK_DEBUG=1` 
 
 ## Skills
 
-- **`/session-postmortem`** (#3247): at the end of a session, reviews the session's conductor
+- **`/conductor-postmortem`** (#3247): at the end of a session, reviews the session's conductor
   runs (`conductor_list_runs`, `conductor_run_stats`) and the conversation for workflow-engine
   and pipeline bugs and improvements. It drafts issues with evidence, routes runkon engine
   findings to `runkon/runkon`, checks for duplicates, and files only the drafts you approve.
-  It needs the conductor MCP server and an authenticated `gh`.
+  It needs the conductor MCP server and an authenticated `gh`. It is not a general session retro;
+  for that, use the `session` plugin's `/postmortem`.
 
 ## Scope
 
-Session hooks and the `session-postmortem` skill. The MCP server is still registered by
+Session hooks and the `conductor-postmortem` skill. The MCP server is still registered by
 `conductor setup install`, and the workflow authoring skills (`conductor-workflow-create`,
 `conductor-workflow-update`) stay project-scoped.
 

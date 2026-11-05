@@ -5,7 +5,7 @@
   "plugins": [
     {
       "name": "conductor",
-      "description": "Report interactive Claude Code sessions in conductor worktrees to conductor (RFC 021), and review a session's workflow runs with /session-postmortem",
+      "description": "Report interactive Claude Code sessions in conductor worktrees to conductor (RFC 021), and review a session's workflow runs with /conductor-postmortem",
       "source": "./plugin"
     }
   ]
