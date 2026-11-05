@@ -117,6 +117,25 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
             child_run.id
         };
 
+        let result = self.run_attempt(ctx, info, params, child_run_id.clone());
+
+        // Add this attempt's usage onto the step row on every exit path: a failed
+        // attempt still cost tokens. Runs after `persist_corrected_run_metrics`
+        // (inside `run_attempt`), so the agent run row holds the correction totals.
+        record_step_usage(&self.conn, &info.step_id, &params.name, &child_run_id);
+        result
+    }
+}
+
+impl RkActionExecutorAdapter {
+    /// Run one agent attempt against the pre-created `child_run_id` agent run.
+    fn run_attempt(
+        &self,
+        ctx: &dyn runkon_flow::traits::run_context::RunContext,
+        info: &runkon_flow::traits::action_executor::StepInfo,
+        params: &runkon_flow::traits::action_executor::ActionParams,
+        child_run_id: String,
+    ) -> Result<runkon_flow::traits::action_executor::ActionOutput, EngineError> {
         // Build per-step RuntimeOptions — max_turns is step-level so the resolver is fresh per call.
         let options = runkon_runtimes::RuntimeOptions {
             binary_path: crate::agent_runtime::resolve_conductor_bin().into(),
@@ -468,11 +487,38 @@ fn persist_corrected_run_metrics(
     crate::agent::AgentManager::new(conn).set_run_metrics(run_id, &metrics)
 }
 
+/// Add an agent run's usage onto its step row. Best-effort: a DB error or poisoned
+/// lock is logged, never propagated. Does nothing when `step_id` is empty.
+fn record_step_usage(
+    conn: &Mutex<rusqlite::Connection>,
+    step_id: &str,
+    step_name: &str,
+    child_run_id: &str,
+) {
+    if step_id.is_empty() {
+        return;
+    }
+    match conn.lock() {
+        Ok(conn) => {
+            if let Err(e) =
+                crate::workflow::add_step_metrics_from_agent_run(&conn, step_id, child_run_id)
+            {
+                tracing::warn!(
+                    "step '{step_name}' (step_id={step_id}): failed to add usage of run {child_run_id} to the step: {e}",
+                );
+            }
+        }
+        Err(e) => tracing::warn!(
+            "step '{step_name}': db lock poisoned, skipping step usage for run {child_run_id}: {e}",
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         derive_runtime_from_model, headless_resumable_session, persist_corrected_run_metrics,
-        schema_output_missing,
+        record_step_usage, schema_output_missing,
     };
     use runkon_runtimes::config::RuntimeConfig;
     use std::collections::HashMap;
@@ -658,5 +704,71 @@ mod tests {
             headless_resumable_session(&conn, "step", "h1", Some("sess-1".into())),
             None
         );
+    }
+
+    fn usage_db() -> std::sync::Mutex<rusqlite::Connection> {
+        let conn = crate::test_helpers::setup_db();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        conn.execute(
+            "INSERT INTO workflow_run_steps (id, workflow_run_id, step_name, role, status, position) \
+             VALUES ('st1', 'wr', 'impl', 'actor', 'failed', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO agent_runs (id, prompt, status, started_at, cost_usd, num_turns, \
+             input_tokens, output_tokens) VALUES ('ar1', 'p', 'failed', '2026-01-01T00:00:00Z', 0.5, 3, 10, 20)",
+            [],
+        )
+        .unwrap();
+        std::sync::Mutex::new(conn)
+    }
+
+    fn step_tokens(conn: &std::sync::Mutex<rusqlite::Connection>) -> (Option<i64>, Option<f64>) {
+        conn.lock()
+            .unwrap()
+            .query_row(
+                "SELECT input_tokens, cost_usd FROM workflow_run_steps WHERE id='st1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn record_step_usage_copies_usage_even_for_failed_agent_run() {
+        let conn = usage_db();
+        record_step_usage(&conn, "st1", "impl", "ar1");
+        assert_eq!(step_tokens(&conn), (Some(10), Some(0.5)));
+    }
+
+    #[test]
+    fn record_step_usage_empty_step_id_is_noop() {
+        let conn = usage_db();
+        record_step_usage(&conn, "", "impl", "ar1");
+        assert_eq!(step_tokens(&conn), (None, None));
+    }
+
+    #[test]
+    fn record_step_usage_db_error_does_not_panic() {
+        let conn = usage_db();
+        conn.lock()
+            .unwrap()
+            .execute_batch("DROP TABLE agent_runs")
+            .unwrap();
+        record_step_usage(&conn, "st1", "impl", "ar1");
+        assert_eq!(step_tokens(&conn), (None, None));
+    }
+
+    #[test]
+    fn record_step_usage_poisoned_lock_does_not_panic() {
+        let conn = std::sync::Arc::new(usage_db());
+        let c2 = conn.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = c2.lock().unwrap();
+            panic!("poison");
+        })
+        .join();
+        record_step_usage(&conn, "st1", "impl", "ar1");
     }
 }

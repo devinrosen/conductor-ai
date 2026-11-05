@@ -26,7 +26,6 @@ pub(crate) mod wait;
 mod tests;
 
 pub use definitions::InvalidWorkflowEntry;
-pub use steps::StepMetrics;
 
 #[allow(unused_imports)]
 pub(super) use helpers::{row_to_workflow_run, row_to_workflow_step};

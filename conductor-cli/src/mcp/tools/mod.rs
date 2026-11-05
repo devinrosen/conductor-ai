@@ -26,6 +26,7 @@ pub(super) const READ_ONLY_TOOLS: &[&str] = &[
     "conductor_list_runs",
     "conductor_list_agent_runs",
     "conductor_get_step_log",
+    "conductor_run_stats",
     "conductor_list_worktrees",
     "conductor_list_tickets",
     "conductor_get_ready_tickets",
@@ -333,6 +334,34 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
              this context is not available from this tool. \
              Appends a warning when any running conductor process predates its installed binary.",
             schema(&[("run_id", "Workflow run ID", true)]),
+        ),
+        Tool::new(
+            "conductor_run_stats",
+            "Time, review cycles, tokens and cost for a workflow run and its child runs: wall \
+             time per step and per review cycle, blocking findings by reviewer, triage and verify \
+             outcomes, and tokens, cache, cost and turns summed from agent runs. Read-only. \
+             Pass several comma-separated run ids to combine them (e.g. a ticket-to-pr run and \
+             its follow-up iterate-pr run); set compare_run_id to compare against another run.",
+            schema_typed(&[
+                (
+                    "run_id",
+                    "string",
+                    "Workflow run ID; comma-separated IDs are combined into one report",
+                    true,
+                ),
+                (
+                    "compare_run_id",
+                    "string",
+                    "Run ID(s) to compare against, comma-separated",
+                    false,
+                ),
+                (
+                    "json",
+                    "boolean",
+                    "Return JSON instead of the text report",
+                    false,
+                ),
+            ]),
         ),
         Tool::new(
             "conductor_wait_run",
@@ -706,6 +735,7 @@ pub(super) fn dispatch_tool(
         "conductor_submit_agent_feedback" => agents::tool_submit_agent_feedback(conductor, args),
         "conductor_get_worktree" => worktrees::tool_get_worktree(conductor, args),
         "conductor_get_step_log" => runs::tool_get_step_log(conductor, args),
+        "conductor_run_stats" => runs::tool_run_stats(conductor, args),
         "conductor_list_prs" => prs::tool_list_prs(conductor, args),
         "conductor_validate_workflow" => workflows::tool_validate_workflow(conductor, args),
         "conductor_register_repo" => repos::tool_register_repo(conductor, args),

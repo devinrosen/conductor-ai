@@ -572,6 +572,20 @@ pub fn handle_workflow(
                 std::process::exit(code);
             }
         }
+        WorkflowCommands::RunStats {
+            run_ids,
+            compare,
+            json,
+        } => {
+            let text = conductor_core::workflow::run_stats::render_run_stats(
+                conn, &run_ids, &compare, json,
+            )?;
+            if json {
+                println!("{text}");
+            } else {
+                print!("{text}");
+            }
+        }
         WorkflowCommands::StepLog {
             run_id,
             step_name,

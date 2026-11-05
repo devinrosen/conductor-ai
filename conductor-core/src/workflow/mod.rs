@@ -14,6 +14,7 @@ pub(crate) mod engine_error;
 pub mod estimation;
 pub(crate) mod executors;
 pub mod helpers;
+pub mod run_stats;
 pub use helpers::{gate_type_or_name, is_gate_step, is_waiting_gate};
 pub(crate) mod item_provider;
 pub(crate) mod manager;
@@ -118,8 +119,8 @@ pub use manager::recovery::{
 pub(crate) use manager::recovery::count_live_subprocess_steps;
 pub use manager::recovery::terminate_subprocesses;
 pub use manager::steps::{
-    active_step_exists, approve_gate, get_gate_approval_state, insert_step, insert_step_running,
-    mark_step_pending, mark_step_running, mark_step_terminal, mirror_step_metrics_from_run,
+    active_step_exists, add_step_metrics_from_agent_run, approve_gate, get_gate_approval_state,
+    insert_step, insert_step_running, mark_step_pending, mark_step_running, mark_step_terminal,
     predecessor_completed, reject_gate, set_step_gate_info, set_step_gate_options,
     set_step_output_file, set_step_parallel_group, set_step_subprocess_pid,
     update_step_child_run_id, update_step_status, update_step_status_full,
@@ -129,7 +130,7 @@ pub use manager::wait::{
     wait_for_workflow_run_with_progress, WaitOptions, WaitOutcome, WaitProgress, WaitStepSummary,
     WaitSummary,
 };
-pub use manager::{InvalidWorkflowEntry, StepMetrics};
+pub use manager::InvalidWorkflowEntry;
 pub use output::{parse_flow_output, FlowOutput};
 pub use output_excerpt::{
     flow_output_excerpt, is_output_parse_error, step_has_output_error, step_output_error_excerpt,
