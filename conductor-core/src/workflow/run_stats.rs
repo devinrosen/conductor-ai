@@ -254,7 +254,9 @@ fn load_agents_by_parent(conn: &Connection, parent: &str) -> Result<Vec<AgentRow
 }
 
 fn load_agent_by_id(conn: &Connection, id: &str) -> Result<Option<AgentRow>> {
-    let mut stmt = conn.prepare(&format!("SELECT {AGENT_COLS} FROM agent_runs WHERE id = ?1"))?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {AGENT_COLS} FROM agent_runs WHERE id = ?1"
+    ))?;
     let mut rows = stmt.query_map(params![id], row_to_agent)?;
     Ok(rows.next().transpose()?)
 }
@@ -448,8 +450,8 @@ pub fn collect_run_stats(conn: &Connection, root_run_ids: &[String]) -> Result<R
         });
         e.executions += 1;
         e.attempts += 1 + s.retry_count.max(0) as usize;
-        e.wall_ms += ms_between(s.started_at, s.ended_at.or(s.started_at.map(|_| now)))
-            .unwrap_or(0);
+        e.wall_ms +=
+            ms_between(s.started_at, s.ended_at.or(s.started_at.map(|_| now))).unwrap_or(0);
         e.usage.add(&tree.step_usage[i]);
         if let Some(st) = s.started_at {
             e.first_start = Some(e.first_start.map_or(st, |f| f.min(st)));
@@ -502,7 +504,9 @@ pub fn collect_run_stats(conn: &Connection, root_run_ids: &[String]) -> Result<R
                 let iter = tree
                     .steps
                     .iter()
-                    .find(|ps| ps.run_id == p && ps.child_run_id.as_deref() == Some(s.run_id.as_str()))
+                    .find(|ps| {
+                        ps.run_id == p && ps.child_run_id.as_deref() == Some(s.run_id.as_str())
+                    })
                     .map(|ps| ps.iteration)
                     .unwrap_or(0);
                 (p.to_string(), iter)
@@ -544,10 +548,17 @@ pub fn collect_run_stats(conn: &Connection, root_run_ids: &[String]) -> Result<R
         members.sort_unstable();
         members.dedup();
 
-        let start = members.iter().filter_map(|&i| tree.steps[i].started_at).min();
+        let start = members
+            .iter()
+            .filter_map(|&i| tree.steps[i].started_at)
+            .min();
         let end = members
             .iter()
-            .filter_map(|&i| tree.steps[i].ended_at.or(tree.steps[i].started_at.map(|_| now)))
+            .filter_map(|&i| {
+                tree.steps[i]
+                    .ended_at
+                    .or(tree.steps[i].started_at.map(|_| now))
+            })
             .max();
         let mut usage = Usage::default();
         for &i in &members {
@@ -867,7 +878,10 @@ pub fn format_run_stats(s: &RunStats) -> String {
                     fmt_cost(c.usage.cost_usd),
                     fmt_approved(c.approved).into(),
                     format!("{} ({})", c.blocking_total, fmt_blocking(c)),
-                    format!("{}/{}/{}", c.triage.address, c.triage.pushback, c.triage.clarify),
+                    format!(
+                        "{}/{}/{}",
+                        c.triage.address, c.triage.pushback, c.triage.clarify
+                    ),
                     fmt_verify(&c.verify),
                 ]
             })
@@ -901,17 +915,36 @@ fn delta_i(a: i64, b: i64) -> String {
 
 pub fn format_run_stats_compare(a: &RunStats, b: &RunStats) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "A: {} ({})", a.run_ids.join(" + "), a.workflow_names.join(", "));
-    let _ = writeln!(out, "B: {} ({})", b.run_ids.join(" + "), b.workflow_names.join(", "));
+    let _ = writeln!(
+        out,
+        "A: {} ({})",
+        a.run_ids.join(" + "),
+        a.workflow_names.join(", ")
+    );
+    let _ = writeln!(
+        out,
+        "B: {} ({})",
+        b.run_ids.join(" + "),
+        b.workflow_names.join(", ")
+    );
     out.push_str("\nTotals\n");
     let (ua, ub) = (&a.usage, &b.usage);
-    let blocking = |s: &RunStats| s.cycles.iter().map(|c| c.blocking_total as i64).sum::<i64>();
+    let blocking = |s: &RunStats| {
+        s.cycles
+            .iter()
+            .map(|c| c.blocking_total as i64)
+            .sum::<i64>()
+    };
     let rows = vec![
         vec![
             "wall".to_string(),
             fmt_dur(a.wall_ms),
             fmt_dur(b.wall_ms),
-            format!("{}{}", if b.wall_ms >= a.wall_ms { "+" } else { "-" }, fmt_dur((b.wall_ms - a.wall_ms).abs())),
+            format!(
+                "{}{}",
+                if b.wall_ms >= a.wall_ms { "+" } else { "-" },
+                fmt_dur((b.wall_ms - a.wall_ms).abs())
+            ),
         ],
         vec![
             "cost".into(),
@@ -953,7 +986,10 @@ pub fn format_run_stats_compare(a: &RunStats, b: &RunStats) -> String {
             "cache write".into(),
             fmt_tokens(ua.cache_creation_input_tokens),
             fmt_tokens(ub.cache_creation_input_tokens),
-            delta_i(ua.cache_creation_input_tokens, ub.cache_creation_input_tokens),
+            delta_i(
+                ua.cache_creation_input_tokens,
+                ub.cache_creation_input_tokens,
+            ),
         ],
         vec![
             "review cycles".into(),
@@ -1005,7 +1041,9 @@ pub fn format_run_stats_compare(a: &RunStats, b: &RunStats) -> String {
             })
             .collect();
         out.push_str(&table(
-            &["step", "wall A", "wall B", "cost A", "cost B", "out A", "out B"],
+            &[
+                "step", "wall A", "wall B", "cost A", "cost B", "out A", "out B",
+            ],
             &rows,
         ));
     }
@@ -1032,7 +1070,13 @@ mod tests {
         format!("2026-01-01T00:{:02}:00Z", min)
     }
 
-    fn wf_run(conn: &Connection, id: &str, name: &str, parent_agent: &str, parent_wf: Option<&str>) {
+    fn wf_run(
+        conn: &Connection,
+        id: &str,
+        name: &str,
+        parent_agent: &str,
+        parent_wf: Option<&str>,
+    ) {
         conn.execute(
             "INSERT INTO workflow_runs (id, workflow_name, parent_run_id, status, dry_run, \
              trigger, started_at, ended_at, iteration, parent_workflow_run_id) \
@@ -1063,13 +1107,28 @@ mod tests {
         .unwrap();
     }
 
-    fn agent(conn: &Connection, id: &str, parent: &str, step: &str, start: i64, cost: f64, out: i64) {
+    fn agent(
+        conn: &Connection,
+        id: &str,
+        parent: &str,
+        step: &str,
+        start: i64,
+        cost: f64,
+        out: i64,
+    ) {
         conn.execute(
             "INSERT INTO agent_runs (id, prompt, status, started_at, ended_at, parent_run_id, \
              cost_usd, num_turns, input_tokens, output_tokens, cache_read_input_tokens, \
              cache_creation_input_tokens) \
              VALUES (?1, ?2, 'completed', ?3, ?3, ?4, ?5, 2, 10, ?6, 100, 50)",
-            params![id, format!("Workflow step: {step}"), t(start), parent, cost, out],
+            params![
+                id,
+                format!("Workflow step: {step}"),
+                t(start),
+                parent,
+                cost,
+                out
+            ],
         )
         .unwrap();
     }
@@ -1095,17 +1154,77 @@ mod tests {
         step(conn, "s0", "R", "implement", -1, 1, 2, Some("a0"), None);
         agent(conn, "a0", "PA", "implement", 1, 1.0, 100);
         // Cycle 1 (iteration 0)
-        step(conn, "w1", "R", "workflow:review-pr", 0, 3, 10, Some("C1"), None);
-        step(conn, "r1a", "C1", "review-security", 0, 3, 8, Some("ra1"), None);
+        step(
+            conn,
+            "w1",
+            "R",
+            "workflow:review-pr",
+            0,
+            3,
+            10,
+            Some("C1"),
+            None,
+        );
+        step(
+            conn,
+            "r1a",
+            "C1",
+            "review-security",
+            0,
+            3,
+            8,
+            Some("ra1"),
+            None,
+        );
         step(conn, "r1b", "C1", "review-arch", 0, 4, 9, Some("rb1"), None);
-        step(conn, "g1", "C1", "aggregate", 0, 9, 10, None, Some(AGG_BLOCK));
+        step(
+            conn,
+            "g1",
+            "C1",
+            "aggregate",
+            0,
+            9,
+            10,
+            None,
+            Some(AGG_BLOCK),
+        );
         agent(conn, "ra1", "PC1", "review-security", 3, 0.5, 10);
         agent(conn, "rb1", "PC1", "review-arch", 4, 0.5, 10);
         step(conn, "t1", "R", "triage", 0, 11, 12, None, Some(TRIAGE));
-        step(conn, "v1", "R", "verify", 0, 13, 14, None, Some(VERIFY_FAIL));
+        step(
+            conn,
+            "v1",
+            "R",
+            "verify",
+            0,
+            13,
+            14,
+            None,
+            Some(VERIFY_FAIL),
+        );
         // Cycle 2 (iteration 1)
-        step(conn, "w2", "R", "workflow:review-pr", 1, 20, 25, Some("C2"), None);
-        step(conn, "r2a", "C2", "review-security", 0, 20, 24, Some("ra2"), None);
+        step(
+            conn,
+            "w2",
+            "R",
+            "workflow:review-pr",
+            1,
+            20,
+            25,
+            Some("C2"),
+            None,
+        );
+        step(
+            conn,
+            "r2a",
+            "C2",
+            "review-security",
+            0,
+            20,
+            24,
+            Some("ra2"),
+            None,
+        );
         step(conn, "g2", "C2", "aggregate", 0, 24, 25, None, Some(AGG_OK));
         agent(conn, "ra2", "PC2", "review-security", 20, 0.25, 10);
         step(conn, "v2", "R", "verify", 1, 26, 27, None, Some(VERIFY_OK));
@@ -1172,7 +1291,10 @@ mod tests {
             .unwrap();
         assert_eq!(sec.executions, 2);
         assert!((sec.usage.cost_usd - 0.75).abs() < 1e-9);
-        assert!(s.steps.iter().all(|x| !x.step_name.starts_with("workflow:")));
+        assert!(s
+            .steps
+            .iter()
+            .all(|x| !x.step_name.starts_with("workflow:")));
     }
 
     #[test]

@@ -119,8 +119,8 @@ pub use manager::recovery::{
 pub(crate) use manager::recovery::count_live_subprocess_steps;
 pub use manager::recovery::terminate_subprocesses;
 pub use manager::steps::{
-    active_step_exists, add_step_metrics_from_agent_run, approve_gate, get_gate_approval_state, insert_step, insert_step_running,
-    mark_step_pending, mark_step_running, mark_step_terminal,
+    active_step_exists, add_step_metrics_from_agent_run, approve_gate, get_gate_approval_state,
+    insert_step, insert_step_running, mark_step_pending, mark_step_running, mark_step_terminal,
     predecessor_completed, reject_gate, set_step_gate_info, set_step_gate_options,
     set_step_output_file, set_step_parallel_group, set_step_subprocess_pid,
     update_step_child_run_id, update_step_status, update_step_status_full,
