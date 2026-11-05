@@ -220,6 +220,9 @@ pub enum AgentCommands {
         /// Issue body
         #[arg(long)]
         body: String,
+        /// Milestone title to file the issue in (must be an open milestone)
+        #[arg(long)]
+        milestone: Option<String>,
         /// Agent run ID (defaults to $CONDUCTOR_RUN_ID env var)
         #[arg(long)]
         run_id: Option<String>,
@@ -787,4 +790,37 @@ pub enum TicketCommands {
         #[arg(long)]
         agent_map: Option<String>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_issue_milestone(extra: &[&str]) -> Option<String> {
+        let mut argv = vec![
+            "conductor",
+            "agent",
+            "create-issue",
+            "--title",
+            "t",
+            "--body",
+            "b",
+        ];
+        argv.extend_from_slice(extra);
+        match Cli::try_parse_from(argv).unwrap().command {
+            Commands::Agent {
+                command: AgentCommands::CreateIssue { milestone, .. },
+            } => milestone,
+            _ => panic!("expected agent create-issue"),
+        }
+    }
+
+    #[test]
+    fn test_create_issue_milestone_flag() {
+        assert_eq!(create_issue_milestone(&[]), None);
+        assert_eq!(
+            create_issue_milestone(&["--milestone", "0.20.0"]),
+            Some("0.20.0".to_string())
+        );
+    }
 }

@@ -4,6 +4,13 @@ use serde_json::Value;
 
 use crate::mcp::helpers::{get_arg, tool_err, tool_ok};
 
+/// The `\nMilestone: <m>` output suffix, empty when no milestone was requested.
+fn milestone_line(milestone: Option<&str>) -> String {
+    milestone
+        .map(|m| format!("\nMilestone: {m}"))
+        .unwrap_or_default()
+}
+
 pub(super) fn tool_create_gh_issue(
     conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
@@ -22,6 +29,7 @@ pub(super) fn tool_create_gh_issue(
         .filter(|l| !l.is_empty())
         .collect();
     let run_id = get_arg(args, "run_id");
+    let milestone = github::normalize_milestone(get_arg(args, "milestone"));
 
     let conn = &conductor.conn;
     let config = &conductor.config;
@@ -41,11 +49,13 @@ pub(super) fn tool_create_gh_issue(
         }
     };
 
-    let (number, url) =
-        match github::create_github_issue(&owner, &gh_repo, title, body, &labels, None) {
-            Ok(v) => v,
-            Err(e) => return tool_err(format!("Failed to create issue: {e}")),
-        };
+    let (number, url) = match github::create_github_issue(
+        &owner, &gh_repo, title, body, &labels, milestone, None,
+    ) {
+        Ok(v) => v,
+        Err(e) => return tool_err(format!("Failed to create issue: {e}")),
+    };
+    let milestone_line = milestone_line(milestone);
 
     // If run_id is provided, record the created issue for tracking
     if let Some(rid) = run_id {
@@ -55,12 +65,14 @@ pub(super) fn tool_create_gh_issue(
         {
             // Non-fatal: issue was created, but tracking failed
             return tool_ok(format!(
-                "Created issue #{number}: {title}\nURL: {url}\nWarning: failed to record issue link for run {rid}: {e}"
+                "Created issue #{number}: {title}\nURL: {url}{milestone_line}\nWarning: failed to record issue link for run {rid}: {e}"
             ));
         }
     }
 
-    tool_ok(format!("Created issue #{number}: {title}\nURL: {url}"))
+    tool_ok(format!(
+        "Created issue #{number}: {title}\nURL: {url}{milestone_line}"
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -83,6 +95,18 @@ mod tests {
             m.insert(k.to_string(), Value::String(v.to_string()));
         }
         m
+    }
+
+    #[test]
+    fn test_milestone_line() {
+        use conductor_core::github::normalize_milestone;
+        assert_eq!(milestone_line(None), "");
+        assert_eq!(milestone_line(normalize_milestone(Some(""))), "");
+        assert_eq!(milestone_line(normalize_milestone(Some("  "))), "");
+        assert_eq!(
+            milestone_line(normalize_milestone(Some(" 0.20.0 "))),
+            "\nMilestone: 0.20.0"
+        );
     }
 
     #[test]
