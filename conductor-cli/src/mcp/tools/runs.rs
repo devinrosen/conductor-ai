@@ -2,7 +2,9 @@ use conductor_core::Conductor;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, get_arg_usize, get_bool_arg, pagination_hint, tool_err, tool_ok};
+use crate::mcp::helpers::{
+    get_arg, get_arg_usize, get_bool_arg, pagination_hint, tool_err, tool_ok,
+};
 use crate::mcp::resources::{
     format_run_detail_with_log, format_run_summary_line, format_run_summary_line_with_repo,
 };

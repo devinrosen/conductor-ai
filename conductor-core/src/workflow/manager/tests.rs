@@ -810,9 +810,8 @@ fn test_list_all_workflow_runs_filtered_paginated_include_inactive() {
     )
     .unwrap();
 
-    let runs =
-        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 50, 0, true)
-            .unwrap();
+    let runs = crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 50, 0, true)
+        .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
     for r in [&active_run, &merged_run, &abandoned_run] {
         assert!(ids.contains(&r.id.as_str()), "run {} must appear", r.id);
@@ -841,11 +840,9 @@ fn test_list_workflow_runs_by_repo_id_filtered_include_inactive() {
     conn.execute("UPDATE worktrees SET status = 'merged' WHERE id = 'w2'", [])
         .unwrap();
     let repo_id: String = conn
-        .query_row(
-            "SELECT repo_id FROM worktrees WHERE id = 'w2'",
-            [],
-            |r| r.get(0),
-        )
+        .query_row("SELECT repo_id FROM worktrees WHERE id = 'w2'", [], |r| {
+            r.get(0)
+        })
         .unwrap();
 
     for status in [None, Some(WorkflowRunStatus::Pending)] {
