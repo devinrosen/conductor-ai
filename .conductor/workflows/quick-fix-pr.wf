@@ -28,15 +28,17 @@ workflow quick-fix-pr {
   }
 
   // Mechanical breakage (another module's test literals, a crate verify
-  // doesn't test, pending insta snapshots) goes back to implement-ticket with the
+  // doesn't test, pending insta snapshots) goes to fix-precheck with the
   // compiler output or snapshot diffs before verify runs (#3238).
   script precheck-tests {
     run = ".conductor/scripts/precheck-tests.sh"
     env = { FEATURE_BASE_BRANCH = "{{feature_base_branch}}" }
   }
 
+  // A dedicated agent with its own step name: a third implement call would
+  // make resume's occurrence matching and prior_contexts lookups ambiguous.
   if precheck-tests.has_precheck_failures {
-    call implement-ticket {
+    call fix-precheck {
       retries = 1
       as      = "developer"
     }

@@ -25,17 +25,16 @@ emit() {
   echo "<<<END_FLOW_OUTPUT>>>"
 }
 
-# Changed files against the merge base. If the base can't be resolved, run the
-# checks anyway: skipping them would hide breakage, running them only costs time.
-changed=""
-if merge_base=$(git merge-base HEAD "origin/${base}" 2>/dev/null || git merge-base HEAD "${base}" 2>/dev/null); then
-  changed=$(git diff --name-only "${merge_base}" 2>/dev/null; git ls-files --others --exclude-standard)
-  if ! printf '%s\n' "${changed}" | grep -qE '\.rs$|(^|/)Cargo\.(toml|lock)$|(^|/)build\.rs$|\.snap$'; then
-    emit '[]' "PASS: no Rust changes; precheck skipped."
-    exit 0
-  fi
-else
+# Changed files against the merge base. Only a successful diff can skip the
+# checks: if the base or the diff fails, run them anyway, since skipping would
+# hide breakage and running them only costs time.
+if ! merge_base=$(git merge-base HEAD "origin/${base}" 2>/dev/null || git merge-base HEAD "${base}" 2>/dev/null); then
   echo "WARNING: could not find the merge base with ${base}; running the precheck anyway" >&2
+elif ! changed=$(git diff --name-only "${merge_base}") || ! untracked=$(git ls-files --others --exclude-standard); then
+  echo "WARNING: git could not list the changed files; running the precheck anyway" >&2
+elif ! printf '%s\n%s\n' "${changed}" "${untracked}" | grep -qE '\.rs$|(^|/)Cargo\.(toml|lock)$|(^|/)build\.rs$|\.snap$'; then
+  emit '[]' "PASS: no Rust changes; precheck skipped."
+  exit 0
 fi
 
 logs=$(mktemp -d)
@@ -55,7 +54,9 @@ fi
 # --- 2. Pending insta snapshots --------------------------------------------
 # Snapshot files live in <crate>/tests/snapshots/<test binary>__<name>.snap.
 # Clear leftovers from earlier runs first so only this change's are reported.
-find . -name '*.snap.new' -not -path './target/*' -delete 2>/dev/null || true
+if ! find . -name '*.snap.new' -not -path './target/*' -delete; then
+  echo "WARNING: could not delete leftover .snap.new files; any still present will be reported below" >&2
+fi
 while IFS= read -r target; do
   [ -z "${target}" ] && continue
   crate="${target%% *}"
@@ -70,9 +71,23 @@ if [ -n "${pending}" ]; then
   diffs=""
   while IFS= read -r new_file; do
     old_file="${new_file%.new}"
-    diffs="${diffs}
+    if [ -f "${old_file}" ]; then
+      # diff exits 1 when the files differ; 2 means it couldn't compare them.
+      snap_diff=$(diff -u "${old_file}" "${new_file}")
+      diff_status=$?
+      if [ "${diff_status}" -gt 1 ]; then
+        snap_diff="(diff failed with status ${diff_status}; compare ${new_file#./} with ${old_file#./} directly)"
+      else
+        snap_diff=$(printf '%s\n' "${snap_diff}" | tail -n +3 | head -n 40)
+      fi
+      diffs="${diffs}
 --- ${old_file#./}
-$(diff -u "${old_file}" "${new_file}" 2>/dev/null | tail -n +3 | head -n 40)"
+${snap_diff}"
+    else
+      diffs="${diffs}
+--- ${old_file#./} (new snapshot, no .snap yet)
+$(head -n 40 "${new_file}")"
+    fi
   done <<< "${pending}"
   count=$(printf '%s\n' "${pending}" | wc -l | tr -d ' ')
   report="${count} insta snapshot(s) changed. For each, if the new rendering is what the change intends, replace the .snap with the .snap.new (mv); otherwise fix the code. Never commit a .snap.new file.${diffs}"

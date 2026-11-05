@@ -23,12 +23,6 @@ Steps:
 
 Do not create files or make changes beyond what the plan specifies. If you discover the plan is incomplete or incorrect, document the deviation in `PLAN.md` before proceeding.
 
-## Precheck failures
-
-If the prior context starts with `FAIL:` from the precheck (test targets that don't compile, or changed insta snapshots), fix exactly what it lists:
-- **Compile errors:** fix every one, including test code in other modules or crates that builds a type you changed (struct literals missing a new field, changed signatures, help-text tests).
-- **Changed snapshots:** compare each `.snap.new` with its `.snap`. If the new rendering is what the change intends, replace the `.snap` with the `.snap.new` (`mv path.snap.new path.snap`); otherwise fix the code and delete the `.snap.new`. Never commit a `.snap.new` file.
-
 ## Do NOT verify your own work
 
 **Do NOT run `cargo build`, `cargo test`, `cargo nextest`, `cargo clippy`, or `cargo fmt`.** A separate `verify` step (runs automatically after you commit) handles all verification via Task sub-agent delegation, keeping cargo's voluminous output out of your context window. The verify step will loop back to you with a structured failure summary if anything fails — that is where you fix issues, not preemptively here. If `PLAN.md` lists cargo commands as "definition of done", ignore them; verify owns that work now.
