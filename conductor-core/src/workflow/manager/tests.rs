@@ -847,7 +847,7 @@ fn test_list_workflow_runs_by_repo_id_filtered_include_inactive() {
 
     for status in [None, Some(WorkflowRunStatus::Pending)] {
         let hidden = crate::workflow::list_workflow_runs_by_repo_id_filtered(
-            &conn, &repo_id, 50, 0, status, false,
+            &conn, &repo_id, 50, 0, status.clone(), false,
         )
         .unwrap();
         assert!(!hidden.iter().any(|r| r.id == merged_run.id));
