@@ -47,6 +47,7 @@ Prior step context: {{prior_context}}
 
 ### Templates
 - A change to `conductor-core/templates/*.wft` stays consistent with the matching `.conductor/workflows/*.wf`, and its hints describe what the template does.
+- When the diff changes a `.wf` that has a matching `.wft`, or the other way round, compare the changed blocks across the two files: step names and order, conditions and markers, `output` names, `env`, and gate prompt text. Report a difference in behaviour (a missing step, a different marker, a gate prompt that tells the approver something different) as a `warning`. Report a difference only in wording or hints as a `suggestion`. The template is a standalone copy on purpose. Don't ask for one to be generated from the other; the DRY reviewer leaves this check to you.
 
 ## Past misses
 
