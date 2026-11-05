@@ -5,6 +5,7 @@ mod gates;
 mod manager;
 mod output;
 mod resumption;
+mod smoke;
 mod types;
 
 pub(super) fn completed_keys_from_steps(

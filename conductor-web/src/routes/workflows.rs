@@ -540,6 +540,7 @@ pub async fn run_workflow(
             parent_step_id: None,
             default_bot_name: None,
             iteration: 0,
+            smoke: None,
         };
 
         let result = conductor_core::workflow::execute_workflow_standalone(&params);
@@ -781,6 +782,7 @@ pub async fn post_workflow_run(
             target_label: Some(target_label.clone()),
             default_bot_name: None,
             iteration: 0,
+            smoke: None,
             run_id_notify: Some(std::sync::Arc::clone(&run_id_slot)),
             triggered_by_hook: false,
             conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),

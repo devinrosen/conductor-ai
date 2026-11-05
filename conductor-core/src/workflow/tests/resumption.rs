@@ -1474,6 +1474,7 @@ mod child_resume {
             parent_step_id: None,
             default_bot_name: None,
             iteration: 0,
+            smoke: None,
         };
         crate::workflow::execute_workflow_standalone(&params).expect("parent run should start")
     }

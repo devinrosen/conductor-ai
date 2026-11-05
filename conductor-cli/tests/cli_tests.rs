@@ -974,3 +974,108 @@ fn session_hook_falls_back_to_parent_pid() {
         .unwrap();
     assert_eq!(pid, i64::from(std::process::id()));
 }
+
+/// A repo dir with a workflow that runs a script, then calls an agent. `PATH`
+/// is pinned to `/usr/bin:/bin`, so no `claude` exists: a smoke run that tried
+/// to start the agent would fail instead of stopping at it.
+fn setup_smoke_fixture(body: &str) -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(".conductor");
+    for sub in ["workflows", "agents", "scripts"] {
+        std::fs::create_dir_all(root.join(sub)).unwrap();
+    }
+    std::fs::write(
+        root.join("agents").join("some-agent.md"),
+        "---\nrole: actor\n---\n\nDo the thing.\n",
+    )
+    .unwrap();
+    let script = root.join("scripts").join("quiet.sh");
+    std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(
+        root.join("workflows").join("smoke.wf"),
+        format!(
+            "workflow smoke {{\n  meta {{\n    trigger = \"manual\"\n    targets = [\"worktree\"]\n  }}\n{body}\n}}\n"
+        ),
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn workflow_validate_dry_run_stops_at_the_agent_step() {
+    let dir = setup_smoke_fixture(
+        "  script quiet {\n    run = \".conductor/scripts/quiet.sh\"\n  }\n  call some-agent\n",
+    );
+    conductor_cmd(dir.path())
+        .args([
+            "workflow",
+            "validate",
+            "smoke",
+            "--dry-run",
+            "--path",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "stopped at agent step 'some-agent'",
+        ));
+}
+
+#[test]
+fn workflow_validate_dry_run_unknown_gate_type_fails() {
+    let dir = setup_smoke_fixture(
+        "  gate bogus_gate {\n    prompt = \"ok?\"\n    timeout = \"1h\"\n    on_timeout = fail\n  }\n",
+    );
+    conductor_cmd(dir.path())
+        .args([
+            "workflow",
+            "validate",
+            "smoke",
+            "--dry-run",
+            "--path",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("bogus_gate"));
+}
+
+#[test]
+fn workflow_validate_dry_run_stops_at_a_valid_gate() {
+    let dir = setup_smoke_fixture(
+        "  gate human_review {\n    prompt = \"ok?\"\n    timeout = \"1h\"\n  }\n",
+    );
+    conductor_cmd(dir.path())
+        .args([
+            "workflow",
+            "validate",
+            "smoke",
+            "--dry-run",
+            "--path",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("stopped at gate step"));
+}
+
+#[test]
+fn workflow_validate_input_requires_dry_run() {
+    let dir = setup_smoke_fixture("  call some-agent\n");
+    conductor_cmd(dir.path())
+        .args([
+            "workflow",
+            "validate",
+            "smoke",
+            "--input",
+            "a=b",
+            "--path",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--dry-run"));
+}

@@ -35,6 +35,9 @@ pub(crate) struct ConductorChildWorkflowRunner {
     target_label: Option<String>,
     triggered_by_hook: bool,
     fresh_children: FreshChildren,
+    /// Smoke mode of the parent run, copied into every child's params so a
+    /// child stops at its own first agent or gate step.
+    smoke: Option<crate::workflow::SmokeStop>,
 }
 
 impl ConductorChildWorkflowRunner {
@@ -52,7 +55,14 @@ impl ConductorChildWorkflowRunner {
             target_label,
             triggered_by_hook,
             fresh_children: FreshChildren::None,
+            smoke: None,
         }
+    }
+
+    /// Run children in smoke mode, reporting stops into `smoke`.
+    pub(crate) fn with_smoke(mut self, smoke: Option<crate::workflow::SmokeStop>) -> Self {
+        self.smoke = smoke;
+        self
     }
 
     /// Make `find_resumable_child` answer `None` for the given children, so the
@@ -119,6 +129,7 @@ impl ConductorChildWorkflowRunner {
             parent_step_id: params.parent_step_id,
             default_bot_name: params.as_identity,
             iteration: params.iteration,
+            smoke: self.smoke.clone(),
         }
     }
 

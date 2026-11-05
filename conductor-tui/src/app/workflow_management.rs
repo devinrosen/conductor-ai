@@ -1203,6 +1203,7 @@ impl App {
                 parent_step_id: None,
                 default_bot_name: None,
                 iteration: 0,
+                smoke: None,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1266,6 +1267,7 @@ impl App {
                 parent_step_id: None,
                 default_bot_name: None,
                 iteration: 0,
+                smoke: None,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1328,6 +1330,7 @@ impl App {
                 parent_step_id: None,
                 default_bot_name: None,
                 iteration: 0,
+                smoke: None,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1387,6 +1390,7 @@ impl App {
                 parent_step_id: None,
                 default_bot_name: None,
                 iteration: 0,
+                smoke: None,
             };
 
             let result = execute_workflow_standalone(&params);

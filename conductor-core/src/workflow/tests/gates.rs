@@ -380,6 +380,7 @@ fn spawn_standalone(
         parent_step_id: None,
         default_bot_name: None,
         iteration: 0,
+        smoke: None,
     };
     let handle = std::thread::spawn(move || crate::workflow::execute_workflow_standalone(&params));
 

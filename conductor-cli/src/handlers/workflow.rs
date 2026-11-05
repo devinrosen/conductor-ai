@@ -16,6 +16,7 @@ fn register_foreground_run() -> Option<conductor_core::process_registry::Process
 }
 
 /// Where a standalone workflow run executes.
+#[derive(Clone)]
 struct ExecTarget {
     worktree_id: Option<String>,
     working_dir: String,
@@ -66,6 +67,7 @@ fn exec_params(
         parent_step_id: None,
         default_bot_name: None,
         iteration: 0,
+        smoke: None,
     }
 }
 
@@ -720,6 +722,8 @@ pub fn handle_workflow(
             all,
             path,
             templates,
+            dry_run,
+            inputs,
         } => {
             if !all && name.is_none() && !templates {
                 anyhow::bail!(
@@ -730,11 +734,28 @@ pub fn handle_workflow(
             // `--templates` alone checks only the embedded templates: no repo
             // or worktree to resolve.
             let templates_only = templates && !all && name.is_none();
+            if dry_run && templates_only {
+                anyhow::bail!(
+                    "--dry-run starts a workflow, and templates can't be started. \
+                     Pass <NAME> or --all."
+                );
+            }
+
+            // Where a smoke run executes (only set when --dry-run resolves one).
+            let mut smoke_target: Option<ExecTarget> = None;
 
             let (wt_path, repo_path) = if templates_only {
                 let dir = path.clone().unwrap_or_else(|| ".".to_string());
                 (dir.clone(), dir)
             } else if let Some(ref dir) = path {
+                smoke_target = Some(ExecTarget {
+                    worktree_id: None,
+                    working_dir: dir.clone(),
+                    repo_path: dir.clone(),
+                    ticket_id: None,
+                    repo_id: None,
+                    target_label: Some(dir.clone()),
+                });
                 (dir.clone(), dir.clone())
             } else if repo.is_some() && worktree.is_some() {
                 let repo_mgr = RepoManager::new(conn, config);
@@ -743,6 +764,14 @@ pub fn handle_workflow(
                 let wt_mgr = WorktreeManager::new(conn, config);
                 // SAFETY: guarded by `worktree.is_some()` above
                 let wt = wt_mgr.get_by_slug(&r.id, worktree.as_deref().unwrap())?;
+                smoke_target = Some(ExecTarget {
+                    worktree_id: Some(wt.id.clone()),
+                    working_dir: wt.path.clone(),
+                    repo_path: r.local_path.clone(),
+                    ticket_id: wt.ticket_id.clone(),
+                    repo_id: Some(r.id.clone()),
+                    target_label: Some(format!("{}/{}", r.slug, wt.slug)),
+                });
                 (wt.path, r.local_path)
             } else if repo.is_some() || worktree.is_some() {
                 anyhow::bail!(
@@ -765,6 +794,14 @@ pub fn handle_workflow(
                 })?;
                 let repo_mgr = RepoManager::new(conn, config);
                 let r = repo_mgr.get_by_id(&wt.repo_id)?;
+                smoke_target = Some(ExecTarget {
+                    worktree_id: Some(wt.id.clone()),
+                    working_dir: wt.path.clone(),
+                    repo_path: r.local_path.clone(),
+                    ticket_id: wt.ticket_id.clone(),
+                    repo_id: Some(r.id.clone()),
+                    target_label: Some(format!("{}/{}", r.slug, wt.slug)),
+                });
                 (wt.path, r.local_path)
             };
 
@@ -854,7 +891,44 @@ pub fn handle_workflow(
                 println!("\n{}/{total} workflow(s) passed.", total - failed);
             }
 
-            if failed > 0 {
+            // Smoke-start each workflow that passed the static checks.
+            let mut smoke_failed = 0;
+            if dry_run {
+                let mut base_inputs = std::collections::HashMap::new();
+                for input_str in &inputs {
+                    match input_str.split_once('=') {
+                        Some((k, v)) => {
+                            base_inputs.insert(k.to_string(), v.to_string());
+                        }
+                        None => anyhow::bail!("Invalid input format: '{input_str}'. Use key=value."),
+                    }
+                }
+                let target = smoke_target
+                    .clone()
+                    .expect("--dry-run resolves a target unless templates-only");
+                let statically_failed: std::collections::HashSet<&str> = results[0]
+                    .entries
+                    .iter()
+                    .filter(|e| !e.errors.is_empty())
+                    .map(|e| e.name.as_str())
+                    .collect();
+                println!();
+                for wf in workflows
+                    .iter()
+                    .filter(|w| !statically_failed.contains(w.name.as_str()))
+                {
+                    smoke_failed += smoke_one(
+                        conn,
+                        config,
+                        wf,
+                        &target,
+                        &base_inputs,
+                        /* skip_unfillable */ all,
+                    );
+                }
+            }
+
+            if failed > 0 || smoke_failed > 0 {
                 std::process::exit(1);
             }
         }
@@ -1349,5 +1423,91 @@ mod step_log_cli_tests {
     #[test]
     fn non_numeric_lines_is_a_parse_error() {
         assert!(parse(&["--lines", "many"]).is_err());
+    }
+}
+
+
+/// Smoke-start one workflow and print its result line. Returns 1 for a
+/// failure, 0 for a pass or a skip.
+fn smoke_one(
+    conn: &Connection,
+    config: &Config,
+    workflow: &conductor_core::workflow::WorkflowDef,
+    target: &ExecTarget,
+    base_inputs: &std::collections::HashMap<String, String>,
+    skip_unfillable: bool,
+) -> usize {
+    use conductor_core::workflow::{SmokeResult, SmokeStopKind};
+
+    let mut target = target.clone();
+    let mut inputs = base_inputs.clone();
+    // The ticket the run is about: the worktree's linked ticket, else an
+    // explicit `--input ticket_id=...` that names a known ticket.
+    if let Some(tid) = target.ticket_id.clone() {
+        inputs.entry("ticket_id".to_string()).or_insert(tid);
+    } else if let Some(tid) = inputs.get("ticket_id") {
+        if TicketSyncer::new(conn).get_by_id(tid).is_ok() {
+            target.ticket_id = Some(tid.clone());
+        }
+    }
+    if let Err(e) = conductor_core::workflow::apply_workflow_input_defaults(workflow, &mut inputs) {
+        if skip_unfillable {
+            println!("SMOKE SKIP  {}  ({e})", workflow.name);
+            return 0;
+        }
+        println!("SMOKE FAIL  {}  start: {e}", workflow.name);
+        return 1;
+    }
+
+    let outcome = conductor_core::workflow::smoke_run_workflow(exec_params(
+        config,
+        workflow.clone(),
+        target,
+        ExecOptions {
+            model: None,
+            exec_config: WorkflowExecConfig::default(),
+            inputs,
+            extra_plugin_dirs: vec![],
+            db_path: None,
+        },
+    ));
+    let run = outcome
+        .run_id
+        .as_deref()
+        .map(|id| format!("  (run {id})"))
+        .unwrap_or_default();
+    match outcome.result {
+        SmokeResult::Passed {
+            stopped_at: Some(point),
+        } => {
+            let kind = match point.kind {
+                SmokeStopKind::Agent => "agent",
+                SmokeStopKind::Gate => "gate",
+            };
+            let child = if point.workflow == workflow.name {
+                String::new()
+            } else {
+                format!(" in '{}'", point.workflow)
+            };
+            println!(
+                "SMOKE PASS  {}  stopped at {kind} step '{}'{child}{run}",
+                workflow.name, point.step
+            );
+            0
+        }
+        SmokeResult::Passed { stopped_at: None } => {
+            println!(
+                "SMOKE PASS  {}  ran to completion, no agent or gate step{run}",
+                workflow.name
+            );
+            0
+        }
+        SmokeResult::Failed { step, error } => {
+            let at = step
+                .map(|s| format!(" at step '{s}'"))
+                .unwrap_or_default();
+            println!("SMOKE FAIL  {}{at}: {error}{run}", workflow.name);
+            1
+        }
     }
 }

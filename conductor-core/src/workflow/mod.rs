@@ -32,6 +32,7 @@ pub(crate) mod persistence_sqlite;
 pub(crate) mod prompt_builder;
 pub(crate) mod run_context;
 pub(crate) mod runkon_bridge;
+mod smoke;
 mod step_log;
 pub(crate) mod types;
 
@@ -140,6 +141,9 @@ pub use runkon_flow::traits::persistence::{
     WorkflowPersistence,
 };
 pub use runkon_flow::types::FanOutItemRow;
+pub use smoke::{
+    smoke_run_workflow, SmokeOutcome, SmokeResult, SmokeStop, SmokeStopKind, SmokeStopPoint,
+};
 pub use step_log::{render_step_log, resolve_step_log_target, StepLogMode, StepLogTarget};
 pub use types::SpawnHeartbeatResumeParams;
 pub use types::{

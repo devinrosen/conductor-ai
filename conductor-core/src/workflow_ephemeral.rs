@@ -253,6 +253,7 @@ pub fn run_workflow_on_pr(
         target_label: Some(pr_target_label),
         default_bot_name: None,
         iteration: 0,
+        smoke: None,
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir,

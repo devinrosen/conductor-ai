@@ -79,6 +79,17 @@ pub(super) fn build_rk_action_registry(
     )
 }
 
+/// Build the action registry of a smoke run: the catch-all is a
+/// [`crate::workflow::smoke::SmokeStopActionExecutor`], so no agent can start.
+pub(super) fn build_rk_smoke_action_registry(
+    smoke: crate::workflow::SmokeStop,
+) -> runkon_flow::traits::action_executor::ActionRegistry {
+    runkon_flow::traits::action_executor::ActionRegistry::from_executors(
+        std::collections::HashMap::new(),
+        Some(Box::new(crate::workflow::smoke::SmokeStopActionExecutor::new(smoke))),
+    )
+}
+
 /// Build a validation-only `ItemProviderRegistry` with all four built-in providers.
 ///
 /// Uses an in-memory SQLite connection so the providers can be instantiated for
