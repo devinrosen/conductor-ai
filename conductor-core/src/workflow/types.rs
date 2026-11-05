@@ -242,6 +242,53 @@ pub struct WorkflowExecStandalone {
     pub default_bot_name: Option<String>,
     /// Iteration number for foreach child runs (0 for top-level runs).
     pub iteration: u32,
+    /// Smoke mode (`workflow validate --dry-run`): an engine dry run (no script
+    /// executes, gates auto-approve) that stops and cancels at the first agent
+    /// step, never running an agent. Inherited by
+    /// child workflows. See [`crate::workflow::smoke_run_workflow`].
+    pub smoke: Option<crate::workflow::SmokeStop>,
+}
+
+impl WorkflowExecStandalone {
+    /// Build a top-level run with every optional field at its neutral default
+    /// (no worktree/ticket/repo, no model or runtime override, depth 0, not a
+    /// hook run, no smoke mode). Callers override fields with struct-update
+    /// syntax: `WorkflowExecStandalone { model, ..WorkflowExecStandalone::new(..) }`,
+    /// so a new field only needs an edit here.
+    pub fn new(
+        config: crate::config::Config,
+        workflow: runkon_flow::dsl::WorkflowDef,
+        working_dir: String,
+        repo_path: String,
+        exec_config: runkon_flow::types::WorkflowExecConfig,
+    ) -> Self {
+        Self {
+            config,
+            workflow,
+            worktree_id: None,
+            working_dir,
+            repo_path,
+            ticket_id: None,
+            repo_id: None,
+            model: None,
+            runtime: None,
+            exec_config,
+            inputs: HashMap::new(),
+            target_label: None,
+            run_id_notify: None,
+            triggered_by_hook: false,
+            conductor_bin_dir: None,
+            force: false,
+            extra_plugin_dirs: vec![],
+            db_path: None,
+            parent_workflow_run_id: None,
+            depth: 0,
+            parent_step_id: None,
+            default_bot_name: None,
+            iteration: 0,
+            smoke: None,
+        }
+    }
 }
 
 /// Parameters for [`spawn_heartbeat_resume`].

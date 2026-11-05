@@ -1177,32 +1177,23 @@ impl App {
             };
 
             let params = WorkflowExecStandalone {
-                config,
-                workflow: def.clone(),
                 worktree_id,
-                working_dir,
-                repo_path,
                 ticket_id,
-                repo_id: None,
                 model,
                 runtime,
-                exec_config: WorkflowExecConfig {
-                    shutdown: Some(shutdown),
-                    ..WorkflowExecConfig::default()
-                },
                 inputs,
                 target_label,
-                run_id_notify: None,
-                triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                force: false,
-                extra_plugin_dirs: vec![],
-                db_path: None,
-                parent_workflow_run_id: None,
-                depth: 0,
-                parent_step_id: None,
-                default_bot_name: None,
-                iteration: 0,
+                ..WorkflowExecStandalone::new(
+                    config,
+                    def.clone(),
+                    working_dir,
+                    repo_path,
+                    WorkflowExecConfig {
+                        shutdown: Some(shutdown),
+                        ..WorkflowExecConfig::default()
+                    },
+                )
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1240,32 +1231,24 @@ impl App {
             let working_dir = repo_path.clone();
 
             let params = WorkflowExecStandalone {
-                config,
-                workflow: def.clone(),
-                worktree_id: None,
-                working_dir,
-                repo_path,
                 ticket_id,
                 repo_id,
                 model,
                 runtime,
-                exec_config: WorkflowExecConfig {
-                    shutdown: Some(shutdown),
-                    ..WorkflowExecConfig::default()
-                },
                 inputs,
                 target_label,
-                run_id_notify: None,
-                triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                force: false,
                 extra_plugin_dirs,
-                db_path: None,
-                parent_workflow_run_id: None,
-                depth: 0,
-                parent_step_id: None,
-                default_bot_name: None,
-                iteration: 0,
+                ..WorkflowExecStandalone::new(
+                    config,
+                    def.clone(),
+                    working_dir,
+                    repo_path,
+                    WorkflowExecConfig {
+                        shutdown: Some(shutdown),
+                        ..WorkflowExecConfig::default()
+                    },
+                )
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1302,32 +1285,23 @@ impl App {
             };
 
             let params = WorkflowExecStandalone {
-                config,
-                workflow: def.clone(),
-                worktree_id: None,
-                working_dir: repo_path.clone(),
-                repo_path,
-                ticket_id: None,
                 repo_id,
                 model,
                 runtime,
-                exec_config: WorkflowExecConfig {
-                    shutdown: Some(shutdown),
-                    ..WorkflowExecConfig::default()
-                },
                 inputs,
                 target_label,
-                run_id_notify: None,
-                triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                force: false,
                 extra_plugin_dirs,
-                db_path: None,
-                parent_workflow_run_id: None,
-                depth: 0,
-                parent_step_id: None,
-                default_bot_name: None,
-                iteration: 0,
+                ..WorkflowExecStandalone::new(
+                    config,
+                    def.clone(),
+                    repo_path.clone(),
+                    repo_path,
+                    WorkflowExecConfig {
+                        shutdown: Some(shutdown),
+                        ..WorkflowExecConfig::default()
+                    },
+                )
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1361,32 +1335,21 @@ impl App {
             };
 
             let params = WorkflowExecStandalone {
-                config,
-                workflow: def.clone(),
-                worktree_id: None,
-                working_dir: repo_path.clone(),
-                repo_path,
-                ticket_id: None,
-                repo_id: None,
                 model,
                 runtime,
-                exec_config: WorkflowExecConfig {
-                    shutdown: Some(shutdown),
-                    ..WorkflowExecConfig::default()
-                },
                 inputs,
                 target_label: Some(target_label),
-                run_id_notify: None,
-                triggered_by_hook: false,
                 conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                force: false,
-                extra_plugin_dirs: vec![],
-                db_path: None,
-                parent_workflow_run_id: None,
-                depth: 0,
-                parent_step_id: None,
-                default_bot_name: None,
-                iteration: 0,
+                ..WorkflowExecStandalone::new(
+                    config,
+                    def.clone(),
+                    repo_path.clone(),
+                    repo_path,
+                    WorkflowExecConfig {
+                        shutdown: Some(shutdown),
+                        ..WorkflowExecConfig::default()
+                    },
+                )
             };
 
             let result = execute_workflow_standalone(&params);

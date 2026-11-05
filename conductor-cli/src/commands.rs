@@ -385,6 +385,14 @@ pub enum WorkflowCommands {
         /// Also validate the embedded workflow templates (.wft)
         #[arg(long)]
         templates: bool,
+        /// Also smoke-start each workflow that passes validation: a recorded engine
+        /// dry run (no script step executes, gates auto-approve) that stops at the
+        /// first agent step and cancels. No model calls and no side effects.
+        #[arg(long)]
+        dry_run: bool,
+        /// Input variables for the smoke run (key=value pairs)
+        #[arg(long = "input", value_name = "KEY=VALUE", requires = "dry_run")]
+        inputs: Vec<String>,
     },
     /// Resume a failed or stalled workflow run
     #[command(
