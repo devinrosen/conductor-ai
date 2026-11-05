@@ -448,26 +448,80 @@ pub fn fetch_github_issue(
     })
 }
 
+/// Trim a requested milestone title; a blank or whitespace-only title counts as absent.
+pub fn normalize_milestone(milestone: Option<&str>) -> Option<&str> {
+    milestone.map(str::trim).filter(|m| !m.is_empty())
+}
+
+/// List the titles of a repo's open milestones via `gh api`.
+pub fn list_open_milestones(owner: &str, repo: &str, token: Option<&str>) -> Result<Vec<String>> {
+    let endpoint = format!("repos/{owner}/{repo}/milestones?state=open&per_page=100");
+    let output = run_gh_with_token(
+        &["api", "--paginate", &endpoint, "--jq", ".[].title"],
+        token,
+    )?;
+    Ok(parse_milestone_titles(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
+}
+
+fn parse_milestone_titles(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+fn check_milestone(requested: &str, open: &[String], repo_slug: &str) -> Result<()> {
+    if open.iter().any(|m| m == requested) {
+        return Ok(());
+    }
+    let listing = if open.is_empty() {
+        "the repo has no open milestones".to_string()
+    } else {
+        format!("open milestones: {}", open.join(", "))
+    };
+    Err(ConductorError::TicketSync(format!(
+        "milestone '{requested}' not found in {repo_slug}; {listing}"
+    )))
+}
+
 /// Create a new GitHub issue via the `gh` CLI.
 /// Returns `(source_id, url)` where `source_id` is the issue number as a string.
 ///
 /// When `token` is `Some`, the issue is created under that identity
 /// (e.g. a GitHub App bot). When `None`, falls back to the default `gh` CLI user.
+///
+/// When `milestone` is `Some` (and not blank), the title is checked against the repo's
+/// open milestones first; an unknown title is an error naming the open ones, and no
+/// issue is created.
 pub fn create_github_issue(
     owner: &str,
     repo: &str,
     title: &str,
     body: &str,
     labels: &[&str],
+    milestone: Option<&str>,
     token: Option<&str>,
 ) -> Result<(String, String)> {
     let repo_slug = repo_slug(owner, repo);
+    let milestone = normalize_milestone(milestone);
+    if let Some(requested) = milestone {
+        let open = list_open_milestones(owner, repo, token)?;
+        check_milestone(requested, &open, &repo_slug)?;
+    }
     let mut args = vec![
         "issue", "create", "--repo", &repo_slug, "--title", title, "--body", body,
     ];
     for label in labels {
         args.push("--label");
         args.push(label);
+    }
+    if let Some(m) = milestone {
+        args.push("--milestone");
+        args.push(m);
     }
     let output = run_gh_with_token(&args, token)?;
 
@@ -992,6 +1046,43 @@ pub fn upsert_sticky_comment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_milestone_titles() {
+        assert_eq!(
+            parse_milestone_titles("0.20.0\n\n 0.21.0 \n"),
+            vec!["0.20.0".to_string(), "0.21.0".to_string()]
+        );
+        assert!(parse_milestone_titles("").is_empty());
+    }
+
+    #[test]
+    fn test_normalize_milestone() {
+        assert_eq!(normalize_milestone(None), None);
+        assert_eq!(normalize_milestone(Some("")), None);
+        assert_eq!(normalize_milestone(Some("  \t ")), None);
+        assert_eq!(normalize_milestone(Some(" 0.20.0 ")), Some("0.20.0"));
+    }
+
+    #[test]
+    fn test_check_milestone() {
+        let open = vec!["0.20.0".to_string(), "0.21.0".to_string()];
+        assert!(check_milestone("0.20.0", &open, "o/r").is_ok());
+
+        let err = check_milestone("0.99.0", &open, "o/r")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("'0.99.0' not found in o/r"), "{err}");
+        assert!(err.contains("open milestones: 0.20.0, 0.21.0"), "{err}");
+
+        let err = check_milestone("0.20.0", &[], "o/r")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no open milestones"), "{err}");
+
+        let open = vec!["Beta".to_string()];
+        assert!(check_milestone("beta", &open, "o/r").is_err());
+    }
 
     #[test]
     fn test_repo_slug() {
