@@ -134,7 +134,7 @@ GitHub Actions runs on PRs to `main` (`.github/workflows/ci.yml`):
 - **Clippy** — `cargo clippy --workspace --all-targets -- -D warnings`
 - **Test** — `cargo test --workspace`
 
-Branch ruleset on `main`: PRs required, linear history (squash/rebase only), `Clippy` + `Test` must pass. Tag ruleset: `v*` tags cannot be deleted or overwritten.
+Branch ruleset on `main`: PRs required, linear history (squash/rebase only), `Clippy`, `Test` and `Validate Workflows` must pass. Branch ruleset on `release/**`: `Clippy`, `Test` and `Validate Workflows` must pass to merge a PR, no deletion or force push; repo admins may bypass, because the branch's creation and its `release:` bump commit are pushed directly. `Validate Workflows` runs `conductor workflow validate --all --templates` and reports success when its path filter skips it. Tag ruleset: `v*` tags cannot be deleted or overwritten.
 
 ### Tests never touch the real conductor home
 
