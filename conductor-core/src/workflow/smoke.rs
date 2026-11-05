@@ -184,14 +184,20 @@ impl<R: GateResolver> GateResolver for SmokeStopGateResolver<R> {
             .smoke
             .record_at(ctx, &params.gate_name, SmokeStopKind::Gate);
         let reason = point.reason();
-        match crate::db::open_database(&self.db_path) {
-            Ok(conn) => {
-                if let Err(e) = crate::workflow::cancel_run(&conn, run_id, &reason) {
-                    tracing::warn!("smoke: failed to cancel run {run_id} at a gate: {e}");
-                }
-            }
-            Err(e) => tracing::warn!("smoke: failed to open the database to cancel {run_id}: {e}"),
-        }
+        // A failed cancel must not leave the run waiting on the gate: fail
+        // the step instead, so the smoke result reports it.
+        let conn = crate::db::open_database(&self.db_path).map_err(|e| {
+            EngineError::Workflow(format!(
+                "smoke: failed to open the database to cancel run {run_id} at gate '{}': {e}",
+                params.gate_name
+            ))
+        })?;
+        crate::workflow::cancel_run(&conn, run_id, &reason).map_err(|e| {
+            EngineError::Workflow(format!(
+                "smoke: failed to cancel run {run_id} at gate '{}': {e}",
+                params.gate_name
+            ))
+        })?;
         Ok(GatePoll::Pending)
     }
 
