@@ -91,7 +91,12 @@ conductor workflow validate publish-docs --path ~/path/to/repo
 
 # Against a registered worktree:
 conductor workflow validate ticket-to-pr my-repo fix-login-bug
+
+# Every workflow in the repo, plus the embedded workflow templates:
+conductor workflow validate --all --templates --path ~/path/to/repo
 ```
+
+Validation runs the same checks a run starts with: the DSL parses, agents, schemas and scripts exist (workflow-local files first, then shared ones), there are no cycles, and every gate type, executor and foreach item provider is registered. A `{{variable}}` that is not an input, a built-in or something a script exports is reported as a warning.
 
 ## Monitoring runs
 

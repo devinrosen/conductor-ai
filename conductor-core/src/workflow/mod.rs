@@ -37,8 +37,8 @@ pub(crate) mod types;
 
 // Re-export batch validation from the workflow layer (not DSL).
 pub use batch_validate::{
-    validate_workflows_batch, BatchValidationResult, BatchValidationWarning,
-    WorkflowValidationEntry,
+    validate_template_sources, validate_workflows_batch, BatchValidationResult,
+    BatchValidationWarning, WorkflowValidationEntry,
 };
 
 // Re-export all public types and functions to preserve existing import paths.

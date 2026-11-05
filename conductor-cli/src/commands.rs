@@ -368,7 +368,7 @@ pub enum WorkflowCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Validate a workflow definition (check all agents exist)
+    /// Validate a workflow definition (agents, schemas, scripts, gate types, variables)
     Validate {
         /// Workflow name (required unless --all is set)
         name: Option<String>,
@@ -382,6 +382,9 @@ pub enum WorkflowCommands {
         /// Path to a repo root directory; skips DB lookup
         #[arg(long, conflicts_with_all = &["repo", "worktree"])]
         path: Option<String>,
+        /// Also validate the embedded workflow templates (.wft)
+        #[arg(long)]
+        templates: bool,
     },
     /// Resume a failed or stalled workflow run
     #[command(

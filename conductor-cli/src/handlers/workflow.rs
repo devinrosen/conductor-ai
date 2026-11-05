@@ -719,15 +719,22 @@ pub fn handle_workflow(
             name,
             all,
             path,
+            templates,
         } => {
-            if !all && name.is_none() {
+            if !all && name.is_none() && !templates {
                 anyhow::bail!(
-                    "either <NAME> or --all must be provided. \
+                    "either <NAME>, --all or --templates must be provided. \
                      Use --all to validate every workflow."
                 );
             }
+            // `--templates` alone checks only the embedded templates: no repo
+            // or worktree to resolve.
+            let templates_only = templates && !all && name.is_none();
 
-            let (wt_path, repo_path) = if let Some(ref dir) = path {
+            let (wt_path, repo_path) = if templates_only {
+                let dir = path.clone().unwrap_or_else(|| ".".to_string());
+                (dir.clone(), dir)
+            } else if let Some(ref dir) = path {
                 (dir.clone(), dir.clone())
             } else if repo.is_some() && worktree.is_some() {
                 let repo_mgr = RepoManager::new(conn, config);
@@ -765,13 +772,15 @@ pub fn handle_workflow(
             let workflows: Vec<conductor_core::workflow::WorkflowDef>;
             let mut parse_errors: Vec<String> = Vec::new();
 
-            if all {
+            if templates_only {
+                workflows = Vec::new();
+            } else if all {
                 let (defs, warnings) = conductor_core::workflow::list_defs(&wt_path, &repo_path)?;
                 for w in &warnings {
                     parse_errors.push(format!("{}: {}", w.file, w.message));
                 }
                 workflows = defs;
-                if workflows.is_empty() && parse_errors.is_empty() {
+                if workflows.is_empty() && parse_errors.is_empty() && !templates {
                     println!("No workflow files found.");
                     return Ok(());
                 }
@@ -806,33 +815,46 @@ pub fn handle_workflow(
                 &loader,
             );
 
-            // Report parse failures first.
-            for err in &result.parse_errors {
-                println!("FAIL  {err}");
+            let mut results = vec![result];
+            if templates {
+                results.push(conductor_core::workflow::validate_template_sources(
+                    &conductor_core::workflow_template::embedded_template_sources(),
+                    &repo_path,
+                ));
             }
 
-            // Report per-workflow results.
-            for entry in &result.entries {
-                if entry.errors.is_empty() {
-                    println!("PASS  {}", entry.name);
-                } else {
-                    println!("FAIL  {}", entry.name);
-                    for e in &entry.errors {
-                        println!("      \u{2717} {e}");
+            let mut total = 0;
+            let mut failed = 0;
+            for result in &results {
+                // Report parse failures first.
+                for err in &result.parse_errors {
+                    println!("FAIL  {err}");
+                }
+
+                // Report per-workflow results.
+                for entry in &result.entries {
+                    if entry.errors.is_empty() {
+                        println!("PASS  {}", entry.name);
+                    } else {
+                        println!("FAIL  {}", entry.name);
+                        for e in &entry.errors {
+                            println!("      \u{2717} {e}");
+                        }
+                    }
+                    for w in &entry.warnings {
+                        println!("      ~ warning: {}", w.message);
                     }
                 }
-                for w in &entry.warnings {
-                    println!("      ~ warning: {}", w.message);
-                }
+                total += result.total();
+                failed += result.failed_count();
             }
 
             // Summary when validating multiple workflows.
-            if all {
-                let passed = result.total() - result.failed_count();
-                println!("\n{passed}/{} workflow(s) passed.", result.total());
+            if all || templates {
+                println!("\n{}/{total} workflow(s) passed.", total - failed);
             }
 
-            if result.failed_count() > 0 {
+            if failed > 0 {
                 std::process::exit(1);
             }
         }
