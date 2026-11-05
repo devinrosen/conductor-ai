@@ -50,8 +50,9 @@ workflow quick-fix-pr {
     }
   }
 
-  call verify {
-    output = "verify"
+  script verify {
+    run = ".conductor/scripts/verify.sh"
+    env = { FEATURE_BASE_BRANCH = "{{feature_base_branch}}" }
   }
 
   if verify.has_failures {
@@ -65,8 +66,9 @@ workflow quick-fix-pr {
         FMT_FIX_ALLOW_FAILURE = "1"
       }
     }
-    call verify {
-      output = "verify"
+    script verify {
+      run = ".conductor/scripts/verify.sh"
+      env = { FEATURE_BASE_BRANCH = "{{feature_base_branch}}" }
     }
   }
 
@@ -121,8 +123,9 @@ workflow quick-fix-pr {
           }
         }
 
-        call verify {
-          output = "verify"
+        script verify {
+          run = ".conductor/scripts/verify.sh"
+          env = { FEATURE_BASE_BRANCH = "{{feature_base_branch}}" }
         }
 
         if verify.has_failures {
@@ -136,8 +139,9 @@ workflow quick-fix-pr {
               FMT_FIX_ALLOW_FAILURE = "1"
             }
           }
-          call verify {
-            output = "verify"
+          script verify {
+            run = ".conductor/scripts/verify.sh"
+            env = { FEATURE_BASE_BRANCH = "{{feature_base_branch}}" }
           }
         }
 
