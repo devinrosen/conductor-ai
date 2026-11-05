@@ -11,6 +11,9 @@ fields:
       category: string
       failed_step: string
       severity: enum(critical, warning)
+      repo?:
+        type: string
+        desc: "GitHub owner/name to file in when the fix belongs in another repo (only runkon/runkon is accepted); omit for this repo"
   summary: string
 
 markers:

@@ -36,6 +36,7 @@ Prior step context: {{prior_context}}
    - **category**: one of the categories above
    - **failed_step**: name of the workflow step that surfaced this issue
    - **severity**: `critical` if it blocks the workflow from completing, `warning` if it degrades quality
+   - **repo** (optional): where the fix belongs. Set `runkon/runkon` when the root cause is in the runkon engine itself: code in the `runkon-*` crates (paths under `runkon-flow`, `runkon-flow-executors`, `runkon-runtimes` and so on, including copies in `~/.cargo/registry`), the engine's documented behaviour (conditions, resume, loops, FLOW_OUTPUT parsing), runkon's tests or its release process. Omit it when the fix belongs in this repo, including how this repo's workflows, scripts, agents or conductor code use runkon. When unsure, omit it and say in the description that the issue may belong in runkon/runkon.
 
 5. Write a one-paragraph `summary` of the overall failure for quick triage.
 
