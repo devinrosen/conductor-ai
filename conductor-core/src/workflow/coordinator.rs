@@ -373,18 +373,20 @@ fn build_rk_execution_state(args: RkStateArgs) -> runkon_flow::engine::Execution
     }
 }
 
-/// Build a [`runkon_flow::FlowEngine`] with all gate resolvers registered.
-#[allow(clippy::too_many_arguments)]
-fn build_flow_engine(
+/// Start a `FlowEngineBuilder` with every gate resolver a run accepts.
+///
+/// Every gate type a run accepts is registered here, and `workflow validate`
+/// builds its engine through the same function, so a type missing here fails
+/// validation too (#3284).
+fn flow_engine_builder_with_gates(
     persistence: &Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence>,
     event_sinks: &Arc<[Arc<dyn runkon_flow::EventSink>]>,
     working_dir: String,
     default_bot_name: Option<String>,
     config: Config,
     db: &std::path::Path,
-    workflow_name: &str,
     owner: String,
-) -> Result<runkon_flow::FlowEngine> {
+) -> runkon_flow::FlowEngineBuilder {
     use super::executors::resolvers::{
         GitHubTokenCache, HumanApprovalGateResolver, HumanGateKind, PrApprovalGateResolver,
         PrChecksGateResolver,
@@ -416,11 +418,96 @@ fn build_flow_engine(
             db.to_path_buf(),
             owner,
         ))
-        .build()
-        .map_err(|e| {
-            ConductorError::Workflow(format!("failed to build engine for '{workflow_name}': {e}"))
-        })
 }
+
+/// Build a [`runkon_flow::FlowEngine`] with all gate resolvers registered.
+#[allow(clippy::too_many_arguments)]
+fn build_flow_engine(
+    persistence: &Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence>,
+    event_sinks: &Arc<[Arc<dyn runkon_flow::EventSink>]>,
+    working_dir: String,
+    default_bot_name: Option<String>,
+    config: Config,
+    db: &std::path::Path,
+    workflow_name: &str,
+    owner: String,
+) -> Result<runkon_flow::FlowEngine> {
+    flow_engine_builder_with_gates(
+        persistence,
+        event_sinks,
+        working_dir,
+        default_bot_name,
+        config,
+        db,
+        owner,
+    )
+    .build()
+    .map_err(|e| {
+        ConductorError::Workflow(format!("failed to build engine for '{workflow_name}': {e}"))
+    })
+}
+
+/// Build the engine `workflow validate` checks definitions against.
+///
+/// It has the run path's gate resolvers (shared builder above), conductor's
+/// catch-all action executor and the four item providers, so
+/// `FlowEngine::validate` rejects what a run would reject. No resolver in it
+/// is ever polled, and the in-memory database is never written.
+pub(crate) fn build_validation_engine() -> Result<runkon_flow::FlowEngine> {
+    use std::sync::Mutex;
+    let wrap = |e: runkon_flow::engine_error::EngineError| {
+        ConductorError::Workflow(format!("failed to build validation engine: {e}"))
+    };
+    let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> =
+        Arc::new(runkon_flow::persistence_memory::InMemoryWorkflowPersistence::new());
+    let event_sinks: Arc<[Arc<dyn runkon_flow::EventSink>]> = Arc::from(Vec::new());
+    let config = Config::default();
+    let db = std::path::PathBuf::from(":memory:");
+    let conn = Arc::new(Mutex::new(Connection::open_in_memory()?));
+    let builder = flow_engine_builder_with_gates(
+        &persistence,
+        &event_sinks,
+        ".".to_string(),
+        None,
+        config.clone(),
+        &db,
+        "validate".to_string(),
+    )
+    .action_fallback(Box::new(
+        super::runkon_bridge::RkActionExecutorAdapter::new(
+            config.clone(),
+            Arc::clone(&conn),
+            db,
+            None,
+        ),
+    ))
+    .map_err(wrap)?;
+    super::runkon_bridge::with_rk_item_providers(builder, conn, &config, None)
+        .build()
+        .map_err(wrap)
+}
+
+/// Variable names conductor injects into a run's inputs: the keys set by
+/// `inject_worktree_variables`, `inject_ticket_variables` and
+/// `inject_repo_variables`, plus those `WorktreeRunContext` exposes. The
+/// variable check in batch validation treats them as known; a test keeps the
+/// list in step with the `inject_*` functions.
+pub(crate) const CONDUCTOR_INJECTED_VARIABLES: &[&str] = &[
+    "feature_base_branch",
+    "worktree_branch",
+    "pr_number",
+    "ticket_id",
+    "ticket_source_id",
+    "ticket_source_type",
+    "ticket_title",
+    "ticket_body",
+    "ticket_url",
+    "ticket_raw_json",
+    "repo_id",
+    "repo_path",
+    "repo_name",
+    "worktree_id",
+];
 
 /// Map a [`runkon_flow::engine_error::EngineError`] to [`ConductorError`].
 ///
@@ -1364,6 +1451,28 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     Ok(rk_result)
 }
 
+/// Every gate type a run registers, with the extra fields it needs to parse.
+/// Shared by the engine and `workflow validate` tests.
+#[cfg(test)]
+pub(crate) const RUN_GATE_TYPE_CASES: [(&str, &str); 4] = [
+    ("human_approval", r#"prompt = "x""#),
+    ("human_review", r#"prompt = "x""#),
+    ("pr_approval", r#"mode = "review_decision""#),
+    ("pr_checks", ""),
+];
+
+/// A one-gate workflow of the given type, for gate-type validation tests.
+#[cfg(test)]
+pub(crate) fn gate_test_def(gate_type: &str, extra: &str) -> runkon_flow::dsl::WorkflowDef {
+    let src = format!(
+        r#"workflow gate-test {{
+            meta {{ trigger = "manual" targets = ["worktree"] }}
+            gate {gate_type} {{ {extra} timeout = "1h" on_timeout = fail }}
+        }}"#
+    );
+    runkon_flow::dsl::parse_workflow_str(&src, "<test>").unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1897,6 +2006,62 @@ mod tests {
             Some("2946"),
             "pr_number must be injected as a string when Some"
         );
+    }
+
+    #[test]
+    fn conductor_injected_variables_cover_inject_fns() {
+        let conn = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let wt = crate::worktree::WorktreeManager::new(&conn, &config)
+            .get_by_id("w1")
+            .unwrap();
+        let repo = crate::repo::Repo {
+            id: "r1".into(),
+            slug: "repo".into(),
+            local_path: "/repo".into(),
+            remote_url: String::new(),
+            default_branch: "main".into(),
+            workspace_dir: String::new(),
+            created_at: "2024-01-01T00:00:00Z".into(),
+            model: None,
+            allow_agent_issue_creation: false,
+            runtime_overrides: None,
+        };
+        let mut inputs = HashMap::new();
+        inject_worktree_variables(&wt, "main", Some(1), &mut inputs);
+        inject_ticket_variables(&make_ticket(), &mut inputs);
+        inject_repo_variables(&repo, &mut inputs);
+        let ctx = crate::workflow::run_context::WorktreeRunContext::new(
+            "/work",
+            "/repo",
+            Some("w1".into()),
+            Some("t1".into()),
+            Some("r1".into()),
+            "run-1",
+            "wf",
+            None,
+            None,
+        );
+        use runkon_flow::traits::run_context::RunContext;
+        let mut keys: Vec<String> = inputs.keys().cloned().collect();
+        keys.extend(ctx.injected_variables().keys().map(|k| k.to_string()));
+        for key in keys {
+            assert!(
+                CONDUCTOR_INJECTED_VARIABLES.contains(&key.as_str()),
+                "'{key}' is injected into runs but missing from CONDUCTOR_INJECTED_VARIABLES"
+            );
+        }
+    }
+
+    #[test]
+    fn validation_engine_registers_run_gate_types() {
+        let engine = build_validation_engine().expect("validation engine builds");
+        for (gate_type, extra) in RUN_GATE_TYPE_CASES {
+            let def = gate_test_def(gate_type, extra);
+            if let Err(errs) = engine.validate(&def) {
+                panic!("gate type {gate_type} rejected: {errs:?}");
+            }
+        }
     }
 
     // -------------------------------------------------------------------------

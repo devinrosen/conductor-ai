@@ -35,6 +35,25 @@ pub fn list_embedded_templates() -> Vec<WorkflowTemplate> {
     templates
 }
 
+/// Every embedded `.wft` file as `(file name, raw content)`, sorted by name.
+///
+/// Unlike [`list_embedded_templates`] this does not skip templates that fail to
+/// parse, so validation can report them. A file that isn't valid UTF-8 comes
+/// back lossy-decoded, which fails to parse and so surfaces as an error too.
+pub fn embedded_template_sources() -> Vec<(String, String)> {
+    let mut sources: Vec<(String, String)> = <TemplateAssets as Embed>::iter()
+        .filter_map(|name| {
+            let data = <TemplateAssets as Embed>::get(name.as_ref())?;
+            Some((
+                name.to_string(),
+                String::from_utf8_lossy(data.data.as_ref()).into_owned(),
+            ))
+        })
+        .collect();
+    sources.sort();
+    sources
+}
+
 /// Get a single embedded template by name (O(1) asset lookup).
 pub fn get_embedded_template(name: &str) -> Option<WorkflowTemplate> {
     // Try direct filename lookup first for O(1) fetch.
