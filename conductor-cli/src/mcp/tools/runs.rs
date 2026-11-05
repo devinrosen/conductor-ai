@@ -2,7 +2,9 @@ use conductor_core::Conductor;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, get_arg_usize, pagination_hint, tool_err, tool_ok};
+use crate::mcp::helpers::{
+    get_arg, get_arg_usize, get_bool_arg, pagination_hint, tool_err, tool_ok,
+};
 use crate::mcp::resources::{
     format_run_detail_with_log, format_run_summary_line, format_run_summary_line_with_repo,
 };
@@ -18,6 +20,7 @@ pub(super) fn tool_list_runs(
     let repo_slug = get_arg(args, "repo");
     let worktree_slug = get_arg(args, "worktree");
     let status_str = get_arg(args, "status");
+    let include_inactive = get_bool_arg(args, "include_inactive");
 
     // worktree filter is repo-scoped and meaningless without a repo
     if worktree_slug.is_some() && repo_slug.is_none() {
@@ -64,7 +67,12 @@ pub(super) fn tool_list_runs(
             }
         } else {
             match conductor_core::workflow::list_workflow_runs_by_repo_id_filtered(
-                conn, &repo.id, limit, offset, status,
+                conn,
+                &repo.id,
+                limit,
+                offset,
+                status,
+                include_inactive,
             ) {
                 Ok(r) => r,
                 Err(e) => return tool_err(e),
@@ -111,7 +119,11 @@ pub(super) fn tool_list_runs(
             repos.into_iter().map(|r| (r.id, r.slug)).collect();
 
         let runs = match conductor_core::workflow::list_all_workflow_runs_filtered_paginated(
-            conn, status, limit, offset,
+            conn,
+            status,
+            limit,
+            offset,
+            include_inactive,
         ) {
             Ok(r) => r,
             Err(e) => return tool_err(e),
@@ -1231,6 +1243,84 @@ mod tests {
             text.contains("worktree_branch: feat/my-feature"),
             "expected worktree_branch in output, got: {text}"
         );
+    }
+
+    #[test]
+    fn test_list_runs_include_inactive_shows_merged_worktree_runs() {
+        use conductor_core::agent::AgentManager;
+        use conductor_core::config::Config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let (_f, conductor) = make_test_conductor();
+        let conn = open_database(_f.path()).expect("open db");
+        let config = Config::default();
+
+        let repo = RepoManager::new(&conn, &config)
+            .register(
+                "inactive-test-repo",
+                "/tmp/inactive-test-repo",
+                "https://github.com/x/y",
+                None,
+            )
+            .expect("register repo");
+
+        let wt_id = "01JTEST0000000000000000002";
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 'merged', datetime('now'))",
+            rusqlite::params![wt_id, repo.id, "feat-merged", "feat/merged", "/tmp/wt-m"],
+        )
+        .expect("insert worktree");
+
+        let parent = AgentManager::new(&conn)
+            .create_run(None, "workflow", None)
+            .expect("create agent run");
+        let run = conductor_core::workflow::create_workflow_run_with_targets(
+            &conn,
+            "merged-wf",
+            Some(wt_id),
+            None,
+            Some(&repo.id),
+            &parent.id,
+            false,
+            "manual",
+            None,
+            None,
+            None,
+        )
+        .expect("create workflow run");
+
+        let text_of = |args: &serde_json::Map<String, Value>| {
+            let result = tool_list_runs(&conductor, args);
+            assert_ne!(result.is_error, Some(true));
+            result.content[0]
+                .as_text()
+                .map(|t| t.text.clone())
+                .unwrap_or_default()
+        };
+
+        for with_repo in [true, false] {
+            let mut args = if with_repo {
+                args_with("repo", "inactive-test-repo")
+            } else {
+                empty_args()
+            };
+            let default_text = text_of(&args);
+            assert!(
+                !default_text.contains(&run.id),
+                "merged run must be hidden by default (repo={with_repo}): {default_text}"
+            );
+            args.insert("include_inactive".into(), Value::Bool(true));
+            let text = text_of(&args);
+            assert!(
+                text.contains(&run.id),
+                "merged run must appear with include_inactive (repo={with_repo}): {text}"
+            );
+            if with_repo {
+                assert!(text.contains("worktree_slug: feat-merged"), "got: {text}");
+            }
+        }
     }
 
     #[test]

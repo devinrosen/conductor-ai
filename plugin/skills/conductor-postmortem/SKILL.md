@@ -12,7 +12,7 @@ The most useful evidence is in this conversation, not only in conductor's databa
 ## 1. Find the session's runs
 
 1. Collect every workflow run ID that appears in this conversation (`run_id: 01…` from `conductor_run_workflow`, `conductor workflow wait`, `conductor_resume_run` and the like).
-2. Call `conductor_list_runs` (no repo filter, `limit` 50; page with `offset` if needed) and add runs that started during this session but weren't mentioned, for example child runs. Run IDs are ULIDs, so they sort by start time. If you can't tell when the session started, use the earliest run ID from step 1, and say so.
+2. Call `conductor_list_runs` with `include_inactive = true` (no repo filter, `limit` 50; page with `offset` if needed). The session's PRs have usually merged by now, and without `include_inactive` the tool hides runs on merged worktrees. and add runs that started during this session but weren't mentioned, for example child runs. Run IDs are ULIDs, so they sort by start time. If you can't tell when the session started, use the earliest run ID from step 1, and say so.
 3. For each top-level run, call `conductor_run_stats` (pass a ticket-to-pr run and its follow-up iterate-pr run together, comma-separated). For failed or resumed runs, also call `conductor_get_run` for the step errors.
 
 Summarize in a table: run, workflow, repo and ticket or PR, outcome, wall time, review rounds, blocking findings, cost. Mark runs that needed a hand fix, a resume, or a stop such as `fail-verify`.
