@@ -29,11 +29,12 @@ emit() {
 log=$(mktemp)
 trap 'rm -f "${log}"' EXIT
 
-if cargo run -q --bin conductor -- workflow validate --all --templates --path . > "${log}" 2>&1; then
+status=0
+cargo run -q --bin conductor -- workflow validate --all --templates --path . > "${log}" 2>&1 || status=$?
+if [ "${status}" -eq 0 ]; then
   emit true "Workflow validation passed: $(tail -n 1 "${log}")" '[]'
   exit 0
 fi
-status=$?
 
 pr_files=""
 if [ -n "${BASE_BRANCH:-}" ] && [[ "${BASE_BRANCH}" != *"{{"* ]]; then
