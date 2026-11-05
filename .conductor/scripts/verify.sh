@@ -148,7 +148,7 @@ fi
 # --- cargo fmt -----------------------------------------------------------------
 # fmt-fix runs just before verify, so a failure here means rustfmt itself
 # couldn't format the code, usually a parse error.
-if cargo fmt --all --check > "${logs}/fmt.log" 2>&1; then
+if cargo fmt --all --check -- --color never > "${logs}/fmt.log" 2>&1; then
   record "cargo fmt" pass "ok"
 else
   record "cargo fmt" fail "cargo fmt --all --check failed after fmt-fix (rustfmt couldn't format the code, usually a parse error)" "$(head -n 30 "${logs}/fmt.log")"
