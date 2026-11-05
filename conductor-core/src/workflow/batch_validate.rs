@@ -268,6 +268,38 @@ impl BatchValidationResult {
     }
 }
 
+/// Validation context over a validation-only registry.
+fn validation_context(
+    registry: &runkon_flow::traits::item_provider::ItemProviderRegistry,
+) -> ValidationContext<'_> {
+    ValidationContext {
+        registry,
+        valid_targets: CONDUCTOR_TARGETS,
+    }
+}
+
+/// The engine a run validates against, with its build error as a string.
+fn validation_engine() -> std::result::Result<runkon_flow::FlowEngine, String> {
+    super::coordinator::build_validation_engine().map_err(|e| e.to_string())
+}
+
+/// Script resolver over each dir and its `.conductor/scripts`, plus the default
+/// skills dir.
+fn validation_script_resolver(
+    dirs: &[&str],
+) -> impl Fn(&str) -> std::result::Result<std::path::PathBuf, String> {
+    let mut roots = Vec::new();
+    for dir in dirs {
+        let dir = std::path::PathBuf::from(dir);
+        roots.push(dir.clone());
+        roots.push(dir.join(".conductor/scripts"));
+    }
+    if let Some(skills) = default_skills_dir() {
+        roots.push(skills);
+    }
+    make_script_resolver(roots)
+}
+
 /// Validate a batch of workflows against agents, snippets, schemas, cycles,
 /// semantic rules, script steps, and bot-name configuration.
 ///
@@ -290,16 +322,7 @@ pub fn validate_workflows_batch<F>(
 where
     F: Fn(&str) -> std::result::Result<WorkflowDef, String>,
 {
-    let mut script_roots = vec![
-        std::path::PathBuf::from(wt_path),
-        std::path::PathBuf::from(wt_path).join(".conductor/scripts"),
-        std::path::PathBuf::from(repo_path),
-        std::path::PathBuf::from(repo_path).join(".conductor/scripts"),
-    ];
-    if let Some(skills) = default_skills_dir() {
-        script_roots.push(skills);
-    }
-    let script_resolver = make_script_resolver(script_roots);
+    let script_resolver = validation_script_resolver(&[wt_path, repo_path]);
 
     let make_error = |message: String, hint: Option<String>| -> ValidationError {
         ValidationError { message, hint }
@@ -394,15 +417,10 @@ where
     };
 
     // Build a validation-only registry and context once for the whole batch.
+    // The engine is the one a run validates against, built once for the batch.
     let validation_registry = super::runkon_bridge::build_rk_validation_registry();
-    let validation_ctx = ValidationContext {
-        registry: &validation_registry,
-        valid_targets: CONDUCTOR_TARGETS,
-    };
-
-    // The engine a run validates against, built once for the batch.
-    let validation_engine =
-        super::coordinator::build_validation_engine().map_err(|e| e.to_string());
+    let validation_ctx = validation_context(&validation_registry);
+    let validation_engine = validation_engine();
 
     let mut entries = Vec::new();
     for (workflow, wf_refs) in workflows.iter().zip(per_wf_refs.iter()) {
@@ -589,17 +607,9 @@ pub fn validate_template_sources(
             .ok_or_else(|| format!("workflow '{name}' not found"))
     };
     let registry = super::runkon_bridge::build_rk_validation_registry();
-    let ctx = ValidationContext {
-        registry: &registry,
-        valid_targets: CONDUCTOR_TARGETS,
-    };
-    let engine = super::coordinator::build_validation_engine().map_err(|e| e.to_string());
-    let repo = std::path::PathBuf::from(repo_path);
-    let mut roots = vec![repo.clone(), repo.join(".conductor/scripts")];
-    if let Some(skills) = default_skills_dir() {
-        roots.push(skills);
-    }
-    let script_resolver = make_script_resolver(roots);
+    let ctx = validation_context(&registry);
+    let engine = validation_engine();
+    let script_resolver = validation_script_resolver(&[repo_path]);
 
     let entries = defs
         .iter()
@@ -990,12 +1000,7 @@ mod tests {
     }
 
     fn gate_wf(gate_type: &str, extra: &str) -> WorkflowDef {
-        parse_wf(&format!(
-            r#"workflow gate-test {{
-                meta {{ trigger = "manual" targets = ["worktree"] }}
-                gate {gate_type} {{ {extra} timeout = "1h" on_timeout = fail }}
-            }}"#
-        ))
+        crate::workflow::coordinator::gate_test_def(gate_type, extra)
     }
 
     fn write_file(dir: &std::path::Path, rel: &str, body: &str) {
@@ -1019,12 +1024,7 @@ mod tests {
     #[test]
     fn batch_known_gate_types_pass() {
         let dir = tempfile::tempdir().unwrap();
-        for (gate_type, extra) in [
-            ("human_approval", r#"prompt = "x""#),
-            ("human_review", r#"prompt = "x""#),
-            ("pr_approval", r#"mode = "review_decision""#),
-            ("pr_checks", ""),
-        ] {
+        for (gate_type, extra) in crate::workflow::coordinator::RUN_GATE_TYPE_CASES {
             let entry = run_batch(dir.path(), gate_wf(gate_type, extra));
             assert!(
                 entry.errors.is_empty(),

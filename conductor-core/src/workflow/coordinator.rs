@@ -1451,6 +1451,28 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     Ok(rk_result)
 }
 
+/// Every gate type a run registers, with the extra fields it needs to parse.
+/// Shared by the engine and `workflow validate` tests.
+#[cfg(test)]
+pub(crate) const RUN_GATE_TYPE_CASES: [(&str, &str); 4] = [
+    ("human_approval", r#"prompt = "x""#),
+    ("human_review", r#"prompt = "x""#),
+    ("pr_approval", r#"mode = "review_decision""#),
+    ("pr_checks", ""),
+];
+
+/// A one-gate workflow of the given type, for gate-type validation tests.
+#[cfg(test)]
+pub(crate) fn gate_test_def(gate_type: &str, extra: &str) -> runkon_flow::dsl::WorkflowDef {
+    let src = format!(
+        r#"workflow gate-test {{
+            meta {{ trigger = "manual" targets = ["worktree"] }}
+            gate {gate_type} {{ {extra} timeout = "1h" on_timeout = fail }}
+        }}"#
+    );
+    runkon_flow::dsl::parse_workflow_str(&src, "<test>").unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2034,19 +2056,8 @@ mod tests {
     #[test]
     fn validation_engine_registers_run_gate_types() {
         let engine = build_validation_engine().expect("validation engine builds");
-        for (gate_type, extra) in [
-            ("human_approval", r#"prompt = "x""#),
-            ("human_review", r#"prompt = "x""#),
-            ("pr_approval", r#"mode = "review_decision""#),
-            ("pr_checks", ""),
-        ] {
-            let src = format!(
-                r#"workflow gate-test {{
-                    meta {{ trigger = "manual" targets = ["worktree"] }}
-                    gate {gate_type} {{ {extra} timeout = "1h" on_timeout = fail }}
-                }}"#
-            );
-            let def = runkon_flow::dsl::parse_workflow_str(&src, "<test>").unwrap();
+        for (gate_type, extra) in RUN_GATE_TYPE_CASES {
+            let def = gate_test_def(gate_type, extra);
             if let Err(errs) = engine.validate(&def) {
                 panic!("gate type {gate_type} rejected: {errs:?}");
             }

@@ -94,6 +94,23 @@ pub(super) fn build_rk_validation_registry(
     build_rk_item_provider_registry(conn, &config, None)
 }
 
+/// The one list of built-in item providers. Runs `$body` once per provider with
+/// `$p` bound to it, so a run's registry and the validation engine's builder
+/// can't disagree on what is registered.
+macro_rules! for_each_rk_item_provider {
+    ($conn:expr, $config:expr, $repo_id:expr, |$p:ident| $body:expr) => {{
+        let $p = RkTicketsItemProvider::new(Arc::clone(&$conn), $config.clone(), $repo_id.clone());
+        $body;
+        let $p = RkReposItemProvider::new(Arc::clone(&$conn), $config.clone());
+        $body;
+        let $p = RkWorkflowRunsItemProvider::new(Arc::clone(&$conn), $config.clone());
+        $body;
+        let $p =
+            RkWorktreesItemProvider::new(Arc::clone(&$conn), $config.clone(), $repo_id.clone());
+        $body;
+    }};
+}
+
 /// Build a runkon-flow `ItemProviderRegistry` with all four built-in providers.
 pub(super) fn build_rk_item_provider_registry(
     conn: Arc<Mutex<rusqlite::Connection>>,
@@ -101,29 +118,13 @@ pub(super) fn build_rk_item_provider_registry(
     repo_id: Option<String>,
 ) -> runkon_flow::traits::item_provider::ItemProviderRegistry {
     let mut registry = runkon_flow::traits::item_provider::ItemProviderRegistry::new();
-
-    registry.register(RkTicketsItemProvider::new(
-        Arc::clone(&conn),
-        config.clone(),
-        repo_id.clone(),
-    ));
-    registry.register(RkReposItemProvider::new(Arc::clone(&conn), config.clone()));
-    registry.register(RkWorkflowRunsItemProvider::new(
-        Arc::clone(&conn),
-        config.clone(),
-    ));
-    registry.register(RkWorktreesItemProvider::new(
-        Arc::clone(&conn),
-        config.clone(),
-        repo_id,
-    ));
-
+    for_each_rk_item_provider!(conn, config, repo_id, |p| registry.register(p));
     registry
 }
 
 /// Register the four built-in item providers on an engine builder.
 ///
-/// Must list the same providers as [`build_rk_item_provider_registry`]; the
+/// Shares its provider list with [`build_rk_item_provider_registry`]; the
 /// validation engine uses this one because a builder owns its own registry.
 pub(super) fn with_rk_item_providers(
     builder: runkon_flow::FlowEngineBuilder,
@@ -131,22 +132,10 @@ pub(super) fn with_rk_item_providers(
     config: &crate::config::Config,
     repo_id: Option<String>,
 ) -> runkon_flow::FlowEngineBuilder {
+    let mut builder = builder;
+    for_each_rk_item_provider!(conn, config, repo_id, |p| builder =
+        builder.item_provider(p));
     builder
-        .item_provider(RkTicketsItemProvider::new(
-            Arc::clone(&conn),
-            config.clone(),
-            repo_id.clone(),
-        ))
-        .item_provider(RkReposItemProvider::new(Arc::clone(&conn), config.clone()))
-        .item_provider(RkWorkflowRunsItemProvider::new(
-            Arc::clone(&conn),
-            config.clone(),
-        ))
-        .item_provider(RkWorktreesItemProvider::new(
-            Arc::clone(&conn),
-            config.clone(),
-            repo_id,
-        ))
 }
 
 /// Build a `ScriptEnvProvider` for use with runkon-flow.
