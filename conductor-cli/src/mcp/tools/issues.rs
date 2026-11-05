@@ -4,6 +4,13 @@ use serde_json::Value;
 
 use crate::mcp::helpers::{get_arg, tool_err, tool_ok};
 
+/// The `\nMilestone: <m>` output suffix, empty when no milestone was requested.
+fn milestone_line(milestone: Option<&str>) -> String {
+    milestone
+        .map(|m| format!("\nMilestone: {m}"))
+        .unwrap_or_default()
+}
+
 pub(super) fn tool_create_gh_issue(
     conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
@@ -22,9 +29,7 @@ pub(super) fn tool_create_gh_issue(
         .filter(|l| !l.is_empty())
         .collect();
     let run_id = get_arg(args, "run_id");
-    let milestone = get_arg(args, "milestone")
-        .map(str::trim)
-        .filter(|m| !m.is_empty());
+    let milestone = github::normalize_milestone(get_arg(args, "milestone"));
 
     let conn = &conductor.conn;
     let config = &conductor.config;
@@ -50,9 +55,7 @@ pub(super) fn tool_create_gh_issue(
         Ok(v) => v,
         Err(e) => return tool_err(format!("Failed to create issue: {e}")),
     };
-    let milestone_line = milestone
-        .map(|m| format!("\nMilestone: {m}"))
-        .unwrap_or_default();
+    let milestone_line = milestone_line(milestone);
 
     // If run_id is provided, record the created issue for tracking
     if let Some(rid) = run_id {
@@ -92,6 +95,18 @@ mod tests {
             m.insert(k.to_string(), Value::String(v.to_string()));
         }
         m
+    }
+
+    #[test]
+    fn test_milestone_line() {
+        use conductor_core::github::normalize_milestone;
+        assert_eq!(milestone_line(None), "");
+        assert_eq!(milestone_line(normalize_milestone(Some(""))), "");
+        assert_eq!(milestone_line(normalize_milestone(Some("  "))), "");
+        assert_eq!(
+            milestone_line(normalize_milestone(Some(" 0.20.0 "))),
+            "\nMilestone: 0.20.0"
+        );
     }
 
     #[test]

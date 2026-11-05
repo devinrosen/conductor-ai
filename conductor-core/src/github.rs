@@ -448,6 +448,11 @@ pub fn fetch_github_issue(
     })
 }
 
+/// Trim a requested milestone title; a blank or whitespace-only title counts as absent.
+pub fn normalize_milestone(milestone: Option<&str>) -> Option<&str> {
+    milestone.map(str::trim).filter(|m| !m.is_empty())
+}
+
 /// List the titles of a repo's open milestones via `gh api`.
 pub fn list_open_milestones(owner: &str, repo: &str, token: Option<&str>) -> Result<Vec<String>> {
     let endpoint = format!("repos/{owner}/{repo}/milestones?state=open&per_page=100");
@@ -502,7 +507,7 @@ pub fn create_github_issue(
     token: Option<&str>,
 ) -> Result<(String, String)> {
     let repo_slug = repo_slug(owner, repo);
-    let milestone = milestone.map(str::trim).filter(|m| !m.is_empty());
+    let milestone = normalize_milestone(milestone);
     if let Some(requested) = milestone {
         let open = list_open_milestones(owner, repo, token)?;
         check_milestone(requested, &open, &repo_slug)?;
@@ -1049,6 +1054,14 @@ mod tests {
             vec!["0.20.0".to_string(), "0.21.0".to_string()]
         );
         assert!(parse_milestone_titles("").is_empty());
+    }
+
+    #[test]
+    fn test_normalize_milestone() {
+        assert_eq!(normalize_milestone(None), None);
+        assert_eq!(normalize_milestone(Some("")), None);
+        assert_eq!(normalize_milestone(Some("  \t ")), None);
+        assert_eq!(normalize_milestone(Some(" 0.20.0 ")), Some("0.20.0"));
     }
 
     #[test]
