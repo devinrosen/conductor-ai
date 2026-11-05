@@ -1081,3 +1081,131 @@ fn workflow_validate_input_requires_dry_run() {
         .failure()
         .stderr(predicate::str::contains("--dry-run"));
 }
+
+/// Add a second workflow file to a `setup_smoke_fixture` repo.
+fn add_smoke_workflow(dir: &std::path::Path, name: &str, body: &str) {
+    std::fs::write(
+        dir.join(".conductor/workflows").join(format!("{name}.wf")),
+        format!(
+            "workflow {name} {{\n  meta {{\n    trigger = \"manual\"\n    targets = [\"worktree\"]\n  }}\n{body}\n}}\n"
+        ),
+    )
+    .unwrap();
+}
+
+fn smoke_args<'a>(dir: &'a tempfile::TempDir, extra: &[&'a str]) -> Vec<&'a str> {
+    let mut args = vec!["workflow", "validate"];
+    args.extend_from_slice(extra);
+    args.extend(["--path", dir.path().to_str().unwrap()]);
+    args
+}
+
+#[test]
+fn workflow_validate_dry_run_named_workflow_fails_on_an_unfillable_required_input() {
+    let dir = setup_smoke_fixture("  inputs {\n    target required\n  }\n  call some-agent\n");
+    conductor_cmd(dir.path())
+        .args(smoke_args(&dir, &["smoke", "--dry-run"]))
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("SMOKE FAIL  smoke  start:"))
+        .stdout(predicate::str::contains("Missing required input: 'target'"));
+}
+
+#[test]
+fn workflow_validate_dry_run_all_skips_an_unfillable_required_input() {
+    let dir = setup_smoke_fixture("  inputs {\n    target required\n  }\n  call some-agent\n");
+    add_smoke_workflow(dir.path(), "plain", "  call some-agent\n");
+    conductor_cmd(dir.path())
+        .args(smoke_args(&dir, &["--all", "--dry-run"]))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SMOKE SKIP  smoke"))
+        .stdout(predicate::str::contains("SMOKE PASS  plain"));
+}
+
+#[test]
+fn workflow_validate_dry_run_supplied_input_satisfies_a_required_input() {
+    let dir = setup_smoke_fixture("  inputs {\n    target required\n  }\n  call some-agent\n");
+    conductor_cmd(dir.path())
+        .args(smoke_args(
+            &dir,
+            &["smoke", "--dry-run", "--input", "target=x"],
+        ))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "stopped at agent step 'some-agent'",
+        ));
+}
+
+#[test]
+fn workflow_validate_dry_run_unknown_ticket_id_input_is_not_linked_to_the_run() {
+    // A `ticket_id` input naming no known ticket must stay a plain input: linking
+    // it to the run would violate the workflow_runs.ticket_id foreign key.
+    let dir = setup_smoke_fixture("  inputs {\n    ticket_id required\n  }\n  call some-agent\n");
+    conductor_cmd(dir.path())
+        .args(smoke_args(
+            &dir,
+            &["smoke", "--dry-run", "--input", "ticket_id=no-such-ticket"],
+        ))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SMOKE PASS  smoke"));
+}
+
+#[test]
+fn workflow_validate_dry_run_rejects_a_malformed_input() {
+    let dir = setup_smoke_fixture("  call some-agent\n");
+    conductor_cmd(dir.path())
+        .args(smoke_args(
+            &dir,
+            &["smoke", "--dry-run", "--input", "no-equals"],
+        ))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Invalid input format: 'no-equals'",
+        ));
+}
+
+#[test]
+fn workflow_validate_dry_run_with_templates_alone_is_rejected() {
+    let dir = setup_smoke_fixture("  call some-agent\n");
+    conductor_cmd(dir.path())
+        .args(smoke_args(&dir, &["--templates", "--dry-run"]))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("templates can't be started"));
+}
+
+#[test]
+fn workflow_validate_dry_run_all_exits_zero_when_every_workflow_passes_or_skips() {
+    let dir = setup_smoke_fixture("  call some-agent\n");
+    add_smoke_workflow(
+        dir.path(),
+        "needs-input",
+        "  inputs {\n    x required\n  }\n",
+    );
+    conductor_cmd(dir.path())
+        .args(smoke_args(&dir, &["--all", "--dry-run"]))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SMOKE PASS  smoke"))
+        .stdout(predicate::str::contains("SMOKE SKIP  needs-input"));
+}
+
+#[test]
+fn workflow_validate_dry_run_all_exits_nonzero_when_one_workflow_fails() {
+    let dir = setup_smoke_fixture("  call some-agent\n");
+    add_smoke_workflow(
+        dir.path(),
+        "bad-gate",
+        "  gate bogus_gate {\n    prompt = \"ok?\"\n    timeout = \"1h\"\n    on_timeout = fail\n  }\n",
+    );
+    conductor_cmd(dir.path())
+        .args(smoke_args(&dir, &["--all", "--dry-run"]))
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("SMOKE PASS  smoke"))
+        .stdout(predicate::str::contains("bogus_gate"));
+}

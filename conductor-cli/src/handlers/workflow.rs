@@ -60,30 +60,22 @@ fn exec_params(
     opts: ExecOptions,
 ) -> conductor_core::workflow::WorkflowExecStandalone {
     conductor_core::workflow::WorkflowExecStandalone {
-        config: config.clone(),
-        workflow,
         worktree_id: target.worktree_id,
-        working_dir: target.working_dir,
-        repo_path: target.repo_path,
         ticket_id: target.ticket_id,
         repo_id: target.repo_id,
         model: opts.model,
-        runtime: None,
-        exec_config: opts.exec_config,
         inputs: opts.inputs,
         target_label: target.target_label,
-        run_id_notify: None,
-        triggered_by_hook: false,
         conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-        force: false,
         extra_plugin_dirs: opts.extra_plugin_dirs,
         db_path: opts.db_path,
-        parent_workflow_run_id: None,
-        depth: 0,
-        parent_step_id: None,
-        default_bot_name: None,
-        iteration: 0,
-        smoke: None,
+        ..conductor_core::workflow::WorkflowExecStandalone::new(
+            config.clone(),
+            workflow,
+            target.working_dir,
+            target.repo_path,
+            opts.exec_config,
+        )
     }
 }
 

@@ -236,7 +236,11 @@ impl SmokeOutcome {
 
 /// The deepest failed step of a run: a failed child run's step wins over the
 /// parent's `call workflow` step that merely reports it.
-fn find_failed_step(conn: &rusqlite::Connection, run_id: &str, depth: u32) -> Option<String> {
+pub(crate) fn find_failed_step(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+    depth: u32,
+) -> Option<String> {
     if depth > 16 {
         return None;
     }

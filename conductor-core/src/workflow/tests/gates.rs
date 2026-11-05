@@ -354,33 +354,17 @@ fn spawn_standalone(
     String,
 ) {
     let params = crate::workflow::types::WorkflowExecStandalone {
-        config: Config::default(),
-        workflow: def,
-        worktree_id: None,
-        working_dir: ws.to_str().unwrap().to_string(),
-        repo_path: ws.to_str().unwrap().to_string(),
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        runtime: None,
-        exec_config: crate::workflow::WorkflowExecConfig {
-            poll_interval: std::time::Duration::from_millis(50),
-            ..Default::default()
-        },
-        inputs: std::collections::HashMap::new(),
-        target_label: None,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        force: false,
-        extra_plugin_dirs: vec![],
         db_path: Some(db_path.to_path_buf()),
-        parent_workflow_run_id: None,
-        depth: 0,
-        parent_step_id: None,
-        default_bot_name: None,
-        iteration: 0,
-        smoke: None,
+        ..WorkflowExecStandalone::new(
+            Config::default(),
+            def,
+            ws.to_str().unwrap().to_string(),
+            ws.to_str().unwrap().to_string(),
+            crate::workflow::WorkflowExecConfig {
+                poll_interval: std::time::Duration::from_millis(50),
+                ..Default::default()
+            },
+        )
     };
     let handle = std::thread::spawn(move || crate::workflow::execute_workflow_standalone(&params));
 

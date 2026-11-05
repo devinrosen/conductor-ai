@@ -237,30 +237,18 @@ pub fn run_workflow_on_pr(
 
     let pr_target_label = format!("{}/{}#{}", pr_ref.owner, pr_ref.repo, pr_ref.number);
     let input = WorkflowExecStandalone {
-        config: config.clone(),
-        workflow,
-        worktree_id: None,
-        working_dir: clone_path_str.to_string(),
-        repo_path: clone_path_str.to_string(),
-        ticket_id: None,
-        repo_id: None,
         model: model.map(String::from),
         runtime: runtime.map(String::from),
-        exec_config,
         inputs,
-        depth: 0,
-        parent_workflow_run_id: None,
         target_label: Some(pr_target_label),
-        default_bot_name: None,
-        iteration: 0,
-        smoke: None,
-        run_id_notify: None,
-        triggered_by_hook: false,
         conductor_bin_dir,
-        force: false,
-        extra_plugin_dirs: vec![],
-        parent_step_id: None,
-        db_path: None,
+        ..WorkflowExecStandalone::new(
+            config.clone(),
+            workflow,
+            clone_path_str.to_string(),
+            clone_path_str.to_string(),
+            exec_config,
+        )
     };
 
     // `temp_dir` is dropped after execute_workflow_standalone returns, cleaning up the cloned repo.

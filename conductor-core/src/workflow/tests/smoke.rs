@@ -70,30 +70,14 @@ fn params(
 ) -> crate::workflow::types::WorkflowExecStandalone {
     let ws = f.ws.path().to_str().unwrap().to_string();
     crate::workflow::types::WorkflowExecStandalone {
-        config: Config::default(),
-        workflow: def,
-        worktree_id: None,
-        working_dir: ws.clone(),
-        repo_path: ws,
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        runtime: None,
-        exec_config: WorkflowExecConfig::default(),
-        inputs: HashMap::new(),
-        target_label: None,
-        run_id_notify: None,
-        triggered_by_hook: false,
-        conductor_bin_dir: None,
-        force: false,
-        extra_plugin_dirs: vec![],
         db_path: Some(f.db_path.clone()),
-        parent_workflow_run_id: None,
-        depth: 0,
-        parent_step_id: None,
-        default_bot_name: None,
-        iteration: 0,
-        smoke: None,
+        ..WorkflowExecStandalone::new(
+            Config::default(),
+            def,
+            ws.clone(),
+            ws,
+            WorkflowExecConfig::default(),
+        )
     }
 }
 
@@ -270,4 +254,121 @@ fn unopenable_database_is_reported_not_swallowed() {
         }
         other => panic!("expected Failed, got {other:?}"),
     }
+}
+
+/// Seed a run chain `top -> c1 -> c2 -> ... -> c<depth>` (each a failed child of
+/// the previous) and return the connection. Every run gets a failed step named
+/// `step-<run id>`, except where `skip_step` names a run.
+fn seed_failed_chain(f: &Fixture, depth: u32, skip_step: Option<&str>) -> rusqlite::Connection {
+    let conn = crate::db::open_database(&f.db_path).unwrap();
+    let mut ids = vec!["top".to_string()];
+    ids.extend((1..=depth).map(|i| format!("c{i}")));
+    for (i, id) in ids.iter().enumerate() {
+        crate::test_helpers::insert_test_wf_run(&conn, id, &format!("wf-{id}"), "failed", None);
+        if i > 0 {
+            conn.execute(
+                "UPDATE workflow_runs SET parent_workflow_run_id = ?1 WHERE id = ?2",
+                rusqlite::params![ids[i - 1], id],
+            )
+            .unwrap();
+        }
+        if skip_step != Some(id.as_str()) {
+            crate::test_helpers::insert_test_wf_step(
+                &conn,
+                &format!("s-{id}"),
+                id,
+                &format!("step-{id}"),
+                "script",
+                "failed",
+                0,
+                "2026-01-01T00:00:01Z",
+                None,
+                None,
+            );
+        }
+    }
+    conn
+}
+
+#[test]
+fn find_failed_step_reports_a_step_of_the_run_itself() {
+    let f = fixture();
+    let conn = seed_failed_chain(&f, 0, None);
+    assert_eq!(
+        crate::workflow::smoke::find_failed_step(&conn, "top", 0).as_deref(),
+        Some("step-top")
+    );
+}
+
+#[test]
+fn find_failed_step_attributes_to_the_failed_child_run() {
+    let f = fixture();
+    let conn = seed_failed_chain(&f, 1, None);
+    // The parent's own failed step only reports the child; the child's step wins.
+    assert_eq!(
+        crate::workflow::smoke::find_failed_step(&conn, "top", 0).as_deref(),
+        Some("step-c1 (in wf-c1)")
+    );
+}
+
+#[test]
+fn find_failed_step_nests_through_grandchildren() {
+    let f = fixture();
+    let conn = seed_failed_chain(&f, 2, None);
+    assert_eq!(
+        crate::workflow::smoke::find_failed_step(&conn, "top", 0).as_deref(),
+        Some("step-c2 (in wf-c2) (in wf-c1)")
+    );
+}
+
+#[test]
+fn find_failed_step_falls_back_to_the_parent_step_when_the_child_has_none() {
+    let f = fixture();
+    let conn = seed_failed_chain(&f, 1, Some("c1"));
+    assert_eq!(
+        crate::workflow::smoke::find_failed_step(&conn, "top", 0).as_deref(),
+        Some("step-top")
+    );
+}
+
+#[test]
+fn find_failed_step_ignores_children_that_did_not_fail() {
+    let f = fixture();
+    let conn = seed_failed_chain(&f, 1, None);
+    conn.execute(
+        "UPDATE workflow_runs SET status = 'cancelled' WHERE id = 'c1'",
+        [],
+    )
+    .unwrap();
+    assert_eq!(
+        crate::workflow::smoke::find_failed_step(&conn, "top", 0).as_deref(),
+        Some("step-top")
+    );
+}
+
+#[test]
+fn find_failed_step_stops_past_the_depth_cap() {
+    let f = fixture();
+    let conn = seed_failed_chain(&f, 1, None);
+    // Past the cap nothing is looked up, not even the run's own failed step.
+    assert_eq!(
+        crate::workflow::smoke::find_failed_step(&conn, "top", 17),
+        None
+    );
+    // At the cap the run's own step is still found.
+    assert_eq!(
+        crate::workflow::smoke::find_failed_step(&conn, "c1", 16).as_deref(),
+        Some("step-c1")
+    );
+}
+
+#[test]
+fn find_failed_step_stops_recursing_in_a_chain_deeper_than_the_cap() {
+    let f = fixture();
+    let conn = seed_failed_chain(&f, 20, None);
+    // c16 is the deepest run still searched (depth 16); c17 is past the cap, so
+    // the failure is attributed to c16's own step instead of recursing further.
+    let found = crate::workflow::smoke::find_failed_step(&conn, "top", 0).unwrap();
+    assert!(found.starts_with("step-c16 (in wf-c16)"), "{found}");
+    assert!(!found.contains("c17"), "{found}");
 }

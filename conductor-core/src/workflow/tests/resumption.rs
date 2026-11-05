@@ -1448,33 +1448,19 @@ mod child_resume {
     fn run_parent(f: &Fixture) -> crate::workflow::WorkflowResult {
         let ws_str = f.ws.path().to_str().unwrap().to_string();
         let params = crate::workflow::types::WorkflowExecStandalone {
-            config: Config::default(),
-            workflow: f.parent_def.clone(),
             worktree_id: Some("w1".to_string()),
-            working_dir: ws_str.clone(),
-            repo_path: ws_str,
-            ticket_id: None,
             repo_id: Some("r1".to_string()),
-            model: None,
-            runtime: None,
-            exec_config: crate::workflow::WorkflowExecConfig {
-                poll_interval: std::time::Duration::from_millis(50),
-                ..Default::default()
-            },
-            inputs: HashMap::new(),
-            target_label: None,
-            run_id_notify: None,
-            triggered_by_hook: false,
-            conductor_bin_dir: None,
-            force: false,
-            extra_plugin_dirs: vec![],
             db_path: Some(f.db_path.clone()),
-            parent_workflow_run_id: None,
-            depth: 0,
-            parent_step_id: None,
-            default_bot_name: None,
-            iteration: 0,
-            smoke: None,
+            ..WorkflowExecStandalone::new(
+                Config::default(),
+                f.parent_def.clone(),
+                ws_str.clone(),
+                ws_str,
+                crate::workflow::WorkflowExecConfig {
+                    poll_interval: std::time::Duration::from_millis(50),
+                    ..Default::default()
+                },
+            )
         };
         crate::workflow::execute_workflow_standalone(&params).expect("parent run should start")
     }

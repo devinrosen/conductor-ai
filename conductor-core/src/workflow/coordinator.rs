@@ -2130,37 +2130,24 @@ mod tests {
         run_id_notify: Option<crate::workflow::types::RunIdSlot>,
     ) -> WorkflowExecStandalone {
         WorkflowExecStandalone {
-            config: crate::config::Config::default(),
-            workflow: make_wf(vec![]),
             worktree_id: if ticket_id.is_some() {
                 Some("w1".into())
             } else {
                 None
             },
-            working_dir: "/tmp".into(),
-            repo_path: "/tmp".into(),
             ticket_id,
-            repo_id: None,
-            model: None,
-            runtime: None,
-            exec_config: crate::workflow::WorkflowExecConfig {
-                dry_run: false,
-                ..Default::default()
-            },
-            inputs: HashMap::new(),
-            target_label: None,
             run_id_notify,
-            triggered_by_hook: false,
-            conductor_bin_dir: None,
-            force: false,
-            extra_plugin_dirs: vec![],
             db_path: Some(db_path),
-            parent_workflow_run_id: None,
-            depth: 0,
-            parent_step_id: None,
-            default_bot_name: None,
-            iteration: 0,
-            smoke: None,
+            ..WorkflowExecStandalone::new(
+                crate::config::Config::default(),
+                make_wf(vec![]),
+                "/tmp".into(),
+                "/tmp".into(),
+                crate::workflow::WorkflowExecConfig {
+                    dry_run: false,
+                    ..Default::default()
+                },
+            )
         }
     }
 

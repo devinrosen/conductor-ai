@@ -514,33 +514,24 @@ pub async fn run_workflow(
     let db_path = state.db_path.clone();
     tokio::task::spawn_blocking(move || {
         let params = conductor_core::workflow::WorkflowExecStandalone {
-            config,
-            workflow: def,
             worktree_id: Some(wt_id),
-            working_dir: wt_path,
-            repo_path,
             ticket_id: wt_ticket_id,
-            repo_id: None,
             model,
-            runtime: None,
-            exec_config: WorkflowExecConfig {
-                dry_run,
-                ..Default::default()
-            },
             inputs,
             target_label: Some(wt_target_label.clone()),
             run_id_notify: Some(std::sync::Arc::clone(&run_id_slot)),
-            triggered_by_hook: false,
             conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-            force: false,
-            extra_plugin_dirs: vec![],
             db_path: Some(db_path.clone()),
-            parent_workflow_run_id: None,
-            depth: 0,
-            parent_step_id: None,
-            default_bot_name: None,
-            iteration: 0,
-            smoke: None,
+            ..WorkflowExecStandalone::new(
+                config,
+                def,
+                wt_path,
+                repo_path,
+                WorkflowExecConfig {
+                    dry_run,
+                    ..Default::default()
+                },
+            )
         };
 
         let result = conductor_core::workflow::execute_workflow_standalone(&params);
@@ -766,30 +757,16 @@ pub async fn post_workflow_run(
             None
         };
         let input = WorkflowExecStandalone {
-            config: config.clone(),
-            workflow: def,
             worktree_id: wt_id_clone.clone(),
-            working_dir: wt_path,
-            repo_path,
             ticket_id: wt_ticket_id,
             repo_id: repo_id_for_exec,
             model,
-            runtime: None,
-            exec_config,
             inputs,
-            depth: 0,
-            parent_workflow_run_id: None,
             target_label: Some(target_label.clone()),
-            default_bot_name: None,
-            iteration: 0,
-            smoke: None,
             run_id_notify: Some(std::sync::Arc::clone(&run_id_slot)),
-            triggered_by_hook: false,
             conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-            extra_plugin_dirs: vec![],
-            force: false,
-            parent_step_id: None,
             db_path: Some(db_path),
+            ..WorkflowExecStandalone::new(config.clone(), def, wt_path, repo_path, exec_config)
         };
 
         let result = execute_workflow_standalone(&input);
