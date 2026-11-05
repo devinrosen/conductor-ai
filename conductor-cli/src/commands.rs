@@ -348,6 +348,23 @@ pub enum WorkflowCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Time, review cycles, tokens and cost per step for a workflow run and its child runs
+    #[command(
+        name = "run-stats",
+        after_help = "Examples:\n  conductor workflow run-stats <run-id>\n  conductor workflow run-stats <ticket-to-pr-id> <iterate-pr-id>\n  conductor workflow run-stats <run-id> --compare <other-run-id> --json"
+    )]
+    RunStats {
+        /// Workflow run ID(s); several are combined into one report (e.g. a ticket-to-pr run
+        /// and its follow-up iterate-pr run)
+        #[arg(required = true, num_args = 1..)]
+        run_ids: Vec<String>,
+        /// Run ID(s) to compare against, side by side (several are combined)
+        #[arg(long, num_args = 1..)]
+        compare: Vec<String>,
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
     /// Validate a workflow definition (check all agents exist)
     Validate {
         /// Workflow name (required unless --all is set)

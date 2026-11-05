@@ -334,6 +334,39 @@ pub(super) fn tool_get_step_log(
     }
 }
 
+/// Split a comma-separated list of run ids, dropping blanks.
+fn split_run_ids(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+pub(super) fn tool_run_stats(
+    conductor: &Conductor,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
+    let run_ids = split_run_ids(require_arg!(args, "run_id"));
+    if run_ids.is_empty() {
+        return tool_err("run_id must contain at least one workflow run id");
+    }
+    let compare_ids = get_arg(args, "compare_run_id")
+        .map(split_run_ids)
+        .unwrap_or_default();
+    let as_json = args.get("json").and_then(Value::as_bool).unwrap_or(false);
+
+    match conductor_core::workflow::run_stats::render_run_stats(
+        &conductor.conn,
+        &run_ids,
+        &compare_ids,
+        as_json,
+    ) {
+        Ok(t) => tool_ok(t),
+        Err(e) => tool_err(e),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1748,5 +1781,72 @@ mod tests {
             !text.contains("test iteration 0 log"),
             "should not contain test iteration 0 log, got: {text}"
         );
+    }
+
+    #[test]
+    fn test_run_stats_missing_run_id_arg() {
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_run_stats(&conductor, &empty_args());
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_run_stats_nonexistent_run() {
+        let (_f, conductor) = make_test_conductor();
+        let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
+        let result = tool_run_stats(&conductor, &args);
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_run_stats_happy_path_text_and_json() {
+        let (f, conductor) = make_test_conductor();
+        let (run_id, _step_id) = make_run_with_step(f.path(), "implement");
+
+        let result = tool_run_stats(&conductor, &args_with("run_id", &run_id));
+        assert_ne!(result.is_error, Some(true));
+        let text = result.content[0].as_text().map(|t| t.text.clone()).unwrap();
+        assert!(text.contains(&run_id), "{text}");
+        assert!(text.contains("implement"), "{text}");
+
+        let mut args = args_with("run_id", &run_id);
+        args.insert("compare_run_id".into(), Value::String(run_id.clone()));
+        args.insert("json".into(), Value::Bool(true));
+        let result = tool_run_stats(&conductor, &args);
+        assert_ne!(result.is_error, Some(true));
+        let text = result.content[0].as_text().map(|t| t.text.clone()).unwrap();
+        let v: Value = serde_json::from_str(&text).expect("json output");
+        assert!(v.get("run").is_some() && v.get("compare").is_some());
+    }
+
+    #[test]
+    fn test_split_run_ids_trims_and_drops_blanks() {
+        assert_eq!(split_run_ids("a, b ,,c"), vec!["a", "b", "c"]);
+        assert_eq!(split_run_ids("  a  "), vec!["a"]);
+        assert!(split_run_ids("").is_empty());
+        assert!(split_run_ids(" , ,  ").is_empty());
+    }
+
+    #[test]
+    fn test_run_stats_blank_run_id_is_error() {
+        let (_f, conductor) = make_test_conductor();
+        let result = tool_run_stats(&conductor, &args_with("run_id", " , "));
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0].as_text().map(|t| t.text.clone()).unwrap();
+        assert!(text.contains("at least one workflow run id"), "{text}");
+    }
+
+    #[test]
+    fn test_run_stats_multiple_comma_separated_ids() {
+        let (f, conductor) = make_test_conductor();
+        let (run_id, _) = make_run_with_step(f.path(), "implement");
+        let ids = format!("{run_id}, {run_id}");
+        let mut args = args_with("run_id", &ids);
+        args.insert(
+            "compare_run_id".into(),
+            Value::String(format!(" ,{run_id}")),
+        );
+        let result = tool_run_stats(&conductor, &args);
+        assert_ne!(result.is_error, Some(true));
     }
 }
