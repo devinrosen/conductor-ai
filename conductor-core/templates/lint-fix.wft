@@ -19,16 +19,24 @@ workflow lint-fix {
     group       = "Development"
   }
 
-  do {
-    max_iterations = 3
-    on_max_iter    = fail
+  script analyze-lint {
+    run = ".conductor/scripts/analyze-lint.sh"
+  }
 
-    script analyze-lint {
-      run = ".conductor/scripts/analyze-lint.sh"
-    }
+  // Each iteration fixes, then re-analyzes, so the `while` condition reflects
+  // the state after the fix: a fix made on the last iteration is checked
+  // instead of failing on max_iterations. The re-analysis has its own step
+  // name because conditions read the latest result stored under a name.
+  if analyze-lint.has_lint_errors {
+    do {
+      max_iterations = 3
+      on_max_iter    = fail
 
-    if analyze-lint.has_lint_errors {
       call lint-fix-impl
-    }
-  } while analyze-lint.has_lint_errors
+
+      script reanalyze-lint {
+        run = ".conductor/scripts/analyze-lint.sh"
+      }
+    } while reanalyze-lint.has_lint_errors
+  }
 }
