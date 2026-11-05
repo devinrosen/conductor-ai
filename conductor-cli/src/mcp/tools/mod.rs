@@ -269,27 +269,39 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
             "List recent workflow runs, optionally filtered by repo, worktree, and/or status. \
              When repo is omitted, runs across all registered repos are returned and each row \
              includes a repo field. Supports pagination via limit (default 50) and offset (default 0). \
+             By default, runs on worktrees that are no longer active (merged or abandoned) are omitted; \
+             pass include_inactive=true to include them (repo-level runs with no worktree are always included). \
              For full step detail and conversation log on a specific run, read the `conductor://run/{run_id}` resource.",
-            schema(&[
+            schema_typed(&[
                 (
                     "repo",
+                    "string",
                     "Repo slug (optional; omit to list runs across all repos)",
                     false,
                 ),
                 (
                     "worktree",
+                    "string",
                     "Worktree slug or branch name to filter by (optional)",
                     false,
                 ),
                 (
                     "status",
+                    "string",
                     "Filter by run status: pending, running, completed, failed, cancelled, waiting (optional)",
                     false,
                 ),
-                ("limit", "Max runs to return (default 50)", false),
+                ("limit", "string", "Max runs to return (default 50)", false),
                 (
                     "offset",
+                    "string",
                     "Number of runs to skip for pagination (default 0)",
+                    false,
+                ),
+                (
+                    "include_inactive",
+                    "boolean",
+                    "Include runs on merged or abandoned worktrees (default false)",
                     false,
                 ),
             ]),
