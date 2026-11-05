@@ -131,16 +131,15 @@ pub fn handle_agent(command: AgentCommands, conn: &Connection, config: &Config) 
             })?;
 
             // Create the GitHub issue
-            let (source_id, url) =
-                github::create_github_issue(
-                    &owner,
-                    &repo_name,
-                    &title,
-                    &body,
-                    &[],
-                    milestone.as_deref(),
-                    None,
-                )?;
+            let (source_id, url) = github::create_github_issue(
+                &owner,
+                &repo_name,
+                &title,
+                &body,
+                &[],
+                milestone.as_deref(),
+                None,
+            )?;
 
             // Record in DB
             agent_mgr.record_created_issue(&run_id, repo_id, "github", &source_id, &title, &url)?;

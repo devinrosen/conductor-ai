@@ -451,7 +451,10 @@ pub fn fetch_github_issue(
 /// List the titles of a repo's open milestones via `gh api`.
 pub fn list_open_milestones(owner: &str, repo: &str, token: Option<&str>) -> Result<Vec<String>> {
     let endpoint = format!("repos/{owner}/{repo}/milestones?state=open&per_page=100");
-    let output = run_gh_with_token(&["api", "--paginate", &endpoint, "--jq", ".[].title"], token)?;
+    let output = run_gh_with_token(
+        &["api", "--paginate", &endpoint, "--jq", ".[].title"],
+        token,
+    )?;
     Ok(parse_milestone_titles(&String::from_utf8_lossy(
         &output.stdout,
     )))
@@ -1053,11 +1056,15 @@ mod tests {
         let open = vec!["0.20.0".to_string(), "0.21.0".to_string()];
         assert!(check_milestone("0.20.0", &open, "o/r").is_ok());
 
-        let err = check_milestone("0.99.0", &open, "o/r").unwrap_err().to_string();
+        let err = check_milestone("0.99.0", &open, "o/r")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("'0.99.0' not found in o/r"), "{err}");
         assert!(err.contains("open milestones: 0.20.0, 0.21.0"), "{err}");
 
-        let err = check_milestone("0.20.0", &[], "o/r").unwrap_err().to_string();
+        let err = check_milestone("0.20.0", &[], "o/r")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("no open milestones"), "{err}");
 
         let open = vec!["Beta".to_string()];
