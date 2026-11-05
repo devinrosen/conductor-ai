@@ -73,8 +73,9 @@ if [ -n "${pending}" ]; then
     old_file="${new_file%.new}"
     if [ -f "${old_file}" ]; then
       # diff exits 1 when the files differ; 2 means it couldn't compare them.
-      snap_diff=$(diff -u "${old_file}" "${new_file}")
-      diff_status=$?
+      # Captured with || so the status survives if set -e is ever added.
+      diff_status=0
+      snap_diff=$(diff -u "${old_file}" "${new_file}") || diff_status=$?
       if [ "${diff_status}" -gt 1 ]; then
         snap_diff="(diff failed with status ${diff_status}; compare ${new_file#./} with ${old_file#./} directly)"
       else
