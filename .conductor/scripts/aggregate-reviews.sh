@@ -57,7 +57,8 @@ if ! result=$(jq -c '
     "review-error-handling":     {name: "Error Handling",     labels: ["bug"]},
     "review-test-coverage":      {name: "Test Coverage",      labels: ["enhancement"]},
     "review-db-migrations":      {name: "DB Migrations",      labels: ["bug"]},
-    "review-workflow-semantics": {name: "Workflow Semantics", labels: ["bug"]}
+    "review-workflow-semantics": {name: "Workflow Semantics", labels: ["bug"]},
+    "validate-workflows":        {name: "Workflow Validation", labels: ["bug"]}
   };
   def sev_rank: if . == "critical" then 2 elif . == "warning" then 1 else 0 end;
   # structured_output first, then the context string, as JSON objects.
