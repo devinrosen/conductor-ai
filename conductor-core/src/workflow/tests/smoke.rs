@@ -223,8 +223,14 @@ fn active_run_on_the_worktree_does_not_block_and_is_not_cancelled() {
         None,
     )
     .unwrap();
-    crate::workflow::update_workflow_status(&conn, &active.id, WorkflowRunStatus::Running, None, None)
-        .unwrap();
+    crate::workflow::update_workflow_status(
+        &conn,
+        &active.id,
+        WorkflowRunStatus::Running,
+        None,
+        None,
+    )
+    .unwrap();
 
     let def = parse("call some-agent");
     let mut p = params(&f, def);

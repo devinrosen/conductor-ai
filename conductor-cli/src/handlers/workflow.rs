@@ -900,7 +900,9 @@ pub fn handle_workflow(
                         Some((k, v)) => {
                             base_inputs.insert(k.to_string(), v.to_string());
                         }
-                        None => anyhow::bail!("Invalid input format: '{input_str}'. Use key=value."),
+                        None => {
+                            anyhow::bail!("Invalid input format: '{input_str}'. Use key=value.")
+                        }
                     }
                 }
                 let target = smoke_target
@@ -1426,7 +1428,6 @@ mod step_log_cli_tests {
     }
 }
 
-
 /// Smoke-start one workflow and print its result line. Returns 1 for a
 /// failure, 0 for a pass or a skip.
 fn smoke_one(
@@ -1503,9 +1504,7 @@ fn smoke_one(
             0
         }
         SmokeResult::Failed { step, error } => {
-            let at = step
-                .map(|s| format!(" at step '{s}'"))
-                .unwrap_or_default();
+            let at = step.map(|s| format!(" at step '{s}'")).unwrap_or_default();
             println!("SMOKE FAIL  {}{at}: {error}{run}", workflow.name);
             1
         }

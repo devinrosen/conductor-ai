@@ -16,9 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use runkon_flow::cancellation_reason::CancellationReason;
 use runkon_flow::engine_error::EngineError;
-use runkon_flow::traits::action_executor::{
-    ActionExecutor, ActionOutput, ActionParams, StepInfo,
-};
+use runkon_flow::traits::action_executor::{ActionExecutor, ActionOutput, ActionParams, StepInfo};
 use runkon_flow::traits::gate_resolver::{GateParams, GatePoll, GateResolver};
 use runkon_flow::traits::run_context::RunContext;
 
@@ -74,10 +72,7 @@ impl SmokeStop {
 
     /// The first stop point recorded, if any.
     pub fn stopped_at(&self) -> Option<SmokeStopPoint> {
-        self.point
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.point.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 

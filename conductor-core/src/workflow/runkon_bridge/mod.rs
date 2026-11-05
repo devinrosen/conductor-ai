@@ -86,7 +86,9 @@ pub(super) fn build_rk_smoke_action_registry(
 ) -> runkon_flow::traits::action_executor::ActionRegistry {
     runkon_flow::traits::action_executor::ActionRegistry::from_executors(
         std::collections::HashMap::new(),
-        Some(Box::new(crate::workflow::smoke::SmokeStopActionExecutor::new(smoke))),
+        Some(Box::new(
+            crate::workflow::smoke::SmokeStopActionExecutor::new(smoke),
+        )),
     )
 }
 
