@@ -1,10 +1,14 @@
 //! Smoke mode for `conductor workflow validate --dry-run` (#3292).
 //!
-//! A smoke run is a real, recorded workflow run that executes script steps and
-//! stops, cancelled, at the first agent (`call`) or gate step. It starts the
-//! workflow the way a normal run does, so registries, resolvers, input
-//! defaults and the engine's own start-of-run validation all run, but no agent
-//! executor is ever built, so no model call is possible.
+//! A smoke run is a recorded workflow run executed as an engine dry run: no
+//! script step is ever executed (runkon skips them in a dry run), gates are
+//! auto-approved, and the run stops, cancelled, at the first agent (`call`)
+//! step. It starts the workflow the way a normal run does, so registries,
+//! resolvers, input defaults and the engine's own start-of-run validation
+//! (unknown gate types, executors, item providers) all run, but no agent
+//! executor is ever built, so no model call is possible and nothing with side
+//! effects runs. The gate resolver wrapper below only matters if the engine
+//! ever polls a gate in a dry run.
 //!
 //! The pieces:
 //! - [`SmokeStop`]: shared handle that records the first stop point.
@@ -271,8 +275,9 @@ fn db_open_error(path: &std::path::Path, e: &dyn std::fmt::Display) -> String {
 
 /// Run `params` as a smoke run and classify the outcome.
 ///
-/// Sets `params.smoke`; every other field is used as given. The run executes
-/// script steps for real and stops at the first agent or gate step.
+/// Sets `params.smoke`; every other field is used as given. The run is an
+/// engine dry run (no script executes, gates auto-approve) and stops at the
+/// first agent step.
 pub fn smoke_run_workflow(mut params: WorkflowExecStandalone) -> SmokeOutcome {
     let stop = SmokeStop::new();
     params.smoke = Some(stop.clone());

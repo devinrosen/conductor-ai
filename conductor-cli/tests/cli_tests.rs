@@ -1044,7 +1044,7 @@ fn workflow_validate_dry_run_unknown_gate_type_fails() {
 }
 
 #[test]
-fn workflow_validate_dry_run_stops_at_a_valid_gate() {
+fn workflow_validate_dry_run_passes_a_valid_gate() {
     let dir = setup_smoke_fixture(
         "  gate human_review {\n    prompt = \"ok?\"\n    timeout = \"1h\"\n  }\n",
     );
@@ -1059,7 +1059,9 @@ fn workflow_validate_dry_run_stops_at_a_valid_gate() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("stopped at gate step"));
+        // A smoke run is an engine dry run: the gate is auto-approved once the
+        // engine has validated its type, and the gate-only workflow completes.
+        .stdout(predicate::str::contains("ran to completion"));
 }
 
 #[test]

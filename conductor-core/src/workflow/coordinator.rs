@@ -875,10 +875,12 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
 
     let mut rk_exec_config = params.exec_config.clone();
     if params.smoke.is_some() {
-        // The engine auto-approves gates in a dry run without polling a
-        // resolver, so a smoke run executes as a real run (agents are stubbed)
-        // and polls its gates quickly to stop at them.
-        rk_exec_config.dry_run = false;
+        // A smoke run is an engine dry run: runkon skips every script step
+        // ("dry-run: script not executed") and auto-approves gates, so nothing
+        // with side effects runs (iterate-pr's rebase-worktree can force-push).
+        // The engine's start-of-run validation (gate types, executors, item
+        // providers) still runs first, and agent calls hit the smoke stub.
+        rk_exec_config.dry_run = true;
         rk_exec_config.poll_interval = std::time::Duration::from_millis(10);
     }
     let event_sinks: Arc<[Arc<dyn runkon_flow::EventSink>]> =

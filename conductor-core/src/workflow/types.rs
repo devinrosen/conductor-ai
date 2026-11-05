@@ -242,8 +242,9 @@ pub struct WorkflowExecStandalone {
     pub default_bot_name: Option<String>,
     /// Iteration number for foreach child runs (0 for top-level runs).
     pub iteration: u32,
-    /// Smoke mode (`workflow validate --dry-run`): run script steps, stop and
-    /// cancel at the first agent or gate step, never run an agent. Inherited by
+    /// Smoke mode (`workflow validate --dry-run`): an engine dry run (no script
+    /// executes, gates auto-approve) that stops and cancels at the first agent
+    /// step, never running an agent. Inherited by
     /// child workflows. See [`crate::workflow::smoke_run_workflow`].
     pub smoke: Option<crate::workflow::SmokeStop>,
 }

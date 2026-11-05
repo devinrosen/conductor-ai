@@ -1,5 +1,7 @@
-//! Smoke mode (`workflow validate --dry-run`, #3292): script steps run, the run
-//! stops cancelled at the first agent or gate step, and no agent ever starts.
+//! Smoke mode (`workflow validate --dry-run`, #3292): the run is an engine dry
+//! run, so no script step ever executes and gates are auto-approved; it stops
+//! cancelled at the first agent step, and no agent ever starts. The engine's
+//! start-of-run validation still runs, so an unknown gate type fails (#3281).
 
 use std::os::unix::fs::PermissionsExt;
 
@@ -118,7 +120,7 @@ fn script_then_agent_stops_at_the_agent() {
     };
     assert_eq!(point.kind, SmokeStopKind::Agent);
     assert_eq!(point.step, "some-agent");
-    assert!(ran(&f, "a"), "the script before the agent runs for real");
+    assert!(!ran(&f, "a"), "smoke mode must never execute a script step");
 
     let run_id = outcome.run_id.expect("run id");
     assert_eq!(run_status(&f, &run_id), "cancelled");
@@ -132,22 +134,39 @@ fn script_then_agent_stops_at_the_agent() {
 }
 
 #[test]
-fn leading_gate_stops_at_the_gate_and_runs_nothing_after_it() {
+fn gate_is_passed_without_running_scripts_and_stops_at_the_agent() {
     let f = fixture();
     let a = script(&f, "a", false);
     let def = parse(&format!(
-        "gate human_review {{ prompt = \"ok?\" timeout = \"1h\" }}\nscript a {{ run = \"{a}\" }}"
+        "gate human_review {{ prompt = \"ok?\" timeout = \"1h\" }}\nscript a {{ run = \"{a}\" }}\ncall some-agent"
     ));
     let outcome = smoke_run_workflow(params(&f, def));
     let SmokeResult::Passed {
         stopped_at: Some(point),
     } = &outcome.result
     else {
-        panic!("expected a pass at the gate, got {:?}", outcome.result);
+        panic!("expected a pass at the agent, got {:?}", outcome.result);
     };
-    assert_eq!(point.kind, SmokeStopKind::Gate);
-    assert!(!ran(&f, "a"), "a script after a gate must not run");
+    assert_eq!(point.kind, SmokeStopKind::Agent);
+    assert!(!ran(&f, "a"), "smoke mode must never execute a script step");
     assert_eq!(run_status(&f, &outcome.run_id.unwrap()), "cancelled");
+}
+
+#[test]
+fn unknown_gate_type_fails_before_any_step() {
+    let f = fixture();
+    let a = script(&f, "a", false);
+    let def = parse(&format!(
+        "script a {{ run = \"{a}\" }}\ngate not_a_type {{ prompt = \"x\" timeout = \"1h\" }}"
+    ));
+    let outcome = smoke_run_workflow(params(&f, def));
+    match &outcome.result {
+        SmokeResult::Failed { error, .. } => {
+            assert!(error.contains("not_a_type"), "{error}")
+        }
+        other => panic!("expected a validation failure, got {other:?}"),
+    }
+    assert!(!ran(&f, "a"));
 }
 
 #[test]
@@ -171,25 +190,23 @@ fn child_workflow_stops_at_its_first_agent() {
     };
     assert_eq!(point.workflow, "smoke-child");
     assert_eq!(point.step, "some-agent");
-    assert!(ran(&f, "a"));
+    assert!(!ran(&f, "a"), "child scripts don't run either");
     assert_eq!(run_status(&f, &outcome.run_id.unwrap()), "cancelled");
 }
 
 #[test]
-fn failing_script_reports_its_step() {
+fn failing_script_is_never_run() {
     let f = fixture();
     let bad = script(&f, "bad", true);
     let def = parse(&format!(
         "script broken-step {{ run = \"{bad}\" }}\ncall some-agent"
     ));
     let outcome = smoke_run_workflow(params(&f, def));
-    match &outcome.result {
-        SmokeResult::Failed { step, .. } => {
-            assert_eq!(step.as_deref(), Some("broken-step"));
-        }
-        other => panic!("expected a failure, got {other:?}"),
-    }
-    assert!(!outcome.passed());
+    assert!(
+        outcome.passed(),
+        "a script that would fail is skipped, not run: {:?}",
+        outcome.result
+    );
 }
 
 #[test]
@@ -199,6 +216,7 @@ fn scripts_only_workflow_completes() {
     let def = parse(&format!("script a {{ run = \"{a}\" }}"));
     let outcome = smoke_run_workflow(params(&f, def));
     assert_eq!(outcome.result, SmokeResult::Passed { stopped_at: None });
+    assert!(!ran(&f, "a"), "smoke mode must never execute a script step");
     assert_eq!(run_status(&f, &outcome.run_id.unwrap()), "completed");
 }
 

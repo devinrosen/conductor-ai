@@ -1497,7 +1497,7 @@ fn smoke_one(
         }
         SmokeResult::Passed { stopped_at: None } => {
             println!(
-                "SMOKE PASS  {}  ran to completion, no agent or gate step{run}",
+                "SMOKE PASS  {}  ran to completion, no agent step{run}",
                 workflow.name
             );
             0

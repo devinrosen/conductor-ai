@@ -385,10 +385,9 @@ pub enum WorkflowCommands {
         /// Also validate the embedded workflow templates (.wft)
         #[arg(long)]
         templates: bool,
-        /// Also smoke-start each workflow that passes validation: a real, recorded
-        /// run that executes script steps up to the first agent or gate step, then
-        /// cancels. No model calls. Pre-agent script steps run for real, so run it
-        /// from a worktree you can afford to touch.
+        /// Also smoke-start each workflow that passes validation: a recorded engine
+        /// dry run (no script step executes, gates auto-approve) that stops at the
+        /// first agent step and cancels. No model calls and no side effects.
         #[arg(long)]
         dry_run: bool,
         /// Input variables for the smoke run (key=value pairs)

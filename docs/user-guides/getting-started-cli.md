@@ -95,14 +95,14 @@ conductor workflow validate ticket-to-pr my-repo fix-login-bug
 # Every workflow in the repo, plus the embedded workflow templates:
 conductor workflow validate --all --templates --path ~/path/to/repo
 
-# Also smoke-start it: a real, recorded run that executes script steps up to the
-# first agent or gate step, then cancels. No model calls.
+# Also smoke-start it: a recorded dry run that skips script steps, auto-approves
+# gates and cancels at the first agent step. No model calls, no side effects.
 conductor workflow validate ticket-to-pr my-repo fix-login-bug --dry-run --input qualify=false
 ```
 
 Validation runs the same checks a run starts with: the DSL parses, agents, schemas and scripts exist (workflow-local files first, then shared ones), there are no cycles, and every gate type, executor and foreach item provider is registered. A `{{variable}}` that is not an input, a built-in or something a script exports is reported as a warning.
 
-`--dry-run` then starts each workflow that passed, so registries, gate resolvers and input defaults are exercised for real. It reports `SMOKE PASS` with the agent or gate step it stopped at and the run ID, or `SMOKE FAIL` with the failing step, and exits non-zero on a failure. With `--all`, a workflow whose required inputs have no default is skipped. Script steps before the first agent run for real, so use a worktree you can afford to touch.
+`--dry-run` then starts each workflow that passed, so registries, gate resolvers and input defaults are exercised for real. It reports `SMOKE PASS` with the agent step it stopped at and the run ID, or `SMOKE FAIL` with the failing step, and exits non-zero on a failure. With `--all`, a workflow whose required inputs have no default is skipped. No script step runs, so it's safe on any worktree.
 
 ## Monitoring runs
 
