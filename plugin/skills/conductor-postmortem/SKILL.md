@@ -83,6 +83,8 @@ gh issue create --repo <owner/name> --title "<title>" --body-file <file> [--mile
 
 Only use labels that already exist in that repo (`gh label list --repo <owner/name>`). For an approved duplicate, post the comment on the existing issue instead (`gh issue comment`).
 
+For a repo registered with conductor, prefer `conductor_create_gh_issue` (with `milestone`, `labels` and `run_id` if any): it resolves the repo slug, validates the milestone against the open ones and records the run link. Keep the `gh` form for unregistered repos such as runkon/runkon.
+
 If the repo is registered with conductor and an issue will be worked on through conductor, run a full `conductor_sync_tickets` for that repo afterwards so the new ticket IDs resolve.
 
 ## 6. Report

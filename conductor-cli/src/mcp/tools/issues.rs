@@ -22,6 +22,9 @@ pub(super) fn tool_create_gh_issue(
         .filter(|l| !l.is_empty())
         .collect();
     let run_id = get_arg(args, "run_id");
+    let milestone = get_arg(args, "milestone")
+        .map(str::trim)
+        .filter(|m| !m.is_empty());
 
     let conn = &conductor.conn;
     let config = &conductor.config;
@@ -41,11 +44,15 @@ pub(super) fn tool_create_gh_issue(
         }
     };
 
-    let (number, url) =
-        match github::create_github_issue(&owner, &gh_repo, title, body, &labels, None) {
-            Ok(v) => v,
-            Err(e) => return tool_err(format!("Failed to create issue: {e}")),
-        };
+    let (number, url) = match github::create_github_issue(
+        &owner, &gh_repo, title, body, &labels, milestone, None,
+    ) {
+        Ok(v) => v,
+        Err(e) => return tool_err(format!("Failed to create issue: {e}")),
+    };
+    let milestone_line = milestone
+        .map(|m| format!("\nMilestone: {m}"))
+        .unwrap_or_default();
 
     // If run_id is provided, record the created issue for tracking
     if let Some(rid) = run_id {
@@ -55,12 +62,14 @@ pub(super) fn tool_create_gh_issue(
         {
             // Non-fatal: issue was created, but tracking failed
             return tool_ok(format!(
-                "Created issue #{number}: {title}\nURL: {url}\nWarning: failed to record issue link for run {rid}: {e}"
+                "Created issue #{number}: {title}\nURL: {url}{milestone_line}\nWarning: failed to record issue link for run {rid}: {e}"
             ));
         }
     }
 
-    tool_ok(format!("Created issue #{number}: {title}\nURL: {url}"))
+    tool_ok(format!(
+        "Created issue #{number}: {title}\nURL: {url}{milestone_line}"
+    ))
 }
 
 // ---------------------------------------------------------------------------

@@ -220,6 +220,9 @@ pub enum AgentCommands {
         /// Issue body
         #[arg(long)]
         body: String,
+        /// Milestone title to file the issue in (must be an open milestone)
+        #[arg(long)]
+        milestone: Option<String>,
         /// Agent run ID (defaults to $CONDUCTOR_RUN_ID env var)
         #[arg(long)]
         run_id: Option<String>,
