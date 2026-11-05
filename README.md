@@ -128,6 +128,7 @@ conductor workflow list                              # list available workflows
 conductor workflow show <name>                       # ASCII step graph
 conductor workflow validate <name>                   # check agents, schemas, scripts, cycles, gate types, variables
 conductor workflow validate --all --templates        # every repo workflow plus the embedded templates
+conductor workflow validate <name> --dry-run         # also smoke-start it as a dry run to the first agent step, then cancel (no scripts run, no model calls)
 conductor workflow run <name> [--input k=v] [--dry-run]
 conductor workflow cancel <run-id>
 conductor workflow runs [--worktree id]              # run history

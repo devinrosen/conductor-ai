@@ -378,6 +378,7 @@ fn build_rk_execution_state(args: RkStateArgs) -> runkon_flow::engine::Execution
 /// Every gate type a run accepts is registered here, and `workflow validate`
 /// builds its engine through the same function, so a type missing here fails
 /// validation too (#3284).
+#[allow(clippy::too_many_arguments)]
 fn flow_engine_builder_with_gates(
     persistence: &Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence>,
     event_sinks: &Arc<[Arc<dyn runkon_flow::EventSink>]>,
@@ -386,38 +387,69 @@ fn flow_engine_builder_with_gates(
     config: Config,
     db: &std::path::Path,
     owner: String,
+    smoke: Option<&super::SmokeStop>,
 ) -> runkon_flow::FlowEngineBuilder {
     use super::executors::resolvers::{
         GitHubTokenCache, HumanApprovalGateResolver, HumanGateKind, PrApprovalGateResolver,
         PrChecksGateResolver,
     };
+    // In smoke mode every resolver is wrapped so a gate stops the run instead
+    // of being polled for real.
+    fn register<R: runkon_flow::traits::gate_resolver::GateResolver + 'static>(
+        builder: runkon_flow::FlowEngineBuilder,
+        resolver: R,
+        smoke: Option<&super::SmokeStop>,
+        db: &std::path::Path,
+    ) -> runkon_flow::FlowEngineBuilder {
+        match smoke {
+            Some(s) => builder.gate_resolver(super::smoke::SmokeStopGateResolver::new(
+                resolver,
+                s.clone(),
+                db.to_path_buf(),
+            )),
+            None => builder.gate_resolver(resolver),
+        }
+    }
     let token_cache = Arc::new(GitHubTokenCache::new(None, owner.clone()));
-    runkon_flow::FlowEngineBuilder::new()
-        .with_event_sinks(event_sinks)
-        .gate_resolver(HumanApprovalGateResolver::new(
-            Arc::clone(persistence),
-            HumanGateKind::HumanApproval,
-        ))
-        .gate_resolver(HumanApprovalGateResolver::new(
-            Arc::clone(persistence),
-            HumanGateKind::HumanReview,
-        ))
-        .gate_resolver(PrApprovalGateResolver::new(
+    let builder = runkon_flow::FlowEngineBuilder::new().with_event_sinks(event_sinks);
+    let builder = register(
+        builder,
+        HumanApprovalGateResolver::new(Arc::clone(persistence), HumanGateKind::HumanApproval),
+        smoke,
+        db,
+    );
+    let builder = register(
+        builder,
+        HumanApprovalGateResolver::new(Arc::clone(persistence), HumanGateKind::HumanReview),
+        smoke,
+        db,
+    );
+    let builder = register(
+        builder,
+        PrApprovalGateResolver::new(
             working_dir.clone(),
             default_bot_name.clone(),
             Arc::clone(&token_cache),
             config.clone(),
             db.to_path_buf(),
             owner.clone(),
-        ))
-        .gate_resolver(PrChecksGateResolver::new(
+        ),
+        smoke,
+        db,
+    );
+    register(
+        builder,
+        PrChecksGateResolver::new(
             working_dir,
             default_bot_name,
             token_cache,
             config,
             db.to_path_buf(),
             owner,
-        ))
+        ),
+        smoke,
+        db,
+    )
 }
 
 /// Build a [`runkon_flow::FlowEngine`] with all gate resolvers registered.
@@ -431,6 +463,7 @@ fn build_flow_engine(
     db: &std::path::Path,
     workflow_name: &str,
     owner: String,
+    smoke: Option<&super::SmokeStop>,
 ) -> Result<runkon_flow::FlowEngine> {
     flow_engine_builder_with_gates(
         persistence,
@@ -440,6 +473,7 @@ fn build_flow_engine(
         config,
         db,
         owner,
+        smoke,
     )
     .build()
     .map_err(|e| {
@@ -472,6 +506,7 @@ pub(crate) fn build_validation_engine() -> Result<runkon_flow::FlowEngine> {
         config.clone(),
         &db,
         "validate".to_string(),
+        None,
     )
     .action_fallback(Box::new(
         super::runkon_bridge::RkActionExecutorAdapter::new(
@@ -528,6 +563,7 @@ fn map_engine_error(
 /// Build the persistence, action-registry, and child-runner that are identical
 /// between fresh execution and resume.  Call sites then layer in the parts that
 /// differ (item_registry, script_env_provider, ExecutionState fields).
+#[allow(clippy::too_many_arguments)]
 fn build_rk_engine_components(
     config: &crate::config::Config,
     shared_conn: &Arc<std::sync::Mutex<Connection>>,
@@ -536,18 +572,22 @@ fn build_rk_engine_components(
     triggered_by_hook: bool,
     runtime_override: Option<String>,
     fresh_children: super::runkon_bridge::FreshChildren,
+    smoke: Option<&super::SmokeStop>,
 ) -> RkEngineComponents {
     let persistence: Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence> = Arc::new(
         super::persistence_sqlite::SqliteWorkflowPersistence::from_shared_connection(Arc::clone(
             shared_conn,
         )),
     );
-    let action_registry = Arc::new(super::runkon_bridge::build_rk_action_registry(
-        config,
-        Arc::clone(shared_conn),
-        db,
-        runtime_override,
-    ));
+    let action_registry = Arc::new(match smoke {
+        Some(s) => super::runkon_bridge::build_rk_smoke_action_registry(s.clone()),
+        None => super::runkon_bridge::build_rk_action_registry(
+            config,
+            Arc::clone(shared_conn),
+            db,
+            runtime_override,
+        ),
+    });
     let child_runner: Arc<dyn runkon_flow::engine::ChildWorkflowRunner> = Arc::new(
         super::runkon_bridge::ConductorChildWorkflowRunner::new(
             db.to_path_buf(),
@@ -556,7 +596,8 @@ fn build_rk_engine_components(
             target_label,
             triggered_by_hook,
         )
-        .with_fresh_children(fresh_children),
+        .with_fresh_children(fresh_children)
+        .with_smoke(smoke.cloned()),
     );
     RkEngineComponents {
         persistence,
@@ -640,7 +681,9 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
 
         // Guard active runs at depth 0 only — child workflows (depth > 0) run
         // concurrently with their parent and must not trigger this check.
-        if params.depth == 0 {
+        // A smoke run never runs an agent and cancels only itself, so it is
+        // allowed beside the worktree's active run.
+        if params.depth == 0 && params.smoke.is_none() {
             if let Some(ref wt_id) = params.worktree_id {
                 guard_active_run(conn, wt_id, params.force)?;
             }
@@ -690,7 +733,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
             params.ticket_id.as_deref(),
             effective_repo_id.as_deref(),
             &parent_run.id,
-            params.exec_config.dry_run,
+            params.exec_config.dry_run || params.smoke.is_some(),
             &trigger_str,
             Some(&snapshot_json),
             params.parent_workflow_run_id.as_deref(),
@@ -808,6 +851,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         params.triggered_by_hook,
         params.runtime.clone(),
         super::runkon_bridge::FreshChildren::None,
+        params.smoke.as_ref(),
     );
 
     let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(
@@ -829,7 +873,16 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         params.repo_path.clone(),
     );
 
-    let rk_exec_config = params.exec_config.clone();
+    let mut rk_exec_config = params.exec_config.clone();
+    if params.smoke.is_some() {
+        // A smoke run is an engine dry run: runkon skips every script step
+        // ("dry-run: script not executed") and auto-approves gates, so nothing
+        // with side effects runs (iterate-pr's rebase-worktree can force-push).
+        // The engine's start-of-run validation (gate types, executors, item
+        // providers) still runs first, and agent calls hit the smoke stub.
+        rk_exec_config.dry_run = true;
+        rk_exec_config.poll_interval = std::time::Duration::from_millis(10);
+    }
     let event_sinks: Arc<[Arc<dyn runkon_flow::EventSink>]> =
         Arc::from(params.exec_config.event_sinks.clone());
 
@@ -874,6 +927,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         &db,
         &workflow.name,
         repo_owner,
+        params.smoke.as_ref(),
     )?;
 
     let rk_result = match engine.run(&rk_def, &mut rk_state) {
@@ -1361,6 +1415,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         wf_run.is_triggered_by_hook(),
         input.runtime.map(String::from),
         fresh_children,
+        None,
     );
 
     let item_registry = Arc::new(super::runkon_bridge::build_rk_item_provider_registry(
@@ -1428,6 +1483,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         &db,
         &wf_run.workflow_name,
         repo_owner,
+        None,
     )?;
 
     let rk_result = match engine.resume(&rk_def, &mut rk_state) {
@@ -2074,36 +2130,24 @@ mod tests {
         run_id_notify: Option<crate::workflow::types::RunIdSlot>,
     ) -> WorkflowExecStandalone {
         WorkflowExecStandalone {
-            config: crate::config::Config::default(),
-            workflow: make_wf(vec![]),
             worktree_id: if ticket_id.is_some() {
                 Some("w1".into())
             } else {
                 None
             },
-            working_dir: "/tmp".into(),
-            repo_path: "/tmp".into(),
             ticket_id,
-            repo_id: None,
-            model: None,
-            runtime: None,
-            exec_config: crate::workflow::WorkflowExecConfig {
-                dry_run: false,
-                ..Default::default()
-            },
-            inputs: HashMap::new(),
-            target_label: None,
             run_id_notify,
-            triggered_by_hook: false,
-            conductor_bin_dir: None,
-            force: false,
-            extra_plugin_dirs: vec![],
             db_path: Some(db_path),
-            parent_workflow_run_id: None,
-            depth: 0,
-            parent_step_id: None,
-            default_bot_name: None,
-            iteration: 0,
+            ..WorkflowExecStandalone::new(
+                crate::config::Config::default(),
+                make_wf(vec![]),
+                "/tmp".into(),
+                "/tmp".into(),
+                crate::workflow::WorkflowExecConfig {
+                    dry_run: false,
+                    ..Default::default()
+                },
+            )
         }
     }
 
