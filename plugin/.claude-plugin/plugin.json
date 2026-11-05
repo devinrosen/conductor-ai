@@ -1,6 +1,6 @@
 {
   "name": "conductor",
-  "version": "0.19.1",
+  "version": "0.19.2",
   "description": "Report interactive Claude Code sessions in conductor worktrees to conductor (RFC 021), and review a session's workflow runs with /conductor-postmortem",
   "author": { "name": "Devin Rosen" },
   "homepage": "https://github.com/devinrosen/conductor-ai",
