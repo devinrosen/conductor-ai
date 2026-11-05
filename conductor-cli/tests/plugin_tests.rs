@@ -7,6 +7,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+mod common;
+
 const WRAPPER_COMMAND: &str = "\"${CLAUDE_PLUGIN_ROOT}/hooks/conductor-session-hook\"";
 
 fn repo_root() -> PathBuf {
@@ -96,17 +98,9 @@ fn write_script(dir: &Path, name: &str, body: &str) {
 
 /// Run the wrapper with a clean environment, feeding `stdin` from a thread.
 fn run_wrapper(home: &Path, path_dirs: &[&Path], attended: Option<&str>, stdin: Vec<u8>) -> Output {
-    let mut path = path_dirs
-        .iter()
-        .map(|p| p.display().to_string())
-        .collect::<Vec<_>>();
-    path.push("/usr/bin:/bin".to_string());
     let mut cmd = Command::new("/bin/sh");
+    common::apply_fixed_env(&mut cmd, home, path_dirs);
     cmd.arg(wrapper())
-        .env_clear()
-        .env("PATH", path.join(":"))
-        .env("HOME", home)
-        .env("CONDUCTOR_HOME", home)
         .current_dir(home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

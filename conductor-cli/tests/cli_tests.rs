@@ -2,13 +2,8 @@ use assert_cmd::prelude::*;
 use predicates::prelude::*;
 use std::process::Command;
 
-/// Build a `conductor` command with `CONDUCTOR_HOME` pointed at `home` so
-/// each test gets an isolated temp database and config.
-fn conductor_cmd(home: &std::path::Path) -> Command {
-    let mut cmd = Command::cargo_bin("conductor").unwrap();
-    cmd.env("CONDUCTOR_HOME", home);
-    cmd
-}
+mod common;
+use common::conductor_cmd;
 
 #[test]
 fn repo_list_empty() {
@@ -354,15 +349,14 @@ fn workflow_run_background_reports_unknown_worktree() {
 /// Run the hidden `workflow launch-detached` with `spec` on stdin. Its notify fd
 /// is 2, so what the child reports on the pipe arrives as the captured stderr.
 ///
-/// `PATH` is cut to `/usr/bin:/bin` so `claude`, `gh` and `tmux` are missing, as
-/// on CI: a prerequisite warning must never reach the notify pipe.
+/// The shared helper pins `PATH` to `/usr/bin:/bin` so `claude`, `gh` and `tmux`
+/// are missing, as on CI: a prerequisite warning must never reach the notify pipe.
 #[cfg(unix)]
 fn launch_detached(home: &std::path::Path, spec: &str) -> std::process::Output {
     use std::io::Write;
     use std::process::Stdio;
     let mut child = conductor_cmd(home)
         .args(["workflow", "launch-detached", "--notify-fd", "2"])
-        .env("PATH", "/usr/bin:/bin")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -616,8 +610,6 @@ fn run_hook(
     let mut cmd = assert_cmd::Command::from_std(conductor_cmd(home));
     cmd.args(["session", "hook"])
         .env("CLAUDE_CODE_SESSION_ATTENDED", attended)
-        .env_remove("CONDUCTOR_SESSION_HOOK_DEBUG")
-        .env_remove("CONDUCTOR_DB_PATH")
         .write_stdin(stdin.to_vec());
     match claude_pid {
         Some(pid) => cmd.env("CLAUDE_PID", pid.to_string()),
