@@ -10,6 +10,7 @@ hints:
   - The single re-review is deliberate. If the repo wants more cycles, call iterate-pr instead of inlining the review
   - The review-scope script picks each review's scope: "incremental" from the commit the last <!-- conductor-review --> review was submitted on (exported as review_since) when that commit is still an ancestor of HEAD, otherwise "full". Never hard-code incremental: the first review must cover the whole PR
   - Check the repo's CI config (.github/workflows/ or similar) and customize the verify, fmt-fix and lint-fix commands to match it
+  - verify is a script, not an agent: exit codes decide pass or fail. Write .conductor/scripts/verify.sh to run the repo's build, test, lint and format checks on what changed since the merge base with FEATURE_BASE_BRANCH, skip them when nothing relevant changed, and emit a FLOW_OUTPUT with the has_failures marker on any failure and a context naming the failing checks, test names and first error lines (implement reads it). A check that can't run is a failure
 ---
 workflow quick-fix-pr {
   meta {
@@ -28,7 +29,10 @@ workflow quick-fix-pr {
     as      = "developer"
   }
 
-  call verify { output = "verify" }
+  script verify {
+    run = ".conductor/scripts/verify.sh"
+    env = { FEATURE_BASE_BRANCH = "{{feature_base_branch}}" }
+  }
 
   call workflow lint-fix
 
