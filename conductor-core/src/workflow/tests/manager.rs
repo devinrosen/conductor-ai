@@ -729,6 +729,7 @@ fn test_list_all_workflow_runs_filtered_paginated_status_filter() {
         Some(WorkflowRunStatus::Completed),
         100,
         0,
+        false,
     )
     .unwrap();
     assert_eq!(completed.len(), 1);
@@ -739,6 +740,7 @@ fn test_list_all_workflow_runs_filtered_paginated_status_filter() {
         Some(WorkflowRunStatus::Pending),
         100,
         0,
+        false,
     )
     .unwrap();
     assert_eq!(pending.len(), 1);
@@ -767,11 +769,11 @@ fn test_list_all_workflow_runs_filtered_paginated_offset() {
     }
 
     let page1 =
-        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 2, 0).unwrap();
+        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 2, 0, false).unwrap();
     assert_eq!(page1.len(), 2);
 
     let page2 =
-        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 2, 2).unwrap();
+        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 2, 2, false).unwrap();
     assert_eq!(page2.len(), 2);
 
     // All 4 unique

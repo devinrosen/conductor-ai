@@ -587,6 +587,7 @@ fn test_list_workflow_runs_by_repo_id_filtered_with_status() {
         50,
         0,
         Some(WorkflowRunStatus::Running),
+        false,
     )
     .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
@@ -617,7 +618,8 @@ fn test_list_workflow_runs_by_repo_id_filtered_none_returns_all() {
     .unwrap();
 
     let runs =
-        crate::workflow::list_workflow_runs_by_repo_id_filtered(&conn, "r1", 50, 0, None).unwrap();
+        crate::workflow::list_workflow_runs_by_repo_id_filtered(&conn, "r1", 50, 0, None, false)
+            .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
     assert!(
@@ -730,6 +732,7 @@ fn test_list_all_workflow_runs_filtered_paginated_with_status() {
         Some(WorkflowRunStatus::Running),
         50,
         0,
+        false,
     )
     .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
@@ -760,7 +763,8 @@ fn test_list_all_workflow_runs_filtered_paginated_none() {
     .unwrap();
 
     let runs =
-        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 50, 0).unwrap();
+        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 50, 0, false)
+            .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
     assert!(ids.contains(&run1.id.as_str()), "run1 must appear");
@@ -777,7 +781,8 @@ fn test_list_all_workflow_runs_filtered_paginated_excludes_inactive_worktrees() 
         .unwrap();
 
     let runs =
-        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 50, 0).unwrap();
+        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 50, 0, false)
+            .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
     assert!(
@@ -788,6 +793,73 @@ fn test_list_all_workflow_runs_filtered_paginated_excludes_inactive_worktrees() 
         !ids.contains(&inactive_run.id.as_str()),
         "merged worktree run must not appear"
     );
+}
+
+#[test]
+fn test_list_all_workflow_runs_filtered_paginated_include_inactive() {
+    let conn = setup_db();
+
+    let active_run = create_worktree_run(&conn, "w1");
+    let merged_run = create_worktree_run(&conn, "w2");
+    let abandoned_run = create_worktree_run(&conn, "w3");
+    conn.execute("UPDATE worktrees SET status = 'merged' WHERE id = 'w2'", [])
+        .unwrap();
+    conn.execute(
+        "UPDATE worktrees SET status = 'abandoned' WHERE id = 'w3'",
+        [],
+    )
+    .unwrap();
+
+    let runs =
+        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 50, 0, true)
+            .unwrap();
+    let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+    for r in [&active_run, &merged_run, &abandoned_run] {
+        assert!(ids.contains(&r.id.as_str()), "run {} must appear", r.id);
+    }
+    assert!(
+        runs.windows(2).all(|w| w[0].started_at >= w[1].started_at),
+        "must be newest first"
+    );
+
+    let pending = crate::workflow::list_all_workflow_runs_filtered_paginated(
+        &conn,
+        Some(WorkflowRunStatus::Pending),
+        50,
+        0,
+        true,
+    )
+    .unwrap();
+    assert_eq!(pending.len(), 3);
+}
+
+#[test]
+fn test_list_workflow_runs_by_repo_id_filtered_include_inactive() {
+    let conn = setup_db();
+
+    let merged_run = create_worktree_run(&conn, "w2");
+    conn.execute("UPDATE worktrees SET status = 'merged' WHERE id = 'w2'", [])
+        .unwrap();
+    let repo_id: String = conn
+        .query_row(
+            "SELECT repo_id FROM worktrees WHERE id = 'w2'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    for status in [None, Some(WorkflowRunStatus::Pending)] {
+        let hidden = crate::workflow::list_workflow_runs_by_repo_id_filtered(
+            &conn, &repo_id, 50, 0, status, false,
+        )
+        .unwrap();
+        assert!(!hidden.iter().any(|r| r.id == merged_run.id));
+        let shown = crate::workflow::list_workflow_runs_by_repo_id_filtered(
+            &conn, &repo_id, 50, 0, status, true,
+        )
+        .unwrap();
+        assert!(shown.iter().any(|r| r.id == merged_run.id));
+    }
 }
 
 // ── list_all_workflow_runs ───────────────────────────────────────────────
