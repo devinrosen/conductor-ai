@@ -45,15 +45,59 @@ SKIP_E2E=1 git push -u origin "$current_branch"
 # --fill for the body. sed, not head: sed reads all input so git log can't hit
 # SIGPIPE and fail the pipeline under pipefail.
 pr_title=$(git log --reverse --no-merges --format=%s "origin/$base..HEAD" | sed -n 1p)
-pr_args=(--fill --base "$base")
+
+# The PR description comes from what the run produced (#3148): the plan's
+# summary and risks, and implement's own summary of what it changed
+# (implement-ticket's in quick-fix-pr, which has no plan). PRIOR_CONTEXTS is
+# the engine's {{prior_contexts}} JSON array of {step, context,
+# structured_output, ...}. The first implement entry describes the change;
+# later ones are verify-loopback fixes. Without usable contexts, fall back to
+# --fill (the commits' bodies), as before.
+build_pr_body() {
+  local contexts="${PRIOR_CONTEXTS:-}"
+  case "$contexts" in
+    ''|*'{{'*) return 1 ;;
+  esac
+  printf '%s' "$contexts" | jq -r '
+    def plan: [.[] | select(.step == "plan" and .structured_output != null)]
+              | last | (.structured_output // "null") | (try fromjson catch null);
+    def impl: [.[] | select(.step == "implement" or .step == "implement-ticket")]
+              | first | (.context // "") | gsub("^\\s+|\\s+$"; "");
+    plan as $p | impl as $i
+    | (($p.summary // "") | gsub("^\\s+|\\s+$"; "")) as $s
+    | ($p.risks // [] | map(select(type == "string" and length > 0))) as $r
+    | if $s == "" and $i == "" then empty else
+        ( if $s != "" then "## Summary\n\n\($s)" else "## Summary\n\n\($i)" end )
+        + ( if $s != "" and $i != "" then "\n\n## Implementation\n\n\($i)" else "" end )
+        + ( if ($r | length) > 0 then "\n\n## Risks and open questions\n\n" + ($r | map("- " + .) | join("\n")) else "" end )
+      end
+  '
+}
+
+pr_body=""
+if ! pr_body=$(build_pr_body 2>/dev/null); then
+  pr_body=""
+fi
+if [ -z "$pr_body" ] && [ -n "${PRIOR_CONTEXTS:-}" ] && [[ "${PRIOR_CONTEXTS}" != *"{{"* ]]; then
+  echo "WARNING: no plan or implement summary found in PRIOR_CONTEXTS; using the commit bodies for the PR description" >&2
+fi
+
+pr_body_file=$(mktemp)
+trap 'rm -f "$pr_body_file"' EXIT
+if [ -n "$pr_body" ]; then
+  printf '%s\n' "$pr_body" > "$pr_body_file"
+  pr_args=(--base "$base" --body-file "$pr_body_file")
+else
+  pr_args=(--fill --base "$base")
+fi
 if [ -n "$pr_title" ]; then
   pr_args+=(--title "$pr_title")
 fi
 
 # Link the ticket so close-linked-issues.yml closes it on a release-branch merge.
 # Only a numeric ID counts (rejects empty, Jira keys, an unsubstituted template).
-# `gh pr create --body` would replace the --fill body, so the line is added with
-# `gh pr edit` after creating the PR. An existing PR's body is left alone.
+# The line is added with `gh pr edit` after creating the PR, so it lands on both
+# the built body and the --fill one. An existing PR's body is left alone.
 ticket_id="${TICKET_SOURCE_ID:-}"
 case "$ticket_id" in
   ''|*[!0-9]*) ticket_id="" ;;
