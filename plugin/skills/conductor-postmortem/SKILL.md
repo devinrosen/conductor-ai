@@ -1,9 +1,9 @@
 ---
-name: session-postmortem
-description: End-of-session review of what went wrong with conductor workflows and the runkon engine, and what to improve. Gathers the session's conductor runs and stats, looks back over the conversation for hand fixes and wrong reviewer claims, drafts issues with evidence routed to the right repo, and files only the ones the user approves. Use when the user asks for a session postmortem, a retro, "what went wrong this session", or bugs and improvements for the workflow engine or pipeline.
+name: conductor-postmortem
+description: End-of-session review of what went wrong with conductor workflow runs and the runkon engine, and what to improve, filed as GitHub issues. Not a general retro: the session plugin's /postmortem covers that. Gathers the session's conductor runs and stats, looks back over the conversation for hand fixes and wrong reviewer claims, drafts issues with evidence routed to the right repo, and files only the ones the user approves. Use when the user asks for a conductor postmortem, what went wrong with this session's conductor runs, or bugs and improvements for the workflow engine or pipeline.
 ---
 
-# session-postmortem
+# conductor-postmortem
 
 Review the current session's conductor work and turn what went wrong into issues the user approves. Nothing is written to GitHub until the user says which drafts to file.
 
