@@ -10,7 +10,7 @@ hints:
   - Inspect what "blocking" means in this repo's review culture — some teams treat all findings as blocking, others only security/correctness issues
   - If the repo uses a monorepo, the push script may need to target a specific package path
   - Consider whether 10 max_iterations is appropriate — smaller repos with less churn may need fewer
-  - "The review-scope script picks each cycle's review scope: \"incremental\" from the commit the last <!-- conductor-review --> review was submitted on (exported as review_since) when that commit is still an ancestor of HEAD, otherwise \"full\". Never hard-code incremental: the first cycle must review the whole PR, or a PR whose last commit is a small cleanup gets approved with most of its change unreviewed"
+  - "The review-scope script picks each cycle's review scope: \"incremental\" from the commit the last <!-- conductor-review --> review was submitted on (exported as review_since) when that commit is still an ancestor of HEAD, otherwise \"full\". Never hard-code incremental: the first cycle must review the whole PR, or a PR whose last commit is a small cleanup gets approved with most of its change unreviewed. When HEAD is already the commit the last conductor review was submitted on, do not re-review: a script step named review-aggregator (reuse-review.sh) hands triage that review's verdict and findings, read from a base64 payload submit-review embeds in the review body (only from a non-dismissed review by an OWNER/MEMBER/COLLABORATOR, otherwise review-scope falls back to a full review). A force_review input (default \"false\") restores the full re-review"
 ---
 workflow iterate-pr {
   meta {

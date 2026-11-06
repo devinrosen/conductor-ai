@@ -3,7 +3,13 @@
 # Called as a script step after review-aggregator. Env vars: PRIOR_OUTPUT, PR_NUMBER, DRY_RUN,
 # FILE_OFF_DIFF ("false" lists off-diff findings in the review body instead of filing issues),
 # BASE_BRANCH (the PR's base from resolve-pr-base, falling back to `gh pr view`; used by the off-diff
-# filter and to detect a PR that changes the review pipeline itself, #3293)
+# filter and to detect a PR that changes the review pipeline itself, #3293),
+# SCOPE / SINCE (the scope review-pr ran with; "full" and "" when unset).
+#
+# The review body ends with a hidden payload, <!-- conductor-review-data:v1 BASE64 -->,
+# holding the final verdict, findings and scope. review-scope.sh and reuse-review.sh
+# read it back so iterate-pr can triage this review instead of re-reviewing the
+# same commit (#3307). It is left out when the body would near GitHub's size cap.
 set -euo pipefail
 
 # shellcheck source=lib-gh-retry.sh
@@ -393,6 +399,33 @@ if [ -n "${UNFILED_OFF_DIFF}" ]; then
 
 ### Off-diff findings (not filed as issues, not blocking this PR)
 ${UNFILED_OFF_DIFF}"
+fi
+
+# Machine-readable payload for review reuse (#3307). Built from the final,
+# post-adjustment findings so it matches what this review says. base64 keeps a
+# "-->" inside a message from closing the comment. Never fails the step.
+REVIEW_SCOPE_VAL="${SCOPE:-full}"
+REVIEW_SINCE_VAL="${SINCE:-}"
+[[ "${REVIEW_SCOPE_VAL}" == *"{{"* ]] && REVIEW_SCOPE_VAL="full"
+[[ "${REVIEW_SINCE_VAL}" == *"{{"* ]] && REVIEW_SINCE_VAL=""
+if REVIEW_PAYLOAD=$(echo "${PRIOR_OUTPUT}" | jq -r \
+  --arg scope "${REVIEW_SCOPE_VAL}" --arg since "${REVIEW_SINCE_VAL}" \
+  --argjson approved "${OVERALL_APPROVED}" '
+  {v: 1, scope: $scope, since: $since, overall_approved: $approved,
+   reviewed_by: (.reviewed_by // ""), summary: (.summary // ""),
+   blocking_findings: (.blocking_findings // []),
+   answered_findings: (.answered_findings // [])}
+  | tojson | @base64' 2>/dev/null) && [ -n "${REVIEW_PAYLOAD}" ]; then
+  PAYLOAD_LINE="<!-- conductor-review-data:v1 ${REVIEW_PAYLOAD} -->"
+  if [ $(( ${#REVIEW_BODY} + ${#PAYLOAD_LINE} )) -gt 60000 ]; then
+    echo "Warning: review body plus review data would exceed GitHub's size cap; leaving the data out, so the next iterate-pr does a full review." >&2
+  else
+    REVIEW_BODY="${REVIEW_BODY}
+
+${PAYLOAD_LINE}"
+  fi
+else
+  echo "Warning: could not build the review data payload; the next iterate-pr does a full review." >&2
 fi
 
 REVIEW_BODY_FILE=$(mktemp "${TMPDIR:-/tmp}/conductor_review_body.XXXXXXXXXX")

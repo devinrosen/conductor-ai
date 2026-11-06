@@ -25,7 +25,7 @@ Full context history: {{prior_contexts}}
 
 ## Where findings come from
 
-The conductor review swarm posts a single body-only PR review (no inline review threads). Findings are NOT discoverable via `gh pr view --json reviewThreads` — that array will be empty. Instead, findings flow through workflow context: `review-aggregator` emits a `blocking_findings` array in its `structured_output`, and you consume it from `{{prior_contexts}}`.
+The conductor review swarm posts a single body-only PR review (no inline review threads). Findings are NOT discoverable via `gh pr view --json reviewThreads` — that array will be empty. Instead, findings flow through workflow context: `review-aggregator` emits a `blocking_findings` array in its `structured_output`, and you consume it from `{{prior_contexts}}`. The entry may be a reused review (its `context` starts with "Reused conductor review"), emitted by a script when HEAD hadn't moved since the last review; triage it exactly the same way.
 
 ## Steps
 
