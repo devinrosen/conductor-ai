@@ -104,6 +104,8 @@ workflow review-pr {
       PRIOR_OUTPUT     = "{{prior_output}}"
       PR_NUMBER        = "{{pr_number}}"
       BASE_BRANCH      = "{{base_branch}}"
+      SCOPE            = "{{scope}}"
+      SINCE            = "{{since}}"
       DRY_RUN          = "{{dry_run}}"
       FILE_OFF_DIFF    = "{{file_off_diff}}"
       TICKET_SOURCE_ID = "{{ticket_source_id}}"

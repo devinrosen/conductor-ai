@@ -13,6 +13,8 @@ workflow quick-fix-pr {
 
   inputs {
     ticket_id required
+    // "true" re-reviews even when HEAD is the commit the last conductor review covered (#3307).
+    force_review default = "false"
   }
 
   call implement-ticket {
@@ -94,14 +96,33 @@ workflow quick-fix-pr {
     script review-scope {
       run = ".conductor/scripts/review-scope.sh"
       env = {
-        PR_NUMBER = "{{pr_number}}"
+        PR_NUMBER    = "{{pr_number}}"
+        FORCE_REVIEW = "{{force_review}}"
       }
     }
 
-    call workflow review-pr {
-      inputs {
-        scope = "{{review_scope}}"
-        since = "{{review_since}}"
+    // HEAD is the commit the last conductor review covered: reuse that review's
+    // verdict and findings instead of re-reviewing identical code (#3307).
+    // The step is deliberately named review-aggregator, like the one inside review-pr:
+    // the conditions below and triage-reviews read the latest review-aggregator by name,
+    // whichever path (reuse or real review) produced it. Resume matches repeated names by
+    // occurrence order, so it replays the same path as long as the PR's HEAD is unchanged.
+    if review-scope.reuse_review {
+      script review-aggregator {
+        run = ".conductor/scripts/reuse-review.sh"
+        env = {
+          PR_NUMBER = "{{pr_number}}"
+          REVIEW_ID = "{{reuse_review_id}}"
+        }
+      }
+    }
+
+    unless review-scope.reuse_review {
+      call workflow review-pr {
+        inputs {
+          scope = "{{review_scope}}"
+          since = "{{review_since}}"
+        }
       }
     }
 
@@ -160,14 +181,33 @@ workflow quick-fix-pr {
         script review-scope-rereview {
           run = ".conductor/scripts/review-scope.sh"
           env = {
-            PR_NUMBER = "{{pr_number}}"
+            PR_NUMBER    = "{{pr_number}}"
+            FORCE_REVIEW = "{{force_review}}"
           }
         }
 
-        call workflow review-pr {
-          inputs {
-            scope = "{{review_scope}}"
-            since = "{{review_since}}"
+        // HEAD is the commit the last conductor review covered: reuse that review's
+        // verdict and findings instead of re-reviewing identical code (#3307).
+        // The step is deliberately named review-aggregator, like the one inside review-pr:
+        // the conditions below and triage-reviews read the latest review-aggregator by name,
+        // whichever path (reuse or real review) produced it. Resume matches repeated names by
+        // occurrence order, so it replays the same path as long as the PR's HEAD is unchanged.
+        if review-scope-rereview.reuse_review {
+          script review-aggregator {
+            run = ".conductor/scripts/reuse-review.sh"
+            env = {
+              PR_NUMBER = "{{pr_number}}"
+              REVIEW_ID = "{{reuse_review_id}}"
+            }
+          }
+        }
+
+        unless review-scope-rereview.reuse_review {
+          call workflow review-pr {
+            inputs {
+              scope = "{{review_scope}}"
+              since = "{{review_since}}"
+            }
           }
         }
 
