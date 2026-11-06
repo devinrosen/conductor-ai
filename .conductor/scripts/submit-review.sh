@@ -118,17 +118,22 @@ fi
 # ---------------------------------------------------------------------------
 OWNER_REPO=$(gh_retry gh repo view --json nameWithOwner -q .nameWithOwner)
 
-REVIEW_IDS=$(gh api "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews" \
-  --jq '[.[] | select(.body | contains("<!-- conductor-review -->")) | .id] | .[]' \
+# Only APPROVED and CHANGES_REQUESTED reviews can be dismissed. GitHub rejects
+# DISMISSED ones ("Can not dismiss a dismissed pull request review") and
+# COMMENTED ones, so skip them rather than log an expected error every round.
+REVIEW_IDS=$(gh api --paginate "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews" \
+  --jq '.[] | select((.body | contains("<!-- conductor-review -->"))
+                     and (.state == "APPROVED" or .state == "CHANGES_REQUESTED")) | .id' \
   2>/dev/null || true)
 
 if [ -n "${REVIEW_IDS}" ]; then
   while IFS= read -r review_id; do
     echo "Dismissing stale conductor review ${review_id}…"
-    gh api --method PUT \
+    if ! gh api --method PUT \
       "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews/${review_id}/dismissals" \
-      -f message="Superseded by new conductor review run." \
-      2>/dev/null || true
+      -f message="Superseded by new conductor review run." >/dev/null 2>&1; then
+      echo "Warning: could not dismiss conductor review ${review_id}" >&2
+    fi
   done <<< "${REVIEW_IDS}"
 fi
 
