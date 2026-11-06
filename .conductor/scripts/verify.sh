@@ -31,6 +31,16 @@
 set -uo pipefail
 
 base="${FEATURE_BASE_BRANCH:-main}"
+
+# The engine exports the workflow's inputs and context to script steps as
+# CONDUCTOR_* and FLOW_* variables (CONDUCTOR_TICKET_ID and the like). Every
+# cargo command below would pass them on to the tests, so a test that reads
+# the environment behaves differently inside a run than locally or in CI
+# (#3311). Unset them so the checks see the developer's environment.
+while IFS= read -r var; do
+  unset "${var}"
+done < <(compgen -e | grep -E '^(CONDUCTOR|FLOW)_')
+
 all_crates=(conductor-core conductor-cli conductor-tui conductor-web)
 max_context=6000
 
