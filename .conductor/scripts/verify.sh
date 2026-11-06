@@ -31,6 +31,19 @@
 set -uo pipefail
 
 base="${FEATURE_BASE_BRANCH:-main}"
+
+# The engine exports the workflow's inputs and context to script steps as
+# CONDUCTOR_* and FLOW_* variables (CONDUCTOR_TICKET_ID and the like). Every
+# cargo command below would pass them on to the tests, so a test that reads
+# the environment behaves differently inside a run than locally or in CI
+# (#3311). Unset them so the checks see the developer's environment. Keep
+# CONDUCTOR_HOME and CONDUCTOR_DB_PATH: they're set by whoever runs verify, not
+# by the engine, and `conductor workflow validate` below must not fall back to
+# the real ~/.conductor when verify runs against a scratch home.
+while IFS= read -r var; do
+  unset "${var}"
+done < <(compgen -e | grep -E '^(CONDUCTOR|FLOW)_' | grep -vxE 'CONDUCTOR_(HOME|DB_PATH)')
+
 all_crates=(conductor-core conductor-cli conductor-tui conductor-web)
 max_context=6000
 
