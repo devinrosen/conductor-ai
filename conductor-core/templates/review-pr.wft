@@ -9,6 +9,7 @@ hints:
   - Check if the repo uses database migrations (e.g. diesel, sqlx, alembic, flyway) — the detect-db-migrations script should grep for migration files
   - Inspect the repo's language/stack to set appropriate reviewer agent names and specializations (e.g. a React frontend needs a different security reviewer than a Rust backend)
   - Look at the repo's existing test patterns to calibrate what "good test coverage" means here
+  - "The submit-review script embeds the final verdict, findings and scope in a hidden base64 <!-- conductor-review-data:v1 ... --> payload at the end of the review body, so iterate-pr can reuse the review when HEAD hasn't moved. It is read back only from non-dismissed reviews by OWNER/MEMBER/COLLABORATOR authors"
   - Check if there's a .github/PULL_REQUEST_TEMPLATE.md — the submit-review script should post a comment that complements the PR template
   - If the repo has multiple services or packages, the review agents may need to be scoped per-service
   - Consider whether performance review makes sense for this repo type (e.g. skip for pure docs repos)
