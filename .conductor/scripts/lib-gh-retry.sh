@@ -5,9 +5,10 @@
 # gh_retry gh <args...>
 #   Runs the command and passes its stdout through. On failure, retries after
 #   GH_RETRY_DELAYS seconds (default "2 5 10", so up to 4 attempts) when stderr
-#   looks transient: network errors, timeouts, HTTP 5xx, HTTP 429 or a rate
-#   limit. Any other failure (a 422 validation error, a missing PR, a 404)
-#   returns at once. The last attempt's stderr is written to stderr and its exit
+#   looks transient: network errors, timeouts, HTTP 5xx, HTTP 429, a rate
+#   limit or GitHub's generic GraphQL failure ("Something went wrong while
+#   executing your query", #3306). Any other failure (a 422 validation error,
+#   a missing PR, a 404) returns at once. The last attempt's stderr is written to stderr and its exit
 #   status is returned, so callers still see the real gh error (#3239).
 #
 # Only wrap calls that are safe to repeat. A write whose request reached GitHub
@@ -19,7 +20,7 @@ GH_RETRY_DELAYS="${GH_RETRY_DELAYS:-2 5 10}"
 # gh_is_transient_error STDERR_TEXT
 gh_is_transient_error() {
   printf '%s' "$1" | grep -qiE \
-    'HTTP 5[0-9][0-9]|HTTP 429|rate limit|timed? ?out|timeout|connection (reset|refused)|could not resolve host|no such host|TLS handshake|unexpected EOF|i/o timeout|error connecting to|network is unreachable|temporary failure|server error|bad gateway|service unavailable'
+    'HTTP 5[0-9][0-9]|HTTP 429|rate limit|timed? ?out|timeout|connection (reset|refused)|could not resolve host|no such host|TLS handshake|unexpected EOF|i/o timeout|error connecting to|network is unreachable|temporary failure|server error|bad gateway|service unavailable|something went wrong while executing your query'
 }
 
 gh_retry() {
