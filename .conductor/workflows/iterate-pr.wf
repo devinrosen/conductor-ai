@@ -22,6 +22,18 @@ workflow iterate-pr {
       call workflow lint-fix
     }
 
+    // Collect what trusted authors (OWNER, MEMBER, COLLABORATOR) asked for on the
+    // PR since the last conductor review. It must run before review-pr, which posts
+    // a new review and so empties that window. Triage turns real change requests
+    // into address items (#3308).
+    script fetch-change-requests {
+      run = ".conductor/scripts/fetch-change-requests.sh"
+      env = {
+        PR_NUMBER      = "{{pr_number}}"
+        PRIOR_CONTEXTS = "{{prior_contexts}}"
+      }
+    }
+
     // Review everything since the last conductor review, or the whole PR when
     // there is none (first cycle, rebase, force-push). #3074. When HEAD is
     // already the commit that review covered, it is reused, not repeated (#3307).
@@ -58,7 +70,16 @@ workflow iterate-pr {
       }
     }
 
-    if review-aggregator.has_blocking_findings {
+    // Triage runs for blocking findings or trusted change requests. The DSL has no
+    // `or`, so this script computes it (#3308).
+    script needs-triage {
+      run = ".conductor/scripts/needs-triage.sh"
+      env = {
+        PRIOR_CONTEXTS = "{{prior_contexts}}"
+      }
+    }
+
+    if needs-triage.needs_triage {
       call triage-reviews {
         as = "developer"
         output = "triage-reviews"
