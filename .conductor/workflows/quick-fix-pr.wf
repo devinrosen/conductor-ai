@@ -103,6 +103,10 @@ workflow quick-fix-pr {
 
     // HEAD is the commit the last conductor review covered: reuse that review's
     // verdict and findings instead of re-reviewing identical code (#3307).
+    // The step is deliberately named review-aggregator, like the one inside review-pr:
+    // the conditions below and triage-reviews read the latest review-aggregator by name,
+    // whichever path (reuse or real review) produced it. Resume matches repeated names by
+    // occurrence order, so it replays the same path as long as the PR's HEAD is unchanged.
     if review-scope.reuse_review {
       script review-aggregator {
         run = ".conductor/scripts/reuse-review.sh"
@@ -184,6 +188,10 @@ workflow quick-fix-pr {
 
         // HEAD is the commit the last conductor review covered: reuse that review's
         // verdict and findings instead of re-reviewing identical code (#3307).
+        // The step is deliberately named review-aggregator, like the one inside review-pr:
+        // the conditions below and triage-reviews read the latest review-aggregator by name,
+        // whichever path (reuse or real review) produced it. Resume matches repeated names by
+        // occurrence order, so it replays the same path as long as the PR's HEAD is unchanged.
         if review-scope-rereview.reuse_review {
           script review-aggregator {
             run = ".conductor/scripts/reuse-review.sh"
