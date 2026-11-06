@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname "$0")/lib-git-retry.sh"
 
-git push -u --force-with-lease origin HEAD
+git_push_retry -u --force-with-lease origin HEAD
 branch=$(git rev-parse --abbrev-ref HEAD)
 
 cat <<EOF
