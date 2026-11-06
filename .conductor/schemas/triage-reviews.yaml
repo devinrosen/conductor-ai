@@ -1,16 +1,28 @@
 fields:
   context:
     type: string
-    desc: "Triaged N findings: A address, P pushback (brief reasons), C clarify."
+    desc: "Triaged N findings and M change requests: A address, P pushback (brief reasons), C clarify."
   triaged:
     type: array
-    desc: "One entry per blocking finding. Empty when triage halted or there were no findings."
+    desc: "One entry per blocking finding and per trusted change request acted on. Empty when triage halted or there was nothing to triage."
     items:
       file: string
       line: number
       reviewer: string
       outcome: enum(address, pushback, clarify)
       reason: string
+      source?:
+        type: enum(finding, change-request)
+        desc: "Where the entry came from; absent means finding"
+      comment_id?:
+        type: number
+        desc: "GitHub id of the comment, for change-request entries"
+      author?:
+        type: string
+        desc: "Login of the change request's author"
+      message?:
+        type: string
+        desc: "The change request, quoted verbatim"
   halt_reason?:
     type: string
     desc: "Set only when triage halted, e.g. missing_aggregator_output"
