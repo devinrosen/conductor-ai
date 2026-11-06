@@ -3,7 +3,7 @@
 #
 # Replaces the verify agent. Maps the changed files to crates, then runs:
 #   cargo build
-#   cargo nextest run -p <crate> --no-fail-fast (conductor-core with --features test-helpers)
+#   cargo nextest run -p <crate> --no-fail-fast --no-tests=pass (conductor-core with --features test-helpers)
 #   cargo clippy -p <crate> --all-targets -- -D warnings
 #   cargo fmt --all --check
 # A root Cargo.toml or Cargo.lock change checks every crate. Only .rs files,
@@ -31,6 +31,19 @@
 set -uo pipefail
 
 base="${FEATURE_BASE_BRANCH:-main}"
+
+# The engine exports the workflow's inputs and context to script steps as
+# CONDUCTOR_* and FLOW_* variables (CONDUCTOR_TICKET_ID and the like). Every
+# cargo command below would pass them on to the tests, so a test that reads
+# the environment behaves differently inside a run than locally or in CI
+# (#3311). Unset them so the checks see the developer's environment. Keep
+# CONDUCTOR_HOME and CONDUCTOR_DB_PATH: they're set by whoever runs verify, not
+# by the engine, and `conductor workflow validate` below must not fall back to
+# the real ~/.conductor when verify runs against a scratch home.
+while IFS= read -r var; do
+  unset "${var}"
+done < <(compgen -e | grep -E '^(CONDUCTOR|FLOW)_' | grep -vxE 'CONDUCTOR_(HOME|DB_PATH)')
+
 all_crates=(conductor-core conductor-cli conductor-tui conductor-web)
 max_context=6000
 
@@ -131,7 +144,7 @@ if [ "${failed}" -eq 0 ]; then
     [ "${crate}" = "conductor-core" ] && features=(--features test-helpers)
     log="${logs}/nextest-${crate}.log"
     nextest_status=0
-    cargo nextest run -p "${crate}" --no-fail-fast "${features[@]+"${features[@]}"}" > "${log}" 2>&1 || nextest_status=$?
+    cargo nextest run -p "${crate}" --no-fail-fast --no-tests=pass "${features[@]+"${features[@]}"}" > "${log}" 2>&1 || nextest_status=$?
     summary=$(grep -E '^\s*Summary \[' "${log}" | tail -n 1 | sed -E 's/^[[:space:]]*Summary \[[^]]*\][[:space:]]*//')
     if [ "${nextest_status}" -eq 0 ]; then
       record "cargo nextest -p ${crate}" pass "${summary:-passed}"
