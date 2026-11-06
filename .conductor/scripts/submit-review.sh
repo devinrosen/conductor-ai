@@ -121,18 +121,23 @@ OWNER_REPO=$(gh_retry gh repo view --json nameWithOwner -q .nameWithOwner)
 # Only APPROVED and CHANGES_REQUESTED reviews can be dismissed. GitHub rejects
 # DISMISSED ones ("Can not dismiss a dismissed pull request review") and
 # COMMENTED ones, so skip them rather than log an expected error every round.
-REVIEW_IDS=$(gh api --paginate "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews" \
+# A failed listing or dismissal doesn't stop the new review from being posted,
+# but it's reported: a stale CHANGES_REQUESTED review left on the PR can block
+# the merge. gh_retry writes gh's error to stderr.
+if ! REVIEW_IDS=$(gh_retry gh api --paginate "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews" \
   --jq '.[] | select((.body | contains("<!-- conductor-review -->"))
-                     and (.state == "APPROVED" or .state == "CHANGES_REQUESTED")) | .id' \
-  2>/dev/null || true)
+                     and (.state == "APPROVED" or .state == "CHANGES_REQUESTED")) | .id'); then
+  echo "Warning: could not list conductor reviews on PR #${PR_NUMBER}; stale reviews were not dismissed" >&2
+  REVIEW_IDS=""
+fi
 
 if [ -n "${REVIEW_IDS}" ]; then
   while IFS= read -r review_id; do
     echo "Dismissing stale conductor review ${review_id}…"
-    if ! gh api --method PUT \
+    if ! dismiss_err=$(gh api --method PUT \
       "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews/${review_id}/dismissals" \
-      -f message="Superseded by new conductor review run." >/dev/null 2>&1; then
-      echo "Warning: could not dismiss conductor review ${review_id}" >&2
+      -f message="Superseded by new conductor review run." 2>&1 >/dev/null); then
+      echo "Warning: could not dismiss conductor review ${review_id}: ${dismiss_err}" >&2
     fi
   done <<< "${REVIEW_IDS}"
 fi
