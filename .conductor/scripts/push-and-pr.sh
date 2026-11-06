@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname "$0")/lib-git-retry.sh"
 
 base="${FEATURE_BASE_BRANCH:-main}"
 
@@ -20,7 +21,7 @@ fi
 # Push base branch to origin if it doesn't exist there yet
 if ! git ls-remote --exit-code --heads origin "$base" > /dev/null 2>&1; then
   echo "Base branch '$base' not found on origin — pushing it now…"
-  git push -u origin "$base"
+  git_push_retry -u origin "$base"
 fi
 
 # Fetch latest base ref for accurate comparison
@@ -37,7 +38,7 @@ EOF
   exit 0
 fi
 
-SKIP_E2E=1 git push -u origin "$current_branch"
+SKIP_E2E=1 git_push_retry -u origin "$current_branch"
 
 # With more than one commit, `gh pr create --fill` titles the PR from the branch
 # name, and the squash merge makes that title the commit on base. Title it from
