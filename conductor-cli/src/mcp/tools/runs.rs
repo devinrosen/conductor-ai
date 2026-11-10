@@ -1377,7 +1377,7 @@ mod tests {
                 None,
             )
             .expect("create workflow run");
-            ids.push(run.id);
+            ids.push(run.id.clone());
         }
         conn.execute(
             "UPDATE workflow_runs SET parent_workflow_run_id = ?1, ended_at = '2026-01-02T03:04:05Z', \
