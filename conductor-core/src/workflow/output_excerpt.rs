@@ -15,13 +15,7 @@ const EXCERPT_CHARS: usize = 200;
 ///
 /// Uses the same lookup as the parser, so the excerpt is the text that was parsed.
 pub fn flow_output_excerpt(result_text: &str) -> Option<String> {
-    let block = runkon_flow::helpers::find_flow_output_block(result_text)?;
-    // `block` is a subslice of `result_text`, so its offset is a pointer difference.
-    let offset = (block.as_ptr() as usize).checked_sub(result_text.as_ptr() as usize)?;
-    // Report the line of the opening marker, which precedes the (trimmed) block.
-    let before = result_text.get(..offset)?;
-    let marker = before.rfind("<<<FLOW_OUTPUT>>>").unwrap_or(offset);
-    let line = before[..marker].matches('\n').count() + 1;
+    let (line, block) = runkon_flow::helpers::find_flow_output_block_with_line(result_text)?;
 
     let mut shown: String = block.chars().take(EXCERPT_CHARS).collect();
     let cut = block.chars().nth(EXCERPT_CHARS).is_some();
@@ -34,10 +28,11 @@ pub fn flow_output_excerpt(result_text: &str) -> Option<String> {
     ))
 }
 
-/// Fragments of runkon's output parse and validation errors. runkon reports these as
-/// plain strings (`structured output validation: ...`, `Invalid JSON in FLOW_OUTPUT:
-/// ...`), with no typed variant to match on, so these must track its wording. The
-/// `predicate_matches_runkon_errors` test pins them.
+/// Fragments of runkon's output parse and validation errors. runkon 0.9 has typed
+/// `OutputError` / `AgentError`, but conductor flattens them to text at the
+/// `EngineError::Workflow` boundary, so a step error read back from the DB is a string
+/// and these must track the `Display` wording. The `predicate_matches_runkon_errors`
+/// test pins them.
 const OUTPUT_ERROR_FRAGMENTS: [&str; 2] = ["structured output validation", "FLOW_OUTPUT"];
 
 /// True when `err` reads like a FLOW_OUTPUT parse or validation failure.

@@ -1536,6 +1536,112 @@ mod tests {
     use std::collections::HashMap;
 
     // -------------------------------------------------------------------------
+    // require_output through conductor's schema resolver (#3277)
+    // -------------------------------------------------------------------------
+
+    /// Reports `OUTPUT_WARNING` like an agent whose result had no FLOW_OUTPUT block.
+    struct NoOutputBlockExecutor(&'static str);
+
+    impl runkon_flow::traits::action_executor::ActionExecutor for NoOutputBlockExecutor {
+        fn name(&self) -> &str {
+            self.0
+        }
+
+        fn execute(
+            &self,
+            _ctx: &dyn runkon_flow::traits::run_context::RunContext,
+            _info: &runkon_flow::traits::action_executor::StepInfo,
+            _params: &runkon_flow::traits::action_executor::ActionParams,
+        ) -> runkon_flow::engine_error::Result<runkon_flow::traits::action_executor::ActionOutput>
+        {
+            Ok(runkon_flow::traits::action_executor::ActionOutput {
+                metadata: HashMap::from([(
+                    runkon_flow::constants::metadata_keys::OUTPUT_WARNING.to_string(),
+                    "no FLOW_OUTPUT block".to_string(),
+                )]),
+                ..Default::default()
+            })
+        }
+    }
+
+    /// Run `body` as a one-step workflow whose executor reports no output block, with
+    /// conductor's schema resolver reading `.conductor/schemas/s.yaml`. Returns whether
+    /// the run succeeded and the step's persisted status and error.
+    fn run_no_output_block_step(
+        body: &str,
+    ) -> (
+        bool,
+        runkon_flow::status::WorkflowStepStatus,
+        Option<String>,
+    ) {
+        use runkon_flow::traits::persistence::{NewRun, WorkflowPersistence};
+
+        let ws = tempfile::tempdir().unwrap();
+        let schemas = ws.path().join(".conductor/schemas");
+        std::fs::create_dir_all(&schemas).unwrap();
+        std::fs::write(schemas.join("s.yaml"), "fields:\n  ok: boolean\n").unwrap();
+        let ws_path = ws.path().to_string_lossy().to_string();
+
+        let def = runkon_flow::dsl::parse_workflow_str(
+            &format!("workflow w {{\n  meta {{ trigger = \"manual\" targets = [\"worktree\"] }}\n  {body}\n}}"),
+            "<test>",
+        )
+        .unwrap();
+        let engine = runkon_flow::FlowEngineBuilder::new()
+            .action(Box::new(NoOutputBlockExecutor("a")))
+            .build()
+            .unwrap();
+        let persistence = Arc::new(runkon_flow::persistence_memory::InMemoryWorkflowPersistence::new());
+        let run = persistence
+            .create_run(NewRun {
+                workflow_name: "w".to_string(),
+                parent_run_id: String::new(),
+                dry_run: false,
+                trigger: "test".to_string(),
+                definition_snapshot: None,
+                parent_workflow_run_id: None,
+            })
+            .unwrap();
+        let mut state = runkon_flow::test_helpers::make_test_execution_state(
+            Arc::clone(&persistence) as Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence>,
+            run.id,
+        );
+        state.workflow_name = "w".to_string();
+        state.action_registry = Arc::new(runkon_flow::traits::action_executor::ActionRegistry::from_executors(
+            HashMap::from([(
+                "a".to_string(),
+                Box::new(NoOutputBlockExecutor("a"))
+                    as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+            )]),
+            None,
+        ));
+        state.schema_resolver = Some(make_schema_resolver(
+            "w".to_string(),
+            ws_path.clone(),
+            ws_path,
+        ));
+        let result = engine.run(&def, &mut state).unwrap();
+        let steps = persistence.get_steps(&result.workflow_run_id).unwrap();
+        let step = steps.iter().find(|s| s.step_name == "a").unwrap();
+        (result.all_succeeded, step.status, step.step_error.clone())
+    }
+
+    #[test]
+    fn schema_step_without_output_block_fails_via_engine_require_output() {
+        let (ok, status, err) = run_no_output_block_step("call a { output = s }");
+        assert!(!ok, "a schema step with no output block must fail the run");
+        assert_eq!(status, runkon_flow::status::WorkflowStepStatus::Failed);
+        assert_eq!(err.as_deref(), Some("no FLOW_OUTPUT block"));
+    }
+
+    #[test]
+    fn step_without_schema_keeps_warning_only_behaviour() {
+        let (ok, status, _) = run_no_output_block_step("call a");
+        assert!(ok);
+        assert_eq!(status, runkon_flow::status::WorkflowStepStatus::Completed);
+    }
+
+    // -------------------------------------------------------------------------
     // fresh_children_for
     // -------------------------------------------------------------------------
 

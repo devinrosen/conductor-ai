@@ -45,6 +45,14 @@ pub(super) fn bridge_lock_err(e: impl std::fmt::Display) -> EngineError {
     EngineError::Workflow(format!("db mutex poisoned: {e}"))
 }
 
+/// The agent and prompt root runkon searches: conductor's repos keep them under
+/// `.conductor/`, overriding runkon's `.runkon` default. Every runkon call that
+/// loads an agent or prompt takes this, so the root is defined once.
+pub(super) fn conductor_config_dir() -> runkon_flow_executors::ConfigDir {
+    runkon_flow_executors::ConfigDir::new(".conductor")
+        .expect("`.conductor` is a valid plain relative directory name")
+}
+
 /// Wrap a `ConductorError` from a child-workflow execute/resume call into
 /// an `EngineError`, preserving cancellation passthrough so a child cancel
 /// propagates as a cancellation rather than a generic workflow failure.
@@ -200,5 +208,75 @@ mod tests {
             msg.contains("some error"),
             "error message should be preserved: {msg}"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::conductor_config_dir;
+    use runkon_flow_executors::agent_loader::{load_agent, load_and_concat_snippets};
+
+    fn write(root: &std::path::Path, rel: &str, body: &str) {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+    }
+
+    fn agent(desc: &str) -> String {
+        format!("---\nrole: reviewer\n---\n{desc}\n")
+    }
+
+    #[test]
+    fn agents_resolve_workflow_local_then_shared_then_worktree_before_repo() {
+        let wt = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        let (w, r) = (wt.path(), repo.path());
+        let load = || {
+            load_agent(
+                &w.to_string_lossy(),
+                &r.to_string_lossy(),
+                "x",
+                Some("wf"),
+                &conductor_config_dir(),
+                &[],
+                None,
+            )
+            .map(|a| a.prompt)
+        };
+        assert!(load().is_err());
+        write(r, ".conductor/agents/x.md", &agent("repo-shared"));
+        assert!(load().unwrap().contains("repo-shared"));
+        write(w, ".conductor/agents/x.md", &agent("wt-shared"));
+        assert!(load().unwrap().contains("wt-shared"));
+        write(r, ".conductor/workflows/wf/agents/x.md", &agent("repo-local"));
+        assert!(load().unwrap().contains("repo-local"));
+        write(w, ".conductor/workflows/wf/agents/x.md", &agent("wt-local"));
+        assert!(load().unwrap().contains("wt-local"));
+    }
+
+    #[test]
+    fn snippets_resolve_from_conductor_prompts() {
+        let wt = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        write(repo.path(), ".conductor/prompts/s.md", "repo-snippet");
+        let out = load_and_concat_snippets(
+            &wt.path().to_string_lossy(),
+            &repo.path().to_string_lossy(),
+            &["s".to_string()],
+            Some("wf"),
+            &conductor_config_dir(),
+        )
+        .unwrap();
+        assert!(out.contains("repo-snippet"));
+        write(wt.path(), ".conductor/prompts/s.md", "wt-snippet");
+        let out = load_and_concat_snippets(
+            &wt.path().to_string_lossy(),
+            &repo.path().to_string_lossy(),
+            &["s".to_string()],
+            Some("wf"),
+            &conductor_config_dir(),
+        )
+        .unwrap();
+        assert!(out.contains("wt-snippet"));
     }
 }
