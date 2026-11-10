@@ -136,10 +136,8 @@ pub fn find_review_run(
     repo_id: Option<&str>,
     pr_number: Option<u64>,
 ) -> Result<String> {
+    reject_run_id_with_selector(run_id, repo_id.is_some(), pr_number)?;
     match (run_id, repo_id, pr_number) {
-        (Some(_), Some(_), _) | (Some(_), _, Some(_)) => Err(not_found(
-            "pass either a run id or a repo with a PR number, not both".into(),
-        )),
         (Some(id), None, None) => resolve_review_run(conn, id),
         (None, Some(repo), Some(pr)) => latest_review_run_for_pr(conn, repo, pr)?
             .ok_or_else(|| not_found(format!("no review-pr run found for PR #{pr} in that repo"))),
@@ -150,11 +148,28 @@ pub fn find_review_run(
         (None, None, None) => Err(not_found(
             "pass a run id, or a repo with a PR number".into(),
         )),
+        // Rejected above by `reject_run_id_with_selector`.
+        (Some(_), _, _) => unreachable!("run id with another selector"),
     }
 }
 
+/// The run-id-vs-repo/PR conflict rule, shared by [`find_review_run`] and
+/// [`find_review_run_by_slug`] so it is checked in one place.
+fn reject_run_id_with_selector(
+    run_id: Option<&str>,
+    has_repo: bool,
+    pr_number: Option<u64>,
+) -> Result<()> {
+    if run_id.is_some() && (has_repo || pr_number.is_some()) {
+        return Err(not_found(
+            "pass either a run id or a repo with a PR number, not both".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Like [`find_review_run`], but the repo is given by slug. The run-id-vs-repo/PR conflict
-/// is rejected before the slug is looked up, so both entry points share one rule.
+/// is rejected before the slug is looked up.
 pub fn find_review_run_by_slug(
     conn: &Connection,
     config: &crate::config::Config,
@@ -162,9 +177,7 @@ pub fn find_review_run_by_slug(
     repo_slug: Option<&str>,
     pr_number: Option<u64>,
 ) -> Result<String> {
-    if run_id.is_some() && (repo_slug.is_some() || pr_number.is_some()) {
-        return find_review_run(conn, run_id, Some(""), pr_number);
-    }
+    reject_run_id_with_selector(run_id, repo_slug.is_some(), pr_number)?;
     let repo_id = match repo_slug {
         Some(slug) => Some(
             crate::repo::RepoManager::new(conn, config)
@@ -926,6 +939,40 @@ mod tests {
         assert!(find_review_run(&conn, None, None, Some(7)).is_err());
         assert!(find_review_run(&conn, None, Some("repo1"), None).is_err());
         assert!(find_review_run(&conn, None, Some("repo1"), Some(8)).is_err());
+    }
+
+    #[test]
+    fn find_review_run_by_slug_checks_conflict_before_lookup() {
+        let conn = db();
+        let config = crate::config::Config::default();
+        full_fixture(&conn, r#"{"pr_number":"7"}"#);
+        test_helpers::insert_test_repo(&conn, "repo1", "my-repo", "/tmp/my-repo");
+
+        // run id + unknown slug: the conflict wins over repo-not-found.
+        let e = find_review_run_by_slug(&conn, &config, Some("R"), Some("nope"), None)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("not both"), "{e}");
+        // run id + PR is also a conflict.
+        let e = find_review_run_by_slug(&conn, &config, Some("R"), None, Some(7))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("not both"), "{e}");
+        // unknown slug with a PR: repo-not-found, not the conflict error.
+        let e = find_review_run_by_slug(&conn, &config, None, Some("nope"), Some(7))
+            .unwrap_err()
+            .to_string();
+        assert!(!e.contains("not both"), "{e}");
+        // valid slug + PR resolves to the run.
+        assert_eq!(
+            find_review_run_by_slug(&conn, &config, None, Some("my-repo"), Some(7)).unwrap(),
+            "R"
+        );
+        // run id alone.
+        assert_eq!(
+            find_review_run_by_slug(&conn, &config, Some("R"), None, None).unwrap(),
+            "R"
+        );
     }
 
     #[test]
