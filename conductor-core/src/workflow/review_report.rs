@@ -138,7 +138,7 @@ pub fn find_review_run(
 ) -> Result<String> {
     reject_run_id_with_selector(run_id, repo_id.is_some(), pr_number)?;
     match (run_id, repo_id, pr_number) {
-        (Some(id), None, None) => resolve_review_run(conn, id),
+        (Some(id), _, _) => resolve_review_run(conn, id),
         (None, Some(repo), Some(pr)) => latest_review_run_for_pr(conn, repo, pr)?
             .ok_or_else(|| not_found(format!("no review-pr run found for PR #{pr} in that repo"))),
         (None, None, Some(_)) => Err(not_found(
@@ -148,8 +148,6 @@ pub fn find_review_run(
         (None, None, None) => Err(not_found(
             "pass a run id, or a repo with a PR number".into(),
         )),
-        // Rejected above by `reject_run_id_with_selector`.
-        (Some(_), _, _) => unreachable!("run id with another selector"),
     }
 }
 
