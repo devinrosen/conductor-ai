@@ -157,7 +157,7 @@ fn ms_between(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Option<i64>
     Some((b? - a?).num_milliseconds().max(0))
 }
 
-fn parse_output(raw: Option<String>, run_id: &str, step_name: &str) -> Option<Value> {
+pub(crate) fn parse_output(raw: Option<String>, run_id: &str, step_name: &str) -> Option<Value> {
     let raw = raw?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
