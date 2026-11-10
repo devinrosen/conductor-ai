@@ -900,31 +900,30 @@ impl<'a> TicketSyncer<'a> {
                 .or_default()
                 .push(branch.clone());
         }
-        let mut merged_branches: HashMap<String, MergedPr> = HashMap::new();
-        for (remote_url, branches) in &branches_by_remote {
-            merged_branches.extend(merge_check(remote_url, branches));
-        }
+        // remote_url -> (branch -> MergedPr): each worktree is looked up under its own
+        // remote only, so a PR merged in one repo never matches another repo's branch.
+        let merged_by_remote: HashMap<&str, HashMap<String, MergedPr>> = branches_by_remote
+            .iter()
+            .map(|(remote_url, branches)| (*remote_url, merge_check(remote_url, branches)))
+            .collect();
 
         let now = Utc::now().to_rfc3339();
         let mut count = 0usize;
 
-        for (repo_path, worktree_path, branch, _remote_url) in &artifacts {
-            let Some(merged) = merged_branches.get(branch) else {
+        for (repo_path, worktree_path, branch, remote_url) in &artifacts {
+            let Some(merged) = merged_by_remote
+                .get(remote_url.as_str())
+                .and_then(|m| m.get(branch))
+            else {
                 // Ticket is closed but PR not yet merged — leave the worktree alone.
                 continue;
             };
-            if let Some(reason) = crate::worktree::WorktreeManager::local_work_at_risk(
+            if crate::worktree::skip_for_local_work(
                 repo_path,
                 worktree_path,
                 branch,
                 &merged.head_oid,
             ) {
-                warn!(
-                    branch = %branch,
-                    path = %worktree_path,
-                    reason = %reason,
-                    "merged PR detected but worktree has local work — skipping cleanup"
-                );
                 continue;
             }
             self.conn.execute(

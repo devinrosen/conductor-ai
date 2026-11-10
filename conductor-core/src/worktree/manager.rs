@@ -1140,16 +1140,6 @@ impl<'a> WorktreeManager<'a> {
         remove_git_artifacts(repo_path, worktree_path, branch);
     }
 
-    /// Reason automatic cleanup must skip this worktree because local work would be lost.
-    pub(crate) fn local_work_at_risk(
-        repo_path: &str,
-        worktree_path: &str,
-        branch: &str,
-        head_oid: &str,
-    ) -> Option<String> {
-        local_work_at_risk(repo_path, worktree_path, branch, head_oid)
-    }
-
     pub fn update_status(&self, worktree_id: &str, status: WorktreeStatus) -> Result<()> {
         let completed_at = if status != WorktreeStatus::Active {
             Some(Utc::now().to_rfc3339())
@@ -1609,14 +1599,7 @@ impl<'a> WorktreeManager<'a> {
             }
 
             // A merged PR means the pushed branch is done, not that local work is.
-            if let Some(reason) = local_work_at_risk(repo_path, wt_path, branch, &merged.head_oid) {
-                tracing::warn!(
-                    worktree = %wt_id,
-                    branch = %branch,
-                    path = %wt_path,
-                    reason = %reason,
-                    "merged PR detected but worktree has local work — skipping cleanup"
-                );
+            if skip_for_local_work(repo_path, wt_path, branch, &merged.head_oid) {
                 continue;
             }
 
@@ -2703,6 +2686,66 @@ mod tests {
         assert_eq!(n, 0);
         assert_eq!(wt_status(&conn), "active");
         assert!(std::path::Path::new(&wt_path).exists());
+    }
+
+    #[test]
+    fn test_cleanup_empty_head_oid_skips_commits_not_on_any_remote() {
+        let (_r, _w, _repo_path, wt_path, conn) = setup_git_repo_with_worktree();
+        git_out(&wt_path, &["commit", "--allow-empty", "-m", "unpushed"]);
+
+        let config = crate::config::Config::default();
+        let mgr = WorktreeManager::new(&conn, &config);
+        let n = mgr
+            .cleanup_merged_worktrees_with_merge_check(
+                None,
+                merged_with_head(String::new()),
+                |_, _| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(wt_status(&conn), "active");
+        assert!(std::path::Path::new(&wt_path).exists());
+    }
+
+    #[test]
+    fn test_cleanup_unknown_head_oid_skips_commits_not_on_any_remote() {
+        let (_r, _w, _repo_path, wt_path, conn) = setup_git_repo_with_worktree();
+        git_out(&wt_path, &["commit", "--allow-empty", "-m", "unpushed"]);
+
+        let config = crate::config::Config::default();
+        let mgr = WorktreeManager::new(&conn, &config);
+        let n = mgr
+            .cleanup_merged_worktrees_with_merge_check(
+                None,
+                merged_with_head("0123456789abcdef0123456789abcdef01234567".into()),
+                |_, _| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(wt_status(&conn), "active");
+    }
+
+    #[test]
+    fn test_cleanup_empty_head_oid_removes_worktree_whose_tip_is_on_a_remote_ref() {
+        let (_r, _w, repo_path, wt_path, conn) = setup_git_repo_with_worktree();
+        let tip = git_out(&repo_path, &["rev-parse", "feat/test"]);
+        git_out(
+            &repo_path,
+            &["update-ref", "refs/remotes/origin/feat/test", &tip],
+        );
+
+        let config = crate::config::Config::default();
+        let mgr = WorktreeManager::new(&conn, &config);
+        let n = mgr
+            .cleanup_merged_worktrees_with_merge_check(
+                None,
+                merged_with_head(String::new()),
+                |_, _| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(wt_status(&conn), "merged");
+        assert!(!std::path::Path::new(&wt_path).exists());
     }
 
     #[test]

@@ -543,18 +543,43 @@ pub(crate) fn local_work_at_risk(
                     return Some(format!("{n} path(s) with uncommitted changes"));
                 }
             }
-            _ => return Some("could not verify worktree is clean (git status failed)".into()),
+            Ok(o) => {
+                return Some(format!(
+                    "could not verify worktree is clean (git status failed in {worktree_path}: {})",
+                    String::from_utf8_lossy(&o.stderr).trim()
+                ))
+            }
+            Err(e) => {
+                return Some(format!(
+                    "could not verify worktree is clean (git status failed in {worktree_path}: {e})"
+                ))
+            }
         }
     }
 
     let branch_ref = format!("refs/heads/{branch}");
-    let resolves = git_in(repo_path)
+    if !Path::new(repo_path).exists() {
+        return None;
+    }
+    // `rev-parse --verify --quiet` exits 1 with no output for a missing ref; any other
+    // failure (spawn error, bad repo path) is unknown, so fail safe and keep the worktree.
+    match git_in(repo_path)
         .args(["rev-parse", "--verify", "--quiet", &branch_ref])
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if !resolves {
-        return None;
+    {
+        Ok(o) if o.status.success() => {}
+        Ok(o) if o.status.code() == Some(1) && o.stderr.is_empty() => return None,
+        Ok(o) => {
+            return Some(format!(
+                "could not verify branch exists (git rev-parse failed in {repo_path}: {})",
+                String::from_utf8_lossy(&o.stderr).trim()
+            ))
+        }
+        Err(e) => {
+            return Some(format!(
+                "could not verify branch exists (git rev-parse failed in {repo_path}: {e})"
+            ))
+        }
     }
 
     let oid_known = !head_oid.is_empty()
@@ -587,7 +612,35 @@ pub(crate) fn local_work_at_risk(
                 None
             }
         }
-        _ => Some("could not verify branch commits are pushed (git rev-list failed)".into()),
+        Ok(o) => Some(format!(
+            "could not verify branch commits are pushed (git rev-list failed in {repo_path}: {})",
+            String::from_utf8_lossy(&o.stderr).trim()
+        )),
+        Err(e) => Some(format!(
+            "could not verify branch commits are pushed (git rev-list failed in {repo_path}: {e})"
+        )),
+    }
+}
+
+/// Log and return `true` when a merged worktree must be kept because local work is at risk.
+/// Shared by the ticket-sync and merged-PR cleanup paths.
+pub(crate) fn skip_for_local_work(
+    repo_path: &str,
+    worktree_path: &str,
+    branch: &str,
+    head_oid: &str,
+) -> bool {
+    match local_work_at_risk(repo_path, worktree_path, branch, head_oid) {
+        Some(reason) => {
+            tracing::warn!(
+                branch = %branch,
+                path = %worktree_path,
+                reason = %reason,
+                "merged PR detected but worktree has local work — skipping cleanup"
+            );
+            true
+        }
+        None => false,
     }
 }
 
