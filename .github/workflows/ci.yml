@@ -21,6 +21,7 @@ jobs:
       workflows: ${{ steps.filter.outputs.workflows }}
       desktop: ${{ steps.filter.outputs.desktop }}
       migrations: ${{ steps.filter.outputs.migrations }}
+      pipeline_scripts: ${{ steps.filter.outputs.pipeline_scripts }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -68,6 +69,10 @@ jobs:
               - 'conductor-cli/src/handlers/workflow.rs'
             migrations:
               - 'conductor-core/src/db/migrations/**'
+            pipeline_scripts:
+              - '.conductor/scripts/**'
+              - '.conductor/tests/**'
+              - '.github/workflows/ci.yml'
 
   fmt:
     name: Format
@@ -168,6 +173,21 @@ jobs:
       - name: Validate workflows
         if: needs.changes.outputs.workflows == 'true'
         run: cargo run --bin conductor -- workflow validate --all --templates --path .
+
+  pipeline-scripts:
+    name: Pipeline Scripts
+    needs: [changes]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        if: needs.changes.outputs.pipeline_scripts == 'true'
+      - name: Install rustfmt
+        if: needs.changes.outputs.pipeline_scripts == 'true'
+        run: rustup component add rustfmt
+      - name: Run pipeline script tests
+        if: needs.changes.outputs.pipeline_scripts == 'true'
+        run: .conductor/tests/run.sh
 
   schema-diagram-count:
     name: Schema Diagram Count

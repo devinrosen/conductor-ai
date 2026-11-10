@@ -1,0 +1,25 @@
+{
+  "markers": [
+    "has_review_issues",
+    "has_blocking_findings",
+    "has_warnings"
+  ],
+  "overall_approved": false,
+  "reviewed_by": "Architecture, DRY Abstraction, Error Handling, Performance, Security, Test Coverage, Workflow Semantics, Workflow Validation",
+  "blocking": [
+    {
+      "reviewer": "DRY Abstraction",
+      "file": "conductor-cli/src/mcp/tools/runs.rs",
+      "line": 403,
+      "severity": "warning"
+    },
+    {
+      "reviewer": "Error Handling",
+      "file": "conductor-core/src/workflow/review_report.rs",
+      "line": 521,
+      "severity": "warning"
+    }
+  ],
+  "answered": 0,
+  "off_diff": []
+}

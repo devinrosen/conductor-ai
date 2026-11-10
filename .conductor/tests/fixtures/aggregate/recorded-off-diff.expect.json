@@ -1,0 +1,26 @@
+{
+  "markers": [
+    "has_review_issues",
+    "has_blocking_findings",
+    "has_warnings"
+  ],
+  "overall_approved": false,
+  "reviewed_by": "Architecture, DRY Abstraction, Error Handling, Performance, Security, Test Coverage",
+  "blocking": [
+    {
+      "reviewer": "DRY Abstraction",
+      "file": "conductor-core/src/workflow/runkon_bridge/action_executor_adapter.rs",
+      "line": 133,
+      "severity": "warning"
+    }
+  ],
+  "answered": 0,
+  "off_diff": [
+    {
+      "file": "conductor-core/src/workflow/runkon_bridge/action_executor_adapter.rs",
+      "line": 373,
+      "severity": "warning",
+      "reviewer": "DRY Abstraction"
+    }
+  ]
+}

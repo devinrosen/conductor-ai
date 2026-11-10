@@ -1,0 +1,69 @@
+[
+  {
+    "step": "validate-workflows",
+    "iteration": 0,
+    "context": "Workflow validation passed: 39/39 workflow(s) passed.",
+    "markers": [],
+    "structured_output": "{\"markers\":[],\"context\":\"Workflow validation passed: 39/39 workflow(s) passed.\",\"off_diff_findings\":[],\"findings\":[],\"approved\":true,\"summary\":\"Workflow validation passed: 39/39 workflow(s) passed.\"}"
+  },
+  {
+    "step": "review-architecture",
+    "iteration": 0,
+    "context": "Review logic sits in conductor-core and is shared by thin MCP and CLI consumers, and the DB-only conductor_get_review tool is correctly classified as READ_ONLY; no architectural violations found.",
+    "markers": [],
+    "structured_output": "{\"approved\":true,\"findings\":[],\"summary\":\"Review logic sits in conductor-core and is shared by thin MCP and CLI consumers, and the DB-only conductor_get_review tool is correctly classified as READ_ONLY; no architectural violations found.\"}"
+  },
+  {
+    "step": "review-dry-abstraction",
+    "iteration": 0,
+    "context": "One DRY warning: the repo-slug lookup and run-id-vs-repo/pr conflict rule are duplicated between the MCP tool and the CLI handler; the core review_report module is otherwise well factored with no duplication, premature traits or copy-paste DB boilerplate worth flagging.",
+    "markers": [
+      "has_review_issues"
+    ],
+    "structured_output": "{\"approved\":false,\"findings\":[{\"file\":\"conductor-cli/src/mcp/tools/runs.rs\",\"line\":403,\"message\":\"The run-id-or-repo/pr selector logic is duplicated across the MCP tool and the CLI handler. Both resolve a repo slug to an id with RepoManager::get_by_slug, and the MCP tool also re-checks the run_id-vs-repo/pr conflict that find_review_run already rejects. Keep the slug-to-id step and the conflict rule in one core helper so the two entry points cannot drift. Also at: conductor-cli/src/handlers/workflow.rs:609\",\"severity\":\"warning\",\"suggestion\":\"Add a core helper in review_report.rs that takes the repo slug (e.g. find_review_run_by_slug(conn, config, run_id, slug, pr) or have find_review_run accept an Option<&str> slug), and call it from both the MCP tool and the CLI ReviewShow handler, dropping the duplicated RepoManager lookup and the pre-check in tool_get_review.\"}],\"off_diff_findings\":[],\"summary\":\"One DRY warning: the repo-slug lookup and run-id-vs-repo/pr conflict rule are duplicated between the MCP tool and the CLI handler; the core review_report module is otherwise well factored with no duplication, premature traits or copy-paste DB boilerplate worth flagging.\"}"
+  },
+  {
+    "step": "review-security",
+    "iteration": 0,
+    "context": "No security issues: all new SQL is parameterized, the script builds its JSON with jq --arg, and no new subprocess or filesystem paths take untrusted input.",
+    "markers": [],
+    "structured_output": "{\"approved\":true,\"findings\":[],\"summary\":\"No security issues: all new SQL is parameterized, the script builds its JSON with jq --arg, and no new subprocess or filesystem paths take untrusted input.\"}"
+  },
+  {
+    "step": "review-performance",
+    "iteration": 0,
+    "context": "Performance review found no warning- or critical-level issues: review_report.rs runs a fixed number of queries per call with no N+1 patterns, and the remaining parsing and cloning costs are negligible for one-shot on-demand MCP and CLI requests.",
+    "markers": [],
+    "structured_output": "{\"approved\":true,\"findings\":[],\"off_diff_findings\":[],\"summary\":\"Performance review found no warning- or critical-level issues: review_report.rs runs a fixed number of queries per call with no N+1 patterns, and the remaining parsing and cloning costs are negligible for one-shot on-demand MCP and CLI requests.\"}"
+  },
+  {
+    "step": "review-error-handling",
+    "iteration": 0,
+    "context": "Error handling is mostly sound. The submit-review.sh lookup is best-effort with a stderr warning and runs under set -euo pipefail. The `let _ = writeln!` calls write to a String, so they cannot fail. One warning: unparseable run inputs silently degrade to a 'full' scope with no note.",
+    "markers": [
+      "has_review_issues"
+    ],
+    "structured_output": "{\"approved\":false,\"findings\":[{\"file\":\"conductor-core/src/workflow/review_report.rs\",\"line\":521,\"message\":\"Run inputs that fail to parse as JSON are silently turned into Value::Null with `.ok()`. The report then claims scope 'full' and pr_number None with no note. That is a misleading answer for an incremental run with corrupt inputs. The function already collects `notes` for other degraded data, such as the snapshot fallback, but not for this case.\",\"severity\":\"warning\",\"suggestion\":\"Match on the parse result. When the inputs are Some but invalid, push a note such as 'run inputs could not be parsed; scope and PR number are unknown' to `notes` and include the serde error.\"}],\"summary\":\"Error handling is mostly sound. The submit-review.sh lookup is best-effort with a stderr warning and runs under set -euo pipefail. The `let _ = writeln!` calls write to a String, so they cannot fail. One warning: unparseable run inputs silently degrade to a 'full' scope with no note.\"}"
+  },
+  {
+    "step": "review-test-coverage",
+    "iteration": 0,
+    "context": null,
+    "markers": [],
+    "structured_output": "{\"approved\":true,\"findings\":[],\"summary\":\"Every new public symbol in conductor-core's review_report.rs has unit tests, and the MCP tool and CLI review-show command have tests for argument validation, error paths and the happy path. No coverage gaps found.\"}"
+  },
+  {
+    "step": "review-workflow-semantics",
+    "iteration": 0,
+    "context": "submit-review.sh's new review-recording block is best-effort, builds valid FLOW_OUTPUT with jq, emits nothing under DRY_RUN and is safe on resume; no pipeline defects found.",
+    "markers": [],
+    "structured_output": "{\"approved\":true,\"findings\":[],\"summary\":\"submit-review.sh's new review-recording block is best-effort, builds valid FLOW_OUTPUT with jq, emits nothing under DRY_RUN and is safe on resume; no pipeline defects found.\"}"
+  },
+  {
+    "step": "fetch-pr-replies",
+    "iteration": 0,
+    "context": "(trimmed)",
+    "markers": [],
+    "structured_output": "{\"markers\":[],\"context\":\"No earlier conductor review on PR #3323; no replies to consider.\",\"replies\":[]}"
+  }
+]
