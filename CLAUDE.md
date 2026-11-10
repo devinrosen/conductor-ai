@@ -162,6 +162,7 @@ Each release has a GitHub milestone and a `release/X.Y.Z` branch cut from `main`
 - **Autonomous SDLC vision:** [docs/AUTONOMOUS-SDLC.md](docs/AUTONOMOUS-SDLC.md)
 - **Current priorities:** https://github.com/devinrosen/conductor-ai/issues?q=is%3Aopen+label%3Aroadmap
 - **Workflow engine design:** [docs/workflow/engine.md](docs/workflow/engine.md)
+- **Workflow language reference** (semantics for `.wf` authors and reviewers; update it, and the Workflow Semantics brief, together): [docs/workflow/language.md](docs/workflow/language.md)
 - **Notification hooks reference:** [docs/notification-hooks.md](docs/notification-hooks.md)
 
 ## TUI Threading Rule
