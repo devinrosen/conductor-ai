@@ -427,6 +427,7 @@ mod tests {
             context: "ctx".into(),
             structured_output: None,
             correction_attempts: 0,
+            recovered_from: None,
         }
     }
 

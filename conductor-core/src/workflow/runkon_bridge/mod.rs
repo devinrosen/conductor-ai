@@ -212,7 +212,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod tests {
+mod config_dir_tests {
     use super::conductor_config_dir;
     use runkon_flow_executors::agent_loader::{load_agent, load_and_concat_snippets};
 

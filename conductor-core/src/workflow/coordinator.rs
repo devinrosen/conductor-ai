@@ -1627,7 +1627,7 @@ mod tests {
         let result = engine.run(&def, &mut state).unwrap();
         let steps = persistence.get_steps(&result.workflow_run_id).unwrap();
         let step = steps.iter().find(|s| s.step_name == "a").unwrap();
-        (result.all_succeeded, step.status, step.step_error.clone())
+        (result.all_succeeded, step.status.clone(),step.step_error.clone())
     }
 
     #[test]
