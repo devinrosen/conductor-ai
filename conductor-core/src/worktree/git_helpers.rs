@@ -3,6 +3,7 @@ use std::process::Command;
 
 use crate::error::{ConductorError, Result, SubprocessFailure};
 use crate::git::{check_gh_output, check_output, git_in};
+use crate::github::MergedPr;
 
 /// Structured result of a pre-creation health check on the base branch.
 #[derive(Debug, Clone)]
@@ -514,6 +515,180 @@ pub(super) fn pull_ff_only(worktree_path: &str, branch: &str) -> std::result::Re
                 stderr.trim()
             ))
         }
+    }
+}
+
+/// Format why a git command could not be verified: the spawn error, or the exit status
+/// plus trimmed stderr.
+fn git_unverified(
+    what: &str,
+    cmd: &str,
+    path: &str,
+    res: std::io::Result<std::process::Output>,
+) -> String {
+    let detail = match res {
+        Err(e) => e.to_string(),
+        Ok(o) => format!(
+            "{}: {}",
+            o.status,
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
+    };
+    format!("could not verify {what} (git {cmd} failed in {path}: {detail})")
+}
+
+/// Why automatic cleanup must not remove this worktree, or `None` when it is safe.
+///
+/// Local work is at risk when the worktree has uncommitted changes (tracked or
+/// untracked, not ignored) or its local branch has commits that are not on the
+/// merged PR's head (`head_oid`; when empty or not present locally, not on any
+/// remote-tracking ref). A missing worktree directory or branch has nothing to lose;
+/// a missing repo path with a worktree still on disk means the branch could not be
+/// checked, so the worktree is kept.
+pub(crate) fn local_work_at_risk(
+    repo_path: &str,
+    worktree_path: &str,
+    branch: &str,
+    head_oid: &str,
+) -> Option<String> {
+    if Path::new(worktree_path).exists() {
+        let res = git_in(worktree_path)
+            .args(["status", "--porcelain"])
+            .output();
+        match res {
+            Ok(o) if o.status.success() => {
+                let n = String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .count();
+                if n > 0 {
+                    return Some(format!("{n} path(s) with uncommitted changes"));
+                }
+            }
+            res => {
+                return Some(git_unverified(
+                    "worktree is clean",
+                    "status",
+                    worktree_path,
+                    res,
+                ))
+            }
+        }
+    }
+
+    let branch_ref = format!("refs/heads/{branch}");
+    if !Path::new(repo_path).exists() {
+        if !Path::new(worktree_path).exists() {
+            // Neither the repo nor the worktree directory is reachable: nothing to remove.
+            return None;
+        }
+        return Some(format!(
+            "could not verify branch exists (repo path {repo_path} does not exist)"
+        ));
+    }
+    // `rev-parse --verify --quiet` exits 1 with no output for a missing ref; any other
+    // failure (spawn error, bad repo path) is unknown, so fail safe and keep the worktree.
+    let res = git_in(repo_path)
+        .args(["rev-parse", "--verify", "--quiet", &branch_ref])
+        .output();
+    match res {
+        Ok(o) if o.status.success() => {}
+        Ok(o) if o.status.code() == Some(1) && o.stderr.is_empty() => return None,
+        res => return Some(git_unverified("branch exists", "rev-parse", repo_path, res)),
+    }
+
+    let oid_known = !head_oid.is_empty()
+        && git_in(repo_path)
+            .args(["cat-file", "-e", &format!("{head_oid}^{{commit}}")])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+    let mut cmd = git_in(repo_path);
+    cmd.args(["rev-list", "--count", &branch_ref]);
+    if oid_known {
+        cmd.arg(format!("^{head_oid}"));
+    } else {
+        cmd.args(["--not", "--remotes"]);
+    }
+    match cmd.output() {
+        Ok(o) if o.status.success() => {
+            let count: u64 = String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse()
+                .unwrap_or(1);
+            if count > 0 {
+                let target = if oid_known {
+                    "the merged PR head"
+                } else {
+                    "any remote branch"
+                };
+                Some(format!("{count} commit(s) not on {target}"))
+            } else {
+                None
+            }
+        }
+        res => Some(git_unverified(
+            "branch commits are pushed",
+            "rev-list",
+            repo_path,
+            res,
+        )),
+    }
+}
+
+/// remote_url -> (branch -> merged PR).
+pub(crate) type MergedByRemote =
+    std::collections::HashMap<String, std::collections::HashMap<String, MergedPr>>;
+
+/// Batch-check merged PRs per remote for `(remote_url, branch)` pairs. Results stay keyed
+/// by remote so a PR merged in one repo never matches another repo's same-named branch;
+/// read them back with [`lookup_merged`].
+pub(crate) fn merged_prs_by_remote<'a>(
+    pairs: impl IntoIterator<Item = (&'a str, &'a str)>,
+    merge_check: impl Fn(&str, &[String]) -> std::collections::HashMap<String, MergedPr>,
+) -> MergedByRemote {
+    let mut branches_by_remote: std::collections::HashMap<&str, Vec<String>> =
+        std::collections::HashMap::new();
+    for (remote_url, branch) in pairs {
+        branches_by_remote
+            .entry(remote_url)
+            .or_default()
+            .push(branch.to_string());
+    }
+    branches_by_remote
+        .into_iter()
+        .map(|(remote_url, branches)| (remote_url.to_string(), merge_check(remote_url, &branches)))
+        .collect()
+}
+
+/// The merged PR for `branch` under its own `remote_url` only.
+pub(crate) fn lookup_merged<'a>(
+    merged: &'a MergedByRemote,
+    remote_url: &str,
+    branch: &str,
+) -> Option<&'a MergedPr> {
+    merged.get(remote_url).and_then(|m| m.get(branch))
+}
+
+/// Log and return `true` when a merged worktree must be kept because local work is at risk.
+/// Shared by the ticket-sync and merged-PR cleanup paths.
+pub(crate) fn skip_for_local_work(
+    repo_path: &str,
+    worktree_path: &str,
+    branch: &str,
+    head_oid: &str,
+) -> bool {
+    match local_work_at_risk(repo_path, worktree_path, branch, head_oid) {
+        Some(reason) => {
+            tracing::warn!(
+                branch = %branch,
+                path = %worktree_path,
+                reason = %reason,
+                "merged PR detected but worktree has local work — skipping cleanup"
+            );
+            true
+        }
+        None => false,
     }
 }
 

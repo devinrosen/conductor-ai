@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use chrono::Utc;
 use rusqlite::{named_params, Connection};
@@ -6,7 +6,7 @@ use tracing::warn;
 
 use crate::db::{query_collect, sql_placeholders, with_in_clause};
 use crate::error::{ConductorError, Result};
-use crate::github::merged_branches_for_repo;
+use crate::github::{merged_branches_for_repo, MergedPr};
 
 use super::query::{
     map_ticket_row, query_dep_pairs, query_dep_pairs_for_repo, TICKET_COLS, TICKET_COLS_BARE,
@@ -875,7 +875,7 @@ impl<'a> TicketSyncer<'a> {
     pub(super) fn mark_worktrees_for_closed_tickets_with_merge_check(
         &self,
         repo_id: &str,
-        merge_check: impl Fn(&str, &[String]) -> HashMap<String, String>,
+        merge_check: impl Fn(&str, &[String]) -> HashMap<String, MergedPr>,
     ) -> Result<usize> {
         // Collect git paths before updating so we can clean up worktree dirs and branches.
         let artifacts: Vec<(String, String, String, String)> = query_collect(
@@ -892,25 +892,29 @@ impl<'a> TicketSyncer<'a> {
             },
         )?;
 
-        // Group branches by remote_url and batch-check merged status per repo.
-        let mut branches_by_remote: HashMap<&str, Vec<String>> = HashMap::new();
-        for (_, _, branch, remote_url) in &artifacts {
-            branches_by_remote
-                .entry(remote_url.as_str())
-                .or_default()
-                .push(branch.clone());
-        }
-        let mut merged_branches: HashSet<String> = HashSet::new();
-        for (remote_url, branches) in &branches_by_remote {
-            merged_branches.extend(merge_check(remote_url, branches).into_keys());
-        }
+        let merged_by_remote = crate::worktree::merged_prs_by_remote(
+            artifacts
+                .iter()
+                .map(|(_, _, branch, remote_url)| (remote_url.as_str(), branch.as_str())),
+            merge_check,
+        );
 
         let now = Utc::now().to_rfc3339();
         let mut count = 0usize;
 
-        for (repo_path, worktree_path, branch, _remote_url) in &artifacts {
-            if !merged_branches.contains(branch) {
+        for (repo_path, worktree_path, branch, remote_url) in &artifacts {
+            let Some(merged) =
+                crate::worktree::lookup_merged(&merged_by_remote, remote_url, branch)
+            else {
                 // Ticket is closed but PR not yet merged — leave the worktree alone.
+                continue;
+            };
+            if crate::worktree::skip_for_local_work(
+                repo_path,
+                worktree_path,
+                branch,
+                &merged.head_oid,
+            ) {
                 continue;
             }
             self.conn.execute(
