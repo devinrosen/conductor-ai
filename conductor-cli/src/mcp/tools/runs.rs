@@ -18,16 +18,44 @@ fn push_row(out: &mut String, row: &str, extras: &str) {
     out.push('\n');
 }
 
-/// Resolve a run's ticket to its source id.
+/// Resolve a run's ticket to its source id. A ticket that no longer exists
+/// yields `None`; any other lookup error is logged and shown as a marker so the
+/// row doesn't silently look like "no ticket".
 fn ticket_source_id(
     conn: &rusqlite::Connection,
     run: &conductor_core::workflow::ConductorWorkflowRun,
 ) -> Option<String> {
+    use conductor_core::error::ConductorError;
     let id = run.ticket_id.as_deref()?;
-    conductor_core::tickets::TicketSyncer::new(conn)
-        .get_by_id(id)
-        .ok()
-        .map(|t| t.source_id)
+    match conductor_core::tickets::TicketSyncer::new(conn).get_by_id(id) {
+        Ok(t) => Some(t.source_id),
+        Err(ConductorError::TicketNotFound { .. }) => None,
+        Err(e) => {
+            tracing::warn!("failed to resolve ticket {id} for run {}: {e}", run.id);
+            Some(format!("<lookup failed: {e}>"))
+        }
+    }
+}
+
+/// Bulk-load worktree id -> (slug, branch) for the distinct worktrees the runs
+/// reference, in one query. Shared by the per-repo and cross-repo paths.
+fn worktree_map(
+    conn: &rusqlite::Connection,
+    config: &conductor_core::config::Config,
+    runs: &[conductor_core::workflow::ConductorWorkflowRun],
+) -> conductor_core::error::Result<std::collections::HashMap<String, (String, String)>> {
+    let mut ids: Vec<&str> = runs
+        .iter()
+        .filter_map(|r| r.worktree_id.as_deref())
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let worktrees =
+        conductor_core::worktree::WorktreeManager::new(conn, config).get_by_ids(&ids)?;
+    Ok(worktrees
+        .into_iter()
+        .map(|wt| (wt.id, (wt.slug, wt.branch)))
+        .collect())
 }
 
 pub(super) fn tool_list_runs(
@@ -82,7 +110,12 @@ pub(super) fn tool_list_runs(
                 Err(e) => return tool_err(e),
             };
             match conductor_core::workflow::list_workflow_runs_filtered_paginated(
-                conn, &wt.id, status, limit, offset,
+                conn,
+                &wt.id,
+                status,
+                limit,
+                offset,
+                top_level_only,
             ) {
                 Ok(r) => r,
                 Err(e) => return tool_err(e),
@@ -95,42 +128,29 @@ pub(super) fn tool_list_runs(
                 offset,
                 status,
                 include_inactive,
+                top_level_only,
             ) {
                 Ok(r) => r,
                 Err(e) => return tool_err(e),
             }
         };
 
-        // Pagination is based on the unfiltered page size, so top_level_only can
-        // return fewer than `limit` rows without ending the paging.
-        let fetched = runs.len();
-        let runs: Vec<_> = runs
-            .into_iter()
-            .filter(|r| !top_level_only || r.parent_workflow_run_id.is_none())
-            .collect();
-
         if runs.is_empty() {
             return tool_ok(format!("No workflow runs for {slug}."));
         }
 
-        // Bulk-fetch all worktrees for this repo once, then build a lookup map.
-        // This avoids N+1 DB queries and config file reads (one per run).
-        let wt_mgr = WorktreeManager::new(conn, config);
-        let worktrees = match wt_mgr.list_by_repo_id(&repo.id, false) {
-            Ok(wts) => wts,
+        let wt_map = match worktree_map(conn, config, &runs) {
+            Ok(m) => m,
             Err(e) => return tool_err(e),
         };
-        let wt_map: std::collections::HashMap<&str, (&str, &str)> = worktrees
-            .iter()
-            .map(|wt| (wt.id.as_str(), (wt.slug.as_str(), wt.branch.as_str())))
-            .collect();
 
         let mut out = String::new();
         for run in &runs {
             let (wt_slug, wt_branch) = run
                 .worktree_id
                 .as_deref()
-                .and_then(|id| wt_map.get(id).copied())
+                .and_then(|id| wt_map.get(id))
+                .map(|(s, b)| (s.as_str(), b.as_str()))
                 .unzip();
             push_row(
                 &mut out,
@@ -138,8 +158,8 @@ pub(super) fn tool_list_runs(
                 &format_run_extra_lines(run, ticket_source_id(conn, run).as_deref()),
             );
         }
-        if fetched == limit {
-            out.push_str(&pagination_hint(offset, fetched, limit));
+        if runs.len() == limit {
+            out.push_str(&pagination_hint(offset, runs.len(), limit));
         }
         tool_ok(out)
     } else {
@@ -158,23 +178,19 @@ pub(super) fn tool_list_runs(
             limit,
             offset,
             include_inactive,
+            top_level_only,
         ) {
             Ok(r) => r,
             Err(e) => return tool_err(e),
         };
 
-        let fetched = runs.len();
-        let runs: Vec<_> = runs
-            .into_iter()
-            .filter(|r| !top_level_only || r.parent_workflow_run_id.is_none())
-            .collect();
-
         if runs.is_empty() {
             return tool_ok("No workflow runs.".to_string());
         }
-        let wt_mgr = WorktreeManager::new(conn, config);
-        let mut wt_cache: std::collections::HashMap<String, Option<(String, String)>> =
-            std::collections::HashMap::new();
+        let wt_map = match worktree_map(conn, config, &runs) {
+            Ok(m) => m,
+            Err(e) => return tool_err(e),
+        };
         let mut out = String::new();
         for run in &runs {
             let slug_for_run = run
@@ -182,15 +198,10 @@ pub(super) fn tool_list_runs(
                 .as_deref()
                 .and_then(|id| repo_map.get(id).map(|s| s.as_str()));
             let mut extras = String::new();
-            if let Some(wt_id) = run.worktree_id.as_deref() {
-                let wt = wt_cache
-                    .entry(wt_id.to_string())
-                    .or_insert_with(|| wt_mgr.get_by_id(wt_id).ok().map(|w| (w.slug, w.branch)));
-                if let Some((slug, branch)) = wt {
-                    extras.push_str(&format!(
-                        "worktree_slug: {slug}\nworktree_branch: {branch}\n"
-                    ));
-                }
+            if let Some((slug, branch)) = run.worktree_id.as_deref().and_then(|id| wt_map.get(id)) {
+                extras.push_str(&format!(
+                    "worktree_slug: {slug}\nworktree_branch: {branch}\n"
+                ));
             }
             extras.push_str(&format_run_extra_lines(
                 run,
@@ -202,8 +213,8 @@ pub(super) fn tool_list_runs(
                 &extras,
             );
         }
-        if fetched == limit {
-            out.push_str(&pagination_hint(offset, fetched, limit));
+        if runs.len() == limit {
+            out.push_str(&pagination_hint(offset, runs.len(), limit));
         }
         tool_ok(out)
     }
@@ -1410,6 +1421,182 @@ mod tests {
         assert!(top.contains("parent-wf"), "got: {top}");
         assert!(!top.contains("child-wf"), "got: {top}");
         assert!(!top.contains("child: true"), "got: {top}");
+    }
+
+    #[test]
+    fn test_list_runs_all_repos_shows_worktree_and_ticket() {
+        use conductor_core::agent::AgentManager;
+        use conductor_core::config::Config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+        use conductor_core::tickets::{TicketInput, TicketSyncer};
+
+        let (_f, conductor) = make_test_conductor();
+        let conn = open_database(_f.path()).expect("open db");
+        let config = Config::default();
+        let repo = RepoManager::new(&conn, &config)
+            .register("all-repo", "/tmp/all-repo", "https://github.com/x/y", None)
+            .expect("register repo");
+        let wt_id = "01JTEST0000000000000000003";
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES (?1, ?2, 'feat-all', 'feat/all', '/tmp/wt-all', 'active', datetime('now'))",
+            rusqlite::params![wt_id, repo.id],
+        )
+        .expect("insert worktree");
+        let syncer = TicketSyncer::new(&conn);
+        syncer.sync_and_close_tickets(
+            &repo.id,
+            "github",
+            &[TicketInput {
+                source_type: "github".into(),
+                source_id: "777".into(),
+                title: "t".into(),
+                body: String::new(),
+                state: "open".into(),
+                labels: vec![],
+                assignee: None,
+                priority: None,
+                url: "https://github.com/x/y/issues/777".into(),
+                raw_json: None,
+                label_details: vec![],
+                blocked_by: vec![],
+                children: vec![],
+                parent: None,
+            }],
+        );
+        let ticket = syncer.get_by_source_id(&repo.id, "777").expect("ticket");
+
+        let agent_mgr = AgentManager::new(&conn);
+        let mut ids = Vec::new();
+        for (name, wt) in [("linked-wf", Some(wt_id)), ("bare-wf", None)] {
+            let parent = agent_mgr
+                .create_run(None, "workflow", None)
+                .expect("agent run");
+            let run = conductor_core::workflow::create_workflow_run_with_targets(
+                &conn,
+                name,
+                wt,
+                None,
+                Some(&repo.id),
+                &parent.id,
+                false,
+                "manual",
+                None,
+                None,
+                None,
+            )
+            .expect("create run");
+            ids.push(run.id.clone());
+        }
+        conn.execute(
+            "UPDATE workflow_runs SET ticket_id = ?1 WHERE id = ?2",
+            rusqlite::params![ticket.id, ids[0]],
+        )
+        .expect("link ticket");
+
+        let result = tool_list_runs(&conductor, &empty_args());
+        assert_ne!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.clone())
+            .unwrap_or_default();
+        let rows: Vec<&str> = text
+            .split("\n\n")
+            .filter(|r| !r.trim().is_empty())
+            .collect();
+        let linked = rows
+            .iter()
+            .find(|r| r.contains("linked-wf"))
+            .expect("linked row");
+        let bare = rows
+            .iter()
+            .find(|r| r.contains("bare-wf"))
+            .expect("bare row");
+        assert!(linked.contains("worktree_slug: feat-all"), "got: {linked}");
+        assert!(
+            linked.contains("worktree_branch: feat/all"),
+            "got: {linked}"
+        );
+        assert!(linked.contains("ticket: 777"), "got: {linked}");
+        assert!(!bare.contains("worktree_slug"), "got: {bare}");
+        assert!(!bare.contains("ticket:"), "got: {bare}");
+    }
+
+    #[test]
+    fn test_list_runs_top_level_only_keeps_paging_hint_and_pages_past_children() {
+        use conductor_core::agent::AgentManager;
+        use conductor_core::config::Config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let (_f, conductor) = make_test_conductor();
+        let conn = open_database(_f.path()).expect("open db");
+        let config = Config::default();
+        let repo = RepoManager::new(&conn, &config)
+            .register(
+                "page-repo",
+                "/tmp/page-repo",
+                "https://github.com/x/y",
+                None,
+            )
+            .expect("register repo");
+        let agent_mgr = AgentManager::new(&conn);
+        let make = |name: &str| {
+            let parent = agent_mgr
+                .create_run(None, "workflow", None)
+                .expect("agent run");
+            conductor_core::workflow::create_workflow_run_with_targets(
+                &conn,
+                name,
+                None,
+                None,
+                Some(&repo.id),
+                &parent.id,
+                false,
+                "manual",
+                None,
+                None,
+                None,
+            )
+            .expect("create run")
+            .id
+            .clone()
+        };
+        let root_a = make("root-a");
+        let _root_b = make("root-b");
+        let _root_c = make("root-c");
+        // Three newer child runs: a page of 2 without the filter would be all children.
+        for i in 0..3 {
+            let id = make(&format!("child-{i}"));
+            conn.execute(
+                "UPDATE workflow_runs SET parent_workflow_run_id = ?1, started_at = '2999-01-01T00:00:00Z' WHERE id = ?2",
+                rusqlite::params![root_a, id],
+            )
+            .expect("mark child");
+        }
+
+        let text_of = |args: &serde_json::Map<String, Value>| {
+            tool_list_runs(&conductor, args).content[0]
+                .as_text()
+                .map(|t| t.text.clone())
+                .unwrap_or_default()
+        };
+        let mut args = args_with("repo", "page-repo");
+        args.insert("top_level_only".into(), Value::Bool(true));
+        args.insert("limit".into(), Value::String("2".into()));
+        let page1 = text_of(&args);
+        assert!(!page1.contains("child-"), "got: {page1}");
+        assert_eq!(page1.matches("workflow: root-").count(), 2, "got: {page1}");
+        assert!(
+            page1.contains("offset"),
+            "paging hint expected, got: {page1}"
+        );
+
+        args.insert("offset".into(), Value::String("2".into()));
+        let page2 = text_of(&args);
+        assert_eq!(page2.matches("workflow: root-").count(), 1, "got: {page2}");
+        assert!(!page2.contains("child-"), "got: {page2}");
     }
 
     #[test]

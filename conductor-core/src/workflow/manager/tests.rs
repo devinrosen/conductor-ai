@@ -588,6 +588,7 @@ fn test_list_workflow_runs_by_repo_id_filtered_with_status() {
         0,
         Some(WorkflowRunStatus::Running),
         false,
+        false,
     )
     .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
@@ -617,9 +618,10 @@ fn test_list_workflow_runs_by_repo_id_filtered_none_returns_all() {
     )
     .unwrap();
 
-    let runs =
-        crate::workflow::list_workflow_runs_by_repo_id_filtered(&conn, "r1", 50, 0, None, false)
-            .unwrap();
+    let runs = crate::workflow::list_workflow_runs_by_repo_id_filtered(
+        &conn, "r1", 50, 0, None, false, false,
+    )
+    .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
     assert!(
@@ -658,6 +660,7 @@ fn test_list_workflow_runs_filtered_paginated_with_status() {
         Some(WorkflowRunStatus::Pending),
         1,
         0,
+        false,
     )
     .unwrap();
     assert_eq!(
@@ -673,6 +676,7 @@ fn test_list_workflow_runs_filtered_paginated_with_status() {
         Some(WorkflowRunStatus::Pending),
         1,
         1,
+        false,
     )
     .unwrap();
     assert_eq!(
@@ -698,11 +702,13 @@ fn test_list_workflow_runs_filtered_paginated_none_delegates() {
 
     // None — no status filter, pagination alone controls results.
     let page1 =
-        crate::workflow::list_workflow_runs_filtered_paginated(&conn, "w1", None, 2, 0).unwrap();
+        crate::workflow::list_workflow_runs_filtered_paginated(&conn, "w1", None, 2, 0, false)
+            .unwrap();
     assert_eq!(page1.len(), 2, "limit=2 must return exactly 2 runs");
 
     let page2 =
-        crate::workflow::list_workflow_runs_filtered_paginated(&conn, "w1", None, 2, 2).unwrap();
+        crate::workflow::list_workflow_runs_filtered_paginated(&conn, "w1", None, 2, 2, false)
+            .unwrap();
     assert_eq!(
         page2.len(),
         1,
@@ -733,6 +739,7 @@ fn test_list_all_workflow_runs_filtered_paginated_with_status() {
         50,
         0,
         false,
+        false,
     )
     .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
@@ -762,9 +769,10 @@ fn test_list_all_workflow_runs_filtered_paginated_none() {
     )
     .unwrap();
 
-    let runs =
-        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 50, 0, false)
-            .unwrap();
+    let runs = crate::workflow::list_all_workflow_runs_filtered_paginated(
+        &conn, None, 50, 0, false, false,
+    )
+    .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
     assert!(ids.contains(&run1.id.as_str()), "run1 must appear");
@@ -780,9 +788,10 @@ fn test_list_all_workflow_runs_filtered_paginated_excludes_inactive_worktrees() 
     conn.execute("UPDATE worktrees SET status = 'merged' WHERE id = 'w2'", [])
         .unwrap();
 
-    let runs =
-        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 50, 0, false)
-            .unwrap();
+    let runs = crate::workflow::list_all_workflow_runs_filtered_paginated(
+        &conn, None, 50, 0, false, false,
+    )
+    .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
     assert!(
@@ -810,8 +819,9 @@ fn test_list_all_workflow_runs_filtered_paginated_include_inactive() {
     )
     .unwrap();
 
-    let runs = crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 50, 0, true)
-        .unwrap();
+    let runs =
+        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 50, 0, true, false)
+            .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
     for r in [&active_run, &merged_run, &abandoned_run] {
         assert!(ids.contains(&r.id.as_str()), "run {} must appear", r.id);
@@ -827,6 +837,7 @@ fn test_list_all_workflow_runs_filtered_paginated_include_inactive() {
         50,
         0,
         true,
+        false,
     )
     .unwrap();
     assert_eq!(pending.len(), 3);
@@ -860,11 +871,12 @@ fn test_list_workflow_runs_by_repo_id_filtered_include_inactive() {
             0,
             status.clone(),
             false,
+            false,
         )
         .unwrap();
         assert!(!hidden.iter().any(|r| r.id == merged_run.id));
         let shown = crate::workflow::list_workflow_runs_by_repo_id_filtered(
-            &conn, &repo_id, 50, 0, status, true,
+            &conn, &repo_id, 50, 0, status, true, false,
         )
         .unwrap();
         assert!(shown.iter().any(|r| r.id == merged_run.id));
@@ -5095,4 +5107,42 @@ fn test_refresh_fan_out_counters_empty_fan_out_yields_zeros() {
     assert_eq!(completed, 0);
     assert_eq!(failed, 0);
     assert_eq!(skipped, 0);
+}
+
+// ── top_level_only filter ────────────────────────────────────────────────
+
+#[test]
+fn test_list_runs_top_level_only_applies_before_pagination() {
+    let conn = setup_db();
+    let root = create_repo_run(&conn, "r1");
+    let mut child_ids = Vec::new();
+    for _ in 0..3 {
+        let c = create_repo_run(&conn, "r1");
+        conn.execute(
+            "UPDATE workflow_runs SET parent_workflow_run_id = ?1, started_at = '2999-01-01T00:00:00Z' WHERE id = ?2",
+            rusqlite::params![root.id, c.id],
+        )
+        .unwrap();
+        child_ids.push(c.id.clone());
+    }
+
+    // Children sort first; a page of 2 would be all children without the filter.
+    let unfiltered = crate::workflow::list_workflow_runs_by_repo_id_filtered(
+        &conn, "r1", 2, 0, None, false, false,
+    )
+    .unwrap();
+    assert!(unfiltered.iter().all(|r| child_ids.contains(&r.id)));
+
+    let top = crate::workflow::list_workflow_runs_by_repo_id_filtered(
+        &conn, "r1", 2, 0, None, false, true,
+    )
+    .unwrap();
+    assert_eq!(top.len(), 1);
+    assert_eq!(top[0].id, root.id);
+
+    let all_top =
+        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 2, 0, false, true)
+            .unwrap();
+    assert_eq!(all_top.len(), 1);
+    assert_eq!(all_top[0].id, root.id);
 }

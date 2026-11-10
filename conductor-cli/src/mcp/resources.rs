@@ -648,6 +648,70 @@ pub(crate) fn resolve_worktree_info(
 mod tests {
     use super::*;
 
+    fn bare_run() -> conductor_core::workflow::ConductorWorkflowRun {
+        let (_f, conductor) = {
+            use conductor_core::config::Config;
+            let file = tempfile::NamedTempFile::new().expect("temp file");
+            let conn = conductor_core::db::open_database(file.path()).expect("open db");
+            (
+                file,
+                Conductor {
+                    conn,
+                    config: Config::default(),
+                },
+            )
+        };
+        let parent = conductor_core::agent::AgentManager::new(&conductor.conn)
+            .create_run(None, "workflow", None)
+            .expect("agent run");
+        let run = conductor_core::workflow::create_workflow_run_with_targets(
+            &conductor.conn,
+            "wf",
+            None,
+            None,
+            None,
+            &parent.id,
+            false,
+            "manual",
+            None,
+            None,
+            None,
+        )
+        .expect("create run");
+        conductor_core::workflow::get_workflow_run(&conductor.conn, &run.id)
+            .expect("get run")
+            .expect("run exists")
+    }
+
+    #[test]
+    fn run_extra_lines_empty_when_nothing_recorded() {
+        assert_eq!(format_run_extra_lines(&bare_run(), None), "");
+    }
+
+    #[test]
+    fn run_extra_lines_ticket_line() {
+        assert_eq!(
+            format_run_extra_lines(&bare_run(), Some("123")),
+            "ticket: 123\n"
+        );
+    }
+
+    #[test]
+    fn run_extra_lines_pr_key_fallback_and_precedence() {
+        let mut run = bare_run();
+        run.run.inputs.insert("pr".into(), "7".into());
+        assert_eq!(format_run_extra_lines(&run, None), "pr: 7\n");
+        run.run.inputs.insert("pr_number".into(), "9".into());
+        assert_eq!(format_run_extra_lines(&run, None), "pr: 9\n");
+    }
+
+    #[test]
+    fn run_extra_lines_empty_pr_number_is_skipped() {
+        let mut run = bare_run();
+        run.run.inputs.insert("pr_number".into(), String::new());
+        assert_eq!(format_run_extra_lines(&run, None), "");
+    }
+
     fn make_test_conductor() -> (tempfile::NamedTempFile, Conductor) {
         use conductor_core::config::Config;
         use conductor_core::db::open_database;
