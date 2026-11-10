@@ -18,7 +18,7 @@ pub(super) fn make_standalone_db() -> (tempfile::NamedTempFile, std::path::PathB
     let tmp = tempfile::NamedTempFile::new().expect("tempfile");
     let path = tmp.path().to_path_buf();
     {
-        let conn = crate::db::open_database(&path).expect("open temp db");
+        let conn = crate::test_helpers::open_test_db_file(&path);
         crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
         crate::test_helpers::insert_test_worktree(
             &conn,

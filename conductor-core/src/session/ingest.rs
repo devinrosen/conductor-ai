@@ -805,7 +805,7 @@ mod tests {
     fn two_file_db_connections_claim_once() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("c.db");
-        let a = crate::db::open_database(&db).unwrap();
+        let a = crate::test_helpers::open_test_db_file(&db);
         crate::test_helpers::insert_test_repo(&a, "r1", "test-repo", "/tmp/repo");
         crate::test_helpers::insert_test_worktree(&a, "w1", "r1", "feat-test", "/tmp/ws/feat-test");
         let t = dir.path().join("t.jsonl");

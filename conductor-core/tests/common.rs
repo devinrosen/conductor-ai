@@ -20,7 +20,7 @@ pub fn make_agent_def(runtime: &str) -> AgentDef {
 pub fn setup_test_db(run_id: &str, runtime: &str) -> tempfile::NamedTempFile {
     let tmp = tempfile::NamedTempFile::new().expect("temp db file");
 
-    let conn = conductor_core::db::open_database(tmp.path()).expect("open test db");
+    let conn = conductor_core::test_helpers::open_test_db_file(tmp.path());
     conn.execute(
         "INSERT INTO agent_runs (id, prompt, status, started_at, runtime) \
          VALUES (?1, 'test', 'running', '2024-01-01T00:00:00Z', ?2)",

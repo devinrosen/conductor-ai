@@ -33,7 +33,7 @@ utoipa = { version = "5", optional = true }
 ctor = { version = "0.8", optional = true }
 
 [features]
-test-helpers = ["dep:ctor"]
+test-helpers = ["dep:ctor", "rusqlite/backup"]
 openapi = ["dep:utoipa", "runkon-flow/utoipa", "runkon-runtimes/utoipa"]
 
 [dev-dependencies]

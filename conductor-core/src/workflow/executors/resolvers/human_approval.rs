@@ -74,10 +74,6 @@ mod tests {
     use std::sync::Arc;
     use tempfile::NamedTempFile;
 
-    fn setup_test_db(conn: &Connection) {
-        crate::db::migrations::run(conn).expect("migrations should run successfully");
-    }
-
     /// Insert a workflow_run_steps row for testing.
     ///
     /// FK enforcement is temporarily disabled so the test does not need to
@@ -113,8 +109,8 @@ mod tests {
         let tmp = NamedTempFile::new().unwrap();
         let db_path = tmp.path().to_path_buf();
 
+        crate::test_helpers::seed_test_db_file(&db_path);
         let conn = Connection::open(&db_path).unwrap();
-        setup_test_db(&conn);
         insert_test_step(
             &conn,
             "INSERT INTO workflow_run_steps (id, workflow_run_id, step_name, role, position, status, iteration, gate_type, gate_approved_at) \
@@ -140,8 +136,8 @@ mod tests {
         let tmp = NamedTempFile::new().unwrap();
         let db_path = tmp.path().to_path_buf();
 
+        crate::test_helpers::seed_test_db_file(&db_path);
         let conn = Connection::open(&db_path).unwrap();
-        setup_test_db(&conn);
         insert_test_step(
             &conn,
             "INSERT INTO workflow_run_steps (id, workflow_run_id, step_name, role, position, status, iteration, gate_type) \
@@ -169,8 +165,8 @@ mod tests {
         let tmp = NamedTempFile::new().unwrap();
         let db_path = tmp.path().to_path_buf();
 
+        crate::test_helpers::seed_test_db_file(&db_path);
         let conn = Connection::open(&db_path).unwrap();
-        setup_test_db(&conn);
         insert_test_step(
             &conn,
             "INSERT INTO workflow_run_steps (id, workflow_run_id, step_name, role, position, status, iteration, gate_type, gate_feedback) \
@@ -198,8 +194,8 @@ mod tests {
         let tmp = NamedTempFile::new().unwrap();
         let db_path = tmp.path().to_path_buf();
 
+        crate::test_helpers::seed_test_db_file(&db_path);
         let conn = Connection::open(&db_path).unwrap();
-        setup_test_db(&conn);
         insert_test_step(
             &conn,
             "INSERT INTO workflow_run_steps (id, workflow_run_id, step_name, role, position, status, iteration, gate_type) \
@@ -224,8 +220,8 @@ mod tests {
     fn test_human_review_resolver_gate_type() {
         let tmp = NamedTempFile::new().unwrap();
         let db_path = tmp.path().to_path_buf();
+        crate::test_helpers::seed_test_db_file(&db_path);
         let conn = Connection::open(&db_path).unwrap();
-        setup_test_db(&conn);
         drop(conn);
 
         let persistence = make_persistence(&db_path);
@@ -238,8 +234,8 @@ mod tests {
         let tmp = NamedTempFile::new().unwrap();
         let db_path = tmp.path().to_path_buf();
 
+        crate::test_helpers::seed_test_db_file(&db_path);
         let conn = Connection::open(&db_path).unwrap();
-        setup_test_db(&conn);
         drop(conn);
 
         let persistence = make_persistence(&db_path);

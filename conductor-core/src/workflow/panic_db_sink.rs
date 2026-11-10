@@ -65,8 +65,8 @@ mod tests {
     fn make_test_db_with_run() -> (tempfile::TempDir, PathBuf, String) {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
+        crate::test_helpers::seed_test_db_file(&db_path);
         let conn = Connection::open(&db_path).unwrap();
-        crate::db::migrations::run(&conn).unwrap();
 
         let run_id = ulid::Ulid::new().to_string();
         // Insert a minimal agent_run (FK parent for workflow_runs).
