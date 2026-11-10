@@ -298,7 +298,6 @@ fn seed_workflow_runs(conn: &Connection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::open_database;
     use tempfile::NamedTempFile;
 
     #[test]

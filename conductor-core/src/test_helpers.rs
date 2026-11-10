@@ -137,6 +137,8 @@ pub fn create_test_conn() -> Connection {
 pub fn create_test_conn_fk_off() -> Connection {
     let mut conn = Connection::open_in_memory().unwrap();
     copy_template_into(&mut conn);
+    // The bundled SQLite may default foreign_keys to ON, so turn it off explicitly.
+    conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
     conn
 }
 
@@ -678,8 +680,8 @@ mod template_tests {
         assert_eq!(mode.to_lowercase(), "wal");
         assert_eq!(count_rows(&conn, "repos"), 0);
         assert_eq!(
-            db::connection_db_path(&conn).as_deref(),
-            Some(tmp.path()),
+            db::connection_db_path(&conn).and_then(|p| p.canonicalize().ok()),
+            tmp.path().canonicalize().ok(),
             "connection_db_path should return the file path"
         );
     }
