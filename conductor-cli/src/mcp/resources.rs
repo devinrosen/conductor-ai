@@ -389,17 +389,11 @@ pub(crate) fn format_run_summary_line_with_repo(
     worktree_slug: Option<&str>,
     worktree_branch: Option<&str>,
 ) -> String {
-    let mut out = format!(
-        "repo: {}\nid: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\n",
+    format!(
+        "repo: {}\n{}",
         repo_slug.unwrap_or("unknown"),
-        run.id,
-        run.workflow_name,
-        run.status,
-        run.started_at
-    );
-    push_worktree_lines(&mut out, worktree_slug, worktree_branch);
-    out.push('\n');
-    out
+        format_run_summary_line(run, worktree_slug, worktree_branch)
+    )
 }
 
 /// Extra `list_runs` row lines: ended_at, parent run (`child: true`), ticket and PR target.

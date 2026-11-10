@@ -931,37 +931,8 @@ mod tests {
                 [],
             ).unwrap();
 
-            let agent_mgr = conductor_core::agent::AgentManager::new(&conn);
-            let p1 = agent_mgr.create_run(Some("w1"), "wf-a", None).unwrap();
-            let p2 = agent_mgr.create_run(Some("w2"), "wf-b", None).unwrap();
-            conductor_core::workflow::create_workflow_run_with_targets(
-                &conn,
-                "flow-a",
-                Some("w1"),
-                None,
-                Some("r1"),
-                &p1.id,
-                false,
-                "manual",
-                None,
-                None,
-                None,
-            )
-            .unwrap();
-            conductor_core::workflow::create_workflow_run_with_targets(
-                &conn,
-                "flow-b",
-                Some("w2"),
-                None,
-                Some("r2"),
-                &p2.id,
-                false,
-                "manual",
-                None,
-                None,
-                None,
-            )
-            .unwrap();
+            create_list_run(&conn, "flow-a", Some("w1"), Some("r1"));
+            create_list_run(&conn, "flow-b", Some("w2"), Some("r2"));
         }
 
         let result = tool_list_runs(&conductor, &empty_args());
@@ -1030,41 +1001,8 @@ mod tests {
             .register("repo-b", "/tmp/repo-b", "https://github.com/x/b", None)
             .expect("register repo-b");
 
-        let agent_mgr = conductor_core::agent::AgentManager::new(&conn);
-
-        let parent = agent_mgr
-            .create_run(None, "workflow", None)
-            .expect("create agent run");
-
-        // Create one run for repo-A and one for repo-B
-        let _run_a = conductor_core::workflow::create_workflow_run_with_targets(
-            &conn,
-            "wf-a",
-            None,
-            None,
-            Some(&repo_a.id),
-            &parent.id,
-            false,
-            "manual",
-            None,
-            None,
-            None,
-        )
-        .expect("create run A");
-        let _run_b = conductor_core::workflow::create_workflow_run_with_targets(
-            &conn,
-            "wf-b",
-            None,
-            None,
-            Some(&repo_b.id),
-            &parent.id,
-            false,
-            "manual",
-            None,
-            None,
-            None,
-        )
-        .expect("create run B");
+        let _run_a = create_list_run(&conn, "wf-a", None, Some(&repo_a.id));
+        let _run_b = create_list_run(&conn, "wf-b", None, Some(&repo_b.id));
 
         let runs_a =
             conductor_core::workflow::list_workflow_runs_by_repo_id(&conn, &repo_a.id, 50, 0)
@@ -1314,24 +1252,7 @@ mod tests {
         .expect("insert worktree");
 
         // Create a workflow run linked to both the worktree and the repo.
-        let agent_mgr = conductor_core::agent::AgentManager::new(&conn);
-        let parent = agent_mgr
-            .create_run(None, "workflow", None)
-            .expect("create agent run");
-        conductor_core::workflow::create_workflow_run_with_targets(
-            &conn,
-            "my-wf",
-            Some(wt_id),
-            None,
-            Some(&repo.id),
-            &parent.id,
-            false,
-            "manual",
-            None,
-            None,
-            None,
-        )
-        .expect("create workflow run");
+        create_list_run(&conn, "my-wf", Some(wt_id), Some(&repo.id));
 
         // Call tool_list_runs and verify worktree_slug appears in output.
         let args = args_with("repo", "slug-test-repo");
@@ -1628,23 +1549,7 @@ mod tests {
         )
         .expect("insert worktree");
 
-        let parent = conductor_core::agent::AgentManager::new(&conn)
-            .create_run(None, "workflow", None)
-            .expect("create agent run");
-        let run = conductor_core::workflow::create_workflow_run_with_targets(
-            &conn,
-            "merged-wf",
-            Some(wt_id),
-            None,
-            Some(&repo.id),
-            &parent.id,
-            false,
-            "manual",
-            None,
-            None,
-            None,
-        )
-        .expect("create workflow run");
+        let run_id = create_list_run(&conn, "merged-wf", Some(wt_id), Some(&repo.id));
 
         let text_of = |args: &serde_json::Map<String, Value>| {
             let result = tool_list_runs(&conductor, args);
@@ -1663,13 +1568,13 @@ mod tests {
             };
             let default_text = text_of(&args);
             assert!(
-                !default_text.contains(&run.id),
+                !default_text.contains(&run_id),
                 "merged run must be hidden by default (repo={with_repo}): {default_text}"
             );
             args.insert("include_inactive".into(), Value::Bool(true));
             let text = text_of(&args);
             assert!(
-                text.contains(&run.id),
+                text.contains(&run_id),
                 "merged run must appear with include_inactive (repo={with_repo}): {text}"
             );
             if with_repo {
