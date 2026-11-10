@@ -463,16 +463,61 @@ fi
 # blip here used to fail the whole run after every reviewer had finished.
 if [ "${OVERALL_APPROVED}" = "true" ] && [ "${WITHHOLD_APPROVAL}" = "true" ]; then
   echo "Approval withheld (review pipeline changed or unchecked) — submitting a COMMENT review so a person must approve (#3293)…"
+  EVENT="COMMENT"
   gh_retry gh pr review "${PR_NUMBER}" --comment --body-file "${REVIEW_BODY_FILE}"
 elif [ "${OVERALL_APPROVED}" = "true" ]; then
   echo "Submitting APPROVE review for PR #${PR_NUMBER}…"
+  EVENT="APPROVE"
   gh_retry gh pr review "${PR_NUMBER}" --approve --body-file "${REVIEW_BODY_FILE}"
 elif [ "${IS_OWN_PR}" = "true" ]; then
   echo "PR author matches current user — submitting COMMENT review (GitHub disallows REQUEST_CHANGES on own PRs)…"
+  EVENT="COMMENT"
   gh_retry gh pr review "${PR_NUMBER}" --comment --body-file "${REVIEW_BODY_FILE}"
 else
   echo "Submitting REQUEST CHANGES review for PR #${PR_NUMBER}…"
+  EVENT="REQUEST_CHANGES"
   gh_retry gh pr review "${PR_NUMBER}" --request-changes --body-file "${REVIEW_BODY_FILE}"
 fi
 
 echo "Review submitted successfully."
+
+# ---------------------------------------------------------------------------
+# 7. Record the posted review (#3092)
+#
+# `gh pr review` prints no URL, so look up the review just posted: the newest
+# conductor review by this user. `conductor workflow review-show` and the
+# conductor_get_review MCP tool read it from this step's output. Best-effort:
+# the review is already posted, so a failed lookup leaves the URL null with a
+# warning and never fails the step.
+# ---------------------------------------------------------------------------
+REVIEW_ID=""
+REVIEW_URL=""
+if [ -n "${CURRENT_USER}" ] && REVIEWS_JSON=$(gh_retry gh api --paginate "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews"); then
+  # --paginate emits one JSON array per page; slurp and flatten them.
+  LOOKUP=$(printf '%s' "${REVIEWS_JSON}" | jq -rs --arg user "${CURRENT_USER}" '
+    [.[][]? | select(.user.login == $user and ((.body // "") | contains("<!-- conductor-review -->")))]
+    | last // empty | "\(.id)\t\(.html_url)"' 2>/dev/null || true)
+  if [ -n "${LOOKUP}" ]; then
+    REVIEW_ID="${LOOKUP%%$'\t'*}"
+    REVIEW_URL="${LOOKUP#*$'\t'}"
+  fi
+fi
+if [ -z "${REVIEW_URL}" ]; then
+  echo "Warning: could not look up the URL of the review just posted on PR #${PR_NUMBER}; it is not recorded." >&2
+fi
+
+if FLOW_JSON=$(jq -nc \
+  --arg id "${REVIEW_ID}" --arg url "${REVIEW_URL}" --arg event "${EVENT}" \
+  --arg pr "${PR_NUMBER}" --argjson approved "${OVERALL_APPROVED}" '
+  {markers: [],
+   context: ("Submitted \($event) review for PR #\($pr)" + (if $url != "" then ": \($url)" else "" end)),
+   review_id: (if $id == "" then null else ($id | tonumber? // null) end),
+   review_url: (if $url == "" then null else $url end),
+   event: $event,
+   overall_approved: $approved}' 2>/dev/null); then
+  echo "<<<FLOW_OUTPUT>>>"
+  echo "${FLOW_JSON}"
+  echo "<<<END_FLOW_OUTPUT>>>"
+else
+  echo "Warning: could not build the review's FLOW_OUTPUT; the posted review is not recorded." >&2
+fi
