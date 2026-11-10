@@ -359,6 +359,16 @@ pub(crate) fn format_workflow_def(def: &conductor_core::workflow::WorkflowDef) -
 // Run formatting helpers (shared between resource reader and tool handlers)
 // ---------------------------------------------------------------------------
 
+/// Append the `worktree_slug:` / `worktree_branch:` lines shared by every run row.
+fn push_worktree_lines(out: &mut String, slug: Option<&str>, branch: Option<&str>) {
+    if let Some(slug) = slug {
+        out.push_str(&format!("worktree_slug: {slug}\n"));
+    }
+    if let Some(branch) = branch {
+        out.push_str(&format!("worktree_branch: {branch}\n"));
+    }
+}
+
 pub(crate) fn format_run_summary_line(
     run: &conductor_core::workflow::WorkflowRun,
     worktree_slug: Option<&str>,
@@ -368,12 +378,7 @@ pub(crate) fn format_run_summary_line(
         "id: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\n",
         run.id, run.workflow_name, run.status, run.started_at
     );
-    if let Some(slug) = worktree_slug {
-        out.push_str(&format!("worktree_slug: {slug}\n"));
-    }
-    if let Some(branch) = worktree_branch {
-        out.push_str(&format!("worktree_branch: {branch}\n"));
-    }
+    push_worktree_lines(&mut out, worktree_slug, worktree_branch);
     out.push('\n');
     out
 }
@@ -381,15 +386,20 @@ pub(crate) fn format_run_summary_line(
 pub(crate) fn format_run_summary_line_with_repo(
     run: &conductor_core::workflow::WorkflowRun,
     repo_slug: Option<&str>,
+    worktree_slug: Option<&str>,
+    worktree_branch: Option<&str>,
 ) -> String {
-    format!(
-        "repo: {}\nid: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\n\n",
+    let mut out = format!(
+        "repo: {}\nid: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\n",
         repo_slug.unwrap_or("unknown"),
         run.id,
         run.workflow_name,
         run.status,
         run.started_at
-    )
+    );
+    push_worktree_lines(&mut out, worktree_slug, worktree_branch);
+    out.push('\n');
+    out
 }
 
 /// Extra `list_runs` row lines: ended_at, parent run (`child: true`), ticket and PR target.
@@ -649,36 +659,10 @@ mod tests {
     use super::*;
 
     fn bare_run() -> conductor_core::workflow::ConductorWorkflowRun {
-        let (_f, conductor) = {
-            use conductor_core::config::Config;
-            let file = tempfile::NamedTempFile::new().expect("temp file");
-            let conn = conductor_core::db::open_database(file.path()).expect("open db");
-            (
-                file,
-                Conductor {
-                    conn,
-                    config: Config::default(),
-                },
-            )
-        };
-        let parent = conductor_core::agent::AgentManager::new(&conductor.conn)
-            .create_run(None, "workflow", None)
-            .expect("agent run");
-        let run = conductor_core::workflow::create_workflow_run_with_targets(
-            &conductor.conn,
-            "wf",
-            None,
-            None,
-            None,
-            &parent.id,
-            false,
-            "manual",
-            None,
-            None,
-            None,
-        )
-        .expect("create run");
-        conductor_core::workflow::get_workflow_run(&conductor.conn, &run.id)
+        let (_f, conductor) = crate::mcp::tools::test_helpers::make_test_conductor();
+        let id =
+            crate::mcp::tools::test_helpers::create_list_run(&conductor.conn, "wf", None, None);
+        conductor_core::workflow::get_workflow_run(&conductor.conn, &id)
             .expect("get run")
             .expect("run exists")
     }

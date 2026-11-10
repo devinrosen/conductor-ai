@@ -18,21 +18,24 @@ fn push_row(out: &mut String, row: &str, extras: &str) {
     out.push('\n');
 }
 
-/// Resolve a run's ticket to its source id. A ticket that no longer exists
-/// yields `None`; any other lookup error is logged and shown as a marker so the
-/// row doesn't silently look like "no ticket".
-fn ticket_source_id(
+/// Bulk-load ticket id -> source id for the distinct tickets the runs reference,
+/// in one query. A ticket that no longer exists is simply absent from the map. If
+/// the lookup itself fails, the error is logged and every referenced ticket maps to
+/// a `<lookup failed: ...>` marker so rows don't silently look like "no ticket".
+fn ticket_source_map(
     conn: &rusqlite::Connection,
-    run: &conductor_core::workflow::ConductorWorkflowRun,
-) -> Option<String> {
-    use conductor_core::error::ConductorError;
-    let id = run.ticket_id.as_deref()?;
-    match conductor_core::tickets::TicketSyncer::new(conn).get_by_id(id) {
-        Ok(t) => Some(t.source_id),
-        Err(ConductorError::TicketNotFound { .. }) => None,
+    runs: &[conductor_core::workflow::ConductorWorkflowRun],
+) -> std::collections::HashMap<String, String> {
+    let mut ids: Vec<&str> = runs.iter().filter_map(|r| r.ticket_id.as_deref()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    match conductor_core::tickets::TicketSyncer::new(conn).get_by_ids(&ids) {
+        Ok(tickets) => tickets.into_iter().map(|t| (t.id, t.source_id)).collect(),
         Err(e) => {
-            tracing::warn!("failed to resolve ticket {id} for run {}: {e}", run.id);
-            Some(format!("<lookup failed: {e}>"))
+            tracing::warn!("failed to resolve tickets for run list: {e}");
+            ids.into_iter()
+                .map(|id| (id.to_string(), format!("<lookup failed: {e}>")))
+                .collect()
         }
     }
 }
@@ -43,7 +46,7 @@ fn worktree_map(
     conn: &rusqlite::Connection,
     config: &conductor_core::config::Config,
     runs: &[conductor_core::workflow::ConductorWorkflowRun],
-) -> conductor_core::error::Result<std::collections::HashMap<String, (String, String)>> {
+) -> conductor_core::error::Result<WorktreeMap> {
     let mut ids: Vec<&str> = runs
         .iter()
         .filter_map(|r| r.worktree_id.as_deref())
@@ -56,6 +59,31 @@ fn worktree_map(
         .into_iter()
         .map(|wt| (wt.id, (wt.slug, wt.branch)))
         .collect())
+}
+
+type WorktreeMap = std::collections::HashMap<String, (String, String)>;
+
+/// A run's worktree (slug, branch) from the bulk map, if it has one.
+fn run_worktree<'a>(
+    map: &'a WorktreeMap,
+    run: &conductor_core::workflow::ConductorWorkflowRun,
+) -> (Option<&'a str>, Option<&'a str>) {
+    run.worktree_id
+        .as_deref()
+        .and_then(|id| map.get(id))
+        .map(|(s, b)| (s.as_str(), b.as_str()))
+        .unzip()
+}
+
+/// A run's ticket source id (or lookup-failed marker) from the bulk map, if any.
+fn run_ticket<'a>(
+    map: &'a std::collections::HashMap<String, String>,
+    run: &conductor_core::workflow::ConductorWorkflowRun,
+) -> Option<&'a str> {
+    run.ticket_id
+        .as_deref()
+        .and_then(|id| map.get(id))
+        .map(String::as_str)
 }
 
 pub(super) fn tool_list_runs(
@@ -144,18 +172,14 @@ pub(super) fn tool_list_runs(
             Err(e) => return tool_err(e),
         };
 
+        let ticket_map = ticket_source_map(conn, &runs);
         let mut out = String::new();
         for run in &runs {
-            let (wt_slug, wt_branch) = run
-                .worktree_id
-                .as_deref()
-                .and_then(|id| wt_map.get(id))
-                .map(|(s, b)| (s.as_str(), b.as_str()))
-                .unzip();
+            let (wt_slug, wt_branch) = run_worktree(&wt_map, run);
             push_row(
                 &mut out,
                 &format_run_summary_line(run, wt_slug, wt_branch),
-                &format_run_extra_lines(run, ticket_source_id(conn, run).as_deref()),
+                &format_run_extra_lines(run, run_ticket(&ticket_map, run)),
             );
         }
         if runs.len() == limit {
@@ -191,26 +215,18 @@ pub(super) fn tool_list_runs(
             Ok(m) => m,
             Err(e) => return tool_err(e),
         };
+        let ticket_map = ticket_source_map(conn, &runs);
         let mut out = String::new();
         for run in &runs {
             let slug_for_run = run
                 .repo_id
                 .as_deref()
                 .and_then(|id| repo_map.get(id).map(|s| s.as_str()));
-            let mut extras = String::new();
-            if let Some((slug, branch)) = run.worktree_id.as_deref().and_then(|id| wt_map.get(id)) {
-                extras.push_str(&format!(
-                    "worktree_slug: {slug}\nworktree_branch: {branch}\n"
-                ));
-            }
-            extras.push_str(&format_run_extra_lines(
-                run,
-                ticket_source_id(conn, run).as_deref(),
-            ));
+            let (wt_slug, wt_branch) = run_worktree(&wt_map, run);
             push_row(
                 &mut out,
-                &format_run_summary_line_with_repo(run, slug_for_run),
-                &extras,
+                &format_run_summary_line_with_repo(run, slug_for_run, wt_slug, wt_branch),
+                &format_run_extra_lines(run, run_ticket(&ticket_map, run)),
             );
         }
         if runs.len() == limit {
@@ -489,7 +505,7 @@ pub(super) fn tool_get_review(
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_helpers::make_test_conductor;
+    use super::super::test_helpers::{create_list_run, make_test_conductor};
     use super::*;
     use serde_json::Value;
 
@@ -550,11 +566,10 @@ mod tests {
         db_path: &std::path::Path,
         status: conductor_core::workflow::WorkflowRunStatus,
     ) -> String {
-        use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;
 
         let conn = open_database(db_path).expect("open db");
-        let agent_mgr = AgentManager::new(&conn);
+        let agent_mgr = conductor_core::agent::AgentManager::new(&conn);
         let parent = agent_mgr
             .create_run(None, "workflow", None)
             .expect("create agent run");
@@ -583,11 +598,10 @@ mod tests {
 
     /// Helper: create a workflow run with one step. Returns (run_id, step_id).
     fn make_run_with_step(db_path: &std::path::Path, step_name: &str) -> (String, String) {
-        use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;
 
         let conn = open_database(db_path).expect("open db");
-        let agent_mgr = AgentManager::new(&conn);
+        let agent_mgr = conductor_core::agent::AgentManager::new(&conn);
         let parent = agent_mgr
             .create_run(None, "workflow", None)
             .expect("create parent run");
@@ -888,7 +902,6 @@ mod tests {
 
     #[test]
     fn test_dispatch_list_runs_cross_repo() {
-        use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;
 
         let (_f, conductor) = make_test_conductor();
@@ -918,7 +931,7 @@ mod tests {
                 [],
             ).unwrap();
 
-            let agent_mgr = AgentManager::new(&conn);
+            let agent_mgr = conductor_core::agent::AgentManager::new(&conn);
             let p1 = agent_mgr.create_run(Some("w1"), "wf-a", None).unwrap();
             let p2 = agent_mgr.create_run(Some("w2"), "wf-b", None).unwrap();
             conductor_core::workflow::create_workflow_run_with_targets(
@@ -1002,7 +1015,6 @@ mod tests {
 
     #[test]
     fn test_list_workflow_runs_by_repo_id_scoped() {
-        use conductor_core::agent::AgentManager;
         use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
@@ -1018,7 +1030,7 @@ mod tests {
             .register("repo-b", "/tmp/repo-b", "https://github.com/x/b", None)
             .expect("register repo-b");
 
-        let agent_mgr = AgentManager::new(&conn);
+        let agent_mgr = conductor_core::agent::AgentManager::new(&conn);
 
         let parent = agent_mgr
             .create_run(None, "workflow", None)
@@ -1268,7 +1280,6 @@ mod tests {
 
     #[test]
     fn test_list_runs_includes_worktree_slug() {
-        use conductor_core::agent::AgentManager;
         use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
@@ -1303,7 +1314,7 @@ mod tests {
         .expect("insert worktree");
 
         // Create a workflow run linked to both the worktree and the repo.
-        let agent_mgr = AgentManager::new(&conn);
+        let agent_mgr = conductor_core::agent::AgentManager::new(&conn);
         let parent = agent_mgr
             .create_run(None, "workflow", None)
             .expect("create agent run");
@@ -1351,7 +1362,6 @@ mod tests {
 
     #[test]
     fn test_list_runs_shows_child_ended_at_and_top_level_only() {
-        use conductor_core::agent::AgentManager;
         use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
@@ -1368,28 +1378,10 @@ mod tests {
             )
             .expect("register repo");
 
-        let agent_mgr = AgentManager::new(&conn);
-        let mut ids = Vec::new();
-        for name in ["parent-wf", "child-wf"] {
-            let parent = agent_mgr
-                .create_run(None, "workflow", None)
-                .expect("create agent run");
-            let run = conductor_core::workflow::create_workflow_run_with_targets(
-                &conn,
-                name,
-                None,
-                None,
-                Some(&repo.id),
-                &parent.id,
-                false,
-                "manual",
-                None,
-                None,
-                None,
-            )
-            .expect("create workflow run");
-            ids.push(run.id.clone());
-        }
+        let ids: Vec<String> = ["parent-wf", "child-wf"]
+            .iter()
+            .map(|name| create_list_run(&conn, name, None, Some(&repo.id)))
+            .collect();
         conn.execute(
             "UPDATE workflow_runs SET parent_workflow_run_id = ?1, ended_at = '2026-01-02T03:04:05Z', \
              inputs = '{\"pr_number\":\"42\"}', target_label = 'x/y#42' WHERE id = ?2",
@@ -1397,14 +1389,10 @@ mod tests {
         )
         .expect("update child");
 
-        let text_of = |result: CallToolResult| {
-            result.content[0]
-                .as_text()
-                .map(|t| t.text.clone())
-                .unwrap_or_default()
-        };
-
-        let all = text_of(tool_list_runs(&conductor, &args_with("repo", "child-repo")));
+        let all = result_text(&tool_list_runs(
+            &conductor,
+            &args_with("repo", "child-repo"),
+        ));
         assert!(all.contains("child: true"), "got: {all}");
         assert!(
             all.contains(&format!("parent_run_id: {}", ids[0])),
@@ -1417,15 +1405,76 @@ mod tests {
 
         let mut args = args_with("repo", "child-repo");
         args.insert("top_level_only".into(), Value::Bool(true));
-        let top = text_of(tool_list_runs(&conductor, &args));
+        let top = result_text(&tool_list_runs(&conductor, &args));
         assert!(top.contains("parent-wf"), "got: {top}");
         assert!(!top.contains("child-wf"), "got: {top}");
         assert!(!top.contains("child: true"), "got: {top}");
     }
 
+    /// Open a connection to the conductor's database with
+    /// foreign keys off, so tests can plant dangling references and break tables.
+    fn lenient_conn(file: &tempfile::NamedTempFile) -> rusqlite::Connection {
+        let conn = conductor_core::db::open_database(file.path()).expect("open db");
+        conn.execute_batch("PRAGMA foreign_keys = OFF;")
+            .expect("fk off");
+        conn
+    }
+
+    #[test]
+    fn test_list_runs_omits_ticket_line_for_deleted_ticket() {
+        let (f, conductor) = make_test_conductor();
+        let conn = lenient_conn(&f);
+        let id = create_list_run(&conn, "orphan-wf", None, None);
+        conn.execute(
+            "UPDATE workflow_runs SET ticket_id = 'gone-ticket' WHERE id = ?1",
+            rusqlite::params![id],
+        )
+        .expect("link missing ticket");
+
+        let result = tool_list_runs(&conductor, &empty_args());
+        assert_ne!(result.is_error, Some(true));
+        let text = result_text(&result);
+        assert!(text.contains("orphan-wf"), "got: {text}");
+        assert!(!text.contains("ticket:"), "got: {text}");
+    }
+
+    #[test]
+    fn test_list_runs_marks_ticket_lookup_failure() {
+        let (f, conductor) = make_test_conductor();
+        let conn = lenient_conn(&f);
+        let id = create_list_run(&conn, "broken-wf", None, None);
+        conn.execute(
+            "UPDATE workflow_runs SET ticket_id = 'some-ticket' WHERE id = ?1",
+            rusqlite::params![id],
+        )
+        .expect("link ticket");
+        conn.execute_batch("DROP TABLE tickets;")
+            .expect("break tickets");
+
+        let result = tool_list_runs(&conductor, &empty_args());
+        assert_ne!(result.is_error, Some(true));
+        let text = result_text(&result);
+        assert!(text.contains("ticket: <lookup failed:"), "got: {text}");
+    }
+
+    #[test]
+    fn test_list_runs_returns_error_when_worktree_lookup_fails() {
+        let (f, conductor) = make_test_conductor();
+        let conn = lenient_conn(&f);
+        create_list_run(&conn, "wt-wf", Some("wt-1"), None);
+        // The list query only joins on worktrees.id/status; renaming `branch`
+        // breaks only the bulk worktree lookup.
+        conn.execute_batch("ALTER TABLE worktrees RENAME COLUMN branch TO branch_x;")
+            .expect("break worktrees");
+        let mut args = empty_args();
+        args.insert("include_inactive".into(), Value::Bool(true));
+
+        let result = tool_list_runs(&conductor, &args);
+        assert_eq!(result.is_error, Some(true), "got: {}", result_text(&result));
+    }
+
     #[test]
     fn test_list_runs_all_repos_shows_worktree_and_ticket() {
-        use conductor_core::agent::AgentManager;
         use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
@@ -1467,28 +1516,10 @@ mod tests {
         );
         let ticket = syncer.get_by_source_id(&repo.id, "777").expect("ticket");
 
-        let agent_mgr = AgentManager::new(&conn);
-        let mut ids = Vec::new();
-        for (name, wt) in [("linked-wf", Some(wt_id)), ("bare-wf", None)] {
-            let parent = agent_mgr
-                .create_run(None, "workflow", None)
-                .expect("agent run");
-            let run = conductor_core::workflow::create_workflow_run_with_targets(
-                &conn,
-                name,
-                wt,
-                None,
-                Some(&repo.id),
-                &parent.id,
-                false,
-                "manual",
-                None,
-                None,
-                None,
-            )
-            .expect("create run");
-            ids.push(run.id.clone());
-        }
+        let ids: Vec<String> = [("linked-wf", Some(wt_id)), ("bare-wf", None)]
+            .iter()
+            .map(|(name, wt)| create_list_run(&conn, name, *wt, Some(&repo.id)))
+            .collect();
         conn.execute(
             "UPDATE workflow_runs SET ticket_id = ?1 WHERE id = ?2",
             rusqlite::params![ticket.id, ids[0]],
@@ -1497,10 +1528,7 @@ mod tests {
 
         let result = tool_list_runs(&conductor, &empty_args());
         assert_ne!(result.is_error, Some(true));
-        let text = result.content[0]
-            .as_text()
-            .map(|t| t.text.clone())
-            .unwrap_or_default();
+        let text = result_text(&result);
         let rows: Vec<&str> = text
             .split("\n\n")
             .filter(|r| !r.trim().is_empty())
@@ -1525,7 +1553,6 @@ mod tests {
 
     #[test]
     fn test_list_runs_top_level_only_keeps_paging_hint_and_pages_past_children() {
-        use conductor_core::agent::AgentManager;
         use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
@@ -1541,28 +1568,7 @@ mod tests {
                 None,
             )
             .expect("register repo");
-        let agent_mgr = AgentManager::new(&conn);
-        let make = |name: &str| {
-            let parent = agent_mgr
-                .create_run(None, "workflow", None)
-                .expect("agent run");
-            conductor_core::workflow::create_workflow_run_with_targets(
-                &conn,
-                name,
-                None,
-                None,
-                Some(&repo.id),
-                &parent.id,
-                false,
-                "manual",
-                None,
-                None,
-                None,
-            )
-            .expect("create run")
-            .id
-            .clone()
-        };
+        let make = |name: &str| create_list_run(&conn, name, None, Some(&repo.id));
         let root_a = make("root-a");
         let _root_b = make("root-b");
         let _root_c = make("root-c");
@@ -1576,12 +1582,8 @@ mod tests {
             .expect("mark child");
         }
 
-        let text_of = |args: &serde_json::Map<String, Value>| {
-            tool_list_runs(&conductor, args).content[0]
-                .as_text()
-                .map(|t| t.text.clone())
-                .unwrap_or_default()
-        };
+        let text_of =
+            |args: &serde_json::Map<String, Value>| result_text(&tool_list_runs(&conductor, args));
         let mut args = args_with("repo", "page-repo");
         args.insert("top_level_only".into(), Value::Bool(true));
         args.insert("limit".into(), Value::String("2".into()));
@@ -1601,7 +1603,6 @@ mod tests {
 
     #[test]
     fn test_list_runs_include_inactive_shows_merged_worktree_runs() {
-        use conductor_core::agent::AgentManager;
         use conductor_core::config::Config;
         use conductor_core::db::open_database;
         use conductor_core::repo::RepoManager;
@@ -1627,7 +1628,7 @@ mod tests {
         )
         .expect("insert worktree");
 
-        let parent = AgentManager::new(&conn)
+        let parent = conductor_core::agent::AgentManager::new(&conn)
             .create_run(None, "workflow", None)
             .expect("create agent run");
         let run = conductor_core::workflow::create_workflow_run_with_targets(
@@ -1793,7 +1794,6 @@ mod tests {
     #[test]
     fn test_dispatch_get_step_log_log_file_missing() {
         // Step has a child_run_id but no log file exists on disk.
-        use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;
         use conductor_core::workflow::WorkflowStepStatus;
 
@@ -1806,7 +1806,7 @@ mod tests {
         let nonexistent_str = nonexistent.to_str().unwrap().to_string();
 
         let conn = open_database(_f.path()).expect("open db");
-        let agent_mgr = AgentManager::new(&conn);
+        let agent_mgr = conductor_core::agent::AgentManager::new(&conn);
         let child_run = agent_mgr
             .create_run(None, "agent", None)
             .expect("create child run");

@@ -17,7 +17,7 @@ mod workflows;
 mod worktrees;
 
 #[cfg(test)]
-mod test_helpers;
+pub(crate) mod test_helpers;
 
 /// Tools that only read the database. The server bounds these with a timeout;
 /// every tool in `conductor_tools()` must appear in exactly one of this list and
