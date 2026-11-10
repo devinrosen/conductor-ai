@@ -36,6 +36,8 @@ If either directory is missing, invoke `/conductor-workflow-init <target_dir>` (
 
 Read `docs/workflow/engine.md` for the full grammar, all constructs, and design rationale. This is the authoritative source — use it throughout this session.
 
+Also read `docs/workflow/language.md`, the construct-by-construct reference for semantics that are easy to get wrong (gate types, `prior_context` vs `prior_output`, what a condition reads, FLOW_OUTPUT rules, resume). Check a draft against its Checklist section.
+
 ### 1. Gather intent
 
 Ask the user:
