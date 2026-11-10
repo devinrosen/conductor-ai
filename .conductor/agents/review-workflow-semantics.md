@@ -9,6 +9,8 @@ Prior step context: {{prior_context}}
 
 ## Engine semantics
 
+The full reference is `docs/workflow/language.md`. This section is a short copy of the rules a reviewer checks; keep it in sync with that file. A script step gets no schema-derived markers (only agent steps do), and a malformed FLOW_OUTPUT block fails a script step but only logs for an agent step.
+
 - **Conditions:** `if` and `unless` take only `step.marker` or a bare boolean input name. There is no `&&`, `||`, `!` or comparison. `unless` is the inverse of `if`.
 - **Marker lookup:** a condition reads the **latest** result stored under that step **name**, whatever its iteration. In a loop iteration where the step was skipped (by its own `if`/`unless`, or because its branch wasn't taken), the condition still sees the previous iteration's markers. A step that has never run reads as false.
 - **Resume:** completed steps are saved by `(name, iteration)`. Since runkon 0.7.2 the n-th occurrence of a name matches the n-th saved row, so a repeated name no longer skips the wrong step on resume. A repeated name is still ambiguous for conditions (which read only its latest result) and for resume ordering.
