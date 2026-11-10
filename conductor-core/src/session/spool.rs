@@ -736,7 +736,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("session-spool");
         let db = tmp.path().join("c.db");
-        let conn = crate::db::open_database(&db).unwrap();
+        let conn = crate::test_helpers::open_test_db_file(&db);
         crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
         crate::test_helpers::insert_test_worktree(
             &conn,

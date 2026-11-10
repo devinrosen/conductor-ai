@@ -1900,7 +1900,7 @@ mod tests {
         let db_file = NamedTempFile::new().unwrap();
         let db_path = db_file.path().to_path_buf();
         // Initialise the schema so open_database succeeds inside the spawned thread.
-        crate::db::open_database(&db_path).unwrap();
+        crate::test_helpers::seed_test_db_file(&db_path);
 
         let handle = spawn_heartbeat_resume(SpawnHeartbeatResumeParams {
             run_id: "nonexistent-run-id".to_string(),
@@ -2272,7 +2272,7 @@ mod tests {
         // execute_workflow_standalone before any agent work begins.
         let db_file = tempfile::NamedTempFile::new().unwrap();
         {
-            let conn = crate::db::open_database(db_file.path()).unwrap();
+            let conn = crate::test_helpers::open_test_db_file(db_file.path());
             crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
             crate::test_helpers::insert_test_worktree(&conn, "w1", "r1", "feat-test", "/tmp");
         }
@@ -2328,7 +2328,7 @@ mod tests {
         use tempfile::NamedTempFile;
         let db_file = NamedTempFile::new().unwrap();
         let run_id = {
-            let conn = crate::db::open_database(db_file.path()).unwrap();
+            let conn = crate::test_helpers::open_test_db_file(db_file.path());
             crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
             crate::test_helpers::insert_test_worktree(&conn, "w1", "r1", "feat-test", "/tmp");
             let parent = crate::agent::AgentManager::new(&conn)
@@ -2371,7 +2371,7 @@ mod tests {
         use tempfile::NamedTempFile;
         let db_file = NamedTempFile::new().unwrap();
         let run_id = {
-            let conn = crate::db::open_database(db_file.path()).unwrap();
+            let conn = crate::test_helpers::open_test_db_file(db_file.path());
             // Ephemeral runs have no worktree/repo/ticket — only an agent parent.
             let parent = crate::agent::AgentManager::new(&conn)
                 .create_run(None, "workflow", None)
@@ -2406,7 +2406,7 @@ mod tests {
         // (no steps → immediate success). This documents that run_id_notify is populated
         // immediately after the workflow run record is created, before any engine work.
         let db_file = tempfile::NamedTempFile::new().unwrap();
-        crate::db::open_database(db_file.path()).unwrap();
+        crate::test_helpers::seed_test_db_file(db_file.path());
 
         let notify: crate::workflow::types::RunIdSlot =
             std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
@@ -2435,7 +2435,7 @@ mod tests {
         // Verifies: validation passes, DB run record is created and reaches
         // "completed" state, and the engine returns all_succeeded=true.
         let db_file = tempfile::NamedTempFile::new().unwrap();
-        crate::db::open_database(db_file.path()).unwrap();
+        crate::test_helpers::seed_test_db_file(db_file.path());
 
         let params = make_standalone_params(db_file.path().to_path_buf(), None, None);
         let result = execute_workflow_standalone(&params)
@@ -2462,7 +2462,7 @@ mod tests {
         // Note: apply_workflow_input_defaults is the caller's responsibility;
         // here we pass a pre-merged map directly via params.inputs.
         let db_file = tempfile::NamedTempFile::new().unwrap();
-        crate::db::open_database(db_file.path()).unwrap();
+        crate::test_helpers::seed_test_db_file(db_file.path());
 
         let mut params = make_standalone_params(db_file.path().to_path_buf(), None, None);
         params
@@ -2540,7 +2540,7 @@ mod tests {
     #[test]
     fn resume_workflow_standalone_missing_run_returns_err() {
         let db_file = tempfile::NamedTempFile::new().unwrap();
-        crate::db::open_database(db_file.path()).unwrap();
+        crate::test_helpers::seed_test_db_file(db_file.path());
 
         let params =
             make_resume_standalone("no-such-run-id", None, false, db_file.path().to_path_buf());
@@ -2555,7 +2555,7 @@ mod tests {
     fn resume_workflow_standalone_missing_snapshot_returns_err() {
         let db_file = tempfile::NamedTempFile::new().unwrap();
         let run_id = {
-            let conn = crate::db::open_database(db_file.path()).unwrap();
+            let conn = crate::test_helpers::open_test_db_file(db_file.path());
             insert_failed_run_with_repo(&conn, None) // no definition_snapshot
         };
 
@@ -2575,7 +2575,7 @@ mod tests {
         let db_file = tempfile::NamedTempFile::new().unwrap();
         let snapshot = serde_json::to_string(&make_wf(vec![])).unwrap();
         let run_id = {
-            let conn = crate::db::open_database(db_file.path()).unwrap();
+            let conn = crate::test_helpers::open_test_db_file(db_file.path());
             insert_failed_run_with_repo(&conn, Some(&snapshot))
         };
 
@@ -2593,7 +2593,7 @@ mod tests {
         let db_file = tempfile::NamedTempFile::new().unwrap();
         let snapshot = serde_json::to_string(&make_wf(vec![])).unwrap();
         let run_id = {
-            let conn = crate::db::open_database(db_file.path()).unwrap();
+            let conn = crate::test_helpers::open_test_db_file(db_file.path());
             insert_failed_run_with_repo(&conn, Some(&snapshot))
         };
 
@@ -2618,7 +2618,7 @@ mod tests {
         let db_file = tempfile::NamedTempFile::new().unwrap();
         let snapshot = serde_json::to_string(&make_wf(vec![])).unwrap();
         let run_id = {
-            let conn = crate::db::open_database(db_file.path()).unwrap();
+            let conn = crate::test_helpers::open_test_db_file(db_file.path());
             insert_failed_run_with_repo(&conn, Some(&snapshot))
         };
 
@@ -2652,7 +2652,7 @@ mod tests {
         let db_file = tempfile::NamedTempFile::new().unwrap();
         let snapshot = serde_json::to_string(&make_wf(vec![])).unwrap();
         let run_id = {
-            let conn = crate::db::open_database(db_file.path()).unwrap();
+            let conn = crate::test_helpers::open_test_db_file(db_file.path());
             // insert_test_repo / insert_test_worktree use "/tmp" paths that exist.
             crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp");
             crate::test_helpers::insert_test_worktree(&conn, "w1", "r1", "feat-test", "/tmp");
@@ -2694,7 +2694,7 @@ mod tests {
         let db_file = tempfile::NamedTempFile::new().unwrap();
         let snapshot = serde_json::to_string(&make_wf(vec![])).unwrap();
         let run_id = {
-            let conn = crate::db::open_database(db_file.path()).unwrap();
+            let conn = crate::test_helpers::open_test_db_file(db_file.path());
             insert_failed_run_with_repo(&conn, Some(&snapshot))
         };
 
@@ -2727,7 +2727,7 @@ mod tests {
 
         let db_file = tempfile::NamedTempFile::new().unwrap();
         let wf_run_id = {
-            let conn = crate::db::open_database(db_file.path()).unwrap();
+            let conn = crate::test_helpers::open_test_db_file(db_file.path());
             let agent_mgr = crate::agent::AgentManager::new(&conn);
             let parent = agent_mgr.create_run(None, "workflow", None).unwrap();
             let run = crate::workflow::create_workflow_run(
@@ -2765,7 +2765,7 @@ mod tests {
         use std::sync::{Arc, Mutex};
 
         let db_file = tempfile::NamedTempFile::new().unwrap();
-        let conn = crate::db::open_database(db_file.path()).unwrap();
+        let conn = crate::test_helpers::open_test_db_file(db_file.path());
         let shared: Arc<Mutex<rusqlite::Connection>> = Arc::new(Mutex::new(conn));
 
         // Poison the mutex by panicking while holding the lock.

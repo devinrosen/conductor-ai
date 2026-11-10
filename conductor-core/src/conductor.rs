@@ -78,7 +78,7 @@ mod tests {
     fn conn_db_path_returns_the_open_database() {
         let tmp = NamedTempFile::new().unwrap();
         let conductor = Conductor {
-            conn: open_database(tmp.path()).unwrap(),
+            conn: crate::test_helpers::open_test_db_file(tmp.path()),
             config: Config::default(),
         };
         assert_eq!(

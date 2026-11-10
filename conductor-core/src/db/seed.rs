@@ -298,13 +298,12 @@ fn seed_workflow_runs(conn: &Connection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::open_database;
     use tempfile::NamedTempFile;
 
     #[test]
     fn test_seed_populates_tables() {
         let tmp = NamedTempFile::new().unwrap();
-        let conn = open_database(tmp.path()).unwrap();
+        let conn = crate::test_helpers::open_test_db_file(tmp.path());
         seed_database(&conn).unwrap();
 
         let repo_count: i64 = conn
@@ -331,7 +330,7 @@ mod tests {
     #[test]
     fn test_seed_is_idempotent() {
         let tmp = NamedTempFile::new().unwrap();
-        let conn = open_database(tmp.path()).unwrap();
+        let conn = crate::test_helpers::open_test_db_file(tmp.path());
         seed_database(&conn).unwrap();
         // Second call should not error
         seed_database(&conn).unwrap();

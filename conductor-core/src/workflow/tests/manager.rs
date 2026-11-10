@@ -3508,7 +3508,7 @@ fn test_recover_stuck_steps_fixes_step_with_terminal_child() {
     // inside SqliteWorkflowPersistence see each other's commits.
     let tmp = tempfile::tempdir().unwrap();
     let db_path = tmp.path().join("test.db");
-    let conn = crate::db::open_database(&db_path).unwrap();
+    let conn = crate::test_helpers::open_test_db_file(&db_path);
     crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
     crate::test_helpers::insert_test_worktree(&conn, "w1", "r1", "feat-test", "/tmp/ws/feat-test");
 

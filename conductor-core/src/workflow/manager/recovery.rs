@@ -1975,7 +1975,7 @@ mod tests {
         // File-based DB so two connections see each other's committed writes.
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("test.db");
-        let conn = crate::db::open_database(&db_path).unwrap();
+        let conn = crate::test_helpers::open_test_db_file(&db_path);
 
         // Replicate what setup_db_with_agent_run() provides.
         crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
@@ -2056,7 +2056,7 @@ mod tests {
     fn test_recover_stuck_steps_from_db_wrapper() {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("test.db");
-        let conn = crate::db::open_database(&db_path).unwrap();
+        let conn = crate::test_helpers::open_test_db_file(&db_path);
 
         crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
         crate::test_helpers::insert_test_worktree(
