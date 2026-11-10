@@ -183,14 +183,13 @@ pub(super) fn tool_list_runs(
                 .and_then(|id| repo_map.get(id).map(|s| s.as_str()));
             let mut extras = String::new();
             if let Some(wt_id) = run.worktree_id.as_deref() {
-                let wt = wt_cache.entry(wt_id.to_string()).or_insert_with(|| {
-                    wt_mgr
-                        .get_by_id(wt_id)
-                        .ok()
-                        .map(|w| (w.slug, w.branch))
-                });
+                let wt = wt_cache
+                    .entry(wt_id.to_string())
+                    .or_insert_with(|| wt_mgr.get_by_id(wt_id).ok().map(|w| (w.slug, w.branch)));
                 if let Some((slug, branch)) = wt {
-                    extras.push_str(&format!("worktree_slug: {slug}\nworktree_branch: {branch}\n"));
+                    extras.push_str(&format!(
+                        "worktree_slug: {slug}\nworktree_branch: {branch}\n"
+                    ));
                 }
             }
             extras.push_str(&format_run_extra_lines(
@@ -1350,7 +1349,12 @@ mod tests {
         let conn = open_database(_f.path()).expect("open db");
         let config = Config::default();
         let repo = RepoManager::new(&conn, &config)
-            .register("child-repo", "/tmp/child-repo", "https://github.com/x/y", None)
+            .register(
+                "child-repo",
+                "/tmp/child-repo",
+                "https://github.com/x/y",
+                None,
+            )
             .expect("register repo");
 
         let agent_mgr = AgentManager::new(&conn);
@@ -1391,7 +1395,10 @@ mod tests {
 
         let all = text_of(tool_list_runs(&conductor, &args_with("repo", "child-repo")));
         assert!(all.contains("child: true"), "got: {all}");
-        assert!(all.contains(&format!("parent_run_id: {}", ids[0])), "got: {all}");
+        assert!(
+            all.contains(&format!("parent_run_id: {}", ids[0])),
+            "got: {all}"
+        );
         assert!(all.contains("ended_at: 2026-01-02T03:04:05Z"), "got: {all}");
         assert!(all.contains("pr: 42"), "got: {all}");
         assert!(all.contains("target: x/y#42"), "got: {all}");
