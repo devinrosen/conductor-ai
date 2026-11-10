@@ -517,6 +517,74 @@ pub(super) fn pull_ff_only(worktree_path: &str, branch: &str) -> std::result::Re
     }
 }
 
+/// Why automatic cleanup must not remove this worktree, or `None` when it is safe.
+///
+/// Local work is at risk when the worktree has uncommitted changes (tracked or
+/// untracked, not ignored) or its local branch has commits that are not on the
+/// merged PR's head (`head_oid`; when empty or not present locally, not on any
+/// remote-tracking ref). A missing worktree directory or branch has nothing to lose.
+pub(crate) fn local_work_at_risk(
+    repo_path: &str,
+    worktree_path: &str,
+    branch: &str,
+    head_oid: &str,
+) -> Option<String> {
+    if Path::new(worktree_path).exists() {
+        match git_in(worktree_path).args(["status", "--porcelain"]).output() {
+            Ok(o) if o.status.success() => {
+                let n = String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .count();
+                if n > 0 {
+                    return Some(format!("{n} path(s) with uncommitted changes"));
+                }
+            }
+            _ => return Some("could not verify worktree is clean (git status failed)".into()),
+        }
+    }
+
+    let branch_ref = format!("refs/heads/{branch}");
+    let resolves = git_in(repo_path)
+        .args(["rev-parse", "--verify", "--quiet", &branch_ref])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !resolves {
+        return None;
+    }
+
+    let oid_known = !head_oid.is_empty()
+        && git_in(repo_path)
+            .args(["cat-file", "-e", &format!("{head_oid}^{{commit}}")])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+    let mut cmd = git_in(repo_path);
+    cmd.args(["rev-list", "--count", &branch_ref]);
+    if oid_known {
+        cmd.arg(format!("^{head_oid}"));
+    } else {
+        cmd.args(["--not", "--remotes"]);
+    }
+    match cmd.output() {
+        Ok(o) if o.status.success() => {
+            let count: u64 = String::from_utf8_lossy(&o.stdout).trim().parse().unwrap_or(1);
+            if count > 0 {
+                let target = if oid_known {
+                    "the merged PR head"
+                } else {
+                    "any remote branch"
+                };
+                Some(format!("{count} commit(s) not on {target}"))
+            } else {
+                None
+            }
+        }
+        _ => Some("could not verify branch commits are pushed (git rev-list failed)".into()),
+    }
+}
+
 /// Remove the git worktree directory and delete the associated branch.
 /// Both operations are best-effort: failures are logged but not propagated because the
 /// worktree or branch may already be gone (e.g. manually removed).

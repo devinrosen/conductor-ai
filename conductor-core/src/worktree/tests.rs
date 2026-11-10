@@ -1357,7 +1357,7 @@ fn test_cleanup_merged_worktrees_marks_merged() {
             |_, branches| {
                 branches
                     .iter()
-                    .map(|b| (b.clone(), String::new()))
+                    .map(|b| (b.clone(), crate::github::MergedPr::default()))
                     .collect()
             },
             |_, _| Ok(()),
@@ -1425,7 +1425,7 @@ fn test_cleanup_merged_worktrees_skips_already_merged() {
             |_, branches| {
                 branches
                     .iter()
-                    .map(|b| (b.clone(), String::new()))
+                    .map(|b| (b.clone(), crate::github::MergedPr::default()))
                     .collect()
             },
             |_, _| Ok(()),
@@ -1459,7 +1459,7 @@ fn test_cleanup_merged_worktrees_multiple_repos() {
             |_, branches| {
                 branches
                     .iter()
-                    .map(|b| (b.clone(), String::new()))
+                    .map(|b| (b.clone(), crate::github::MergedPr::default()))
                     .collect()
             },
             |_, _| Ok(()),
@@ -1498,7 +1498,7 @@ fn test_cleanup_merged_worktrees_skips_branch_reuse_after_old_merge() {
                 // mergedAt is 2023 — before the worktree's 2024 created_at
                 branches
                     .iter()
-                    .map(|b| (b.clone(), "2023-12-31T23:59:59Z".to_string()))
+                    .map(|b| (b.clone(), crate::github::MergedPr { merged_at: "2023-12-31T23:59:59Z".to_string(), ..Default::default() }))
                     .collect()
             },
             |_, _| Ok(()),
@@ -1532,7 +1532,7 @@ fn test_cleanup_merged_worktrees_cleans_up_genuine_merge() {
             |_, branches| {
                 branches
                     .iter()
-                    .map(|b| (b.clone(), "2024-06-01T00:00:00Z".to_string()))
+                    .map(|b| (b.clone(), crate::github::MergedPr { merged_at: "2024-06-01T00:00:00Z".to_string(), ..Default::default() }))
                     .collect()
             },
             |_, _| Ok(()),
@@ -1874,7 +1874,7 @@ fn test_cleanup_merged_worktrees_filters_by_repo() {
             |_, branches| {
                 branches
                     .iter()
-                    .map(|b| (b.clone(), String::new()))
+                    .map(|b| (b.clone(), crate::github::MergedPr::default()))
                     .collect()
             },
             |_, _| Ok(()),
@@ -1895,6 +1895,54 @@ fn test_cleanup_merged_worktrees_filters_by_repo() {
         .unwrap();
     assert_eq!(s1, "active");
     assert_eq!(s2, "merged");
+}
+
+#[test]
+fn test_cleanup_merged_pr_in_other_repo_does_not_clean_same_branch() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    // r1 (setup_db) has remote https://github.com/test/repo.git; add repo B.
+    conn.execute(
+        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+         VALUES ('r2', 'repo-b', '/tmp/repo-b', 'https://github.com/test/other.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+    // w1 (r1) already uses branch feat/test; give r2 the same branch.
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+         VALUES ('w2', 'r2', 'feat-test', 'feat/test', '/tmp/ws2/feat-test', 'active', '2024-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let count = mgr
+        .cleanup_merged_worktrees_with_merge_check(
+            None,
+            |remote_url, branches| {
+                if remote_url == "https://github.com/test/repo.git" {
+                    branches
+                        .iter()
+                        .map(|b| (b.clone(), crate::github::MergedPr::default()))
+                        .collect()
+                } else {
+                    std::collections::HashMap::new()
+                }
+            },
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(count, 1);
+
+    let status = |id: &str| -> String {
+        conn.query_row("SELECT status FROM worktrees WHERE id = ?1", [id], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    };
+    assert_eq!(status("w1"), "merged");
+    assert_eq!(status("w2"), "active");
 }
 
 #[test]

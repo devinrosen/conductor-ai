@@ -327,10 +327,10 @@ fn get_worktree_status(conn: &Connection, id: &str) -> String {
     .unwrap()
 }
 
-fn all_merged(_repo_id: &str, branches: &[String]) -> HashMap<String, String> {
+fn all_merged(_repo_id: &str, branches: &[String]) -> HashMap<String, crate::github::MergedPr> {
     branches
         .iter()
-        .map(|b| (b.clone(), String::new()))
+        .map(|b| (b.clone(), crate::github::MergedPr::default()))
         .collect()
 }
 
@@ -703,6 +703,60 @@ fn test_mark_worktrees_skips_unmerged_pr() {
         .unwrap();
     assert_eq!(count, 0);
     assert_eq!(get_worktree_status(&conn, "wt1"), "active");
+}
+
+#[test]
+fn test_mark_worktrees_skips_dirty_worktree_when_pr_merged() {
+    // A merged PR must not remove a worktree that still has uncommitted changes.
+    use std::process::Command;
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let o = Command::new("git").args(args).current_dir(dir).output().unwrap();
+        assert!(o.status.success(), "git {args:?} failed");
+    };
+    let repo_dir = tempfile::TempDir::new().unwrap();
+    let ws_dir = tempfile::TempDir::new().unwrap();
+    git(repo_dir.path(), &["init", "-b", "main"]);
+    git(repo_dir.path(), &["config", "user.email", "t@t.com"]);
+    git(repo_dir.path(), &["config", "user.name", "T"]);
+    git(repo_dir.path(), &["commit", "--allow-empty", "-m", "init"]);
+    let wt = ws_dir.path().join("wt");
+    git(
+        repo_dir.path(),
+        &["worktree", "add", "-b", "feat/dirty", wt.to_str().unwrap()],
+    );
+    std::fs::write(wt.join("scratch.txt"), "work in progress").unwrap();
+
+    let conn = setup_db();
+    let syncer = TicketSyncer::new(&conn);
+    syncer
+        .upsert_tickets("r1", &[make_ticket("1", "Issue 1")])
+        .unwrap();
+    let ticket_id: String = conn
+        .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+            row.get("id")
+        })
+        .unwrap();
+    insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
+    conn.execute(
+        "UPDATE worktrees SET path = ?1, branch = 'feat/dirty' WHERE id = 'wt1'",
+        [wt.to_str().unwrap()],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE repos SET local_path = ?1 WHERE id = 'r1'",
+        [repo_dir.path().to_str().unwrap()],
+    )
+    .unwrap();
+    syncer
+        .close_missing_tickets("r1", "github", &["999"])
+        .unwrap();
+
+    let count = syncer
+        .mark_worktrees_for_closed_tickets_with_merge_check("r1", all_merged)
+        .unwrap();
+    assert_eq!(count, 0);
+    assert_eq!(get_worktree_status(&conn, "wt1"), "active");
+    assert!(wt.join("scratch.txt").exists());
 }
 
 #[test]

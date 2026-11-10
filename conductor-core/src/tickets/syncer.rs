@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use chrono::Utc;
 use rusqlite::{named_params, Connection};
@@ -6,7 +6,7 @@ use tracing::warn;
 
 use crate::db::{query_collect, sql_placeholders, with_in_clause};
 use crate::error::{ConductorError, Result};
-use crate::github::merged_branches_for_repo;
+use crate::github::{merged_branches_for_repo, MergedPr};
 
 use super::query::{
     map_ticket_row, query_dep_pairs, query_dep_pairs_for_repo, TICKET_COLS, TICKET_COLS_BARE,
@@ -875,7 +875,7 @@ impl<'a> TicketSyncer<'a> {
     pub(super) fn mark_worktrees_for_closed_tickets_with_merge_check(
         &self,
         repo_id: &str,
-        merge_check: impl Fn(&str, &[String]) -> HashMap<String, String>,
+        merge_check: impl Fn(&str, &[String]) -> HashMap<String, MergedPr>,
     ) -> Result<usize> {
         // Collect git paths before updating so we can clean up worktree dirs and branches.
         let artifacts: Vec<(String, String, String, String)> = query_collect(
@@ -900,17 +900,31 @@ impl<'a> TicketSyncer<'a> {
                 .or_default()
                 .push(branch.clone());
         }
-        let mut merged_branches: HashSet<String> = HashSet::new();
+        let mut merged_branches: HashMap<String, MergedPr> = HashMap::new();
         for (remote_url, branches) in &branches_by_remote {
-            merged_branches.extend(merge_check(remote_url, branches).into_keys());
+            merged_branches.extend(merge_check(remote_url, branches));
         }
 
         let now = Utc::now().to_rfc3339();
         let mut count = 0usize;
 
         for (repo_path, worktree_path, branch, _remote_url) in &artifacts {
-            if !merged_branches.contains(branch) {
+            let Some(merged) = merged_branches.get(branch) else {
                 // Ticket is closed but PR not yet merged — leave the worktree alone.
+                continue;
+            };
+            if let Some(reason) = crate::worktree::WorktreeManager::local_work_at_risk(
+                repo_path,
+                worktree_path,
+                branch,
+                &merged.head_oid,
+            ) {
+                warn!(
+                    branch = %branch,
+                    path = %worktree_path,
+                    reason = %reason,
+                    "merged PR detected but worktree has local work — skipping cleanup"
+                );
                 continue;
             }
             self.conn.execute(

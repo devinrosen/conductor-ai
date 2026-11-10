@@ -8,6 +8,7 @@ use crate::config::Config;
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::git::{check_gh_output, check_output, git_in};
+use crate::github::MergedPr;
 use crate::repo::RepoManager;
 use crate::tickets::TicketSyncer;
 
@@ -1139,6 +1140,16 @@ impl<'a> WorktreeManager<'a> {
         remove_git_artifacts(repo_path, worktree_path, branch);
     }
 
+    /// Reason automatic cleanup must skip this worktree because local work would be lost.
+    pub(crate) fn local_work_at_risk(
+        repo_path: &str,
+        worktree_path: &str,
+        branch: &str,
+        head_oid: &str,
+    ) -> Option<String> {
+        local_work_at_risk(repo_path, worktree_path, branch, head_oid)
+    }
+
     pub fn update_status(&self, worktree_id: &str, status: WorktreeStatus) -> Result<()> {
         let completed_at = if status != WorktreeStatus::Active {
             Some(Utc::now().to_rfc3339())
@@ -1491,6 +1502,10 @@ impl<'a> WorktreeManager<'a> {
     /// 3. Delete the remote branch (best-effort)
     /// 4. Auto-close orphaned features
     ///
+    /// Merged PRs are matched per repo (by remote URL). A worktree with uncommitted
+    /// changes, or with commits not on the merged PR's head, is skipped with a warning
+    /// and stays active.
+    ///
     /// When `repo_slug` is `Some`, only worktrees for that repo are checked.
     /// Returns the number of worktrees cleaned up.
     pub fn cleanup_merged_worktrees(&self, repo_slug: Option<&str>) -> Result<usize> {
@@ -1504,8 +1519,9 @@ impl<'a> WorktreeManager<'a> {
     pub(crate) fn cleanup_merged_worktrees_with_merge_check(
         &self,
         repo_slug: Option<&str>,
-        // Returns branch → mergedAt (ISO 8601). Empty string means "unknown time, always clean up".
-        merge_check: impl Fn(&str, &[String]) -> std::collections::HashMap<String, String>,
+        // Returns branch → MergedPr for one remote. An empty `merged_at` means "unknown time,
+        // always clean up"; an empty `head_oid` means the PR head is unknown.
+        merge_check: impl Fn(&str, &[String]) -> std::collections::HashMap<String, MergedPr>,
         pull_fn: impl Fn(&str, &str) -> std::result::Result<(), String>,
     ) -> Result<usize> {
         let base_query =
@@ -1548,12 +1564,15 @@ impl<'a> WorktreeManager<'a> {
                 .or_default()
                 .push(row[1].clone());
         }
-        // branch → mergedAt (ISO 8601); empty string = unknown, always clean up.
-        let mut merged_branches: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        for (remote_url, branches) in &branches_by_remote {
-            merged_branches.extend(merge_check(remote_url, branches));
-        }
+        // remote_url → (branch → MergedPr). Each worktree is looked up under its own
+        // remote only, so a merged PR in one repo never matches another repo's branch.
+        let merged_by_remote: std::collections::HashMap<
+            &str,
+            std::collections::HashMap<String, MergedPr>,
+        > = branches_by_remote
+            .iter()
+            .map(|(remote_url, branches)| (*remote_url, merge_check(remote_url, branches)))
+            .collect();
 
         let now = Utc::now().to_rfc3339();
         let mut cleaned = 0usize;
@@ -1563,11 +1582,15 @@ impl<'a> WorktreeManager<'a> {
             std::collections::HashSet::new();
 
         for row in &rows {
-            let [wt_id, branch, wt_path, repo_path, _remote_url, repo_id, base_branch, wt_created_at] =
+            let [wt_id, branch, wt_path, repo_path, remote_url, repo_id, base_branch, wt_created_at] =
                 row;
-            let Some(merged_at) = merged_branches.get(branch) else {
+            let Some(merged) = merged_by_remote
+                .get(remote_url.as_str())
+                .and_then(|m| m.get(branch))
+            else {
                 continue;
             };
+            let merged_at = &merged.merged_at;
 
             // If the worktree was created AFTER the PR was merged, the branch name is being
             // reused for a new worktree — do not clean it up.
@@ -1581,6 +1604,20 @@ impl<'a> WorktreeManager<'a> {
                     wt_created_at = %wt_created_at,
                     merged_at = %merged_at,
                     "skipping cleanup: worktree was created after PR was merged (branch reuse)"
+                );
+                continue;
+            }
+
+            // A merged PR means the pushed branch is done, not that local work is.
+            if let Some(reason) =
+                local_work_at_risk(repo_path, wt_path, branch, &merged.head_oid)
+            {
+                tracing::warn!(
+                    worktree = %wt_id,
+                    branch = %branch,
+                    path = %wt_path,
+                    reason = %reason,
+                    "merged PR detected but worktree has local work — skipping cleanup"
                 );
                 continue;
             }
@@ -1838,10 +1875,10 @@ mod tests {
 
     /// Returns a merge_check closure that marks only "feat/sub-task" as merged.
     fn merged_sub_task_check(
-    ) -> impl Fn(&str, &[String]) -> std::collections::HashMap<String, String> {
+    ) -> impl Fn(&str, &[String]) -> std::collections::HashMap<String, MergedPr> {
         |_remote_url: &str, _branches: &[String]| {
             let mut map = std::collections::HashMap::new();
-            map.insert("feat/sub-task".to_string(), String::new());
+            map.insert("feat/sub-task".to_string(), MergedPr::default());
             map
         }
     }
@@ -2577,6 +2614,115 @@ mod tests {
         };
         let w = unknown.warning();
         assert!(w.contains("its original base") && w.contains("next run"));
+    }
+
+    fn git_out(dir: &str, args: &[&str]) -> String {
+        let o = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "git {args:?} failed");
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    }
+
+    fn merged_with_head(head_oid: String) -> impl Fn(&str, &[String]) -> std::collections::HashMap<String, MergedPr> {
+        move |_, branches| {
+            branches
+                .iter()
+                .map(|b| {
+                    (
+                        b.clone(),
+                        MergedPr {
+                            merged_at: String::new(),
+                            head_oid: head_oid.clone(),
+                        },
+                    )
+                })
+                .collect()
+        }
+    }
+
+    fn wt_status(conn: &rusqlite::Connection) -> String {
+        conn.query_row("SELECT status FROM worktrees WHERE id = 'wt1'", [], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn test_cleanup_skips_worktree_with_uncommitted_tracked_changes() {
+        let (_r, _w, repo_path, wt_path, conn) = setup_git_repo_with_worktree();
+        std::fs::write(format!("{wt_path}/f.txt"), "one").unwrap();
+        git_out(&wt_path, &["add", "f.txt"]);
+        git_out(&wt_path, &["commit", "-m", "add f"]);
+        let head = git_out(&repo_path, &["rev-parse", "feat/test"]);
+        std::fs::write(format!("{wt_path}/f.txt"), "two").unwrap();
+
+        let config = crate::config::Config::default();
+        let mgr = WorktreeManager::new(&conn, &config);
+        let n = mgr
+            .cleanup_merged_worktrees_with_merge_check(None, merged_with_head(head), |_, _| Ok(()))
+            .unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(wt_status(&conn), "active");
+        assert!(std::path::Path::new(&wt_path).exists());
+        git_out(&repo_path, &["rev-parse", "--verify", "refs/heads/feat/test"]);
+    }
+
+    #[test]
+    fn test_cleanup_skips_worktree_with_untracked_files() {
+        let (_r, _w, repo_path, wt_path, conn) = setup_git_repo_with_worktree();
+        let head = git_out(&repo_path, &["rev-parse", "feat/test"]);
+        std::fs::write(format!("{wt_path}/new.txt"), "x").unwrap();
+
+        let config = crate::config::Config::default();
+        let mgr = WorktreeManager::new(&conn, &config);
+        let n = mgr
+            .cleanup_merged_worktrees_with_merge_check(None, merged_with_head(head), |_, _| Ok(()))
+            .unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(wt_status(&conn), "active");
+        assert!(std::path::Path::new(&wt_path).join("new.txt").exists());
+    }
+
+    #[test]
+    fn test_cleanup_skips_worktree_with_commits_beyond_pr_head() {
+        let (_r, _w, repo_path, wt_path, conn) = setup_git_repo_with_worktree();
+        let head = git_out(&repo_path, &["rev-parse", "feat/test"]);
+        git_out(&wt_path, &["commit", "--allow-empty", "-m", "unpushed"]);
+
+        let config = crate::config::Config::default();
+        let mgr = WorktreeManager::new(&conn, &config);
+        let n = mgr
+            .cleanup_merged_worktrees_with_merge_check(None, merged_with_head(head), |_, _| Ok(()))
+            .unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(wt_status(&conn), "active");
+        assert!(std::path::Path::new(&wt_path).exists());
+    }
+
+    #[test]
+    fn test_cleanup_removes_clean_worktree_at_pr_head() {
+        let (_r, _w, repo_path, wt_path, conn) = setup_git_repo_with_worktree();
+        let head = git_out(&repo_path, &["rev-parse", "feat/test"]);
+
+        let config = crate::config::Config::default();
+        let mgr = WorktreeManager::new(&conn, &config);
+        let n = mgr
+            .cleanup_merged_worktrees_with_merge_check(None, merged_with_head(head), |_, _| Ok(()))
+            .unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(wt_status(&conn), "merged");
+        assert!(!std::path::Path::new(&wt_path).exists());
+    }
+
+    #[test]
+    fn test_local_work_at_risk_nothing_to_lose_when_missing() {
+        assert_eq!(
+            local_work_at_risk("/nonexistent/repo", "/nonexistent/wt", "feat/x", ""),
+            None
+        );
     }
 
     #[test]
