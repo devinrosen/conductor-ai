@@ -1545,24 +1545,10 @@ impl<'a> WorktreeManager<'a> {
             None => query_collect(self.conn, &query, [], mapper)?,
         };
 
-        // Group branches by remote_url and batch-check merged status per repo.
-        let mut branches_by_remote: std::collections::HashMap<&str, Vec<String>> =
-            std::collections::HashMap::new();
-        for row in &rows {
-            branches_by_remote
-                .entry(row[4].as_str())
-                .or_default()
-                .push(row[1].clone());
-        }
-        // remote_url → (branch → MergedPr). Each worktree is looked up under its own
-        // remote only, so a merged PR in one repo never matches another repo's branch.
-        let merged_by_remote: std::collections::HashMap<
-            &str,
-            std::collections::HashMap<String, MergedPr>,
-        > = branches_by_remote
-            .iter()
-            .map(|(remote_url, branches)| (*remote_url, merge_check(remote_url, branches)))
-            .collect();
+        let merged_by_remote = merged_prs_by_remote(
+            rows.iter().map(|r| (r[4].as_str(), r[1].as_str())),
+            merge_check,
+        );
 
         let now = Utc::now().to_rfc3339();
         let mut cleaned = 0usize;
@@ -1574,10 +1560,7 @@ impl<'a> WorktreeManager<'a> {
         for row in &rows {
             let [wt_id, branch, wt_path, repo_path, remote_url, repo_id, base_branch, wt_created_at] =
                 row;
-            let Some(merged) = merged_by_remote
-                .get(remote_url.as_str())
-                .and_then(|m| m.get(branch))
-            else {
+            let Some(merged) = lookup_merged(&merged_by_remote, remote_url, branch) else {
                 continue;
             };
             let merged_at = &merged.merged_at;
@@ -2764,11 +2747,85 @@ mod tests {
     }
 
     #[test]
-    fn test_local_work_at_risk_nothing_to_lose_when_missing() {
+    fn test_local_work_at_risk_missing_repo_path_fails_safe() {
+        let (_r, _w, _repo_path, wt_path, _conn) = setup_git_repo_with_worktree();
+        let wt_path = wt_path.as_str();
+        let reason = local_work_at_risk("/nonexistent/repo", wt_path, "feat/x", "")
+            .expect("missing repo path with a worktree on disk must keep the worktree");
+        assert!(reason.contains("/nonexistent/repo"), "{reason}");
+        assert!(skip_for_local_work(
+            "/nonexistent/repo",
+            wt_path,
+            "feat/x",
+            ""
+        ));
+        // Nothing on disk at all: nothing to lose.
         assert_eq!(
             local_work_at_risk("/nonexistent/repo", "/nonexistent/wt", "feat/x", ""),
             None
         );
+    }
+
+    #[test]
+    fn test_local_work_at_risk_missing_branch_has_nothing_to_lose() {
+        let (_r, _w, repo_path, wt_path, _conn) = setup_git_repo_with_worktree();
+        assert_eq!(
+            local_work_at_risk(&repo_path, &wt_path, "feat/does-not-exist", ""),
+            None
+        );
+    }
+
+    #[test]
+    fn test_local_work_at_risk_non_repo_worktree_path_fails_safe() {
+        let (_r, _w, repo_path, _wt_path, _conn) = setup_git_repo_with_worktree();
+        let not_repo = tempfile::TempDir::new().unwrap();
+        let p = not_repo.path().to_str().unwrap();
+        let reason = local_work_at_risk(&repo_path, p, "feat/test", "")
+            .expect("git status failure must keep the worktree");
+        assert!(reason.contains(p), "{reason}");
+    }
+
+    #[test]
+    fn test_local_work_at_risk_non_repo_repo_path_fails_safe() {
+        let not_repo = tempfile::TempDir::new().unwrap();
+        let p = not_repo.path().to_str().unwrap();
+        let reason = local_work_at_risk(p, "/nonexistent/wt", "feat/test", "")
+            .expect("git rev-parse failure must keep the worktree");
+        assert!(reason.contains(p), "{reason}");
+    }
+
+    #[test]
+    fn test_skip_for_local_work_true_when_dirty_false_when_clean() {
+        let (_r, _w, repo_path, wt_path, _conn) = setup_git_repo_with_worktree();
+        let tip = git_out(&repo_path, &["rev-parse", "feat/test"]);
+        assert!(!skip_for_local_work(
+            &repo_path,
+            &wt_path,
+            "feat/test",
+            &tip
+        ));
+        std::fs::write(std::path::Path::new(&wt_path).join("scratch.txt"), "wip").unwrap();
+        assert!(skip_for_local_work(&repo_path, &wt_path, "feat/test", &tip));
+    }
+
+    #[test]
+    fn test_merged_prs_by_remote_scopes_lookup_to_own_remote() {
+        let merged = merged_prs_by_remote(
+            [("remote-a", "fix/same"), ("remote-b", "fix/same")],
+            |remote, branches| {
+                if remote == "remote-a" {
+                    branches
+                        .iter()
+                        .map(|b| (b.clone(), MergedPr::default()))
+                        .collect()
+                } else {
+                    std::collections::HashMap::new()
+                }
+            },
+        );
+        assert!(lookup_merged(&merged, "remote-a", "fix/same").is_some());
+        assert!(lookup_merged(&merged, "remote-b", "fix/same").is_none());
+        assert!(lookup_merged(&merged, "remote-c", "fix/same").is_none());
     }
 
     #[test]

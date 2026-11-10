@@ -892,28 +892,19 @@ impl<'a> TicketSyncer<'a> {
             },
         )?;
 
-        // Group branches by remote_url and batch-check merged status per repo.
-        let mut branches_by_remote: HashMap<&str, Vec<String>> = HashMap::new();
-        for (_, _, branch, remote_url) in &artifacts {
-            branches_by_remote
-                .entry(remote_url.as_str())
-                .or_default()
-                .push(branch.clone());
-        }
-        // remote_url -> (branch -> MergedPr): each worktree is looked up under its own
-        // remote only, so a PR merged in one repo never matches another repo's branch.
-        let merged_by_remote: HashMap<&str, HashMap<String, MergedPr>> = branches_by_remote
-            .iter()
-            .map(|(remote_url, branches)| (*remote_url, merge_check(remote_url, branches)))
-            .collect();
+        let merged_by_remote = crate::worktree::merged_prs_by_remote(
+            artifacts
+                .iter()
+                .map(|(_, _, branch, remote_url)| (remote_url.as_str(), branch.as_str())),
+            merge_check,
+        );
 
         let now = Utc::now().to_rfc3339();
         let mut count = 0usize;
 
         for (repo_path, worktree_path, branch, remote_url) in &artifacts {
-            let Some(merged) = merged_by_remote
-                .get(remote_url.as_str())
-                .and_then(|m| m.get(branch))
+            let Some(merged) =
+                crate::worktree::lookup_merged(&merged_by_remote, remote_url, branch)
             else {
                 // Ticket is closed but PR not yet merged — leave the worktree alone.
                 continue;
