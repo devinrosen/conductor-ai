@@ -13,8 +13,10 @@
 //!
 //! The loop here resumes the same Claude session with a finish-your-steps
 //! prompt, up to [`MAX_FINISH_ATTEMPTS`] times, and fails the step if the turn
-//! is still unfinished. Missing `FLOW_OUTPUT` alone is not a trigger (see
-//! runkon/runkon#105), but is mentioned in the prompt when a resume happens.
+//! is still unfinished. Missing `FLOW_OUTPUT` alone is not a trigger, but is
+//! mentioned in the prompt when a resume happens. A resume that produces the
+//! block clears `OUTPUT_WARNING`; if the step still ends without one, the
+//! engine's `require_output` fails a schema step on that final state.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -425,6 +427,7 @@ mod tests {
             context: "ctx".into(),
             structured_output: None,
             correction_attempts: 0,
+            recovered_from: None,
         }
     }
 

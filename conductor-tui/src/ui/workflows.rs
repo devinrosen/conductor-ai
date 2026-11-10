@@ -2254,6 +2254,7 @@ mod tests {
             plugin_dirs: vec![],
             timeout: None,
             max_turns: None,
+            require_output: None,
         })
     }
 
@@ -2507,6 +2508,7 @@ mod tests {
                 call_with: Default::default(),
                 call_if: Default::default(),
                 call_retries: Default::default(),
+                call_require_output: Default::default(),
             }),
             call_wf_node("next"),
         ];

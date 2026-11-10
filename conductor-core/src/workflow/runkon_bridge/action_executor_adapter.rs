@@ -201,12 +201,14 @@ impl RkActionExecutorAdapter {
         // before the step, so a dirty tree inherited from earlier is not blamed
         // on the agent. A load error is left for `inner.execute` to report.
         let working_dir = ctx.working_dir().to_path_buf();
+        let config_dir = super::conductor_config_dir();
         let agent_def = runkon_flow_executors::agent_loader::load_agent(
             &working_dir.to_string_lossy(),
             &ctx.get(crate::workflow::engine_keys::REPO_PATH)
                 .unwrap_or_default(),
             &params.name,
             Some(ctx.workflow_name()),
+            &config_dir,
             &params.plugin_dirs,
             self.config.general.default_runtime.as_deref(),
         )
@@ -241,10 +243,17 @@ impl RkActionExecutorAdapter {
             runtimes: self.config.runtimes.clone(),
             default_runtime: self.config.general.default_runtime.clone(),
             runtime_override,
+            config_dir: config_dir.clone(),
         };
         let schema_arc = params
             .extensions
             .get::<crate::schema_config::OutputSchema>();
+        // A failed earlier attempt of this step occurrence (resume): runkon reuses
+        // or corrects its output instead of re-running the agent.
+        let prior_run_id = params
+            .extensions
+            .get::<runkon_flow::extensions::PriorStepAttempt>()
+            .map(|p| p.child_run_id.clone());
         let agent_params = runkon_anthropic::claude_agent::ClaudeAgentParams {
             name: &params.name,
             inputs: &params.inputs,
@@ -252,6 +261,7 @@ impl RkActionExecutorAdapter {
             dry_run: params.dry_run,
             retry_error: params.retry_error.as_deref(),
             schema: schema_arc.as_deref(),
+            prior_run_id: prior_run_id.as_deref(),
         };
 
         let inner = runkon_anthropic::claude_agent::ClaudeAgentExecutor::new(
@@ -260,7 +270,12 @@ impl RkActionExecutorAdapter {
         );
         let mut output = inner
             .execute(&agent_ctx, &agent_params)
-            .map_err(EngineError::Workflow)?;
+            .map_err(|e| EngineError::Workflow(e.to_string()))?;
+        // Output reused from the earlier attempt with no correction: nothing ran on
+        // `child_run_id`, and the earlier run already finished its turn (only its
+        // output failed validation), so the unfinished-turn check is skipped.
+        let recovered_from = recovered_without_correction(&output.metadata);
+        let agent_def = agent_def.filter(|_| recovered_from.is_none());
         if let Some(agent_def) = agent_def {
             let log_path = crate::config::agent_log_path(&child_run_id)
                 .unwrap_or_else(|_| std::env::temp_dir().join(format!("{child_run_id}.log")));
@@ -325,6 +340,7 @@ impl RkActionExecutorAdapter {
                         info.step_timeout,
                         schema,
                     )
+                    .map_err(String::from)
                 },
             )?;
         }
@@ -337,30 +353,26 @@ impl RkActionExecutorAdapter {
         {
             // Runkon summed the metrics across correction attempts; the row only
             // holds the final attempt's, so write the totals back (best-effort).
-            match self.conn.lock() {
-                Ok(conn) => {
-                    if let Err(e) =
-                        persist_corrected_run_metrics(&conn, &child_run_id, &output.metadata)
-                    {
-                        tracing::warn!(
-                            "step '{}': failed to persist summed correction metrics for run {}: {e}",
-                            params.name,
-                            child_run_id,
-                        );
-                    }
-                }
-                Err(e) => tracing::warn!(
-                    "step '{}': db lock poisoned, skipping summed correction metrics for run {}: {e}",
-                    params.name,
-                    child_run_id,
-                ),
+            with_conn_best_effort(
+                &self.conn,
+                &params.name,
+                &format!("persist summed correction metrics for run {child_run_id}"),
+                |conn| persist_corrected_run_metrics(conn, &child_run_id, &output.metadata),
+            );
+        }
+        output.child_run_id = Some(match recovered_from {
+            Some(prior) => {
+                // Close the pre-created row runkon never used (best-effort).
+                with_conn_best_effort(
+                    &self.conn,
+                    &params.name,
+                    &format!("close recovered run {child_run_id}"),
+                    |conn| finalize_recovered_run(conn, &child_run_id, &prior),
+                );
+                prior
             }
-        }
-        if let Some(e) = schema_output_missing(&params.name, schema_arc.is_some(), &output.metadata)
-        {
-            return Err(e);
-        }
-        output.child_run_id = Some(child_run_id);
+            None => child_run_id,
+        });
         Ok(output)
     }
 }
@@ -403,28 +415,6 @@ fn build_resume_request(p: ResumeRequestParts<'_>) -> runkon_runtimes::RuntimeRe
     }
 }
 
-/// Fail a step that has an output schema but whose agent produced no usable
-/// output. runkon 0.7.1 fails a schema step on a missing or invalid
-/// `FLOW_OUTPUT` block, but still passes it with empty markers when the agent
-/// produced no result text at all; it only records `OUTPUT_WARNING`. For
-/// `verify` that reads as "no `has_failures`", i.e. a pass.
-///
-/// Steps without a schema keep the warning-only behaviour. This can go once
-/// runkon/runkon#105 (engine-level `require_output`) lands.
-fn schema_output_missing(
-    step: &str,
-    has_schema: bool,
-    metadata: &std::collections::HashMap<String, String>,
-) -> Option<EngineError> {
-    if !has_schema {
-        return None;
-    }
-    let warning = metadata.get(runkon_flow::constants::metadata_keys::OUTPUT_WARNING)?;
-    Some(EngineError::Workflow(format!(
-        "step '{step}': has an output schema but produced no usable output: {warning}"
-    )))
-}
-
 /// `session` when the finish-turn path may resume it headless: `None` when there is no session,
 /// a human took it over interactively (#3163), or ownership can't be determined (a `None`
 /// makes the step report its unfinished turn rather than resume blindly).
@@ -459,6 +449,31 @@ fn headless_resumable_session(
             None
         }
     }
+}
+
+/// The prior run id when runkon reused its output as-is. With a correction the
+/// session was resumed under the new run, so the new row holds the work.
+fn recovered_without_correction(
+    metadata: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    use runkon_flow::constants::metadata_keys as k;
+    if metadata.contains_key(k::OUTPUT_CORRECTION_ATTEMPTS) {
+        return None;
+    }
+    metadata.get(k::OUTPUT_RECOVERED_FROM_RUN).cloned()
+}
+
+/// Mark the never-used pre-created run completed, pointing at the run whose
+/// log holds the output.
+fn finalize_recovered_run(
+    conn: &rusqlite::Connection,
+    child_run_id: &str,
+    prior_run_id: &str,
+) -> crate::error::Result<()> {
+    crate::agent::AgentManager::new(conn).update_run_completed_if_running(
+        child_run_id,
+        &format!("output recovered from run {prior_run_id}"),
+    )
 }
 
 /// Write the metrics runkon summed across output-correction attempts onto the
@@ -498,19 +513,29 @@ fn record_step_usage(
     if step_id.is_empty() {
         return;
     }
+    with_conn_best_effort(
+        conn,
+        step_name,
+        &format!("add usage of run {child_run_id} to step {step_id}"),
+        |conn| crate::workflow::add_step_metrics_from_agent_run(conn, step_id, child_run_id),
+    );
+}
+
+/// Run a best-effort DB operation: a DB error or poisoned lock is logged with
+/// the step name and `what`, never propagated.
+fn with_conn_best_effort(
+    conn: &Mutex<rusqlite::Connection>,
+    step: &str,
+    what: &str,
+    f: impl FnOnce(&rusqlite::Connection) -> crate::error::Result<()>,
+) {
     match conn.lock() {
         Ok(conn) => {
-            if let Err(e) =
-                crate::workflow::add_step_metrics_from_agent_run(&conn, step_id, child_run_id)
-            {
-                tracing::warn!(
-                    "step '{step_name}' (step_id={step_id}): failed to add usage of run {child_run_id} to the step: {e}",
-                );
+            if let Err(e) = f(&conn) {
+                tracing::warn!("step '{step}': failed to {what}: {e}");
             }
         }
-        Err(e) => tracing::warn!(
-            "step '{step_name}': db lock poisoned, skipping step usage for run {child_run_id}: {e}",
-        ),
+        Err(e) => tracing::warn!("step '{step}': db lock poisoned, cannot {what}: {e}"),
     }
 }
 
@@ -518,37 +543,34 @@ fn record_step_usage(
 mod tests {
     use super::{
         derive_runtime_from_model, headless_resumable_session, persist_corrected_run_metrics,
-        record_step_usage, schema_output_missing,
+        record_step_usage,
     };
+    use super::{finalize_recovered_run, recovered_without_correction};
     use runkon_runtimes::config::RuntimeConfig;
     use std::collections::HashMap;
 
-    fn warning_metadata() -> HashMap<String, String> {
+    #[test]
+    fn recovery_without_correction_is_detected() {
         let mut md = HashMap::new();
-        md.insert(
-            runkon_flow::constants::metadata_keys::OUTPUT_WARNING.to_string(),
-            "no FLOW_OUTPUT block".to_string(),
+        assert_eq!(recovered_without_correction(&md), None);
+        md.insert("output_recovered_from_run".into(), "prior".into());
+        assert_eq!(recovered_without_correction(&md).as_deref(), Some("prior"));
+        md.insert("output_correction_attempts".into(), "1".into());
+        assert_eq!(recovered_without_correction(&md), None);
+    }
+
+    #[test]
+    fn finalize_recovered_run_completes_the_unused_row() {
+        let conn = crate::test_helpers::setup_db();
+        let mgr = crate::agent::AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "task", None).unwrap();
+        finalize_recovered_run(&conn, &run.id, "prior-run").unwrap();
+        let row = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(row.status.to_string(), "completed");
+        assert_eq!(
+            row.result_text.as_deref(),
+            Some("output recovered from run prior-run")
         );
-        md
-    }
-
-    #[test]
-    fn schema_step_with_output_warning_fails() {
-        let err = schema_output_missing("verify", true, &warning_metadata())
-            .expect("schema + warning must fail");
-        let msg = err.to_string();
-        assert!(msg.contains("verify"), "{msg}");
-        assert!(msg.contains("no FLOW_OUTPUT block"), "{msg}");
-    }
-
-    #[test]
-    fn schema_step_without_warning_passes() {
-        assert!(schema_output_missing("verify", true, &HashMap::new()).is_none());
-    }
-
-    #[test]
-    fn non_schema_step_with_output_warning_passes() {
-        assert!(schema_output_missing("implement", false, &warning_metadata()).is_none());
     }
 
     fn rt(models: &[&str]) -> RuntimeConfig {

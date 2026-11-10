@@ -4445,9 +4445,9 @@ dependencies = [
 
 [[package]]
 name = "runkon-anthropic"
-version = "0.8.2-alpha"
+version = "0.9.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ad7eaa9d60d926b7737a9e514b8e8276df3f9d0bebc60c932d297f1fe9323ac"
+checksum = "3e5b6a39b0968d28d2276d6e73a0bfa13f3cd0bdc19d48b8b85d2691632ddb84"
 dependencies = [
  "runkon-flow",
  "runkon-flow-executors",
@@ -4460,9 +4460,9 @@ dependencies = [
 
 [[package]]
 name = "runkon-flow"
-version = "0.8.2-alpha"
+version = "0.9.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d00610d8950dafdeb35358630ffc4a477f10b4debd333f340251101f0888567"
+checksum = "66a67ddc17557651ea5a8bfb5fa233055208705f8c41bd03f96ed0766a418e6c"
 dependencies = [
  "chrono",
  "rusqlite",
@@ -4481,23 +4481,24 @@ dependencies = [
 
 [[package]]
 name = "runkon-flow-executors"
-version = "0.8.2-alpha"
+version = "0.9.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e20fed13206c45526ce73e250e96186580e085b6bb58948717951a37cd1f43f5"
+checksum = "a05c9dc847eab6a0448f4a6c99a0e4216ea636495c6cef648c008b5f4cdc906e"
 dependencies = [
  "runkon-flow",
  "runkon-runtimes",
  "serde",
  "serde_json",
  "serde_yml",
+ "thiserror 2.0.18",
  "tracing",
 ]
 
 [[package]]
 name = "runkon-google"
-version = "0.8.2-alpha"
+version = "0.9.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a94a096515083d2ce3a6288cd6bce825679fadf61ff56f063c59cc3cd991c68"
+checksum = "c7a0a6a350e0c4126a273ab34a5da55fdf83e8498d42a9cf56f674ed422dcb42"
 dependencies = [
  "runkon-flow",
  "runkon-flow-executors",
@@ -4510,9 +4511,9 @@ dependencies = [
 
 [[package]]
 name = "runkon-notify"
-version = "0.8.2-alpha"
+version = "0.9.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e3c39691d258508fe5dc9126754b1a6125df9f29bd69ec77d9f0710e8d93155"
+checksum = "1a3a91dfbd1dffefc73f3e6576e24f79514808b6694993db4fb75268234d7b63"
 dependencies = [
  "serde",
  "serde_json",
@@ -4523,9 +4524,9 @@ dependencies = [
 
 [[package]]
 name = "runkon-runtimes"
-version = "0.8.2-alpha"
+version = "0.9.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c44ec8f8517c6fc29313af0885cc0d708d7f241bd92e23d36422aaecd92a6a2"
+checksum = "87f345f05f213defa3f5046ee99710ef173d46cc96f116b7108734961f364c8a"
 dependencies = [
  "libc",
  "serde",
