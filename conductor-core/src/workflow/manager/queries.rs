@@ -1968,14 +1968,10 @@ pub fn get_all_pending_gates(conn: &Connection) -> Result<Vec<PendingGateAnalyti
 #[cfg(test)]
 mod tests {
     use super::pct_change;
-    use crate::db::migrations;
     use rusqlite::Connection;
 
     fn setup_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
-        migrations::run(&conn).unwrap();
-        conn
+        crate::test_helpers::create_test_conn_fk_off()
     }
 
     #[test]

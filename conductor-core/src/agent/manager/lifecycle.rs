@@ -1403,7 +1403,7 @@ mod tests {
     #[test]
     fn drain_db_open_failure_marks_run_failed() {
         let tmp = tempfile::NamedTempFile::new().expect("temp db");
-        let conn = crate::db::open_database(tmp.path()).expect("open db");
+        let conn = crate::test_helpers::open_test_db_file(tmp.path());
         crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
         crate::test_helpers::insert_test_worktree(
             &conn,

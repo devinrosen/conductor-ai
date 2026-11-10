@@ -1,7 +1,8 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use crate::db;
 use crate::tickets::TicketInput;
@@ -20,12 +21,146 @@ use crate::tickets::TicketInput;
 /// Dropping it early re-introduces the race this mutex is meant to prevent.
 pub static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Opens an in-memory SQLite database with migrations applied. No seed data is inserted.
+static TEMPLATE_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Short hash identifying this test binary build (path, length, mtime). The migrations are
+/// compiled into the binary, so any rebuild gets a new key and never reuses a stale schema.
+/// `None` when the executable's metadata is unavailable.
+fn binary_key() -> Option<String> {
+    use std::hash::{Hash, Hasher};
+    let exe = std::env::current_exe().ok()?;
+    let exe = exe.canonicalize().unwrap_or(exe);
+    let meta = std::fs::metadata(&exe).ok()?;
+    let mtime = meta.modified().ok()?;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    exe.hash(&mut h);
+    meta.len().hash(&mut h);
+    mtime.hash(&mut h);
+    Some(format!("{:016x}", h.finish()))
+}
+
+/// Best-effort removal of template files untouched for 24 h, bounding growth across rebuilds.
+fn prune_stale_templates(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let cutoff = Duration::from_secs(24 * 60 * 60);
+    for entry in entries.flatten() {
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > cutoff);
+        if old {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Path of the migrated template database for this test binary build, creating it on first use.
+///
+/// The template is a file in `std::env::temp_dir()` rather than under `CONDUCTOR_HOME`: nextest
+/// runs every test in its own process, each with its own isolated home, so only a file outside
+/// it can be shared. `temp_dir()` is never the real `~/.conductor`. Returns `None` when the
+/// binary can't be keyed; callers then fall back to a per-process in-memory template.
+fn template_path() -> Option<&'static Path> {
+    TEMPLATE_PATH
+        .get_or_init(|| {
+            let key = binary_key()?;
+            let dir = std::env::temp_dir().join("conductor-test-db-templates");
+            std::fs::create_dir_all(&dir).unwrap();
+            let name = format!("schema{}-{}.db", db::migrations::LATEST_SCHEMA_VERSION, key);
+            let path = dir.join(&name);
+            if !path.exists() {
+                // Concurrent processes may race; each writes its own tmp file and renames
+                // atomically, and every winner writes equivalent content.
+                let tmp = dir.join(format!("{name}.{}.tmp", std::process::id()));
+                let _ = std::fs::remove_file(&tmp);
+                let conn = Connection::open(&tmp).unwrap();
+                db::migrations::run(&conn).unwrap();
+                drop(conn);
+                std::fs::rename(&tmp, &path).unwrap();
+                prune_stale_templates(&dir);
+            }
+            Some(path)
+        })
+        .as_deref()
+}
+
+/// Fallback template for binaries whose executable can't be keyed: migrated once per process.
+fn memory_template() -> &'static std::sync::Mutex<Connection> {
+    static MEM: OnceLock<std::sync::Mutex<Connection>> = OnceLock::new();
+    MEM.get_or_init(|| {
+        let conn = Connection::open_in_memory().unwrap();
+        db::migrations::run(&conn).unwrap();
+        std::sync::Mutex::new(conn)
+    })
+}
+
+/// Copy the migrated template into `dest`, an empty database (in-memory or a new/0-byte file).
+/// Copies pages only: connection pragmas such as `foreign_keys` are not carried over.
+fn copy_template_into(dest: &mut Connection) {
+    fn run(src: &Connection, dest: &mut Connection) {
+        let backup = rusqlite::backup::Backup::new(src, dest).unwrap();
+        // pages_per_step must be > 0; i32::MAX copies everything in one step.
+        backup
+            .run_to_completion(i32::MAX, Duration::ZERO, None)
+            .unwrap();
+    }
+    match template_path() {
+        Some(path) => {
+            let src = Connection::open_with_flags(
+                path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
+            .unwrap();
+            run(&src, dest);
+        }
+        None => run(&memory_template().lock().unwrap(), dest),
+    }
+}
+
+/// Opens an in-memory SQLite database with migrations applied (foreign keys ON). No seed data
+/// is inserted.
+///
+/// The schema comes from copying a per-build migrated template (see [`template_path`]) instead
+/// of running every migration, so it costs microseconds, not tens of milliseconds. Tests of
+/// the migrations themselves must call `db::migrations::run` on a fresh connection instead.
 pub fn create_test_conn() -> Connection {
-    let conn = Connection::open_in_memory().unwrap();
+    let conn = create_test_conn_fk_off();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
-    db::migrations::run(&conn).unwrap();
     conn
+}
+
+/// Like [`create_test_conn`] but leaves foreign keys OFF (SQLite's default).
+pub fn create_test_conn_fk_off() -> Connection {
+    let mut conn = Connection::open_in_memory().unwrap();
+    copy_template_into(&mut conn);
+    conn
+}
+
+/// Copy the migrated template into the new or empty file at `path`. Panics if the file already
+/// holds a schema, so a populated test database is never overwritten.
+pub fn seed_test_db_file(path: &Path) {
+    let mut conn = Connection::open(path).unwrap();
+    let objects: i64 = conn
+        .query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        objects,
+        0,
+        "seed_test_db_file refuses a populated database: {}",
+        path.display()
+    );
+    copy_template_into(&mut conn);
+}
+
+/// Seed `path` from the template, then open it with [`db::open_database`]. A drop-in for a
+/// test's first `open_database` on a fresh temp path.
+pub fn open_test_db_file(path: &Path) -> Connection {
+    seed_test_db_file(path);
+    db::open_database(path).unwrap()
 }
 
 /// Insert a single repo row. `id`, `slug`, and `local_path` are the only values
@@ -334,16 +469,16 @@ pub fn create_file_test_db() -> (Connection, String) {
         .as_nanos();
     let db_path = tmpdir.join(format!("conductor_test_{}.db", nonce));
     let path_str = db_path.to_string_lossy().to_string();
+    seed_test_db_file(&db_path);
     let conn = Connection::open(&db_path).unwrap();
     conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
-    db::migrations::run(&conn).unwrap();
     (conn, path_str)
 }
 
 /// Create `<home>/conductor.db` with repo `r1`/`hook-repo` and an active
 /// worktree `w1`/`hook-wt` at `/tmp/ws/hook-wt` (session-hook test fixture).
 pub fn seed_hook_db(home: &std::path::Path) -> Connection {
-    let conn = db::open_database(&home.join("conductor.db")).unwrap();
+    let conn = open_test_db_file(&home.join("conductor.db"));
     insert_test_repo(&conn, "r1", "hook-repo", "/tmp/hook-repo");
     insert_test_worktree(&conn, "w1", "r1", "hook-wt", "/tmp/ws/hook-wt");
     conn
@@ -466,5 +601,94 @@ mod isolate_home_tests {
             dirs::home_dir().map(|h| h.join(".conductor"))
         );
         assert!(home.is_dir());
+    }
+}
+
+#[cfg(test)]
+mod template_tests {
+    use super::*;
+
+    fn schema_dump(conn: &Connection) -> Vec<(String, String, String, Option<String>)> {
+        let mut stmt = conn
+            .prepare("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
+            .unwrap();
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        rows
+    }
+
+    fn fk_state(conn: &Connection) -> i64 {
+        conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn template_matches_fresh_migration() {
+        let fresh = Connection::open_in_memory().unwrap();
+        db::migrations::run(&fresh).unwrap();
+        let copy = create_test_conn();
+        assert_eq!(schema_dump(&copy), schema_dump(&fresh));
+        let version: i64 = copy
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM _conductor_meta WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, db::migrations::LATEST_SCHEMA_VERSION as i64);
+    }
+
+    #[test]
+    fn create_test_conn_has_foreign_keys_on() {
+        assert_eq!(fk_state(&create_test_conn()), 1);
+    }
+
+    #[test]
+    fn create_test_conn_fk_off_has_foreign_keys_off() {
+        assert_eq!(fk_state(&create_test_conn_fk_off()), 0);
+    }
+
+    #[test]
+    fn template_is_shared_file_outside_conductor_home() {
+        let path = template_path().expect("test binary can be keyed");
+        assert!(!path.starts_with(crate::config::conductor_dir()));
+        if let Some(home) = dirs::home_dir() {
+            assert!(!path.starts_with(home.join(".conductor")));
+        }
+    }
+
+    #[test]
+    fn copies_are_independent() {
+        let a = create_test_conn();
+        insert_test_repo(&a, "r1", "a", "/tmp/a");
+        assert_eq!(count_rows(&a, "repos"), 1);
+        assert_eq!(count_rows(&create_test_conn(), "repos"), 0);
+    }
+
+    #[test]
+    fn open_test_db_file_on_empty_tempfile() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_test_db_file(tmp.path());
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
+        assert_eq!(count_rows(&conn, "repos"), 0);
+        assert_eq!(
+            db::connection_db_path(&conn).as_deref(),
+            Some(tmp.path()),
+            "connection_db_path should return the file path"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "refuses a populated database")]
+    fn seed_test_db_file_refuses_populated_db() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        seed_test_db_file(tmp.path());
+        seed_test_db_file(tmp.path());
     }
 }

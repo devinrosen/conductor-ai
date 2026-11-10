@@ -141,6 +141,8 @@ Branch ruleset on `main`: PRs required, linear history (squash/rebase only), `Cl
 
 Every test binary sets `CONDUCTOR_HOME` to its own temp dir before `main` runs, through `conductor_core::isolate_test_home!()`, and under nextest `conductor_dir()` panics when `CONDUCTOR_HOME` is unset. A **new** test binary (a new `tests/*.rs` file or a new crate) must invoke `conductor_core::isolate_test_home!();` at the top level, which needs conductor-core's `test-helpers` feature, or it fails CI. Code that spawns a thread which opens its own connection must pass the caller's database path down (`db::connection_db_path(conn)`, `Conductor::conn_db_path()`), never fall back to `config::db_path()`: before this was enforced, such threads made `cargo test` migrate the developer's real database (#3171, #3175).
 
+Test databases come from `test_helpers::create_test_conn()` (in-memory) and `test_helpers::open_test_db_file(path)` (a fresh temp file). Both copy a per-build migrated template kept in the system temp dir (never under `CONDUCTOR_HOME`, so nextest's per-test processes share it) instead of running every migration. A test of the migrations themselves calls `migrations::run` on a fresh connection.
+
 Tests that spawn the `conductor` binary build the command with `conductor_cmd()` from `conductor-cli/tests/common/mod.rs`. It clears the environment and pins `PATH` to `/usr/bin:/bin`, so output doesn't depend on which tools (`gh`, `tmux`, `claude`) or variables (`TMUX`, `CLAUDE_PID`, `CONDUCTOR_DB_PATH`) the developer has. A test that needs a variable sets it explicitly. Without this, #3235 passed locally and failed only in CI.
 
 ## Releases and milestones

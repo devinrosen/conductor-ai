@@ -341,7 +341,7 @@ mod tests {
 
         let tmp = tempfile::NamedTempFile::new().expect("tempfile");
         let db_path = tmp.path().to_path_buf();
-        let conn = crate::db::open_database(&db_path).unwrap();
+        let conn = crate::test_helpers::open_test_db_file(&db_path);
         crate::test_helpers::insert_test_repo(&conn, "r1", "test-repo", "/tmp/repo");
 
         let agent_mgr = AgentManager::new(&conn);
