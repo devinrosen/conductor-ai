@@ -530,7 +530,10 @@ pub(crate) fn local_work_at_risk(
     head_oid: &str,
 ) -> Option<String> {
     if Path::new(worktree_path).exists() {
-        match git_in(worktree_path).args(["status", "--porcelain"]).output() {
+        match git_in(worktree_path)
+            .args(["status", "--porcelain"])
+            .output()
+        {
             Ok(o) if o.status.success() => {
                 let n = String::from_utf8_lossy(&o.stdout)
                     .lines()
@@ -569,7 +572,10 @@ pub(crate) fn local_work_at_risk(
     }
     match cmd.output() {
         Ok(o) if o.status.success() => {
-            let count: u64 = String::from_utf8_lossy(&o.stdout).trim().parse().unwrap_or(1);
+            let count: u64 = String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse()
+                .unwrap_or(1);
             if count > 0 {
                 let target = if oid_known {
                     "the merged PR head"

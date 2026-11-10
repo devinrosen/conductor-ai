@@ -1609,9 +1609,7 @@ impl<'a> WorktreeManager<'a> {
             }
 
             // A merged PR means the pushed branch is done, not that local work is.
-            if let Some(reason) =
-                local_work_at_risk(repo_path, wt_path, branch, &merged.head_oid)
-            {
+            if let Some(reason) = local_work_at_risk(repo_path, wt_path, branch, &merged.head_oid) {
                 tracing::warn!(
                     worktree = %wt_id,
                     branch = %branch,
@@ -2626,7 +2624,9 @@ mod tests {
         String::from_utf8_lossy(&o.stdout).trim().to_string()
     }
 
-    fn merged_with_head(head_oid: String) -> impl Fn(&str, &[String]) -> std::collections::HashMap<String, MergedPr> {
+    fn merged_with_head(
+        head_oid: String,
+    ) -> impl Fn(&str, &[String]) -> std::collections::HashMap<String, MergedPr> {
         move |_, branches| {
             branches
                 .iter()
@@ -2667,7 +2667,10 @@ mod tests {
         assert_eq!(n, 0);
         assert_eq!(wt_status(&conn), "active");
         assert!(std::path::Path::new(&wt_path).exists());
-        git_out(&repo_path, &["rev-parse", "--verify", "refs/heads/feat/test"]);
+        git_out(
+            &repo_path,
+            &["rev-parse", "--verify", "refs/heads/feat/test"],
+        );
     }
 
     #[test]

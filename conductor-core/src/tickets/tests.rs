@@ -710,7 +710,11 @@ fn test_mark_worktrees_skips_dirty_worktree_when_pr_merged() {
     // A merged PR must not remove a worktree that still has uncommitted changes.
     use std::process::Command;
     let git = |dir: &std::path::Path, args: &[&str]| {
-        let o = Command::new("git").args(args).current_dir(dir).output().unwrap();
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
         assert!(o.status.success(), "git {args:?} failed");
     };
     let repo_dir = tempfile::TempDir::new().unwrap();

@@ -1439,7 +1439,10 @@ mod tests {
         let branches = vec!["feat/123-add-thing".to_string(), "fix/456-bug".to_string()];
         let result = parse_merged_branches_json(json, &branches);
         assert_eq!(result.len(), 2);
-        assert_eq!(result["feat/123-add-thing"].merged_at, "2024-01-15T10:00:00Z");
+        assert_eq!(
+            result["feat/123-add-thing"].merged_at,
+            "2024-01-15T10:00:00Z"
+        );
         assert_eq!(result["fix/456-bug"].merged_at, "2024-01-16T12:00:00Z");
         assert!(!result.contains_key("feat/789-other"));
     }

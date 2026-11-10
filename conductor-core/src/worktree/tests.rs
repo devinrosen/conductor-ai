@@ -1498,7 +1498,15 @@ fn test_cleanup_merged_worktrees_skips_branch_reuse_after_old_merge() {
                 // mergedAt is 2023 — before the worktree's 2024 created_at
                 branches
                     .iter()
-                    .map(|b| (b.clone(), crate::github::MergedPr { merged_at: "2023-12-31T23:59:59Z".to_string(), ..Default::default() }))
+                    .map(|b| {
+                        (
+                            b.clone(),
+                            crate::github::MergedPr {
+                                merged_at: "2023-12-31T23:59:59Z".to_string(),
+                                ..Default::default()
+                            },
+                        )
+                    })
                     .collect()
             },
             |_, _| Ok(()),
@@ -1532,7 +1540,15 @@ fn test_cleanup_merged_worktrees_cleans_up_genuine_merge() {
             |_, branches| {
                 branches
                     .iter()
-                    .map(|b| (b.clone(), crate::github::MergedPr { merged_at: "2024-06-01T00:00:00Z".to_string(), ..Default::default() }))
+                    .map(|b| {
+                        (
+                            b.clone(),
+                            crate::github::MergedPr {
+                                merged_at: "2024-06-01T00:00:00Z".to_string(),
+                                ..Default::default()
+                            },
+                        )
+                    })
                     .collect()
             },
             |_, _| Ok(()),
