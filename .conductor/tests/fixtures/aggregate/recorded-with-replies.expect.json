@@ -1,0 +1,10 @@
+{
+  "markers": [
+    "approved"
+  ],
+  "overall_approved": true,
+  "reviewed_by": "Architecture, DRY Abstraction, Error Handling, Performance, Security, Test Coverage",
+  "blocking": [],
+  "answered": 0,
+  "off_diff": []
+}

@@ -1,0 +1,53 @@
+[
+  {
+    "step": "review-architecture",
+    "iteration": 0,
+    "context": null,
+    "markers": [],
+    "structured_output": "{\"approved\":true,\"findings\":[],\"summary\":\"No architectural violations. The `.conductor` search root is defined once in `conductor_config_dir()` and passed to every loader call. Recovered-run bookkeeping goes through `AgentManager` and stays inside the bridge. The `schema_output_missing` adapter workaround is removed in favour of the engine's `require_output`, and the PR adds tests that pin both behaviours.\"}"
+  },
+  {
+    "step": "review-dry-abstraction",
+    "iteration": 0,
+    "context": "One DRY warning: the new finalize_recovered_run method is a third copy of the lock-match-warn best-effort block already in the adapter; the rest of the diff (config_dir helper, schema_output_missing removal, test helpers) has no meaningful duplication or over-abstraction.",
+    "markers": [
+      "has_review_issues"
+    ],
+    "structured_output": "{\"approved\":false,\"findings\":[{\"file\":\"conductor-core/src/workflow/runkon_bridge/action_executor_adapter.rs\",\"line\":133,\"message\":\"The new RkActionExecutorAdapter::finalize_recovered_run method repeats the `match self.conn.lock() { Ok(conn) => if let Err(e) = ... tracing::warn!, Err(e) => tracing::warn!(\\\"db lock poisoned...\\\") }` best-effort shape that the file already uses in two other places, so this is a third copy of the same lock-and-warn boilerplate. Also at: conductor-core/src/workflow/runkon_bridge/action_executor_adapter.rs:373 (the persist_corrected_run_metrics site, unchanged code, see off_diff_findings).\",\"severity\":\"warning\",\"suggestion\":\"Extract one helper, e.g. `fn with_conn_best_effort(conn: &Mutex<Connection>, what: &str, f: impl FnOnce(&Connection) -> Result<()>)` that does the lock match and the two warn messages, then have this method and the existing sites call it with a closure. The free fn `finalize_recovered_run` already holds the DB logic, so the method reduces to one call. Also consider renaming the method so it doesn't share the free function's name.\"}],\"off_diff_findings\":[{\"body\":\"The best-effort lock-and-warn block that persists summed correction metrics repeats the same shape as record_step_usage (lines ~539-551), and the new finalize_recovered_run method is a third copy. Pre-existing duplication; it becomes worth extracting into one best-effort DB helper when the next call site is added. This is not a blocker for this PR.\",\"file\":\"conductor-core/src/workflow/runkon_bridge/action_executor_adapter.rs\",\"line\":373,\"severity\":\"warning\",\"title\":\"Repeated best-effort conn.lock() + warn blocks in the adapter\"}],\"summary\":\"One DRY warning: the new finalize_recovered_run method is a third copy of the lock-match-warn best-effort block already in the adapter; the rest of the diff (config_dir helper, schema_output_missing removal, test helpers) has no meaningful duplication or over-abstraction.\"}"
+  },
+  {
+    "step": "review-security",
+    "iteration": 0,
+    "context": null,
+    "markers": [],
+    "structured_output": "{\"approved\":true,\"findings\":[],\"summary\":\"No security issues. The search root is a constant `.conductor` built through the validated `ConfigDir::new`, with no user input in it. The new `finalize_recovered_run` DB call goes through the existing `AgentManager` with the run IDs passed as parameters. The change adds no subprocess calls, no secret handling and no new deserialization of external data.\"}"
+  },
+  {
+    "step": "review-performance",
+    "iteration": 0,
+    "context": null,
+    "markers": [],
+    "structured_output": "{\"approved\":true,\"findings\":[],\"off_diff_findings\":[],\"summary\":\"Performance review of the runkon 0.9.0-alpha upgrade found no critical or warning issues: the new per-call ConfigDir construction, recovered-run finalization, and error-path string conversions are negligible or only run on rare paths, and the remaining changes are test-only or dependency bumps.\"}"
+  },
+  {
+    "step": "review-error-handling",
+    "iteration": 0,
+    "context": null,
+    "markers": [],
+    "structured_output": "{\"approved\":true,\"findings\":[],\"summary\":\"No error-handling problems in the diff: the one expect is on a constant with a descriptive message, the best-effort recovery close logs a warning, and the typed runkon errors are flattened with their full text.\"}"
+  },
+  {
+    "step": "review-test-coverage",
+    "iteration": 0,
+    "context": null,
+    "markers": [],
+    "structured_output": "{\"approved\":true,\"findings\":[],\"summary\":\"New public/internal logic (conductor_config_dir, recovered-output handling, engine require_output failure path) is covered by tests in the diff; no test-coverage gaps found.\"}"
+  },
+  {
+    "step": "fetch-pr-replies",
+    "iteration": 0,
+    "context": "(trimmed)",
+    "markers": [],
+    "structured_output": "{\"markers\":[],\"context\":\"No earlier conductor review on PR #3320; no replies to consider.\",\"replies\":[]}"
+  }
+]
