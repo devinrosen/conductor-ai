@@ -402,7 +402,13 @@ fn format_finding(f: &Value) -> String {
     } else {
         s("message")
     };
-    format!("  - {} {} ({}) — {}", s("severity"), loc, s("reviewer"), msg)
+    format!(
+        "  - {} {} ({}) — {}",
+        s("severity"),
+        loc,
+        s("reviewer"),
+        msg
+    )
 }
 
 /// Human-readable form of a report.
@@ -629,7 +635,14 @@ mod tests {
             Some(SNAPSHOT),
         );
         let wrapped = serde_json::to_string(AGG).unwrap();
-        step(&conn, "R", "review-aggregator", "completed", 0, Some(&wrapped));
+        step(
+            &conn,
+            "R",
+            "review-aggregator",
+            "completed",
+            0,
+            Some(&wrapped),
+        );
         let r = load_review_report(&conn, "R").unwrap();
         assert_eq!(r.review.unwrap()["summary"], "s");
     }
@@ -648,8 +661,22 @@ mod tests {
             None,
             Some(SNAPSHOT),
         );
-        step(&conn, "R", "review-aggregator", "completed", 0, Some(r#"{"summary":"old"}"#));
-        step(&conn, "R", "review-aggregator", "completed", 1, Some(r#"{"summary":"new"}"#));
+        step(
+            &conn,
+            "R",
+            "review-aggregator",
+            "completed",
+            0,
+            Some(r#"{"summary":"old"}"#),
+        );
+        step(
+            &conn,
+            "R",
+            "review-aggregator",
+            "completed",
+            1,
+            Some(r#"{"summary":"new"}"#),
+        );
         let r = load_review_report(&conn, "R").unwrap();
         assert_eq!(r.review.unwrap()["summary"], "new");
     }
@@ -671,7 +698,11 @@ mod tests {
         step(&conn, "R", "review-architecture", "running", 0, None);
         let r = load_review_report(&conn, "R").unwrap();
         assert!(r.review.is_none() && r.posted_review.is_none());
-        assert!(r.notes.iter().any(|n| n.contains("running")), "{:?}", r.notes);
+        assert!(
+            r.notes.iter().any(|n| n.contains("running")),
+            "{:?}",
+            r.notes
+        );
         let sec = r
             .reviewers
             .iter()
@@ -710,10 +741,50 @@ mod tests {
     #[test]
     fn resolves_latest_review_through_parent_chain() {
         let conn = db();
-        run(&conn, "T", "ticket-to-pr", "completed", None, None, "2026-01-01T00:00:00Z", None, None);
-        run(&conn, "I", "iterate-pr", "completed", Some("T"), None, "2026-01-01T01:00:00Z", None, None);
-        run(&conn, "R1", "review-pr", "completed", Some("T"), None, "2026-01-01T02:00:00Z", None, None);
-        run(&conn, "R2", "review-pr", "completed", Some("I"), None, "2026-01-01T03:00:00Z", None, None);
+        run(
+            &conn,
+            "T",
+            "ticket-to-pr",
+            "completed",
+            None,
+            None,
+            "2026-01-01T00:00:00Z",
+            None,
+            None,
+        );
+        run(
+            &conn,
+            "I",
+            "iterate-pr",
+            "completed",
+            Some("T"),
+            None,
+            "2026-01-01T01:00:00Z",
+            None,
+            None,
+        );
+        run(
+            &conn,
+            "R1",
+            "review-pr",
+            "completed",
+            Some("T"),
+            None,
+            "2026-01-01T02:00:00Z",
+            None,
+            None,
+        );
+        run(
+            &conn,
+            "R2",
+            "review-pr",
+            "completed",
+            Some("I"),
+            None,
+            "2026-01-01T03:00:00Z",
+            None,
+            None,
+        );
         assert_eq!(resolve_review_run(&conn, "T").unwrap(), "R2");
         assert_eq!(resolve_review_run(&conn, "I").unwrap(), "R2");
         assert_eq!(resolve_review_run(&conn, "R1").unwrap(), "R1");
@@ -722,7 +793,17 @@ mod tests {
     #[test]
     fn resolve_errors_without_review_or_run() {
         let conn = db();
-        run(&conn, "T", "ticket-to-pr", "completed", None, None, "2026-01-01T00:00:00Z", None, None);
+        run(
+            &conn,
+            "T",
+            "ticket-to-pr",
+            "completed",
+            None,
+            None,
+            "2026-01-01T00:00:00Z",
+            None,
+            None,
+        );
         let e = resolve_review_run(&conn, "T").unwrap_err().to_string();
         assert!(e.contains("no review-pr run"), "{e}");
         assert!(matches!(
@@ -736,16 +817,60 @@ mod tests {
     fn latest_review_run_for_pr_is_per_repo() {
         let conn = db();
         let inp = r#"{"pr_number":"9"}"#;
-        run(&conn, "A1", "review-pr", "completed", None, Some("repoA"), "2026-01-01T00:00:00Z", Some(inp), None);
-        run(&conn, "A2", "review-pr", "failed", None, Some("repoA"), "2026-01-01T02:00:00Z", Some(inp), None);
-        run(&conn, "B1", "review-pr", "completed", None, Some("repoB"), "2026-01-01T03:00:00Z", Some(inp), None);
-        run(&conn, "A3", "review-pr", "completed", None, Some("repoA"), "2026-01-01T04:00:00Z", Some(r#"{"pr_number":"90"}"#), None);
+        run(
+            &conn,
+            "A1",
+            "review-pr",
+            "completed",
+            None,
+            Some("repoA"),
+            "2026-01-01T00:00:00Z",
+            Some(inp),
+            None,
+        );
+        run(
+            &conn,
+            "A2",
+            "review-pr",
+            "failed",
+            None,
+            Some("repoA"),
+            "2026-01-01T02:00:00Z",
+            Some(inp),
+            None,
+        );
+        run(
+            &conn,
+            "B1",
+            "review-pr",
+            "completed",
+            None,
+            Some("repoB"),
+            "2026-01-01T03:00:00Z",
+            Some(inp),
+            None,
+        );
+        run(
+            &conn,
+            "A3",
+            "review-pr",
+            "completed",
+            None,
+            Some("repoA"),
+            "2026-01-01T04:00:00Z",
+            Some(r#"{"pr_number":"90"}"#),
+            None,
+        );
         assert_eq!(
-            latest_review_run_for_pr(&conn, "repoA", 9).unwrap().as_deref(),
+            latest_review_run_for_pr(&conn, "repoA", 9)
+                .unwrap()
+                .as_deref(),
             Some("A2")
         );
         assert_eq!(
-            latest_review_run_for_pr(&conn, "repoB", 9).unwrap().as_deref(),
+            latest_review_run_for_pr(&conn, "repoB", 9)
+                .unwrap()
+                .as_deref(),
             Some("B1")
         );
         assert_eq!(latest_review_run_for_pr(&conn, "repoA", 5).unwrap(), None);
@@ -770,7 +895,10 @@ mod tests {
     #[test]
     fn format_includes_findings_and_url() {
         let conn = db();
-        full_fixture(&conn, r#"{"pr_number":"7","scope":"incremental","since":"abc"}"#);
+        full_fixture(
+            &conn,
+            r#"{"pr_number":"7","scope":"incremental","since":"abc"}"#,
+        );
         let text = format_review_report(&load_review_report(&conn, "R").unwrap());
         assert!(text.contains("incremental since abc"), "{text}");
         assert!(text.contains("Approved:    no"), "{text}");

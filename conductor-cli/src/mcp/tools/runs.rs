@@ -387,8 +387,12 @@ pub(super) fn tool_get_review(
     use conductor_core::repo::RepoManager;
     use conductor_core::workflow::review_report::{find_review_run, load_review_report};
 
-    let run_id = get_arg(args, "run_id").map(str::trim).filter(|s| !s.is_empty());
-    let repo_slug = get_arg(args, "repo").map(str::trim).filter(|s| !s.is_empty());
+    let run_id = get_arg(args, "run_id")
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let repo_slug = get_arg(args, "repo")
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let pr = match args.get("pr") {
         None | Some(Value::Null) => None,
         Some(_) => match get_arg_usize(args, "pr") {
@@ -401,11 +405,12 @@ pub(super) fn tool_get_review(
     }
 
     let repo_id = match repo_slug {
-        Some(slug) => match RepoManager::new(&conductor.conn, &conductor.config).get_by_slug(slug)
-        {
-            Ok(r) => Some(r.id),
-            Err(e) => return tool_err(e),
-        },
+        Some(slug) => {
+            match RepoManager::new(&conductor.conn, &conductor.config).get_by_slug(slug) {
+                Ok(r) => Some(r.id),
+                Err(e) => return tool_err(e),
+            }
+        }
         None => None,
     };
 
@@ -1967,7 +1972,10 @@ mod tests {
     #[test]
     fn test_get_review_nonexistent_run() {
         let (_f, conductor) = make_test_conductor();
-        let r = tool_get_review(&conductor, &args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX"));
+        let r = tool_get_review(
+            &conductor,
+            &args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX"),
+        );
         assert_eq!(r.is_error, Some(true));
     }
 
