@@ -128,23 +128,6 @@ impl runkon_flow::traits::action_executor::ActionExecutor for RkActionExecutorAd
 }
 
 impl RkActionExecutorAdapter {
-    /// Close the pre-created `agent_runs` row when runkon reused the earlier
-    /// attempt's output without spawning anything on it (best-effort).
-    fn finalize_recovered_run(&self, step: &str, child_run_id: &str, prior_run_id: &str) {
-        match self.conn.lock() {
-            Ok(conn) => {
-                if let Err(e) = finalize_recovered_run(&conn, child_run_id, prior_run_id) {
-                    tracing::warn!(
-                        "step '{step}': failed to close recovered run {child_run_id}: {e}"
-                    );
-                }
-            }
-            Err(e) => tracing::warn!(
-                "step '{step}': db lock poisoned, cannot close recovered run {child_run_id}: {e}"
-            ),
-        }
-    }
-
     /// Run one agent attempt against the pre-created `child_run_id` agent run.
     fn run_attempt(
         &self,
@@ -370,28 +353,22 @@ impl RkActionExecutorAdapter {
         {
             // Runkon summed the metrics across correction attempts; the row only
             // holds the final attempt's, so write the totals back (best-effort).
-            match self.conn.lock() {
-                Ok(conn) => {
-                    if let Err(e) =
-                        persist_corrected_run_metrics(&conn, &child_run_id, &output.metadata)
-                    {
-                        tracing::warn!(
-                            "step '{}': failed to persist summed correction metrics for run {}: {e}",
-                            params.name,
-                            child_run_id,
-                        );
-                    }
-                }
-                Err(e) => tracing::warn!(
-                    "step '{}': db lock poisoned, skipping summed correction metrics for run {}: {e}",
-                    params.name,
-                    child_run_id,
-                ),
-            }
+            with_conn_best_effort(
+                &self.conn,
+                &params.name,
+                &format!("persist summed correction metrics for run {child_run_id}"),
+                |conn| persist_corrected_run_metrics(conn, &child_run_id, &output.metadata),
+            );
         }
         output.child_run_id = Some(match recovered_from {
             Some(prior) => {
-                self.finalize_recovered_run(&params.name, &child_run_id, &prior);
+                // Close the pre-created row runkon never used (best-effort).
+                with_conn_best_effort(
+                    &self.conn,
+                    &params.name,
+                    &format!("close recovered run {child_run_id}"),
+                    |conn| finalize_recovered_run(conn, &child_run_id, &prior),
+                );
                 prior
             }
             None => child_run_id,
@@ -536,19 +513,29 @@ fn record_step_usage(
     if step_id.is_empty() {
         return;
     }
+    with_conn_best_effort(
+        conn,
+        step_name,
+        &format!("add usage of run {child_run_id} to step {step_id}"),
+        |conn| crate::workflow::add_step_metrics_from_agent_run(conn, step_id, child_run_id),
+    );
+}
+
+/// Run a best-effort DB operation: a DB error or poisoned lock is logged with
+/// the step name and `what`, never propagated.
+fn with_conn_best_effort(
+    conn: &Mutex<rusqlite::Connection>,
+    step: &str,
+    what: &str,
+    f: impl FnOnce(&rusqlite::Connection) -> crate::error::Result<()>,
+) {
     match conn.lock() {
         Ok(conn) => {
-            if let Err(e) =
-                crate::workflow::add_step_metrics_from_agent_run(&conn, step_id, child_run_id)
-            {
-                tracing::warn!(
-                    "step '{step_name}' (step_id={step_id}): failed to add usage of run {child_run_id} to the step: {e}",
-                );
+            if let Err(e) = f(&conn) {
+                tracing::warn!("step '{step}': failed to {what}: {e}");
             }
         }
-        Err(e) => tracing::warn!(
-            "step '{step_name}': db lock poisoned, skipping step usage for run {child_run_id}: {e}",
-        ),
+        Err(e) => tracing::warn!("step '{step}': db lock poisoned, cannot {what}: {e}"),
     }
 }
 
