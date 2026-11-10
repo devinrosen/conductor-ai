@@ -731,16 +731,25 @@ pub fn has_merged_pr(remote_url: &str, branch: &str) -> bool {
     !json.is_empty()
 }
 
+/// A merged PR for a branch: when it merged and the head commit it merged.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MergedPr {
+    /// `mergedAt` (ISO 8601). Empty means unknown (always eligible).
+    pub merged_at: String,
+    /// `headRefOid` of the PR. Empty means unknown.
+    pub head_oid: String,
+}
+
 /// Given a remote URL and a list of branch names, return the subset of branches
 /// that have at least one merged PR. Makes a single `gh pr list` call per repo
 /// instead of one per branch, avoiding N+1 API calls.
-/// Returns a map of branch name → mergedAt (ISO 8601) for branches that have
-/// a merged PR in the repo. Branches not found in merged PRs are absent from
-/// the map. Returns an empty map on any API failure.
+/// Returns a map of branch name → [`MergedPr`] (newest merged PR wins) for
+/// branches that have a merged PR in the repo. Branches not found in merged
+/// PRs are absent from the map. Returns an empty map on any API failure.
 pub fn merged_branches_for_repo(
     remote_url: &str,
     branches: &[String],
-) -> std::collections::HashMap<String, String> {
+) -> std::collections::HashMap<String, MergedPr> {
     if branches.is_empty() {
         return std::collections::HashMap::new();
     }
@@ -757,7 +766,7 @@ pub fn merged_branches_for_repo(
         "--state",
         "merged",
         "--json",
-        "headRefName,mergedAt",
+        "headRefName,mergedAt,headRefOid",
         "--limit",
         &limit,
     ]) else {
@@ -769,39 +778,34 @@ pub fn merged_branches_for_repo(
     parse_merged_branches_json(json, branches)
 }
 
-fn filter_merged_branches<'a>(
-    prs: impl Iterator<Item = (&'a str, &'a str)>,
-    branches: &[String],
-) -> std::collections::HashMap<String, String> {
-    let branch_set: std::collections::HashSet<&str> = branches.iter().map(String::as_str).collect();
-    let mut result = std::collections::HashMap::new();
-    for (head_ref, merged_at) in prs {
-        if branch_set.contains(head_ref) {
-            result.insert(head_ref.to_string(), merged_at.to_string());
-        }
-    }
-    result
-}
-
 pub(crate) fn parse_merged_branches_json(
     json: &str,
     branches: &[String],
-) -> std::collections::HashMap<String, String> {
+) -> std::collections::HashMap<String, MergedPr> {
     #[derive(serde::Deserialize)]
     struct PrHead {
         #[serde(rename = "headRefName")]
         head_ref_name: String,
         #[serde(rename = "mergedAt")]
         merged_at: String,
+        #[serde(rename = "headRefOid", default)]
+        head_ref_oid: String,
     }
     let Ok(prs) = serde_json::from_str::<Vec<PrHead>>(json) else {
         return std::collections::HashMap::new();
     };
-    filter_merged_branches(
-        prs.iter()
-            .map(|p| (p.head_ref_name.as_str(), p.merged_at.as_str())),
-        branches,
-    )
+    let branch_set: std::collections::HashSet<&str> = branches.iter().map(String::as_str).collect();
+    let mut result = std::collections::HashMap::new();
+    // gh lists newest first; keep the first entry per branch.
+    for p in prs {
+        if branch_set.contains(p.head_ref_name.as_str()) {
+            result.entry(p.head_ref_name).or_insert(MergedPr {
+                merged_at: p.merged_at,
+                head_oid: p.head_ref_oid,
+            });
+        }
+    }
+    result
 }
 
 /// Close a GitHub issue as completed via the `gh` CLI.
@@ -1435,8 +1439,11 @@ mod tests {
         let branches = vec!["feat/123-add-thing".to_string(), "fix/456-bug".to_string()];
         let result = parse_merged_branches_json(json, &branches);
         assert_eq!(result.len(), 2);
-        assert_eq!(result["feat/123-add-thing"], "2024-01-15T10:00:00Z");
-        assert_eq!(result["fix/456-bug"], "2024-01-16T12:00:00Z");
+        assert_eq!(
+            result["feat/123-add-thing"].merged_at,
+            "2024-01-15T10:00:00Z"
+        );
+        assert_eq!(result["fix/456-bug"].merged_at, "2024-01-16T12:00:00Z");
         assert!(!result.contains_key("feat/789-other"));
     }
 
@@ -1462,5 +1469,17 @@ mod tests {
         let branches = vec!["feat/123".to_string()];
         let result = parse_merged_branches_json("[]", &branches);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_merged_branches_json_head_oid_and_newest_wins() {
+        let json = r#"[
+            {"headRefName": "fix/x", "mergedAt": "2024-03-01T00:00:00Z", "headRefOid": "bbb"},
+            {"headRefName": "fix/x", "mergedAt": "2024-01-01T00:00:00Z", "headRefOid": "aaa"}
+        ]"#;
+        let result = parse_merged_branches_json(json, &["fix/x".to_string()]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result["fix/x"].head_oid, "bbb");
+        assert_eq!(result["fix/x"].merged_at, "2024-03-01T00:00:00Z");
     }
 }
