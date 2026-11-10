@@ -1591,7 +1591,8 @@ mod tests {
             .action(Box::new(NoOutputBlockExecutor("a")))
             .build()
             .unwrap();
-        let persistence = Arc::new(runkon_flow::persistence_memory::InMemoryWorkflowPersistence::new());
+        let persistence =
+            Arc::new(runkon_flow::persistence_memory::InMemoryWorkflowPersistence::new());
         let run = persistence
             .create_run(NewRun {
                 workflow_name: "w".to_string(),
@@ -1603,18 +1604,21 @@ mod tests {
             })
             .unwrap();
         let mut state = runkon_flow::test_helpers::make_test_execution_state(
-            Arc::clone(&persistence) as Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence>,
+            Arc::clone(&persistence)
+                as Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence>,
             run.id,
         );
         state.workflow_name = "w".to_string();
-        state.action_registry = Arc::new(runkon_flow::traits::action_executor::ActionRegistry::from_executors(
-            HashMap::from([(
-                "a".to_string(),
-                Box::new(NoOutputBlockExecutor("a"))
-                    as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
-            )]),
-            None,
-        ));
+        state.action_registry = Arc::new(
+            runkon_flow::traits::action_executor::ActionRegistry::from_executors(
+                HashMap::from([(
+                    "a".to_string(),
+                    Box::new(NoOutputBlockExecutor("a"))
+                        as Box<dyn runkon_flow::traits::action_executor::ActionExecutor>,
+                )]),
+                None,
+            ),
+        );
         state.schema_resolver = Some(make_schema_resolver(
             "w".to_string(),
             ws_path.clone(),

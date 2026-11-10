@@ -248,7 +248,11 @@ mod tests {
         assert!(load().unwrap().contains("repo-shared"));
         write(w, ".conductor/agents/x.md", &agent("wt-shared"));
         assert!(load().unwrap().contains("wt-shared"));
-        write(r, ".conductor/workflows/wf/agents/x.md", &agent("repo-local"));
+        write(
+            r,
+            ".conductor/workflows/wf/agents/x.md",
+            &agent("repo-local"),
+        );
         assert!(load().unwrap().contains("repo-local"));
         write(w, ".conductor/workflows/wf/agents/x.md", &agent("wt-local"));
         assert!(load().unwrap().contains("wt-local"));
