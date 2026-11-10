@@ -114,7 +114,10 @@ fn test_interpret_agent_output_schema_validation_fails_succeeded() {
     let text = "<<<FLOW_OUTPUT>>>\n{\"summary\": \"oops\"}\n<<<END_FLOW_OUTPUT>>>";
     let result = interpret_agent_output(Some(text), Some(&schema), true);
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("structured output validation"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("structured output validation"));
 }
 
 #[test]
