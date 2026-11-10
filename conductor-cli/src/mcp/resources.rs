@@ -392,6 +392,37 @@ pub(crate) fn format_run_summary_line_with_repo(
     )
 }
 
+/// Extra `list_runs` row lines: ended_at, parent run (`child: true`), ticket and PR target.
+/// Each line appears only when the run records it. `ticket_source_id` is the
+/// run's ticket resolved to its source id (e.g. the GitHub issue number).
+pub(crate) fn format_run_extra_lines(
+    run: &conductor_core::workflow::ConductorWorkflowRun,
+    ticket_source_id: Option<&str>,
+) -> String {
+    let mut out = String::new();
+    if let Some(ended) = run.ended_at.as_deref() {
+        out.push_str(&format!("ended_at: {ended}\n"));
+    }
+    if let Some(parent) = run.parent_workflow_run_id.as_deref() {
+        out.push_str(&format!("child: true\nparent_run_id: {parent}\n"));
+    }
+    if let Some(ticket) = ticket_source_id {
+        out.push_str(&format!("ticket: {ticket}\n"));
+    }
+    let pr = run
+        .inputs
+        .get("pr_number")
+        .or_else(|| run.inputs.get("pr"))
+        .filter(|v| !v.is_empty());
+    if let Some(pr) = pr {
+        out.push_str(&format!("pr: {pr}\n"));
+    }
+    if let Some(label) = run.target_label.as_deref() {
+        out.push_str(&format!("target: {label}\n"));
+    }
+    out
+}
+
 fn format_run_detail(
     conn: &rusqlite::Connection,
     run: &conductor_core::workflow::ConductorWorkflowRun,
