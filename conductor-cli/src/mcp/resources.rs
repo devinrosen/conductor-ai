@@ -359,6 +359,16 @@ pub(crate) fn format_workflow_def(def: &conductor_core::workflow::WorkflowDef) -
 // Run formatting helpers (shared between resource reader and tool handlers)
 // ---------------------------------------------------------------------------
 
+/// Append the `worktree_slug:` / `worktree_branch:` lines shared by every run row.
+fn push_worktree_lines(out: &mut String, slug: Option<&str>, branch: Option<&str>) {
+    if let Some(slug) = slug {
+        out.push_str(&format!("worktree_slug: {slug}\n"));
+    }
+    if let Some(branch) = branch {
+        out.push_str(&format!("worktree_branch: {branch}\n"));
+    }
+}
+
 pub(crate) fn format_run_summary_line(
     run: &conductor_core::workflow::WorkflowRun,
     worktree_slug: Option<&str>,
@@ -368,12 +378,7 @@ pub(crate) fn format_run_summary_line(
         "id: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\n",
         run.id, run.workflow_name, run.status, run.started_at
     );
-    if let Some(slug) = worktree_slug {
-        out.push_str(&format!("worktree_slug: {slug}\n"));
-    }
-    if let Some(branch) = worktree_branch {
-        out.push_str(&format!("worktree_branch: {branch}\n"));
-    }
+    push_worktree_lines(&mut out, worktree_slug, worktree_branch);
     out.push('\n');
     out
 }
@@ -381,15 +386,45 @@ pub(crate) fn format_run_summary_line(
 pub(crate) fn format_run_summary_line_with_repo(
     run: &conductor_core::workflow::WorkflowRun,
     repo_slug: Option<&str>,
+    worktree_slug: Option<&str>,
+    worktree_branch: Option<&str>,
 ) -> String {
     format!(
-        "repo: {}\nid: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\n\n",
+        "repo: {}\n{}",
         repo_slug.unwrap_or("unknown"),
-        run.id,
-        run.workflow_name,
-        run.status,
-        run.started_at
+        format_run_summary_line(run, worktree_slug, worktree_branch)
     )
+}
+
+/// Extra `list_runs` row lines: ended_at, parent run (`child: true`), ticket and PR target.
+/// Each line appears only when the run records it. `ticket_source_id` is the
+/// run's ticket resolved to its source id (e.g. the GitHub issue number).
+pub(crate) fn format_run_extra_lines(
+    run: &conductor_core::workflow::ConductorWorkflowRun,
+    ticket_source_id: Option<&str>,
+) -> String {
+    let mut out = String::new();
+    if let Some(ended) = run.ended_at.as_deref() {
+        out.push_str(&format!("ended_at: {ended}\n"));
+    }
+    if let Some(parent) = run.parent_workflow_run_id.as_deref() {
+        out.push_str(&format!("child: true\nparent_run_id: {parent}\n"));
+    }
+    if let Some(ticket) = ticket_source_id {
+        out.push_str(&format!("ticket: {ticket}\n"));
+    }
+    let pr = run
+        .inputs
+        .get("pr_number")
+        .or_else(|| run.inputs.get("pr"))
+        .filter(|v| !v.is_empty());
+    if let Some(pr) = pr {
+        out.push_str(&format!("pr: {pr}\n"));
+    }
+    if let Some(label) = run.target_label.as_deref() {
+        out.push_str(&format!("target: {label}\n"));
+    }
+    out
 }
 
 fn format_run_detail(
@@ -616,6 +651,44 @@ pub(crate) fn resolve_worktree_info(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn bare_run() -> conductor_core::workflow::ConductorWorkflowRun {
+        let (_f, conductor) = crate::mcp::tools::test_helpers::make_test_conductor();
+        let id =
+            crate::mcp::tools::test_helpers::create_list_run(&conductor.conn, "wf", None, None);
+        conductor_core::workflow::get_workflow_run(&conductor.conn, &id)
+            .expect("get run")
+            .expect("run exists")
+    }
+
+    #[test]
+    fn run_extra_lines_empty_when_nothing_recorded() {
+        assert_eq!(format_run_extra_lines(&bare_run(), None), "");
+    }
+
+    #[test]
+    fn run_extra_lines_ticket_line() {
+        assert_eq!(
+            format_run_extra_lines(&bare_run(), Some("123")),
+            "ticket: 123\n"
+        );
+    }
+
+    #[test]
+    fn run_extra_lines_pr_key_fallback_and_precedence() {
+        let mut run = bare_run();
+        run.run.inputs.insert("pr".into(), "7".into());
+        assert_eq!(format_run_extra_lines(&run, None), "pr: 7\n");
+        run.run.inputs.insert("pr_number".into(), "9".into());
+        assert_eq!(format_run_extra_lines(&run, None), "pr: 9\n");
+    }
+
+    #[test]
+    fn run_extra_lines_empty_pr_number_is_skipped() {
+        let mut run = bare_run();
+        run.run.inputs.insert("pr_number".into(), String::new());
+        assert_eq!(format_run_extra_lines(&run, None), "");
+    }
 
     fn make_test_conductor() -> (tempfile::NamedTempFile, Conductor) {
         use conductor_core::config::Config;

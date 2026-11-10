@@ -866,6 +866,27 @@ fn test_get_by_id_not_found() {
 }
 
 #[test]
+fn test_get_by_ids_returns_found_and_skips_unknown() {
+    let conn = setup_db();
+    let syncer = TicketSyncer::new(&conn);
+    syncer
+        .upsert_tickets("r1", &[make_ticket("1", "A"), make_ticket("2", "B")])
+        .unwrap();
+    let id1 = syncer.get_by_source_id("r1", "1").unwrap().id;
+    let id2 = syncer.get_by_source_id("r1", "2").unwrap().id;
+
+    assert!(syncer.get_by_ids(&[]).unwrap().is_empty());
+    let mut got: Vec<String> = syncer
+        .get_by_ids(&[&id1, &id2, "missing"])
+        .unwrap()
+        .into_iter()
+        .map(|t| t.source_id)
+        .collect();
+    got.sort();
+    assert_eq!(got, vec!["1", "2"]);
+}
+
+#[test]
 fn test_upsert_tickets_stores_label_details() {
     let conn = setup_db();
     let syncer = TicketSyncer::new(&conn);
