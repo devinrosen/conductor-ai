@@ -384,8 +384,7 @@ pub(super) fn tool_get_review(
     conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
-    use conductor_core::repo::RepoManager;
-    use conductor_core::workflow::review_report::{find_review_run, load_review_report};
+    use conductor_core::workflow::review_report::{find_review_run_by_slug, load_review_report};
 
     let run_id = get_arg(args, "run_id")
         .map(str::trim)
@@ -400,21 +399,7 @@ pub(super) fn tool_get_review(
             _ => return tool_err("pr must be a positive PR number"),
         },
     };
-    if run_id.is_some() && (repo_slug.is_some() || pr.is_some()) {
-        return tool_err("Pass either run_id or repo with pr, not both");
-    }
-
-    let repo_id = match repo_slug {
-        Some(slug) => {
-            match RepoManager::new(&conductor.conn, &conductor.config).get_by_slug(slug) {
-                Ok(r) => Some(r.id),
-                Err(e) => return tool_err(e),
-            }
-        }
-        None => None,
-    };
-
-    let report = find_review_run(&conductor.conn, run_id, repo_id.as_deref(), pr)
+    let report = find_review_run_by_slug(&conductor.conn, &conductor.config, run_id, repo_slug, pr)
         .and_then(|id| load_review_report(&conductor.conn, &id));
     match report {
         Ok(r) => match serde_json::to_string_pretty(&r) {

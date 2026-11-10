@@ -603,13 +603,9 @@ pub fn handle_workflow(
             json,
         } => {
             use conductor_core::workflow::review_report::{
-                find_review_run, format_review_report, load_review_report,
+                find_review_run_by_slug, format_review_report, load_review_report,
             };
-            let repo_id = match repo.as_deref() {
-                Some(slug) => Some(RepoManager::new(conn, config).get_by_slug(slug)?.id),
-                None => None,
-            };
-            let id = find_review_run(conn, run_id.as_deref(), repo_id.as_deref(), pr)?;
+            let id = find_review_run_by_slug(conn, config, run_id.as_deref(), repo.as_deref(), pr)?;
             let report = load_review_report(conn, &id)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);

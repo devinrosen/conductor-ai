@@ -153,6 +153,29 @@ pub fn find_review_run(
     }
 }
 
+/// Like [`find_review_run`], but the repo is given by slug. The run-id-vs-repo/PR conflict
+/// is rejected before the slug is looked up, so both entry points share one rule.
+pub fn find_review_run_by_slug(
+    conn: &Connection,
+    config: &crate::config::Config,
+    run_id: Option<&str>,
+    repo_slug: Option<&str>,
+    pr_number: Option<u64>,
+) -> Result<String> {
+    if run_id.is_some() && (repo_slug.is_some() || pr_number.is_some()) {
+        return find_review_run(conn, run_id, Some(""), pr_number);
+    }
+    let repo_id = match repo_slug {
+        Some(slug) => Some(
+            crate::repo::RepoManager::new(conn, config)
+                .get_by_slug(slug)?
+                .id,
+        ),
+        None => None,
+    };
+    find_review_run(conn, run_id, repo_id.as_deref(), pr_number)
+}
+
 struct StepInfo {
     status: String,
     output: Option<Value>,
@@ -266,10 +289,15 @@ pub fn load_review_report(conn: &Connection, run_id: &str) -> Result<ReviewRepor
     }
 
     let mut notes = Vec::new();
-    let inputs: Value = inputs
-        .as_deref()
-        .and_then(|s| serde_json::from_str(s).ok())
-        .unwrap_or(Value::Null);
+    let inputs: Value = match inputs.as_deref() {
+        Some(s) => serde_json::from_str(s).unwrap_or_else(|e| {
+            notes.push(format!(
+                "run inputs could not be parsed ({e}); scope and PR number are unknown"
+            ));
+            Value::Null
+        }),
+        None => Value::Null,
+    };
     let input_str = |k: &str| {
         inputs.get(k).and_then(|v| match v {
             Value::String(s) => Some(s.clone()),
@@ -874,6 +902,14 @@ mod tests {
             Some("B1")
         );
         assert_eq!(latest_review_run_for_pr(&conn, "repoA", 5).unwrap(), None);
+    }
+
+    #[test]
+    fn unparseable_inputs_add_a_note() {
+        let conn = db();
+        full_fixture(&conn, "not json");
+        let r = load_review_report(&conn, "R").unwrap();
+        assert!(r.notes.iter().any(|n| n.contains("could not be parsed")));
     }
 
     #[test]
