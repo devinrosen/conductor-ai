@@ -103,6 +103,26 @@ fn worktree_create_stack_fails_on_unknown_repo() {
 }
 
 #[test]
+fn workflow_review_show_unknown_run_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    conductor_cmd(dir.path())
+        .args(["workflow", "review-show", "01HXXXXXXXXXXXXXXXXXXXXXXX"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not found"));
+}
+
+#[test]
+fn workflow_review_show_needs_a_selector() {
+    let dir = tempfile::tempdir().unwrap();
+    conductor_cmd(dir.path())
+        .args(["workflow", "review-show"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("run id"));
+}
+
+#[test]
 fn workflow_validate_requires_name_or_all() {
     let dir = tempfile::tempdir().unwrap();
     conductor_cmd(dir.path())

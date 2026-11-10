@@ -379,6 +379,47 @@ pub(super) fn tool_run_stats(
     }
 }
 
+/// `conductor_get_review`: a review-pr run's findings, scope, reviewers and posted review.
+pub(super) fn tool_get_review(
+    conductor: &Conductor,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
+    use conductor_core::repo::RepoManager;
+    use conductor_core::workflow::review_report::{find_review_run, load_review_report};
+
+    let run_id = get_arg(args, "run_id").map(str::trim).filter(|s| !s.is_empty());
+    let repo_slug = get_arg(args, "repo").map(str::trim).filter(|s| !s.is_empty());
+    let pr = match args.get("pr") {
+        None | Some(Value::Null) => None,
+        Some(_) => match get_arg_usize(args, "pr") {
+            Some(n) if n > 0 => Some(n as u64),
+            _ => return tool_err("pr must be a positive PR number"),
+        },
+    };
+    if run_id.is_some() && (repo_slug.is_some() || pr.is_some()) {
+        return tool_err("Pass either run_id or repo with pr, not both");
+    }
+
+    let repo_id = match repo_slug {
+        Some(slug) => match RepoManager::new(&conductor.conn, &conductor.config).get_by_slug(slug)
+        {
+            Ok(r) => Some(r.id),
+            Err(e) => return tool_err(e),
+        },
+        None => None,
+    };
+
+    let report = find_review_run(&conductor.conn, run_id, repo_id.as_deref(), pr)
+        .and_then(|id| load_review_report(&conductor.conn, &id));
+    match report {
+        Ok(r) => match serde_json::to_string_pretty(&r) {
+            Ok(t) => tool_ok(t),
+            Err(e) => tool_err(e),
+        },
+        Err(e) => tool_err(e),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1907,6 +1948,58 @@ mod tests {
         let text = result.content[0].as_text().map(|t| t.text.clone()).unwrap();
         let v: Value = serde_json::from_str(&text).expect("json output");
         assert!(v.get("run").is_some() && v.get("compare").is_some());
+    }
+
+    #[test]
+    fn test_get_review_arg_validation() {
+        let (_f, conductor) = make_test_conductor();
+        let r = tool_get_review(&conductor, &empty_args());
+        assert_eq!(r.is_error, Some(true));
+        let mut both = args_with("run_id", "X");
+        both.insert("repo".into(), Value::String("r".into()));
+        assert_eq!(tool_get_review(&conductor, &both).is_error, Some(true));
+        let r = tool_get_review(&conductor, &args_with("pr", "5"));
+        assert_eq!(r.is_error, Some(true));
+        let r = tool_get_review(&conductor, &args_with("pr", "abc"));
+        assert_eq!(r.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_get_review_nonexistent_run() {
+        let (_f, conductor) = make_test_conductor();
+        let r = tool_get_review(&conductor, &args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX"));
+        assert_eq!(r.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_get_review_happy_path() {
+        let (_f, conductor) = make_test_conductor();
+        let conn = &conductor.conn;
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        conn.execute(
+            "INSERT INTO workflow_runs (id, workflow_name, parent_run_id, status, dry_run, \
+             trigger, started_at, iteration, inputs) \
+             VALUES ('RV', 'review-pr', 'PA', 'completed', 0, 'manual', '2026-01-01T00:00:00Z', 0, \
+             '{\"pr_number\":\"3\",\"scope\":\"full\",\"since\":\"\"}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workflow_run_steps (id, workflow_run_id, step_name, role, status, \
+             position, started_at, iteration, structured_output) VALUES \
+             ('S1', 'RV', 'review-aggregator', 'actor', 'completed', 0, '2026-01-01T00:01:00Z', 0, \
+             '{\"overall_approved\":true,\"blocking_findings\":[],\"markers\":[]}')",
+            [],
+        )
+        .unwrap();
+        let r = tool_get_review(&conductor, &args_with("run_id", "RV"));
+        assert_ne!(r.is_error, Some(true));
+        let text = r.content[0].as_text().map(|t| t.text.clone()).unwrap();
+        let v: Value = serde_json::from_str(&text).expect("json");
+        assert_eq!(v["run_id"], "RV");
+        assert_eq!(v["review"]["overall_approved"], true);
+        assert!(v["review"].get("markers").is_none());
+        assert_eq!(v["scope"]["kind"], "full");
     }
 
     #[test]

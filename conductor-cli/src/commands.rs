@@ -368,6 +368,24 @@ pub enum WorkflowCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Show a review-pr run's findings, scope, reviewers and posted review
+    #[command(
+        name = "review-show",
+        after_help = "Examples:\n  conductor workflow review-show <review-run-id>\n  conductor workflow review-show <ticket-to-pr-or-iterate-pr-id>   # its latest review\n  conductor workflow review-show --repo my-repo --pr 123 --json"
+    )]
+    ReviewShow {
+        /// review-pr run ID, or a parent ticket-to-pr / iterate-pr run ID (its latest review)
+        run_id: Option<String>,
+        /// Repo slug; with --pr, shows the latest review-pr run for that PR
+        #[arg(long, requires = "pr", conflicts_with = "run_id")]
+        repo: Option<String>,
+        /// PR number (requires --repo)
+        #[arg(long, requires = "repo", conflicts_with = "run_id")]
+        pr: Option<u64>,
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
     /// Validate a workflow definition (agents, schemas, scripts, gate types, variables)
     Validate {
         /// Workflow name (required unless --all is set)
