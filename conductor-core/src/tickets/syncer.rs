@@ -470,6 +470,23 @@ impl<'a> TicketSyncer<'a> {
             .map_err(ticket_not_found(ticket_id))
     }
 
+    /// Fetch multiple tickets by their internal IDs in a single query.
+    /// Unknown IDs are simply absent from the result. Returns an empty Vec when
+    /// `ids` is empty (avoids a syntax-error `IN ()` clause).
+    pub fn get_by_ids(&self, ids: &[&str]) -> Result<Vec<Ticket>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let placeholders = sql_placeholders(ids.len());
+        let sql = format!("SELECT {TICKET_COLS_BARE} FROM tickets WHERE id IN ({placeholders})");
+        query_collect(
+            self.conn,
+            &sql,
+            rusqlite::params_from_iter(ids.iter()),
+            map_ticket_row,
+        )
+    }
+
     /// Resolve a mixed list of IDs (internal IDs or source_ids) within a single repo
     /// using at most 2 DB queries regardless of how many IDs are provided.
     ///

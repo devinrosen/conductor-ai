@@ -17,7 +17,7 @@ mod workflows;
 mod worktrees;
 
 #[cfg(test)]
-mod test_helpers;
+pub(crate) mod test_helpers;
 
 /// Tools that only read the database. The server bounds these with a timeout;
 /// every tool in `conductor_tools()` must appear in exactly one of this list and
@@ -272,6 +272,9 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
              includes a repo field. Supports pagination via limit (default 50) and offset (default 0). \
              By default, runs on worktrees that are no longer active (merged or abandoned) are omitted; \
              pass include_inactive=true to include them (repo-level runs with no worktree are always included). \
+             Each row also shows, when known: ended_at, worktree_slug and worktree_branch, child: true with \
+             parent_run_id for child runs, the ticket (source id), the pr number and the target label. \
+             Pass top_level_only=true to hide child runs. \
              For full step detail and conversation log on a specific run, read the `conductor://run/{run_id}` resource.",
             schema_typed(&[
                 (
@@ -303,6 +306,12 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
                     "include_inactive",
                     "boolean",
                     "Include runs on merged or abandoned worktrees (default false)",
+                    false,
+                ),
+                (
+                    "top_level_only",
+                    "boolean",
+                    "Hide child runs (runs started by another workflow run) (default false)",
                     false,
                 ),
             ]),
