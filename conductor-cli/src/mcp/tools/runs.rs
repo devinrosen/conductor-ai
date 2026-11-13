@@ -2230,9 +2230,9 @@ mod tests {
         let conn = &conductor.conn;
         conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
         conn.execute(
-            "INSERT INTO workflow_runs (id, workflow_name, status, dry_run, \
+            "INSERT INTO workflow_runs (id, workflow_name, parent_run_id, status, dry_run, \
              trigger, started_at, iteration, inputs) \
-             VALUES ('RV2', 'review-pr', 'completed', 0, 'manual', '2026-01-01T00:00:00Z', 0, \
+             VALUES ('RV2', 'review-pr', 'PA', 'completed', 0, 'manual', '2026-01-01T00:00:00Z', 0, \
              '{\"pr_number\":\"3\",\"scope\":\"full\",\"since\":\"\"}')",
             [],
         )
