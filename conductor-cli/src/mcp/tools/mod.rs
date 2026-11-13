@@ -362,7 +362,9 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
             "A review-pr run's review as structured data: the review-aggregator output \
              (blocking_findings, answered_findings, off_diff_findings, overall_approved, summary, \
              reviewed_by), the run status, the scope reviewed (full, or incremental since a sha), \
-             the reviewers that ran or were skipped, and the posted GitHub review (url, id, event). \
+             the reviewers that ran or were skipped, and the posted GitHub review (url, id, event, overall_approved). \
+             Gate on the top-level `approved`, not review.overall_approved: the submit-review \
+             step can override the aggregator, and a note says so. \
              Read-only, DB only. Pass run_id (a review-pr run, or a parent ticket-to-pr or \
              iterate-pr run, which resolves to its latest review) or repo + pr to get the latest \
              review-pr run for that PR.",

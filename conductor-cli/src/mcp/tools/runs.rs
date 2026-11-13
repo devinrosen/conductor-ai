@@ -2219,8 +2219,46 @@ mod tests {
         let v: Value = serde_json::from_str(&text).expect("json");
         assert_eq!(v["run_id"], "RV");
         assert_eq!(v["review"]["overall_approved"], true);
+        assert_eq!(v["approved"], true);
         assert!(v["review"].get("markers").is_none());
         assert_eq!(v["scope"]["kind"], "full");
+    }
+
+    #[test]
+    fn test_get_review_posted_verdict_overrides_aggregator() {
+        let (_f, conductor) = make_test_conductor();
+        let conn = &conductor.conn;
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        conn.execute(
+            "INSERT INTO workflow_runs (id, workflow_name, status, dry_run, \
+             trigger, started_at, iteration, inputs) \
+             VALUES ('RV2', 'review-pr', 'completed', 0, 'manual', '2026-01-01T00:00:00Z', 0, \
+             '{\"pr_number\":\"3\",\"scope\":\"full\",\"since\":\"\"}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workflow_run_steps (id, workflow_run_id, step_name, role, status, \
+             position, started_at, iteration, structured_output) VALUES \
+             ('S1', 'RV2', 'review-aggregator', 'actor', 'completed', 0, '2026-01-01T00:01:00Z', 0, \
+             '{\"overall_approved\":true,\"blocking_findings\":[],\"markers\":[]}'), \
+             ('S2', 'RV2', 'submit-review', 'actor', 'completed', 1, '2026-01-01T00:02:00Z', 0, \
+             '{\"overall_approved\":false,\"event\":\"COMMENT\",\"review_id\":5,\"review_url\":\"u\"}')",
+            [],
+        )
+        .unwrap();
+        let r = tool_get_review(&conductor, &args_with("run_id", "RV2"));
+        assert_ne!(r.is_error, Some(true));
+        let text = r.content[0].as_text().map(|t| t.text.clone()).unwrap();
+        let v: Value = serde_json::from_str(&text).expect("json");
+        assert_eq!(v["approved"], false);
+        assert_eq!(v["review"]["overall_approved"], true);
+        assert_eq!(v["posted_review"]["overall_approved"], false);
+        assert!(v["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("overrides the aggregator")));
     }
 
     #[test]
