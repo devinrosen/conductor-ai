@@ -1583,20 +1583,70 @@ mod tests {
     fn nested_rounds_fixture(conn: &Connection) {
         wf_run(conn, "T", "ticket-to-pr", "PT", None);
         wf_run(conn, "I", "iterate-pr", "PI", Some("T"));
-        step(conn, "wi", "T", "workflow:iterate-pr", 0, 0, 50, Some("I"), None);
+        step(
+            conn,
+            "wi",
+            "T",
+            "workflow:iterate-pr",
+            0,
+            0,
+            50,
+            Some("I"),
+            None,
+        );
         let aggs = [AGG_BLOCK, AGG_BLOCK_1, AGG_BLOCK_2, AGG_OK];
         for k in 0..4i64 {
             let base = k * 10 + 1;
             let ak = format!("ar{k}");
-            step(conn, &format!("rb{k}"), "I", "rebase", k, base, base, Some(&ak), None);
+            step(
+                conn,
+                &format!("rb{k}"),
+                "I",
+                "rebase",
+                k,
+                base,
+                base,
+                Some(&ak),
+                None,
+            );
             agent(conn, &ak, "PI", "rebase", base, 0.1 * (k + 1) as f64, 10);
             nested_review(conn, "I", &format!("C{k}"), base + 1, aggs[k as usize]);
             if k < 3 {
-                step(conn, &format!("tr{k}"), "I", "triage", 0, base + 5, base + 5, None, Some(TRIAGE));
+                step(
+                    conn,
+                    &format!("tr{k}"),
+                    "I",
+                    "triage",
+                    0,
+                    base + 5,
+                    base + 5,
+                    None,
+                    Some(TRIAGE),
+                );
                 let v = if k == 0 { VERIFY_FAIL } else { VERIFY_OK };
-                step(conn, &format!("vf{k}"), "I", "verify", 0, base + 6, base + 6, None, Some(v));
+                step(
+                    conn,
+                    &format!("vf{k}"),
+                    "I",
+                    "verify",
+                    0,
+                    base + 6,
+                    base + 6,
+                    None,
+                    Some(v),
+                );
             }
-            step(conn, &format!("pu{k}"), "I", "push", k, base + 8, base + 8, None, None);
+            step(
+                conn,
+                &format!("pu{k}"),
+                "I",
+                "push",
+                k,
+                base + 8,
+                base + 8,
+                None,
+                None,
+            );
         }
     }
 
@@ -1627,7 +1677,10 @@ mod tests {
         assert!(s.cycles[3].verify.is_empty());
         // The prologue (rebase) of iteration k belongs to round k+1.
         for (k, c) in s.cycles.iter().enumerate() {
-            assert!((c.usage.cost_usd - 0.1 * (k + 1) as f64).abs() < 1e-9, "{k}");
+            assert!(
+                (c.usage.cost_usd - 0.1 * (k + 1) as f64).abs() < 1e-9,
+                "{k}"
+            );
         }
         assert_eq!(s.cycles[1].wall_ms, 9 * 60_000);
         assert!(s.pre_cycle_verify.is_empty());
@@ -1661,7 +1714,17 @@ mod tests {
         nested_review(&conn, "I", "C", 2, AGG_BLOCK);
         step(&conn, "pu0", "I", "push", 0, 6, 6, None, None);
         step(&conn, "rb1", "I", "rebase", 1, 7, 7, None, None);
-        step(&conn, "reuse", "I", "reuse-review", 0, 8, 9, None, Some(AGG_OK));
+        step(
+            &conn,
+            "reuse",
+            "I",
+            "reuse-review",
+            0,
+            8,
+            9,
+            None,
+            Some(AGG_OK),
+        );
         step(&conn, "pu1", "I", "push", 1, 10, 10, None, None);
         let s = collect_run_stats(&conn, &["I".to_string()]).unwrap();
         assert_eq!(s.cycles.len(), 2);
@@ -1677,7 +1740,17 @@ mod tests {
         let conn = db();
         wf_run(&conn, "T", "ticket-to-pr", "PT", None);
         wf_run(&conn, "I", "iterate-pr", "PI", Some("T"));
-        step(&conn, "wi", "T", "workflow:iterate-pr", 0, 0, 20, Some("I"), None);
+        step(
+            &conn,
+            "wi",
+            "T",
+            "workflow:iterate-pr",
+            0,
+            0,
+            20,
+            Some("I"),
+            None,
+        );
         step(&conn, "rb", "I", "rebase", 0, 1, 1, Some("ar"), None);
         agent(&conn, "ar", "PI", "rebase", 1, 0.5, 10);
         nested_review(&conn, "I", "C", 2, AGG_OK);
