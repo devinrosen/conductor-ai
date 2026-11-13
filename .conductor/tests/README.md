@@ -1,7 +1,8 @@
 # Pipeline script tests
 
 Fixture tests for the decision logic in `.conductor/scripts/`: `aggregate-reviews.sh`,
-`show-plan-decisions.sh`, the `detect-*.sh` scripts with `lib-diff-range.sh`, and `fmt-fix.sh`.
+`show-plan-decisions.sh`, the `detect-*.sh` scripts with `lib-diff-range.sh`, `fmt-fix.sh` and
+`submit-review.sh`.
 Plain bash (3.2 compatible), plus `jq`, `git` and `rustfmt`. CI runs them as the **Pipeline Scripts**
 job when `.conductor/scripts/**` or `.conductor/tests/**` changes.
 
@@ -23,6 +24,13 @@ needs a case that fails without it.
 
 Beware bash 3.2: a `\"` inside a single-quoted jq program nested in `"$( )"` loses its backslash.
 Pass JSON strings with `jq --arg`.
+
+## Stubbing gh
+
+`test-submit-review.sh` puts a stub `gh` first on `PATH` (`write_stub`). Files in `$GH_STUB_DIR`
+drive it: `user` (without it `gh api user` fails like a GitHub App token), `author`, `poster`,
+`reviews.json` (one JSON array per page; `gh pr review` appends to the last) and `drop_post`. A call
+the stub doesn't know fails, so a test can't reach the network. Copy it for another script that calls `gh`.
 
 ## Recording an aggregator fixture
 
