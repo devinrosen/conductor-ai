@@ -1682,7 +1682,7 @@ mod tests {
                 "{k}"
             );
         }
-        assert_eq!(s.cycles[1].wall_ms, 9 * 60_000);
+        assert_eq!(s.cycles[1].wall_ms, 8 * 60_000);
         assert!(s.pre_cycle_verify.is_empty());
     }
 
@@ -1701,8 +1701,8 @@ mod tests {
         assert_eq!(s.cycles[1].approved, Some(true));
         assert_eq!(s.cycles[1].triage, TriageCounts::default());
         assert_eq!(s.cycles_to_approval, Some(2));
-        // Round 1 starts at the rebase, round 2 at the re-review call (minute 9..12).
-        assert_eq!(s.cycles[0].wall_ms, 8 * 60_000);
+        // Round 1 spans the rebase to the triage (minute 1..7), round 2 the re-review call (9..12).
+        assert_eq!(s.cycles[0].wall_ms, 6 * 60_000);
         assert_eq!(s.cycles[1].wall_ms, 3 * 60_000);
     }
 
@@ -1731,7 +1731,7 @@ mod tests {
         assert_eq!(s.cycles[0].approved, Some(false));
         assert_eq!(s.cycles[1].approved, Some(true));
         assert_eq!(s.cycles[1].reviews, 1);
-        assert_eq!(s.cycles[1].wall_ms, 4 * 60_000);
+        assert_eq!(s.cycles[1].wall_ms, 3 * 60_000);
         assert_eq!(s.cycles_to_approval, Some(2));
     }
 
