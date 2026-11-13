@@ -89,6 +89,9 @@ pub struct CycleStats {
     pub wall_ms: i64,
     pub usage: Usage,
     pub approved: Option<bool>,
+    /// Blocking findings per reviewer, keyed by reviewer id (the reviewer step's name
+    /// when the run has one, else the lowercased, hyphenated name). The display name is
+    /// in `RunStats.reviewer_names`.
     pub blocking_by_reviewer: BTreeMap<String, usize>,
     pub blocking_total: usize,
     pub triage: TriageCounts,
@@ -112,6 +115,8 @@ pub struct RunStats {
     pub cycles: Vec<CycleStats>,
     pub cycles_to_approval: Option<usize>,
     pub pre_cycle_verify: Vec<VerifyResult>,
+    /// Reviewer id (a `blocking_by_reviewer` key) to the first display name seen for it.
+    pub reviewer_names: BTreeMap<String, String>,
 }
 
 struct RunRow {
@@ -426,6 +431,40 @@ fn workflow_chain(runs: &HashMap<&str, &RunRow>, run_id: &str) -> Vec<String> {
     chain
 }
 
+/// Lowercase `name` and turn each run of non-alphanumeric characters into one `-`.
+fn reviewer_slug(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars().flat_map(char::to_lowercase) {
+        if c.is_alphanumeric() {
+            out.push(c);
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_end_matches('-').to_string()
+}
+
+/// Stable id for a reviewer named freehand by an aggregator: the matching step name
+/// (exact slug match, else a unique `-<slug>` suffix match) so it is the agent id, else
+/// the slug. An empty name is `unknown`.
+fn reviewer_key(name: &str, step_names: &[String]) -> String {
+    let slug = reviewer_slug(name);
+    if slug.is_empty() {
+        return "unknown".into();
+    }
+    if let Some(n) = step_names.iter().find(|n| reviewer_slug(n) == slug) {
+        return n.clone();
+    }
+    let suffix = format!("-{slug}");
+    let mut hits = step_names
+        .iter()
+        .filter(|n| reviewer_slug(n).ends_with(&suffix));
+    match (hits.next(), hits.next()) {
+        (Some(n), None) => n.clone(),
+        _ => slug,
+    }
+}
+
 fn aggregator_findings(v: &Value) -> Option<&Vec<Value>> {
     v.get("blocking_findings")?.as_array()
 }
@@ -528,7 +567,19 @@ pub fn collect_run_stats(conn: &Connection, root_run_ids: &[String]) -> Result<R
     struct Cycle {
         start: Option<DateTime<Utc>>,
         stats: CycleStats,
+        reviewers: Vec<(String, String)>,
     }
+    let step_names: Vec<String> = {
+        let mut v: Vec<String> = tree
+            .steps
+            .iter()
+            .map(|s| s.step_name.clone())
+            .filter(|n| !is_workflow_step(n))
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    };
     let mut in_cycle: HashSet<usize> = HashSet::new();
     let mut cycles: Vec<Cycle> = Vec::new();
     for round in &rounds {
@@ -559,13 +610,12 @@ pub fn collect_run_stats(conn: &Connection, root_run_ids: &[String]) -> Result<R
         let last_out = tree.steps[last].output.as_ref().expect("aggregator output");
         let findings = aggregator_findings(last_out).cloned().unwrap_or_default();
         let mut blocking_by_reviewer: BTreeMap<String, usize> = BTreeMap::new();
+        let mut reviewers: Vec<(String, String)> = Vec::new();
         for f in &findings {
-            let who = f
-                .get("reviewer")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown")
-                .to_string();
-            *blocking_by_reviewer.entry(who).or_default() += 1;
+            let raw = f.get("reviewer").and_then(Value::as_str).unwrap_or("");
+            let key = reviewer_key(raw, &step_names);
+            *blocking_by_reviewer.entry(key.clone()).or_default() += 1;
+            reviewers.push((key, raw.to_string()));
         }
 
         let mut triage = TriageCounts::default();
@@ -591,6 +641,7 @@ pub fn collect_run_stats(conn: &Connection, root_run_ids: &[String]) -> Result<R
         in_cycle.extend(members.iter().copied());
         cycles.push(Cycle {
             start,
+            reviewers,
             stats: CycleStats {
                 index: 0,
                 wall_ms: ms_between(start, end).unwrap_or(0),
@@ -605,6 +656,19 @@ pub fn collect_run_stats(conn: &Connection, root_run_ids: &[String]) -> Result<R
         });
     }
     cycles.sort_by_key(|c| c.start);
+    let mut reviewer_names: BTreeMap<String, String> = BTreeMap::new();
+    for c in &cycles {
+        for (key, raw) in &c.reviewers {
+            let name = if raw.trim().is_empty() {
+                key.as_str()
+            } else {
+                raw.as_str()
+            };
+            reviewer_names
+                .entry(key.clone())
+                .or_insert_with(|| name.to_string());
+        }
+    }
     let cycles: Vec<CycleStats> = cycles
         .into_iter()
         .enumerate()
@@ -683,6 +747,7 @@ pub fn collect_run_stats(conn: &Connection, root_run_ids: &[String]) -> Result<R
         cycles,
         cycles_to_approval,
         pre_cycle_verify,
+        reviewer_names,
     })
 }
 
@@ -838,13 +903,13 @@ fn fmt_tokens(n: i64) -> String {
     }
 }
 
-fn fmt_blocking(c: &CycleStats) -> String {
+fn fmt_blocking(c: &CycleStats, names: &BTreeMap<String, String>) -> String {
     if c.blocking_by_reviewer.is_empty() {
         return "-".into();
     }
     c.blocking_by_reviewer
         .iter()
-        .map(|(k, v)| format!("{k} {v}"))
+        .map(|(k, v)| format!("{} {v}", names.get(k).unwrap_or(k)))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -1014,7 +1079,11 @@ pub fn format_run_stats(s: &RunStats) -> String {
                     fmt_dur(c.wall_ms),
                     fmt_cost(c.usage.cost_usd),
                     fmt_approved(c.approved).into(),
-                    format!("{} ({})", c.blocking_total, fmt_blocking(c)),
+                    format!(
+                        "{} ({})",
+                        c.blocking_total,
+                        fmt_blocking(c, &s.reviewer_names)
+                    ),
                     format!(
                         "{}/{}/{}",
                         c.triage.address, c.triage.pushback, c.triage.clarify
@@ -1385,8 +1454,8 @@ mod tests {
         let c1 = &s.cycles[0];
         assert_eq!(c1.approved, Some(false));
         assert_eq!(c1.blocking_total, 3);
-        assert_eq!(c1.blocking_by_reviewer["security"], 2);
-        assert_eq!(c1.blocking_by_reviewer["arch"], 1);
+        assert_eq!(c1.blocking_by_reviewer["review-security"], 2);
+        assert_eq!(c1.blocking_by_reviewer["review-arch"], 1);
         assert_eq!((c1.triage.address, c1.triage.pushback), (1, 1));
         assert_eq!(c1.verify.len(), 1);
         assert_eq!(c1.verify[0].failed_checks, vec!["clippy".to_string()]);
@@ -1761,5 +1830,103 @@ mod tests {
         assert_eq!(s.cycles_to_approval, Some(1));
         assert!((s.cycles[0].usage.cost_usd - 0.5).abs() < 1e-9);
         assert_eq!(s.cycles[0].wall_ms, 7 * 60_000);
+    }
+
+    fn dry_agg(name: &str) -> String {
+        format!(r#"{{"overall_approved":false,"blocking_findings":[{{"reviewer":"{name}"}}]}}"#)
+    }
+
+    /// Three review rounds whose aggregator names the DRY reviewer three ways.
+    fn dry_variants_fixture(conn: &Connection, with_step: bool) {
+        wf_run(conn, "T", "ticket-to-pr", "PT", None);
+        wf_run(conn, "I", "iterate-pr", "PI", Some("T"));
+        step(
+            conn,
+            "wi",
+            "T",
+            "workflow:iterate-pr",
+            0,
+            0,
+            50,
+            Some("I"),
+            None,
+        );
+        let names = ["DRY abstraction", "Dry abstraction", "DRY/Abstraction"];
+        for (k, n) in names.iter().enumerate() {
+            let child = format!("C{k}");
+            let at = k as i64 * 10 + 1;
+            nested_review(conn, "I", &child, at, &dry_agg(n));
+            if with_step {
+                step(
+                    conn,
+                    &format!("rd{k}"),
+                    &child,
+                    "review-dry-abstraction",
+                    0,
+                    at,
+                    at + 1,
+                    None,
+                    None,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reviewer_key_is_stable_across_name_variants() {
+        let steps: Vec<String> = ["review-dry-abstraction", "review-security", "perf"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        for n in ["DRY abstraction", "Dry abstraction", "DRY/Abstraction"] {
+            assert_eq!(reviewer_key(n, &steps), "review-dry-abstraction");
+            assert_eq!(reviewer_key(n, &[]), "dry-abstraction");
+        }
+        // Exact match.
+        assert_eq!(reviewer_key("Perf", &steps), "perf");
+        // Unique suffix match.
+        assert_eq!(reviewer_key("Security", &steps), "review-security");
+        // Ambiguous suffix falls back to the slug.
+        let amb: Vec<String> = ["review-security", "extra-security"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(reviewer_key("security", &amb), "security");
+        // Empty.
+        assert_eq!(reviewer_key("", &steps), "unknown");
+        assert_eq!(reviewer_key(" / ", &steps), "unknown");
+    }
+
+    #[test]
+    fn name_variants_report_under_one_key_and_one_name() {
+        let conn = db();
+        dry_variants_fixture(&conn, true);
+        let s = collect_run_stats(&conn, &["T".to_string()]).unwrap();
+        assert_eq!(s.cycles.len(), 3);
+        for c in &s.cycles {
+            assert_eq!(c.blocking_by_reviewer.len(), 1);
+            assert_eq!(c.blocking_by_reviewer["review-dry-abstraction"], 1);
+        }
+        assert_eq!(s.reviewer_names.len(), 1);
+        assert_eq!(
+            s.reviewer_names["review-dry-abstraction"],
+            "DRY abstraction"
+        );
+        let text = format_run_stats(&s);
+        assert!(text.contains("DRY abstraction 1"));
+        assert!(!text.contains("Dry abstraction"));
+        assert!(!text.contains("DRY/Abstraction"));
+    }
+
+    #[test]
+    fn name_variants_without_a_matching_step_use_the_slug() {
+        let conn = db();
+        dry_variants_fixture(&conn, false);
+        let s = collect_run_stats(&conn, &["T".to_string()]).unwrap();
+        for c in &s.cycles {
+            assert_eq!(c.blocking_by_reviewer["dry-abstraction"], 1);
+        }
+        assert_eq!(s.reviewer_names.len(), 1);
+        assert_eq!(s.reviewer_names["dry-abstraction"], "DRY abstraction");
     }
 }

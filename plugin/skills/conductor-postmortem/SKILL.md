@@ -28,7 +28,7 @@ Read the numbers from `conductor_run_stats` with `json = true` (or `conductor wo
 | Review rounds | `.cycles \| length` |
 | Approved | `.cycles[-1].approved` |
 | Rounds to approval | `.cycles_to_approval` (null when never approved) |
-| Blocking findings per round | `.cycles[].blocking_total`, by reviewer in `.cycles[].blocking_by_reviewer` |
+| Blocking findings per round | `.cycles[].blocking_total`, by reviewer in `.cycles[].blocking_by_reviewer`, keyed by reviewer id (the reviewer step name, or a hyphenated lowercase name when no step matches); `.reviewer_names` maps each id to its display name. Compare reviewers across runs by id |
 
 A cycle is one review round: each review-pr call is its own round, and so are a pushback re-review and a reused review.
 
