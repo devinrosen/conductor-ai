@@ -11,12 +11,17 @@
 # .conductor/ or conductor-core/templates/ also runs
 #   conductor workflow validate --all --templates
 # with the conductor just built from this worktree (#3290), so a pipeline bug
-# such as an unknown gate type (#3281) goes back to implement. Anything else
-# (.md, frontend files) skips the checks.
+# such as an unknown gate type (#3281) goes back to implement. A change under
+# .conductor/scripts/ or .conductor/tests/ also runs
+#   bash .conductor/tests/run.sh
+# (the pipeline script fixture tests, #3347). It needs no cargo build, so it
+# runs even when the build fails. Anything else (.md, frontend files) skips
+# the checks.
 #
 # Emits has_failures when any check failed or couldn't run, with a context
 # that names the failing checks, test names and the first compiler or clippy
-# errors, which implement reads as its prior context. The FLOW_OUTPUT also
+# errors (or the failing script test cases), which implement reads as its prior
+# context. The FLOW_OUTPUT also
 # carries `passed` and `checks` ({name, status, summary}) as structured output.
 #
 # Env: FEATURE_BASE_BRANCH (default main). VERIFY_CRATES overrides the crate
@@ -79,21 +84,27 @@ $4}"
 # fails, check every crate, since skipping would hide breakage.
 crates=()
 validate_pipeline=0
+script_tests=0
 if [ -n "${VERIFY_CRATES:-}" ]; then
   read -ra crates <<< "${VERIFY_CRATES}"
 elif ! merge_base=$(git merge-base HEAD "origin/${base}" 2>/dev/null || git merge-base HEAD "${base}" 2>/dev/null); then
   echo "WARNING: could not find the merge base with ${base}; checking every crate" >&2
   crates=("${all_crates[@]}")
   validate_pipeline=1
+  script_tests=1
 elif ! changed=$(git diff --name-only "${merge_base}") || ! untracked=$(git ls-files --others --exclude-standard); then
   echo "WARNING: git could not list the changed files; checking every crate" >&2
   crates=("${all_crates[@]}")
   validate_pipeline=1
+  script_tests=1
 else
   all_changed=$(printf '%s\n%s\n' "${changed}" "${untracked}")
   rust_files=$(printf '%s\n' "${all_changed}" | grep -E '\.rs$|(^|/)Cargo\.(toml|lock)$|(^|/)build\.rs$' || true)
   if printf '%s\n' "${all_changed}" | grep -qE '^(\.conductor/|conductor-core/templates/)'; then
     validate_pipeline=1
+  fi
+  if printf '%s\n' "${all_changed}" | grep -qE '^\.conductor/(scripts|tests)/'; then
+    script_tests=1
   fi
   if [ -z "${rust_files}" ] && [ "${validate_pipeline}" -eq 0 ]; then
     emit '[]' "PASS: no Rust or pipeline changes; checks skipped." true
@@ -183,6 +194,27 @@ if [ "${validate_pipeline}" -eq 1 ]; then
     record "conductor workflow validate" pass "$(tail -n 1 "${logs}/validate.log")"
   else
     record "conductor workflow validate" fail "workflow or template validation failed" "$(grep -E '^(FAIL|\s*✗)' "${logs}/validate.log" | head -n 40)"
+  fi
+fi
+
+# --- pipeline script tests -----------------------------------------------------
+# Needs no cargo build, so it runs even when the build failed.
+if [ "${script_tests}" -eq 1 ]; then
+  log="${logs}/script-tests.log"
+  if [ ! -f .conductor/tests/run.sh ]; then
+    record "pipeline script tests" skipped "not run: no .conductor/tests/run.sh"
+  else
+    script_status=0
+    bash .conductor/tests/run.sh > "${log}" 2>&1 || script_status=$?
+    summary=$(grep -E '^passed: [0-9]+, failed: [0-9]+$' "${log}" | tail -n 1)
+    if [ "${script_status}" -eq 0 ]; then
+      record "pipeline script tests" pass "${summary:-passed}"
+    else
+      detail=$(grep -E -A3 '^FAIL  ' "${log}" | head -n 60)
+      [ -n "${detail}" ] || detail=$(tail -n 30 "${log}")
+      record "pipeline script tests" fail "${summary:-run.sh exited ${script_status}}" "Failing cases:
+${detail}"
+    fi
   fi
 fi
 
