@@ -387,7 +387,7 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
         Tool::new(
             "conductor_run_stats",
             "Time, review cycles, tokens and cost for a workflow run and its child runs: wall \
-             time per step and per review cycle, blocking findings by reviewer, triage and verify \
+             time per step and per review round (one cycle per round), blocking findings by reviewer, triage and verify \
              outcomes, and tokens, cache, cost and turns summed from agent runs. Read-only. \
              Pass several comma-separated run ids to combine them (e.g. a ticket-to-pr run and \
              its follow-up iterate-pr run); set compare_run_id to compare against another run.",

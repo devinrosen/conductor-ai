@@ -5,6 +5,9 @@
 //! whose agent run no step row links any more are still counted (they are attributed
 //! by their `Workflow step: <name>` prompt, or fall into the `(unattributed)` bucket).
 //!
+//! A review cycle is one review round: each review-pr call, or reused review, with the
+//! steps up to the next one.
+//!
 //! Review cycles are found from the *shape* of step outputs, not from workflow or step
 //! names: an aggregator output has `blocking_findings`, triage has `triaged`, verify has
 //! `passed` plus `checks`.
@@ -90,7 +93,8 @@ pub struct CycleStats {
     pub blocking_total: usize,
     pub triage: TriageCounts,
     pub verify: Vec<VerifyResult>,
-    /// Aggregator outputs in the cycle (more than one when a pushback re-reviews).
+    /// Aggregator outputs in the round: normally 1, since each review (a pushback
+    /// re-review included) is its own round.
     pub reviews: usize,
 }
 
@@ -519,36 +523,7 @@ pub fn collect_run_stats(conn: &Connection, root_run_ids: &[String]) -> Result<R
             children_of.entry(p).or_default().push(&r.id);
         }
     }
-    // (owner run, owner iteration) -> aggregator step indices
-    let mut cycle_keys: Vec<(String, i64)> = Vec::new();
-    let mut aggregators: HashMap<(String, i64), Vec<usize>> = HashMap::new();
-    for (i, s) in tree.steps.iter().enumerate() {
-        let Some(out) = &s.output else { continue };
-        if aggregator_findings(out).is_none() {
-            continue;
-        }
-        let key = match run_by_id
-            .get(s.run_id.as_str())
-            .and_then(|r| r.parent_workflow_run_id.as_deref())
-        {
-            Some(p) => {
-                let iter = tree
-                    .steps
-                    .iter()
-                    .find(|ps| {
-                        ps.run_id == p && ps.child_run_id.as_deref() == Some(s.run_id.as_str())
-                    })
-                    .map(|ps| ps.iteration)
-                    .unwrap_or(0);
-                (p.to_string(), iter)
-            }
-            None => (s.run_id.clone(), s.iteration),
-        };
-        if !aggregators.contains_key(&key) {
-            cycle_keys.push(key.clone());
-        }
-        aggregators.entry(key).or_default().push(i);
-    }
+    let rounds = review_rounds(&tree, &run_by_id, &steps_of_run, &children_of);
 
     struct Cycle {
         start: Option<DateTime<Utc>>,
@@ -556,29 +531,8 @@ pub fn collect_run_stats(conn: &Connection, root_run_ids: &[String]) -> Result<R
     }
     let mut in_cycle: HashSet<usize> = HashSet::new();
     let mut cycles: Vec<Cycle> = Vec::new();
-    for key in &cycle_keys {
-        // Steps: owner-run steps of that iteration plus all descendant runs' steps.
-        let mut members: Vec<usize> = Vec::new();
-        for &i in steps_of_run.get(key.0.as_str()).into_iter().flatten() {
-            if tree.steps[i].iteration != key.1 {
-                continue;
-            }
-            members.push(i);
-            if let Some(child) = tree.steps[i].child_run_id.as_deref() {
-                let mut stack = vec![child];
-                let mut visited: HashSet<&str> = HashSet::new();
-                while let Some(r) = stack.pop() {
-                    if !visited.insert(r) || !run_by_id.contains_key(r) {
-                        continue;
-                    }
-                    members.extend(steps_of_run.get(r).into_iter().flatten().copied());
-                    stack.extend(children_of.get(r).into_iter().flatten().copied());
-                }
-            }
-        }
-        members.sort_unstable();
-        members.dedup();
-
+    for round in &rounds {
+        let members = &round.members;
         let start = members
             .iter()
             .filter_map(|&i| tree.steps[i].started_at)
@@ -592,11 +546,11 @@ pub fn collect_run_stats(conn: &Connection, root_run_ids: &[String]) -> Result<R
             })
             .max();
         let mut usage = Usage::default();
-        for &i in &members {
+        for &i in members {
             usage.add(&tree.step_usage[i]);
         }
 
-        let aggs = &aggregators[key];
+        let aggs = &round.aggs;
         let last = aggs
             .iter()
             .copied()
@@ -616,7 +570,7 @@ pub fn collect_run_stats(conn: &Connection, root_run_ids: &[String]) -> Result<R
 
         let mut triage = TriageCounts::default();
         let mut verify = Vec::new();
-        for &i in &members {
+        for &i in members {
             let Some(out) = &tree.steps[i].output else {
                 continue;
             };
@@ -730,6 +684,126 @@ pub fn collect_run_stats(conn: &Connection, root_run_ids: &[String]) -> Result<R
         cycles_to_approval,
         pre_cycle_verify,
     })
+}
+
+/// One review round: the owner-run steps from the round's boundary to the next round's,
+/// the descendant runs' steps, and the aggregator output(s) that gave the verdict.
+struct Round {
+    members: Vec<usize>,
+    aggs: Vec<usize>,
+}
+
+/// Split the tree into review rounds, one per review start: the `workflow:` step whose
+/// child run holds an aggregator, or an aggregator step in the owner run itself (a
+/// reused review).
+///
+/// runkon records `iteration = 0` for steps nested in `if`/`unless`/`do`, even inside a
+/// loop, while top-level loop steps carry the real iteration. So a round cannot be keyed
+/// by `(run, iteration)`. Instead each owner run's steps, in position order, get an
+/// effective iteration (the running maximum), so nested steps inherit the iteration of
+/// the loop step before them. A round starts at the first step of its review's effective
+/// iteration (keeping the loop prologue, such as a rebase, with the round it leads into),
+/// or at the review step itself when an earlier review already ran in that iteration
+/// (a pushback re-review). Two separate loops in one run restart at 0 and so look like
+/// one iteration; verdicts stay right, only prologue steps shift to the previous round.
+fn review_rounds(
+    tree: &Tree,
+    run_by_id: &HashMap<&str, &RunRow>,
+    steps_of_run: &HashMap<&str, Vec<usize>>,
+    children_of: &HashMap<&str, Vec<&str>>,
+) -> Vec<Round> {
+    // owner run -> review-start step -> aggregator steps
+    let mut starts: Vec<(&str, BTreeMap<usize, Vec<usize>>)> = Vec::new();
+    for (i, s) in tree.steps.iter().enumerate() {
+        let Some(out) = &s.output else { continue };
+        if aggregator_findings(out).is_none() {
+            continue;
+        }
+        let (owner, start) = run_by_id
+            .get(s.run_id.as_str())
+            .and_then(|r| r.parent_workflow_run_id.as_deref())
+            .and_then(|p| {
+                tree.steps
+                    .iter()
+                    .position(|ps| {
+                        ps.run_id == p && ps.child_run_id.as_deref() == Some(s.run_id.as_str())
+                    })
+                    .map(|idx| (p, idx))
+            })
+            .unwrap_or((s.run_id.as_str(), i));
+        let slot = match starts.iter().position(|(o, _)| *o == owner) {
+            Some(n) => n,
+            None => {
+                starts.push((owner, BTreeMap::new()));
+                starts.len() - 1
+            }
+        };
+        starts[slot].1.entry(start).or_default().push(i);
+    }
+
+    let mut rounds = Vec::new();
+    for (owner, by_start) in &starts {
+        let mut ordered: Vec<usize> = steps_of_run.get(owner).cloned().unwrap_or_default();
+        ordered.sort_by_key(|&i| (tree.steps[i].position, tree.steps[i].started_at));
+        let mut eff: Vec<i64> = Vec::with_capacity(ordered.len());
+        for &i in &ordered {
+            let it = tree.steps[i].iteration;
+            eff.push(eff.last().map_or(it, |&m| m.max(it)));
+        }
+        let at = |step: usize| ordered.iter().position(|&i| i == step);
+
+        let mut review_starts: Vec<(usize, &Vec<usize>)> = by_start
+            .iter()
+            .filter_map(|(&step, aggs)| at(step).map(|n| (n, aggs)))
+            .collect();
+        review_starts.sort_by_key(|(n, _)| *n);
+
+        let mut bounds: Vec<usize> = Vec::new();
+        for (k, (n, _)) in review_starts.iter().enumerate() {
+            let first_of_iter = |after: usize| {
+                (after..ordered.len())
+                    .find(|&j| eff[j] == eff[*n])
+                    .unwrap_or(*n)
+            };
+            bounds.push(match k {
+                0 => first_of_iter(0),
+                _ => {
+                    let prev = review_starts[k - 1].0;
+                    if eff[*n] > eff[prev] {
+                        first_of_iter(prev + 1)
+                    } else {
+                        *n
+                    }
+                }
+            });
+        }
+
+        for (k, (_, aggs)) in review_starts.iter().enumerate() {
+            let end = bounds.get(k + 1).copied().unwrap_or(ordered.len());
+            let mut members: Vec<usize> = Vec::new();
+            for &i in &ordered[bounds[k]..end] {
+                members.push(i);
+                if let Some(child) = tree.steps[i].child_run_id.as_deref() {
+                    let mut stack = vec![child];
+                    let mut visited: HashSet<&str> = HashSet::new();
+                    while let Some(r) = stack.pop() {
+                        if !visited.insert(r) || !run_by_id.contains_key(r) {
+                            continue;
+                        }
+                        members.extend(steps_of_run.get(r).into_iter().flatten().copied());
+                        stack.extend(children_of.get(r).into_iter().flatten().copied());
+                    }
+                }
+            }
+            members.sort_unstable();
+            members.dedup();
+            rounds.push(Round {
+                members,
+                aggs: (*aggs).clone(),
+            });
+        }
+    }
+    rounds
 }
 
 // ---------------------------------------------------------------------------
@@ -1471,5 +1545,221 @@ mod tests {
         assert!(parse_output(Some("\"not json\"".into()), "R", "s").is_none());
         assert!(parse_output(Some("  ".into()), "R", "s").is_none());
         assert!(parse_output(Some("\"{\\\"a\\\":1}\"".into()), "R", "s").is_some());
+    }
+    const AGG_BLOCK_1: &str =
+        r#"{"overall_approved":false,"blocking_findings":[{"reviewer":"perf"}]}"#;
+    const AGG_BLOCK_2: &str = r#"{"overall_approved":false,"blocking_findings":[{"reviewer":"arch"},{"reviewer":"arch"}]}"#;
+
+    /// One review-pr call nested at iteration 0 (as runkon records it) with its child run.
+    #[allow(clippy::too_many_arguments)]
+    fn nested_review(conn: &Connection, owner: &str, child: &str, at: i64, agg: &str) {
+        wf_run(conn, child, "review-pr", &format!("P{child}"), Some(owner));
+        step(
+            conn,
+            &format!("w{child}"),
+            owner,
+            "workflow:review-pr",
+            0,
+            at,
+            at + 3,
+            Some(child),
+            None,
+        );
+        step(
+            conn,
+            &format!("g{child}"),
+            child,
+            "aggregate",
+            0,
+            at + 1,
+            at + 2,
+            None,
+            Some(agg),
+        );
+    }
+
+    /// Run 01M730B's shape: ticket-to-pr -> iterate-pr with 4 loop iterations. Top-level
+    /// steps carry the real iteration, nested ones are all at iteration 0.
+    fn nested_rounds_fixture(conn: &Connection) {
+        wf_run(conn, "T", "ticket-to-pr", "PT", None);
+        wf_run(conn, "I", "iterate-pr", "PI", Some("T"));
+        step(
+            conn,
+            "wi",
+            "T",
+            "workflow:iterate-pr",
+            0,
+            0,
+            50,
+            Some("I"),
+            None,
+        );
+        let aggs = [AGG_BLOCK, AGG_BLOCK_1, AGG_BLOCK_2, AGG_OK];
+        for k in 0..4i64 {
+            let base = k * 10 + 1;
+            let ak = format!("ar{k}");
+            step(
+                conn,
+                &format!("rb{k}"),
+                "I",
+                "rebase",
+                k,
+                base,
+                base,
+                Some(&ak),
+                None,
+            );
+            agent(conn, &ak, "PI", "rebase", base, 0.1 * (k + 1) as f64, 10);
+            nested_review(conn, "I", &format!("C{k}"), base + 1, aggs[k as usize]);
+            if k < 3 {
+                step(
+                    conn,
+                    &format!("tr{k}"),
+                    "I",
+                    "triage",
+                    0,
+                    base + 5,
+                    base + 5,
+                    None,
+                    Some(TRIAGE),
+                );
+                let v = if k == 0 { VERIFY_FAIL } else { VERIFY_OK };
+                step(
+                    conn,
+                    &format!("vf{k}"),
+                    "I",
+                    "verify",
+                    0,
+                    base + 6,
+                    base + 6,
+                    None,
+                    Some(v),
+                );
+            }
+            step(
+                conn,
+                &format!("pu{k}"),
+                "I",
+                "push",
+                k,
+                base + 8,
+                base + 8,
+                None,
+                None,
+            );
+        }
+    }
+
+    #[test]
+    fn nested_review_rounds_split_into_one_cycle_each() {
+        let conn = db();
+        nested_rounds_fixture(&conn);
+        let s = collect_run_stats(&conn, &["T".to_string()]).unwrap();
+        assert_eq!(s.cycles.len(), 4);
+        assert_eq!(s.cycles_to_approval, Some(4));
+        let approved: Vec<_> = s.cycles.iter().map(|c| c.approved).collect();
+        assert_eq!(
+            approved,
+            vec![Some(false), Some(false), Some(false), Some(true)]
+        );
+        let totals: Vec<_> = s.cycles.iter().map(|c| c.blocking_total).collect();
+        assert_eq!(totals, vec![3, 1, 2, 0]);
+        assert_eq!(s.cycles[0].blocking_by_reviewer["security"], 2);
+        assert_eq!(s.cycles[1].blocking_by_reviewer["perf"], 1);
+        assert_eq!(s.cycles[2].blocking_by_reviewer["arch"], 2);
+        assert!(s.cycles[3].blocking_by_reviewer.is_empty());
+        assert!(s.cycles.iter().all(|c| c.reviews == 1));
+        // Triage and verify land in their own round.
+        assert_eq!(s.cycles[0].triage.address, 1);
+        assert_eq!(s.cycles[0].verify.len(), 1);
+        assert!(!s.cycles[0].verify[0].passed);
+        assert_eq!(s.cycles[3].triage, TriageCounts::default());
+        assert!(s.cycles[3].verify.is_empty());
+        // The prologue (rebase) of iteration k belongs to round k+1.
+        for (k, c) in s.cycles.iter().enumerate() {
+            assert!(
+                (c.usage.cost_usd - 0.1 * (k + 1) as f64).abs() < 1e-9,
+                "{k}"
+            );
+        }
+        assert_eq!(s.cycles[1].wall_ms, 8 * 60_000);
+        assert!(s.pre_cycle_verify.is_empty());
+    }
+
+    #[test]
+    fn pushback_re_review_in_one_iteration_is_its_own_round() {
+        let conn = db();
+        wf_run(&conn, "I", "iterate-pr", "PI", None);
+        step(&conn, "rb", "I", "rebase", 0, 1, 1, None, None);
+        nested_review(&conn, "I", "CA", 3, AGG_BLOCK);
+        step(&conn, "tr", "I", "triage", 0, 7, 7, None, Some(TRIAGE));
+        nested_review(&conn, "I", "CB", 9, AGG_OK);
+        let s = collect_run_stats(&conn, &["I".to_string()]).unwrap();
+        assert_eq!(s.cycles.len(), 2);
+        assert_eq!(s.cycles[0].approved, Some(false));
+        assert_eq!(s.cycles[0].triage.address, 1);
+        assert_eq!(s.cycles[1].approved, Some(true));
+        assert_eq!(s.cycles[1].triage, TriageCounts::default());
+        assert_eq!(s.cycles_to_approval, Some(2));
+        // Round 1 spans the rebase to the triage (minute 1..7), round 2 the re-review call (9..12).
+        assert_eq!(s.cycles[0].wall_ms, 6 * 60_000);
+        assert_eq!(s.cycles[1].wall_ms, 3 * 60_000);
+    }
+
+    #[test]
+    fn reused_review_aggregator_is_its_own_round() {
+        let conn = db();
+        wf_run(&conn, "I", "iterate-pr", "PI", None);
+        step(&conn, "rb0", "I", "rebase", 0, 1, 1, None, None);
+        nested_review(&conn, "I", "C", 2, AGG_BLOCK);
+        step(&conn, "pu0", "I", "push", 0, 6, 6, None, None);
+        step(&conn, "rb1", "I", "rebase", 1, 7, 7, None, None);
+        step(
+            &conn,
+            "reuse",
+            "I",
+            "reuse-review",
+            0,
+            8,
+            9,
+            None,
+            Some(AGG_OK),
+        );
+        step(&conn, "pu1", "I", "push", 1, 10, 10, None, None);
+        let s = collect_run_stats(&conn, &["I".to_string()]).unwrap();
+        assert_eq!(s.cycles.len(), 2);
+        assert_eq!(s.cycles[0].approved, Some(false));
+        assert_eq!(s.cycles[1].approved, Some(true));
+        assert_eq!(s.cycles[1].reviews, 1);
+        assert_eq!(s.cycles[1].wall_ms, 3 * 60_000);
+        assert_eq!(s.cycles_to_approval, Some(2));
+    }
+
+    #[test]
+    fn single_nested_round_is_one_cycle_with_its_prologue() {
+        let conn = db();
+        wf_run(&conn, "T", "ticket-to-pr", "PT", None);
+        wf_run(&conn, "I", "iterate-pr", "PI", Some("T"));
+        step(
+            &conn,
+            "wi",
+            "T",
+            "workflow:iterate-pr",
+            0,
+            0,
+            20,
+            Some("I"),
+            None,
+        );
+        step(&conn, "rb", "I", "rebase", 0, 1, 1, Some("ar"), None);
+        agent(&conn, "ar", "PI", "rebase", 1, 0.5, 10);
+        nested_review(&conn, "I", "C", 2, AGG_OK);
+        step(&conn, "pu", "I", "push", 0, 8, 8, None, None);
+        let s = collect_run_stats(&conn, &["T".to_string()]).unwrap();
+        assert_eq!(s.cycles.len(), 1);
+        assert_eq!(s.cycles[0].approved, Some(true));
+        assert_eq!(s.cycles_to_approval, Some(1));
+        assert!((s.cycles[0].usage.cost_usd - 0.5).abs() < 1e-9);
+        assert_eq!(s.cycles[0].wall_ms, 7 * 60_000);
     }
 }

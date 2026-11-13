@@ -30,6 +30,8 @@ Read the numbers from `conductor_run_stats` with `json = true` (or `conductor wo
 | Rounds to approval | `.cycles_to_approval` (null when never approved) |
 | Blocking findings per round | `.cycles[].blocking_total`, by reviewer in `.cycles[].blocking_by_reviewer` |
 
+A cycle is one review round: each review-pr call is its own round, and so are a pushback re-review and a reused review.
+
 Cross-check: a round with `approved: false` should have a non-zero `blocking_total`. If it reads as 0 or null, the path is wrong; look at the raw JSON before filling the table.
 
 If `~/.cache/claude-notify/usage.json` exists, note the current 5-hour and 7-day usage (`rate_limits.five_hour.used_percentage`, `rate_limits.seven_day.used_percentage`). Say if its `seen_at` is stale; don't guess numbers.
