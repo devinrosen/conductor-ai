@@ -59,6 +59,12 @@ assert_stdout_contains "The hook does not run on dry runs."
 assert_stdout_contains "It never run twice per push."
 assert_stdout_contains "The id is not verified by the caller."
 
+case_begin "sentences with a tooling word before 'not run' survive"
+body "$(contexts "$(entry plan x "$PLAN")" "$(entry implement 'The build step does not run on dry runs. Added tests so the hook never runs twice.')")"
+assert_exit 0
+assert_stdout_contains "The build step does not run on dry runs."
+assert_stdout_contains "Added tests so the hook never runs twice."
+
 case_begin "tooling not-run claims are still dropped"
 body "$(contexts "$(entry plan x "$PLAN")" "$(entry implement 'Kept the loop. The tests were not run. Clippy has not been run. Done.')")"
 assert_exit 0
