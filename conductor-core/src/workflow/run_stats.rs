@@ -1454,8 +1454,8 @@ mod tests {
         let c1 = &s.cycles[0];
         assert_eq!(c1.approved, Some(false));
         assert_eq!(c1.blocking_total, 3);
-        assert_eq!(c1.blocking_by_reviewer["security"], 2);
-        assert_eq!(c1.blocking_by_reviewer["arch"], 1);
+        assert_eq!(c1.blocking_by_reviewer["review-security"], 2);
+        assert_eq!(c1.blocking_by_reviewer["review-arch"], 1);
         assert_eq!((c1.triage.address, c1.triage.pushback), (1, 1));
         assert_eq!(c1.verify.len(), 1);
         assert_eq!(c1.verify[0].failed_checks, vec!["clippy".to_string()]);
