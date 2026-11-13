@@ -669,7 +669,8 @@ mod tests {
         assert!(r.notes.is_empty(), "{:?}", r.notes);
     }
 
-    const AGG_APPROVED: &str = r#"{"markers":[],"context":"c","blocking_findings":[],"overall_approved":true}"#;
+    const AGG_APPROVED: &str =
+        r#"{"markers":[],"context":"c","blocking_findings":[],"overall_approved":true}"#;
 
     #[test]
     fn posted_verdict_overrides_aggregator() {
@@ -689,7 +690,9 @@ mod tests {
         assert_eq!(r.approved, Some(false));
         assert_eq!(r.review.as_ref().unwrap()["overall_approved"], true);
         assert!(
-            r.notes.iter().any(|n| n.contains("overrides the aggregator")),
+            r.notes
+                .iter()
+                .any(|n| n.contains("overrides the aggregator")),
             "{:?}",
             r.notes
         );
@@ -714,7 +717,11 @@ mod tests {
         let r = load_review_report(&conn, "R").unwrap();
         assert_eq!(r.approved, Some(true));
         assert_eq!(r.posted_review.unwrap().overall_approved, None);
-        assert!(!r.notes.iter().any(|n| n.contains("overrides")), "{:?}", r.notes);
+        assert!(
+            !r.notes.iter().any(|n| n.contains("overrides")),
+            "{:?}",
+            r.notes
+        );
     }
 
     #[test]
