@@ -72,6 +72,13 @@ assert_stdout_not_contains "tests were not run"
 assert_stdout_not_contains "Clippy has not"
 assert_stdout_contains "Kept the loop."
 
+case_begin "contracted tooling not-run claims are dropped"
+body "$(contexts "$(entry plan x "$PLAN")" "$(entry implement "Kept the loop. The tests weren't run. Clippy hasn't been run. Done.")")"
+assert_exit 0
+assert_stdout_not_contains "weren't run"
+assert_stdout_not_contains "Clippy hasn't"
+assert_stdout_contains "Kept the loop."
+
 case_begin "quick-fix-pr shape: no plan, implement-ticket summary becomes the Summary"
 body "$(contexts "$(entry implement-ticket 'Fixed the crash. Nothing was built or tested here.')" "$(entry verify PASS "$VERIFY_PASS")")"
 assert_exit 0
