@@ -1,8 +1,8 @@
 # Pipeline script tests
 
 Fixture tests for the decision logic in `.conductor/scripts/`: `aggregate-reviews.sh`,
-`show-plan-decisions.sh`, the `detect-*.sh` scripts with `lib-diff-range.sh`, `fmt-fix.sh` and
-`submit-review.sh`.
+`show-plan-decisions.sh`, the `detect-*.sh` scripts with `lib-diff-range.sh`, `fmt-fix.sh`,
+`submit-review.sh` and `pr-body.sh` (the PR description builder).
 Plain bash (3.2 compatible), plus `jq`, `git` and `rustfmt`. CI runs them as the **Pipeline Scripts**
 job when `.conductor/scripts/**` or `.conductor/tests/**` changes.
 
@@ -19,7 +19,8 @@ results don't depend on where you run them. The tests assert markers and decisio
 
 Add `case_begin "name"`, run the script with `run_script NAME VAR=value ...`, then assert with
 `assert_exit`, `assert_marker`, `assert_no_markers`, `assert_jq '<jq over FLOW_OUTPUT>'`,
-`assert_context_contains` or `assert_stderr_contains` (see `lib.sh`). New decision logic in a script
+`assert_context_contains`, `assert_stderr_contains` or, for scripts that print plain text,
+`assert_stdout_contains` / `assert_stdout_not_contains` (see `lib.sh`). New decision logic in a script
 needs a case that fails without it.
 
 Beware bash 3.2: a `\"` inside a single-quoted jq program nested in `"$( )"` loses its backslash.

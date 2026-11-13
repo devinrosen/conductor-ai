@@ -21,7 +21,7 @@ These answers override the defaults in `PLAN.md`. Record them under the plan's "
 Steps:
 1. Read `PLAN.md` thoroughly before writing any code.
 2. Implement all changes described in the plan, following the existing code style and conventions.
-3. Write a brief FLOW_OUTPUT. Its context starts with one to three sentences on what you changed and why, including any behaviour change a user would notice and anything you deliberately left out; the push step puts this in the PR description. Then list which crates and files you modified, so the verify step can scope its test commands:
+3. Write a brief FLOW_OUTPUT. Its context starts with one to three sentences on what you changed and why, including any behaviour change a user would notice and anything you deliberately left out; the push step puts this in the PR description. Leave build and test status out of the context and the commit messages (no "not built/tested", no "left to verify"): the verify step runs after you, and the push step reports what it ran in the PR description. Then list which crates and files you modified, so the verify step can scope its test commands:
    ```
    <<<FLOW_OUTPUT>>>
    {"markers": [], "context": "Resumed runs now skip completed steps by occurrence, not by name, so a repeated step name no longer skips the wrong step. Modified: conductor-core/src/workflow/coordinator.rs, conductor-core/src/agent/manager/mod.rs (crates: conductor-core)"}
