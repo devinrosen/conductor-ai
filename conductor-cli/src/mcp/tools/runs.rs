@@ -2192,35 +2192,80 @@ mod tests {
         assert_eq!(r.is_error, Some(true));
     }
 
-    #[test]
-    fn test_get_review_happy_path() {
-        let (_f, conductor) = make_test_conductor();
-        let conn = &conductor.conn;
+    /// Seed a completed `review-pr` run `run_id` with one step per
+    /// `(step_name, structured_output)` pair.
+    fn seed_review_run(conn: &rusqlite::Connection, run_id: &str, steps: &[(&str, &str)]) {
         conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
         conn.execute(
             "INSERT INTO workflow_runs (id, workflow_name, parent_run_id, status, dry_run, \
              trigger, started_at, iteration, inputs) \
-             VALUES ('RV', 'review-pr', 'PA', 'completed', 0, 'manual', '2026-01-01T00:00:00Z', 0, \
+             VALUES (?1, 'review-pr', 'PA', 'completed', 0, 'manual', '2026-01-01T00:00:00Z', 0, \
              '{\"pr_number\":\"3\",\"scope\":\"full\",\"since\":\"\"}')",
-            [],
+            [run_id],
         )
         .unwrap();
-        conn.execute(
-            "INSERT INTO workflow_run_steps (id, workflow_run_id, step_name, role, status, \
-             position, started_at, iteration, structured_output) VALUES \
-             ('S1', 'RV', 'review-aggregator', 'actor', 'completed', 0, '2026-01-01T00:01:00Z', 0, \
-             '{\"overall_approved\":true,\"blocking_findings\":[],\"markers\":[]}')",
-            [],
-        )
-        .unwrap();
+        for (i, (name, output)) in steps.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO workflow_run_steps (id, workflow_run_id, step_name, role, status, \
+                 position, started_at, iteration, structured_output) VALUES \
+                 (?1, ?2, ?3, 'actor', 'completed', ?4, '2026-01-01T00:01:00Z', 0, ?5)",
+                rusqlite::params![format!("S{i}"), run_id, name, i as i64, output],
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn test_get_review_happy_path() {
+        let (_f, conductor) = make_test_conductor();
+        seed_review_run(
+            &conductor.conn,
+            "RV",
+            &[(
+                "review-aggregator",
+                r#"{"overall_approved":true,"blocking_findings":[],"markers":[]}"#,
+            )],
+        );
         let r = tool_get_review(&conductor, &args_with("run_id", "RV"));
         assert_ne!(r.is_error, Some(true));
         let text = r.content[0].as_text().map(|t| t.text.clone()).unwrap();
         let v: Value = serde_json::from_str(&text).expect("json");
         assert_eq!(v["run_id"], "RV");
         assert_eq!(v["review"]["overall_approved"], true);
+        assert_eq!(v["approved"], true);
         assert!(v["review"].get("markers").is_none());
         assert_eq!(v["scope"]["kind"], "full");
+    }
+
+    #[test]
+    fn test_get_review_posted_verdict_overrides_aggregator() {
+        let (_f, conductor) = make_test_conductor();
+        seed_review_run(
+            &conductor.conn,
+            "RV2",
+            &[
+                (
+                    "review-aggregator",
+                    r#"{"overall_approved":true,"blocking_findings":[],"markers":[]}"#,
+                ),
+                (
+                    "submit-review",
+                    r#"{"overall_approved":false,"event":"COMMENT","review_id":5,"review_url":"u"}"#,
+                ),
+            ],
+        );
+        let r = tool_get_review(&conductor, &args_with("run_id", "RV2"));
+        assert_ne!(r.is_error, Some(true));
+        let text = r.content[0].as_text().map(|t| t.text.clone()).unwrap();
+        let v: Value = serde_json::from_str(&text).expect("json");
+        assert_eq!(v["approved"], false);
+        assert_eq!(v["review"]["overall_approved"], true);
+        assert_eq!(v["posted_review"]["overall_approved"], false);
+        assert!(v["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("overrides the aggregator")));
     }
 
     #[test]
