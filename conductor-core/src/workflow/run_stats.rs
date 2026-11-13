@@ -1079,7 +1079,11 @@ pub fn format_run_stats(s: &RunStats) -> String {
                     fmt_dur(c.wall_ms),
                     fmt_cost(c.usage.cost_usd),
                     fmt_approved(c.approved).into(),
-                    format!("{} ({})", c.blocking_total, fmt_blocking(c, &s.reviewer_names)),
+                    format!(
+                        "{} ({})",
+                        c.blocking_total,
+                        fmt_blocking(c, &s.reviewer_names)
+                    ),
                     format!(
                         "{}/{}/{}",
                         c.triage.address, c.triage.pushback, c.triage.clarify
@@ -1829,9 +1833,7 @@ mod tests {
     }
 
     fn dry_agg(name: &str) -> String {
-        format!(
-            r#"{{"overall_approved":false,"blocking_findings":[{{"reviewer":"{name}"}}]}}"#
-        )
+        format!(r#"{{"overall_approved":false,"blocking_findings":[{{"reviewer":"{name}"}}]}}"#)
     }
 
     /// Three review rounds whose aggregator names the DRY reviewer three ways.
@@ -1906,7 +1908,10 @@ mod tests {
             assert_eq!(c.blocking_by_reviewer["review-dry-abstraction"], 1);
         }
         assert_eq!(s.reviewer_names.len(), 1);
-        assert_eq!(s.reviewer_names["review-dry-abstraction"], "DRY abstraction");
+        assert_eq!(
+            s.reviewer_names["review-dry-abstraction"],
+            "DRY abstraction"
+        );
         let text = format_run_stats(&s);
         assert!(text.contains("DRY abstraction 1"));
         assert!(!text.contains("Dry abstraction"));
