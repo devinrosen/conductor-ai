@@ -25,8 +25,10 @@ printf '%s' "$contexts" | jq -r '
     def trim: gsub("^\\s+|\\s+$"; "");
     # A sentence that says the code was not built/tested/run (#3333). Keep narrow.
     def untested:
-      test("(\\bnot|\\bnever|n'"'"'t)\\s+(been\\s+|yet\\s+)?(built|tested|compiled|run|verified)\\b"; "i")
+      test("(\\bnot|\\bnever|n'"'"'t)\\s+(been\\s+|yet\\s+)?(built|tested|compiled)\\b"; "i")
       or test("\\b(nothing|none of (it|this|these))\\b.*\\b(built|tested|compiled)\\b"; "i")
+      or test("(\\bnot|\\bnever|n'"'"'t)\\s+(been\\s+|yet\\s+)?(run|verified)\\b.*\\b(cargo|build|tests?|clippy|fmt)\\b"; "i")
+      or test("\\b(cargo|build|tests?|clippy|fmt)\\b.*(\\bnot|\\bnever|n'"'"'t)\\s+(been\\s+|yet\\s+)?(run|verified)\\b"; "i")
       or test("\\bdid(n'"'"'t| not)\\s+run\\b.*\\b(cargo|build|tests?|clippy|fmt)\\b"; "i")
       or test("^\\s*(not run|untested|not tested|not built)\\s*:"; "i")
       or test("\\bleft (it )?to (the )?verify\\b"; "i")

@@ -52,6 +52,20 @@ assert_exit 0
 assert_stdout_contains "The new test no longer runs the old code path."
 assert_stdout_contains "Tests were added for the parser."
 
+case_begin "behaviour sentences with run/verified survive"
+body "$(contexts "$(entry plan x "$PLAN")" "$(entry implement 'The hook does not run on dry runs. It never run twice per push. The id is not verified by the caller.')")"
+assert_exit 0
+assert_stdout_contains "The hook does not run on dry runs."
+assert_stdout_contains "It never run twice per push."
+assert_stdout_contains "The id is not verified by the caller."
+
+case_begin "tooling not-run claims are still dropped"
+body "$(contexts "$(entry plan x "$PLAN")" "$(entry implement 'Kept the loop. The tests were not run. Clippy has not been run. Done.')")"
+assert_exit 0
+assert_stdout_not_contains "tests were not run"
+assert_stdout_not_contains "Clippy has not"
+assert_stdout_contains "Kept the loop."
+
 case_begin "quick-fix-pr shape: no plan, implement-ticket summary becomes the Summary"
 body "$(contexts "$(entry implement-ticket 'Fixed the crash. Nothing was built or tested here.')" "$(entry verify PASS "$VERIFY_PASS")")"
 assert_exit 0
