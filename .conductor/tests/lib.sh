@@ -177,3 +177,18 @@ assert_context_contains() {
     *) fail "context does not contain [$1]; context: $ctx" ;;
   esac
 }
+
+# assert_stdout_contains TEXT / assert_stdout_not_contains TEXT — for scripts that
+# print plain text (pr-body.sh) rather than a FLOW_OUTPUT block.
+assert_stdout_contains() {
+  case "$STDOUT" in
+    *"$1"*) ;;
+    *) fail "stdout does not contain [$1]; stdout: $STDOUT" ;;
+  esac
+}
+
+assert_stdout_not_contains() {
+  case "$STDOUT" in
+    *"$1"*) fail "stdout contains [$1]; stdout: $STDOUT" ;;
+  esac
+}

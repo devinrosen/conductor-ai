@@ -47,33 +47,12 @@ SKIP_E2E=1 git_push_retry -u origin "$current_branch"
 # SIGPIPE and fail the pipeline under pipefail.
 pr_title=$(git log --reverse --no-merges --format=%s "origin/$base..HEAD" | sed -n 1p)
 
-# The PR description comes from what the run produced (#3148): the plan's
-# summary and risks, and implement's own summary of what it changed
-# (implement-ticket's in quick-fix-pr, which has no plan). PRIOR_CONTEXTS is
-# the engine's {{prior_contexts}} JSON array of {step, context,
-# structured_output, ...}, one entry per completed step in run order (the
-# engine appends, so a repeated name keeps every occurrence). The first
-# implement entry describes the change; later ones are verify-loopback fixes. Without usable contexts, fall back to
+# The PR description comes from what the run produced (#3148, #3333): the plan's
+# summary and risks, implement's summary of what it changed and what verify ran.
+# pr-body.sh builds it from PRIOR_CONTEXTS; without usable contexts, fall back to
 # --fill (the commits' bodies), as before.
 build_pr_body() {
-  local contexts="${PRIOR_CONTEXTS:-}"
-  case "$contexts" in
-    ''|*'{{'*) return 1 ;;
-  esac
-  printf '%s' "$contexts" | jq -r '
-    def plan: [.[] | select(.step == "plan" and .structured_output != null)]
-              | last | (.structured_output // "null") | (try fromjson catch null);
-    def impl: [.[] | select(.step == "implement" or .step == "implement-ticket")]
-              | first | (.context // "") | gsub("^\\s+|\\s+$"; "");
-    plan as $p | impl as $i
-    | (($p.summary // "") | gsub("^\\s+|\\s+$"; "")) as $s
-    | ($p.risks // [] | map(select(type == "string" and length > 0))) as $r
-    | if $s == "" and $i == "" then empty else
-        ( if $s != "" then "## Summary\n\n\($s)" else "## Summary\n\n\($i)" end )
-        + ( if $s != "" and $i != "" then "\n\n## Implementation\n\n\($i)" else "" end )
-        + ( if ($r | length) > 0 then "\n\n## Risks and open questions\n\n" + ($r | map("- " + .) | join("\n")) else "" end )
-      end
-  '
+  bash "$(dirname "$0")/pr-body.sh"
 }
 
 # Warn (never fail) when the contexts can't be read, separately from the
