@@ -32,6 +32,14 @@ if ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+# When this step started, for finding the review it posts (step 7, #3331).
+# GitHub's submitted_at is server time and the local clock can drift, so the
+# lookup accepts reviews from POSTED_REVIEW_CLOCK_SKEW seconds earlier. Earlier
+# conductor reviews come from previous review rounds, minutes apart, so a
+# two-minute allowance can't pick one up.
+STEP_STARTED_EPOCH=$(date +%s)
+POSTED_REVIEW_CLOCK_SKEW=120
+
 # Only the exact string "false" turns filing off. An unset or unsubstituted
 # value keeps the default behaviour (#3090).
 FILE_OFF_DIFF_ENABLED="true"
@@ -451,8 +459,12 @@ echo "${REVIEW_BODY}" > "${REVIEW_BODY_FILE}"
 # gh_retry's retry notes and the final gh error go to the step log (stderr).
 PR_AUTHOR=$(gh_retry gh pr view "${PR_NUMBER}" --json author -q .author.login || true)
 CURRENT_USER=$(gh_retry gh api user -q .login || true)
-if [ -z "${PR_AUTHOR}" ] || [ -z "${CURRENT_USER}" ]; then
-  echo "Warning: could not resolve the PR author or current gh user; assuming this is not your own PR." >&2
+if [ -z "${PR_AUTHOR}" ]; then
+  echo "Warning: could not resolve the PR author; assuming this is not your own PR." >&2
+elif [ -z "${CURRENT_USER}" ]; then
+  # Expected under the conductor-ai-reviewer App token (#3331): the App never
+  # authors the PR, so REQUEST_CHANGES is the right event.
+  echo "gh api user is unavailable (a GitHub App token?); treating this as not your own PR."
 fi
 IS_OWN_PR="false"
 if [ -n "${PR_AUTHOR}" ] && [ -n "${CURRENT_USER}" ] && [ "${PR_AUTHOR}" = "${CURRENT_USER}" ]; then
@@ -485,32 +497,44 @@ echo "Review submitted successfully."
 # 7. Record the posted review (#3092)
 #
 # `gh pr review` prints no URL, so look up the review just posted: the newest
-# conductor review by this user. `conductor workflow review-show` and the
+# conductor review submitted since this step started, preferring one by the
+# current gh user, else by a bot. Pipeline reviews are posted by the
+# conductor-ai-reviewer App, where `gh api user` fails, so the lookup must not
+# depend on the user (#3331). `conductor workflow review-show` and the
 # conductor_get_review MCP tool read it from this step's output. Best-effort:
-# the review is already posted, so a failed lookup leaves the URL null with a
-# warning and never fails the step.
+# the review is already posted, so a failed lookup leaves the URL null, says so
+# in the FLOW_OUTPUT context (stderr isn't kept, #3310) and never fails the step.
 # ---------------------------------------------------------------------------
 REVIEW_ID=""
 REVIEW_URL=""
-if [ -n "${CURRENT_USER}" ] && REVIEWS_JSON=$(gh_retry gh api --paginate "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews"); then
+if REVIEWS_JSON=$(gh_retry gh api --paginate "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews"); then
   # --paginate emits one JSON array per page; slurp and flatten them.
-  LOOKUP=$(printf '%s' "${REVIEWS_JSON}" | jq -rs --arg user "${CURRENT_USER}" '
-    [.[][]? | select(.user.login == $user and ((.body // "") | contains("<!-- conductor-review -->")))]
-    | last // empty | "\(.id)\t\(.html_url)"' 2>/dev/null || true)
+  LOOKUP=$(printf '%s' "${REVIEWS_JSON}" | jq -rs --arg user "${CURRENT_USER}" \
+    --argjson since "$((STEP_STARTED_EPOCH - POSTED_REVIEW_CLOCK_SKEW))" '
+    [.[][]?
+     | select(((.body // "") | contains("<!-- conductor-review -->"))
+              and (.submitted_at != null)
+              and ((.submitted_at | fromdateiso8601? // 0) >= $since))
+     | . + {_rank: (if $user != "" and .user.login == $user then 2
+                    elif .user.type == "Bot" then 1 else 0 end)}]
+    | sort_by(._rank, .submitted_at, .id) | last // empty
+    | "\(.id)\t\(.html_url)"' 2>/dev/null || true)
   if [ -n "${LOOKUP}" ]; then
     REVIEW_ID="${LOOKUP%%$'\t'*}"
     REVIEW_URL="${LOOKUP#*$'\t'}"
   fi
 fi
+LOOKUP_NOTE=""
 if [ -z "${REVIEW_URL}" ]; then
   echo "Warning: could not look up the URL of the review just posted on PR #${PR_NUMBER}; it is not recorded." >&2
+  LOOKUP_NOTE=" (its URL could not be looked up)"
 fi
 
 if FLOW_JSON=$(jq -nc \
   --arg id "${REVIEW_ID}" --arg url "${REVIEW_URL}" --arg event "${EVENT}" \
-  --arg pr "${PR_NUMBER}" --argjson approved "${OVERALL_APPROVED}" '
+  --arg pr "${PR_NUMBER}" --arg note "${LOOKUP_NOTE}" --argjson approved "${OVERALL_APPROVED}" '
   {markers: [],
-   context: ("Submitted \($event) review for PR #\($pr)" + (if $url != "" then ": \($url)" else "" end)),
+   context: ("Submitted \($event) review for PR #\($pr)" + (if $url != "" then ": \($url)" else $note end)),
    review_id: (if $id == "" then null else ($id | tonumber? // null) end),
    review_url: (if $url == "" then null else $url end),
    event: $event,
