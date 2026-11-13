@@ -672,20 +672,28 @@ mod tests {
     const AGG_APPROVED: &str =
         r#"{"markers":[],"context":"c","blocking_findings":[],"overall_approved":true}"#;
 
+    /// Make the aggregator approve and give `submit-review` the output `submit`.
+    fn set_aggregator_approved_and_submit(conn: &Connection, submit: &str) {
+        for (step_name, output) in [
+            ("review-aggregator", AGG_APPROVED),
+            ("submit-review", submit),
+        ] {
+            conn.execute(
+                "UPDATE workflow_run_steps SET structured_output = ?1 WHERE step_name = ?2",
+                [output, step_name],
+            )
+            .unwrap();
+        }
+    }
+
     #[test]
     fn posted_verdict_overrides_aggregator() {
         let conn = db();
         full_fixture(&conn, r#"{"pr_number":"7","scope":"full","since":""}"#);
-        conn.execute(
-            "UPDATE workflow_run_steps SET structured_output = ?1 WHERE step_name = 'review-aggregator'",
-            [AGG_APPROVED],
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE workflow_run_steps SET structured_output = ?1 WHERE step_name = 'submit-review'",
-            [r#"{"overall_approved":false,"event":"COMMENT","review_id":5,"review_url":"u","markers":[]}"#],
-        )
-        .unwrap();
+        set_aggregator_approved_and_submit(
+            &conn,
+            r#"{"overall_approved":false,"event":"COMMENT","review_id":5,"review_url":"u","markers":[]}"#,
+        );
         let r = load_review_report(&conn, "R").unwrap();
         assert_eq!(r.approved, Some(false));
         assert_eq!(r.review.as_ref().unwrap()["overall_approved"], true);
@@ -704,16 +712,10 @@ mod tests {
     fn posted_without_verdict_falls_back_to_aggregator() {
         let conn = db();
         full_fixture(&conn, r#"{"pr_number":"7","scope":"full","since":""}"#);
-        conn.execute(
-            "UPDATE workflow_run_steps SET structured_output = ?1 WHERE step_name = 'review-aggregator'",
-            [AGG_APPROVED],
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE workflow_run_steps SET structured_output = ?1 WHERE step_name = 'submit-review'",
-            [r#"{"review_id":1,"review_url":"u","event":"APPROVE"}"#],
-        )
-        .unwrap();
+        set_aggregator_approved_and_submit(
+            &conn,
+            r#"{"review_id":1,"review_url":"u","event":"APPROVE"}"#,
+        );
         let r = load_review_report(&conn, "R").unwrap();
         assert_eq!(r.approved, Some(true));
         assert_eq!(r.posted_review.unwrap().overall_approved, None);
