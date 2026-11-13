@@ -2,7 +2,7 @@
 
 Fixture tests for the decision logic in `.conductor/scripts/`: `aggregate-reviews.sh`,
 `show-plan-decisions.sh`, the `detect-*.sh` scripts with `lib-diff-range.sh`, `fmt-fix.sh`,
-`submit-review.sh` and `pr-body.sh` (the PR description builder).
+`submit-review.sh`, `pr-body.sh` (the PR description builder) and `verify.sh` (which checks run).
 Plain bash (3.2 compatible), plus `jq`, `git` and `rustfmt`. CI runs them as the **Pipeline Scripts**
 job when `.conductor/scripts/**` or `.conductor/tests/**` changes.
 
@@ -32,6 +32,13 @@ Pass JSON strings with `jq --arg`.
 drive it: `user` (without it `gh api user` fails like a GitHub App token), `author`, `poster`,
 `reviews.json` (one JSON array per page; `gh pr review` appends to the last) and `drop_post`. A call
 the stub doesn't know fails, so a test can't reach the network. Copy it for another script that calls `gh`.
+
+## Stubbing cargo
+
+`test-verify.sh` runs `verify.sh` in scratch repos with a stub `cargo` first on `PATH`. The stub logs
+its arguments to `$CARGO_STUB_DIR/calls`, and a `fail_build` file there makes `cargo build` fail. Each
+scratch repo commits a **fake** `.conductor/tests/run.sh`, which is what verify runs, so the real suite
+never recurses into itself.
 
 ## Recording an aggregator fixture
 
