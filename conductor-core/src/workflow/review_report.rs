@@ -46,6 +46,9 @@ pub struct PostedReview {
     pub id: Option<i64>,
     /// `APPROVE`, `COMMENT` or `REQUEST_CHANGES`.
     pub event: Option<String>,
+    /// The verdict the submit-review step posted; may differ from the aggregator's.
+    #[serde(default)]
+    pub overall_approved: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,6 +64,9 @@ pub struct ReviewReport {
     pub parent_workflow_run_id: Option<String>,
     pub scope: ReviewScope,
     pub reviewers: Vec<ReviewerStatus>,
+    /// The final verdict: the posted review's `overall_approved` when recorded, else the
+    /// aggregator's.
+    pub approved: Option<bool>,
     /// The aggregator's output (`blocking_findings`, `answered_findings`,
     /// `off_diff_findings`, `overall_approved`, ...) without `markers` and `context`.
     pub review: Option<Value>,
@@ -252,7 +258,15 @@ fn posted_review(output: &Value) -> Option<PostedReview> {
         .get("event")
         .and_then(Value::as_str)
         .map(String::from);
-    (url.is_some() || id.is_some() || event.is_some()).then_some(PostedReview { url, id, event })
+    let overall_approved = output.get("overall_approved").and_then(Value::as_bool);
+    (url.is_some() || id.is_some() || event.is_some() || overall_approved.is_some()).then_some(
+        PostedReview {
+            url,
+            id,
+            event,
+            overall_approved,
+        },
+    )
 }
 
 /// Build the report for one `review-pr` run.
@@ -397,6 +411,25 @@ pub fn load_review_report(conn: &Connection, run_id: &str) -> Result<ReviewRepor
         notes.push("the review was posted but its URL could not be looked up".into());
     }
 
+    let agg_approved = review
+        .as_ref()
+        .and_then(|v| v.get("overall_approved"))
+        .and_then(Value::as_bool);
+    let posted_approved = posted.as_ref().and_then(|p| p.overall_approved);
+    let approved = posted_approved.or(agg_approved);
+    if let (Some(p), Some(a)) = (posted_approved, agg_approved) {
+        if p != a {
+            let event = posted
+                .as_ref()
+                .and_then(|p| p.event.as_deref())
+                .unwrap_or("unknown");
+            notes.push(format!(
+                "the posted review overrides the aggregator: submit-review posted {} (event {event}), the aggregator reported overall_approved={a}",
+                if p { "approved" } else { "changes requested" }
+            ));
+        }
+    }
+
     Ok(ReviewReport {
         run_id: run_id.to_string(),
         workflow_name,
@@ -409,6 +442,7 @@ pub fn load_review_report(conn: &Connection, run_id: &str) -> Result<ReviewRepor
         parent_workflow_run_id: parent,
         scope,
         reviewers,
+        approved,
         review,
         aggregator_status,
         posted_review: posted,
@@ -466,15 +500,10 @@ pub fn format_review_report(r: &ReviewReport) -> String {
             let _ = writeln!(out, "Scope:       {}", r.scope.kind);
         }
     }
-    let approved = r
-        .review
-        .as_ref()
-        .and_then(|v| v.get("overall_approved"))
-        .and_then(Value::as_bool);
     let _ = writeln!(
         out,
         "Approved:    {}",
-        match approved {
+        match r.approved {
             Some(true) => "yes",
             Some(false) => "no",
             None => "unknown",
@@ -635,7 +664,66 @@ mod tests {
         assert_eq!(p.id, Some(42));
         assert_eq!(p.event.as_deref(), Some("REQUEST_CHANGES"));
         assert!(p.url.unwrap().ends_with("pullrequestreview-42"));
+        assert_eq!(p.overall_approved, Some(false));
+        assert_eq!(r.approved, Some(false));
         assert!(r.notes.is_empty(), "{:?}", r.notes);
+    }
+
+    const AGG_APPROVED: &str =
+        r#"{"markers":[],"context":"c","blocking_findings":[],"overall_approved":true}"#;
+
+    /// Make the aggregator approve and give `submit-review` the output `submit`.
+    fn set_aggregator_approved_and_submit(conn: &Connection, submit: &str) {
+        for (step_name, output) in [
+            ("review-aggregator", AGG_APPROVED),
+            ("submit-review", submit),
+        ] {
+            conn.execute(
+                "UPDATE workflow_run_steps SET structured_output = ?1 WHERE step_name = ?2",
+                [output, step_name],
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn posted_verdict_overrides_aggregator() {
+        let conn = db();
+        full_fixture(&conn, r#"{"pr_number":"7","scope":"full","since":""}"#);
+        set_aggregator_approved_and_submit(
+            &conn,
+            r#"{"overall_approved":false,"event":"COMMENT","review_id":5,"review_url":"u","markers":[]}"#,
+        );
+        let r = load_review_report(&conn, "R").unwrap();
+        assert_eq!(r.approved, Some(false));
+        assert_eq!(r.review.as_ref().unwrap()["overall_approved"], true);
+        assert!(
+            r.notes
+                .iter()
+                .any(|n| n.contains("overrides the aggregator")),
+            "{:?}",
+            r.notes
+        );
+        let text = format_review_report(&r);
+        assert!(text.contains("Approved:    no"), "{text}");
+    }
+
+    #[test]
+    fn posted_without_verdict_falls_back_to_aggregator() {
+        let conn = db();
+        full_fixture(&conn, r#"{"pr_number":"7","scope":"full","since":""}"#);
+        set_aggregator_approved_and_submit(
+            &conn,
+            r#"{"review_id":1,"review_url":"u","event":"APPROVE"}"#,
+        );
+        let r = load_review_report(&conn, "R").unwrap();
+        assert_eq!(r.approved, Some(true));
+        assert_eq!(r.posted_review.unwrap().overall_approved, None);
+        assert!(
+            !r.notes.iter().any(|n| n.contains("overrides")),
+            "{:?}",
+            r.notes
+        );
     }
 
     #[test]
