@@ -12,14 +12,21 @@
 #   ## Verification    what the last verify entry ran, when it passed
 #   ## Risks and open questions
 # Output is empty (exit 0) when there is no plan or implement summary, so the caller falls
-# back to the commit bodies. Exit 1 with no stderr when PRIOR_CONTEXTS is unset or still a
-# template; exit non-zero with jq's error on stderr when it can't be parsed.
+# back to the commit bodies. Exit 1 with no stderr when PRIOR_CONTEXTS is unset, empty or
+# itself a bare {{...}} template; any other value goes to jq, which exits non-zero with its
+# error on stderr when it can't be parsed.
 set -euo pipefail
 
 contexts="${PRIOR_CONTEXTS:-}"
-case "$contexts" in
-  ''|*'{{'*) exit 1 ;;
-esac
+# Exit 1 (no stderr) only when the value is empty or is itself an unsubstituted template
+# such as {{prior_contexts}} (#3350). Step outputs inside a real array may mention {{var}}
+# freely, so don't scan the JSON for braces.
+trimmed="${contexts#"${contexts%%[![:space:]]*}"}"
+trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+tmpl_re='^\{\{[[:alnum:]_.]+\}\}$'
+if [ -z "$trimmed" ] || [[ "$trimmed" =~ $tmpl_re ]]; then
+  exit 1
+fi
 
 printf '%s' "$contexts" | jq -r '
     def trim: gsub("^\\s+|\\s+$"; "");
