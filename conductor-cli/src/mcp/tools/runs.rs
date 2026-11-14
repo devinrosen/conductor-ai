@@ -1629,6 +1629,47 @@ mod tests {
     }
 
     #[test]
+    fn test_get_step_log_reads_script_step_log() {
+        let (f, conductor) = make_test_conductor();
+        let (run_id, step_id) = make_run_with_step(f.path(), "build");
+        let log = std::env::temp_dir().join(format!("mcp-script-log-{step_id}.log"));
+        std::fs::write(&log, "--- stderr ---\nwarning: disk almost full\n").unwrap();
+        let conn = conductor_core::db::open_database(f.path()).expect("open db");
+        conn.execute(
+            "UPDATE workflow_run_steps SET role = 'script', output_file = ?1 WHERE id = ?2",
+            rusqlite::params![log.to_string_lossy(), step_id],
+        )
+        .unwrap();
+
+        let mut args = args_with("run_id", &run_id);
+        args.insert("step_name".to_string(), Value::String("build".to_string()));
+        for mode in ["result", "tail", "full"] {
+            args.insert("mode".to_string(), Value::String(mode.to_string()));
+            let result = tool_get_step_log(&conductor, &args);
+            assert_ne!(result.is_error, Some(true), "mode {mode}");
+            let text = result.content[0]
+                .as_text()
+                .map(|t| t.text.as_str())
+                .unwrap_or("");
+            assert!(text.contains("warning: disk almost full"), "{mode}: {text}");
+        }
+
+        conn.execute(
+            "UPDATE workflow_run_steps SET output_file = NULL WHERE id = ?1",
+            rusqlite::params![step_id],
+        )
+        .unwrap();
+        args.insert("mode".to_string(), Value::String("result".to_string()));
+        let result = tool_get_step_log(&conductor, &args);
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("left no log"), "{text}");
+        std::fs::remove_file(log).ok();
+    }
+
+    #[test]
     fn test_get_run_not_blocked_by_open_write_transaction() {
         // Regression for #3093: a write transaction held open on another
         // connection must not make get_run wait (WAL readers don't block).

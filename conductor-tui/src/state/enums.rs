@@ -370,6 +370,7 @@ pub mod workflow_run_info_row {
 /// created with a linked ticket) so the user can launch an agent or dismiss
 /// instead of choosing a workflow.
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)] // WorkflowDef grew in runkon 0.10 (schedule); short UI list, boxing adds churn
 pub enum WorkflowPickerItem {
     Workflow(conductor_core::workflow::WorkflowDef),
     /// Non-selectable section header row, grouping workflows by their `group` field.

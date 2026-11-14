@@ -67,6 +67,71 @@ pub fn step_output_error_excerpt(conn: &Connection, step: &WorkflowRunStep) -> O
     flow_output_excerpt(&final_result_text(&log_path, run.result_text.as_deref())?)
 }
 
+/// How many stderr lines [`script_stderr_excerpt`] returns.
+pub const STDERR_EXCERPT_LINES: usize = 5;
+/// Longest a stderr excerpt line may be, in characters, before it is cut.
+const STDERR_EXCERPT_LINE_CHARS: usize = 300;
+const STDERR_HEADER: &str = "--- stderr ---";
+const STDOUT_HEADER: &str = "--- stdout (outside FLOW_OUTPUT) ---";
+
+/// The last few non-empty stderr lines from a script step's log, oldest first.
+///
+/// The log is the file runkon wrote for the attempt and recorded in the step row's
+/// `output_file`. Returns `None` when the step isn't a script, has no log, the file is
+/// missing, or its stderr section is empty: this only decorates run detail, so lookups
+/// never fail loudly.
+pub fn script_stderr_excerpt(step: &WorkflowRunStep) -> Option<Vec<String>> {
+    if step.role != runkon_flow::constants::STEP_ROLE_SCRIPT {
+        return None;
+    }
+    let contents = std::fs::read_to_string(step.output_file.as_deref()?).ok()?;
+    stderr_tail(&contents)
+}
+
+/// [`script_stderr_excerpt`] rendered as a text block for run detail: a header naming the
+/// line count and `hint` (where the full log is), then each line indented two spaces
+/// further than `indent`. Every line ends in a newline. `None` when there is no excerpt.
+pub fn script_stderr_block(step: &WorkflowRunStep, hint: &str, indent: &str) -> Option<String> {
+    let lines = script_stderr_excerpt(step)?;
+    let mut out = format!(
+        "{indent}stderr (last {} lines; full log: {hint}):\n",
+        lines.len()
+    );
+    for line in lines {
+        out.push_str(&format!("{indent}  {line}\n"));
+    }
+    Some(out)
+}
+
+fn stderr_tail(log: &str) -> Option<Vec<String>> {
+    let mut in_stderr = false;
+    let mut lines: Vec<&str> = Vec::new();
+    for line in log.lines() {
+        match line {
+            STDERR_HEADER => in_stderr = true,
+            STDOUT_HEADER => in_stderr = false,
+            _ if in_stderr && !line.trim().is_empty() => lines.push(line),
+            _ => {}
+        }
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    let start = lines.len().saturating_sub(STDERR_EXCERPT_LINES);
+    Some(
+        lines[start..]
+            .iter()
+            .map(|l| {
+                let mut shown: String = l.chars().take(STDERR_EXCERPT_LINE_CHARS).collect();
+                if l.chars().nth(STDERR_EXCERPT_LINE_CHARS).is_some() {
+                    shown.push('…');
+                }
+                shown
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,5 +298,69 @@ mod tests {
         let e = step_output_error_excerpt(&conn, &step).unwrap();
         assert!(e.contains("{stored"), "{e}");
         std::fs::remove_file(path).ok();
+    }
+
+    // --- script_stderr_excerpt ---
+
+    fn script_step(log: Option<&str>) -> (WorkflowRunStep, Option<std::path::PathBuf>) {
+        let path = log.map(|l| {
+            let p = std::env::temp_dir().join(format!("test-excerpt-{}.log", ulid::Ulid::new()));
+            std::fs::write(&p, l).unwrap();
+            p
+        });
+        let step = WorkflowRunStep {
+            role: "script".into(),
+            output_file: path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        (step, path)
+    }
+
+    #[test]
+    fn stderr_excerpt_takes_last_lines_of_stderr_section_only() {
+        let stderr: String = (1..=8).map(|i| format!("err {i}\n")).collect();
+        let log = format!("{STDERR_HEADER}\n{stderr}{STDOUT_HEADER}\nstdout noise\n");
+        let (step, path) = script_step(Some(&log));
+        let lines = script_stderr_excerpt(&step).unwrap();
+        assert_eq!(lines, ["err 4", "err 5", "err 6", "err 7", "err 8"]);
+        std::fs::remove_file(path.unwrap()).ok();
+    }
+
+    #[test]
+    fn stderr_block_renders_header_and_indented_lines() {
+        let log = format!("{STDERR_HEADER}\nboom\nbang\n");
+        let (step, path) = script_step(Some(&log));
+        assert_eq!(
+            script_stderr_block(&step, "the hint", "  ").unwrap(),
+            "  stderr (last 2 lines; full log: the hint):\n    boom\n    bang\n"
+        );
+        std::fs::remove_file(path.unwrap()).ok();
+        let (step, _) = script_step(None);
+        assert!(script_stderr_block(&step, "h", "").is_none());
+    }
+
+    #[test]
+    fn stderr_excerpt_none_for_stdout_only_log() {
+        let (step, path) = script_step(Some(&format!("{STDOUT_HEADER}\nonly stdout\n")));
+        assert!(script_stderr_excerpt(&step).is_none());
+        std::fs::remove_file(path.unwrap()).ok();
+    }
+
+    #[test]
+    fn stderr_excerpt_none_without_log_or_for_non_script() {
+        let (step, _) = script_step(None);
+        assert!(script_stderr_excerpt(&step).is_none());
+        let (mut step, path) = script_step(Some(&format!("{STDERR_HEADER}\nboom\n")));
+        step.role = "actor".into();
+        assert!(script_stderr_excerpt(&step).is_none());
+        std::fs::remove_file(path.unwrap()).ok();
+    }
+
+    #[test]
+    fn stderr_excerpt_cuts_long_lines() {
+        let log = format!("{STDERR_HEADER}\n{}\n", "x".repeat(400));
+        let lines = stderr_tail(&log).unwrap();
+        assert_eq!(lines[0].chars().count(), STDERR_EXCERPT_LINE_CHARS + 1);
+        assert!(lines[0].ends_with('…'));
     }
 }

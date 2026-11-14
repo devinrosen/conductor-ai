@@ -1307,6 +1307,7 @@ mod tests {
             body: vec![],
             always: vec![],
             source_path: String::new(),
+            schedule: None,
         });
         app.go_back();
         assert_eq!(app.state.view, View::Dashboard);
@@ -1644,6 +1645,7 @@ mod tests {
             body: vec![],
             always: vec![],
             source_path: String::new(),
+            schedule: None,
         }
     }
 

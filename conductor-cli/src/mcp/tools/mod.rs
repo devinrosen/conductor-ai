@@ -451,7 +451,9 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
             "conductor_approve_gate",
             "Approve a waiting gate in a workflow run. \
              When the gate has multi-select options, pass the chosen values as `selections`. \
-             An empty selections array means 'approve with nothing selected' (skip).",
+             An empty selections array means 'approve with nothing selected' (skip). \
+             The run continues on its own once the gate is approved; don't call \
+             conductor_resume_run unless the run's process has died.",
             Arc::new({
                 let mut m = serde_json::Map::new();
                 m.insert("type".into(), json!("object"));
@@ -561,7 +563,8 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
         Tool::new(
             "conductor_resume_run",
             "Resume a failed or paused workflow run from its last failed step, in its own process on the installed conductor. \
-             Use conductor_get_run to check the run status before resuming.",
+             Use conductor_get_run to check the run status before resuming. A run waiting at a \
+             gate whose engine is still alive resumes itself after approval, so don't resume it.",
             schema(&[
                 ("run_id", "Workflow run ID to resume", true),
                 (
@@ -603,7 +606,9 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
              step error. mode=tail returns the last N log messages (lines, default 20, max \
              200); mode=full returns the whole log, which can be hundreds of KB. Use this to \
              diagnose step failures. The step must have an associated agent run (gate steps \
-             and skipped steps do not have logs).",
+             and skipped steps do not have logs). For a script step the log is the script's \
+             stderr and any stdout outside FLOW_OUTPUT (the last ~64 KiB of the latest attempt); \
+             result mode returns all of it and tail mode its last lines.",
             schema_typed(&[
                 ("run_id", "string", "Workflow run ID", true),
                 ("step_name", "string", "Step name (as shown in conductor_get_run output)", true),

@@ -1414,6 +1414,7 @@ fn make_workflow_def(name: &str, target: &str) -> conductor_core::workflow::Work
         body: vec![],
         always: vec![],
         source_path: format!(".conductor/workflows/{name}.wf"),
+        schedule: None,
     }
 }
 

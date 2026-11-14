@@ -898,6 +898,7 @@ mod tests {
                     body: vec![],
                     always: vec![],
                     source_path: String::new(),
+                    schedule: None,
                 },
             ));
         }
@@ -1847,6 +1848,7 @@ mod tests {
                     body: vec![],
                     always: vec![],
                     source_path: ".conductor/workflows/deploy.wf".into(),
+                    schedule: None,
                 },
             )],
             selected: 0,
@@ -1922,6 +1924,7 @@ mod tests {
                     body: vec![],
                     always: vec![],
                     source_path: ".conductor/workflows/build.wf".into(),
+                    schedule: None,
                 },
             )],
             selected: 0,

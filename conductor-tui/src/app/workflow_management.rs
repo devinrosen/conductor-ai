@@ -2264,6 +2264,7 @@ mod tests {
             body: vec![],
             always: vec![],
             source_path: "test.wf".into(),
+            schedule: None,
         };
 
         let mut prefill = std::collections::HashMap::new();
@@ -2348,6 +2349,7 @@ mod tests {
             body: vec![],
             always: vec![],
             source_path: String::new(),
+            schedule: None,
         }
     }
 
@@ -2503,6 +2505,7 @@ mod tests {
             body: vec![],
             always: vec![],
             source_path: ".conductor/workflows/test-wf.wf".into(),
+            schedule: None,
         };
 
         app.spawn_workflow_in_background(SpawnWorkflowParams {

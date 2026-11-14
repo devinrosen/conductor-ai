@@ -2291,6 +2291,7 @@ mod tests {
             body,
             always: vec![],
             source_path: format!("{name}.wf"),
+            schedule: None,
         }
     }
 

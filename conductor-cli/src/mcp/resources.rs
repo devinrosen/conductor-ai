@@ -510,6 +510,14 @@ fn format_run_detail(
         if let Some(excerpt) = conductor_core::workflow::step_output_error_excerpt(conn, step) {
             out.push_str(&format!("    {excerpt}\n"));
         }
+        // Shown for completed script steps too, so success-path warnings are visible. For a
+        // failed step `step_error` may already hold the stderr tail; it is short, so the
+        // excerpt is not deduplicated against it.
+        if let Some(block) =
+            conductor_core::workflow::script_stderr_block(step, "conductor_get_step_log", "    ")
+        {
+            out.push_str(&block);
+        }
         out.push_str(&conductor_core::workflow::render_step_failure_tree(
             conn, step, &run_chain, 4,
         ));
@@ -778,6 +786,53 @@ mod tests {
         )
         .unwrap();
         assert!(run_detail(conn, "r1").contains("    step_error: different\n"));
+    }
+
+    #[test]
+    fn test_format_run_detail_shows_script_stderr_excerpt() {
+        let (_f, conductor) = make_test_conductor();
+        let conn = &conductor.conn;
+        insert_test_wf_run(conn, "r1", "wf", "completed", None);
+        for (id, name, role) in [("s1", "build", "script"), ("s2", "plan", "actor")] {
+            insert_test_wf_step(
+                conn,
+                id,
+                "r1",
+                name,
+                role,
+                "completed",
+                0,
+                "2026-01-01T00:00:01Z",
+                None,
+                None,
+            );
+        }
+        let with_err =
+            std::env::temp_dir().join(format!("res-script-{}.log", conductor_core::new_id()));
+        std::fs::write(
+            &with_err,
+            "--- stderr ---\nwarning: flaky\n--- stdout (outside FLOW_OUTPUT) ---\nchatter\n",
+        )
+        .unwrap();
+        // The actor step's log must not be read, even though it has an output_file.
+        conn.execute(
+            "UPDATE workflow_run_steps SET output_file = ?1 WHERE id IN ('s1', 's2')",
+            [with_err.to_string_lossy()],
+        )
+        .unwrap();
+        let out = run_detail(conn, "r1");
+        assert!(
+            out.contains(
+                "    stderr (last 1 lines; full log: conductor_get_step_log):\n      warning: flaky\n"
+            ),
+            "got: {out}"
+        );
+        assert_eq!(out.matches("stderr (last").count(), 1, "got: {out}");
+        assert!(!out.contains("chatter"), "got: {out}");
+
+        std::fs::write(&with_err, "--- stdout (outside FLOW_OUTPUT) ---\nchatter\n").unwrap();
+        assert!(!run_detail(conn, "r1").contains("stderr (last"));
+        std::fs::remove_file(with_err).ok();
     }
 
     #[test]
