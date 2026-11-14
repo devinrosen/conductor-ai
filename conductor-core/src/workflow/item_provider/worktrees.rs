@@ -444,8 +444,7 @@ mod tests {
         let raw: HashMap<String, String> = [("has_ticket".to_string(), "yes".to_string())].into();
         let err = WorktreesProvider::new(None, None)
             .parse_scope(Some(&raw))
-            .err()
-            .expect("invalid has_ticket must be rejected");
+            .expect_err("invalid has_ticket must be rejected");
         assert!(err.to_string().contains("scope.has_ticket"), "{err}");
     }
 

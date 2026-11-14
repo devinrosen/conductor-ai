@@ -9,7 +9,7 @@ workflow iterate-feature {
 
   foreach run-children {
     over          = worktrees
-    scope         = { has_open_pr = false, has_ticket = true }
+    scope         = { has_open_pr = false  has_ticket = true }
     max_parallel  = 1
     workflow      = "ticket-to-pr"
     inputs        = { ticket_id = "{{item.ticket_id}}" }
