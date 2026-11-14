@@ -31,11 +31,41 @@ fn child_ticket_id(
     inputs: &std::collections::HashMap<String, String>,
     parent_ctx: &runkon_flow::engine::ChildWorkflowContext,
 ) -> Option<String> {
-    match inputs.get("ticket_id").map(|s| s.trim()) {
-        Some(t) if !t.is_empty() => Some(t.to_string()),
-        _ => parent_ctx
+    match non_empty_ticket_input(inputs) {
+        Some(t) => Some(t.to_string()),
+        None => parent_ctx
             .run_ctx
             .get(crate::workflow::engine_keys::TICKET_ID),
+    }
+}
+
+/// The `ticket_id` input, trimmed, when it is non-empty.
+fn non_empty_ticket_input(inputs: &std::collections::HashMap<String, String>) -> Option<&str> {
+    inputs
+        .get("ticket_id")
+        .map(|s| s.trim())
+        .filter(|t| !t.is_empty())
+}
+
+/// An unknown ticket id would otherwise surface as a foreign-key error after
+/// the child run row is created. Only a not-found result reads as "not a known
+/// ticket"; any other lookup error is reported with its cause.
+fn validate_child_ticket_exists(
+    conn: &rusqlite::Connection,
+    workflow_name: &str,
+    inputs: &std::collections::HashMap<String, String>,
+) -> Result<(), String> {
+    let Some(tid) = non_empty_ticket_input(inputs) else {
+        return Ok(());
+    };
+    match crate::tickets::TicketSyncer::new(conn).get_by_id(tid) {
+        Ok(_) => Ok(()),
+        Err(crate::error::ConductorError::TicketNotFound { .. }) => Err(format!(
+            "child workflow '{workflow_name}': input ticket_id '{tid}' is not a known ticket"
+        )),
+        Err(e) => Err(format!(
+            "child workflow '{workflow_name}': failed to look up ticket '{tid}': {e}"
+        )),
     }
 }
 
@@ -221,20 +251,10 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         validate_child_ticket_input(workflow_name, &params.inputs)
             .map_err(EngineError::Workflow)?;
 
-        // An unknown ticket id would otherwise surface as a foreign-key error
-        // after the child run row is created.
-        if let Some(tid) = params.inputs.get("ticket_id").map(|s| s.trim()) {
-            if !tid.is_empty() {
-                let conn = self.conn.lock().map_err(bridge_lock_err)?;
-                if crate::tickets::TicketSyncer::new(&conn)
-                    .get_by_id(tid)
-                    .is_err()
-                {
-                    return Err(EngineError::Workflow(format!(
-                        "child workflow '{workflow_name}': input ticket_id '{tid}' is not a known ticket"
-                    )));
-                }
-            }
+        {
+            let conn = self.conn.lock().map_err(bridge_lock_err)?;
+            validate_child_ticket_exists(&conn, workflow_name, &params.inputs)
+                .map_err(EngineError::Workflow)?;
         }
 
         // Route child workflows through execute_workflow_standalone so they use
@@ -449,6 +469,41 @@ mod tests {
         inputs.insert("ticket_id".to_string(), "01ABC".to_string());
         assert!(validate_child_ticket_input("ticket-to-pr", &inputs).is_ok());
         assert!(validate_child_ticket_input("ticket-to-pr", &HashMap::new()).is_ok());
+    }
+
+    #[test]
+    fn child_ticket_exists_check_covers_unknown_known_and_empty() {
+        let conn = crate::test_helpers::setup_db();
+        crate::tickets::TicketSyncer::new(&conn)
+            .upsert_tickets("r1", &[crate::test_helpers::make_ticket("1", "Issue 1")])
+            .unwrap();
+        let known: String = conn
+            .query_row("SELECT id FROM tickets LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+
+        let mut inputs = HashMap::new();
+        inputs.insert("ticket_id".to_string(), "no-such-ticket".to_string());
+        let err = validate_child_ticket_exists(&conn, "ticket-to-pr", &inputs).unwrap_err();
+        assert!(err.contains("no-such-ticket"), "{err}");
+        assert!(err.contains("not a known ticket"), "{err}");
+
+        inputs.insert("ticket_id".to_string(), format!(" {known} "));
+        assert!(validate_child_ticket_exists(&conn, "ticket-to-pr", &inputs).is_ok());
+
+        inputs.insert("ticket_id".to_string(), "  ".to_string());
+        assert!(validate_child_ticket_exists(&conn, "ticket-to-pr", &inputs).is_ok());
+        assert!(validate_child_ticket_exists(&conn, "ticket-to-pr", &HashMap::new()).is_ok());
+    }
+
+    #[test]
+    fn child_ticket_lookup_db_error_is_not_reported_as_unknown() {
+        let conn = crate::test_helpers::setup_db();
+        conn.execute_batch("DROP TABLE tickets;").unwrap();
+        let mut inputs = HashMap::new();
+        inputs.insert("ticket_id".to_string(), "t1".to_string());
+        let err = validate_child_ticket_exists(&conn, "ticket-to-pr", &inputs).unwrap_err();
+        assert!(err.contains("failed to look up ticket 't1'"), "{err}");
+        assert!(!err.contains("not a known ticket"), "{err}");
     }
 
     #[test]

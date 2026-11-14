@@ -28,6 +28,18 @@ impl WorktreesProvider {
     }
 }
 
+/// Parse an optional `true`/`false` scope value, erroring on anything else.
+fn parse_optional_bool_scope(map: &HashMap<String, String>, key: &str) -> Result<Option<bool>> {
+    match map.get(key).map(|s| s.as_str()) {
+        None => Ok(None),
+        Some("true") => Ok(Some(true)),
+        Some("false") => Ok(Some(false)),
+        Some(v) => Err(ConductorError::Workflow(format!(
+            "scope.{key} must be true or false, got '{v}'"
+        ))),
+    }
+}
+
 impl ItemProvider for WorktreesProvider {
     fn name(&self) -> &str {
         "worktrees"
@@ -43,27 +55,8 @@ impl ItemProvider for WorktreesProvider {
         };
 
         let base_branch = map.get("base_branch").cloned();
-        let has_open_pr = match map.get("has_open_pr").map(|s| s.as_str()) {
-            None => None,
-            Some("true") => Some(true),
-            Some("false") => Some(false),
-            Some(v) => {
-                return Err(ConductorError::Workflow(format!(
-                    "scope.has_open_pr must be true or false, got '{v}'"
-                )));
-            }
-        };
-
-        let has_ticket = match map.get("has_ticket").map(|s| s.as_str()) {
-            None => None,
-            Some("true") => Some(true),
-            Some("false") => Some(false),
-            Some(v) => {
-                return Err(ConductorError::Workflow(format!(
-                    "scope.has_ticket must be true or false, got '{v}'"
-                )));
-            }
-        };
+        let has_open_pr = parse_optional_bool_scope(map, "has_open_pr")?;
+        let has_ticket = parse_optional_bool_scope(map, "has_ticket")?;
 
         Ok(Some(Box::new(WorktreeScope {
             base_branch,
