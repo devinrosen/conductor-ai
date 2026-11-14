@@ -28,6 +28,18 @@ impl WorktreesProvider {
     }
 }
 
+/// Parse an optional `true`/`false` scope value, erroring on anything else.
+fn parse_optional_bool_scope(map: &HashMap<String, String>, key: &str) -> Result<Option<bool>> {
+    match map.get(key).map(|s| s.as_str()) {
+        None => Ok(None),
+        Some("true") => Ok(Some(true)),
+        Some("false") => Ok(Some(false)),
+        Some(v) => Err(ConductorError::Workflow(format!(
+            "scope.{key} must be true or false, got '{v}'"
+        ))),
+    }
+}
+
 impl ItemProvider for WorktreesProvider {
     fn name(&self) -> &str {
         "worktrees"
@@ -43,20 +55,13 @@ impl ItemProvider for WorktreesProvider {
         };
 
         let base_branch = map.get("base_branch").cloned();
-        let has_open_pr = match map.get("has_open_pr").map(|s| s.as_str()) {
-            None => None,
-            Some("true") => Some(true),
-            Some("false") => Some(false),
-            Some(v) => {
-                return Err(ConductorError::Workflow(format!(
-                    "scope.has_open_pr must be true or false, got '{v}'"
-                )));
-            }
-        };
+        let has_open_pr = parse_optional_bool_scope(map, "has_open_pr")?;
+        let has_ticket = parse_optional_bool_scope(map, "has_ticket")?;
 
         Ok(Some(Box::new(WorktreeScope {
             base_branch,
             has_open_pr,
+            has_ticket,
         })))
     }
 
@@ -111,6 +116,10 @@ impl ItemProvider for WorktreesProvider {
         let active_worktrees = wt_mgr.list_by_repo_id_and_base_branch(repo_id, base_branch)?;
 
         let mut candidates: Vec<_> = active_worktrees.into_iter().collect();
+
+        if let Some(want_ticket) = wt_scope_opt.and_then(|s| s.has_ticket) {
+            candidates.retain(|wt| wt.ticket_id.is_some() == want_ticket);
+        }
 
         if let Some(want_open_pr) = wt_scope_opt.and_then(|s| s.has_open_pr) {
             if !candidates.is_empty() {
@@ -296,6 +305,7 @@ mod tests {
         let scope = WorktreeScope {
             base_branch: Some("main".to_string()),
             has_open_pr: None,
+            has_ticket: None,
         };
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = WorktreesProvider::new(Some("r1".into()), None)
@@ -314,6 +324,7 @@ mod tests {
         let scope = WorktreeScope {
             base_branch: Some("main".to_string()),
             has_open_pr: None,
+            has_ticket: None,
         };
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         // Providers return ALL items; dedup is done by the foreach executor.
@@ -367,6 +378,7 @@ mod tests {
         let scope = WorktreeScope {
             base_branch: Some("main".to_string()),
             has_open_pr: None,
+            has_ticket: None,
         };
         let ctx = test_helpers::make_provider_ctx(&conn, &config);
         let items = WorktreesProvider::new(Some("r1".into()), None)
@@ -378,6 +390,55 @@ mod tests {
             Some(ticket_id.as_str())
         );
         assert!(!by_id["w3"].context.contains_key("ticket_id"));
+    }
+
+    #[test]
+    fn test_worktrees_has_ticket_scope_filters_by_link() {
+        let conn = test_helpers::setup_db();
+        let config = Config::default();
+        let syncer = crate::tickets::TicketSyncer::new(&conn);
+        syncer
+            .upsert_tickets("r1", &[test_helpers::make_ticket("t1", "Linked")])
+            .unwrap();
+        let ticket_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = 't1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        insert_worktree_with_base_branch(&conn, "w2", "r1", "linked", "main");
+        insert_worktree_with_base_branch(&conn, "w3", "r1", "unlinked", "main");
+        conn.execute(
+            "UPDATE worktrees SET ticket_id = ?1 WHERE id = 'w2'",
+            [&ticket_id],
+        )
+        .unwrap();
+
+        let ids_for = |has_ticket: Option<bool>| -> Vec<String> {
+            let scope = WorktreeScope {
+                base_branch: Some("main".to_string()),
+                has_open_pr: None,
+                has_ticket,
+            };
+            let ctx = test_helpers::make_provider_ctx(&conn, &config);
+            WorktreesProvider::new(Some("r1".into()), None)
+                .items(&ctx, Some(&scope as &dyn std::any::Any), &HashMap::new())
+                .unwrap()
+                .into_iter()
+                .map(|i| i.item_id)
+                .collect()
+        };
+        assert_eq!(ids_for(Some(true)), vec!["w2".to_string()]);
+        assert_eq!(ids_for(Some(false)), vec!["w3".to_string()]);
+        assert_eq!(ids_for(None).len(), 2);
+    }
+
+    #[test]
+    fn test_parse_scope_rejects_invalid_has_ticket() {
+        let raw: HashMap<String, String> = [("has_ticket".to_string(), "yes".to_string())].into();
+        let err = WorktreesProvider::new(None, None)
+            .parse_scope(Some(&raw))
+            .expect_err("invalid has_ticket must be rejected");
+        assert!(err.to_string().contains("scope.has_ticket"), "{err}");
     }
 
     #[test]

@@ -442,6 +442,9 @@ worktree_id in the execution context. `ordered = true` respects ticket
 blocking edges: a worktree whose linked ticket is blocked waits until the
 blocker's child run completes.
 
+`scope` keys: `base_branch`, `has_open_pr` (`true`/`false`) and `has_ticket`
+(`true` keeps only worktrees with a linked ticket, `false` only those without).
+
 | `{{item.*}}` field | Description |
 |---|---|
 | `{{item.id}}` | Worktree ULID |
@@ -449,6 +452,7 @@ blocker's child run completes.
 | `{{item.branch}}` | Feature branch name |
 | `{{item.path}}` | Absolute filesystem path to the worktree |
 | `{{item.base_branch}}` | Base branch (omitted if not set) |
+| `{{item.ticket_id}}` | Linked ticket ULID (omitted if the worktree has none) |
 
 **`over = workflow_runs`**
 
