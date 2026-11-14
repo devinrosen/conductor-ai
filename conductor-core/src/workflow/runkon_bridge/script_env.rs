@@ -93,6 +93,29 @@ impl ScriptEnvProvider for ConductorScriptEnvProvider {
     fn input_env_prefix(&self) -> &str {
         "CONDUCTOR_"
     }
+
+    /// Keep each script attempt's stderr log under the run's log directory.
+    /// `ctx.run_id()` of a `call workflow` child is the child's own run.
+    fn script_log_path(
+        &self,
+        ctx: &dyn RunContext,
+        step_id: &str,
+        step_name: &str,
+        iteration: u32,
+    ) -> Option<std::path::PathBuf> {
+        match crate::config::workflow_script_log_path(ctx.run_id(), step_id, step_name, iteration)
+        {
+            Ok(path) => Some(path),
+            Err(e) => {
+                tracing::warn!(
+                    step = step_name,
+                    error = %e,
+                    "cannot build a script log path; this step keeps no log"
+                );
+                None
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -168,6 +191,34 @@ mod tests {
             ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()), None);
         let env = provider.env(&noop_ctx(), None);
         assert!(!env.contains_key("GH_TOKEN"));
+    }
+
+    #[test]
+    fn script_log_path_lands_under_run_scripts_dir_and_sanitizes() {
+        let provider =
+            ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()), None);
+        let run = crate::new_id();
+        let step = crate::new_id();
+        let ctx = noop_ctx().with_run_id(run.clone());
+        let path = provider
+            .script_log_path(&ctx, &step, "we ird/name", 1)
+            .expect("path");
+        assert_eq!(
+            path.parent().unwrap(),
+            crate::config::workflow_log_dir().join(&run).join("scripts")
+        );
+        let file = path.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(file.starts_with("we_ird_name-1-"), "got {file}");
+    }
+
+    #[test]
+    fn script_log_path_none_for_non_ulid_run_id() {
+        let provider =
+            ConductorScriptEnvProvider::new(None, vec![], Arc::new(Config::default()), None);
+        let ctx = noop_ctx().with_run_id("not-a-ulid");
+        assert!(provider
+            .script_log_path(&ctx, &crate::new_id(), "s", 0)
+            .is_none());
     }
 
     #[test]

@@ -32,7 +32,7 @@ workflow iterate-pr {
   meta {
     title       = "Iterate on PR Feedback"   // display name
     description = "..."
-    trigger     = "manual"                    // manual | pr | scheduled
+    trigger     = "manual"                    // manual | pr | scheduled (scheduled needs every or cron)
     targets     = ["worktree"]                // optional, defaults to empty
     group       = "Development"               // UI grouping
   }
@@ -47,6 +47,7 @@ workflow iterate-pr {
 ```
 
 - `title`, `description`, `trigger`, `targets` and `group` are all optional; `targets` defaults to empty. Valid `targets` values are `worktree`, `ticket`, `repo`, `pr` and `workflow_run` (`batch_validate.rs`).
+- `trigger = "scheduled"` requires exactly one of `every = "<duration>"` or `cron = "<5-field cron>"` in `meta` (optional `timezone`), checked at parse time. Both, neither, or a schedule field on a `manual` or `pr` workflow is a parse error. runkon only parses the schedule; conductor has no scheduler and does not run scheduled workflows.
 - Comments are `//` to end of line. `#` is **not** a comment; the lexer skips only `//`.
 - An input with neither `required` nor `default` is required. Inputs also take `description`.
 - Input values are strings. A `boolean` input is the string `"true"` or `"false"`; only a case-insensitive `"true"` counts as true.
@@ -117,13 +118,16 @@ script review-scope {
 | `run` | Script path, `{{variable}}` allowed. Validate-time resolution is worktree, then repo, then `~/.claude/skills/`; at run time the step is `sh -c <run>` with the worktree as cwd |
 | `env = { K = "v" }` | Environment for the script; values substitute `{{variable}}` from the raw (not shell-quoted) variable map. Security-sensitive names are ignored |
 | `timeout = N` | **Seconds** (a number, unlike a `call`'s `"5m"`). The script is killed and the step is recorded `Failed` ("timed out after Ns") |
-| `retries`, `on_fail` | Scripts ignore `retries` and `on_fail = <agent>`; only `on_fail = continue` is honoured |
+| `retries = N` | A failing script (non-zero exit, timeout or unparseable FLOW_OUTPUT) is retried up to N more times; each attempt is its own step row. A retried script repeats its side effects. `review-pr.wf`'s `resolve-pr-base { retries = 1 }` retries |
+| `on_fail` | After the last failed attempt, `on_fail = <agent>` runs with `{{failed_step}}`, `{{failure_reason}}` and `{{retry_count}}`. `on_fail = continue` skips the failed step without failing the run |
 | `as = "<bot>"` | Injects that identity's token as `GH_TOKEN` |
 
 Rules, from `executors/script.rs` and `prompt_builder.rs`:
 
 - The script runs as `sh -c` in the worktree with stdin closed. Every run input already reaches it as `CONDUCTOR_<NAME>`, plus `PATH` and `GH_TOKEN` from the provider; other values (such as `prior_output`) must come through `env`, and `DRY_RUN` reaches it only that way.
 - The script emits its own FLOW_OUTPUT block on stdout. **A script step gets no schema-derived markers**; nothing derives them from fields. A script that wants a marker prints it in `markers`. A `.conductor/schemas/*.yaml` named after a script's output documents its contract only (for example `review-aggregator.yaml` for `aggregate-reviews.sh`); renaming a field there changes nothing at run time.
+- Each attempt keeps a script log: its stderr and any stdout outside the FLOW_OUTPUT block, about 64 KiB with the oldest bytes dropped. It is written to `~/.conductor/workflow-logs/<run>/scripts/<step>-<iteration>-<step id>.log` and recorded in the step row's `output_file`, which is set only when the script wrote something. Read it with `conductor_get_step_log` or `conductor workflow step-log`; `conductor_get_run` shows the last few stderr lines under each script step, completed ones included. Logs are not deleted with the run.
+- A failed step's error keeps the **last** 2000 characters of stderr. Capture is bounded: stdout keeps its last 1 MiB, so a FLOW_OUTPUT block cut by that cap fails to parse.
 - Without a FLOW_OUTPUT block, the step has no markers and its context is stdout truncated to 2000 characters.
 - With a block that does not parse (invalid JSON, a missing end marker, the one-line form `<<<FLOW_OUTPUT>>> {...}`), the **script step fails**. Agents are more lenient (see [FLOW_OUTPUT](#flow_output)).
 - Extra top-level string fields in the structured output of any step (schema'd agents, scripts, child-workflow steps) become `{{name}}` variables for later steps: `{"markers": [], "context": "", "review_scope": "full"}` makes `{{review_scope}}`. Only `repo_path`, `worktree_id`, `ticket_id`, `repo_id` and `workflow_run_id` are protected; a script can overwrite `ticket_title`, `pr_number`, `feature_base_branch`, `worktree_branch` and user inputs. Exported variables persist across loop iterations, so every branch of a script should emit the field, or a stale value from the previous iteration is read.
@@ -152,7 +156,9 @@ There are five types:
 
 - `timeout` is a duration string (`"2h"`); the default is 24h. `on_timeout` is `fail` (default) or `continue`. Every gate should set both on purpose.
 - `as = "<bot>"` works on gates as on calls.
-- Feedback entered on approval becomes `{{gate_feedback}}`. It is **never cleared**, so it reaches every later step, and a later gate approved without feedback keeps the earlier value. When options are picked, the value is the selected option keys joined with ", ", replacing any feedback. It is stored on the gate's step row, so it survives a resume.
+- Feedback entered on approval becomes `{{gate_feedback}}`, which is always the **most recent** gate's value. A gate decided without feedback (an approval, a rejection, a dry-run approval, or a timeout with `on_timeout = continue`) clears it, so an earlier gate's feedback does not reach steps after a later gate. When options are picked, the value is the selected option keys joined with ", ", replacing any feedback. It is stored on the gate's step row, and a resume restores it per gate, with the gate's selections.
+- `{{<gate-name>.feedback}}` (for example `{{human_review.feedback}}`) reads one gate's feedback, or its joined selections, and is empty when that gate had neither. Use it when a gate's answer must survive a later gate. The gate name is its type, so two gates of the same type share it.
+- A gate's `prompt` substitutes `{{name}}` variables when the gate starts: inputs, engine variables, earlier steps' FLOW_OUTPUT fields (such as `{{plan_path}}`) and gate feedback. The stored prompt and what hosts show are the resolved text. An unknown `{{name}}` stays literal.
 - `options = analyze-mobile-ux.findings` takes a `step.field` reference to a JSON object of labels keyed by value, from a step with a schema, and offers it to the approver as choices. The step must already have a result, or the gate fails before it is created.
 - A rejected gate fails the run.
 - In a [dry run](#dry-run) every gate except `quality_gate` is auto-approved and recorded Completed; `quality_gate` is still evaluated.
@@ -236,7 +242,7 @@ foreach sprint-work { over = tickets  scope = { ticket_id = "{{inputs.root_ticke
 
 - Required: `over` (`tickets`, `repos`, `workflow_runs`, `worktrees`), `max_parallel`, `workflow`.
 - Optional: `scope`, `filter`, `ordered`, `on_cycle` (`fail` or `warn`), `inputs`, `on_child_fail` (`halt`, `continue`, `skip_dependents`).
-- `{{item.*}}` is substituted at dispatch time, not at parse time (for example `{{item.ticket_id}}` with `over = worktrees` in iterate-feature.wf). Whether every `{{item.*}}` field is substituted in `inputs` is tracked in a separate issue; check the producer before relying on one.
+- `inputs` values substitute `{{item.id}}`, `{{item.ref}}`, `{{item.<key>}}` and the parent's `{{name}}` variables for each item at dispatch time, not at parse time. An unknown name stays literal in the child's input. The keys an item has depend on `over`; for `worktrees` they are `slug`, `branch`, `path`, `base_branch` (when set) and `ticket_id` (the linked ticket's ULID, absent when the worktree has no ticket, so iterate-feature.wf's `{{item.ticket_id}}` reaches that child literally).
 - Items are tracked in `workflow_run_step_fan_out_items`, so a resume does not re-dispatch an item already present.
 - One child workflow means one ticket per worktree for `ticket-to-pr`; see engine.md#foreach for the item fields and ordering rules.
 
@@ -306,7 +312,8 @@ The block a step prints to hand markers, context and extra fields to the engine.
 | `{{prior_output}}` | The structured JSON of the most recent completed step that has one, whatever its name; **not a lookup by name**. For a schema'd agent, its parsed output; for a script, its whole FLOW_OUTPUT object. Absent until a step produces one |
 | `{{prior_output_file}}` | Never set: no script step sets `output_file` |
 | `{{prior_contexts}}` | JSON array `[{"step","iteration","context","markers","structured_output","output_file"}, ...]` of every completed step in run order (`iteration` is 0 for steps nested in `if`, `unless` or `do`, even inside a loop). Repeated names are all included, never deduped, also when replayed on resume. A script picking `first` or `last` for a name sees every occurrence |
-| `{{gate_feedback}}` | The feedback typed at a gate (or the picked option keys), never cleared; persisted for resume |
+| `{{gate_feedback}}` | The most recent gate's feedback (or picked option keys); a gate decided without feedback clears it; restored per gate on resume |
+| `{{<gate>.feedback}}` | One gate's feedback or joined selections, by gate name (`{{human_review.feedback}}`); empty when that gate had none |
 | `{{dry_run}}` | `"true"` or `"false"` |
 | `{{workflow_run_id}}` | ULID of the run |
 | `{{workflow_status}}` | In `always`: `completed` or `failed` |
@@ -328,7 +335,7 @@ The block a step prints to hand markers, context and extra fields to the engine.
 
 `conductor workflow resume <run>` (and `conductor_resume_run`) re-enters the saved definition snapshot.
 
-- Completed steps are recorded by `(name, iteration)` and are skipped, their markers, context and `gate_feedback` restored from the database. Cost is not restored (`restore_step_row` builds empty metadata). The n-th occurrence of a name matches the n-th saved row (runkon 0.7.2 and later), so a repeated name no longer skips the wrong step, though it still makes conditions ambiguous. Steps nested in `if`, `unless` or `do` have iteration 0, so the iteration part of the key doesn't distinguish them.
+- Completed steps are recorded by `(name, iteration)` and are skipped, their markers, context, gate feedback and gate selections (per gate) restored from the database. Cost is not restored (`restore_step_row` builds empty metadata). The n-th occurrence of a name matches the n-th saved row (runkon 0.7.2 and later), so a repeated name no longer skips the wrong step, though it still makes conditions ambiguous. Steps nested in `if`, `unless` or `do` have iteration 0, so the iteration part of the key doesn't distinguish them.
 - Steps skipped by a condition are re-evaluated on resume, not treated as completed.
 - A step that failed, or was running, runs again. A step whose effect (push, PR create, comment, commit) happened but was not recorded complete **runs again**: make those effects idempotent.
 - `--from-step NAME` resets NAME and every later step. `--restart` clears everything.

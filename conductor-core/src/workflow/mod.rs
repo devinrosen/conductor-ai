@@ -135,7 +135,8 @@ pub use manager::wait::{
 pub use manager::InvalidWorkflowEntry;
 pub use output::{parse_flow_output, FlowOutput};
 pub use output_excerpt::{
-    flow_output_excerpt, is_output_parse_error, step_has_output_error, step_output_error_excerpt,
+    flow_output_excerpt, is_output_parse_error, script_stderr_excerpt, step_has_output_error,
+    step_output_error_excerpt, STDERR_EXCERPT_LINES,
 };
 pub use runkon_flow::traits::persistence::{
     FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,
@@ -145,7 +146,9 @@ pub use runkon_flow::types::FanOutItemRow;
 pub use smoke::{
     smoke_run_workflow, SmokeOutcome, SmokeResult, SmokeStop, SmokeStopKind, SmokeStopPoint,
 };
-pub use step_log::{render_step_log, resolve_step_log_target, StepLogMode, StepLogTarget};
+pub use step_log::{
+    render_step_log, resolve_step_log_target, StepLogMode, StepLogSource, StepLogTarget,
+};
 pub use types::SpawnHeartbeatResumeParams;
 pub use types::{
     resolve_conductor_bin_dir, ActiveWorkflowCounts, AgentRunMetrics, ConductorWorkflowRun,

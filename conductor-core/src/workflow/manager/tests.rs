@@ -1235,6 +1235,7 @@ fn minimal_workflow(name: &str) -> runkon_flow::dsl::WorkflowDef {
         body: vec![],
         always: vec![],
         source_path: "test.wf".to_string(),
+        schedule: None,
     }
 }
 
@@ -1861,6 +1862,7 @@ fn make_repo_workflow(name: &str) -> crate::workflow::WorkflowDef {
         body: vec![],
         always: vec![],
         source_path: format!(".conductor/workflows/{name}.wf"),
+        schedule: None,
     }
 }
 
@@ -1876,6 +1878,7 @@ fn make_worktree_workflow(name: &str) -> crate::workflow::WorkflowDef {
         body: vec![],
         always: vec![],
         source_path: format!(".conductor/workflows/{name}.wf"),
+        schedule: None,
     }
 }
 

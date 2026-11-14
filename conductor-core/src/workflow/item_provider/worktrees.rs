@@ -140,6 +140,11 @@ impl ItemProvider for WorktreesProvider {
                 if let Some(ref bb) = wt.base_branch {
                     context.insert("base_branch".to_string(), bb.clone());
                 }
+                // The linked ticket's ULID, so `{{item.ticket_id}}` can feed a child's
+                // `ticket_id` input. Absent when the worktree has no linked ticket.
+                if let Some(ref tid) = wt.ticket_id {
+                    context.insert("ticket_id".to_string(), tid.clone());
+                }
                 FanOutItem {
                     item_type: "worktree".to_string(),
                     item_id: wt.id,
@@ -336,6 +341,45 @@ mod tests {
             .unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].item_id, "w2");
+    }
+
+    #[test]
+    fn test_worktrees_items_carry_ticket_id_when_linked() {
+        let conn = test_helpers::setup_db();
+        let config = Config::default();
+        let syncer = crate::tickets::TicketSyncer::new(&conn);
+        syncer
+            .upsert_tickets("r1", &[test_helpers::make_ticket("t1", "Linked")])
+            .unwrap();
+        let ticket_id: String = conn
+            .query_row(
+                "SELECT id FROM tickets WHERE source_id = 't1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        insert_worktree_with_base_branch(&conn, "w2", "r1", "linked", "main");
+        insert_worktree_with_base_branch(&conn, "w3", "r1", "unlinked", "main");
+        conn.execute(
+            "UPDATE worktrees SET ticket_id = ?1 WHERE id = 'w2'",
+            [&ticket_id],
+        )
+        .unwrap();
+
+        let scope = WorktreeScope {
+            base_branch: Some("main".to_string()),
+            has_open_pr: None,
+        };
+        let ctx = test_helpers::make_provider_ctx(&conn, &config);
+        let items = WorktreesProvider::new(Some("r1".into()), None)
+            .items(&ctx, Some(&scope as &dyn std::any::Any), &HashMap::new())
+            .unwrap();
+        let by_id: HashMap<_, _> = items.iter().map(|i| (i.item_id.as_str(), i)).collect();
+        assert_eq!(
+            by_id["w2"].context.get("ticket_id").map(String::as_str),
+            Some(ticket_id.as_str())
+        );
+        assert!(!by_id["w3"].context.contains_key("ticket_id"));
     }
 
     #[test]

@@ -503,6 +503,7 @@ fn snap_workflow_def_detail() {
         inputs: vec![],
         always: vec![],
         source_path: "/home/user/.conductor/workflows/deploy-pipeline.wf".into(),
+        schedule: None,
     });
     state.view = View::WorkflowDefDetail;
     insta::assert_snapshot!(render_to_string(&state));

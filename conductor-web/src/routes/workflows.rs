@@ -3426,6 +3426,7 @@ mod tests {
             body: vec![],
             always: vec![],
             source_path: "test.wf".to_string(),
+            schedule: None,
         };
 
         let summary = WorkflowDefSummary::from(&def);
@@ -3450,6 +3451,7 @@ mod tests {
             body: vec![],
             always: vec![],
             source_path: "all-contexts.wf".to_string(),
+            schedule: None,
         };
 
         let summary = WorkflowDefSummary::from(&def);

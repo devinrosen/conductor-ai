@@ -44,23 +44,35 @@ impl StepLogMode {
     }
 }
 
-/// The step and agent run a step-log request resolved to.
+/// Where a step's log comes from.
+#[derive(Debug, Clone)]
+pub enum StepLogSource {
+    /// An agent step: the log of its child agent run.
+    Agent {
+        child_run_id: String,
+        log_path: PathBuf,
+        /// The agent run's stored result text, used when the log has no result event.
+        agent_result_text: Option<String>,
+    },
+    /// A script step: the capped stderr log runkon wrote for the attempt, recorded in
+    /// the step row's `output_file`. `None` when the attempt left no log.
+    Script { log_path: Option<PathBuf> },
+}
+
+/// The step a step-log request resolved to, and where its log lives.
 #[derive(Debug, Clone)]
 pub struct StepLogTarget {
     pub run_id: String,
     pub step: WorkflowRunStep,
-    pub child_run_id: String,
-    pub log_path: PathBuf,
-    /// The agent run's stored result text, used when the log has no result event.
-    pub agent_result_text: Option<String>,
+    pub source: StepLogSource,
     /// The step failed on its FLOW_OUTPUT, so rendering adds an excerpt of the block.
     /// The excerpt is built at render time: it needs the log, and resolving only
     /// touches the database.
     pub output_error: bool,
 }
 
-/// Find the step named `step_name` in `run_id` (last iteration wins) and the log of
-/// its agent run.
+/// Find the step named `step_name` in `run_id` (last iteration wins; among script
+/// retry attempts of one iteration, the latest attempt wins) and its log.
 pub fn resolve_step_log_target(
     conn: &Connection,
     run_id: &str,
@@ -72,10 +84,28 @@ pub fn resolve_step_log_target(
     let step = super::get_workflow_steps(conn, run_id)?
         .into_iter()
         .filter(|s| s.step_name == step_name)
-        .max_by_key(|s| s.iteration)
+        .max_by(|a, b| {
+            (a.iteration, a.retry_count, &a.started_at, &a.id).cmp(&(
+                b.iteration,
+                b.retry_count,
+                &b.started_at,
+                &b.id,
+            ))
+        })
         .ok_or_else(|| {
             ConductorError::Workflow(format!("Step '{step_name}' not found in run {run_id}"))
         })?;
+
+    if step.role == runkon_flow::constants::STEP_ROLE_SCRIPT {
+        let output_error = step_has_output_error(&step);
+        let log_path = step.output_file.as_deref().map(PathBuf::from);
+        return Ok(StepLogTarget {
+            run_id: run_id.to_string(),
+            step,
+            source: StepLogSource::Script { log_path },
+            output_error,
+        });
+    }
 
     // Gate and skipped steps have no child_run_id.
     let child_run_id = step.child_run_id.clone().ok_or_else(|| {
@@ -94,15 +124,20 @@ pub fn resolve_step_log_target(
     Ok(StepLogTarget {
         run_id: run_id.to_string(),
         step,
-        child_run_id,
-        log_path,
-        agent_result_text: run.result_text,
+        source: StepLogSource::Agent {
+            child_run_id,
+            log_path,
+            agent_result_text: run.result_text,
+        },
         output_error,
     })
 }
 
 /// Render the target's log in the requested mode. Does file I/O only.
 pub fn render_step_log(target: &StepLogTarget, mode: StepLogMode) -> Result<String> {
+    if let StepLogSource::Script { log_path } = &target.source {
+        return render_script_log(target, log_path.as_deref(), mode);
+    }
     match mode {
         StepLogMode::Full => read_log(target),
         StepLogMode::Tail { lines } => {
@@ -144,26 +179,90 @@ fn output_excerpt(
 
 /// The step's final result message: the log's last result event, else the stored text.
 fn final_text(target: &StepLogTarget) -> Option<String> {
-    final_result_text(&target.log_path, target.agent_result_text.as_deref())
+    match &target.source {
+        StepLogSource::Agent {
+            log_path,
+            agent_result_text,
+            ..
+        } => final_result_text(log_path, agent_result_text.as_deref()),
+        StepLogSource::Script { .. } => None,
+    }
 }
 
 fn read_log(target: &StepLogTarget) -> Result<String> {
-    std::fs::read_to_string(&target.log_path).map_err(|e| {
+    let StepLogSource::Agent {
+        child_run_id,
+        log_path,
+        ..
+    } = &target.source
+    else {
+        return Err(ConductorError::Workflow(format!(
+            "Step '{}' is not an agent step",
+            target.step.step_name
+        )));
+    };
+    std::fs::read_to_string(log_path).map_err(|e| {
         ConductorError::Workflow(format!(
             "Log file not found for step '{}' of run {} (agent run {}) at '{}': {e}",
             target.step.step_name,
             target.run_id,
-            target.child_run_id,
-            target.log_path.display()
+            child_run_id,
+            log_path.display()
         ))
     })
 }
 
+/// Render a script step's log. `log_path` is the step row's `output_file`.
+fn render_script_log(
+    target: &StepLogTarget,
+    log_path: Option<&std::path::Path>,
+    mode: StepLogMode,
+) -> Result<String> {
+    let step = &target.step;
+    let mut head = format!(
+        "step: {} (iteration {}, attempt {})\nstatus: {}\n",
+        step.step_name,
+        step.iteration,
+        step.retry_count + 1,
+        step.status
+    );
+    if let Some(err) = step.step_error.as_deref() {
+        head.push_str(&format!("step error: {err}\n"));
+    }
+    let Some(path) = log_path else {
+        return Ok(format!(
+            "{head}Script step '{}' left no log: it wrote nothing to stderr or outside FLOW_OUTPUT, or ran before runkon 0.10.\n",
+            step.step_name
+        ));
+    };
+    let contents = std::fs::read_to_string(path).map_err(|e| {
+        ConductorError::Workflow(format!(
+            "Log file not found for script step '{}' of run {} at '{}': {e}",
+            step.step_name,
+            target.run_id,
+            path.display()
+        ))
+    })?;
+    match mode {
+        StepLogMode::Full => Ok(contents),
+        StepLogMode::Tail { lines } => Ok(format!(
+            "{head}{}",
+            render_tail_of(&contents, lines, "lines")
+        )),
+        // runkon caps the log at about 64 KiB, so the whole of it is the result.
+        StepLogMode::Result => Ok(format!("{head}--- log ---\n{contents}")),
+    }
+}
+
 fn header(target: &StepLogTarget, excerpt: Option<&str>) -> String {
     let step = &target.step;
+    let child_run_id = match &target.source {
+        StepLogSource::Agent { child_run_id, .. } => child_run_id.as_str(),
+        StepLogSource::Script { .. } => "",
+    };
     let mut out = format!(
         "step: {} (iteration {})\nstatus: {}\nagent run: {}\n",
-        step.step_name, step.iteration, step.status, target.child_run_id
+        step.step_name, step.iteration, step.status, child_run_id
     );
     if let Some(err) = step.step_error.as_deref() {
         out.push_str(&format!("step error: {err}\n"));
@@ -178,6 +277,11 @@ fn header(target: &StepLogTarget, excerpt: Option<&str>) -> String {
 /// Last `n` non-empty lines, each cut to ~4 KB, the whole capped at ~100 KB by
 /// dropping the oldest lines.
 fn render_tail(contents: &str, n: usize) -> String {
+    render_tail_of(contents, n, "messages")
+}
+
+/// [`render_tail`] with the noun for the line count ("messages" for agent logs, "lines" for text logs).
+fn render_tail_of(contents: &str, n: usize, unit: &str) -> String {
     let lines: Vec<&str> = contents.lines().filter(|l| !l.trim().is_empty()).collect();
     let total = lines.len();
     let mut kept: Vec<String> = Vec::new();
@@ -192,7 +296,7 @@ fn render_tail(contents: &str, n: usize) -> String {
     }
     kept.reverse();
     format!(
-        "--- last {} of {total} messages ---\n{}\n",
+        "--- last {} of {total} {unit} ---\n{}\n",
         kept.len(),
         kept.join("\n")
     )
@@ -221,9 +325,11 @@ mod tests {
         let t = StepLogTarget {
             run_id: "r1".into(),
             step: sample_step(),
-            child_run_id: "c1".into(),
-            log_path: path.clone(),
-            agent_result_text: db_result.map(String::from),
+            source: StepLogSource::Agent {
+                child_run_id: "c1".into(),
+                log_path: path.clone(),
+                agent_result_text: db_result.map(String::from),
+            },
             output_error: false,
         };
         (t, path)
@@ -325,7 +431,11 @@ mod tests {
             "line1\nline2\n"
         );
         std::fs::remove_file(&path).ok();
-        t.log_path = path;
+        t.source = StepLogSource::Agent {
+            child_run_id: "c1".into(),
+            log_path: path,
+            agent_result_text: None,
+        };
         let err = render_step_log(&t, StepLogMode::Full)
             .unwrap_err()
             .to_string();
@@ -385,8 +495,16 @@ mod tests {
         let first = seed_step_with_agent_run(&conn, &run_id, "plan", 0, done, None, None, "");
         let t = resolve_step_log_target(&conn, &run_id, "plan").unwrap();
         assert_eq!(t.step.iteration, 1);
-        assert_eq!(t.child_run_id, second.child_run_id);
-        assert_eq!(t.log_path, second.log_path);
+        let StepLogSource::Agent {
+            child_run_id,
+            log_path,
+            ..
+        } = &t.source
+        else {
+            panic!("expected an agent source");
+        };
+        assert_eq!(child_run_id, &second.child_run_id);
+        assert_eq!(log_path, &second.log_path);
         assert!(!t.output_error);
         std::fs::remove_file(first.log_path).ok();
         std::fs::remove_file(second.log_path).ok();
@@ -415,5 +533,94 @@ mod tests {
         let out = render_step_log(&t, StepLogMode::Tail { lines: 5 }).unwrap();
         assert!(out.contains("parsed FLOW_OUTPUT block"), "{out}");
         std::fs::remove_file(seeded.log_path).ok();
+    }
+
+    // --- script steps ---
+
+    fn seed_script_step(
+        conn: &Connection,
+        run_id: &str,
+        name: &str,
+        retry_count: i64,
+        output_file: Option<&std::path::Path>,
+    ) {
+        let id = crate::workflow::insert_step_running(
+            conn,
+            run_id,
+            name,
+            "script",
+            false,
+            0,
+            0,
+            retry_count,
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE workflow_run_steps SET output_file = ?1, status = 'failed' WHERE id = ?2",
+            rusqlite::params![output_file.map(|p| p.to_string_lossy().into_owned()), id],
+        )
+        .unwrap();
+    }
+
+    fn script_log_file(contents: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("test-script-log-{}.log", ulid::Ulid::new()));
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[test]
+    fn script_step_renders_log_in_every_mode() {
+        let (conn, run_id) = db_with_run();
+        let log = script_log_file("--- stderr ---\nwarn one\nboom\n");
+        seed_script_step(&conn, &run_id, "build", 0, Some(&log));
+        let t = resolve_step_log_target(&conn, &run_id, "build").unwrap();
+        assert!(matches!(t.source, StepLogSource::Script { .. }));
+
+        let out = render_step_log(&t, StepLogMode::Result).unwrap();
+        assert!(out.contains("warn one") && out.contains("boom"), "{out}");
+        assert!(out.contains("step: build"), "{out}");
+
+        let out = render_step_log(&t, StepLogMode::Tail { lines: 1 }).unwrap();
+        assert!(out.contains("boom") && !out.contains("warn one"), "{out}");
+
+        let out = render_step_log(&t, StepLogMode::Full).unwrap();
+        assert_eq!(out, "--- stderr ---\nwarn one\nboom\n");
+        std::fs::remove_file(log).ok();
+    }
+
+    #[test]
+    fn script_step_without_output_file_says_no_log() {
+        let (conn, run_id) = db_with_run();
+        seed_script_step(&conn, &run_id, "quiet", 0, None);
+        let t = resolve_step_log_target(&conn, &run_id, "quiet").unwrap();
+        let out = render_step_log(&t, StepLogMode::Result).unwrap();
+        assert!(out.contains("left no log"), "{out}");
+    }
+
+    #[test]
+    fn script_step_with_missing_file_reports_path() {
+        let (conn, run_id) = db_with_run();
+        let gone = std::env::temp_dir().join("test-script-log-gone-xyz.log");
+        seed_script_step(&conn, &run_id, "build", 0, Some(&gone));
+        let t = resolve_step_log_target(&conn, &run_id, "build").unwrap();
+        let err = render_step_log(&t, StepLogMode::Result)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("test-script-log-gone-xyz.log"), "{err}");
+    }
+
+    #[test]
+    fn script_step_latest_attempt_wins() {
+        let (conn, run_id) = db_with_run();
+        let first = script_log_file("first attempt\n");
+        let second = script_log_file("second attempt\n");
+        // Seed the later attempt first so row order can't explain the result.
+        seed_script_step(&conn, &run_id, "build", 1, Some(&second));
+        seed_script_step(&conn, &run_id, "build", 0, Some(&first));
+        let t = resolve_step_log_target(&conn, &run_id, "build").unwrap();
+        let out = render_step_log(&t, StepLogMode::Full).unwrap();
+        assert!(out.contains("second attempt"), "{out}");
+        std::fs::remove_file(first).ok();
+        std::fs::remove_file(second).ok();
     }
 }

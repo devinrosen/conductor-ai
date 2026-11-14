@@ -804,6 +804,40 @@ pub fn workflow_log_path(run_id: &str) -> Result<PathBuf> {
     Ok(workflow_log_dir().join(format!("{run_id}.log")))
 }
 
+/// Returns the log file path for one attempt of a script step.
+///
+/// Convention: `~/.conductor/workflow-logs/{run_id}/scripts/{step_name}-{iteration}-{step_id}.log`
+///
+/// `run_id` and `step_id` must be valid ULIDs. `step_name` is sanitized to
+/// `[A-Za-z0-9_-]` (anything else becomes `_`), so no name can traverse paths.
+pub fn workflow_script_log_path(
+    run_id: &str,
+    step_id: &str,
+    step_name: &str,
+    iteration: u32,
+) -> Result<PathBuf> {
+    run_id
+        .parse::<ulid::Ulid>()
+        .map_err(|_| ConductorError::Workflow(format!("invalid run_id: {run_id}")))?;
+    step_id
+        .parse::<ulid::Ulid>()
+        .map_err(|_| ConductorError::Workflow(format!("invalid step_id: {step_id}")))?;
+    let safe_name: String = step_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    Ok(workflow_log_dir()
+        .join(run_id)
+        .join("scripts")
+        .join(format!("{safe_name}-{iteration}-{step_id}.log")))
+}
+
 impl Config {
     /// Returns `true` when any notification sink is configured
     /// (`[notifications] enabled` or at least one `[[notify.hooks]]` entry).
@@ -2200,6 +2234,37 @@ bot_name = "my-bot"
     fn workflow_log_path_invalid_ulid_returns_error() {
         let err = super::workflow_log_path("../etc/passwd").unwrap_err();
         assert!(err.to_string().contains("invalid run_id"));
+    }
+
+    #[test]
+    fn workflow_script_log_path_builds_under_run_scripts_dir() {
+        let run = crate::new_id();
+        let step = crate::new_id();
+        let path = super::workflow_script_log_path(&run, &step, "build", 2).unwrap();
+        assert!(path.starts_with(super::workflow_log_dir().join(&run).join("scripts")));
+        assert!(path
+            .to_string_lossy()
+            .ends_with(&format!("build-2-{step}.log")));
+    }
+
+    #[test]
+    fn workflow_script_log_path_sanitizes_step_name() {
+        let run = crate::new_id();
+        let step = crate::new_id();
+        let path = super::workflow_script_log_path(&run, &step, "../a/b c", 0).unwrap();
+        let file = path.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(file.starts_with("___a_b_c-0-"), "got {file}");
+        assert_eq!(
+            path.parent().unwrap(),
+            super::workflow_log_dir().join(&run).join("scripts")
+        );
+    }
+
+    #[test]
+    fn workflow_script_log_path_rejects_bad_ids() {
+        let ulid = crate::new_id();
+        assert!(super::workflow_script_log_path("../x", &ulid, "s", 0).is_err());
+        assert!(super::workflow_script_log_path(&ulid, "../x", "s", 0).is_err());
     }
 
     // -----------------------------------------------------------------------
