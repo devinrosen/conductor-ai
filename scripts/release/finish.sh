@@ -69,7 +69,12 @@ git fetch --prune --tags origin
 
 # --- 1. Verify the release -------------------------------------------------
 say "Step 1: verify release $tag"
-sha=$(git log origin/main --format='%H %s' | awk -v s="release: $v" '{h=$1; sub(/^[^ ]+ /, "")} $0 == s {print h; exit}')
+# awk reads to the end instead of exiting on the first match: an early exit closes the
+# pipe, git log dies of SIGPIPE, and pipefail + set -e end the script with no message.
+sha=$(git log origin/main --format='%H %s' | awk -v s="release: $v" '
+  found { next }
+  { h = $1; sub(/^[^ ]+ /, "") }
+  $0 == s { print h; found = 1 }')
 [[ -n $sha ]] || die "no 'release: $v' commit on origin/main; has the release PR merged?"
 echo "release commit: $sha"
 
@@ -128,7 +133,7 @@ fi
 say "Step 3: other open release branches"
 main_sha=$(git rev-parse origin/main)
 found_any=0
-for b in $(git for-each-ref --format='%(refname:strip=3)' 'refs/remotes/origin/release/*'); do
+for b in $(git for-each-ref --format='%(refname:strip=4)' 'refs/remotes/origin/release/*'); do
   [[ $b != "$v" ]] || continue
   [[ $(printf '%s\n%s\n' "$v" "$b" | sort -V | tail -n1) == "$b" ]] || continue
   if git rev-parse -q --verify "refs/tags/v$b" >/dev/null; then continue; fi
