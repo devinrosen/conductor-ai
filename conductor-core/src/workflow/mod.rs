@@ -111,8 +111,9 @@ pub use manager::recovery::{
     detect_stale_workflow_runs, detect_stuck_workflow_run_ids, find_resumable_child_run,
     get_completed_step_keys, purge, purge_count, reap_finalization_stuck_workflow_runs,
     reap_orphaned_script_steps, reap_orphaned_workflow_runs, reap_stale_workflow_runs,
-    recover_stuck_steps_from_db, reset_completed_steps, reset_failed_steps,
-    reset_steps_from_position, run_workflow_maintenance, ReapedStaleRun, StaleWorkflowRun,
+    mark_interrupted_steps_failed, recover_stuck_steps_from_db, run_workflow_maintenance,
+    superseded_from_step_msg, supersede_steps_from_position, INTERRUPTED_STEP_MSG,
+    SUPERSEDED_ON_RESTART_MSG, ReapedStaleRun, StaleWorkflowRun,
 };
 // `count_live_subprocess_steps` is `pub(crate)` (internal-only), so it isn't
 // part of the public re-export above. Re-export it at crate-internal visibility

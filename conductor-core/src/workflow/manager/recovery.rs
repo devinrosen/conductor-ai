@@ -21,19 +21,6 @@ use crate::workflow::{WorkflowRunStatus, WorkflowStepStatus};
 const ORPHAN_BETWEEN_STEPS_MSG: &str =
     "Orphaned: executor died between steps \u{2014} auto-resumed by watchdog";
 
-macro_rules! reset_sql {
-    ($where:literal) => {
-        concat!(
-            "UPDATE workflow_run_steps \
-             SET status = 'pending', started_at = NULL, ended_at = NULL, result_text = NULL, \
-             context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL, \
-             subprocess_pid = NULL, step_error = NULL \
-             ",
-            $where
-        )
-    };
-}
-
 /// A workflow run whose active step has been running longer than the
 /// configured threshold without progress.
 #[derive(Debug, Clone)]
@@ -785,14 +772,16 @@ pub fn find_resumable_child_run(
     Ok(run)
 }
 
-const SQL_RESET_FAILED: &str =
-    reset_sql!("WHERE workflow_run_id = :run_id AND status IN ('failed', 'running', 'timed_out')");
+/// `step_error` on a `running` row that a resume found still unfinished.
+pub const INTERRUPTED_STEP_MSG: &str = "interrupted: run was resumed before this step finished";
 
-const SQL_RESET_COMPLETED: &str =
-    reset_sql!("WHERE workflow_run_id = :run_id AND status = 'completed'");
+/// `step_error` on the completed rows a restart supersedes.
+pub const SUPERSEDED_ON_RESTART_MSG: &str = "superseded: run restarted";
 
-const SQL_RESET_FROM_POS: &str =
-    reset_sql!("WHERE workflow_run_id = :run_id AND position >= :position");
+/// `step_error` on the completed rows a `from_step` resume supersedes.
+pub fn superseded_from_step_msg(from_step: &str) -> String {
+    format!("superseded: run resumed from step '{from_step}'")
+}
 
 pub fn terminate_subprocesses(
     conn: &Connection,
@@ -867,29 +856,50 @@ pub(crate) fn count_live_subprocess_steps(
     Ok(0)
 }
 
-pub fn reset_failed_steps(conn: &Connection, workflow_run_id: &str) -> Result<u64> {
+/// Mark steps a crashed or killed attempt left `running` as `failed`, so a
+/// resume doesn't leave them unfinished beside the rows that re-run them.
+///
+/// `failed` and `timed_out` rows are deliberately left as they are. runkon
+/// groups rows per position as one occurrence and re-runs any occurrence with
+/// no `completed` row, recording the re-run as a new row at the same position
+/// (like a DSL retry), so the earlier attempt stays readable as history. A
+/// failed row also keeps its `child_run_id`, which runkon's prior-attempt
+/// recovery (runkon#143) reads.
+pub fn mark_interrupted_steps_failed(conn: &Connection, workflow_run_id: &str) -> Result<u64> {
     terminate_subprocesses(conn, workflow_run_id, None)?;
-    let count = conn.execute(SQL_RESET_FAILED, named_params![":run_id": workflow_run_id])?;
-    Ok(count as u64)
-}
-
-pub fn reset_completed_steps(conn: &Connection, workflow_run_id: &str) -> Result<u64> {
     let count = conn.execute(
-        SQL_RESET_COMPLETED,
-        named_params![":run_id": workflow_run_id],
+        "UPDATE workflow_run_steps \
+         SET status = 'failed', step_error = COALESCE(step_error, :msg), \
+             ended_at = COALESCE(ended_at, :now), subprocess_pid = NULL \
+         WHERE workflow_run_id = :run_id AND status = 'running'",
+        named_params![
+            ":run_id": workflow_run_id,
+            ":msg": INTERRUPTED_STEP_MSG,
+            ":now": chrono::Utc::now().to_rfc3339(),
+        ],
     )?;
     Ok(count as u64)
 }
 
-pub fn reset_steps_from_position(
+/// Mark `completed` rows at or after `position` as `skipped` with `reason`, so
+/// runkon re-runs them on resume (it only skips occurrences with a `completed`
+/// row). Output, context, `child_run_id` and timestamps are kept, so the
+/// earlier attempt stays readable. Use position 0 to cover every row.
+///
+/// `skipped` rather than a new status: the status enum belongs to runkon, and
+/// runkon ignores `skipped` rows for its skip set and prior-attempt recovery.
+pub fn supersede_steps_from_position(
     conn: &Connection,
     workflow_run_id: &str,
     position: i64,
+    reason: &str,
 ) -> Result<u64> {
     terminate_subprocesses(conn, workflow_run_id, Some(position))?;
     let count = conn.execute(
-        SQL_RESET_FROM_POS,
-        named_params![":run_id": workflow_run_id, ":position": position],
+        "UPDATE workflow_run_steps \
+         SET status = 'skipped', step_error = :reason \
+         WHERE workflow_run_id = :run_id AND position >= :position AND status = 'completed'",
+        named_params![":run_id": workflow_run_id, ":position": position, ":reason": reason],
     )?;
     Ok(count as u64)
 }
@@ -1905,14 +1915,14 @@ mod tests {
         );
 
         // Verify terminate_subprocesses itself completes without error.
-        let term_result = crate::workflow::reset_failed_steps(&conn, "wfrun1");
+        let term_result = crate::workflow::mark_interrupted_steps_failed(&conn, "wfrun1");
         assert!(
             term_result.is_ok(),
-            "reset_failed_steps should not error: {:?}",
+            "mark_interrupted_steps_failed should not error: {:?}",
             term_result
         );
 
-        // After reset, the step must be back in 'pending'.
+        // After the update, the interrupted step must be 'failed'.
         let status: String = conn
             .query_row(
                 "SELECT status FROM workflow_run_steps WHERE id = 'step1'",
@@ -1920,7 +1930,7 @@ mod tests {
                 |r| r.get("status"),
             )
             .unwrap();
-        assert_eq!(status, "pending");
+        assert_eq!(status, "failed");
     }
 
     /// A step with both wrs.subprocess_pid AND ar.subprocess_pid must contribute
@@ -1948,7 +1958,7 @@ mod tests {
         // The agent PID query (wrs.subprocess_pid IS NULL) must NOT return this step.
         // Both terminate_subprocesses and count_live_subprocess_steps must complete cleanly.
         assert!(super::count_live_subprocess_steps(&conn, "wfrun2").is_ok());
-        assert!(crate::workflow::reset_failed_steps(&conn, "wfrun2").is_ok());
+        assert!(crate::workflow::mark_interrupted_steps_failed(&conn, "wfrun2").is_ok());
 
         let status: String = conn
             .query_row(
@@ -2098,7 +2108,7 @@ mod tests {
 
     /// Regression test: terminate_subprocesses must complete without error even when
     /// cancel threads join on PIDs that no longer exist. Exercises the actual production
-    /// code path (reset_failed_steps → terminate_subprocesses → thread spawn + join)
+    /// code path (mark_interrupted_steps_failed → terminate_subprocesses → thread spawn + join)
     /// with a real script step subprocess_pid, proving the `if let Err` guard in the
     /// join loop does not propagate errors from cancel threads.
     #[cfg(unix)]
@@ -2109,7 +2119,7 @@ mod tests {
 
         // Insert a running script step with a nonexistent PID — cancel_subprocess
         // will send SIGTERM safely (no-op for a dead PID) and return, so the thread
-        // won't panic. What matters is that reset_failed_steps returns Ok(()) and
+        // won't panic. What matters is that mark_interrupted_steps_failed returns Ok(()) and
         // the step is reset to pending via the same code path that contains the fix.
         conn.execute(
             "INSERT INTO workflow_run_steps \
@@ -2120,9 +2130,9 @@ mod tests {
             [],
         )
         .unwrap();
-        // reset_failed_steps calls terminate_subprocesses which spawns a cancel thread
+        // mark_interrupted_steps_failed calls terminate_subprocesses which spawns a cancel thread
         // for PID 99999 and joins it. The `if let Err` guard must not propagate any error.
-        let result = crate::workflow::reset_failed_steps(&conn, "wfrun-cancel");
+        let result = crate::workflow::mark_interrupted_steps_failed(&conn, "wfrun-cancel");
         assert!(
             result.is_ok(),
             "terminate_subprocesses cancel threads must not propagate errors: {:?}",
@@ -2137,8 +2147,8 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            status, "pending",
-            "step must be reset to pending after terminate_subprocesses"
+            status, "failed",
+            "step must be marked failed after terminate_subprocesses"
         );
     }
 }

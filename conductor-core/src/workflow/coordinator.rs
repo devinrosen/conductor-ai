@@ -1316,7 +1316,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         };
 
         // Warn if any running steps have live subprocesses — terminate_subprocesses
-        // (called inside reset_failed_steps below) will kill them, but the warning
+        // (called inside mark_interrupted_steps_failed below) will kill them, but the warning
         // helps diagnose concurrent executor races (see issue #2221).
         let live_count = crate::workflow::count_live_subprocess_steps(conn, &wf_run.id)?;
         if live_count > 0 {
@@ -1334,18 +1334,23 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
 
         // Child workflows that must start fresh rather than resume their earlier
         // run: every `workflow:<name>` step at or after `from_step`, or all of
-        // them on restart. Computed from `all_steps`, before the resets below.
+        // them on restart. Computed from `all_steps`, before the updates below.
         let step_positions: Vec<(&str, i64)> = all_steps
             .iter()
             .map(|s| (s.step_name.as_str(), s.position))
             .collect();
         let fresh_children = fresh_children_for(input.restart, input.from_step, &step_positions);
 
-        // Perform DB resets and count how many completed steps will be skipped (for logging).
+        // Update step rows in the DB and count how many completed steps will be skipped (for logging).
         let skip_count: usize = if input.restart {
-            // Restart: clear all step results — skip nothing
-            crate::workflow::reset_failed_steps(conn, &wf_run.id)?;
-            crate::workflow::reset_completed_steps(conn, &wf_run.id)?;
+            // Restart: supersede every completed row so nothing is skipped
+            crate::workflow::supersede_steps_from_position(
+                conn,
+                &wf_run.id,
+                0,
+                crate::workflow::SUPERSEDED_ON_RESTART_MSG,
+            )?;
+            crate::workflow::mark_interrupted_steps_failed(conn, &wf_run.id)?;
             0
         } else {
             let completed_count = all_steps
@@ -1365,15 +1370,20 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
                     .iter()
                     .filter(|s| s.position >= pos && s.status == WorkflowStepStatus::Completed)
                     .count();
-                // Reset those steps in DB
-                crate::workflow::reset_steps_from_position(conn, &wf_run.id, pos)?;
+                // Supersede those steps in DB (kept as history, re-run as new rows)
+                crate::workflow::supersede_steps_from_position(
+                    conn,
+                    &wf_run.id,
+                    pos,
+                    &crate::workflow::superseded_from_step_msg(from_step),
+                )?;
                 completed_count - reset_count
             } else {
                 completed_count
             };
 
-            // Reset non-completed steps
-            crate::workflow::reset_failed_steps(conn, &wf_run.id)?;
+            // Running rows of a dead attempt become failed; failed rows stay as history
+            crate::workflow::mark_interrupted_steps_failed(conn, &wf_run.id)?;
             skip_count
         };
 

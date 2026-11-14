@@ -338,7 +338,7 @@ The block a step prints to hand markers, context and extra fields to the engine.
 - Completed steps are recorded by `(name, iteration)` and are skipped, their markers, context, gate feedback and gate selections (per gate) restored from the database. Cost is not restored (`restore_step_row` builds empty metadata). The n-th occurrence of a name matches the n-th saved row (runkon 0.7.2 and later), so a repeated name no longer skips the wrong step, though it still makes conditions ambiguous. Steps nested in `if`, `unless` or `do` have iteration 0, so the iteration part of the key doesn't distinguish them.
 - Steps skipped by a condition are re-evaluated on resume, not treated as completed.
 - A step that failed, or was running, runs again. A step whose effect (push, PR create, comment, commit) happened but was not recorded complete **runs again**: make those effects idempotent.
-- `--from-step NAME` resets NAME and every later step. `--restart` clears everything.
+- `--from-step NAME` re-runs NAME and every later step; `--restart` re-runs everything. The earlier attempt stays as history at the same positions: failed rows are kept, interrupted `running` rows become `failed`, and completed rows that are re-run become `skipped` with a "superseded" note. No row is left `pending` or `running` once the resumed run completes.
 - Running subprocesses of the old run are terminated on resume.
 - The snapshot is the definition at run start, so editing the `.wf` does not change a run in flight.
 - `fail-verify.sh` tells the user to resume with `--from-step verify`, one reason a same-name retry of `verify` must keep its name.
