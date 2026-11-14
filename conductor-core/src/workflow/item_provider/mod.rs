@@ -31,6 +31,8 @@ pub enum TicketScope {
 pub struct WorktreeScope {
     pub base_branch: Option<String>,
     pub has_open_pr: Option<bool>,
+    /// Keep only worktrees with (`true`) or without (`false`) a linked ticket.
+    pub has_ticket: Option<bool>,
 }
 
 /// An item returned by an `ItemProvider` during fan-out.
