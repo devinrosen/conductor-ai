@@ -27,7 +27,7 @@ case_begin "full scope sets all three markers"
 run_script detect-db-migrations.sh BASE_BRANCH=main
 assert_exit 0; assert_marker has_db_migrations; assert_context_contains "the PR diff against origin/main"
 run_script detect-file-types.sh BASE_BRANCH=main
-assert_exit 0; assert_marker has_code_changes
+assert_exit 0; assert_marker has_code_changes; assert_marker has_security_changes
 run_script detect-workflow-changes.sh BASE_BRANCH=main
 assert_exit 0; assert_marker has_workflow_changes
 
@@ -70,7 +70,7 @@ for s in $ALL; do
 done
 
 # --- detect-file-types path filters, each in its own branch off origin/main ---
-filter_case() { # NAME EXPECT(yes|no) FILE...
+filter_case() { # NAME EXPECT(code|ci|no) FILE...
   local name="$1" expect="$2"
   shift 2
   git checkout -q -B filter origin/main
@@ -79,16 +79,27 @@ filter_case() { # NAME EXPECT(yes|no) FILE...
   run_script detect-file-types.sh BASE_BRANCH=main
   case_begin "detect-file-types: $name"
   assert_exit 0
-  if [ "$expect" = yes ]; then assert_marker has_code_changes; else assert_no_markers; fi
+  case "$expect" in
+    code) assert_marker has_code_changes; assert_marker has_security_changes ;;
+    ci) assert_marker has_security_changes; assert_no_marker has_code_changes ;;
+    *) assert_no_markers ;;
+  esac
 }
-filter_case ".conductor/scripts/*.sh counts as code" yes .conductor/scripts/x.sh
+filter_case ".conductor/scripts/*.sh counts as code" code .conductor/scripts/x.sh
+filter_case ".conductor/tests/*.sh counts as code" code .conductor/tests/t.sh
+filter_case "nested .conductor/tests .sh counts as code" code .conductor/tests/sub/t.sh
+filter_case ".conductor/tests fixtures are not code" no .conductor/tests/fixtures/x.json
+filter_case "a non-.sh file under .conductor/tests is not code" no .conductor/tests/t.rs
 filter_case "root README.md is not code" no README2.md
 filter_case "docs/ is not code" no docs/y.rs
-filter_case ".github/ is not code" no .github/x.js
+filter_case ".github/workflows/*.yml gets a security review" ci .github/workflows/ci.yml
+filter_case ".github/workflows/*.yaml gets a security review" ci .github/workflows/ci.yaml
+filter_case ".github/actions/*/action.yml gets a security review" ci .github/actions/setup/action.yml
+filter_case "other .github/ files get no review" no .github/x.js .github/ISSUE_TEMPLATE/bug.md .github/dependabot.yml
 filter_case ".conductor/workflows is not code" no .conductor/workflows/y.rs
-filter_case ".conductor/tests is not code" no .conductor/tests/t.rs
 filter_case "nested .md is not a code extension" no pkg/notes.md
-filter_case "Cargo.lock is code" yes Cargo.lock
-filter_case "a file name with a space and quote yields valid JSON" yes "src/we ird \"name\".rs"
+filter_case "Cargo.lock is code" code Cargo.lock
+filter_case "code plus a workflow sets both markers" code src/lib.rs .github/workflows/ci.yml
+filter_case "a file name with a space and quote yields valid JSON" code "src/we ird \"name\".rs"
 
 finish

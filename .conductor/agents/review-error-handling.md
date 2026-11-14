@@ -15,11 +15,13 @@ Focus exclusively on:
 - New `ConductorError` variants that don't carry enough detail to identify root cause
 - `eprintln!` used for errors that should go through the error propagation path instead
 
-Shell scripts (`.conductor/scripts/*.sh`) are in scope too. Check for:
+Shell scripts (`.conductor/scripts/*.sh` and `.conductor/tests/*.sh`) are in scope too. Check for:
 - A missing `set -euo pipefail`
 - `|| true` or `2>/dev/null` hiding a failure that should stop the step, for example a failed `gh` write reported as success
 - `jq` on empty or invalid input producing `null` that flows on
 - Errors written to stdout instead of stderr, where they can corrupt the FLOW_OUTPUT block
+
+The test scripts in `.conductor/tests/*.sh` deliberately run with `set -uo pipefail` and no `-e`, so a failing assertion doesn't stop the suite: don't flag the missing `-e` there. Do flag an assertion helper or case that can't fail, such as a check whose failure is swallowed so a broken script passes.
 
 Before claiming a failure aborts (or doesn't abort) a script because of `set -e` (errexit) or `pipefail`, check the script's actual `set` line: it may set only some of the flags (for example `set -uo pipefail` without `-e`). If the line isn't in the diff, read it with `grep -n '^set ' <path>`. When the current flags make the failure impossible, a defensive change is a `suggestion`, not a `warning`.
 
@@ -33,7 +35,7 @@ Do NOT flag:
 Work from the git diff only. Run the `git diff` command from the diff scope rules to get it; don't open source files or run any other command (`cargo`, `grep`, `find` and so on). The diff is the only input you need, with one exception: for a changed shell script you may run `grep -n '^set ' <path>` to read its `set` flags.
 
 To distinguish test code from production code without reading files:
-- If the file path contains `/tests/` or ends with `_test.rs`, treat it as a test file. These heuristics are for Rust; a `.sh` file is never a test file.
+- If the file path contains `/tests/` or ends with `_test.rs`, treat it as a test file. These heuristics are for Rust. A `.sh` file is not a test file, except `.conductor/tests/*.sh`, which is test harness code: review it for hidden failures, not production panics.
 - If the diff context around the line shows `#[cfg(test)]`, `#[test]`, `mod tests`, or `#[tokio::test]`, treat it as test code.
 - Otherwise, assume the code is production code.
 
