@@ -124,6 +124,28 @@ body '{{prior_contexts}}'
 assert_exit_nonzero
 assert_eq "" "$STDERR" "stderr"
 
+case_begin "step outputs that mention {{var}} still build the full description"
+BRACE_PLAN='{"summary":"Plan mentions {{prior_contexts}} text.","risks":["Risk about {{var}} syntax"],"tasks":[]}'
+body "$(contexts "$(entry plan x "$BRACE_PLAN")" "$(entry implement 'Used {{ticket_id}} in the prompt.')" "$(entry verify PASS "$VERIFY_PASS")")"
+assert_exit 0
+assert_stdout_contains "## Summary"
+assert_stdout_contains "Plan mentions {{prior_contexts}} text."
+assert_stdout_contains "## Implementation"
+assert_stdout_contains "Used {{ticket_id}} in the prompt."
+assert_stdout_contains "## Verification"
+assert_stdout_contains "## Risks and open questions"
+assert_stdout_contains "- Risk about {{var}} syntax"
+
+case_begin "unsubstituted template with surrounding whitespace exits non-zero without stderr"
+body $'  {{prior_contexts}}\n'
+assert_exit_nonzero
+assert_eq "" "$STDERR" "stderr"
+
+case_begin "empty PRIOR_CONTEXTS exits non-zero without stderr"
+body ''
+assert_exit_nonzero
+assert_eq "" "$STDERR" "stderr"
+
 case_begin "malformed JSON exits non-zero with jq's error"
 body 'not json'
 assert_exit_nonzero
