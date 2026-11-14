@@ -19,7 +19,9 @@ Do NOT flag:
 - UI rendering code where testing is impractical
 - Trivial one-liners with no logic to test (≤ 5 lines, no branching)
 - Simple delegation/wrapper functions with no logic of their own
-- Missing tests for `.conductor/scripts/*.sh`. These scripts have no test harness; they count as code so security and error-handling review them, not test coverage
+- Do NOT flag the `.conductor/tests/*.sh` test scripts themselves as needing tests, or CI workflow YAML
+
+Pipeline scripts are tested by fixture cases under `.conductor/tests/` (run by `.conductor/tests/run.sh`). Flag new decision logic in a `.conductor/scripts/*.sh` diff (a new branch, marker or exit path) when the same diff adds no matching case under `.conductor/tests/`.
 
 ## Scope constraint
 
