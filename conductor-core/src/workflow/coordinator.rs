@@ -354,6 +354,7 @@ fn build_rk_execution_state(args: RkStateArgs) -> runkon_flow::engine::Execution
         total_cache_read_input_tokens: 0,
         total_cache_creation_input_tokens: 0,
         last_gate_feedback: None,
+        gate_feedback_by_gate: Default::default(),
         block_output: None,
         block_with: Vec::new(),
         resume_ctx: None,
@@ -1718,6 +1719,7 @@ mod tests {
             body: vec![],
             always: vec![],
             source_path: String::new(),
+            schedule: None,
         }
     }
 
