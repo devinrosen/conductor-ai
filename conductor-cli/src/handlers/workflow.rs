@@ -711,7 +711,8 @@ pub fn handle_workflow(
                             {
                                 println!("        {excerpt}");
                             }
-                            if let Some(lines) = conductor_core::workflow::script_stderr_excerpt(step)
+                            if let Some(lines) =
+                                conductor_core::workflow::script_stderr_excerpt(step)
                             {
                                 println!(
                                     "        stderr (last {} lines; full log: conductor workflow step-log):",

@@ -352,11 +352,9 @@ mod tests {
             .upsert_tickets("r1", &[test_helpers::make_ticket("t1", "Linked")])
             .unwrap();
         let ticket_id: String = conn
-            .query_row(
-                "SELECT id FROM tickets WHERE source_id = 't1'",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT id FROM tickets WHERE source_id = 't1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         insert_worktree_with_base_branch(&conn, "w2", "r1", "linked", "main");
         insert_worktree_with_base_branch(&conn, "w3", "r1", "unlinked", "main");

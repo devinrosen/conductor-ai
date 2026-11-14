@@ -103,8 +103,7 @@ impl ScriptEnvProvider for ConductorScriptEnvProvider {
         step_name: &str,
         iteration: u32,
     ) -> Option<std::path::PathBuf> {
-        match crate::config::workflow_script_log_path(ctx.run_id(), step_id, step_name, iteration)
-        {
+        match crate::config::workflow_script_log_path(ctx.run_id(), step_id, step_name, iteration) {
             Ok(path) => Some(path),
             Err(e) => {
                 tracing::warn!(
