@@ -15,8 +15,10 @@ trap 'rm -f "$diff_tmp"' EXIT
 changed_files_to "$diff_tmp"
 
 # Filter for code files, excluding .conductor/, docs/, .github/, and root-level *.md.
-# Shell scripts under .conductor/scripts/ and .conductor/tests/ count as code, so
-# the security, error-handling and test-coverage reviewers cover them.
+# Shell scripts anywhere outside docs/ and every file under .githooks/ (hooks have
+# no extension) count as code, so the security, error-handling and test-coverage
+# reviewers cover them. docs/examples/hooks/*.sh is documentation and stays
+# excluded (#3354).
 # CI files (.github/workflows/*.yml|yaml, .github/actions/*/action.yml|yaml) are
 # not code, but they get a security review (#3335).
 #
@@ -29,9 +31,9 @@ ci_files=()
 while IFS= read -r -d '' file; do
   [[ -z "$file" ]] && continue
 
-  # Pipeline shell scripts run gh and git, so they count as code
-  # and so do the pipeline test scripts that run them
-  if [[ "$file" == .conductor/scripts/*.sh || "$file" == .conductor/tests/*.sh ]]; then
+  # Shell scripts (pipeline, release, root) and git hooks run gh and git, so they
+  # count as code. In [[ == ]] the * matches "/", so nested paths are covered.
+  if [[ "$file" == *.sh && "$file" != docs/* ]] || [[ "$file" == .githooks/* ]]; then
     code_files+=("$file")
     continue
   fi

@@ -20,6 +20,7 @@ Do NOT flag:
 - Trivial one-liners with no logic to test (≤ 5 lines, no branching)
 - Simple delegation/wrapper functions with no logic of their own
 - Do NOT flag the `.conductor/tests/*.sh` test scripts themselves as needing tests, or CI workflow YAML
+- Do NOT ask for tests for shell scripts outside `.conductor/scripts/` (release scripts, root scripts, git hooks): they have no test harness
 
 Pipeline scripts are tested by fixture cases under `.conductor/tests/` (run by `.conductor/tests/run.sh`). Flag new decision logic in a `.conductor/scripts/*.sh` diff (a new branch, marker or exit path) when the same diff adds no matching case under `.conductor/tests/`.
 

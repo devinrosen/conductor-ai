@@ -15,11 +15,12 @@ Focus exclusively on:
 - New `ConductorError` variants that don't carry enough detail to identify root cause
 - `eprintln!` used for errors that should go through the error propagation path instead
 
-Shell scripts (`.conductor/scripts/*.sh` and `.conductor/tests/*.sh`) are in scope too. Check for:
-- A missing `set -euo pipefail`
+Shell scripts (`*.sh` outside `docs/`, and `.githooks/*`) are in scope too. Check for:
+- A missing `set -euo pipefail` in a bash script. A POSIX `#!/bin/sh` script (some root scripts and git hooks) can't use `pipefail`: expect `set -e` (and `-u` where practical) there, and don't flag the missing `pipefail`
+- Under `pipefail` + `set -e`, a pipe into a reader that exits early (`awk '{…; exit}'`, `head`, `grep -q`, `grep -m1`): the writer dies of SIGPIPE and the script ends with exit 141 and no message
 - `|| true` or `2>/dev/null` hiding a failure that should stop the step, for example a failed `gh` write reported as success
 - `jq` on empty or invalid input producing `null` that flows on
-- Errors written to stdout instead of stderr, where they can corrupt the FLOW_OUTPUT block
+- In `.conductor/scripts/*.sh`, errors written to stdout instead of stderr, where they can corrupt the FLOW_OUTPUT block
 
 The test scripts in `.conductor/tests/*.sh` deliberately run with `set -uo pipefail` and no `-e`, so a failing assertion doesn't stop the suite: don't flag the missing `-e` there. Do flag an assertion helper or case that can't fail, such as a check whose failure is swallowed so a broken script passes.
 

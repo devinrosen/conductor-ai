@@ -15,9 +15,9 @@ Focus exclusively on:
 - Unsafe deserialization of external data (JSON from GitHub API, config files)
 - SQL injection in SQLite queries (verify parameterized queries are used consistently)
 
-## Shell scripts (`.conductor/scripts/*.sh`, `.conductor/tests/*.sh`)
+## Shell scripts (`*.sh` outside `docs/`, `.githooks/*`)
 
-These scripts run `gh` and `git` for every workflow run, some with the reviewer identity (`as = "reviewer"`). Also check:
+Pipeline scripts in `.conductor/scripts/` run `gh` and `git` for every workflow run, some with the reviewer identity (`as = "reviewer"`). Release scripts in `scripts/release/` push branches, close milestones and rewrite `Cargo.lock`. Root scripts (`install-cli.sh`, `build.sh` and so on) and git hooks run on the developer's machine, the hooks on every commit or push. Also check:
 - Unquoted expansions, `eval`, and untrusted text (PR titles and bodies, comments, agent output) passed into `gh` arguments, `--jq` filters or shell commands
 - Tokens or `GH_TOKEN` echoed or logged
 - Scripts that write to GitHub with an identity broader than they need
