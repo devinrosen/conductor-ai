@@ -88,6 +88,10 @@ filter_case() { # NAME EXPECT(code|ci|no) FILE...
 filter_case ".conductor/scripts/*.sh counts as code" code .conductor/scripts/x.sh
 filter_case ".conductor/tests/*.sh counts as code" code .conductor/tests/t.sh
 filter_case "nested .conductor/tests .sh counts as code" code .conductor/tests/sub/t.sh
+filter_case "scripts/release/*.sh counts as code" code scripts/release/x.sh
+filter_case "a root *.sh counts as code" code install-cli.sh
+filter_case ".githooks/ files count as code" code .githooks/pre-push
+filter_case "docs/examples/hooks/*.sh is not code" no docs/examples/hooks/x.sh
 filter_case ".conductor/tests fixtures are not code" no .conductor/tests/fixtures/x.json
 filter_case "a non-.sh file under .conductor/tests is not code" no .conductor/tests/t.rs
 filter_case "root README.md is not code" no README2.md
