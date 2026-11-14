@@ -435,10 +435,7 @@ mod tests {
         );
         let mut inputs = HashMap::new();
         inputs.insert("ticket_id".to_string(), "  ".to_string());
-        assert_eq!(
-            child_ticket_id(&inputs, &ctx),
-            Some("t-parent".to_string())
-        );
+        assert_eq!(child_ticket_id(&inputs, &ctx), Some("t-parent".to_string()));
     }
 
     #[test]

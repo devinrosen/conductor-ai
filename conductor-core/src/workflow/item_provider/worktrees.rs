@@ -441,8 +441,7 @@ mod tests {
 
     #[test]
     fn test_parse_scope_rejects_invalid_has_ticket() {
-        let raw: HashMap<String, String> =
-            [("has_ticket".to_string(), "yes".to_string())].into();
+        let raw: HashMap<String, String> = [("has_ticket".to_string(), "yes".to_string())].into();
         let err = WorktreesProvider::new(None, None)
             .parse_scope(Some(&raw))
             .err()
