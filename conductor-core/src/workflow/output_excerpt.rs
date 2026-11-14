@@ -88,6 +88,21 @@ pub fn script_stderr_excerpt(step: &WorkflowRunStep) -> Option<Vec<String>> {
     stderr_tail(&contents)
 }
 
+/// [`script_stderr_excerpt`] rendered as a text block for run detail: a header naming the
+/// line count and `hint` (where the full log is), then each line indented two spaces
+/// further than `indent`. Every line ends in a newline. `None` when there is no excerpt.
+pub fn script_stderr_block(step: &WorkflowRunStep, hint: &str, indent: &str) -> Option<String> {
+    let lines = script_stderr_excerpt(step)?;
+    let mut out = format!(
+        "{indent}stderr (last {} lines; full log: {hint}):\n",
+        lines.len()
+    );
+    for line in lines {
+        out.push_str(&format!("{indent}  {line}\n"));
+    }
+    Some(out)
+}
+
 fn stderr_tail(log: &str) -> Option<Vec<String>> {
     let mut in_stderr = false;
     let mut lines: Vec<&str> = Vec::new();
@@ -309,6 +324,19 @@ mod tests {
         let lines = script_stderr_excerpt(&step).unwrap();
         assert_eq!(lines, ["err 4", "err 5", "err 6", "err 7", "err 8"]);
         std::fs::remove_file(path.unwrap()).ok();
+    }
+
+    #[test]
+    fn stderr_block_renders_header_and_indented_lines() {
+        let log = format!("{STDERR_HEADER}\nboom\nbang\n");
+        let (step, path) = script_step(Some(&log));
+        assert_eq!(
+            script_stderr_block(&step, "the hint", "  ").unwrap(),
+            "  stderr (last 2 lines; full log: the hint):\n    boom\n    bang\n"
+        );
+        std::fs::remove_file(path.unwrap()).ok();
+        let (step, _) = script_step(None);
+        assert!(script_stderr_block(&step, "h", "").is_none());
     }
 
     #[test]

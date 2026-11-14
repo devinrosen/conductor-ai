@@ -135,8 +135,8 @@ pub use manager::wait::{
 pub use manager::InvalidWorkflowEntry;
 pub use output::{parse_flow_output, FlowOutput};
 pub use output_excerpt::{
-    flow_output_excerpt, is_output_parse_error, script_stderr_excerpt, step_has_output_error,
-    step_output_error_excerpt, STDERR_EXCERPT_LINES,
+    flow_output_excerpt, is_output_parse_error, script_stderr_block, script_stderr_excerpt,
+    step_has_output_error, step_output_error_excerpt, STDERR_EXCERPT_LINES,
 };
 pub use runkon_flow::traits::persistence::{
     FanOutItemStatus, FanOutItemUpdate, GateApprovalState, NewRun, NewStep, StepUpdate,

@@ -711,16 +711,12 @@ pub fn handle_workflow(
                             {
                                 println!("        {excerpt}");
                             }
-                            if let Some(lines) =
-                                conductor_core::workflow::script_stderr_excerpt(step)
-                            {
-                                println!(
-                                    "        stderr (last {} lines; full log: conductor workflow step-log):",
-                                    lines.len()
-                                );
-                                for line in lines {
-                                    println!("          {line}");
-                                }
+                            if let Some(block) = conductor_core::workflow::script_stderr_block(
+                                step,
+                                "conductor workflow step-log",
+                                "        ",
+                            ) {
+                                print!("{block}");
                             }
                             if let Some(line) = step_child_run_line(step) {
                                 println!("{line}");

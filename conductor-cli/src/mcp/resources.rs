@@ -513,14 +513,10 @@ fn format_run_detail(
         // Shown for completed script steps too, so success-path warnings are visible. For a
         // failed step `step_error` may already hold the stderr tail; it is short, so the
         // excerpt is not deduplicated against it.
-        if let Some(lines) = conductor_core::workflow::script_stderr_excerpt(step) {
-            out.push_str(&format!(
-                "    stderr (last {} lines; full log: conductor_get_step_log):\n",
-                lines.len()
-            ));
-            for line in lines {
-                out.push_str(&format!("      {line}\n"));
-            }
+        if let Some(block) =
+            conductor_core::workflow::script_stderr_block(step, "conductor_get_step_log", "    ")
+        {
+            out.push_str(&block);
         }
         out.push_str(&conductor_core::workflow::render_step_failure_tree(
             conn, step, &run_chain, 4,
