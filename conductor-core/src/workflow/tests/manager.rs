@@ -3578,7 +3578,13 @@ fn step_row(conn: &Connection, id: &str) -> (String, Option<i64>, Option<String>
     conn.query_row(
         "SELECT status, subprocess_pid, step_error FROM workflow_run_steps WHERE id = :id",
         named_params! { ":id": id },
-        |r| Ok((r.get("status")?, r.get("subprocess_pid")?, r.get("step_error")?)),
+        |r| {
+            Ok((
+                r.get("status")?,
+                r.get("subprocess_pid")?,
+                r.get("step_error")?,
+            ))
+        },
     )
     .unwrap()
 }
@@ -3631,10 +3637,18 @@ fn test_supersede_steps_from_position_only_completed_at_or_after() {
     let at = insert_step_row(&conn, &run_id, "at", 2, "completed", None, None);
     let after = insert_step_row(&conn, &run_id, "after", 3, "completed", None, None);
     let failed = insert_step_row(&conn, &run_id, "failed", 4, "failed", None, Some("boom"));
-    let running = insert_step_row(&conn, &run_id, "running", 5, "running", Some(4294967293), None);
+    let running = insert_step_row(
+        &conn,
+        &run_id,
+        "running",
+        5,
+        "running",
+        Some(4294967293),
+        None,
+    );
 
-    let n = crate::workflow::supersede_steps_from_position(&conn, &run_id, 2, "superseded: x")
-        .unwrap();
+    let n =
+        crate::workflow::supersede_steps_from_position(&conn, &run_id, 2, "superseded: x").unwrap();
     assert_eq!(n, 2);
 
     assert_eq!(step_row(&conn, &before).0, "completed");
@@ -3643,7 +3657,10 @@ fn test_supersede_steps_from_position_only_completed_at_or_after() {
         assert_eq!(status, "skipped");
         assert_eq!(err.as_deref(), Some("superseded: x"));
     }
-    assert_eq!(step_row(&conn, &failed), ("failed".into(), None, Some("boom".into())));
+    assert_eq!(
+        step_row(&conn, &failed),
+        ("failed".into(), None, Some("boom".into()))
+    );
     assert_eq!(step_row(&conn, &running).0, "running");
 }
 
