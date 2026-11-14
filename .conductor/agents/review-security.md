@@ -15,12 +15,22 @@ Focus exclusively on:
 - Unsafe deserialization of external data (JSON from GitHub API, config files)
 - SQL injection in SQLite queries (verify parameterized queries are used consistently)
 
-## Shell scripts (`.conductor/scripts/*.sh`)
+## Shell scripts (`.conductor/scripts/*.sh`, `.conductor/tests/*.sh`)
 
 These scripts run `gh` and `git` for every workflow run, some with the reviewer identity (`as = "reviewer"`). Also check:
 - Unquoted expansions, `eval`, and untrusted text (PR titles and bodies, comments, agent output) passed into `gh` arguments, `--jq` filters or shell commands
 - Tokens or `GH_TOKEN` echoed or logged
 - Scripts that write to GitHub with an identity broader than they need
+- In `.conductor/tests/*.sh`, which build scratch repos and run the scripts under test: `rm -rf` on an unset or unquoted path, and writes outside the temp dir
+
+## CI workflows (`.github/workflows/*.yml`, `.github/actions/*`)
+
+These run with the repo token and sometimes with secrets. Check for:
+- `permissions:` broader than the job needs, or missing (the repo default token scope applies)
+- `pull_request_target` or `workflow_run` triggers that check out or run PR head code while secrets are available
+- Untrusted event data (PR titles and bodies, branch names, issue and comment text, commit messages) put straight into a `run:` script through a `github.event.*` or `github.head_ref` expression, instead of passing it through `env:` and quoting it
+- Secrets echoed, written to logs or artifacts, or passed to steps that don't need them
+- Third-party actions not pinned to a commit SHA, especially in jobs with write permissions or secrets
 
 ## Scope constraint
 
