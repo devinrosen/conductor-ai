@@ -156,7 +156,8 @@ pub struct WaitGateSummary {
     pub step_id: String,
     pub step_name: String,
     pub gate_type: String,
-    /// The prompt as stored, before template rendering.
+    /// The prompt as the engine stored it: rendered with the run's variables when
+    /// the gate started (runkon 0.10+), with unknown placeholders kept literally.
     pub prompt: Option<String>,
     /// The gate's timeout as written in the workflow, e.g. `24h`.
     pub timeout: Option<String>,
