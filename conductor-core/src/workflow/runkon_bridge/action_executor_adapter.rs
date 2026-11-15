@@ -219,6 +219,27 @@ impl RkActionExecutorAdapter {
             );
         })
         .ok();
+        if let Some(def) = agent_def.as_ref() {
+            for warning in prompt_warnings(&params.name, &def.prompt) {
+                tracing::warn!("step '{}': {warning}", params.name);
+                with_conn_best_effort(
+                    &self.conn,
+                    &params.name,
+                    &format!("record prompt warning on run {child_run_id}"),
+                    |conn| {
+                        crate::agent::AgentManager::new(conn)
+                            .create_event(
+                                &child_run_id,
+                                crate::agent::types::EVENT_KIND_SYSTEM,
+                                &warning,
+                                &chrono::Utc::now().to_rfc3339(),
+                                None,
+                            )
+                            .map(|_| ())
+                    },
+                );
+            }
+        }
         let tree_clean_before = !params.dry_run
             && agent_def.as_ref().is_some_and(|d| d.can_commit)
             && turn_completion::tracked_changes(&working_dir).is_some_and(|f| f.is_empty());
@@ -521,6 +542,21 @@ fn record_step_usage(
     );
 }
 
+/// Warnings about an agent brief whose rendered prompt would lose text: each
+/// `{{` span the engine removes although it is not a variable name (#3339).
+fn prompt_warnings(agent: &str, prompt: &str) -> Vec<String> {
+    crate::workflow::placeholder_scan::runaway_placeholders(prompt)
+        .iter()
+        .map(|hit| {
+            format!(
+                "{} agent {agent}: {}",
+                crate::workflow::placeholder_scan::PROMPT_WARNING_PREFIX,
+                hit.describe()
+            )
+        })
+        .collect()
+}
+
 /// Run a best-effort DB operation: a DB error or poisoned lock is logged with
 /// the step name and `what`, never propagated.
 fn with_conn_best_effort(
@@ -545,9 +581,21 @@ mod tests {
         derive_runtime_from_model, headless_resumable_session, persist_corrected_run_metrics,
         record_step_usage,
     };
-    use super::{finalize_recovered_run, recovered_without_correction};
+    use super::{finalize_recovered_run, prompt_warnings, recovered_without_correction};
     use runkon_runtimes::config::RuntimeConfig;
     use std::collections::HashMap;
+
+    #[test]
+    fn prompt_warnings_flag_runaway_placeholder() {
+        let w = prompt_warnings("a", "x `{{` y\nz {{ticket_id}}");
+        assert_eq!(w.len(), 1);
+        assert!(
+            w[0].contains("agent a") && w[0].contains("lines 1-2"),
+            "{w:?}"
+        );
+        assert!(w[0].starts_with(crate::workflow::placeholder_scan::PROMPT_WARNING_PREFIX));
+        assert!(prompt_warnings("a", "fine {{ticket_id}}").is_empty());
+    }
 
     #[test]
     fn recovery_without_correction_is_detected() {

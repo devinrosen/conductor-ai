@@ -611,7 +611,9 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
             "Retrieve a workflow step's agent log. Defaults to the agent's final result \
              message (mode=result), with a header showing the step status, agent run id and \
              step error. mode=tail returns the last N log messages (lines, default 20, max \
-             200); mode=full returns the whole log, which can be hundreds of KB. Use this to \
+             200); mode=full returns the whole log, which can be hundreds of KB; mode=prompt returns the \
+             prompt the agent was given, as stored on its run, with its length in characters and \
+             any run-time prompt warnings (agent steps only). Use this to \
              diagnose step failures. The step must have an associated agent run (gate steps \
              and skipped steps do not have logs). For a script step the log is the script's \
              stderr and any stdout outside FLOW_OUTPUT (the last ~64 KiB of the latest attempt); \
@@ -622,7 +624,7 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
                 (
                     "mode",
                     "string",
-                    "One of 'result' (default; the final result message), 'tail' (last N messages) or 'full' (whole log)",
+                    "One of 'result' (default; the final result message), 'tail' (last N messages), 'full' (whole log) or 'prompt' (the stored prompt)",
                     false,
                 ),
                 (
