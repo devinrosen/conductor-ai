@@ -50,6 +50,12 @@ if [ -f Cargo.lock ]; then
     $0 == "name = \"runkon-flow\"" { found = 1; next }
     found && /^version = / { gsub(/version = |"/, ""); print; exit }
     /^\[\[package\]\]/ { found = 0 }' Cargo.lock)
+  # Cargo.lock comes from the PR branch: accept only a semver string, so it
+  # can't redirect the registry glob or inject text into the reviewer prompt.
+  if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+    [ -z "$version" ] || echo "ignoring malformed runkon-flow version in Cargo.lock" >&2
+    version=""
+  fi
 fi
 
 find_src() { # prints the registry src/<index> dir holding runkon-flow-$version
