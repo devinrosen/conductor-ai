@@ -304,8 +304,8 @@ fn test_list_workflow_runs_page_pages_do_not_overlap() {
         set_started_at(&conn, &run.id, &format!("2024-01-01T00:00:0{i}Z"));
     }
     let st = [WorkflowRunStatus::Pending];
-    let all = crate::workflow::list_workflow_runs_page(&conn, &page_filter(&st, false, 50, 0))
-        .unwrap();
+    let all =
+        crate::workflow::list_workflow_runs_page(&conn, &page_filter(&st, false, 50, 0)).unwrap();
     let p1 =
         crate::workflow::list_workflow_runs_page(&conn, &page_filter(&st, false, 2, 0)).unwrap();
     let p2 =
@@ -313,7 +313,12 @@ fn test_list_workflow_runs_page_pages_do_not_overlap() {
     let p3 =
         crate::workflow::list_workflow_runs_page(&conn, &page_filter(&st, false, 2, 4)).unwrap();
     assert_eq!((p1.len(), p2.len(), p3.len()), (2, 2, 1));
-    let joined: Vec<String> = p1.iter().chain(&p2).chain(&p3).map(|r| r.id.clone()).collect();
+    let joined: Vec<String> = p1
+        .iter()
+        .chain(&p2)
+        .chain(&p3)
+        .map(|r| r.id.clone())
+        .collect();
     let full: Vec<String> = all.iter().map(|r| r.id.clone()).collect();
     assert_eq!(joined, full);
     let starts: Vec<&str> = all.iter().map(|r| r.started_at.as_str()).collect();

@@ -939,8 +939,11 @@ pub async fn list_all_workflow_runs_handler(
         }
         None => None,
     };
-    let include_inactive =
-        default_include_inactive(&statuses, params.worktree.as_deref(), params.include_inactive);
+    let include_inactive = default_include_inactive(
+        &statuses,
+        params.worktree.as_deref(),
+        params.include_inactive,
+    );
     let runs = conductor_core::workflow::list_workflow_runs_page(
         &db,
         &conductor_core::workflow::WorkflowRunListFilter {
@@ -2005,7 +2008,12 @@ mod tests {
         (0..n)
             .map(|i| {
                 let id = conductor_core::test_helpers::seed_workflow_run_on_worktree(
-                    &db, wt, "wf", status.clone(), None, None,
+                    &db,
+                    wt,
+                    "wf",
+                    status.clone(),
+                    None,
+                    None,
                 );
                 db.execute(
                     "UPDATE workflow_runs SET started_at = ?1 WHERE id = ?2",
@@ -2143,10 +2151,7 @@ mod tests {
             assert_eq!(status, StatusCode::OK);
             assert_eq!(ids_of(&body), ids);
         }
-        let (status, _) = rt.block_on(get_response(
-            "/api/workflows/runs?repo=nope",
-            state,
-        ));
+        let (status, _) = rt.block_on(get_response("/api/workflows/runs?repo=nope", state));
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 

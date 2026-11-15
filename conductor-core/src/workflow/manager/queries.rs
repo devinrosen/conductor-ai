@@ -878,7 +878,10 @@ pub fn list_workflow_runs_page(
              LIMIT ? OFFSET ?"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), row_to_conductor_run)?;
+    let rows = stmt.query_map(
+        rusqlite::params_from_iter(params.iter()),
+        row_to_conductor_run,
+    )?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
