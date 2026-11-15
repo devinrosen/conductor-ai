@@ -5,7 +5,9 @@ use conductor_core::agent::AgentManager;
 use conductor_core::config::Config;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
-use conductor_core::worktree::{WorktreeAdoptOptions, WorktreeCreateOptions, WorktreeManager};
+use conductor_core::worktree::{
+    MergedCleanup, WorktreeAdoptOptions, WorktreeCreateOptions, WorktreeManager,
+};
 
 use crate::commands::WorktreeCommands;
 use crate::handlers::agent::run_agent;
@@ -174,17 +176,8 @@ pub fn handle_worktree(
         WorktreeCommands::Cleanup { repo } => {
             let mgr = WorktreeManager::new(conn, config);
             let outcome = mgr.cleanup_merged_worktrees(repo.as_deref())?;
-            let count = outcome.cleaned;
-            if count == 0 && outcome.kept_for_active_run.is_empty() {
-                println!("No merged worktrees found to clean up.");
-            } else if count > 0 {
-                println!("Cleaned up {count} merged worktree(s).");
-            }
-            for kept in &outcome.kept_for_active_run {
-                println!(
-                    "Kept {}: {}; it will be cleaned up after the run ends.",
-                    kept.branch, kept.reason
-                );
+            for line in cleanup_messages(&outcome) {
+                println!("{line}");
             }
         }
         WorktreeCommands::SetBaseBranch {
@@ -284,6 +277,26 @@ pub fn handle_worktree(
     Ok(())
 }
 
+/// Lines printed by `worktree cleanup` for a cleanup outcome.
+fn cleanup_messages(outcome: &MergedCleanup) -> Vec<String> {
+    let mut lines = Vec::new();
+    if outcome.cleaned == 0 && outcome.kept_for_active_run.is_empty() {
+        lines.push("No merged worktrees found to clean up.".to_string());
+    } else if outcome.cleaned > 0 {
+        lines.push(format!(
+            "Cleaned up {} merged worktree(s).",
+            outcome.cleaned
+        ));
+    }
+    for kept in &outcome.kept_for_active_run {
+        lines.push(format!(
+            "Kept {}: {}; it will be cleaned up after the run ends.",
+            kept.branch, kept.reason
+        ));
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use conductor_core::worktree::{SetBaseBranchOptions, WorktreeManager};
@@ -342,5 +355,50 @@ mod tests {
             !msg.contains("Pass rebase=true"),
             "rebase flag should be forwarded, not prompt user to set it: {msg}"
         );
+    }
+
+    fn kept(branch: &str) -> conductor_core::worktree::KeptWorktree {
+        conductor_core::worktree::KeptWorktree {
+            branch: branch.into(),
+            reason: "workflow run wf1 (x) is running".into(),
+        }
+    }
+
+    #[test]
+    fn cleanup_messages_nothing_found() {
+        assert_eq!(
+            super::cleanup_messages(&super::MergedCleanup::default()),
+            vec!["No merged worktrees found to clean up."]
+        );
+    }
+
+    #[test]
+    fn cleanup_messages_cleaned_only() {
+        let o = super::MergedCleanup {
+            cleaned: 2,
+            kept_for_active_run: vec![],
+        };
+        assert_eq!(
+            super::cleanup_messages(&o),
+            vec!["Cleaned up 2 merged worktree(s)."]
+        );
+    }
+
+    #[test]
+    fn cleanup_messages_kept_only_and_mixed() {
+        let o = super::MergedCleanup {
+            cleaned: 0,
+            kept_for_active_run: vec![kept("fix/a")],
+        };
+        let lines = super::cleanup_messages(&o);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].starts_with("Kept fix/a: workflow run wf1"));
+        let o = super::MergedCleanup {
+            cleaned: 1,
+            kept_for_active_run: vec![kept("fix/a")],
+        };
+        let lines = super::cleanup_messages(&o);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "Cleaned up 1 merged worktree(s).");
     }
 }

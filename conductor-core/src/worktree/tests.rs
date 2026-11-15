@@ -3229,3 +3229,34 @@ fn test_cleanup_keeps_worktree_with_live_agent_run() {
         assert_eq!(cleanup_all_merged(&conn).cleaned, 1, "{live}");
     }
 }
+
+#[test]
+fn test_cleanup_keeps_worktree_when_live_run_lookup_fails() {
+    let conn = crate::test_helpers::setup_db();
+    conn.execute_batch("PRAGMA foreign_keys = OFF; DROP TABLE workflow_runs;")
+        .unwrap();
+    let out = cleanup_all_merged(&conn);
+    assert_eq!(out.cleaned, 0);
+    assert_eq!(out.kept_for_active_run.len(), 1);
+    assert!(out.kept_for_active_run[0]
+        .reason
+        .contains("could not check for live runs"));
+    assert_eq!(w1_status(&conn), "active");
+}
+
+#[test]
+fn test_cleanup_keeps_worktree_with_only_a_live_child_workflow_run() {
+    let conn = crate::test_helpers::setup_db();
+    insert_workflow_run_on_w1(&conn, "parent", "completed");
+    insert_workflow_run_on_w1(&conn, "child", "running");
+    conn.execute(
+        "UPDATE workflow_runs SET parent_workflow_run_id = 'parent' WHERE id = 'child'",
+        [],
+    )
+    .unwrap();
+    let out = cleanup_all_merged(&conn);
+    assert_eq!(out.cleaned, 0);
+    assert_eq!(out.kept_for_active_run.len(), 1);
+    assert!(out.kept_for_active_run[0].reason.contains("child"));
+    assert_eq!(w1_status(&conn), "active");
+}
