@@ -3123,6 +3123,11 @@ mod tests {
             [root.to_str().unwrap()],
         )
         .unwrap();
+        db.execute(
+            "UPDATE workflow_runs SET worktree_id = 'w1' WHERE id = ?1",
+            [&run_id],
+        )
+        .unwrap();
         let out = serde_json::json!({ "plan_path": plan_path }).to_string();
         db.execute(
             "INSERT INTO workflow_run_steps \
