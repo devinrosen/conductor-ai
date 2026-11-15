@@ -3690,9 +3690,10 @@ fn test_supersede_steps_from_position_only_completed_at_or_after() {
     assert_eq!(step_row(&conn, &running).0, "running");
 }
 
-/// Running agent steps at or after the boundary are signalled without error.
+/// Supersede leaves running agent steps alone (and sends no signal); the
+/// following mark_interrupted_steps_failed pass terminates them once.
 #[test]
-fn test_supersede_steps_from_position_signals_agent_subprocesses() {
+fn test_supersede_steps_from_position_leaves_running_agent_steps() {
     let conn = setup_db();
     let run_id = make_workflow_run_id(&conn);
     let (_, step_before) = create_agent_step(&conn, &run_id, "agent-before", 1, 4294967290);

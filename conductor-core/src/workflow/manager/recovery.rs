@@ -888,13 +888,16 @@ pub fn mark_interrupted_steps_failed(conn: &Connection, workflow_run_id: &str) -
 ///
 /// `skipped` rather than a new status: the status enum belongs to runkon, and
 /// runkon ignores `skipped` rows for its skip set and prior-attempt recovery.
+///
+/// Only touches `completed` rows and sends no signals. Callers pair it with
+/// `mark_interrupted_steps_failed`, which terminates each running subprocess
+/// once and clears its PID.
 pub fn supersede_steps_from_position(
     conn: &Connection,
     workflow_run_id: &str,
     position: i64,
     reason: &str,
 ) -> Result<u64> {
-    terminate_subprocesses(conn, workflow_run_id, Some(position))?;
     let count = conn.execute(
         "UPDATE workflow_run_steps \
          SET status = 'skipped', step_error = :reason \
