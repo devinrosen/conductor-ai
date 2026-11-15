@@ -98,48 +98,71 @@ fn test_get_active_run_for_worktree_ignores_other_worktree() {
 }
 
 #[test]
-fn test_reset_failed_steps() {
+fn test_mark_interrupted_steps_failed() {
     let conn = setup_db();
     let run_id = setup_run_with_steps(&conn);
 
-    let count = crate::workflow::reset_failed_steps(&conn, &run_id).unwrap();
-    // Should reset both 'failed' and 'running' steps
-    assert_eq!(count, 2);
-
-    let steps = crate::workflow::get_workflow_steps(&conn, &run_id).unwrap();
-    assert_eq!(steps[0].status, WorkflowStepStatus::Completed); // unchanged
-    assert_eq!(steps[1].status, WorkflowStepStatus::Pending); // was failed
-    assert!(steps[1].result_text.is_none()); // cleared
-    assert_eq!(steps[2].status, WorkflowStepStatus::Pending); // was running
-}
-
-#[test]
-fn test_reset_completed_steps() {
-    let conn = setup_db();
-    let run_id = setup_run_with_steps(&conn);
-
-    let count = crate::workflow::reset_completed_steps(&conn, &run_id).unwrap();
+    let count = crate::workflow::mark_interrupted_steps_failed(&conn, &run_id).unwrap();
+    // Only the 'running' step changes; the 'failed' one is kept as it was
     assert_eq!(count, 1);
 
     let steps = crate::workflow::get_workflow_steps(&conn, &run_id).unwrap();
-    assert_eq!(steps[0].status, WorkflowStepStatus::Pending); // was completed
-    assert!(steps[0].result_text.is_none()); // cleared
-    assert!(steps[0].context_out.is_none()); // cleared
+    assert_eq!(steps[0].status, WorkflowStepStatus::Completed); // unchanged
+    assert_eq!(steps[1].status, WorkflowStepStatus::Failed); // was failed
+    assert_eq!(steps[1].result_text.as_deref(), Some("error")); // kept
+    assert_eq!(steps[2].status, WorkflowStepStatus::Failed); // was running
+    assert_eq!(
+        steps[2].step_error.as_deref(),
+        Some(crate::workflow::INTERRUPTED_STEP_MSG)
+    );
+    assert!(steps[2].ended_at.is_some());
 }
 
 #[test]
-fn test_reset_steps_from_position() {
+fn test_supersede_all_completed_steps() {
     let conn = setup_db();
     let run_id = setup_run_with_steps(&conn);
 
-    // Reset from position 1 onwards
-    let count = crate::workflow::reset_steps_from_position(&conn, &run_id, 1).unwrap();
-    assert_eq!(count, 2); // positions 1 and 2
+    let count = crate::workflow::supersede_steps_from_position(
+        &conn,
+        &run_id,
+        0,
+        crate::workflow::SUPERSEDED_ON_RESTART_MSG,
+    )
+    .unwrap();
+    assert_eq!(count, 1);
+
+    let steps = crate::workflow::get_workflow_steps(&conn, &run_id).unwrap();
+    assert_eq!(steps[0].status, WorkflowStepStatus::Skipped); // was completed
+    assert_eq!(
+        steps[0].step_error.as_deref(),
+        Some(crate::workflow::SUPERSEDED_ON_RESTART_MSG)
+    );
+    assert_eq!(steps[0].result_text.as_deref(), Some("result-a")); // kept
+    assert_eq!(steps[0].context_out.as_deref(), Some("ctx-a")); // kept
+}
+
+#[test]
+fn test_supersede_steps_from_position() {
+    let conn = setup_db();
+    let run_id = setup_run_with_steps(&conn);
+
+    // Supersede from position 1 onwards: only completed rows change
+    let count =
+        crate::workflow::supersede_steps_from_position(&conn, &run_id, 1, "superseded: test")
+            .unwrap();
+    assert_eq!(count, 0); // positions 1 and 2 are failed/running, not completed
 
     let steps = crate::workflow::get_workflow_steps(&conn, &run_id).unwrap();
     assert_eq!(steps[0].status, WorkflowStepStatus::Completed); // position 0 unchanged
-    assert_eq!(steps[1].status, WorkflowStepStatus::Pending);
-    assert_eq!(steps[2].status, WorkflowStepStatus::Pending);
+    assert_eq!(steps[1].status, WorkflowStepStatus::Failed);
+    assert_eq!(steps[2].status, WorkflowStepStatus::Running);
+
+    // From position 0 the completed row is superseded
+    let count =
+        crate::workflow::supersede_steps_from_position(&conn, &run_id, 0, "superseded: test")
+            .unwrap();
+    assert_eq!(count, 1);
 }
 
 /// Create a standalone-DB workflow run with the given status and definition snapshot.
@@ -496,7 +519,7 @@ fn test_row_to_workflow_run_malformed_inputs_json_returns_empty() {
 }
 
 #[test]
-fn test_restart_resets_all_steps() {
+fn test_restart_supersedes_all_steps() {
     let conn = setup_db();
     let run_id = setup_run_with_steps(&conn);
 
@@ -506,28 +529,34 @@ fn test_restart_resets_all_steps() {
     assert_eq!(steps[1].status, WorkflowStepStatus::Failed);
     assert_eq!(steps[2].status, WorkflowStepStatus::Running);
 
-    // Restart resets both failed+running and completed steps
-    crate::workflow::reset_failed_steps(&conn, &run_id).unwrap();
-    crate::workflow::reset_completed_steps(&conn, &run_id).unwrap();
+    // Restart supersedes completed steps and fails the interrupted one
+    crate::workflow::supersede_steps_from_position(
+        &conn,
+        &run_id,
+        0,
+        crate::workflow::SUPERSEDED_ON_RESTART_MSG,
+    )
+    .unwrap();
+    crate::workflow::mark_interrupted_steps_failed(&conn, &run_id).unwrap();
 
     let steps = crate::workflow::get_workflow_steps(&conn, &run_id).unwrap();
     assert_eq!(
         steps[0].status,
-        WorkflowStepStatus::Pending,
-        "completed step should be reset"
+        WorkflowStepStatus::Skipped,
+        "completed step should be superseded"
     );
-    assert!(steps[0].result_text.is_none(), "result should be cleared");
-    assert!(steps[0].context_out.is_none(), "context should be cleared");
-    assert!(steps[0].markers_out.is_none(), "markers should be cleared");
+    assert_eq!(steps[0].result_text.as_deref(), Some("result-a"));
+    assert_eq!(steps[0].context_out.as_deref(), Some("ctx-a"));
+    assert!(steps[0].markers_out.is_some(), "markers should be kept");
     assert_eq!(
         steps[1].status,
-        WorkflowStepStatus::Pending,
-        "failed step should be reset"
+        WorkflowStepStatus::Failed,
+        "failed step should be kept"
     );
     assert_eq!(
         steps[2].status,
-        WorkflowStepStatus::Pending,
-        "running step should be reset"
+        WorkflowStepStatus::Failed,
+        "running step should be marked failed"
     );
 
     // skip set should be empty after restart
@@ -541,7 +570,7 @@ fn test_restart_resets_all_steps() {
 /// Exercises the full --from-step DB orchestration path:
 /// - skip-set pruning (keys at/after pos removed)
 /// - step_map filtered to only surviving skip keys
-/// - DB reset: steps at/after the target step become Pending
+/// - DB update: completed steps at/after the target step become Skipped (superseded)
 /// - steps before the target step remain Completed
 #[test]
 fn test_from_step_skip_set_and_step_map() {
@@ -628,8 +657,9 @@ fn test_from_step_skip_set_and_step_map() {
     }
 
     // Reset DB state for steps at/after pos, then reset any failed/running steps
-    crate::workflow::reset_steps_from_position(&conn, &run.id, pos).unwrap();
-    crate::workflow::reset_failed_steps(&conn, &run.id).unwrap();
+    crate::workflow::supersede_steps_from_position(&conn, &run.id, pos, "superseded: test")
+        .unwrap();
+    crate::workflow::mark_interrupted_steps_failed(&conn, &run.id).unwrap();
 
     // skip_completed should contain only ("step-a", 0)
     assert_eq!(keys.len(), 1, "only step-a:0 should survive pruning");
@@ -646,7 +676,7 @@ fn test_from_step_skip_set_and_step_map() {
         "step-c:0 must be pruned from skip set"
     );
 
-    // DB state: step-a stays Completed, step-b and step-c are reset to Pending
+    // DB state: step-a stays Completed, step-b and step-c are superseded (Skipped)
     let updated = crate::workflow::get_workflow_steps(&conn, &run.id).unwrap();
     assert_eq!(
         updated[0].status,
@@ -655,13 +685,13 @@ fn test_from_step_skip_set_and_step_map() {
     );
     assert_eq!(
         updated[1].status,
-        WorkflowStepStatus::Pending,
-        "step-b (pos 1, the from-step) must be reset to Pending"
+        WorkflowStepStatus::Skipped,
+        "step-b (pos 1, the from-step) must be superseded"
     );
     assert_eq!(
         updated[2].status,
-        WorkflowStepStatus::Pending,
-        "step-c (pos 2) must be reset to Pending"
+        WorkflowStepStatus::Skipped,
+        "step-c (pos 2) must be superseded"
     );
 
     // step_map built from all_steps filtered by surviving skip keys
@@ -1604,5 +1634,243 @@ mod child_resume {
         let input = make_resume_input(config, &parent_id, &f.db_path, Some("nope"), false);
         assert!(resume_workflow(&input).is_err());
         assert_eq!(child_runs(&conn).len(), 1);
+    }
+}
+
+/// A resumed run that completes leaves no `pending` or `running` step rows, and
+/// the failed attempt stays readable beside the re-run (#3360).
+#[cfg(unix)]
+mod stale_rows {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    struct Fx {
+        _tmp: tempfile::NamedTempFile,
+        db_path: std::path::PathBuf,
+        ws: tempfile::TempDir,
+        def: runkon_flow::dsl::WorkflowDef,
+    }
+
+    fn write_script(dir: &std::path::Path, name: &str, body: &str) -> String {
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path.to_str().unwrap().to_string()
+    }
+
+    /// Workflow `a`, `b`, `c`. `b` fails while `<ws>/broken` exists and `c`
+    /// fails while `<ws>/broken-c` exists. `a` appends a line to `<ws>/a-runs`
+    /// each time it executes.
+    fn fixture() -> Fx {
+        let (tmp, db_path) = make_standalone_db();
+        let ws = tempfile::tempdir().unwrap();
+        let w = ws.path().to_str().unwrap().to_string();
+        let conn = crate::db::open_database(&db_path).unwrap();
+        conn.execute("UPDATE repos SET local_path = ?1", [&w])
+            .unwrap();
+        conn.execute("UPDATE worktrees SET path = ?1", [&w])
+            .unwrap();
+        drop(conn);
+
+        let emit = |ctx: &str| {
+            format!(
+                "echo '<<<FLOW_OUTPUT>>>'\necho '{{\"markers\": [], \"context\": \"{ctx}\"}}'\necho '<<<END_FLOW_OUTPUT>>>'\n"
+            )
+        };
+        let a = write_script(
+            ws.path(),
+            "a.sh",
+            &format!("echo x >> {w}/a-runs\n{}", emit("ctx-a")),
+        );
+        let b = write_script(
+            ws.path(),
+            "b.sh",
+            &format!(
+                "if [ -e {w}/broken ]; then echo 'b exploded' >&2; exit 1; fi\n{}",
+                emit("ctx-b")
+            ),
+        );
+        let c = write_script(
+            ws.path(),
+            "c.sh",
+            &format!(
+                "if [ -e {w}/broken-c ]; then echo 'c exploded' >&2; exit 1; fi\n{}",
+                emit("ctx-c")
+            ),
+        );
+        std::fs::write(ws.path().join("broken"), "").unwrap();
+
+        let def = runkon_flow::dsl::parse_workflow_str(
+            &format!(
+                r#"workflow stale-wf {{
+                    meta {{ trigger = "manual" targets = ["worktree"] }}
+                    script a {{ run = "{a}" }}
+                    script b {{ run = "{b}" }}
+                    script c {{ run = "{c}" }}
+                }}"#
+            ),
+            "<test>",
+        )
+        .expect("workflow should parse");
+        Fx {
+            _tmp: tmp,
+            db_path,
+            ws,
+            def,
+        }
+    }
+
+    fn run_first(f: &Fx) -> (Connection, String) {
+        let w = f.ws.path().to_str().unwrap().to_string();
+        let params = crate::workflow::types::WorkflowExecStandalone {
+            worktree_id: Some("w1".to_string()),
+            repo_id: Some("r1".to_string()),
+            db_path: Some(f.db_path.clone()),
+            ..WorkflowExecStandalone::new(
+                Config::default(),
+                f.def.clone(),
+                w.clone(),
+                w,
+                crate::workflow::WorkflowExecConfig {
+                    poll_interval: std::time::Duration::from_millis(50),
+                    ..Default::default()
+                },
+            )
+        };
+        let first = crate::workflow::execute_workflow_standalone(&params).expect("run starts");
+        assert!(!first.all_succeeded, "first run must fail at b");
+        let conn = crate::db::open_database(&f.db_path).unwrap();
+        let run_id: String = conn
+            .query_row("SELECT id FROM workflow_runs", [], |r| r.get(0))
+            .unwrap();
+        (conn, run_id)
+    }
+
+    fn resume(f: &Fx, run_id: &str, from_step: Option<&str>, restart: bool) -> bool {
+        let config = make_resume_config();
+        let input = make_resume_input(config, run_id, &f.db_path, from_step, restart);
+        resume_workflow(&input)
+            .expect("resume should run")
+            .all_succeeded
+    }
+
+    fn rows(conn: &Connection, run_id: &str) -> Vec<WorkflowRunStep> {
+        crate::workflow::get_workflow_steps(conn, run_id).unwrap()
+    }
+
+    fn named<'a>(rows: &'a [WorkflowRunStep], name: &str) -> Vec<&'a WorkflowRunStep> {
+        rows.iter().filter(|s| s.step_name == name).collect()
+    }
+
+    fn assert_none_unfinished(rows: &[WorkflowRunStep]) {
+        for s in rows {
+            assert!(
+                !matches!(
+                    s.status,
+                    WorkflowStepStatus::Pending | WorkflowStepStatus::Running
+                ),
+                "step '{}' is {:?} on a finished run",
+                s.step_name,
+                s.status
+            );
+        }
+    }
+
+    fn a_runs(f: &Fx) -> usize {
+        std::fs::read_to_string(f.ws.path().join("a-runs"))
+            .unwrap()
+            .lines()
+            .count()
+    }
+
+    #[test]
+    fn plain_resume_keeps_failed_attempt() {
+        let f = fixture();
+        let (conn, run_id) = run_first(&f);
+        std::fs::remove_file(f.ws.path().join("broken")).unwrap();
+        assert!(resume(&f, &run_id, None, false));
+
+        let all = rows(&conn, &run_id);
+        assert_none_unfinished(&all);
+        let a = named(&all, "a");
+        assert_eq!(a.len(), 1, "a must not be re-run");
+        assert_eq!(a[0].status, WorkflowStepStatus::Completed);
+        let b = named(&all, "b");
+        assert_eq!(b.len(), 2, "failed attempt + re-run");
+        assert_eq!(b[0].status, WorkflowStepStatus::Failed);
+        assert!(b[0].step_error.as_deref().is_some_and(|e| !e.is_empty()));
+        assert_eq!(b[1].status, WorkflowStepStatus::Completed);
+        assert_eq!(named(&all, "c")[0].status, WorkflowStepStatus::Completed);
+    }
+
+    #[test]
+    fn from_step_resume_supersedes_completed_and_keeps_failure() {
+        let f = fixture();
+        let (conn, run_id) = run_first(&f);
+        let before = rows(&conn, &run_id);
+        let old_a = named(&before, "a")[0].clone();
+        std::fs::remove_file(f.ws.path().join("broken")).unwrap();
+        assert!(resume(&f, &run_id, Some("a"), false));
+
+        let all = rows(&conn, &run_id);
+        assert_none_unfinished(&all);
+        let a = named(&all, "a");
+        assert_eq!(a.len(), 2);
+        assert_eq!(a[0].status, WorkflowStepStatus::Skipped);
+        assert_eq!(
+            a[0].step_error.as_deref(),
+            Some(crate::workflow::superseded_from_step_msg("a").as_str())
+        );
+        assert_eq!(a[0].result_text, old_a.result_text);
+        assert_eq!(a[0].context_out, old_a.context_out);
+        assert_eq!(a[1].status, WorkflowStepStatus::Completed);
+        let b = named(&all, "b");
+        assert_eq!(b[0].status, WorkflowStepStatus::Failed);
+        assert!(b[0].step_error.as_deref().is_some_and(|e| !e.is_empty()));
+        assert_eq!(b[1].status, WorkflowStepStatus::Completed);
+        assert_eq!(a_runs(&f), 2);
+    }
+
+    #[test]
+    fn restart_supersedes_every_completed_row() {
+        let f = fixture();
+        let (conn, run_id) = run_first(&f);
+        std::fs::remove_file(f.ws.path().join("broken")).unwrap();
+        assert!(resume(&f, &run_id, None, true));
+
+        let all = rows(&conn, &run_id);
+        assert_none_unfinished(&all);
+        let a = named(&all, "a");
+        assert_eq!(a[0].status, WorkflowStepStatus::Skipped);
+        assert_eq!(
+            a[0].step_error.as_deref(),
+            Some(crate::workflow::SUPERSEDED_ON_RESTART_MSG)
+        );
+        assert_eq!(a[1].status, WorkflowStepStatus::Completed);
+        assert_eq!(named(&all, "b")[0].status, WorkflowStepStatus::Failed);
+        assert_eq!(a_runs(&f), 2);
+    }
+
+    #[test]
+    fn second_resume_does_not_rerun_completed_occurrences() {
+        let f = fixture();
+        let (conn, run_id) = run_first(&f);
+        std::fs::remove_file(f.ws.path().join("broken")).unwrap();
+        std::fs::write(f.ws.path().join("broken-c"), "").unwrap();
+        assert!(!resume(&f, &run_id, Some("a"), false), "c must fail");
+        assert_eq!(a_runs(&f), 2);
+
+        std::fs::remove_file(f.ws.path().join("broken-c")).unwrap();
+        assert!(resume(&f, &run_id, None, false));
+
+        let all = rows(&conn, &run_id);
+        assert_none_unfinished(&all);
+        assert_eq!(a_runs(&f), 2, "a must not run a third time");
+        assert_eq!(named(&all, "a").len(), 2);
+        assert_eq!(named(&all, "b").len(), 2);
+        let c = named(&all, "c");
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].status, WorkflowStepStatus::Failed);
+        assert_eq!(c[1].status, WorkflowStepStatus::Completed);
     }
 }

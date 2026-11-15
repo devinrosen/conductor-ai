@@ -1274,11 +1274,11 @@ flowchart TD
 
     C -->|normal resume| D["completed_keys_from_steps\nskip_set = all Completed steps\nas (step_name, iteration) pairs"]
     C -->|"--from-step NAME"| E["completed_keys_from_steps\nthen prune keys at or after NAME"]
-    E --> F["reset_steps_from_position\nNAME and later steps -> pending"]
+    E --> F["supersede_steps_from_position\nCompleted rows at or after NAME -> skipped (superseded)"]
     C -->|"--restart"| G[empty skip_set]
-    G --> H["reset_failed_steps\nreset_completed_steps -> pending"]
+    G --> H["supersede_steps_from_position(0)\nall Completed rows -> skipped (superseded)"]
 
-    D --> I["terminate_subprocesses\nSIGTERM all running PIDs"]
+    D --> I["terminate_subprocesses\nSIGTERM all running PIDs\nmark_interrupted_steps_failed\nrunning rows -> failed (interrupted)\nfailed rows are kept"]
     F --> I
     H --> I
     I --> J["delete_orphaned_pending_steps\nclean stale queue entries"]
@@ -1293,6 +1293,19 @@ flowchart TD
     P --> R[update step_results\naccumulate metrics]
     Q --> R
 ```
+
+Resume never rewrites an earlier step row to `pending`. runkon groups the rows
+at one position as one occurrence and re-runs any occurrence with no
+`Completed` row, recording the re-run as a new row at the same position, like
+a DSL retry. So the earlier attempt stays as history: `failed` and `timed_out`
+rows are untouched, a row left `running` becomes `failed` with an
+"interrupted" `step_error`, and a `Completed` row that `--from-step` or
+`--restart` re-runs becomes `skipped` with a "superseded" `step_error`, its
+output and `child_run_id` kept. After a resume that completes, no row is
+`pending` or `running`. A failed agent row keeps its `child_run_id`, which
+feeds runkon's prior-attempt recovery (runkon#143). Runs resumed before this
+change may carry stale `pending` rows; a later resume deletes them
+(`delete_orphaned_pending_steps`).
 
 ---
 

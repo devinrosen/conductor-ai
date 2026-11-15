@@ -3548,244 +3548,70 @@ fn test_recover_stuck_steps_fixes_step_with_terminal_child() {
 }
 
 // ---------------------------------------------------------------------------
-// subprocess_pid cleared on reset tests
+// resume step-row updates: mark_interrupted_steps_failed / supersede_steps_from_position
 // ---------------------------------------------------------------------------
 
-/// reset_failed_steps must clear subprocess_pid so the orphan reaper doesn't
-/// see a stale PID on the freshly-reset pending step.
-#[test]
-fn test_reset_failed_steps_clears_subprocess_pid() {
-    let conn = setup_db();
-    let run_id = make_workflow_run_id(&conn);
-
-    // Insert a failed step that has a stale subprocess_pid.
+fn insert_step_row(
+    conn: &Connection,
+    run_id: &str,
+    name: &str,
+    position: i64,
+    status: &str,
+    pid: Option<i64>,
+    step_error: Option<&str>,
+) -> String {
     let step_id = crate::new_id();
     conn.execute(
         "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
-         VALUES (:step_id, :run_id, 'step-failed', 'script', 0, 'failed', 0, 12345)",
-        named_params! { ":step_id": step_id, ":run_id": run_id },
+         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid, step_error) \
+         VALUES (:step_id, :run_id, :name, 'script', :position, :status, 0, :pid, :step_error)",
+        named_params! {
+            ":step_id": step_id, ":run_id": run_id, ":name": name,
+            ":position": position, ":status": status, ":pid": pid, ":step_error": step_error,
+        },
     )
     .unwrap();
-    crate::workflow::reset_failed_steps(&conn, &run_id).unwrap();
-
-    let pid: Option<i64> = conn
-        .query_row(
-            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = :id",
-            named_params! { ":id": step_id },
-            |r| r.get("subprocess_pid"),
-        )
-        .unwrap();
-    assert!(
-        pid.is_none(),
-        "subprocess_pid must be NULL after reset_failed_steps"
-    );
+    step_id
 }
 
-/// reset_completed_steps must clear subprocess_pid.
-#[test]
-fn test_reset_completed_steps_clears_subprocess_pid() {
-    let conn = setup_db();
-    let run_id = make_workflow_run_id(&conn);
-
-    let step_id = crate::new_id();
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
-         VALUES (:step_id, :run_id, 'step-done', 'script', 0, 'completed', 0, 99999)",
-        named_params! { ":step_id": step_id, ":run_id": run_id },
+fn step_row(conn: &Connection, id: &str) -> (String, Option<i64>, Option<String>) {
+    conn.query_row(
+        "SELECT status, subprocess_pid, step_error FROM workflow_run_steps WHERE id = :id",
+        named_params! { ":id": id },
+        |r| {
+            Ok((
+                r.get("status")?,
+                r.get("subprocess_pid")?,
+                r.get("step_error")?,
+            ))
+        },
     )
-    .unwrap();
-    crate::workflow::reset_completed_steps(&conn, &run_id).unwrap();
-
-    let pid: Option<i64> = conn
-        .query_row(
-            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = :id",
-            named_params! { ":id": step_id },
-            |r| r.get("subprocess_pid"),
-        )
-        .unwrap();
-    assert!(
-        pid.is_none(),
-        "subprocess_pid must be NULL after reset_completed_steps"
-    );
+    .unwrap()
 }
 
-/// reset_steps_from_position must clear subprocess_pid.
+/// A running row becomes failed with the interrupted message and a cleared PID
+/// (non-existent PIDs are tolerated when signalling); failed rows are kept.
 #[test]
-fn test_reset_steps_from_position_clears_subprocess_pid() {
+fn test_mark_interrupted_steps_failed_updates_only_running() {
     let conn = setup_db();
     let run_id = make_workflow_run_id(&conn);
+    let running_a = insert_step_row(&conn, &run_id, "a", 0, "running", Some(4294967295), None);
+    let running_b = insert_step_row(&conn, &run_id, "b", 1, "running", Some(4294967294), None);
+    let failed = insert_step_row(&conn, &run_id, "c", 2, "failed", Some(12345), Some("boom"));
 
-    let step_id = crate::new_id();
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
-         VALUES (:step_id, :run_id, 'step-pos', 'script', 2, 'failed', 0, 55555)",
-        named_params! { ":step_id": step_id, ":run_id": run_id },
-    )
-    .unwrap();
-    crate::workflow::reset_steps_from_position(&conn, &run_id, 2).unwrap();
+    let n = crate::workflow::mark_interrupted_steps_failed(&conn, &run_id).unwrap();
+    assert_eq!(n, 2);
 
-    let pid: Option<i64> = conn
-        .query_row(
-            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = :id",
-            named_params! { ":id": step_id },
-            |r| r.get("subprocess_pid"),
-        )
-        .unwrap();
-    assert!(
-        pid.is_none(),
-        "subprocess_pid must be NULL after reset_steps_from_position"
-    );
-}
-
-/// reset_failed_steps must attempt to signal running subprocesses before
-/// nulling subprocess_pid, so orphaned child processes are cleaned up.
-/// Uses non-existent PIDs (u32::MAX - N) — cancel_subprocess tolerates ESRCH.
-/// Tests multiple running subprocesses to verify all PIDs are signalled.
-#[test]
-fn test_reset_failed_steps_kills_running_subprocesses() {
-    let conn = setup_db();
-    let run_id = make_workflow_run_id(&conn);
-
-    let step_id_a = crate::new_id();
-    let step_id_b = crate::new_id();
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
-         VALUES (:step_id, :run_id, 'step-running-a', 'script', 0, 'running', 0, 4294967295)",
-        named_params! { ":step_id": step_id_a, ":run_id": run_id },
-    )
-    .unwrap();
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
-         VALUES (:step_id, :run_id, 'step-running-b', 'script', 1, 'running', 0, 4294967294)",
-        named_params! { ":step_id": step_id_b, ":run_id": run_id },
-    )
-    .unwrap();
-    // Must not error even though the PIDs do not exist.
-    crate::workflow::reset_failed_steps(&conn, &run_id).unwrap();
-
-    for (id, label) in [
-        (&step_id_a, "step-running-a"),
-        (&step_id_b, "step-running-b"),
-    ] {
-        let pid: Option<i64> = conn
-            .query_row(
-                "SELECT subprocess_pid FROM workflow_run_steps WHERE id = :id",
-                named_params! { ":id": id },
-                |r| r.get("subprocess_pid"),
-            )
-            .unwrap();
-        assert!(
-            pid.is_none(),
-            "subprocess_pid must be NULL after reset_failed_steps for {label}"
-        );
+    for id in [&running_a, &running_b] {
+        let (status, pid, err) = step_row(&conn, id);
+        assert_eq!(status, "failed");
+        assert!(pid.is_none(), "subprocess_pid must be NULL");
+        assert_eq!(err.as_deref(), Some(crate::workflow::INTERRUPTED_STEP_MSG));
     }
-}
-
-/// reset_steps_from_position must attempt to signal running subprocesses at or
-/// after `position` before nulling subprocess_pid, and must NOT signal steps
-/// before the boundary.
-#[test]
-fn test_reset_steps_from_position_kills_running_subprocesses() {
-    let conn = setup_db();
-    let run_id = make_workflow_run_id(&conn);
-
-    // Step at position 1 — before the reset boundary; must be left untouched.
-    let step_id_before = crate::new_id();
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
-         VALUES (:step_id, :run_id, 'step-before', 'script', 1, 'running', 0, 4294967294)",
-        named_params! { ":step_id": step_id_before, ":run_id": run_id },
-    )
-    .unwrap();
-
-    // Step at position 2 — at the reset boundary; must be reset.
-    let step_id_at = crate::new_id();
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
-         VALUES (:step_id, :run_id, 'step-at', 'script', 2, 'running', 0, 4294967295)",
-        named_params! { ":step_id": step_id_at, ":run_id": run_id },
-    )
-    .unwrap();
-
-    // Step at position 3 — after the reset boundary; must also be reset.
-    let step_id_after = crate::new_id();
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, subprocess_pid) \
-         VALUES (:step_id, :run_id, 'step-after', 'script', 3, 'running', 0, 4294967293)",
-        named_params! { ":step_id": step_id_after, ":run_id": run_id },
-    )
-    .unwrap();
-    crate::workflow::reset_steps_from_position(&conn, &run_id, 2).unwrap();
-
-    // Step at boundary must have subprocess_pid nulled.
-    let pid_at: Option<i64> = conn
-        .query_row(
-            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = :id",
-            named_params! { ":id": step_id_at },
-            |r| r.get("subprocess_pid"),
-        )
-        .unwrap();
-    assert!(
-        pid_at.is_none(),
-        "subprocess_pid must be NULL after reset_steps_from_position for step at boundary"
-    );
-
-    // Step after boundary must also have subprocess_pid nulled and status reset.
-    let pid_after: Option<i64> = conn
-        .query_row(
-            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = :id",
-            named_params! { ":id": step_id_after },
-            |r| r.get("subprocess_pid"),
-        )
-        .unwrap();
-    assert!(
-        pid_after.is_none(),
-        "subprocess_pid must be NULL after reset_steps_from_position for step after boundary"
-    );
-    let status_after: String = conn
-        .query_row(
-            "SELECT status FROM workflow_run_steps WHERE id = :id",
-            named_params! { ":id": step_id_after },
-            |r| r.get("status"),
-        )
-        .unwrap();
-    assert_eq!(
-        status_after, "pending",
-        "status of step after boundary must be reset to pending"
-    );
-
-    // Step before boundary must retain its status and subprocess_pid.
-    let pid_before: Option<i64> = conn
-        .query_row(
-            "SELECT subprocess_pid FROM workflow_run_steps WHERE id = :id",
-            named_params! { ":id": step_id_before },
-            |r| r.get("subprocess_pid"),
-        )
-        .unwrap();
-    assert_eq!(
-        pid_before,
-        Some(4294967294_i64),
-        "subprocess_pid of step before boundary must not be changed"
-    );
-    let status_before: String = conn
-        .query_row(
-            "SELECT status FROM workflow_run_steps WHERE id = :id",
-            named_params! { ":id": step_id_before },
-            |r| r.get("status"),
-        )
-        .unwrap();
-    assert_eq!(
-        status_before, "running",
-        "status of step before boundary must not be changed"
-    );
+    let (status, pid, err) = step_row(&conn, &failed);
+    assert_eq!(status, "failed");
+    assert_eq!(pid, Some(12345), "failed rows are left as they were");
+    assert_eq!(err.as_deref(), Some("boom"), "failed step_error is kept");
 }
 
 /// Insert a running agent step into a workflow run, returning (agent_run_id, step_id).
@@ -3814,174 +3640,68 @@ fn create_agent_step(
     (agent.id, step_id)
 }
 
-/// reset_steps_from_position with `from_position=Some(pos)` must also signal
-/// agent-step subprocesses (tracked via child_run_id) at or after the boundary,
-/// and must NOT signal agent steps before the boundary.
+/// Running agent steps (tracked via child_run_id) are signalled across the run
+/// and end up failed.
 #[test]
-fn test_reset_steps_from_position_kills_agent_subprocesses() {
+fn test_mark_interrupted_steps_failed_handles_agent_steps() {
     let conn = setup_db();
     let run_id = make_workflow_run_id(&conn);
-
-    // Agent run before the boundary — its subprocess must NOT be touched.
-    let (_, step_before) = create_agent_step(&conn, &run_id, "agent-before", 1, 4294967290);
-
-    // Agent run at the boundary — its subprocess must be signalled.
-    let (_, step_at) = create_agent_step(&conn, &run_id, "agent-at", 2, 4294967291);
-
-    // Agent run after the boundary — its subprocess must also be signalled.
-    let (_, step_after) = create_agent_step(&conn, &run_id, "agent-after", 3, 4294967292);
-    // Must not error even if the PIDs are not real processes.
-    crate::workflow::reset_steps_from_position(&conn, &run_id, 2).unwrap();
-
-    // Steps at and after the boundary must be reset to pending.
-    let status_at: String = conn
-        .query_row(
-            "SELECT status FROM workflow_run_steps WHERE id = :id",
-            named_params! { ":id": step_at },
-            |r| r.get("status"),
-        )
-        .unwrap();
-    assert_eq!(status_at, "pending", "agent step at boundary must be reset");
-
-    let status_after: String = conn
-        .query_row(
-            "SELECT status FROM workflow_run_steps WHERE id = :id",
-            named_params! { ":id": step_after },
-            |r| r.get("status"),
-        )
-        .unwrap();
-    assert_eq!(
-        status_after, "pending",
-        "agent step after boundary must be reset"
-    );
-
-    // Step before boundary must remain running.
-    let status_before: String = conn
-        .query_row(
-            "SELECT status FROM workflow_run_steps WHERE id = :id",
-            named_params! { ":id": step_before },
-            |r| r.get("status"),
-        )
-        .unwrap();
-    assert_eq!(
-        status_before, "running",
-        "agent step before boundary must not be reset"
-    );
-}
-
-/// reset_failed_steps with `from_position=None` must signal agent-step subprocesses
-/// (tracked via child_run_id) across the entire run.
-#[test]
-fn test_reset_failed_steps_kills_agent_subprocesses() {
-    let conn = setup_db();
-    let run_id = make_workflow_run_id(&conn);
-
-    // Agent run in running state — its subprocess must be signalled by reset_failed_steps.
     let (_, step_id) = create_agent_step(&conn, &run_id, "agent-step", 1, 4294967290);
     // Must not error even if the PID is not a real process.
-    crate::workflow::reset_failed_steps(&conn, &run_id).unwrap();
-
-    // Step must be reset to pending.
-    let status: String = conn
-        .query_row(
-            "SELECT status FROM workflow_run_steps WHERE id = :id",
-            named_params! { ":id": step_id },
-            |r| r.get("status"),
-        )
-        .unwrap();
-    assert_eq!(status, "pending", "agent step must be reset to pending");
+    crate::workflow::mark_interrupted_steps_failed(&conn, &run_id).unwrap();
+    assert_eq!(step_row(&conn, &step_id).0, "failed");
 }
 
-// ---------------------------------------------------------------------------
-// step_error cleared on reset tests
-// ---------------------------------------------------------------------------
-
-/// reset_failed_steps must clear step_error so stale error text doesn't persist
-/// after a successful resume.
+/// Completed rows at or after the position become skipped with the reason;
+/// everything before the boundary and every non-completed row is untouched.
+/// Running rows are signalled but not rewritten (that is the interrupted step).
 #[test]
-fn test_reset_failed_steps_clears_step_error() {
+fn test_supersede_steps_from_position_only_completed_at_or_after() {
     let conn = setup_db();
     let run_id = make_workflow_run_id(&conn);
-
-    let step_id = crate::new_id();
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, step_error) \
-         VALUES (:step_id, :run_id, 'step-failed', 'script', 0, 'failed', 0, 'some error')",
-        named_params! { ":step_id": step_id, ":run_id": run_id },
-    )
-    .unwrap();
-    crate::workflow::reset_failed_steps(&conn, &run_id).unwrap();
-
-    let err: Option<String> = conn
-        .query_row(
-            "SELECT step_error FROM workflow_run_steps WHERE id = :id",
-            named_params! { ":id": step_id },
-            |r| r.get("step_error"),
-        )
-        .unwrap();
-    assert!(
-        err.is_none(),
-        "step_error must be NULL after reset_failed_steps"
+    let before = insert_step_row(&conn, &run_id, "before", 1, "completed", None, None);
+    let at = insert_step_row(&conn, &run_id, "at", 2, "completed", None, None);
+    let after = insert_step_row(&conn, &run_id, "after", 3, "completed", None, None);
+    let failed = insert_step_row(&conn, &run_id, "failed", 4, "failed", None, Some("boom"));
+    let running = insert_step_row(
+        &conn,
+        &run_id,
+        "running",
+        5,
+        "running",
+        Some(4294967293),
+        None,
     );
+
+    let n =
+        crate::workflow::supersede_steps_from_position(&conn, &run_id, 2, "superseded: x").unwrap();
+    assert_eq!(n, 2);
+
+    assert_eq!(step_row(&conn, &before).0, "completed");
+    for id in [&at, &after] {
+        let (status, _, err) = step_row(&conn, id);
+        assert_eq!(status, "skipped");
+        assert_eq!(err.as_deref(), Some("superseded: x"));
+    }
+    assert_eq!(
+        step_row(&conn, &failed),
+        ("failed".into(), None, Some("boom".into()))
+    );
+    assert_eq!(step_row(&conn, &running).0, "running");
 }
 
-/// reset_completed_steps must clear step_error.
+/// Supersede leaves running agent steps alone (and sends no signal); the
+/// following mark_interrupted_steps_failed pass terminates them once.
 #[test]
-fn test_reset_completed_steps_clears_step_error() {
+fn test_supersede_steps_from_position_leaves_running_agent_steps() {
     let conn = setup_db();
     let run_id = make_workflow_run_id(&conn);
-
-    let step_id = crate::new_id();
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, step_error) \
-         VALUES (:step_id, :run_id, 'step-done', 'script', 0, 'completed', 0, 'some error')",
-        named_params! { ":step_id": step_id, ":run_id": run_id },
-    )
-    .unwrap();
-    crate::workflow::reset_completed_steps(&conn, &run_id).unwrap();
-
-    let err: Option<String> = conn
-        .query_row(
-            "SELECT step_error FROM workflow_run_steps WHERE id = :id",
-            named_params! { ":id": step_id },
-            |r| r.get("step_error"),
-        )
-        .unwrap();
-    assert!(
-        err.is_none(),
-        "step_error must be NULL after reset_completed_steps"
-    );
-}
-
-/// reset_steps_from_position must clear step_error.
-#[test]
-fn test_reset_steps_from_position_clears_step_error() {
-    let conn = setup_db();
-    let run_id = make_workflow_run_id(&conn);
-
-    let step_id = crate::new_id();
-    conn.execute(
-        "INSERT INTO workflow_run_steps \
-         (id, workflow_run_id, step_name, role, position, status, iteration, step_error) \
-         VALUES (:step_id, :run_id, 'step-pos', 'script', 2, 'failed', 0, 'some error')",
-        named_params! { ":step_id": step_id, ":run_id": run_id },
-    )
-    .unwrap();
-    crate::workflow::reset_steps_from_position(&conn, &run_id, 2).unwrap();
-
-    let err: Option<String> = conn
-        .query_row(
-            "SELECT step_error FROM workflow_run_steps WHERE id = :id",
-            named_params! { ":id": step_id },
-            |r| r.get("step_error"),
-        )
-        .unwrap();
-    assert!(
-        err.is_none(),
-        "step_error must be NULL after reset_steps_from_position"
-    );
+    let (_, step_before) = create_agent_step(&conn, &run_id, "agent-before", 1, 4294967290);
+    let (_, step_at) = create_agent_step(&conn, &run_id, "agent-at", 2, 4294967291);
+    crate::workflow::supersede_steps_from_position(&conn, &run_id, 2, "superseded: x").unwrap();
+    // Only completed rows change status.
+    assert_eq!(step_row(&conn, &step_before).0, "running");
+    assert_eq!(step_row(&conn, &step_at).0, "running");
 }
 
 // ---------------------------------------------------------------------------
