@@ -19,6 +19,7 @@ What `verify-acceptance` runs to check a reviewed PR against its issue. CI alrea
 - If the diff adds a migration under `conductor-core/src/db/migrations/` (`.conductor/scripts/detect-db-migrations.sh` lists them), every command runs with `CONDUCTOR_HOME=$(mktemp -d)`. Never run the branch's build against `~/.conductor`: it migrates the database and locks out the installed binaries.
 - Use a scratch `CONDUCTOR_HOME` for anything that writes, migration or not.
 - Never touch real repos' worktrees or tickets, and never run a workflow that makes model calls.
+- Never push to, or delete branches or tags on, the real GitHub remote. That includes indirect pushes such as `conductor worktree cleanup` and `conductor worktree delete`, which run `git push origin --delete`. A scratch repo or worktree used to exercise such commands gets a local bare repo as `origin` (`git init --bare "$(mktemp -d)"`, then `git remote set-url origin <it>`), registered under a scratch `CONDUCTOR_HOME`. Reads of the real remote (`gh pr view`, `gh issue view`, `git fetch`) are fine.
 
 ## Pipeline changes
 

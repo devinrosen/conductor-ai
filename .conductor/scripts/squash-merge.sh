@@ -2,14 +2,20 @@
 # squash-merge.sh — last step of verify-and-merge (#3407): squash-merges the verified PR.
 # Env vars: PR_NUMBER, HEAD_SHA, BASE_BRANCH, LINKED_ISSUES (space-separated numbers),
 # DRY_RUN (print the planned commit message only), CLOSE_POLL_INTERVAL (default 15 s)
-# and CLOSE_POLL_LIMIT (default 12 polls) for the issue-closing wait.
+# and CLOSE_POLL_LIMIT (default 12 polls) for the issue-closing wait; CLOSE_VIEW_FAIL_LIMIT
+# (default 3) is how many polling rounds in a row may fail to read an issue before it gives up.
+# Every gh call passes --repo, resolved once up front: the worktree can be removed under
+# the run once the PR merges, and gh would then fail to find the repo from the cwd (#3414).
 #
 # The commit subject is "<title> (#PR)"; the body is the PR's Summary section, a Closes
 # line per linked issue and the commits' Co-Authored-By trailers, deduplicated.
 # --match-head-commit means a push after verification is never merged. The branch is
 # not deleted (it is checked out by this worktree), and neither is the worktree: the
-# run is executing in it, so the cleanup command is printed instead.
+# run is executing in it, so the cleanup command is printed instead (only while the
+# worktree is still there).
 set -euo pipefail
+
+START_DIR="${PWD}"
 
 # shellcheck source=lib-gh-retry.sh
 source "$(dirname "$0")/lib-gh-retry.sh"
@@ -23,7 +29,10 @@ for v in BASE_BRANCH LINKED_ISSUES DRY_RUN; do
 done
 ISSUES="${LINKED_ISSUES:-}"
 
-PR=$(gh_retry gh pr view "${PR_NUMBER}" --json title,body,state,headRefOid,baseRefName,commits) \
+OWNER_REPO=$(gh_retry gh repo view --json nameWithOwner -q .nameWithOwner) \
+  || refuse "could not resolve the repository"
+
+PR=$(gh_retry gh pr view "${PR_NUMBER}" --repo "${OWNER_REPO}" --json title,body,state,headRefOid,baseRefName,commits) \
   || refuse "could not read PR #${PR_NUMBER}"
 
 # A resume after gh pr merge succeeded finds the PR MERGED at the verified head: skip
@@ -71,12 +80,12 @@ if [ "${DRY_RUN:-}" = "true" ]; then
 fi
 
 if [ -z "${ALREADY_MERGED}" ]; then
-  gh_retry gh pr merge "${PR_NUMBER}" --squash --match-head-commit "${HEAD_SHA}" \
+  gh_retry gh pr merge "${PR_NUMBER}" --repo "${OWNER_REPO}" --squash --match-head-commit "${HEAD_SHA}" \
     --subject "${SUBJECT}" --body-file "${BODY_FILE}" >/dev/null \
     || refuse "gh pr merge failed for PR #${PR_NUMBER}"
 fi
 
-MERGED=$(gh_retry gh pr view "${PR_NUMBER}" --json state,mergeCommit) || refuse "could not re-read PR #${PR_NUMBER}"
+MERGED=$(gh_retry gh pr view "${PR_NUMBER}" --repo "${OWNER_REPO}" --json state,mergeCommit) || refuse "could not re-read PR #${PR_NUMBER}"
 [ "$(echo "${MERGED}" | jq -r '.state')" = "MERGED" ] || refuse "PR #${PR_NUMBER} is not MERGED after gh pr merge"
 MERGE_SHA=$(echo "${MERGED}" | jq -r '.mergeCommit.oid // ""')
 
@@ -86,20 +95,36 @@ CLOSED_BY_HAND=""
 if [ -n "${ISSUES}" ]; then
   interval="${CLOSE_POLL_INTERVAL:-15}"
   limit="${CLOSE_POLL_LIMIT:-12}"
+  view_fail_limit="${CLOSE_VIEW_FAIL_LIMIT:-3}"
   open_issues="${ISSUES}"
   i=0
+  fail_rounds=0
   while [ -n "${open_issues}" ] && [ "${i}" -lt "${limit}" ]; do
     still=""
+    round_failed=""
     for n in ${open_issues}; do
-      st=$(gh_retry gh issue view "${n}" --json state -q .state 2>/dev/null || echo "UNKNOWN")
-      [ "${st}" = "CLOSED" ] || still="${still} ${n}"
+      if st=$(gh_retry gh issue view "${n}" --repo "${OWNER_REPO}" --json state -q .state); then
+        [ "${st}" = "CLOSED" ] || still="${still} ${n}"
+      else
+        round_failed=1
+        still="${still} ${n}"
+      fi
     done
     open_issues=$(echo "${still}" | xargs)
     i=$((i + 1))
+    if [ -n "${round_failed}" ]; then
+      fail_rounds=$((fail_rounds + 1))
+    else
+      fail_rounds=0
+    fi
+    if [ "${fail_rounds}" -ge "${view_fail_limit}" ] && [ -n "${open_issues}" ]; then
+      echo "Warning: could not read issue state from GitHub (${fail_rounds} failed polls in a row); stopped waiting." >&2
+      break
+    fi
     [ -z "${open_issues}" ] || [ "${i}" -ge "${limit}" ] || sleep "${interval}"
   done
   for n in ${open_issues}; do
-    if gh_retry gh issue close "${n}" --comment "Closed by #${PR_NUMBER} (squash-merged by verify-and-merge)." >/dev/null; then
+    if gh_retry gh issue close "${n}" --repo "${OWNER_REPO}" --comment "Closed by #${PR_NUMBER} (squash-merged by verify-and-merge)." >/dev/null; then
       CLOSED_BY_HAND="${CLOSED_BY_HAND} #${n}"
     else
       echo "Warning: could not close issue #${n}; close it by hand." >&2
@@ -109,6 +134,10 @@ fi
 
 echo "Squash-merged PR #${PR_NUMBER} into ${BASE_BRANCH:-the base branch} as ${MERGE_SHA:-<unknown>}."
 [ -z "${CLOSED_BY_HAND}" ] || echo "Closed by hand (the merge did not close them):${CLOSED_BY_HAND}."
-echo "The worktree and branch are still here; remove them with: conductor worktree cleanup (or conductor worktree delete)."
+if [ -d "${START_DIR}" ]; then
+  echo "The worktree is still here; remove it with: conductor worktree cleanup (or conductor worktree delete)."
+else
+  echo "The worktree (${START_DIR}) is already removed; nothing to clean up."
+fi
 jq -n --arg n "${PR_NUMBER}" --arg sha "${MERGE_SHA}" '{markers: ["merged"], context: "Squash-merged PR #\($n) as \($sha[0:7])."}' \
   | { printf '<<<FLOW_OUTPUT>>>\n'; cat; printf '<<<END_FLOW_OUTPUT>>>\n'; }

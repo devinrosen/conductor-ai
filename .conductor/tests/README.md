@@ -31,7 +31,8 @@ Pass JSON strings with `jq --arg`.
 
 `test-submit-review.sh` puts a stub `gh` first on `PATH` (`write_stub`). Files in `$GH_STUB_DIR`
 drive it: `user` (without it `gh api user` fails like a GitHub App token), `author`, `poster`,
-`reviews.json` (one JSON array per page; `gh pr review` appends to the last) and `drop_post`. `test-verify-and-merge.sh` has its own stub, driven by `pr.json`, `reviews.json`, `checks.json` and `issues/N`, which logs `gh pr merge`, `gh pr comment` and `gh issue close` calls. A call
+`reviews.json` (one JSON array per page; `gh pr review` appends to the last) and `drop_post`. `test-verify-and-merge.sh` has its own stub, driven by `pr.json`, `reviews.json`, `checks.json` and `issues/N` (the content `FAIL` makes `gh issue view N` fail), which logs `gh pr merge`, `gh pr comment` and `gh issue close` calls.
+It strips `--repo`/`-R` and logs every call that came without it (but `repo view`) to `norepo`, so a case asserts the file is empty; a call without `--repo` fails when the cwd is gone, like real `gh`. `views` logs the number of each `gh issue view`, and an `rm_on_merge` file holding a directory makes `gh pr merge` remove it, to simulate a worktree cleaned up under the run. A call
 the stub doesn't know fails, so a test can't reach the network. Copy it for another script that calls `gh`.
 
 ## Stubbing cargo

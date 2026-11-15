@@ -12,12 +12,33 @@ source "$(dirname "$0")/lib.sh"
 #   comment       written: the body of `gh pr comment`
 #   merge         written: the arguments of `gh pr merge`; merge.body is its body file
 #   closed        written: one line per `gh issue close`
+#   norepo        written: one line per call (but `repo view`) that came without --repo
+#   views         written: the number of each `gh issue view`
+#   rm_on_merge   holds a directory that `gh pr merge` removes (a worktree cleaned up under the run)
+#   issues/N      FAIL makes `gh issue view N` fail
+# Without --repo, a call from a deleted cwd fails like real gh does.
 # Any call it doesn't know fails loudly, so a test can't reach the network.
 write_stub() { # DIR
   mkdir -p "$1/bin" "$1/issues"
   cat > "$1/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 d="${GH_STUB_DIR:?}"
+has_repo=""
+args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo|-R) has_repo=1; shift 2 ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+set -- ${args[@]+"${args[@]}"}
+if [ -z "$has_repo" ] && [ "$1 $2" != "repo view" ]; then
+  echo "$*" >> "$d/norepo"
+  if [ ! -d "$PWD" ]; then
+    echo "failed to run git: fatal: Unable to read current working directory" >&2
+    exit 1
+  fi
+fi
 case "$1 $2" in
   "repo view")
     case "$*" in
@@ -48,9 +69,13 @@ case "$1 $2" in
     exit 0 ;;
   "pr merge")
     echo "$*" > "$d/merge"
+    [ -f "$d/rm_on_merge" ] && rm -rf "$(cat "$d/rm_on_merge")"
     while [ $# -gt 0 ]; do [ "$1" = "--body-file" ] && cp "$2" "$d/merge.body"; shift; done
     exit 0 ;;
-  "issue view") cat "$d/issues/$3" 2>/dev/null || echo OPEN; exit 0 ;;
+  "issue view")
+    echo "$3" >> "$d/views"
+    if grep -q FAIL "$d/issues/$3" 2>/dev/null; then echo "gh stub: HTTP 404 not found" >&2; exit 1; fi
+    cat "$d/issues/$3" 2>/dev/null || echo OPEN; exit 0 ;;
   "issue close") echo "$3" >> "$d/closed"; echo CLOSED > "$d/issues/$3"; exit 0 ;;
 esac
 echo "gh stub: unexpected call: $*" >&2
@@ -468,6 +493,8 @@ assert_eq "no" "$(grep -q 'Test plan' "$stub/merge.body" && echo yes || echo no)
 assert_eq "yes" "$(grep -q '^Closes #1$' "$stub/merge.body" && grep -q '^Closes #2$' "$stub/merge.body" && echo yes || echo no)" "Closes lines"
 assert_eq "2" "$(grep -ci '^Co-Authored-By:' "$stub/merge.body")" "deduplicated trailers"
 assert_eq "no" "$([ -f "$stub/closed" ] && echo yes || echo no)" "issues the merge already closed are left alone"
+assert_eq "no" "$([ -s "$stub/norepo" ] && echo yes || echo no)" "gh calls without --repo"
+assert_stdout_contains "still here"
 
 case_begin "squash-merge: an issue still open after polling is closed by hand"
 new_case
@@ -476,6 +503,32 @@ run_merge
 assert_exit 0
 assert_eq "2" "$(cat "$stub/closed")" "hand-closed issue"
 assert_stdout_contains "Closed by hand"
+assert_eq "no" "$([ -s "$stub/norepo" ] && echo yes || echo no)" "gh calls without --repo"
+
+case_begin "squash-merge: the worktree is removed after the merge and the issues are already closed"
+new_case
+echo CLOSED > "$stub/issues/1"; echo CLOSED > "$stub/issues/2"
+echo "$repo" > "$stub/rm_on_merge"
+run_merge CLOSE_POLL_LIMIT=12
+scratch_cwd=$(scratch_dir)
+cd "$scratch_cwd" || die "cd failed"
+assert_exit 0
+assert_marker merged
+case "$STDERR" in *"could not close"*) fail "unexpected could-not-close warning: $STDERR" ;; esac
+assert_stdout_not_contains "still here"
+assert_eq "no" "$([ -f "$stub/closed" ] && echo yes || echo no)" "issues closed by hand"
+assert_eq "2" "$(wc -l < "$stub/views" | tr -d ' ')" "issue views (one round)"
+assert_eq "no" "$([ -s "$stub/norepo" ] && echo yes || echo no)" "gh calls without --repo"
+assert_stdout_contains "already removed"
+
+case_begin "squash-merge: issue view failures give up early"
+new_case
+echo CLOSED > "$stub/issues/1"; echo FAIL > "$stub/issues/2"
+run_merge CLOSE_POLL_LIMIT=10 CLOSE_VIEW_FAIL_LIMIT=3
+assert_exit 0
+assert_stderr_contains "stopped waiting"
+assert_eq "3" "$(grep -c '^2$' "$stub/views")" "views of the failing issue"
+assert_eq "2" "$(cat "$stub/closed")" "close attempted for the unreadable issue"
 
 case_begin "squash-merge: a head that changed is refused"
 new_case
@@ -501,6 +554,7 @@ assert_exit 0
 assert_marker merged
 assert_eq "no" "$([ -f "$stub/merge" ] && echo yes || echo no)" "merge called"
 assert_eq "2" "$(cat "$stub/closed")" "hand-closed issue"
+assert_eq "no" "$([ -s "$stub/norepo" ] && echo yes || echo no)" "gh calls without --repo"
 
 case_begin "squash-merge: a PR merged at another head is refused"
 new_case
