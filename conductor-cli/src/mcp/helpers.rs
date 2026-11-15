@@ -152,6 +152,17 @@ macro_rules! require_arg {
     };
 }
 
+/// Parse a list argument (comma-separated string or array of strings) via `get_list_arg`,
+/// returning a `tool_err` from the enclosing handler when the value is invalid.
+macro_rules! list_arg {
+    ($args:expr, $key:literal) => {
+        match get_list_arg($args, $key) {
+            Ok(v) => v,
+            Err(msg) => return tool_err(msg),
+        }
+    };
+}
+
 /// Returns a pagination hint string like "Showing 0–50 (limit 50). Pass offset=50 for more."
 /// Call this when the result count equals the page limit, then append the result to your output.
 pub(crate) fn pagination_hint(offset: usize, count: usize, limit: usize) -> String {

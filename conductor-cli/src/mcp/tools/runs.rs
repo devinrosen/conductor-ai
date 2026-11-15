@@ -440,17 +440,11 @@ pub(super) fn tool_run_stats(
     conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
-    let run_ids = match get_list_arg(args, "run_id") {
-        Ok(v) => v,
-        Err(msg) => return tool_err(msg),
-    };
+    let run_ids = list_arg!(args, "run_id");
     if run_ids.is_empty() {
         return tool_err("run_id must contain at least one workflow run id");
     }
-    let compare_ids = match get_list_arg(args, "compare_run_id") {
-        Ok(v) => v,
-        Err(msg) => return tool_err(msg),
-    };
+    let compare_ids = list_arg!(args, "compare_run_id");
     let as_json = args.get("json").and_then(Value::as_bool).unwrap_or(false);
 
     match conductor_core::workflow::run_stats::render_run_stats(
@@ -504,6 +498,33 @@ mod tests {
     use super::super::test_helpers::{create_list_run, make_test_conductor};
     use super::*;
     use serde_json::Value;
+
+    fn run_stats_err(args: serde_json::Value) -> String {
+        let (_f, conductor) = make_test_conductor();
+        let Value::Object(map) = args else { panic!() };
+        let result = tool_run_stats(&conductor, &map);
+        assert_eq!(result.is_error, Some(true));
+        result.content[0].as_text().unwrap().text.clone()
+    }
+
+    #[test]
+    fn run_stats_invalid_run_id_rejected() {
+        let text = run_stats_err(serde_json::json!({"run_id": 42}));
+        assert!(text.starts_with("run_id must be"), "{text}");
+    }
+
+    #[test]
+    fn run_stats_invalid_compare_run_id_rejected() {
+        let text = run_stats_err(serde_json::json!({"run_id": "a", "compare_run_id": {"a": 1}}));
+        assert!(text.starts_with("compare_run_id must be"), "{text}");
+    }
+
+    #[test]
+    fn run_stats_accepts_array_run_id() {
+        // The array form passes validation; it fails later on the unknown run, not on parsing.
+        let text = run_stats_err(serde_json::json!({"run_id": ["a", " b "]}));
+        assert!(!text.contains("must be"), "{text}");
+    }
 
     fn stale_info(pid: u32, is_self: bool) -> conductor_core::process_registry::StaleInfo {
         use conductor_core::process_registry::{ProcessKind, ProcessRecord, StaleInfo};

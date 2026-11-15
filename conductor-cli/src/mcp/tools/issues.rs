@@ -22,10 +22,7 @@ pub(super) fn tool_create_gh_issue(
     let repo_slug = require_arg!(args, "repo");
     let title = require_arg!(args, "title");
     let body = require_arg!(args, "body");
-    let label_list = match get_list_arg(args, "labels") {
-        Ok(v) => v,
-        Err(msg) => return tool_err(msg),
-    };
+    let label_list = list_arg!(args, "labels");
     let labels: Vec<&str> = label_list.iter().map(String::as_str).collect();
     let run_id = get_arg(args, "run_id");
     let milestone = github::normalize_milestone(get_arg(args, "milestone"));
