@@ -270,6 +270,12 @@ fn render_script_log(
     mode: StepLogMode,
 ) -> Result<String> {
     let step = &target.step;
+    if matches!(mode, StepLogMode::Prompt) {
+        return Err(ConductorError::Workflow(format!(
+            "Step '{}' is a script step and has no prompt",
+            step.step_name
+        )));
+    }
     let mut head = format!(
         "step: {} (iteration {}, attempt {})\nstatus: {}\n",
         step.step_name,
@@ -300,10 +306,7 @@ fn render_script_log(
             "{head}{}",
             render_tail_of(&contents, lines, "lines")
         )),
-        StepLogMode::Prompt => Err(ConductorError::Workflow(format!(
-            "Step '{}' is a script step and has no prompt",
-            step.step_name
-        ))),
+        StepLogMode::Prompt => unreachable!("rejected above"),
         // runkon caps the log at about 64 KiB, so the whole of it is the result.
         StepLogMode::Result => Ok(format!("{head}--- log ---\n{contents}")),
     }

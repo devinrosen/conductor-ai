@@ -137,11 +137,8 @@ mod tests {
             .iter()
             .map(|h| h.dropped_chars)
             .sum();
-        // `{{x}}` is a valid name but unknown, so the engine drops it too.
-        let valid_unknown = "{{x}}".chars().count();
-        assert_eq!(
-            text.chars().count() - rendered.chars().count(),
-            dropped + valid_unknown
-        );
+        // The first span runs from the literal `{{` through `{{x}}`, so every
+        // removed character belongs to a reported span; the unclosed tail stays.
+        assert_eq!(text.chars().count() - rendered.chars().count(), dropped);
     }
 }

@@ -1250,7 +1250,7 @@ mod tests {
         let wf = parse_workflow_str(src, wf_path.to_str().unwrap()).unwrap();
         let entry = run_batch(dir.path(), wf);
         let msgs: Vec<&str> = entry.warnings.iter().map(|w| w.message.as_str()).collect();
-        let hits: Vec<_> = msgs.iter().filter(|m| m.contains("lines 4-5")).collect();
+        let hits: Vec<_> = msgs.iter().filter(|m| m.contains("lines 1-2")).collect();
         assert_eq!(hits.len(), 1, "got: {msgs:?}");
         assert!(hits[0].contains("agent runaway"), "got: {msgs:?}");
         assert!(!msgs.iter().any(|m| m.contains("agent clean")), "{msgs:?}");
