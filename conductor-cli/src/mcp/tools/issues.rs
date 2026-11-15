@@ -104,7 +104,10 @@ mod tests {
             a.insert("labels".into(), labels);
             let result = tool_create_gh_issue(&conductor, &a);
             assert_eq!(result.is_error, Some(true));
-            let text = result.content[0].as_text().map(|t| t.text.as_str()).unwrap();
+            let text = result.content[0]
+                .as_text()
+                .map(|t| t.text.as_str())
+                .unwrap();
             assert!(text.starts_with("labels must be"), "{text}");
             assert!(!text.contains('\n'));
         }

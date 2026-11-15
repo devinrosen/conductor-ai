@@ -1077,7 +1077,10 @@ mod tests {
     fn gh_error_summary_drops_usage_block() {
         let stderr = "invalid argument \"[\\\"bug\\\"\" for \"-l, --label\" flag\n\nCreate an issue on GitHub.\n\nUSAGE\n  gh issue create\n";
         let got = gh_error_summary(stderr);
-        assert_eq!(got, "invalid argument \"[\\\"bug\\\"\" for \"-l, --label\" flag");
+        assert_eq!(
+            got,
+            "invalid argument \"[\\\"bug\\\"\" for \"-l, --label\" flag"
+        );
         assert!(!got.contains('\n'));
     }
 

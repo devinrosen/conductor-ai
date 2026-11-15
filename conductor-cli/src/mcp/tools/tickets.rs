@@ -300,7 +300,10 @@ mod tests {
         a.insert("blocked_by".into(), serde_json::json!({"a": 1}));
         let result = tool_upsert_ticket(&conductor, &a);
         assert_eq!(result.is_error, Some(true));
-        let text = result.content[0].as_text().map(|t| t.text.as_str()).unwrap();
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap();
         assert!(text.starts_with("blocked_by must be"), "{text}");
     }
 
