@@ -282,6 +282,8 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
              Each row also shows, when known: ended_at, worktree_slug and worktree_branch, child: true with \
              parent_run_id for child runs, the ticket (source id), the pr number and the target label. \
              Pass top_level_only=true to hide child runs. \
+             Dry runs (`conductor workflow validate --dry-run` smokes and runs started with dry_run) and their \
+             child runs are hidden unless include_dry_run=true; each dry-run row shows dry_run: true. \
              For full step detail and conversation log on a specific run, read the `conductor://run/{run_id}` resource.",
             schema_typed(&[
                 (
@@ -319,6 +321,12 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
                     "top_level_only",
                     "boolean",
                     "Hide child runs (runs started by another workflow run) (default false)",
+                    false,
+                ),
+                (
+                    "include_dry_run",
+                    "boolean",
+                    "Include dry-run runs (validate --dry-run smokes and runs started with dry_run) and their child runs (default false)",
                     false,
                 ),
             ]),
