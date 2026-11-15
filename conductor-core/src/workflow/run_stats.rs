@@ -1100,7 +1100,11 @@ pub fn format_run_stats(s: &RunStats) -> String {
             .iter()
             .map(|k| format!("{} {}x", k.path, k.skipped))
             .collect();
-        let _ = writeln!(out, "\nSkipped steps (condition false): {}", list.join(", "));
+        let _ = writeln!(
+            out,
+            "\nSkipped steps (condition false): {}",
+            list.join(", ")
+        );
     }
     if !s.cycles.is_empty() {
         out.push_str("\nReview cycles\n");
@@ -1347,7 +1351,15 @@ mod tests {
         .unwrap();
     }
 
-    fn skipped_step(conn: &Connection, id: &str, run: &str, name: &str, iter: i64, pos: i64, end: i64) {
+    fn skipped_step(
+        conn: &Connection,
+        id: &str,
+        run: &str,
+        name: &str,
+        iter: i64,
+        pos: i64,
+        end: i64,
+    ) {
         conn.execute(
             "INSERT INTO workflow_run_steps (id, workflow_run_id, step_name, role, status, \
              position, started_at, ended_at, iteration) \
@@ -1492,18 +1504,43 @@ mod tests {
         let conn = db();
         wf_run(&conn, "R", "review-pr", "PA", None);
         for (i, base) in [(0_i64, 1_i64), (1, 10)] {
-            step(&conn, &format!("ok{i}"), "R", "review-a", i, base, base + 2, Some(&format!("a{i}")), None);
+            step(
+                &conn,
+                &format!("ok{i}"),
+                "R",
+                "review-a",
+                i,
+                base,
+                base + 2,
+                Some(&format!("a{i}")),
+                None,
+            );
             agent(&conn, &format!("a{i}"), "PA", "review-a", base, 0.5, 10);
-            skipped_step(&conn, &format!("sk{i}"), "R", "review-b", i, base + 3, base + 3);
+            skipped_step(
+                &conn,
+                &format!("sk{i}"),
+                "R",
+                "review-b",
+                i,
+                base + 3,
+                base + 3,
+            );
         }
         let s = collect_run_stats(&conn, &["R".to_string()]).unwrap();
         let skipped_path = "review-pr > review-b".to_string();
         assert!(s.steps.iter().all(|st| st.path != skipped_path));
         assert_eq!(
             s.skipped_steps,
-            vec![SkippedStep { path: skipped_path.clone(), skipped: 2 }]
+            vec![SkippedStep {
+                path: skipped_path.clone(),
+                skipped: 2
+            }]
         );
-        let ran = s.steps.iter().find(|st| st.path == "review-pr > review-a").unwrap();
+        let ran = s
+            .steps
+            .iter()
+            .find(|st| st.path == "review-pr > review-a")
+            .unwrap();
         assert_eq!((ran.executions, ran.attempts), (2, 2));
         assert!((ran.usage.cost_usd - 1.0).abs() < 1e-9);
         let text = format_run_stats(&s);
@@ -1527,11 +1564,18 @@ mod tests {
         agent(&conn, "a0", "PA", "review-b", 1, 0.5, 10);
         skipped_step(&conn, "sk", "R", "review-b", 1, 5, 5);
         let s = collect_run_stats(&conn, &["R".to_string()]).unwrap();
-        let st = s.steps.iter().find(|st| st.path == "review-pr > review-b").unwrap();
+        let st = s
+            .steps
+            .iter()
+            .find(|st| st.path == "review-pr > review-b")
+            .unwrap();
         assert_eq!((st.executions, st.attempts), (1, 1));
         assert_eq!(
             s.skipped_steps,
-            vec![SkippedStep { path: "review-pr > review-b".into(), skipped: 1 }]
+            vec![SkippedStep {
+                path: "review-pr > review-b".into(),
+                skipped: 1
+            }]
         );
     }
 
