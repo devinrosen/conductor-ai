@@ -16,12 +16,14 @@
 #   3. For every later `release/*` branch with no `v` tag, fast-forward it to main when it
 #      has no commits of its own (a plain, non-force push). Otherwise print that main needs
 #      merging in; this script never merges or force-pushes.
-#   4. `git pull --ff-only origin main`, then `./install-cli.sh`.
-#   5. Print what is left by hand: `claude plugin update conductor@conductor-ai`, then
-#      restart Claude Code or run `/mcp`, plus anything steps 1-4 could not do.
+#   4. `git pull --ff-only origin main`, then `./install-cli.sh`, then (when `claude` is on
+#      PATH) `claude plugin marketplace update conductor-ai` and
+#      `claude plugin update conductor@conductor-ai`, and check the plugin is at X.Y.Z.
+#   5. Print what is left by hand: restart Claude Code or run `/mcp`, plus anything
+#      steps 1-4 could not do (a missing `claude` or a failed plugin update included).
 #
 # --dry-run runs the read-only checks (including the wait for the Release workflow) and
-# prints each action it would take instead of taking it.
+# prints each action it would take instead of taking it, the plugin commands included.
 #
 # Idempotent: a re-run skips the wait when the tag and release exist, skips a closed
 # milestone and branches already at main. Exits 1 when something is left over.
@@ -49,12 +51,20 @@ if [[ ! $v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 2
 fi
 tag="v$v"
+plugin=conductor@conductor-ai
+marketplace=conductor-ai
 
 die() { echo "error: $*" >&2; exit 1; }
 say() { echo "==> $*"; }
 
 leftovers=
 leftover() { leftovers="${leftovers}${*}"$'\n'; }
+
+# Installed version of the conductor plugin; empty when claude fails or it isn't installed.
+plugin_version() {
+  { claude plugin list --json 2>/dev/null \
+    | jq -r --arg id "$plugin" '.[] | select(.id == $id) | .version' | head -n1; } || true
+}
 
 # --- Preflight -------------------------------------------------------------
 for tool in gh jq; do
@@ -167,19 +177,53 @@ done
 [[ $found_any == 1 ]] || echo "no other open release branches"
 
 # --- 4. Update and install -------------------------------------------------
-say "Step 4: pull main and install"
+say "Step 4: pull main, install, update the plugin"
+plugin_cmds="claude plugin marketplace update $marketplace && claude plugin update $plugin"
 if [[ $dry == 1 ]]; then
   echo "[dry-run] would run: git pull --ff-only origin main"
   echo "[dry-run] would run: ./install-cli.sh"
+  echo "[dry-run] would run: claude plugin marketplace update $marketplace"
+  echo "[dry-run] would run: claude plugin update $plugin"
+  if command -v claude >/dev/null; then
+    echo "plugin $plugin is currently at: $(plugin_version)"
+  else
+    echo "warning: claude not found on PATH; plugin would not be updated"
+    leftover "update the plugin: $plugin_cmds"
+  fi
 else
   git pull --ff-only origin main
   ./install-cli.sh
+  if ! command -v claude >/dev/null; then
+    echo "warning: claude not found on PATH; plugin not updated"
+    leftover "update the plugin: $plugin_cmds"
+  else
+    before=$(plugin_version)
+    if ! claude plugin marketplace update "$marketplace"; then
+      echo "warning: claude plugin marketplace update $marketplace failed"
+      leftover "update the plugin: $plugin_cmds"
+    elif ! claude plugin update "$plugin"; then
+      echo "warning: claude plugin update $plugin failed"
+      leftover "update the plugin: claude plugin update $plugin"
+    else
+      after=$(plugin_version)
+      if [[ -z $after ]]; then
+        echo "warning: plugin $plugin is not installed"
+        leftover "conductor plugin not installed: claude plugin install $plugin"
+      elif [[ $after != "$v" ]]; then
+        echo "warning: plugin is at $after, expected $v"
+        leftover "plugin $plugin is at $after, expected $v; check: claude plugin list"
+      elif [[ $before == "$after" ]]; then
+        echo "plugin $plugin: already at $v"
+      else
+        echo "plugin $plugin: ${before:-not installed} -> $after"
+      fi
+    fi
+  fi
 fi
 
 # --- 5. What's left --------------------------------------------------------
 say "Remaining manual steps"
-echo "  claude plugin update conductor@conductor-ai"
-echo "  then restart Claude Code, or run /mcp to reconnect the conductor MCP server"
+echo "  restart Claude Code (loads the updated plugin), or run /mcp to reconnect the conductor MCP server"
 if [[ -n $leftovers ]]; then
   echo
   echo "Left over from this run:"
