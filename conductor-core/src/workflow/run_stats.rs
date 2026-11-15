@@ -101,6 +101,13 @@ pub struct CycleStats {
     pub reviews: usize,
 }
 
+/// A step that was skipped (its condition was false) this many times.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct SkippedStep {
+    pub path: String,
+    pub skipped: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RunStats {
     pub run_ids: Vec<String>,
@@ -112,6 +119,8 @@ pub struct RunStats {
     pub usage: Usage,
     pub agent_runs: usize,
     pub steps: Vec<StepStats>,
+    /// Steps whose rows were skipped (a false `if`), kept out of `steps`; sorted by path.
+    pub skipped_steps: Vec<SkippedStep>,
     pub cycles: Vec<CycleStats>,
     pub cycles_to_approval: Option<usize>,
     pub pre_cycle_verify: Vec<VerifyResult>,
@@ -135,6 +144,7 @@ struct StepRow {
     run_id: String,
     step_name: String,
     child_run_id: Option<String>,
+    status: String,
     started_at: Option<DateTime<Utc>>,
     ended_at: Option<DateTime<Utc>>,
     iteration: i64,
@@ -234,10 +244,14 @@ fn load_children(conn: &Connection, parent: &str) -> Result<Vec<RunRow>> {
     Ok(rows)
 }
 
+fn is_skipped(s: &StepRow) -> bool {
+    s.status == "skipped"
+}
+
 fn load_steps(conn: &Connection, run_id: &str) -> Result<Vec<StepRow>> {
     let mut stmt = conn.prepare(
         "SELECT step_name, child_run_id, started_at, ended_at, iteration, retry_count, position, \
-         structured_output FROM workflow_run_steps WHERE workflow_run_id = ?1 \
+         structured_output, status FROM workflow_run_steps WHERE workflow_run_id = ?1 \
          ORDER BY position, started_at",
     )?;
     let rows = stmt
@@ -250,6 +264,7 @@ fn load_steps(conn: &Connection, run_id: &str) -> Result<Vec<StepRow>> {
                 run_id: run_id.to_string(),
                 step_name,
                 child_run_id: r.get(1)?,
+                status: r.get(8)?,
                 started_at: parse_ts(started.as_deref()),
                 ended_at: parse_ts(ended.as_deref()),
                 iteration: r.get(4)?,
@@ -379,7 +394,7 @@ fn load_tree(conn: &Connection, root_ids: &[String]) -> Result<Tree> {
             let cands: Vec<usize> = steps
                 .iter()
                 .enumerate()
-                .filter(|(_, s)| &s.run_id == run_id && s.step_name == name)
+                .filter(|(_, s)| &s.run_id == run_id && s.step_name == name && !is_skipped(s))
                 .map(|(i, _)| i)
                 .collect();
             // The attempt belongs to the row that ended first at or after it started.
@@ -505,6 +520,7 @@ pub fn collect_run_stats(conn: &Connection, root_run_ids: &[String]) -> Result<R
 
     // ---- steps ----
     let mut by_path: HashMap<String, StepStats> = HashMap::new();
+    let mut skipped_by_path: HashMap<String, usize> = HashMap::new();
     for (i, s) in tree.steps.iter().enumerate() {
         if is_workflow_step(&s.step_name) {
             continue;
@@ -512,6 +528,10 @@ pub fn collect_run_stats(conn: &Connection, root_run_ids: &[String]) -> Result<R
         let chain = workflow_chain(&run_by_id, &s.run_id);
         let wf = chain.last().cloned().unwrap_or_default();
         let path = format!("{} > {}", chain.join(" > "), s.step_name);
+        if is_skipped(s) {
+            *skipped_by_path.entry(path).or_insert(0) += 1;
+            continue;
+        }
         let e = by_path.entry(path.clone()).or_insert_with(|| StepStats {
             path,
             step_name: s.step_name.clone(),
@@ -531,6 +551,11 @@ pub fn collect_run_stats(conn: &Connection, root_run_ids: &[String]) -> Result<R
             e.first_start = Some(e.first_start.map_or(st, |f| f.min(st)));
         }
     }
+    let mut skipped_steps: Vec<SkippedStep> = skipped_by_path
+        .into_iter()
+        .map(|(path, skipped)| SkippedStep { path, skipped })
+        .collect();
+    skipped_steps.sort_by(|a, b| a.path.cmp(&b.path));
     let mut steps: Vec<StepStats> = by_path.into_values().collect();
     steps.sort_by(|a, b| {
         a.first_start
@@ -744,6 +769,7 @@ pub fn collect_run_stats(conn: &Connection, root_run_ids: &[String]) -> Result<R
         agent_runs: usage.agent_runs,
         usage,
         steps,
+        skipped_steps,
         cycles,
         cycles_to_approval,
         pre_cycle_verify,
@@ -1068,6 +1094,18 @@ pub fn format_run_stats(s: &RunStats) -> String {
             &rows,
         ));
     }
+    if !s.skipped_steps.is_empty() {
+        let list: Vec<String> = s
+            .skipped_steps
+            .iter()
+            .map(|k| format!("{} {}x", k.path, k.skipped))
+            .collect();
+        let _ = writeln!(
+            out,
+            "\nSkipped steps (condition false): {}",
+            list.join(", ")
+        );
+    }
     if !s.cycles.is_empty() {
         out.push_str("\nReview cycles\n");
         let rows: Vec<Vec<String>> = s
@@ -1313,6 +1351,24 @@ mod tests {
         .unwrap();
     }
 
+    fn skipped_step(
+        conn: &Connection,
+        id: &str,
+        run: &str,
+        name: &str,
+        iter: i64,
+        pos: i64,
+        end: i64,
+    ) {
+        conn.execute(
+            "INSERT INTO workflow_run_steps (id, workflow_run_id, step_name, role, status, \
+             position, started_at, ended_at, iteration) \
+             VALUES (?1, ?2, ?3, 'actor', 'skipped', ?4, NULL, ?5, ?6)",
+            params![id, run, name, pos, t(end), iter],
+        )
+        .unwrap();
+    }
+
     fn agent(
         conn: &Connection,
         id: &str,
@@ -1441,6 +1497,99 @@ mod tests {
         let conn = db();
         let err = collect_run_stats(&conn, &["nope".to_string()]).unwrap_err();
         assert!(matches!(err, ConductorError::WorkflowRunNotFound { .. }));
+    }
+
+    #[test]
+    fn skipped_steps_are_not_counted_as_runs() {
+        let conn = db();
+        wf_run(&conn, "R", "review-pr", "PA", None);
+        for (i, base) in [(0_i64, 1_i64), (1, 10)] {
+            step(
+                &conn,
+                &format!("ok{i}"),
+                "R",
+                "review-a",
+                i,
+                base,
+                base + 2,
+                Some(&format!("a{i}")),
+                None,
+            );
+            agent(&conn, &format!("a{i}"), "PA", "review-a", base, 0.5, 10);
+            skipped_step(
+                &conn,
+                &format!("sk{i}"),
+                "R",
+                "review-b",
+                i,
+                base + 3,
+                base + 3,
+            );
+        }
+        let s = collect_run_stats(&conn, &["R".to_string()]).unwrap();
+        let skipped_path = "review-pr > review-b".to_string();
+        assert!(s.steps.iter().all(|st| st.path != skipped_path));
+        assert_eq!(
+            s.skipped_steps,
+            vec![SkippedStep {
+                path: skipped_path.clone(),
+                skipped: 2
+            }]
+        );
+        let ran = s
+            .steps
+            .iter()
+            .find(|st| st.path == "review-pr > review-a")
+            .unwrap();
+        assert_eq!((ran.executions, ran.attempts), (2, 2));
+        assert!((ran.usage.cost_usd - 1.0).abs() < 1e-9);
+        let text = format_run_stats(&s);
+        assert!(!text.contains("review-b  "), "{text}");
+        assert!(text.contains("Skipped steps (condition false): review-pr > review-b 2x"));
+        let json = serde_json::to_value(&s).unwrap();
+        let in_steps = json["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v["path"] == skipped_path.as_str());
+        assert!(!in_steps);
+        assert_eq!(json["skipped_steps"][0]["skipped"], 2);
+    }
+
+    #[test]
+    fn partially_skipped_step_counts_only_executed_rows() {
+        let conn = db();
+        wf_run(&conn, "R", "review-pr", "PA", None);
+        step(&conn, "ok", "R", "review-b", 0, 1, 3, Some("a0"), None);
+        agent(&conn, "a0", "PA", "review-b", 1, 0.5, 10);
+        skipped_step(&conn, "sk", "R", "review-b", 1, 5, 5);
+        let s = collect_run_stats(&conn, &["R".to_string()]).unwrap();
+        let st = s
+            .steps
+            .iter()
+            .find(|st| st.path == "review-pr > review-b")
+            .unwrap();
+        assert_eq!((st.executions, st.attempts), (1, 1));
+        assert_eq!(
+            s.skipped_steps,
+            vec![SkippedStep {
+                path: "review-pr > review-b".into(),
+                skipped: 1
+            }]
+        );
+    }
+
+    #[test]
+    fn orphaned_attempt_is_not_attributed_to_a_skipped_row() {
+        let conn = db();
+        wf_run(&conn, "R", "review-pr", "PA", None);
+        skipped_step(&conn, "sk", "R", "review-b", 0, 1, 5);
+        // No step row links this agent run; its prompt names the skipped step.
+        agent(&conn, "orphan", "PA", "review-b", 2, 0.5, 10);
+        let s = collect_run_stats(&conn, &["R".to_string()]).unwrap();
+        assert!(s.steps.iter().all(|st| st.path != "review-pr > review-b"));
+        let un = s.steps.iter().find(|st| st.path == UNATTRIBUTED).unwrap();
+        assert_eq!(un.usage.agent_runs, 1);
     }
 
     #[test]
