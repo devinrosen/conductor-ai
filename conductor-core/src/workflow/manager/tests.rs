@@ -270,6 +270,116 @@ fn test_list_active_workflow_runs_inactive_worktree_excluded() {
     );
 }
 
+// --- list_workflow_runs_page ---
+
+fn page_filter<'a>(
+    statuses: &'a [WorkflowRunStatus],
+    include_inactive: bool,
+    limit: usize,
+    offset: usize,
+) -> crate::workflow::WorkflowRunListFilter<'a> {
+    crate::workflow::WorkflowRunListFilter {
+        statuses,
+        repo_id: None,
+        worktree_id: None,
+        include_inactive,
+        limit,
+        offset,
+    }
+}
+
+fn set_started_at(conn: &rusqlite::Connection, id: &str, started_at: &str) {
+    conn.execute(
+        "UPDATE workflow_runs SET started_at = ?1 WHERE id = ?2",
+        rusqlite::params![started_at, id],
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_list_workflow_runs_page_pages_do_not_overlap() {
+    let conn = setup_db();
+    for i in 0..5 {
+        let run = create_worktree_run(&conn, "w1");
+        set_started_at(&conn, &run.id, &format!("2024-01-01T00:00:0{i}Z"));
+    }
+    let st = [WorkflowRunStatus::Pending];
+    let all = crate::workflow::list_workflow_runs_page(&conn, &page_filter(&st, false, 50, 0))
+        .unwrap();
+    let p1 =
+        crate::workflow::list_workflow_runs_page(&conn, &page_filter(&st, false, 2, 0)).unwrap();
+    let p2 =
+        crate::workflow::list_workflow_runs_page(&conn, &page_filter(&st, false, 2, 2)).unwrap();
+    let p3 =
+        crate::workflow::list_workflow_runs_page(&conn, &page_filter(&st, false, 2, 4)).unwrap();
+    assert_eq!((p1.len(), p2.len(), p3.len()), (2, 2, 1));
+    let joined: Vec<String> = p1.iter().chain(&p2).chain(&p3).map(|r| r.id.clone()).collect();
+    let full: Vec<String> = all.iter().map(|r| r.id.clone()).collect();
+    assert_eq!(joined, full);
+    let starts: Vec<&str> = all.iter().map(|r| r.started_at.as_str()).collect();
+    let mut sorted = starts.clone();
+    sorted.sort_by(|a, b| b.cmp(a));
+    assert_eq!(starts, sorted, "newest first");
+}
+
+#[test]
+fn test_list_workflow_runs_page_worktree_filter() {
+    let conn = setup_db();
+    let a = create_worktree_run(&conn, "w1");
+    let _b = create_worktree_run(&conn, "w2");
+    let st = [WorkflowRunStatus::Pending];
+    let mut f = page_filter(&st, false, 50, 0);
+    f.worktree_id = Some("w1");
+    let runs = crate::workflow::list_workflow_runs_page(&conn, &f).unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].id, a.id);
+}
+
+#[test]
+fn test_list_workflow_runs_page_include_inactive() {
+    let conn = setup_db();
+    let run = create_worktree_run(&conn, "w1");
+    conn.execute("UPDATE worktrees SET status = 'merged' WHERE id = 'w1'", [])
+        .unwrap();
+    let st = [WorkflowRunStatus::Pending];
+    let hidden =
+        crate::workflow::list_workflow_runs_page(&conn, &page_filter(&st, false, 50, 0)).unwrap();
+    assert!(hidden.is_empty());
+    let shown =
+        crate::workflow::list_workflow_runs_page(&conn, &page_filter(&st, true, 50, 0)).unwrap();
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].id, run.id);
+}
+
+#[test]
+fn test_list_workflow_runs_page_repo_filter_via_worktree() {
+    let conn = setup_db();
+    let in_r1 = create_worktree_run(&conn, "w1");
+    let _in_r2 = create_worktree_run(&conn, "w3");
+    let st = [WorkflowRunStatus::Pending];
+    let mut f = page_filter(&st, false, 50, 0);
+    f.repo_id = Some("r1");
+    let runs = crate::workflow::list_workflow_runs_page(&conn, &f).unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].id, in_r1.id);
+}
+
+#[test]
+fn test_list_workflow_runs_page_empty_statuses_defaults_to_active() {
+    let conn = setup_db();
+    let pending = create_worktree_run(&conn, "w1");
+    let done = create_worktree_run(&conn, "w1");
+    conn.execute(
+        "UPDATE workflow_runs SET status = 'completed' WHERE id = ?1",
+        [&done.id],
+    )
+    .unwrap();
+    let runs =
+        crate::workflow::list_workflow_runs_page(&conn, &page_filter(&[], false, 50, 0)).unwrap();
+    let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, vec![pending.id.as_str()]);
+}
+
 // --- list_all_waiting_gate_steps ---
 
 #[test]

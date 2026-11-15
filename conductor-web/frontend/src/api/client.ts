@@ -250,9 +250,25 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  listAllWorkflowRuns: (statuses?: string[]) => {
-    const params = statuses && statuses.length > 0 ? `?status=${statuses.join(",")}` : "";
-    return request<WorkflowRun[]>(`/workflows/runs${params}`);
+  listAllWorkflowRuns: (
+    statuses?: string[],
+    opts?: {
+      repo?: string;
+      worktree?: string;
+      limit?: number;
+      offset?: number;
+      includeInactive?: boolean;
+    },
+  ) => {
+    const q = new URLSearchParams();
+    if (statuses && statuses.length > 0) q.set("status", statuses.join(","));
+    if (opts?.repo) q.set("repo", opts.repo);
+    if (opts?.worktree) q.set("worktree", opts.worktree);
+    if (opts?.limit !== undefined) q.set("limit", String(opts.limit));
+    if (opts?.offset !== undefined) q.set("offset", String(opts.offset));
+    if (opts?.includeInactive !== undefined) q.set("include_inactive", String(opts.includeInactive));
+    const qs = q.toString();
+    return request<WorkflowRun[]>(`/workflows/runs${qs ? `?${qs}` : ""}`);
   },
   listWorkflowRuns: (worktreeId: string) =>
     request<WorkflowRun[]>(`/worktrees/${worktreeId}/workflows/runs`),

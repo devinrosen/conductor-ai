@@ -853,8 +853,36 @@ pub async fn post_workflow_run(
 pub struct ListAllRunsQuery {
     /// Comma-separated list of statuses. Defaults to running, waiting, pending (owned by the manager layer).
     pub status: Option<String>,
-    /// Filter by repo slug. When provided, only runs associated with this repo are returned.
+    /// Filter by repo id or slug. When provided, only runs associated with this repo are returned.
     pub repo: Option<String>,
+    /// Filter by worktree id. When provided, only that worktree's runs are returned.
+    pub worktree: Option<String>,
+    /// Maximum number of runs to return, newest first. Defaults to 50; values above 500 are clamped to 500.
+    pub limit: Option<usize>,
+    /// Number of runs to skip (for paging). Defaults to 0.
+    pub offset: Option<usize>,
+    /// Include runs on merged or abandoned worktrees. Defaults to true when `worktree` is given
+    /// or every requested status is terminal (completed, failed, cancelled), otherwise false.
+    pub include_inactive: Option<bool>,
+}
+
+const DEFAULT_RUNS_LIMIT: usize = 50;
+const MAX_RUNS_LIMIT: usize = 500;
+
+fn effective_runs_limit(limit: Option<usize>) -> usize {
+    limit.unwrap_or(DEFAULT_RUNS_LIMIT).clamp(1, MAX_RUNS_LIMIT)
+}
+
+/// Resolve `include_inactive`: an explicit value wins; naming a worktree or asking
+/// only for terminal statuses (run history) includes runs on inactive worktrees.
+fn default_include_inactive(
+    statuses: &[WorkflowRunStatus],
+    worktree: Option<&str>,
+    explicit: Option<bool>,
+) -> bool {
+    explicit.unwrap_or_else(|| {
+        worktree.is_some() || (!statuses.is_empty() && statuses.iter().all(|s| s.is_terminal()))
+    })
 }
 
 #[utoipa::path(
@@ -866,7 +894,7 @@ pub struct ListAllRunsQuery {
     ),
     tag = "workflows",
 )]
-/// GET /api/workflows/runs?status=<csv>
+/// GET /api/workflows/runs?status=<csv>&repo=<id|slug>&worktree=<id>&limit=<n>&offset=<n>&include_inactive=<bool>
 pub async fn list_all_workflow_runs_handler(
     State(state): State<AppState>,
     Query(params): Query<ListAllRunsQuery>,
@@ -899,12 +927,31 @@ pub async fn list_all_workflow_runs_handler(
 
     let db = state.db.lock().await;
     let config = state.config.read().await;
-    let runs = if let Some(ref repo_id) = params.repo {
-        let repo = RepoManager::new(&db, &config).get_by_id(repo_id)?;
-        conductor_core::workflow::list_active_workflow_runs_for_repo(&db, &repo.id, &statuses)?
-    } else {
-        conductor_core::workflow::list_active_workflow_runs(&db, &statuses)?
+    let repo_id = match params.repo.as_deref() {
+        Some(value) => {
+            let mgr = RepoManager::new(&db, &config);
+            let repo = match mgr.get_by_id(value) {
+                Ok(r) => r,
+                Err(ConductorError::RepoNotFound { .. }) => mgr.get_by_slug(value)?,
+                Err(e) => return Err(e.into()),
+            };
+            Some(repo.id)
+        }
+        None => None,
     };
+    let include_inactive =
+        default_include_inactive(&statuses, params.worktree.as_deref(), params.include_inactive);
+    let runs = conductor_core::workflow::list_workflow_runs_page(
+        &db,
+        &conductor_core::workflow::WorkflowRunListFilter {
+            statuses: &statuses,
+            repo_id: repo_id.as_deref(),
+            worktree_id: params.worktree.as_deref(),
+            include_inactive,
+            limit: effective_runs_limit(params.limit),
+            offset: params.offset.unwrap_or(0),
+        },
+    )?;
 
     // Batch-fetch only running/waiting steps for all runs (filter pushed to SQL)
     let run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
@@ -1943,6 +1990,164 @@ mod tests {
             body["error"].as_str().unwrap_or("").contains(substr),
             "unexpected error body: {body}"
         );
+    }
+
+    // ── GET /api/workflows/runs paging and filters ──
+
+    fn seed_runs(
+        state: &AppState,
+        wt: &str,
+        status: WorkflowRunStatus,
+        n: usize,
+        start: usize,
+    ) -> Vec<String> {
+        let db = state.db.blocking_lock();
+        (0..n)
+            .map(|i| {
+                let id = conductor_core::test_helpers::seed_workflow_run_on_worktree(
+                    &db, wt, "wf", status, None, None,
+                );
+                db.execute(
+                    "UPDATE workflow_runs SET started_at = ?1 WHERE id = ?2",
+                    rusqlite::params![format!("2025-01-01T00:{:02}:00Z", start + i), id],
+                )
+                .unwrap();
+                id
+            })
+            .collect()
+    }
+
+    fn ids_of(body: &serde_json::Value) -> Vec<String> {
+        body.as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn runs_limit_default_and_clamp() {
+        assert_eq!(effective_runs_limit(None), 50);
+        assert_eq!(effective_runs_limit(Some(10_000)), 500);
+        assert_eq!(effective_runs_limit(Some(0)), 1);
+        assert_eq!(effective_runs_limit(Some(20)), 20);
+    }
+
+    #[test]
+    fn include_inactive_default_rules() {
+        use WorkflowRunStatus::*;
+        assert!(!default_include_inactive(&[], None, None));
+        assert!(!default_include_inactive(&[Running], None, None));
+        assert!(!default_include_inactive(&[Running, Completed], None, None));
+        assert!(default_include_inactive(&[Completed, Failed], None, None));
+        assert!(default_include_inactive(&[Running], Some("w1"), None));
+        assert!(!default_include_inactive(&[Completed], None, Some(false)));
+        assert!(default_include_inactive(&[Running], None, Some(true)));
+    }
+
+    #[test]
+    fn runs_paging_has_no_overlap() {
+        let state = seeded_state();
+        let seeded = seed_runs(&state, "w1", WorkflowRunStatus::Completed, 5, 0);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_, p1) = rt.block_on(get_response(
+            "/api/workflows/runs?status=completed&limit=2&offset=0",
+            state.clone(),
+        ));
+        let (_, p2) = rt.block_on(get_response(
+            "/api/workflows/runs?status=completed&limit=2&offset=2",
+            state.clone(),
+        ));
+        let mut expected = seeded.clone();
+        expected.reverse();
+        assert_eq!(ids_of(&p1), expected[0..2]);
+        assert_eq!(ids_of(&p2), expected[2..4]);
+    }
+
+    #[test]
+    fn runs_default_limit_bounds_response() {
+        let state = seeded_state();
+        seed_runs(&state, "w1", WorkflowRunStatus::Completed, 51, 0);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (status, body) =
+            rt.block_on(get_response("/api/workflows/runs?status=completed", state));
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.as_array().unwrap().len(), 50);
+    }
+
+    #[test]
+    fn runs_worktree_filter() {
+        let state = seeded_state();
+        {
+            let db = state.db.blocking_lock();
+            conductor_core::test_helpers::insert_test_worktree(
+                &db,
+                "w9",
+                "r1",
+                "other",
+                "/tmp/ws/other",
+            );
+        }
+        let w1 = seed_runs(&state, "w1", WorkflowRunStatus::Completed, 2, 0);
+        seed_runs(&state, "w9", WorkflowRunStatus::Completed, 2, 10);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_, body) = rt.block_on(get_response(
+            "/api/workflows/runs?status=completed&worktree=w1",
+            state,
+        ));
+        let mut got = ids_of(&body);
+        got.sort();
+        let mut want = w1;
+        want.sort();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn runs_on_merged_worktree_visibility() {
+        let state = seeded_state();
+        let done = seed_runs(&state, "w1", WorkflowRunStatus::Completed, 1, 0);
+        let running = seed_runs(&state, "w1", WorkflowRunStatus::Running, 1, 1);
+        state
+            .db
+            .blocking_lock()
+            .execute("UPDATE worktrees SET status = 'merged' WHERE id = 'w1'", [])
+            .unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_, body) = rt.block_on(get_response(
+            "/api/workflows/runs?status=completed",
+            state.clone(),
+        ));
+        assert_eq!(ids_of(&body), done);
+        let (_, body) = rt.block_on(get_response(
+            "/api/workflows/runs?status=running",
+            state.clone(),
+        ));
+        assert!(ids_of(&body).is_empty());
+        let (_, body) = rt.block_on(get_response(
+            "/api/workflows/runs?status=running&include_inactive=true",
+            state,
+        ));
+        assert_eq!(ids_of(&body), running);
+    }
+
+    #[test]
+    fn runs_repo_filter_accepts_id_or_slug() {
+        let state = seeded_state();
+        let ids = seed_runs(&state, "w1", WorkflowRunStatus::Completed, 1, 0);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        for repo in ["r1", "test-repo"] {
+            let (status, body) = rt.block_on(get_response(
+                &format!("/api/workflows/runs?status=completed&repo={repo}"),
+                state.clone(),
+            ));
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(ids_of(&body), ids);
+        }
+        let (status, _) = rt.block_on(get_response(
+            "/api/workflows/runs?repo=nope",
+            state,
+        ));
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
