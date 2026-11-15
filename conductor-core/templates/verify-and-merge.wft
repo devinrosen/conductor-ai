@@ -11,7 +11,7 @@ hints:
   - "Every refusal is a one-line reason on stderr and exit 1, which becomes the step error: a release PR into the default branch, a draft, a stale or missing review, a failing or pending required check, a conflict, a branch that does not contain its base (the base is merged in and pushed, then the run stops so the new head gets reviewed)"
   - "Head pinning: check-pr-ready captures head_sha once, post-verification refuses if the head or working tree changed, and squash-merge passes --match-head-commit, so a push during verification is never merged unverified"
   - "If the repo uses release branches, the recipe confirms the PR targets the open release branch, and a release to default-branch PR stays a manual rebase-merge"
-  - "squash-merge closes the linked issues itself when the merge did not (a release-branch merge does not close them); if issues live outside GitHub (Jira), adapt that part. It does not delete the worktree, because the run is executing in it: it prints the cleanup command"
+  - "squash-merge closes the linked issues itself when the merge did not (a release-branch merge does not close them); if issues live outside GitHub (Jira), adapt that part. It does not delete the worktree, because the run is executing in it: it prints the cleanup command, only while the worktree still exists. It resolves the repository up front and passes an explicit --repo to every gh call, because the worktree can be removed under the run once the PR merges"
 ---
 workflow verify-and-merge {
   meta {
