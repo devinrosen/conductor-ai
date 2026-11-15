@@ -700,24 +700,14 @@ mod tests {
         let conn = crate::test_helpers::setup_db();
         crate::test_helpers::insert_test_repo(&conn, "r-item", "item-repo", "/item/repo");
         crate::test_helpers::insert_test_worktree(&conn, "w-item", "r-item", "item-wt", "/item/wt");
-        let parent = crate::agent::AgentManager::new(&conn)
-            .create_run(Some("w-item"), "workflow", None)
-            .unwrap();
-        let run = crate::workflow::create_workflow_run(
+        crate::test_helpers::seed_workflow_run_on_worktree(
             &conn,
+            "w-item",
             "busy-wf",
-            Some("w-item"),
-            &parent.id,
-            false,
-            "manual",
+            crate::workflow::WorkflowRunStatus::Running,
             None,
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE workflow_runs SET status = 'running' WHERE id = ?1",
-            rusqlite::params![run.id],
-        )
-        .unwrap();
+            None,
+        );
         let target = |retargeted| ChildTarget {
             worktree_id: Some("w-item".to_string()),
             working_dir: "/item/wt".to_string(),
