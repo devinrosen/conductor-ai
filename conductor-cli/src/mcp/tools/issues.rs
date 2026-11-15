@@ -188,6 +188,25 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_link_run_id_workflow_run_with_missing_parent() {
+        use super::super::test_helpers::create_list_run;
+        let (_f, conductor) = make_test_conductor();
+        let conn = &conductor.conn;
+
+        let wf = create_list_run(conn, "wf", None, None);
+        conn.execute(
+            "UPDATE workflow_runs SET parent_run_id = ?1 WHERE id = ?2",
+            rusqlite::params!["01NOSUCHPARENT", wf],
+        )
+        .unwrap();
+
+        let err = resolve_link_run_id(conn, &wf).unwrap_err();
+        assert!(err.contains(&wf), "{err}");
+        assert!(err.contains("01NOSUCHPARENT"), "{err}");
+        assert!(err.contains("no longer exists"), "{err}");
+    }
+
+    #[test]
     fn test_create_gh_issue_unknown_run_id_rejected_before_repo_lookup() {
         let (_f, conductor) = make_test_conductor();
         let a = args_with(&[
