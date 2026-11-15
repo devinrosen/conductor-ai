@@ -251,7 +251,6 @@ impl<'a> RepoManager<'a> {
     }
 }
 
-/// Derive a repo slug from a remote URL (e.g. "https://github.com/org/repo.git" → "repo").
 /// True when `dir` is `stored` or inside it. Compares the raw paths first, then
 /// canonicalized ones (macOS `/var` vs `/private/var`, symlinked homes). A path
 /// that can't be canonicalized only matches on the raw comparison.
@@ -266,6 +265,7 @@ pub(crate) fn dir_contains(stored: &str, dir: &Path) -> bool {
     }
 }
 
+/// Derive a repo slug from a remote URL (e.g. "https://github.com/org/repo.git" → "repo").
 pub fn derive_slug_from_url(remote_url: &str) -> String {
     let last = remote_url.rsplit('/').next().unwrap_or("repo");
     last.strip_suffix(".git").unwrap_or(last).to_string()
