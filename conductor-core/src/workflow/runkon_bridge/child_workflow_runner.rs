@@ -149,11 +149,9 @@ fn resolve_child_target(
     }
     let wt = match crate::worktree::WorktreeManager::new(conn, config).get_by_id(wt_id) {
         Ok(wt) => wt,
-        Err(crate::error::ConductorError::WorktreeNotFound { .. }) => {
-            return Err(format!(
-                "child workflow '{workflow_name}': input worktree_id '{wt_id}' is not a known worktree"
-            ))
-        }
+        Err(crate::error::ConductorError::WorktreeNotFound { .. }) => return Err(format!(
+            "child workflow '{workflow_name}': input worktree_id '{wt_id}' is not a known worktree"
+        )),
         Err(e) => {
             return Err(format!(
                 "child workflow '{workflow_name}': failed to look up worktree '{wt_id}': {e}"
@@ -380,7 +378,8 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         // Route child workflows through execute_workflow_standalone so they use
         // FlowEngine::run() — keeping event emission and step tracking consistent
         // between parent and child runs.
-        let standalone_params = self.build_child_standalone_params(core_def, parent_ctx, params, target);
+        let standalone_params =
+            self.build_child_standalone_params(core_def, parent_ctx, params, target);
 
         let core_result =
             super::super::coordinator::execute_workflow_standalone(&standalone_params).map_err(
@@ -642,7 +641,10 @@ mod tests {
         use runkon_flow::events::EventSink;
         let mut vars = std::collections::HashMap::new();
         vars.insert(crate::workflow::engine_keys::WORKTREE_ID, wt.to_string());
-        vars.insert(crate::workflow::engine_keys::REPO_ID, "r-parent".to_string());
+        vars.insert(
+            crate::workflow::engine_keys::REPO_ID,
+            "r-parent".to_string(),
+        );
         vars.insert(
             crate::workflow::engine_keys::REPO_PATH,
             "/parent/repo".to_string(),
@@ -700,18 +702,27 @@ mod tests {
         let conn = crate::test_helpers::setup_db();
         crate::test_helpers::insert_test_repo(&conn, "r-item", "item-repo", "/item/repo");
         crate::test_helpers::insert_test_worktree(&conn, "w-done", "r-item", "done-wt", "/done");
-        conn.execute("UPDATE worktrees SET status = 'merged' WHERE id = 'w-done'", [])
-            .unwrap();
+        conn.execute(
+            "UPDATE worktrees SET status = 'merged' WHERE id = 'w-done'",
+            [],
+        )
+        .unwrap();
         let ctx = parent_ctx_in_worktree("w-parent");
         let config = crate::config::Config::default();
 
-        let err = resolve_child_target(&conn, &config, "wf", &wt_inputs("w-nope"), &ctx)
-            .unwrap_err();
-        assert!(err.contains("w-nope") && err.contains("not a known worktree"), "{err}");
+        let err =
+            resolve_child_target(&conn, &config, "wf", &wt_inputs("w-nope"), &ctx).unwrap_err();
+        assert!(
+            err.contains("w-nope") && err.contains("not a known worktree"),
+            "{err}"
+        );
 
         let err =
             resolve_child_target(&conn, &config, "wf", &wt_inputs("w-done"), &ctx).unwrap_err();
-        assert!(err.contains("w-done") && err.contains("not active"), "{err}");
+        assert!(
+            err.contains("w-done") && err.contains("not active"),
+            "{err}"
+        );
 
         let err = validate_child_worktree_input("wf", &wt_inputs("{{item.id}}")).unwrap_err();
         assert!(err.contains("{{item.id}}"), "{err}");
