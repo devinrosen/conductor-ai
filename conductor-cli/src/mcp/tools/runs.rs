@@ -3,7 +3,7 @@ use rmcp::model::CallToolResult;
 use serde_json::Value;
 
 use crate::mcp::helpers::{
-    get_arg, get_arg_usize, get_bool_arg, pagination_hint, tool_err, tool_ok,
+    get_arg, get_arg_usize, get_bool_arg, get_list_arg, pagination_hint, tool_err, tool_ok,
 };
 use crate::mcp::resources::{
     format_run_detail_with_log, format_run_extra_lines, format_run_summary_line,
@@ -436,26 +436,15 @@ pub(super) fn tool_get_step_log(
     }
 }
 
-/// Split a comma-separated list of run ids, dropping blanks.
-fn split_run_ids(raw: &str) -> Vec<String> {
-    raw.split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect()
-}
-
 pub(super) fn tool_run_stats(
     conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
-    let run_ids = split_run_ids(require_arg!(args, "run_id"));
+    let run_ids = list_arg!(args, "run_id");
     if run_ids.is_empty() {
         return tool_err("run_id must contain at least one workflow run id");
     }
-    let compare_ids = get_arg(args, "compare_run_id")
-        .map(split_run_ids)
-        .unwrap_or_default();
+    let compare_ids = list_arg!(args, "compare_run_id");
     let as_json = args.get("json").and_then(Value::as_bool).unwrap_or(false);
 
     match conductor_core::workflow::run_stats::render_run_stats(
@@ -506,9 +495,34 @@ pub(super) fn tool_get_review(
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_helpers::{create_list_run, make_test_conductor};
+    use super::super::test_helpers::{create_list_run, err_text, make_test_conductor};
     use super::*;
     use serde_json::Value;
+
+    fn run_stats_err(args: serde_json::Value) -> String {
+        let (_f, conductor) = make_test_conductor();
+        let Value::Object(map) = args else { panic!() };
+        err_text(&tool_run_stats(&conductor, &map))
+    }
+
+    #[test]
+    fn run_stats_invalid_run_id_rejected() {
+        let text = run_stats_err(serde_json::json!({"run_id": 42}));
+        assert!(text.starts_with("run_id must be"), "{text}");
+    }
+
+    #[test]
+    fn run_stats_invalid_compare_run_id_rejected() {
+        let text = run_stats_err(serde_json::json!({"run_id": "a", "compare_run_id": {"a": 1}}));
+        assert!(text.starts_with("compare_run_id must be"), "{text}");
+    }
+
+    #[test]
+    fn run_stats_accepts_array_run_id() {
+        // The array form passes validation; it fails later on the unknown run, not on parsing.
+        let text = run_stats_err(serde_json::json!({"run_id": ["a", " b "]}));
+        assert!(!text.contains("must be"), "{text}");
+    }
 
     fn stale_info(pid: u32, is_self: bool) -> conductor_core::process_registry::StaleInfo {
         use conductor_core::process_registry::{ProcessKind, ProcessRecord, StaleInfo};
@@ -2356,14 +2370,6 @@ mod tests {
             .unwrap()
             .iter()
             .any(|n| n.as_str().unwrap().contains("overrides the aggregator")));
-    }
-
-    #[test]
-    fn test_split_run_ids_trims_and_drops_blanks() {
-        assert_eq!(split_run_ids("a, b ,,c"), vec!["a", "b", "c"]);
-        assert_eq!(split_run_ids("  a  "), vec!["a"]);
-        assert!(split_run_ids("").is_empty());
-        assert!(split_run_ids(" , ,  ").is_empty());
     }
 
     #[test]
