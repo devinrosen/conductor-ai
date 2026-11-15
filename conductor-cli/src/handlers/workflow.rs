@@ -812,8 +812,7 @@ pub fn handle_workflow(
                 (dir.clone(), dir)
             } else if let Some(ref dir) = path {
                 let abs = std::path::absolute(dir)?;
-                if let Some((wt_path, repo_path, target)) =
-                    resolve_dir_target(conn, config, &abs)?
+                if let Some((wt_path, repo_path, target)) = resolve_dir_target(conn, config, &abs)?
                 {
                     smoke_target = Some(target);
                     (wt_path, repo_path)

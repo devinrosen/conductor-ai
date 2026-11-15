@@ -652,7 +652,10 @@ mod tests {
         register_at(&mgr, "inner", "/tmp/nonexistent-3382/outer/inner");
 
         let find = |p: &str| mgr.find_by_path(Path::new(p)).unwrap().map(|r| r.slug);
-        assert_eq!(find("/tmp/nonexistent-3382/outer").as_deref(), Some("outer"));
+        assert_eq!(
+            find("/tmp/nonexistent-3382/outer").as_deref(),
+            Some("outer")
+        );
         assert_eq!(
             find("/tmp/nonexistent-3382/outer/src/lib").as_deref(),
             Some("outer")

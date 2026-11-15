@@ -1188,11 +1188,9 @@ fn add_repo_targeted_workflow(dir: &std::path::Path, name: &str) {
 /// Query one column of the single `workflow_runs` row.
 fn only_run_column(home: &std::path::Path, column: &str) -> Option<String> {
     let conn = conductor_core::db::open_database(&home.join("conductor.db")).unwrap();
-    conn.query_row(
-        &format!("SELECT {column} FROM workflow_runs"),
-        [],
-        |r| r.get::<_, Option<String>>(0),
-    )
+    conn.query_row(&format!("SELECT {column} FROM workflow_runs"), [], |r| {
+        r.get::<_, Option<String>>(0)
+    })
     .unwrap()
 }
 
