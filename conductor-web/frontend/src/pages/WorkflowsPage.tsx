@@ -54,7 +54,7 @@ export function WorkflowsPage() {
     const fetchAll = async () => {
       const [allWorktrees, allRunsList] = await Promise.all([
         api.listAllWorktrees(),
-        api.listAllWorkflowRuns(),
+        api.listAllWorkflowRuns(undefined, { limit: 500 }),
       ]);
 
       const repoMap = new Map(repos.map((r) => [r.id, r]));

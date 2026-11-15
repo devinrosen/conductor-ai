@@ -796,30 +796,79 @@ pub fn list_active_workflow_runs_for_repo(
     repo_id: &str,
     statuses: &[WorkflowRunStatus],
 ) -> Result<Vec<ConductorWorkflowRun>> {
-    let effective = effective_statuses(statuses);
+    list_workflow_runs_page(
+        conn,
+        &WorkflowRunListFilter {
+            statuses,
+            repo_id: Some(repo_id),
+            worktree_id: None,
+            include_inactive: false,
+            limit: 500,
+            offset: 0,
+        },
+    )
+}
 
+/// Filter for [`list_workflow_runs_page`].
+pub struct WorkflowRunListFilter<'a> {
+    /// Statuses to include. Empty defaults to `[running, waiting, pending]`.
+    pub statuses: &'a [WorkflowRunStatus],
+    /// Restrict to a repo (direct `repo_id` or via the run's worktree).
+    pub repo_id: Option<&'a str>,
+    /// Restrict to a single worktree.
+    pub worktree_id: Option<&'a str>,
+    /// When false, runs on non-active worktrees are excluded.
+    pub include_inactive: bool,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+/// List workflow runs matching `f`, newest first (`started_at DESC, id DESC`, the
+/// second key keeps offset pages stable when two runs share a start time).
+///
+/// Used by `list_active_workflow_runs_for_repo` and the `GET /api/workflows/runs` route.
+/// `list_active_workflow_runs` and `list_all_workflow_runs_filtered_paginated` still
+/// carry their own SQL. No `DISTINCT`: `worktrees.id` is the primary key, so the join
+/// yields at most one row per run.
+pub fn list_workflow_runs_page(
+    conn: &Connection,
+    f: &WorkflowRunListFilter,
+) -> Result<Vec<ConductorWorkflowRun>> {
+    let effective = effective_statuses(f.statuses);
     let placeholders = sql_placeholders(effective.len());
 
+    let mut params: Vec<rusqlite::types::Value> = effective
+        .iter()
+        .map(|s| rusqlite::types::Value::Text(s.to_string()))
+        .collect();
+    let mut clauses = vec![format!("workflow_runs.status IN ({placeholders})")];
+    if let Some(repo_id) = f.repo_id {
+        clauses.push("(workflow_runs.repo_id = ? OR worktrees.repo_id = ?)".to_string());
+        params.push(rusqlite::types::Value::Text(repo_id.to_owned()));
+        params.push(rusqlite::types::Value::Text(repo_id.to_owned()));
+    }
+    if let Some(wt) = f.worktree_id {
+        clauses.push("workflow_runs.worktree_id = ?".to_string());
+        params.push(rusqlite::types::Value::Text(wt.to_owned()));
+    }
+    if !f.include_inactive {
+        clauses.push(format!("({ACTIVE_WORKTREE_GUARD})"));
+    }
+    let where_sql = clauses.join(" AND ");
+    params.push(rusqlite::types::Value::Integer(f.limit as i64));
+    params.push(rusqlite::types::Value::Integer(f.offset as i64));
+
     let sql = format!(
-        "SELECT DISTINCT workflow_runs.* \
+        "SELECT workflow_runs.* \
              FROM workflow_runs \
              LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-             WHERE (workflow_runs.repo_id = ? OR worktrees.repo_id = ?) \
-               AND ({ACTIVE_WORKTREE_GUARD}) \
-               AND workflow_runs.status IN ({placeholders}) \
-             ORDER BY workflow_runs.started_at DESC \
-             LIMIT 500"
+             WHERE {where_sql} \
+             ORDER BY workflow_runs.started_at DESC, workflow_runs.id DESC \
+             LIMIT ? OFFSET ?"
     );
-
-    let status_strings: Vec<String> = effective.iter().map(|s| s.to_string()).collect();
-    let mut all_params: Vec<rusqlite::types::Value> = vec![
-        rusqlite::types::Value::Text(repo_id.to_owned()),
-        rusqlite::types::Value::Text(repo_id.to_owned()),
-    ];
-    all_params.extend(status_strings.into_iter().map(rusqlite::types::Value::Text));
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
-        rusqlite::params_from_iter(all_params.iter()),
+        rusqlite::params_from_iter(params.iter()),
         row_to_conductor_run,
     )?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)

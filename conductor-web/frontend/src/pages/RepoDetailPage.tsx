@@ -220,8 +220,12 @@ export function RepoDetailPage() {
 
   // Fetch active workflow runs for this repo to show running indicators on tickets
   const { data: activeWorkflowRuns, refetch: refetchWorkflowRuns } = useApi(
-    () => api.listAllWorkflowRuns(["running", "pending", "waiting", "failed", "completed"]),
-    [],
+    () =>
+      api.listAllWorkflowRuns(["running", "pending", "waiting", "failed", "completed"], {
+        repo: repoId,
+        limit: 500,
+      }),
+    [repoId],
   );
 
   // Map ticket internal id → source_id (e.g. "D-160") for worktree display
