@@ -34,14 +34,12 @@ use crate::error::{ConductorError, Result};
 use crate::workflow::{ConductorWorkflowRun, WorkflowRunStatus, WorkflowStepStatus};
 
 use crate::workflow::constants::STEP_COLUMNS_WITH_PREFIX;
-use crate::workflow::helpers::{
-    backfill_gate_type, gate_step_sql, gate_type_or_name, parse_gate_options,
-};
+use crate::workflow::helpers::{gate_step_sql, gate_type_or_name, parse_gate_options};
 
 use super::failure_chain::{
     chain_or_empty, failed_call_step_chain, format_failure_cause, is_workflow_call_step,
 };
-use super::helpers::row_to_workflow_step;
+use super::helpers::waiting_gate_step_row_mapper;
 use super::queries::{get_workflow_run, get_workflow_steps};
 
 /// How often the wait loop re-checks the run.
@@ -328,7 +326,7 @@ fn preceding_plan_path(
 fn waiting_gates_in_tree(conn: &Connection, run_id: &str) -> Result<Vec<WaitGateSummary>> {
     let sql = format!(
         "{RUN_TREE_CTE}
-         SELECT {cols}, r.workflow_name AS workflow_name
+         SELECT {cols}, r.workflow_name, r.target_label
          FROM workflow_run_steps s
          JOIN workflow_runs r ON r.id = s.workflow_run_id
          WHERE s.workflow_run_id IN (SELECT id FROM tree)
@@ -342,14 +340,10 @@ fn waiting_gates_in_tree(conn: &Connection, run_id: &str) -> Result<Vec<WaitGate
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
-        .query_map(named_params![":root": run_id], |row| {
-            let step = backfill_gate_type(row_to_workflow_step(row)?);
-            let workflow_name: String = row.get("workflow_name")?;
-            Ok((step, workflow_name))
-        })?
+        .query_map(named_params![":root": run_id], waiting_gate_step_row_mapper)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut gates = Vec::with_capacity(rows.len());
-    for (step, workflow_name) in rows {
+    for (step, workflow_name, _target_label) in rows {
         // A broken lookup must not hide the wait result.
         let plan_path = preceding_plan_path(conn, &step).unwrap_or_else(|e| {
             tracing::warn!("plan_path lookup failed for step {}: {e}", step.id);
