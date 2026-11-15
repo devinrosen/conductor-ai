@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Version bump for the `release: X.Y.Z` commit.
+# Version bump and the `release: X.Y.Z` commit.
 #
 # Usage:
-#   scripts/release/bump.sh <version>
+#   scripts/release/bump.sh [--no-commit] <version>
 #     e.g. scripts/release/bump.sh 0.18.1
 #
 # Edits `[workspace.package] version` in the root Cargo.toml and `"version"` in
@@ -13,20 +13,35 @@
 #      third-party dependency moving, fails the script.
 #   2. Neither Cargo.toml's [workspace.package] nor plugin.json still has the old version.
 #
-# Refuses to run if the files it edits have uncommitted changes. If a check fails the
-# edits are left in place for inspection and the undo command is printed.
+# When the checks pass it commits exactly those three files (Cargo.toml, Cargo.lock,
+# plugin.json) as `release: X.Y.Z`, verifies the commit's subject and file list (finish.sh
+# and the Release workflow key on the subject), and prints
+# `git push origin HEAD:release/X.Y.Z` without running it. --no-commit stops before the
+# commit, leaving the edits in the working tree, and prints the commit command.
+#
+# Refuses to run if the files it edits have uncommitted changes, or if anything is staged.
+# Unstaged changes to other files are fine; they stay out of the commit. If a check fails
+# the edits are left in place for inspection and the undo command is printed.
 # Ported from runkon/runkon's scripts/release/bump.sh.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
 usage() {
-  echo "usage: $0 <version>   (e.g. 0.18.1)" >&2
+  echo "usage: $0 [--no-commit] <version>   (e.g. 0.18.1)" >&2
   exit 2
 }
 
-[[ $# -eq 1 ]] || usage
-new=$1
+commit=1
+new=""
+for arg in "$@"; do
+  case $arg in
+    --no-commit) commit=0 ;;
+    -*) usage ;;
+    *) [[ -z $new ]] || usage; new=$arg ;;
+  esac
+done
+[[ -n $new ]] || usage
 if [[ ! $new =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
   echo "invalid version '$new': expected X.Y.Z or X.Y.Z-suffix (e.g. 0.18.1)" >&2
   exit 2
@@ -57,10 +72,17 @@ if ! git diff --quiet HEAD -- "${files[@]}"; then
   exit 1
 fi
 
+if ! git diff --cached --quiet; then
+  echo "error: changes are staged; commit or unstage them first (the release commit holds only the version files):" >&2
+  git diff --cached --name-only | sed 's/^/  /' >&2
+  exit 1
+fi
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cp Cargo.lock "$tmp/Cargo.lock.orig"
 undo="git checkout -- ${files[*]}"
+undo_staged="git reset -q -- ${files[*]} && git checkout -- ${files[*]}"
 
 # Cargo.toml: only the [workspace.package] version line.
 awk -v old="$old" -v new="$new" '
@@ -128,4 +150,29 @@ if awk -v old="$old" '/^\[/ { p = ($0 == "[workspace.package]") } p && $0 == "ve
 fi
 
 echo "bumped $old -> $new"
-git diff --stat HEAD -- "${files[@]}"
+
+if [[ $commit -eq 0 ]]; then
+  git diff --stat HEAD -- "${files[@]}"
+  echo "commit: git add -- ${files[*]} && git commit -m \"release: $new\""
+  exit 0
+fi
+
+git add -- "${files[@]}"
+if ! git commit -q -m "release: $new"; then
+  echo "error: git commit failed" >&2
+  echo "undo: $undo_staged" >&2
+  exit 1
+fi
+
+# The Release workflow and finish.sh match on the subject; check what was committed.
+subject=$(git log -1 --format=%s)
+committed=$(git diff-tree --no-commit-id --name-only -r HEAD | LC_ALL=C sort)
+expected=$(printf '%s\n' "${files[@]}" | LC_ALL=C sort)
+if [[ $subject != "release: $new" || $committed != "$expected" ]]; then
+  echo "error: HEAD is not the expected release commit (subject: '$subject'; files: $(echo $committed))" >&2
+  echo "undo: git reset --soft HEAD~1, then $undo_staged" >&2
+  exit 1
+fi
+
+git show --stat --format='%h %s' HEAD
+echo "next: git push origin HEAD:release/$new"
