@@ -3614,6 +3614,32 @@ fn test_mark_interrupted_steps_failed_updates_only_running() {
     assert_eq!(err.as_deref(), Some("boom"), "failed step_error is kept");
 }
 
+/// Insert a running agent step into a workflow run, returning (agent_run_id, step_id).
+fn create_agent_step(
+    conn: &Connection,
+    run_id: &str,
+    step_name: &str,
+    position: i64,
+    subprocess_pid: i64,
+) -> (String, String) {
+    let agent_mgr = AgentManager::new(conn);
+    let agent = agent_mgr.create_run(Some("w1"), step_name, None).unwrap();
+    conn.execute(
+        "UPDATE agent_runs SET subprocess_pid = :pid WHERE id = :id",
+        named_params! { ":pid": subprocess_pid, ":id": agent.id },
+    )
+    .unwrap();
+    let step_id = crate::new_id();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, iteration, child_run_id) \
+         VALUES (:step_id, :run_id, :step_name, 'actor', :position, 'running', 0, :agent_run_id)",
+        named_params! { ":step_id": step_id, ":run_id": run_id, ":step_name": step_name, ":position": position, ":agent_run_id": agent.id },
+    )
+    .unwrap();
+    (agent.id, step_id)
+}
+
 /// Running agent steps (tracked via child_run_id) are signalled across the run
 /// and end up failed.
 #[test]
