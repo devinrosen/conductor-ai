@@ -314,7 +314,7 @@ The scan takes each `{{` and the first `}}` after it as one placeholder, whateve
 |---|---|
 | `{{prior_context}}` | **Only** the `context` string of the most recent step, usually a one- or two-sentence summary. Structured fields (`missing[]`, `findings[]`) are **not** in it (#3280) |
 | `{{prior_output}}` | The structured JSON of the most recent completed step that has one, whatever its name; **not a lookup by name**. For a schema'd agent, its parsed output; for a script, its whole FLOW_OUTPUT object. Absent until a step produces one |
-| `{{prior_output_file}}` | Never set: no script step sets `output_file` |
+| `{{prior_output_file}}` | Never set: no step type passes an output file on to later steps. A script step records its log path in its own step row's `output_file` (what `step-log` reads), but that path deliberately feeds neither this variable nor the `output_file` field of `{{prior_contexts}}`, which is always null |
 | `{{prior_contexts}}` | JSON array `[{"step","iteration","context","markers","structured_output","output_file"}, ...]` of every completed step in run order (`iteration` is 0 for steps nested in `if`, `unless` or `do`, even inside a loop). Repeated names are all included, never deduped, also when replayed on resume. A script picking `first` or `last` for a name sees every occurrence |
 | `{{gate_feedback}}` | The most recent gate's feedback (or picked option keys); a gate decided without feedback clears it; restored per gate on resume |
 | `{{<gate>.feedback}}` | One gate's feedback or joined selections, by gate name (`{{human_review.feedback}}`); empty when that gate had none |
