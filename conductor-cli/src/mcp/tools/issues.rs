@@ -109,7 +109,8 @@ pub(super) fn tool_create_gh_issue(
             ));
         }
         if let Some(wf) = workflow_run_id {
-            link_line = format!("\nLinked to agent run {agent_run_id} (driver of workflow run {wf})");
+            link_line =
+                format!("\nLinked to agent run {agent_run_id} (driver of workflow run {wf})");
         }
     }
 
@@ -184,7 +185,10 @@ mod tests {
         );
 
         let err = resolve_link_run_id(conn, "01NOSUCHRUN").unwrap_err();
-        assert!(err.contains("neither an agent run nor a workflow run"), "{err}");
+        assert!(
+            err.contains("neither an agent run nor a workflow run"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -221,7 +225,10 @@ mod tests {
             .as_text()
             .map(|t| t.text.as_str())
             .unwrap();
-        assert!(text.contains("neither an agent run nor a workflow run"), "{text}");
+        assert!(
+            text.contains("neither an agent run nor a workflow run"),
+            "{text}"
+        );
     }
 
     #[test]
