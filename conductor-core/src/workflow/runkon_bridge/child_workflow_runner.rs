@@ -149,9 +149,11 @@ fn resolve_child_target(
     }
     let wt = match crate::worktree::WorktreeManager::new(conn, config).get_by_id(wt_id) {
         Ok(wt) => wt,
-        Err(crate::error::ConductorError::WorktreeNotFound { .. }) => return Err(format!(
+        Err(crate::error::ConductorError::WorktreeNotFound { .. }) => {
+            return Err(format!(
             "child workflow '{workflow_name}': input worktree_id '{wt_id}' is not a known worktree"
-        )),
+        ))
+        }
         Err(e) => {
             return Err(format!(
                 "child workflow '{workflow_name}': failed to look up worktree '{wt_id}': {e}"
