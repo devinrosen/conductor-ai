@@ -396,11 +396,12 @@ pub enum WorkflowCommands {
         /// Validate all workflows in .conductor/workflows/
         #[arg(long, conflicts_with = "name")]
         all: bool,
-        /// Repo slug (optional; auto-detected from CWD when omitted)
+        /// Repo slug (optional; auto-detected from CWD when omitted: the worktree, or a registered repo's main checkout)
         repo: Option<String>,
         /// Worktree slug (optional; auto-detected from CWD when omitted)
         worktree: Option<String>,
-        /// Path to a repo root directory; skips DB lookup
+        /// Directory to validate against: inside a registered worktree or repo checkout it
+        /// resolves to that target; any other directory is used as-is without the database
         #[arg(long, conflicts_with_all = &["repo", "worktree"])]
         path: Option<String>,
         /// Also validate the embedded workflow templates (.wft)
