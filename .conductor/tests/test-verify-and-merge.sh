@@ -74,7 +74,7 @@ case "$1 $2" in
     exit 0 ;;
   "issue view")
     echo "$3" >> "$d/views"
-    if grep -q FAIL "$d/issues/$3" 2>/dev/null; then echo "gh stub: HTTP 502" >&2; exit 1; fi
+    if grep -q FAIL "$d/issues/$3" 2>/dev/null; then echo "gh stub: HTTP 404 not found" >&2; exit 1; fi
     cat "$d/issues/$3" 2>/dev/null || echo OPEN; exit 0 ;;
   "issue close") echo "$3" >> "$d/closed"; echo CLOSED > "$d/issues/$3"; exit 0 ;;
 esac
