@@ -2005,7 +2005,7 @@ mod tests {
         (0..n)
             .map(|i| {
                 let id = conductor_core::test_helpers::seed_workflow_run_on_worktree(
-                    &db, wt, "wf", status, None, None,
+                    &db, wt, "wf", status.clone(), None, None,
                 );
                 db.execute(
                     "UPDATE workflow_runs SET started_at = ?1 WHERE id = ?2",
