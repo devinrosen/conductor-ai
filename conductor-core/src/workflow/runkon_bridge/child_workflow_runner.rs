@@ -85,6 +85,123 @@ fn validate_child_ticket_input(
     }
 }
 
+/// Where a child run executes: the item's worktree when the `worktree_id`
+/// input names one, else the parent's worktree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChildTarget {
+    worktree_id: Option<String>,
+    working_dir: String,
+    repo_path: String,
+    repo_id: Option<String>,
+    /// True when the target worktree is not the parent's.
+    retargeted: bool,
+}
+
+/// The `worktree_id` input, trimmed, when it is non-empty.
+fn non_empty_worktree_input(inputs: &std::collections::HashMap<String, String>) -> Option<&str> {
+    inputs
+        .get("worktree_id")
+        .map(|s| s.trim())
+        .filter(|t| !t.is_empty())
+}
+
+/// Fail clearly when a child's `worktree_id` input is an unfilled `{{...}}` placeholder.
+fn validate_child_worktree_input(
+    workflow_name: &str,
+    inputs: &std::collections::HashMap<String, String>,
+) -> Result<(), String> {
+    match inputs.get("worktree_id") {
+        Some(v) if v.contains("{{") => Err(format!(
+            "child workflow '{workflow_name}': input worktree_id is the unresolved placeholder '{v}'; \
+             the foreach item has no such key"
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// A child normally shares the parent's worktree, so the active-run guard
+/// skips depth > 0. A retargeted child runs in another worktree and must not
+/// start beside that worktree's active run. Smoke runs skip the guard.
+fn guard_retargeted_child(
+    conn: &rusqlite::Connection,
+    workflow_name: &str,
+    target: &ChildTarget,
+    smoke: bool,
+) -> std::result::Result<(), String> {
+    if !target.retargeted || smoke {
+        return Ok(());
+    }
+    if let Some(wt_id) = &target.worktree_id {
+        super::super::coordinator::guard_active_run(conn, wt_id, false)
+            .map_err(|e| format!("child workflow '{workflow_name}': worktree '{wt_id}': {e}"))?;
+    }
+    Ok(())
+}
+
+/// Resolve where a child runs. With no (or an empty) `worktree_id` input the
+/// child inherits the parent's worktree, working dir, repo and repo path. With
+/// one, all four come from that worktree.
+fn resolve_child_target(
+    conn: &rusqlite::Connection,
+    config: &crate::config::Config,
+    workflow_name: &str,
+    inputs: &std::collections::HashMap<String, String>,
+    parent_ctx: &runkon_flow::engine::ChildWorkflowContext,
+) -> Result<ChildTarget, String> {
+    use crate::workflow::engine_keys;
+    let parent_worktree = parent_ctx.run_ctx.get(engine_keys::WORKTREE_ID);
+    let inherit = || ChildTarget {
+        worktree_id: parent_worktree.clone(),
+        working_dir: parent_ctx.run_ctx.working_dir_str(),
+        repo_path: parent_ctx
+            .run_ctx
+            .get(engine_keys::REPO_PATH)
+            .unwrap_or_default(),
+        repo_id: parent_ctx.run_ctx.get(engine_keys::REPO_ID),
+        retargeted: false,
+    };
+    let Some(wt_id) = non_empty_worktree_input(inputs) else {
+        return Ok(inherit());
+    };
+    if parent_worktree.as_deref() == Some(wt_id) {
+        return Ok(inherit());
+    }
+    let wt = match crate::worktree::WorktreeManager::new(conn, config).get_by_id(wt_id) {
+        Ok(wt) => wt,
+        Err(crate::error::ConductorError::WorktreeNotFound { .. }) => {
+            return Err(format!(
+            "child workflow '{workflow_name}': input worktree_id '{wt_id}' is not a known worktree"
+        ))
+        }
+        Err(e) => {
+            return Err(format!(
+                "child workflow '{workflow_name}': failed to look up worktree '{wt_id}': {e}"
+            ))
+        }
+    };
+    if !wt.is_active() {
+        return Err(format!(
+            "child workflow '{workflow_name}': worktree '{wt_id}' ({}) is not active",
+            wt.slug
+        ));
+    }
+    let repo = crate::repo::RepoManager::new(conn, config)
+        .get_by_id(&wt.repo_id)
+        .map_err(|e| {
+            format!(
+                "child workflow '{workflow_name}': failed to look up repo '{}' of worktree '{wt_id}': {e}",
+                wt.repo_id
+            )
+        })?;
+    Ok(ChildTarget {
+        worktree_id: Some(wt.id),
+        working_dir: wt.path,
+        repo_path: repo.local_path,
+        repo_id: Some(wt.repo_id),
+        retargeted: true,
+    })
+}
+
 /// Implements `runkon_flow::engine::ChildWorkflowRunner` by delegating to
 /// conductor-core's `execute_workflow` / `resume_workflow` functions.
 pub(crate) struct ConductorChildWorkflowRunner {
@@ -136,14 +253,17 @@ impl ConductorChildWorkflowRunner {
     ///
     /// Extracted for unit-testability. The child's ticket is its `ticket_id`
     /// input when given and non-empty (a fan-out child works on its own item's
-    /// ticket), else the parent run's ticket; see `child_ticket_id`. `repo_id`
-    /// is read from `run_ctx`, so resumed runs whose stored inputs no longer
-    /// carry the key still propagate it to child workflows.
+    /// ticket), else the parent run's ticket; see `child_ticket_id`. The
+    /// worktree, working dir, repo path and `repo_id` come from `target`
+    /// (see `resolve_child_target`): the parent's, read from `run_ctx` so
+    /// resumed runs whose stored inputs no longer carry the keys still
+    /// propagate them, unless a `worktree_id` input retargets the child.
     fn build_child_standalone_params(
         &self,
         workflow: runkon_flow::dsl::WorkflowDef,
         parent_ctx: &runkon_flow::engine::ChildWorkflowContext,
         params: runkon_flow::engine::ChildWorkflowInput,
+        target: ChildTarget,
     ) -> crate::workflow::types::WorkflowExecStandalone {
         let exec_config = crate::workflow::WorkflowExecConfig {
             event_sinks: parent_ctx.event_sinks.iter().cloned().collect(),
@@ -152,18 +272,11 @@ impl ConductorChildWorkflowRunner {
         crate::workflow::types::WorkflowExecStandalone {
             config: self.config.clone(),
             workflow,
-            worktree_id: parent_ctx
-                .run_ctx
-                .get(crate::workflow::engine_keys::WORKTREE_ID),
-            working_dir: parent_ctx.run_ctx.working_dir_str(),
-            repo_path: parent_ctx
-                .run_ctx
-                .get(crate::workflow::engine_keys::REPO_PATH)
-                .unwrap_or_default(),
+            worktree_id: target.worktree_id,
+            working_dir: target.working_dir,
+            repo_path: target.repo_path,
             ticket_id: child_ticket_id(&params.inputs, parent_ctx),
-            repo_id: parent_ctx
-                .run_ctx
-                .get(crate::workflow::engine_keys::REPO_ID),
+            repo_id: target.repo_id,
             model: parent_ctx.model.clone(),
             // Child workflows inherit no explicit runtime override from the
             // parent — the adapter's derive-from-model fallback in
@@ -251,16 +364,34 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
         validate_child_ticket_input(workflow_name, &params.inputs)
             .map_err(EngineError::Workflow)?;
 
-        {
+        validate_child_worktree_input(workflow_name, &params.inputs)
+            .map_err(EngineError::Workflow)?;
+
+        let target = {
             let conn = self.conn.lock().map_err(bridge_lock_err)?;
             validate_child_ticket_exists(&conn, workflow_name, &params.inputs)
                 .map_err(EngineError::Workflow)?;
-        }
+            let target = resolve_child_target(
+                &conn,
+                &self.config,
+                workflow_name,
+                &params.inputs,
+                parent_ctx,
+            )
+            .map_err(EngineError::Workflow)?;
+            // A child normally shares the parent's worktree, so the active-run
+            // guard skips depth > 0. A retargeted child runs in another
+            // worktree and must not start beside its active run.
+            guard_retargeted_child(&conn, workflow_name, &target, self.smoke.is_some())
+                .map_err(EngineError::Workflow)?;
+            target
+        };
 
         // Route child workflows through execute_workflow_standalone so they use
         // FlowEngine::run() — keeping event emission and step tracking consistent
         // between parent and child runs.
-        let standalone_params = self.build_child_standalone_params(core_def, parent_ctx, params);
+        let standalone_params =
+            self.build_child_standalone_params(core_def, parent_ctx, params, target);
 
         let core_result =
             super::super::coordinator::execute_workflow_standalone(&standalone_params).map_err(
@@ -407,7 +538,19 @@ mod tests {
             cancellation: runkon_flow::CancellationToken::new(),
         };
 
-        let standalone = runner.build_child_standalone_params(workflow, &parent_ctx, params);
+        let target = {
+            let conn = runner.conn.lock().unwrap();
+            resolve_child_target(
+                &conn,
+                &runner.config,
+                "test-child",
+                &params.inputs,
+                &parent_ctx,
+            )
+            .unwrap()
+        };
+        let standalone =
+            runner.build_child_standalone_params(workflow, &parent_ctx, params, target);
 
         assert_eq!(
             standalone.ticket_id,
@@ -504,6 +647,131 @@ mod tests {
         let err = validate_child_ticket_exists(&conn, "ticket-to-pr", &inputs).unwrap_err();
         assert!(err.contains("failed to look up ticket 't1'"), "{err}");
         assert!(!err.contains("not a known ticket"), "{err}");
+    }
+
+    fn parent_ctx_in_worktree(wt: &str) -> runkon_flow::engine::ChildWorkflowContext {
+        use runkon_flow::events::EventSink;
+        let mut vars = std::collections::HashMap::new();
+        vars.insert(crate::workflow::engine_keys::WORKTREE_ID, wt.to_string());
+        vars.insert(
+            crate::workflow::engine_keys::REPO_ID,
+            "r-parent".to_string(),
+        );
+        vars.insert(
+            crate::workflow::engine_keys::REPO_PATH,
+            "/parent/repo".to_string(),
+        );
+        runkon_flow::engine::ChildWorkflowContext::new(
+            Arc::new(runkon_flow::traits::run_context::NoopRunContext::with_vars(
+                vars,
+            )) as Arc<dyn runkon_flow::traits::run_context::RunContext>,
+            vec![],
+            "parent-run".to_string(),
+            None,
+            crate::workflow::WorkflowExecConfig::default(),
+            HashMap::new(),
+            Arc::<[Arc<dyn EventSink>]>::from(vec![]),
+        )
+    }
+
+    fn wt_inputs(v: &str) -> HashMap<String, String> {
+        HashMap::from([("worktree_id".to_string(), v.to_string())])
+    }
+
+    #[test]
+    fn child_worktree_input_retargets_to_item_worktree() {
+        let conn = crate::test_helpers::setup_db();
+        crate::test_helpers::insert_test_repo(&conn, "r-item", "item-repo", "/item/repo");
+        crate::test_helpers::insert_test_worktree(&conn, "w-item", "r-item", "item-wt", "/item/wt");
+        let ctx = parent_ctx_in_worktree("w-parent");
+        let config = crate::config::Config::default();
+
+        let t = resolve_child_target(&conn, &config, "ticket-to-pr", &wt_inputs(" w-item "), &ctx)
+            .unwrap();
+        assert!(t.retargeted);
+        assert_eq!(t.worktree_id.as_deref(), Some("w-item"));
+        assert_eq!(t.working_dir, "/item/wt");
+        assert_eq!(t.repo_id.as_deref(), Some("r-item"));
+        assert_eq!(t.repo_path, "/item/repo");
+    }
+
+    #[test]
+    fn retargeted_child_is_rejected_beside_an_active_run_unless_smoke() {
+        let conn = crate::test_helpers::setup_db();
+        crate::test_helpers::insert_test_repo(&conn, "r-item", "item-repo", "/item/repo");
+        crate::test_helpers::insert_test_worktree(&conn, "w-item", "r-item", "item-wt", "/item/wt");
+        crate::test_helpers::seed_workflow_run_on_worktree(
+            &conn,
+            "w-item",
+            "busy-wf",
+            crate::workflow::WorkflowRunStatus::Running,
+            None,
+            None,
+        );
+        let target = |retargeted| ChildTarget {
+            worktree_id: Some("w-item".to_string()),
+            working_dir: "/item/wt".to_string(),
+            repo_path: "/item/repo".to_string(),
+            repo_id: Some("r-item".to_string()),
+            retargeted,
+        };
+
+        let err = guard_retargeted_child(&conn, "ticket-to-pr", &target(true), false).unwrap_err();
+        assert!(
+            err.contains("w-item") && err.contains("ticket-to-pr"),
+            "{err}"
+        );
+        // Smoke mode skips the guard.
+        guard_retargeted_child(&conn, "ticket-to-pr", &target(true), true).unwrap();
+        // A child sharing the parent's worktree is never guarded.
+        guard_retargeted_child(&conn, "ticket-to-pr", &target(false), false).unwrap();
+    }
+
+    #[test]
+    fn child_without_worktree_input_inherits_parent_target() {
+        let conn = crate::test_helpers::setup_db();
+        let ctx = parent_ctx_in_worktree("w-parent");
+        let config = crate::config::Config::default();
+        for inputs in [HashMap::new(), wt_inputs("  "), wt_inputs("w-parent")] {
+            let t = resolve_child_target(&conn, &config, "qualify-ticket", &inputs, &ctx).unwrap();
+            assert!(!t.retargeted);
+            assert_eq!(t.worktree_id.as_deref(), Some("w-parent"));
+            assert_eq!(t.repo_id.as_deref(), Some("r-parent"));
+            assert_eq!(t.repo_path, "/parent/repo");
+        }
+    }
+
+    #[test]
+    fn child_worktree_input_rejects_unknown_and_inactive_and_placeholder() {
+        let conn = crate::test_helpers::setup_db();
+        crate::test_helpers::insert_test_repo(&conn, "r-item", "item-repo", "/item/repo");
+        crate::test_helpers::insert_test_worktree(&conn, "w-done", "r-item", "done-wt", "/done");
+        conn.execute(
+            "UPDATE worktrees SET status = 'merged' WHERE id = 'w-done'",
+            [],
+        )
+        .unwrap();
+        let ctx = parent_ctx_in_worktree("w-parent");
+        let config = crate::config::Config::default();
+
+        let err =
+            resolve_child_target(&conn, &config, "wf", &wt_inputs("w-nope"), &ctx).unwrap_err();
+        assert!(
+            err.contains("w-nope") && err.contains("not a known worktree"),
+            "{err}"
+        );
+
+        let err =
+            resolve_child_target(&conn, &config, "wf", &wt_inputs("w-done"), &ctx).unwrap_err();
+        assert!(
+            err.contains("w-done") && err.contains("not active"),
+            "{err}"
+        );
+
+        let err = validate_child_worktree_input("wf", &wt_inputs("{{item.id}}")).unwrap_err();
+        assert!(err.contains("{{item.id}}"), "{err}");
+        assert!(validate_child_worktree_input("wf", &wt_inputs("w1")).is_ok());
+        assert!(validate_child_worktree_input("wf", &HashMap::new()).is_ok());
     }
 
     #[test]
