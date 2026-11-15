@@ -11,6 +11,52 @@ fn milestone_line(milestone: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
+/// Resolve `run_id` to the agent run an issue link is recorded against.
+///
+/// An agent run ID is used as is. A workflow run ID resolves to its
+/// `parent_run_id`, the agent run that drives the workflow. Returns
+/// `(agent_run_id, Some(workflow_run_id))` when it resolved through a workflow
+/// run. Anything else is an error naming the accepted kinds, so a bad ID fails
+/// before the issue is created.
+fn resolve_link_run_id(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+) -> Result<(String, Option<String>), String> {
+    use conductor_core::agent::AgentManager;
+
+    let agent_mgr = AgentManager::new(conn);
+    let lookup_err = |e: &dyn std::fmt::Display| format!("failed to look up run {run_id}: {e}");
+
+    if agent_mgr
+        .get_run(run_id)
+        .map_err(|e| lookup_err(&e))?
+        .is_some()
+    {
+        return Ok((run_id.to_string(), None));
+    }
+    if let Some(wf) =
+        conductor_core::workflow::get_workflow_run(conn, run_id).map_err(|e| lookup_err(&e))?
+    {
+        let parent = wf.parent_run_id.clone();
+        if parent.is_empty() {
+            return Err(format!("workflow run {run_id} has no parent agent run"));
+        }
+        if agent_mgr
+            .get_run(&parent)
+            .map_err(|e| format!("failed to look up parent agent run {parent}: {e}"))?
+            .is_some()
+        {
+            return Ok((parent, Some(run_id.to_string())));
+        }
+        return Err(format!(
+            "workflow run {run_id}'s parent agent run {parent} no longer exists"
+        ));
+    }
+    Err(format!(
+        "run_id {run_id} is neither an agent run nor a workflow run; pass an agent run ID or a workflow run ID"
+    ))
+}
+
 pub(super) fn tool_create_gh_issue(
     conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
@@ -29,6 +75,14 @@ pub(super) fn tool_create_gh_issue(
 
     let conn = &conductor.conn;
     let config = &conductor.config;
+
+    let link = match run_id {
+        Some(rid) => match resolve_link_run_id(conn, rid) {
+            Ok(v) => Some(v),
+            Err(e) => return tool_err(e),
+        },
+        None => None,
+    };
 
     let repo = match RepoManager::new(conn, config).get_by_slug(repo_slug) {
         Ok(r) => r,
@@ -53,21 +107,30 @@ pub(super) fn tool_create_gh_issue(
     };
     let milestone_line = milestone_line(milestone);
 
-    // If run_id is provided, record the created issue for tracking
-    if let Some(rid) = run_id {
-        let agent_mgr = AgentManager::new(conn);
-        if let Err(e) =
-            agent_mgr.record_created_issue(rid, &repo.id, "github", &number, title, &url)
-        {
+    // If a run was given, record the created issue for tracking
+    let mut link_line = String::new();
+    if let Some((agent_run_id, workflow_run_id)) = link {
+        if let Err(e) = AgentManager::new(conn).record_created_issue(
+            &agent_run_id,
+            &repo.id,
+            "github",
+            &number,
+            title,
+            &url,
+        ) {
             // Non-fatal: issue was created, but tracking failed
             return tool_ok(format!(
-                "Created issue #{number}: {title}\nURL: {url}{milestone_line}\nWarning: failed to record issue link for run {rid}: {e}"
+                "Created issue #{number}: {title}\nURL: {url}{milestone_line}\nWarning: failed to record issue link for agent run {agent_run_id}: {e}"
             ));
+        }
+        if let Some(wf) = workflow_run_id {
+            link_line =
+                format!("\nLinked to agent run {agent_run_id} (driver of workflow run {wf})");
         }
     }
 
     tool_ok(format!(
-        "Created issue #{number}: {title}\nURL: {url}{milestone_line}"
+        "Created issue #{number}: {title}\nURL: {url}{milestone_line}{link_line}"
     ))
 }
 
@@ -108,6 +171,118 @@ mod tests {
             assert!(text.starts_with("labels must be"), "{text}");
             assert!(!text.contains('\n'));
         }
+    }
+
+    #[test]
+    fn test_resolve_link_run_id() {
+        use super::super::test_helpers::create_list_run;
+        use conductor_core::agent::AgentManager;
+        let (_f, conductor) = make_test_conductor();
+        let conn = &conductor.conn;
+
+        let agent = AgentManager::new(conn)
+            .create_run(None, "x", None)
+            .unwrap()
+            .id;
+        assert_eq!(
+            resolve_link_run_id(conn, &agent).unwrap(),
+            (agent.clone(), None)
+        );
+
+        let wf = create_list_run(conn, "wf", None, None);
+        let parent = conductor_core::workflow::get_workflow_run(conn, &wf)
+            .unwrap()
+            .unwrap()
+            .parent_run_id
+            .clone();
+        assert_eq!(
+            resolve_link_run_id(conn, &wf).unwrap(),
+            (parent, Some(wf.clone()))
+        );
+
+        let err = resolve_link_run_id(conn, "01NOSUCHRUN").unwrap_err();
+        assert!(
+            err.contains("neither an agent run nor a workflow run"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_link_run_id_workflow_run_with_missing_parent() {
+        use super::super::test_helpers::create_list_run;
+        let (_f, conductor) = make_test_conductor();
+        let conn = &conductor.conn;
+
+        let wf = create_list_run(conn, "wf", None, None);
+        // Older schemas enforce a foreign key on parent_run_id; switch it off
+        // so the dangling parent can be set up.
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET parent_run_id = ?1 WHERE id = ?2",
+            rusqlite::params!["01NOSUCHPARENT", wf],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+
+        let err = resolve_link_run_id(conn, &wf).unwrap_err();
+        assert!(err.contains(&wf), "{err}");
+        assert!(err.contains("01NOSUCHPARENT"), "{err}");
+        assert!(err.contains("no longer exists"), "{err}");
+    }
+
+    #[test]
+    fn test_resolve_link_run_id_workflow_run_with_empty_parent() {
+        use super::super::test_helpers::create_list_run;
+        let (_f, conductor) = make_test_conductor();
+        let conn = &conductor.conn;
+
+        let wf = create_list_run(conn, "wf", None, None);
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET parent_run_id = '' WHERE id = ?1",
+            rusqlite::params![wf],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+
+        let err = resolve_link_run_id(conn, &wf).unwrap_err();
+        assert!(err.contains(&wf), "{err}");
+        assert!(err.contains("has no parent agent run"), "{err}");
+        assert!(!err.contains("no longer exists"), "{err}");
+    }
+
+    #[test]
+    fn test_resolve_link_run_id_propagates_lookup_error() {
+        let (_f, conductor) = make_test_conductor();
+        let conn = &conductor.conn;
+
+        conn.execute_batch("PRAGMA foreign_keys = OFF; DROP TABLE agent_runs;")
+            .unwrap();
+
+        let err = resolve_link_run_id(conn, "01ANYRUN").unwrap_err();
+        assert!(err.contains("failed to look up run 01ANYRUN"), "{err}");
+        assert!(!err.contains("neither an agent run"), "{err}");
+    }
+
+    #[test]
+    fn test_create_gh_issue_unknown_run_id_rejected_before_repo_lookup() {
+        let (_f, conductor) = make_test_conductor();
+        let a = args_with(&[
+            ("repo", "nope"),
+            ("title", "t"),
+            ("body", "b"),
+            ("run_id", "01NOSUCHRUN"),
+        ]);
+        let result = tool_create_gh_issue(&conductor, &a);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap();
+        assert!(
+            text.contains("neither an agent run nor a workflow run"),
+            "{text}"
+        );
     }
 
     #[test]

@@ -722,7 +722,7 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
         Tool::new(
             "conductor_create_gh_issue",
             "Create a GitHub issue in a registered repo. Returns the issue number and URL. \
-             Optionally files it in an open milestone and links it to an agent run for tracking.",
+             Optionally files it in an open milestone and links it to a conductor run for tracking.",
             schema_typed(&[
                 ("repo", "string", "Repo slug (registered conductor repo)", true),
                 ("title", "string", "Issue title", true),
@@ -742,7 +742,7 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
                 (
                     "run_id",
                     "string",
-                    "Agent run ID for tracking (optional)",
+                    "Run to link the issue to (optional): an agent run ID, or a workflow run ID, which links to the agent run that drives that workflow. An unknown ID fails before the issue is created.",
                     false,
                 ),
             ]),
