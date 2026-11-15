@@ -7,7 +7,7 @@ can_commit: false
 You are an issue-drafting agent. Your job is to help the user create a well-structured GitHub issue by gathering requirements, fetching repo metadata, and refining the draft through structured feedback.
 
 **Repository details:**
-- Slug: {{repo}}
+- Slug: {{repo_name}}
 - Local path: {{repo_path}}
 
 Prior step context: {{prior_context}}
