@@ -7,7 +7,11 @@
 #
 # Run it from the main checkout, on `main`, with no uncommitted changes to tracked files.
 # Preflight (before any side effect): gh and jq are installed, gh is authenticated, the
-# checkout is on main and clean. Then `git fetch --prune --tags origin`.
+# checkout is on main and clean. Then `git fetch --prune --tags origin` and
+# `git pull --ff-only origin main`. When the pull changed this script, it re-runs the
+# updated copy with the same arguments (FINISH_SH_REEXEC=1, internal, stops a second
+# re-exec), so a release's own changes to finish.sh run for that release. The pull comes
+# before step 1, so nothing has run yet and no step runs twice.
 #
 #   1. Verify the release: find the `release: X.Y.Z` commit on origin/main, wait for the
 #      Release workflow run on it, then check that tag vX.Y.Z on origin points at that
@@ -16,18 +20,22 @@
 #   3. For every later `release/*` branch with no `v` tag, fast-forward it to main when it
 #      has no commits of its own (a plain, non-force push). Otherwise print that main needs
 #      merging in; this script never merges or force-pushes.
-#   4. `git pull --ff-only origin main`, then `./install-cli.sh`, then (when `claude` is on
-#      PATH) `claude plugin marketplace update conductor-ai` and
+#   4. `./install-cli.sh`, then (when `claude` is on PATH) `claude plugin marketplace update conductor-ai` and
 #      `claude plugin update conductor@conductor-ai`, and check the plugin is at X.Y.Z.
 #   5. Print what is left by hand: restart Claude Code or run `/mcp`, plus anything
 #      steps 1-4 could not do (a missing `claude` or a failed plugin update included).
 #
 # --dry-run runs the read-only checks (including the wait for the Release workflow) and
 # prints each action it would take instead of taking it, the plugin commands included.
+# It doesn't pull; when the script differs on origin/main it says it would re-exec the
+# updated copy, and carries on with the current one.
 #
 # Idempotent: a re-run skips the wait when the tag and release exist, skips a closed
 # milestone and branches already at main. Exits 1 when something is left over.
 set -euo pipefail
+
+# Absolute path of this script, taken before the cd, for the post-pull re-exec.
+self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
 
 cd "$(git rev-parse --show-toplevel)"
 
@@ -81,6 +89,28 @@ branch=$(git rev-parse --abbrev-ref HEAD)
 git diff --quiet HEAD || die "uncommitted changes to tracked files; commit or revert them first"
 repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 git fetch --prune --tags origin
+
+# Pull main now, so a change to this script in the release being finished takes effect:
+# bash keeps running the copy it opened, so re-run the updated one right away.
+if [[ $dry == 1 ]]; then
+  echo "[dry-run] would run: git pull --ff-only origin main"
+  if rel=$(git ls-files --full-name -- "$self" 2>/dev/null) && [[ -n $rel ]] \
+    && new=$(git rev-parse -q --verify "origin/main:$rel" 2>/dev/null) \
+    && [[ $new != "$(git hash-object "$self")" ]]; then
+    echo "[dry-run] finish.sh differs on origin/main; would re-exec the updated script after the pull (this dry run continues with the current copy)"
+  fi
+else
+  script_before=$(git hash-object "$self")
+  git pull --ff-only origin main
+  if [[ $(git hash-object "$self") != "$script_before" ]]; then
+    if [[ -n ${FINISH_SH_REEXEC:-} ]]; then
+      echo "warning: finish.sh changed again after a re-exec; continuing with the current copy"
+    else
+      say "finish.sh changed in the pull; re-running the updated script"
+      FINISH_SH_REEXEC=1 exec bash "$self" "$@"
+    fi
+  fi
+fi
 
 # --- 1. Verify the release -------------------------------------------------
 say "Step 1: verify release $tag"
@@ -182,10 +212,9 @@ done
 [[ $found_any == 1 ]] || echo "no other open release branches"
 
 # --- 4. Update and install -------------------------------------------------
-say "Step 4: pull main, install, update the plugin"
+say "Step 4: install, update the plugin"
 plugin_cmds="claude plugin marketplace update $marketplace && claude plugin update $plugin"
 if [[ $dry == 1 ]]; then
-  echo "[dry-run] would run: git pull --ff-only origin main"
   echo "[dry-run] would run: ./install-cli.sh"
   echo "[dry-run] would run: claude plugin marketplace update $marketplace"
   echo "[dry-run] would run: claude plugin update $plugin"
@@ -200,7 +229,6 @@ if [[ $dry == 1 ]]; then
     leftover "update the plugin: $plugin_cmds"
   fi
 else
-  git pull --ff-only origin main
   ./install-cli.sh
   if ! command -v claude >/dev/null; then
     echo "warning: claude not found on PATH; plugin not updated"
