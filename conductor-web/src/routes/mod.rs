@@ -258,6 +258,10 @@ pub fn api_router() -> Router<AppState> {
             post(workflows::approve_gate),
         )
         .route(
+            "/api/workflows/runs/{id}/gate/plan",
+            get(workflows::get_gate_plan),
+        )
+        .route(
             "/api/workflows/runs/{id}/gate/reject",
             post(workflows::reject_gate),
         )
