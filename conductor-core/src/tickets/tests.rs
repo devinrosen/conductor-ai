@@ -374,8 +374,11 @@ fn test_mark_worktrees_keeps_worktree_with_live_run_until_it_ends() {
         .unwrap();
     insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
     insert_workflow_run_for_ticket(&conn, "wf1", &ticket_id, "running");
-    conn.execute("UPDATE workflow_runs SET worktree_id = 'wt1' WHERE id = 'wf1'", [])
-        .unwrap();
+    conn.execute(
+        "UPDATE workflow_runs SET worktree_id = 'wt1' WHERE id = 'wf1'",
+        [],
+    )
+    .unwrap();
     syncer
         .close_missing_tickets("r1", "github", &["999"])
         .unwrap();
@@ -386,8 +389,11 @@ fn test_mark_worktrees_keeps_worktree_with_live_run_until_it_ends() {
     assert_eq!(count, 0);
     assert_eq!(get_worktree_status(&conn, "wt1"), "active");
 
-    conn.execute("UPDATE workflow_runs SET status = 'completed' WHERE id = 'wf1'", [])
-        .unwrap();
+    conn.execute(
+        "UPDATE workflow_runs SET status = 'completed' WHERE id = 'wf1'",
+        [],
+    )
+    .unwrap();
     let count = syncer
         .mark_worktrees_for_closed_tickets_with_merge_check("r1", all_merged)
         .unwrap();

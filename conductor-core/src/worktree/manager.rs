@@ -2663,7 +2663,8 @@ mod tests {
         let mgr = WorktreeManager::new(&conn, &config);
         let n = mgr
             .cleanup_merged_worktrees_with_merge_check(None, merged_with_head(head), |_, _| Ok(()))
-            .unwrap().cleaned;
+            .unwrap()
+            .cleaned;
         assert_eq!(n, 0);
         assert_eq!(wt_status(&conn), "active");
         assert!(std::path::Path::new(&wt_path).exists());
@@ -2683,7 +2684,8 @@ mod tests {
         let mgr = WorktreeManager::new(&conn, &config);
         let n = mgr
             .cleanup_merged_worktrees_with_merge_check(None, merged_with_head(head), |_, _| Ok(()))
-            .unwrap().cleaned;
+            .unwrap()
+            .cleaned;
         assert_eq!(n, 0);
         assert_eq!(wt_status(&conn), "active");
         assert!(std::path::Path::new(&wt_path).join("new.txt").exists());
@@ -2699,7 +2701,8 @@ mod tests {
         let mgr = WorktreeManager::new(&conn, &config);
         let n = mgr
             .cleanup_merged_worktrees_with_merge_check(None, merged_with_head(head), |_, _| Ok(()))
-            .unwrap().cleaned;
+            .unwrap()
+            .cleaned;
         assert_eq!(n, 0);
         assert_eq!(wt_status(&conn), "active");
         assert!(std::path::Path::new(&wt_path).exists());
@@ -2718,7 +2721,8 @@ mod tests {
                 merged_with_head(String::new()),
                 |_, _| Ok(()),
             )
-            .unwrap().cleaned;
+            .unwrap()
+            .cleaned;
         assert_eq!(n, 0);
         assert_eq!(wt_status(&conn), "active");
         assert!(std::path::Path::new(&wt_path).exists());
@@ -2737,7 +2741,8 @@ mod tests {
                 merged_with_head("0123456789abcdef0123456789abcdef01234567".into()),
                 |_, _| Ok(()),
             )
-            .unwrap().cleaned;
+            .unwrap()
+            .cleaned;
         assert_eq!(n, 0);
         assert_eq!(wt_status(&conn), "active");
     }
@@ -2759,7 +2764,8 @@ mod tests {
                 merged_with_head(String::new()),
                 |_, _| Ok(()),
             )
-            .unwrap().cleaned;
+            .unwrap()
+            .cleaned;
         assert_eq!(n, 1);
         assert_eq!(wt_status(&conn), "merged");
         assert!(!std::path::Path::new(&wt_path).exists());
@@ -2774,7 +2780,8 @@ mod tests {
         let mgr = WorktreeManager::new(&conn, &config);
         let n = mgr
             .cleanup_merged_worktrees_with_merge_check(None, merged_with_head(head), |_, _| Ok(()))
-            .unwrap().cleaned;
+            .unwrap()
+            .cleaned;
         assert_eq!(n, 1);
         assert_eq!(wt_status(&conn), "merged");
         assert!(!std::path::Path::new(&wt_path).exists());
