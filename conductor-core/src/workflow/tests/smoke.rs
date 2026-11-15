@@ -86,6 +86,20 @@ fn run_status(f: &Fixture, run_id: &str) -> String {
     super::run_status_of(&conn, run_id).expect("run row")
 }
 
+/// Every run row in the fixture database as `(workflow_name, status, dry_run)`.
+fn all_runs(f: &Fixture) -> Vec<(String, String, bool)> {
+    let conn = crate::db::open_database(&f.db_path).unwrap();
+    let mut stmt = conn
+        .prepare("SELECT workflow_name, status, dry_run FROM workflow_runs ORDER BY started_at")
+        .unwrap();
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, bool>(2)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    rows
+}
+
 #[test]
 fn script_then_agent_stops_at_the_agent() {
     let f = fixture();
@@ -174,6 +188,42 @@ fn child_workflow_stops_at_its_first_agent() {
     assert_eq!(point.step, "some-agent");
     assert!(!ran(&f, "a"), "child scripts don't run either");
     assert_eq!(run_status(&f, &outcome.run_id.unwrap()), "cancelled");
+    let runs = all_runs(&f);
+    assert_eq!(runs.len(), 2, "parent and child: {runs:?}");
+    for (name, status, dry_run) in &runs {
+        assert_eq!(status, "cancelled", "{name} must end cancelled: {runs:?}");
+        assert!(dry_run, "{name} is recorded as a dry run: {runs:?}");
+    }
+}
+
+/// A child workflow with a `parallel` block: runkon-flow's parallel executor counts the
+/// smoke stop in a branch as a failure, which used to leave the child run `failed`.
+#[test]
+fn parallel_child_stop_leaves_no_failed_run() {
+    let f = fixture();
+    std::fs::write(
+        f.ws.path().join(".conductor/agents/other-agent.md"),
+        "---\nrole: actor\n---\n\nDo the other thing.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        f.ws.path().join(".conductor/workflows/smoke-parallel.wf"),
+        "workflow smoke-parallel {\n meta { trigger = \"manual\" targets = [\"worktree\"] }\n \
+         parallel {\n  fail_fast = false\n  call some-agent { retries = 1 }\n  call other-agent { retries = 1 }\n }\n}\n",
+    )
+    .unwrap();
+    let def = parse("call workflow smoke-parallel");
+    let outcome = smoke_run_workflow(params(&f, def));
+    assert!(outcome.passed(), "got {:?}", outcome.result);
+    let runs = all_runs(&f);
+    assert!(
+        runs.iter().any(|(name, ..)| name == "smoke-parallel"),
+        "the child run was recorded: {runs:?}"
+    );
+    assert!(
+        runs.iter().all(|(_, status, _)| status == "cancelled"),
+        "a passing smoke leaves no failed run: {runs:?}"
+    );
 }
 
 #[test]

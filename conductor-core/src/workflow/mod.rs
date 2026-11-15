@@ -106,8 +106,9 @@ pub use manager::queries::{
     list_runs_by_status, list_waiting_gate_steps_for_repo, list_workflow_runs,
     list_workflow_runs_by_repo_id, list_workflow_runs_by_repo_id_filtered,
     list_workflow_runs_filtered, list_workflow_runs_filtered_paginated,
-    list_workflow_runs_for_repo, list_workflow_runs_for_scope, list_workflow_runs_page,
-    list_workflow_runs_paginated, resolve_run_context, WorkflowRunListFilter,
+    list_workflow_runs_for_repo, list_workflow_runs_for_scope, list_workflow_runs_for_worktree,
+    list_workflow_runs_page, list_workflow_runs_paginated, resolve_run_context, RunListFlags,
+    WorkflowRunListFilter,
 };
 pub use manager::recovery::{
     claim_and_resume_expired_leases, claim_expired_lease_runs, claim_needs_resume_runs,

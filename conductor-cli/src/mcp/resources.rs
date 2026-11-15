@@ -404,6 +404,9 @@ pub(crate) fn format_run_extra_lines(
     ticket_source_id: Option<&str>,
 ) -> String {
     let mut out = String::new();
+    if run.dry_run {
+        out.push_str("dry_run: true\n");
+    }
     if let Some(ended) = run.ended_at.as_deref() {
         out.push_str(&format!("ended_at: {ended}\n"));
     }
@@ -443,6 +446,9 @@ fn format_run_detail(
         run.ended_at.as_deref().unwrap_or("running"),
         run.result_summary.as_deref().unwrap_or("none")
     );
+    if run.dry_run {
+        out.push_str("dry_run: true\n");
+    }
     let run_chain = conductor_core::workflow::run_chain_if_failed(conn, run);
     if let Some(cause) = conductor_core::workflow::format_failure_cause(&run_chain) {
         out.push_str(&format!("cause: {cause}\n"));

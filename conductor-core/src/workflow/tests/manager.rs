@@ -445,7 +445,7 @@ fn test_list_workflow_runs() {
         None,
     )
     .unwrap();
-    crate::workflow::create_workflow_run(&conn, "test-b", Some("w1"), &p2.id, true, "pr", None)
+    crate::workflow::create_workflow_run(&conn, "test-b", Some("w1"), &p2.id, false, "pr", None)
         .unwrap();
 
     let runs = crate::workflow::list_workflow_runs(&conn, "w1").unwrap();
@@ -729,8 +729,11 @@ fn test_list_all_workflow_runs_filtered_paginated_status_filter() {
         Some(WorkflowRunStatus::Completed),
         100,
         0,
-        false,
-        false,
+        crate::workflow::RunListFlags {
+            include_inactive: false,
+            top_level_only: false,
+            include_dry_run: false,
+        },
     )
     .unwrap();
     assert_eq!(completed.len(), 1);
@@ -741,8 +744,11 @@ fn test_list_all_workflow_runs_filtered_paginated_status_filter() {
         Some(WorkflowRunStatus::Pending),
         100,
         0,
-        false,
-        false,
+        crate::workflow::RunListFlags {
+            include_inactive: false,
+            top_level_only: false,
+            include_dry_run: false,
+        },
     )
     .unwrap();
     assert_eq!(pending.len(), 1);
@@ -770,14 +776,32 @@ fn test_list_all_workflow_runs_filtered_paginated_offset() {
         .unwrap();
     }
 
-    let page1 =
-        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 2, 0, false, false)
-            .unwrap();
+    let page1 = crate::workflow::list_all_workflow_runs_filtered_paginated(
+        &conn,
+        None,
+        2,
+        0,
+        crate::workflow::RunListFlags {
+            include_inactive: false,
+            top_level_only: false,
+            include_dry_run: false,
+        },
+    )
+    .unwrap();
     assert_eq!(page1.len(), 2);
 
-    let page2 =
-        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 2, 2, false, false)
-            .unwrap();
+    let page2 = crate::workflow::list_all_workflow_runs_filtered_paginated(
+        &conn,
+        None,
+        2,
+        2,
+        crate::workflow::RunListFlags {
+            include_inactive: false,
+            top_level_only: false,
+            include_dry_run: false,
+        },
+    )
+    .unwrap();
     assert_eq!(page2.len(), 2);
 
     // All 4 unique

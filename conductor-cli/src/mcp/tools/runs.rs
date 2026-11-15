@@ -99,6 +99,11 @@ pub(super) fn tool_list_runs(
     let status_str = get_arg(args, "status");
     let include_inactive = get_bool_arg(args, "include_inactive");
     let top_level_only = get_bool_arg(args, "top_level_only");
+    let flags = conductor_core::workflow::RunListFlags {
+        include_inactive,
+        top_level_only,
+        include_dry_run: get_bool_arg(args, "include_dry_run"),
+    };
 
     // worktree filter is repo-scoped and meaningless without a repo
     if worktree_slug.is_some() && repo_slug.is_none() {
@@ -138,25 +143,14 @@ pub(super) fn tool_list_runs(
                 Err(e) => return tool_err(e),
             };
             match conductor_core::workflow::list_workflow_runs_filtered_paginated(
-                conn,
-                &wt.id,
-                status,
-                limit,
-                offset,
-                top_level_only,
+                conn, &wt.id, status, limit, offset, flags,
             ) {
                 Ok(r) => r,
                 Err(e) => return tool_err(e),
             }
         } else {
             match conductor_core::workflow::list_workflow_runs_by_repo_id_filtered(
-                conn,
-                &repo.id,
-                limit,
-                offset,
-                status,
-                include_inactive,
-                top_level_only,
+                conn, &repo.id, limit, offset, status, flags,
             ) {
                 Ok(r) => r,
                 Err(e) => return tool_err(e),
@@ -197,12 +191,7 @@ pub(super) fn tool_list_runs(
             repos.into_iter().map(|r| (r.id, r.slug)).collect();
 
         let runs = match conductor_core::workflow::list_all_workflow_runs_filtered_paginated(
-            conn,
-            status,
-            limit,
-            offset,
-            include_inactive,
-            top_level_only,
+            conn, status, limit, offset, flags,
         ) {
             Ok(r) => r,
             Err(e) => return tool_err(e),
@@ -1643,6 +1632,97 @@ mod tests {
             if with_repo {
                 assert!(text.contains("worktree_slug: feat-merged"), "got: {text}");
             }
+        }
+    }
+
+    #[test]
+    fn test_list_runs_hides_dry_runs_unless_include_dry_run() {
+        use conductor_core::config::Config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let (_f, conductor) = make_test_conductor();
+        let conn = open_database(_f.path()).expect("open db");
+        let config = Config::default();
+
+        let repo = RepoManager::new(&conn, &config)
+            .register(
+                "dry-test-repo",
+                "/tmp/dry-test-repo",
+                "https://github.com/x/y",
+                None,
+            )
+            .expect("register repo");
+
+        let wt_id = "01JTEST0000000000000000003";
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 'active', datetime('now'))",
+            rusqlite::params![wt_id, repo.id, "feat-dry", "feat/dry", "/tmp/wt-d"],
+        )
+        .expect("insert worktree");
+
+        let real_id = create_list_run(&conn, "real-wf", Some(wt_id), Some(&repo.id));
+        let smoke_id = create_list_run(&conn, "smoke-wf", Some(wt_id), Some(&repo.id));
+        let child_id = create_list_run(&conn, "smoke-child-wf", Some(wt_id), Some(&repo.id));
+        conn.execute(
+            "UPDATE workflow_runs SET dry_run = 1 WHERE id IN (?1, ?2)",
+            rusqlite::params![smoke_id, child_id],
+        )
+        .expect("mark dry runs");
+        conn.execute(
+            "UPDATE workflow_runs SET parent_workflow_run_id = ?1 WHERE id = ?2",
+            rusqlite::params![smoke_id, child_id],
+        )
+        .expect("link child");
+
+        let text_of = |args: &serde_json::Map<String, Value>| {
+            let result = tool_list_runs(&conductor, args);
+            assert_ne!(result.is_error, Some(true));
+            result.content[0]
+                .as_text()
+                .map(|t| t.text.clone())
+                .unwrap_or_default()
+        };
+
+        // (repo, worktree) scopes: all repos, one repo, one worktree.
+        for scope in [
+            None,
+            Some(("dry-test-repo", None)),
+            Some(("dry-test-repo", Some("feat-dry"))),
+        ] {
+            let mut args = empty_args();
+            if let Some((repo_slug, wt)) = scope {
+                args.insert("repo".into(), Value::String(repo_slug.into()));
+                if let Some(wt) = wt {
+                    args.insert("worktree".into(), Value::String(wt.into()));
+                }
+            }
+            let default_text = text_of(&args);
+            assert!(default_text.contains(&real_id), "{scope:?}: {default_text}");
+            assert!(
+                !default_text.contains(&smoke_id),
+                "{scope:?}: {default_text}"
+            );
+            assert!(
+                !default_text.contains(&child_id),
+                "{scope:?}: {default_text}"
+            );
+            assert!(
+                !default_text.contains("dry_run: true"),
+                "{scope:?}: {default_text}"
+            );
+
+            args.insert("include_dry_run".into(), Value::Bool(true));
+            let text = text_of(&args);
+            assert!(text.contains(&real_id), "{scope:?}: {text}");
+            assert!(text.contains(&smoke_id), "{scope:?}: {text}");
+            assert!(text.contains(&child_id), "{scope:?}: {text}");
+            assert_eq!(
+                text.matches("dry_run: true").count(),
+                2,
+                "each dry run row is marked, the real one is not ({scope:?}): {text}"
+            );
         }
     }
 

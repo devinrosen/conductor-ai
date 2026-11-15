@@ -356,6 +356,7 @@ The scan takes each `{{` and the first `}}` after it as one placeholder, whateve
 - A `call` with `can_commit = true` is told not to commit or push; `{{dry_run}}` is `"true"` for agents; a script sees `DRY_RUN` only through its `env`.
 - `always` runs normally.
 - `validate --dry-run` additionally cancels at the first agent step.
+- A passing `validate --dry-run` leaves no `failed` run row: the root and every descendant run that isn't `completed` end `cancelled`. Dry runs and their child runs are recorded with `dry_run = 1` and hidden from run lists (`conductor_list_runs`, `GET /api/workflows/runs`, the TUI); `include_dry_run` shows them.
 
 ## Checklist
 
