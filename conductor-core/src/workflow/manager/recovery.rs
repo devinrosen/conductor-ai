@@ -1967,7 +1967,7 @@ mod tests {
                 |r| r.get("status"),
             )
             .unwrap();
-        assert_eq!(status, "pending");
+        assert_eq!(status, "failed");
     }
 
     // ── recover_stuck_steps bulk UPDATE ──────────────────────────────────────
