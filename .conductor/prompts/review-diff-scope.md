@@ -24,7 +24,7 @@ Get the diff for this PR using the appropriate command for the review scope:
 
 - If the scope is **incremental**: review the commits pushed since the last
   review. If the last-reviewed commit below is a commit SHA, run
-  `git diff "<that SHA>" HEAD`. If it is empty or still shows `{{...}}`, run
+  `git diff "<that SHA>" HEAD`. If it is empty or still shows an unfilled placeholder, run
   `git diff HEAD~1`.
 
 **Review scope: {{scope}}**

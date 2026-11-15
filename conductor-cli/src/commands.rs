@@ -319,14 +319,14 @@ pub enum WorkflowCommands {
     /// Show the agent log of a workflow step: its final result, the last messages, or everything
     #[command(
         name = "step-log",
-        after_help = "Example:\n  conductor workflow step-log <run-id> plan\n  conductor workflow step-log <run-id> plan --mode tail --lines 50"
+        after_help = "Example:\n  conductor workflow step-log <run-id> plan\n  conductor workflow step-log <run-id> plan --mode tail --lines 50\n  conductor workflow step-log <run-id> plan --mode prompt"
     )]
     StepLog {
         /// Workflow run ID
         run_id: String,
         /// Step name (as shown by run-show)
         step_name: String,
-        /// What to show: result (final message), tail (last messages) or full (whole log)
+        /// What to show: result (final message), tail (last messages), full (whole log) or prompt (the prompt the agent was given)
         #[arg(long, default_value = "result")]
         mode: String,
         /// Number of messages for --mode tail (default 20, max 200)

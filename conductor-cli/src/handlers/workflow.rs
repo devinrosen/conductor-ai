@@ -623,7 +623,7 @@ pub fn handle_workflow(
         } => {
             use conductor_core::workflow::{render_step_log, resolve_step_log_target, StepLogMode};
             let mode = StepLogMode::parse(Some(&mode), lines)?;
-            let target = resolve_step_log_target(conn, &run_id, &step_name)?;
+            let target = resolve_step_log_target(conn, &run_id, &step_name, mode)?;
             print!("{}", render_step_log(&target, mode)?);
         }
         WorkflowCommands::RunShow { id } => {
@@ -1432,6 +1432,15 @@ mod step_log_cli_tests {
         assert_eq!(
             StepLogMode::parse(Some(&mode), lines).unwrap(),
             StepLogMode::Tail { lines: 50 }
+        );
+    }
+
+    #[test]
+    fn prompt_mode_is_accepted() {
+        let (mode, lines) = parse(&["--mode", "prompt"]).unwrap();
+        assert_eq!(
+            StepLogMode::parse(Some(&mode), lines).unwrap(),
+            StepLogMode::Prompt
         );
     }
 

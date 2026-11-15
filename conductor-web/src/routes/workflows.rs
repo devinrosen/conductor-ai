@@ -1504,7 +1504,7 @@ pub async fn get_workflow_step_log(
     // Hold the DB lock only for the DB queries, then drop it before the file read.
     let target = {
         let db = state.db.lock().await;
-        resolve_step_log_target(&db, &run_id, &step_name)?
+        resolve_step_log_target(&db, &run_id, &step_name, mode)?
     };
 
     // File reads are blocking; keep them off the tokio worker thread.

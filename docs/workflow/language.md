@@ -306,6 +306,8 @@ The block a step prints to hand markers, context and extra fields to the engine.
 
 `{{name}}` is substituted in agent prompts, in `script` `run` and `env` values, in `call workflow` `inputs`, and in `foreach` `inputs`. An unknown name is stripped in agent prompts and in script `run`/`env`; it stays literal only in `call workflow` inputs.
 
+The scan takes each `{{` and the first `}}` after it as one placeholder, whatever is between them. So in an agent brief or snippet a literal `{{` in prose ("if it still shows a literal `{{`") followed later by a real `{{name}}` is read as one unknown placeholder, and the whole span between them is stripped from the prompt (#3339). `conductor workflow validate` warns about such a span in agent briefs and snippets, and the actor step records a `Prompt warning:` event on its agent run. Describe the literal in words instead ("an unsubstituted placeholder"). `conductor workflow step-log <run> <step> --mode prompt` shows the stored prompt with its length.
+
 | Variable | Holds |
 |---|---|
 | `{{prior_context}}` | **Only** the `context` string of the most recent step, usually a one- or two-sentence summary. Structured fields (`missing[]`, `findings[]`) are **not** in it (#3280) |
