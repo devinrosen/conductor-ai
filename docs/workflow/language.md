@@ -50,7 +50,7 @@ workflow iterate-pr {
 
 - `title`, `description`, `trigger`, `targets` and `group` are all optional; `targets` defaults to empty. Valid `targets` values are `worktree`, `ticket`, `repo`, `pr` and `workflow_run` (`batch_validate.rs`).
 - `trigger = "scheduled"` requires exactly one of `every = "<duration>"` or `cron = "<5-field cron>"` in `meta` (optional `timezone`), checked at parse time. Both, neither, or a schedule field on a `manual` or `pr` workflow is a parse error. runkon only parses the schedule; conductor has no scheduler and does not run scheduled workflows.
-- Comments are `//` to end of line. `#` is **not** a comment; the lexer skips only `//`.
+- Comments are `//` or `#` to end of line; the lexer skips both forms.
 - An input with neither `required` nor `default` is required. Inputs also take `description`.
 - Input values are strings. A `boolean` input is the string `"true"` or `"false"`; only a case-insensitive `"true"` counts as true.
 - Identifiers allow `[a-zA-Z0-9_-]`, so `push-and-pr` is one name.
