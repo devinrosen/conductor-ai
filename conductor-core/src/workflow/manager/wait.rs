@@ -1057,11 +1057,14 @@ mod tests {
     #[test]
     fn with_overrides_applies_or_falls_back() {
         let d = WaitOptions::default();
-        let o = WaitOptions::with_overrides(None, None);
+        let o = WaitOptions::with_overrides(None, None, false);
         assert_eq!(o.timeout, None);
         assert_eq!(o.stall_after, d.stall_after);
-        let o =
-            WaitOptions::with_overrides(Some(Duration::from_secs(7)), Some(Duration::from_secs(9)));
+        let o = WaitOptions::with_overrides(
+            Some(Duration::from_secs(7)),
+            Some(Duration::from_secs(9)),
+            false,
+        );
         assert_eq!(o.timeout, Some(Duration::from_secs(7)));
         assert_eq!(o.stall_after, Duration::from_secs(9));
         assert_eq!(o.poll_interval, d.poll_interval);
