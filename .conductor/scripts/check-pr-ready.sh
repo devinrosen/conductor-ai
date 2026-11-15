@@ -3,7 +3,10 @@
 # reason on stderr and exit 1, unless the current branch's PR is ready to be verified
 # and merged. The reason becomes the step error.
 # Env vars: CONFIRM (the workflow's confirm input), DRY_RUN, TICKET_SOURCE_ID (fallback
-# for the linked issue), RECIPE_PATH (default .conductor/verify-recipe.md).
+# for the linked issue), RECIPE_PATH (default .conductor/verify-recipe.md),
+# TRUSTED_REVIEW_BOTS (comma-separated bot logins whose reviews are trusted, e.g. the
+# repo's conductor reviewer GitHub App; GitHub reports such a bot as author_association
+# NONE, so without this its reviews never count).
 #
 # Checks, in order: an open non-draft PR; not a release/* -> default branch PR; the
 # repo's verify recipe exists; the local HEAD is the PR head; the latest trusted,
@@ -71,10 +74,15 @@ LOCAL_HEAD=$(git rev-parse HEAD)
 OWNER_REPO=$(gh_retry gh repo view --json nameWithOwner -q .nameWithOwner) || refuse "could not resolve the repository"
 REVIEWS=$(gh_retry gh api --paginate "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews" | jq -s 'add // []') \
   || refuse "could not list the reviews of PR #${PR_NUMBER}"
-REVIEW=$(printf '%s' "${REVIEWS}" | jq -c '
-  [ .[] | select((.body // "") | contains("<!-- conductor-review -->"))
+# Trusted: an OWNER/MEMBER/COLLABORATOR author, or a Bot listed in TRUSTED_REVIEW_BOTS.
+# Bots are matched by exact login and user.type, never by association: any installed
+# app or github-actions[bot] could post a review, so only the named ones count.
+REVIEW=$(printf '%s' "${REVIEWS}" | jq -c --arg bots "${TRUSTED_REVIEW_BOTS:-}" '
+  ($bots | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""))) as $trusted_bots
+  | [ .[] | select((.body // "") | contains("<!-- conductor-review -->"))
         | select(.state != "DISMISSED")
-        | select(.author_association as $a | ["OWNER","MEMBER","COLLABORATOR"] | index($a)) ]
+        | select((.author_association as $a | ["OWNER","MEMBER","COLLABORATOR"] | index($a))
+                 or ((.user.type // "") == "Bot" and ((.user.login // "") as $l | $trusted_bots | index($l)))) ]
   | sort_by(.submitted_at // "") | last // empty')
 [ -n "${REVIEW}" ] || refuse "no conductor review by a trusted author on PR #${PR_NUMBER}"
 REVIEW_COMMIT=$(printf '%s' "${REVIEW}" | jq -r '.commit_id // ""')

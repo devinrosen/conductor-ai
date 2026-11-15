@@ -185,6 +185,29 @@ run_ready
 assert_exit 1
 assert_stderr_contains "no conductor review"
 
+case_begin "a review by a bot listed in TRUSTED_REVIEW_BOTS counts (app reviewers are NONE)"
+new_case
+jq -nc --arg commit "$head" --arg body "$(review_body true)" \
+  '[{id: 1, user: {login: "conductor-ai-reviewer[bot]", type: "Bot"}, author_association: "NONE", state: "APPROVED", commit_id: $commit, body: $body, submitted_at: "2026-01-02T00:00:00Z"}]' > "$stub/reviews.json"
+run_ready TRUSTED_REVIEW_BOTS="other[bot], conductor-ai-reviewer[bot]"
+assert_exit 0
+
+case_begin "a bot review is ignored when the bot is not listed"
+new_case
+jq -nc --arg commit "$head" --arg body "$(review_body true)" \
+  '[{id: 1, user: {login: "github-actions[bot]", type: "Bot"}, author_association: "NONE", state: "APPROVED", commit_id: $commit, body: $body, submitted_at: "2026-01-02T00:00:00Z"}]' > "$stub/reviews.json"
+run_ready TRUSTED_REVIEW_BOTS="conductor-ai-reviewer[bot]"
+assert_exit 1
+assert_stderr_contains "no conductor review"
+
+case_begin "a listed login that is not a Bot account is not trusted by name"
+new_case
+jq -nc --arg commit "$head" --arg body "$(review_body true)" \
+  '[{id: 1, user: {login: "conductor-ai-reviewer[bot]", type: "User"}, author_association: "NONE", state: "APPROVED", commit_id: $commit, body: $body, submitted_at: "2026-01-02T00:00:00Z"}]' > "$stub/reviews.json"
+run_ready TRUSTED_REVIEW_BOTS="conductor-ai-reviewer[bot]"
+assert_exit 1
+assert_stderr_contains "no conductor review"
+
 case_begin "a review that is not All Clear is refused"
 new_case
 echo "[$(review 1 MEMBER COMMENTED "$head" "$(review_body false)")]" > "$stub/reviews.json"

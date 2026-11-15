@@ -13,7 +13,7 @@ workflow verify-and-merge {
 
   script check-pr-ready {
     run = ".conductor/scripts/check-pr-ready.sh"
-    env = { CONFIRM = "{{confirm}}" DRY_RUN = "{{dry_run}}" TICKET_SOURCE_ID = "{{ticket_source_id}}" }
+    env = { CONFIRM = "{{confirm}}" DRY_RUN = "{{dry_run}}" TICKET_SOURCE_ID = "{{ticket_source_id}}" TRUSTED_REVIEW_BOTS = "conductor-ai-reviewer[bot]" }
   }
 
   call verify-acceptance {

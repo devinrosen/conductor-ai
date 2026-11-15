@@ -27,7 +27,7 @@ Each is one line, which becomes the step error:
 - a `release/*` PR into the default branch (those are rebase-merged by hand, then `scripts/release/finish.sh`)
 - no `.conductor/verify-recipe.md`
 - the local branch is not the PR head
-- no conductor review by a trusted author (OWNER, MEMBER, COLLABORATOR, not dismissed), or the latest one predates the head commit, or it is not All Clear
+- no conductor review by a trusted author (OWNER, MEMBER, COLLABORATOR, or a bot login listed in `TRUSTED_REVIEW_BOTS`, which conductor-ai sets to `conductor-ai-reviewer[bot]`; not dismissed), or the latest one predates the head commit, or it is not All Clear
 - the review was posted as a comment because the PR changes the review pipeline, and nobody approved it (approve the PR, or run with `confirm=true`)
 - a required check failing or still running
 - merge conflicts
