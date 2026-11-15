@@ -445,7 +445,7 @@ fn test_list_workflow_runs() {
         None,
     )
     .unwrap();
-    crate::workflow::create_workflow_run(&conn, "test-b", Some("w1"), &p2.id, true, "pr", None)
+    crate::workflow::create_workflow_run(&conn, "test-b", Some("w1"), &p2.id, false, "pr", None)
         .unwrap();
 
     let runs = crate::workflow::list_workflow_runs(&conn, "w1").unwrap();

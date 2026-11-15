@@ -5447,6 +5447,7 @@ fn ids_of(runs: &[ConductorWorkflowRun]) -> Vec<&str> {
 fn test_dry_run_runs_hidden_from_display_lists() {
     let conn = setup_db();
     let real = create_worktree_run(&conn, "w1");
+    let real_repo = create_repo_run(&conn, "r1");
     let (root, child) = create_dry_run_pair(&conn);
     let dry = [root.id.as_str(), child.id.as_str()];
 
@@ -5531,7 +5532,10 @@ fn test_dry_run_runs_hidden_from_display_lists() {
     ];
     for (name, runs) in &lists {
         let ids = ids_of(runs);
-        assert!(ids.contains(&real.id.as_str()), "{name}: real run listed");
+        assert!(
+            ids.contains(&real.id.as_str()) || ids.contains(&real_repo.id.as_str()),
+            "{name}: real run listed"
+        );
         for d in dry {
             assert!(!ids.contains(&d), "{name}: dry run {d} must be hidden");
         }
@@ -5542,6 +5546,7 @@ fn test_dry_run_runs_hidden_from_display_lists() {
 fn test_dry_run_runs_shown_with_include_dry_run() {
     let conn = setup_db();
     let real = create_worktree_run(&conn, "w1");
+    let real_repo = create_repo_run(&conn, "r1");
     let (root, child) = create_dry_run_pair(&conn);
     let flags = crate::workflow::RunListFlags {
         include_dry_run: true,
@@ -5573,7 +5578,12 @@ fn test_dry_run_runs_shown_with_include_dry_run() {
         ("page", page),
     ] {
         let ids = ids_of(&runs);
-        for id in [&real.id, &root.id, &child.id] {
+        let real_id = if name == "by_repo" {
+            &real_repo.id
+        } else {
+            &real.id
+        };
+        for id in [real_id, &root.id, &child.id] {
             assert!(ids.contains(&id.as_str()), "{name}: {id} must be listed");
         }
     }
