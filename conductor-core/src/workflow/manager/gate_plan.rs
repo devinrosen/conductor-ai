@@ -307,10 +307,12 @@ mod tests {
             read_gate_plan(&target(&wt, ".")).unwrap_err(),
             ConductorError::PathNotAllowed { .. }
         ));
-        assert!(matches!(
-            read_gate_plan(&target(&wt, "nope.md")).unwrap_err(),
-            ConductorError::GatePlanUnavailable { .. }
-        ));
+        let err = read_gate_plan(&target(&wt, "nope.md")).unwrap_err();
+        assert!(matches!(err, ConductorError::GatePlanUnavailable { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("the plan file does not exist"), "{msg}");
+        assert!(!msg.contains(wt.to_str().unwrap()), "{msg}");
+        assert!(!msg.contains("nope.md"), "{msg}");
     }
 
     #[test]
@@ -400,10 +402,11 @@ mod tests {
             root: tmp.path().join("deleted"),
             ..t
         };
-        assert!(matches!(
-            read_gate_plan(&gone).unwrap_err(),
-            ConductorError::GatePlanUnavailable { .. }
-        ));
+        let err = read_gate_plan(&gone).unwrap_err();
+        assert!(matches!(err, ConductorError::GatePlanUnavailable { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("the run's worktree is not on disk"), "{msg}");
+        assert!(!msg.contains(tmp.path().to_str().unwrap()), "{msg}");
     }
 
     #[test]
