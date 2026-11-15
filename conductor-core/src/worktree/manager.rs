@@ -1034,7 +1034,7 @@ impl<'a> WorktreeManager<'a> {
         let worktrees = self.list(None, false)?;
         let found = worktrees
             .into_iter()
-            .filter(|wt| cwd.starts_with(Path::new(&wt.path)))
+            .filter(|wt| crate::repo::dir_contains(&wt.path, cwd))
             .max_by_key(|wt| wt.path.len());
         Ok(found)
     }

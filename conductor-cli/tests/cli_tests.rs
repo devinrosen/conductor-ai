@@ -1146,6 +1146,153 @@ fn add_smoke_workflow(dir: &std::path::Path, name: &str, body: &str) {
     .unwrap();
 }
 
+/// Register repo `r` at `repo_dir` and, optionally, worktree `wt` at a separate `wt_dir`.
+/// Returns the worktree's id when one was registered.
+fn register_repo_and_worktree_fixture(
+    home: &std::path::Path,
+    repo_dir: &std::path::Path,
+    wt_dir: Option<&std::path::Path>,
+) -> Option<String> {
+    let conn = conductor_core::db::open_database(&home.join("conductor.db")).unwrap();
+    let config = conductor_core::config::Config::default();
+    let repo = conductor_core::repo::RepoManager::new(&conn, &config)
+        .register(
+            "r",
+            repo_dir.to_str().unwrap(),
+            "https://github.com/example/r.git",
+            None,
+        )
+        .unwrap();
+    wt_dir.map(|wt_dir| {
+        let id = conductor_core::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES (?1, ?2, 'wt', 'feat/wt', ?3, 'active', '2026-01-01T00:00:00Z')",
+            rusqlite::params![id, repo.id, wt_dir.to_str().unwrap()],
+        )
+        .unwrap();
+        id
+    })
+}
+
+fn add_repo_targeted_workflow(dir: &std::path::Path, name: &str) {
+    std::fs::write(
+        dir.join(".conductor/workflows").join(format!("{name}.wf")),
+        format!(
+            "workflow {name} {{\n  meta {{\n    trigger = \"manual\"\n    targets = [\"repo\"]\n  }}\n  call some-agent\n}}\n"
+        ),
+    )
+    .unwrap();
+}
+
+/// Query one column of the single `workflow_runs` row.
+fn only_run_column(home: &std::path::Path, column: &str) -> Option<String> {
+    let conn = conductor_core::db::open_database(&home.join("conductor.db")).unwrap();
+    conn.query_row(&format!("SELECT {column} FROM workflow_runs"), [], |r| {
+        r.get::<_, Option<String>>(0)
+    })
+    .unwrap()
+}
+
+#[test]
+fn workflow_validate_from_main_checkout_and_subdir_passes() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = setup_smoke_fixture("  call some-agent\n");
+    register_repo_and_worktree_fixture(home.path(), repo.path(), None);
+    let sub = repo.path().join(".conductor/workflows");
+    for cwd in [repo.path(), sub.as_path()] {
+        conductor_cmd(home.path())
+            .current_dir(cwd)
+            .args(["workflow", "validate", "smoke"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("PASS  smoke"));
+    }
+}
+
+#[test]
+fn workflow_validate_from_unregistered_dir_explains_the_options() {
+    let home = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    conductor_cmd(home.path())
+        .current_dir(other.path())
+        .args(["workflow", "validate", "smoke"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--path"))
+        .stderr(predicate::str::contains("<repo> <worktree>"));
+}
+
+#[test]
+fn workflow_validate_dry_run_from_main_checkout_smokes_a_repo_workflow() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = setup_smoke_fixture("  call some-agent\n");
+    add_repo_targeted_workflow(repo.path(), "repo-wf");
+    let repo_id = {
+        register_repo_and_worktree_fixture(home.path(), repo.path(), None);
+        let conn = conductor_core::db::open_database(&home.path().join("conductor.db")).unwrap();
+        conn.query_row("SELECT id FROM repos", [], |r| r.get::<_, String>(0))
+            .unwrap()
+    };
+    conductor_cmd(home.path())
+        .current_dir(repo.path())
+        .args(["workflow", "validate", "repo-wf", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SMOKE PASS  repo-wf"));
+    assert_eq!(only_run_column(home.path(), "worktree_id"), None);
+    assert_eq!(only_run_column(home.path(), "repo_id"), Some(repo_id));
+}
+
+#[test]
+fn workflow_validate_dry_run_from_main_checkout_fails_a_worktree_workflow() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = setup_smoke_fixture("  call some-agent\n");
+    register_repo_and_worktree_fixture(home.path(), repo.path(), None);
+    conductor_cmd(home.path())
+        .current_dir(repo.path())
+        .args(["workflow", "validate", "smoke", "--dry-run"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("needs a worktree"));
+}
+
+#[test]
+fn workflow_validate_all_dry_run_from_main_checkout_skips_a_worktree_workflow() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = setup_smoke_fixture("  call some-agent\n");
+    add_repo_targeted_workflow(repo.path(), "repo-wf");
+    register_repo_and_worktree_fixture(home.path(), repo.path(), None);
+    conductor_cmd(home.path())
+        .current_dir(repo.path())
+        .args(["workflow", "validate", "--all", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SMOKE SKIP  smoke"))
+        .stdout(predicate::str::contains("SMOKE PASS  repo-wf"));
+}
+
+#[test]
+fn workflow_validate_dry_run_path_to_a_worktree_records_its_id() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = setup_smoke_fixture("  call some-agent\n");
+    let wt = tempfile::tempdir().unwrap();
+    let wt_id = register_repo_and_worktree_fixture(home.path(), repo.path(), Some(wt.path()));
+    conductor_cmd(home.path())
+        .args([
+            "workflow",
+            "validate",
+            "smoke",
+            "--dry-run",
+            "--path",
+            wt.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("SMOKE PASS  smoke"));
+    assert_eq!(only_run_column(home.path(), "worktree_id"), wt_id);
+}
+
 fn smoke_args<'a>(dir: &'a tempfile::TempDir, extra: &[&'a str]) -> Vec<&'a str> {
     let mut args = vec!["workflow", "validate"];
     args.extend_from_slice(extra);

@@ -1137,6 +1137,30 @@ fn test_find_by_cwd_subdirectory_match() {
     assert_eq!(result.unwrap().id, "wt1");
 }
 
+#[cfg(unix)]
+#[test]
+fn test_find_by_cwd_matches_through_a_symlink() {
+    let real = tempfile::tempdir().unwrap();
+    let link_parent = tempfile::tempdir().unwrap();
+    let link = link_parent.path().join("link");
+    std::os::unix::fs::symlink(real.path(), &link).unwrap();
+    std::fs::create_dir_all(real.path().join("src")).unwrap();
+
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    // Registered under the symlink path; cwd is given as the real (canonical) path.
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+         VALUES ('wt1', 'r1', 'feat-a', 'feat/a', ?1, 'active', '2024-01-01T00:00:00Z')",
+        [link.to_str().unwrap()],
+    )
+    .unwrap();
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let result = mgr.find_by_cwd(&real.path().join("src")).unwrap();
+    assert_eq!(result.map(|w| w.id).as_deref(), Some("wt1"));
+}
+
 #[test]
 fn test_find_by_cwd_longest_prefix_wins() {
     let conn = crate::test_helpers::setup_db();

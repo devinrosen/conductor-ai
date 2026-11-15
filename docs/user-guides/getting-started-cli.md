@@ -89,6 +89,9 @@ conductor workflow run my-repo fix-login-bug ticket-to-pr --dry-run
 # Against a local directory (no DB registration required):
 conductor workflow validate publish-docs --path ~/path/to/repo
 
+# From a registered repo's main checkout (or any subdirectory of it):
+conductor workflow validate create-gh-issue
+
 # Against a registered worktree:
 conductor workflow validate ticket-to-pr my-repo fix-login-bug
 
@@ -103,6 +106,8 @@ conductor workflow validate ticket-to-pr my-repo fix-login-bug --dry-run --input
 Validation runs the same checks a run starts with: the DSL parses, agents, schemas and scripts exist (workflow-local files first, then shared ones), there are no cycles, and every gate type, executor and foreach item provider is registered. A `{{variable}}` that is not an input, a built-in or something a script exports is reported as a warning. A script's export counts only for steps that run after it (or in the same loop), and keys are read from the script's JSON output, so a key it builds dynamically isn't seen.
 
 `--dry-run` then starts each workflow that passed, so registries, gate resolvers and input defaults are exercised for real. It reports `SMOKE PASS` with the agent step it stopped at and the run ID, or `SMOKE FAIL` with the failing step, and exits non-zero on a failure. With `--all`, a workflow whose required inputs have no default is skipped. No script step runs, so it's safe on any worktree.
+
+`--path` inside a registered worktree behaves like `<repo> <worktree>`; inside a registered repo's checkout it gives a repo-level target; any other directory is used as-is without the database. A repo-level `--dry-run` (from the main checkout) only smokes workflows whose `targets` include `repo`: a named workflow that doesn't fails and says which worktree argument is missing, and `--all` skips it.
 
 ## Monitoring runs
 
