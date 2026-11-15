@@ -1386,7 +1386,7 @@ fn test_cleanup_merged_worktrees_marks_merged() {
             },
             |_, _| Ok(()),
         )
-        .unwrap();
+        .unwrap().cleaned;
     assert_eq!(count, 1);
 
     let status: String = conn
@@ -1419,7 +1419,7 @@ fn test_cleanup_merged_worktrees_skips_unmerged() {
             |_, _| std::collections::HashMap::new(),
             |_, _| Ok(()),
         )
-        .unwrap();
+        .unwrap().cleaned;
     assert_eq!(count, 0);
 
     let status: String = conn
@@ -1454,7 +1454,7 @@ fn test_cleanup_merged_worktrees_skips_already_merged() {
             },
             |_, _| Ok(()),
         )
-        .unwrap();
+        .unwrap().cleaned;
     assert_eq!(count, 0);
 }
 
@@ -1488,7 +1488,7 @@ fn test_cleanup_merged_worktrees_multiple_repos() {
             },
             |_, _| Ok(()),
         )
-        .unwrap();
+        .unwrap().cleaned;
     assert_eq!(count, 2);
 
     // Both should be merged
@@ -1577,7 +1577,7 @@ fn test_cleanup_merged_worktrees_cleans_up_genuine_merge() {
             },
             |_, _| Ok(()),
         )
-        .unwrap();
+        .unwrap().cleaned;
 
     assert_eq!(count, 1);
 
@@ -1919,7 +1919,7 @@ fn test_cleanup_merged_worktrees_filters_by_repo() {
             },
             |_, _| Ok(()),
         )
-        .unwrap();
+        .unwrap().cleaned;
     assert_eq!(count, 1);
 
     // w1 should still be active, w2 should be merged
@@ -1972,7 +1972,7 @@ fn test_cleanup_merged_pr_in_other_repo_does_not_clean_same_branch() {
             },
             |_, _| Ok(()),
         )
-        .unwrap();
+        .unwrap().cleaned;
     assert_eq!(count, 1);
 
     let status = |id: &str| -> String {
@@ -3117,4 +3117,87 @@ fn test_create_force_dirty_branches_from_origin_and_leaves_checkout_alone() {
         fs::read_to_string(local.join("README.md")).unwrap(),
         "modified"
     );
+}
+
+// ---------------------------------------------------------------------------
+// cleanup_merged_worktrees keeps worktrees with a live run (#3413)
+// ---------------------------------------------------------------------------
+
+fn all_merged_check(_: &str, branches: &[String]) -> std::collections::HashMap<String, crate::github::MergedPr> {
+    branches
+        .iter()
+        .map(|b| (b.clone(), crate::github::MergedPr::default()))
+        .collect()
+}
+
+fn cleanup_all_merged(conn: &Connection) -> super::MergedCleanup {
+    let config = Config::default();
+    WorktreeManager::new(conn, &config)
+        .cleanup_merged_worktrees_with_merge_check(None, all_merged_check, |_, _| Ok(()))
+        .unwrap()
+}
+
+fn w1_status(conn: &Connection) -> String {
+    conn.query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |row| {
+        row.get("status")
+    })
+    .unwrap()
+}
+
+fn insert_workflow_run_on_w1(conn: &Connection, id: &str, status: &str) {
+    insert_agent_run(conn, &format!("ar-{id}"), "w1", "completed", "2024-01-01T00:00:00Z");
+    conn.execute(
+        "INSERT INTO workflow_runs (id, workflow_name, worktree_id, parent_run_id, status, started_at) \
+         VALUES (:id, 'verify-and-merge', 'w1', :ar, :status, '2024-01-01T00:00:00Z')",
+        rusqlite::named_params! { ":id": id, ":ar": format!("ar-{id}"), ":status": status },
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_cleanup_keeps_worktree_with_live_workflow_run_then_cleans_after_it_ends() {
+    for live in ["running", "waiting", "pending", "needs_resume", "cancelling"] {
+        let conn = crate::test_helpers::setup_db();
+        insert_workflow_run_on_w1(&conn, "wf1", live);
+
+        let out = cleanup_all_merged(&conn);
+        assert_eq!(out.cleaned, 0, "{live}");
+        assert_eq!(out.kept_for_active_run.len(), 1, "{live}");
+        assert!(out.kept_for_active_run[0].reason.contains(live), "{live}");
+        assert_eq!(w1_status(&conn), "active", "{live}");
+
+        conn.execute("UPDATE workflow_runs SET status = 'completed' WHERE id = 'wf1'", [])
+            .unwrap();
+        let out = cleanup_all_merged(&conn);
+        assert_eq!(out.cleaned, 1, "{live}");
+        assert!(out.kept_for_active_run.is_empty(), "{live}");
+        assert_eq!(w1_status(&conn), "merged", "{live}");
+    }
+}
+
+#[test]
+fn test_cleanup_not_blocked_by_final_workflow_runs() {
+    for done in ["completed", "failed", "cancelled"] {
+        let conn = crate::test_helpers::setup_db();
+        insert_workflow_run_on_w1(&conn, "wf1", done);
+        let out = cleanup_all_merged(&conn);
+        assert_eq!(out.cleaned, 1, "{done}");
+        assert_eq!(w1_status(&conn), "merged", "{done}");
+    }
+}
+
+#[test]
+fn test_cleanup_keeps_worktree_with_live_agent_run() {
+    for live in ["running", "waiting_for_feedback", "idle"] {
+        let conn = crate::test_helpers::setup_db();
+        insert_agent_run(&conn, "ar1", "w1", live, "2024-01-01T00:00:00Z");
+        let out = cleanup_all_merged(&conn);
+        assert_eq!(out.cleaned, 0, "{live}");
+        assert_eq!(out.kept_for_active_run.len(), 1, "{live}");
+        assert_eq!(w1_status(&conn), "active", "{live}");
+
+        conn.execute("UPDATE agent_runs SET status = 'completed' WHERE id = 'ar1'", [])
+            .unwrap();
+        assert_eq!(cleanup_all_merged(&conn).cleaned, 1, "{live}");
+    }
 }

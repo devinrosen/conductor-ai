@@ -282,6 +282,22 @@ pub fn get_ticket_id_by_branch(
     .map_err(worktree_not_found(branch))
 }
 
+/// A merged worktree that cleanup kept because a run is still live in it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct KeptWorktree {
+    pub branch: String,
+    pub reason: String,
+}
+
+/// Outcome of a merged-worktree cleanup pass.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct MergedCleanup {
+    /// Worktrees marked merged and removed.
+    pub cleaned: usize,
+    /// Worktrees kept (still `active`) because a workflow or agent run is live in them.
+    pub kept_for_active_run: Vec<KeptWorktree>,
+}
+
 pub struct WorktreeManager<'a> {
     conn: &'a Connection,
     config: &'a Config,
@@ -1496,9 +1512,13 @@ impl<'a> WorktreeManager<'a> {
     /// changes, or with commits not on the merged PR's head, is skipped with a warning
     /// and stays active.
     ///
+    /// A worktree with a live workflow run (any non-final status) or a running, waiting or idle
+    /// agent run is kept, logged and reported in `kept_for_active_run`; it stays active and a
+    /// later pass removes it once the run ends.
+    ///
     /// When `repo_slug` is `Some`, only worktrees for that repo are checked.
-    /// Returns the number of worktrees cleaned up.
-    pub fn cleanup_merged_worktrees(&self, repo_slug: Option<&str>) -> Result<usize> {
+    /// Returns the number of worktrees cleaned up and the ones kept.
+    pub fn cleanup_merged_worktrees(&self, repo_slug: Option<&str>) -> Result<MergedCleanup> {
         self.cleanup_merged_worktrees_with_merge_check(
             repo_slug,
             crate::github::merged_branches_for_repo,
@@ -1513,7 +1533,7 @@ impl<'a> WorktreeManager<'a> {
         // always clean up"; an empty `head_oid` means the PR head is unknown.
         merge_check: impl Fn(&str, &[String]) -> std::collections::HashMap<String, MergedPr>,
         pull_fn: impl Fn(&str, &str) -> std::result::Result<(), String>,
-    ) -> Result<usize> {
+    ) -> Result<MergedCleanup> {
         let base_query =
             "SELECT w.id, w.branch, w.path, r.local_path, r.remote_url, w.repo_id, w.base_branch, w.created_at
                  FROM worktrees w
@@ -1552,6 +1572,7 @@ impl<'a> WorktreeManager<'a> {
 
         let now = Utc::now().to_rfc3339();
         let mut cleaned = 0usize;
+        let mut kept_for_active_run: Vec<KeptWorktree> = Vec::new();
         let mut pruned_repos: std::collections::HashSet<&str> = std::collections::HashSet::new();
         // Track (repo_id, base_branch) pairs already pulled to avoid redundant subprocesses
         let mut pulled_bases: std::collections::HashSet<(String, String)> =
@@ -1578,6 +1599,16 @@ impl<'a> WorktreeManager<'a> {
                     merged_at = %merged_at,
                     "skipping cleanup: worktree was created after PR was merged (branch reuse)"
                 );
+                continue;
+            }
+
+            // A run may keep working in the directory after the PR merges (squash-merge and
+            // close steps); deleting it underneath the run breaks every later command.
+            if let Some(reason) = skip_for_live_run(self.conn, wt_id, branch, wt_path) {
+                kept_for_active_run.push(KeptWorktree {
+                    branch: branch.clone(),
+                    reason,
+                });
                 continue;
             }
 
@@ -1642,7 +1673,10 @@ impl<'a> WorktreeManager<'a> {
             let _ = git_in(repo_path).args(["worktree", "prune"]).output();
         }
 
-        Ok(cleaned)
+        Ok(MergedCleanup {
+            cleaned,
+            kept_for_active_run,
+        })
     }
 }
 
@@ -1900,7 +1934,7 @@ mod tests {
         );
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 1);
+        assert_eq!(result.unwrap().cleaned, 1);
 
         let calls = pulled.lock().unwrap();
         assert_eq!(calls.len(), 1);
@@ -1943,7 +1977,7 @@ mod tests {
         );
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 1);
+        assert_eq!(result.unwrap().cleaned, 1);
 
         // pull_fn must never have been called
         assert!(pulled.lock().unwrap().is_empty());
@@ -1977,7 +2011,7 @@ mod tests {
 
         // Cleanup must still succeed and report 1 worktree cleaned
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 1);
+        assert_eq!(result.unwrap().cleaned, 1);
 
         // Sub worktree must be marked merged
         let status: String = conn
@@ -2029,7 +2063,7 @@ mod tests {
         );
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 1);
+        assert_eq!(result.unwrap().cleaned, 1);
 
         // pull_fn must never have been called — base worktree is not active
         assert!(pulled.lock().unwrap().is_empty());
@@ -2629,7 +2663,7 @@ mod tests {
         let mgr = WorktreeManager::new(&conn, &config);
         let n = mgr
             .cleanup_merged_worktrees_with_merge_check(None, merged_with_head(head), |_, _| Ok(()))
-            .unwrap();
+            .unwrap().cleaned;
         assert_eq!(n, 0);
         assert_eq!(wt_status(&conn), "active");
         assert!(std::path::Path::new(&wt_path).exists());
@@ -2649,7 +2683,7 @@ mod tests {
         let mgr = WorktreeManager::new(&conn, &config);
         let n = mgr
             .cleanup_merged_worktrees_with_merge_check(None, merged_with_head(head), |_, _| Ok(()))
-            .unwrap();
+            .unwrap().cleaned;
         assert_eq!(n, 0);
         assert_eq!(wt_status(&conn), "active");
         assert!(std::path::Path::new(&wt_path).join("new.txt").exists());
@@ -2665,7 +2699,7 @@ mod tests {
         let mgr = WorktreeManager::new(&conn, &config);
         let n = mgr
             .cleanup_merged_worktrees_with_merge_check(None, merged_with_head(head), |_, _| Ok(()))
-            .unwrap();
+            .unwrap().cleaned;
         assert_eq!(n, 0);
         assert_eq!(wt_status(&conn), "active");
         assert!(std::path::Path::new(&wt_path).exists());
@@ -2684,7 +2718,7 @@ mod tests {
                 merged_with_head(String::new()),
                 |_, _| Ok(()),
             )
-            .unwrap();
+            .unwrap().cleaned;
         assert_eq!(n, 0);
         assert_eq!(wt_status(&conn), "active");
         assert!(std::path::Path::new(&wt_path).exists());
@@ -2703,7 +2737,7 @@ mod tests {
                 merged_with_head("0123456789abcdef0123456789abcdef01234567".into()),
                 |_, _| Ok(()),
             )
-            .unwrap();
+            .unwrap().cleaned;
         assert_eq!(n, 0);
         assert_eq!(wt_status(&conn), "active");
     }
@@ -2725,7 +2759,7 @@ mod tests {
                 merged_with_head(String::new()),
                 |_, _| Ok(()),
             )
-            .unwrap();
+            .unwrap().cleaned;
         assert_eq!(n, 1);
         assert_eq!(wt_status(&conn), "merged");
         assert!(!std::path::Path::new(&wt_path).exists());
@@ -2740,7 +2774,7 @@ mod tests {
         let mgr = WorktreeManager::new(&conn, &config);
         let n = mgr
             .cleanup_merged_worktrees_with_merge_check(None, merged_with_head(head), |_, _| Ok(()))
-            .unwrap();
+            .unwrap().cleaned;
         assert_eq!(n, 1);
         assert_eq!(wt_status(&conn), "merged");
         assert!(!std::path::Path::new(&wt_path).exists());

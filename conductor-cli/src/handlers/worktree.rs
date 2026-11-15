@@ -173,11 +173,18 @@ pub fn handle_worktree(
         }
         WorktreeCommands::Cleanup { repo } => {
             let mgr = WorktreeManager::new(conn, config);
-            let count = mgr.cleanup_merged_worktrees(repo.as_deref())?;
-            if count == 0 {
+            let outcome = mgr.cleanup_merged_worktrees(repo.as_deref())?;
+            let count = outcome.cleaned;
+            if count == 0 && outcome.kept_for_active_run.is_empty() {
                 println!("No merged worktrees found to clean up.");
-            } else {
+            } else if count > 0 {
                 println!("Cleaned up {count} merged worktree(s).");
+            }
+            for kept in &outcome.kept_for_active_run {
+                println!(
+                    "Kept {}: {}; it will be cleaned up after the run ends.",
+                    kept.branch, kept.reason
+                );
             }
         }
         WorktreeCommands::SetBaseBranch {

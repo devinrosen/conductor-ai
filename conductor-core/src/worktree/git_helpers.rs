@@ -692,6 +692,75 @@ pub(crate) fn skip_for_local_work(
     }
 }
 
+/// Describe a run still working in a worktree, or `None` when nothing is live.
+///
+/// Live means a workflow run in any non-final status (everything except `completed`, `failed`
+/// and `cancelled`, so a status added later also blocks) or an agent run that is `running`,
+/// `waiting_for_feedback` or `idle`. Reads the database only; it does not check PIDs.
+pub(crate) fn live_run_in_worktree(
+    conn: &rusqlite::Connection,
+    worktree_id: &str,
+) -> Result<Option<String>> {
+    use rusqlite::OptionalExtension;
+    let wf: Option<(String, String, String)> = conn
+        .query_row(
+            "SELECT id, workflow_name, status FROM workflow_runs
+             WHERE worktree_id = :id AND status NOT IN ('completed', 'failed', 'cancelled')
+             ORDER BY (parent_workflow_run_id IS NULL) DESC, started_at DESC
+             LIMIT 1",
+            rusqlite::named_params! { ":id": worktree_id },
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    if let Some((id, name, status)) = wf {
+        return Ok(Some(format!("workflow run {id} ({name}) is {status}")));
+    }
+    let agent: Option<(String, String)> = conn
+        .query_row(
+            &format!(
+                "SELECT id, status FROM agent_runs
+                 WHERE worktree_id = :id AND status IN {}
+                 LIMIT 1",
+                crate::agent::status::ACTIVE_STATUSES_SQL
+            ),
+            rusqlite::named_params! { ":id": worktree_id },
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    Ok(agent.map(|(id, status)| format!("agent run {id} is {status}")))
+}
+
+/// Log and return the reason when a merged worktree must be kept because a run is still live.
+/// A failed lookup keeps the worktree too: deleting a directory is the destructive side, and the
+/// next pass retries. Shared by the ticket-sync and merged-PR cleanup paths.
+pub(crate) fn skip_for_live_run(
+    conn: &rusqlite::Connection,
+    worktree_id: &str,
+    branch: &str,
+    worktree_path: &str,
+) -> Option<String> {
+    let reason = match live_run_in_worktree(conn, worktree_id) {
+        Ok(None) => return None,
+        Ok(Some(reason)) => reason,
+        Err(e) => {
+            tracing::warn!(
+                branch = %branch,
+                path = %worktree_path,
+                error = %e,
+                "could not check for live runs — keeping worktree"
+            );
+            format!("could not check for live runs: {e}")
+        }
+    };
+    tracing::info!(
+        branch = %branch,
+        path = %worktree_path,
+        reason = %reason,
+        "merged PR detected but a run is still active in the worktree — skipping cleanup until it ends"
+    );
+    Some(reason)
+}
+
 /// Remove the git worktree directory and delete the associated branch.
 /// Both operations are best-effort: failures are logged but not propagated because the
 /// worktree or branch may already be gone (e.g. manually removed).

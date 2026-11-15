@@ -21,7 +21,7 @@ pub struct TicketSyncer<'a> {
 }
 
 pub(in crate::tickets) const CLOSED_TICKET_ARTIFACTS_SQL: &str =
-    "SELECT r.local_path, w.path, w.branch, r.remote_url
+    "SELECT w.id, r.local_path, w.path, w.branch, r.remote_url
      FROM worktrees w
      JOIN repos r ON r.id = w.repo_id
      WHERE w.repo_id = :repo_id
@@ -895,12 +895,13 @@ impl<'a> TicketSyncer<'a> {
         merge_check: impl Fn(&str, &[String]) -> HashMap<String, MergedPr>,
     ) -> Result<usize> {
         // Collect git paths before updating so we can clean up worktree dirs and branches.
-        let artifacts: Vec<(String, String, String, String)> = query_collect(
+        let artifacts: Vec<(String, String, String, String, String)> = query_collect(
             self.conn,
             CLOSED_TICKET_ARTIFACTS_SQL,
             named_params! { ":repo_id": repo_id },
             |row| {
                 Ok((
+                    row.get("id")?,
                     row.get("local_path")?,
                     row.get("path")?,
                     row.get("branch")?,
@@ -912,20 +913,25 @@ impl<'a> TicketSyncer<'a> {
         let merged_by_remote = crate::worktree::merged_prs_by_remote(
             artifacts
                 .iter()
-                .map(|(_, _, branch, remote_url)| (remote_url.as_str(), branch.as_str())),
+                .map(|(_, _, _, branch, remote_url)| (remote_url.as_str(), branch.as_str())),
             merge_check,
         );
 
         let now = Utc::now().to_rfc3339();
         let mut count = 0usize;
 
-        for (repo_path, worktree_path, branch, remote_url) in &artifacts {
+        for (worktree_id, repo_path, worktree_path, branch, remote_url) in &artifacts {
             let Some(merged) =
                 crate::worktree::lookup_merged(&merged_by_remote, remote_url, branch)
             else {
                 // Ticket is closed but PR not yet merged — leave the worktree alone.
                 continue;
             };
+            if crate::worktree::skip_for_live_run(self.conn, worktree_id, branch, worktree_path)
+                .is_some()
+            {
+                continue;
+            }
             if crate::worktree::skip_for_local_work(
                 repo_path,
                 worktree_path,

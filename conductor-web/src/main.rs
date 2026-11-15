@@ -107,7 +107,8 @@ async fn main() -> Result<()> {
         }
         if conductor.config.general.auto_cleanup_merged_branches {
             match wt_mgr.cleanup_merged_worktrees(None) {
-                Ok(n) if n > 0 => {
+                Ok(r) if r.cleaned > 0 => {
+                    let n = r.cleaned;
                     tracing::info!("Auto-cleaned {n} merged worktree(s) on startup")
                 }
                 Ok(_) => {}
@@ -212,7 +213,8 @@ async fn main() -> Result<()> {
                 wt_mgr.reap_stale_worktrees()?;
                 if cfg.general.auto_cleanup_merged_branches {
                     match wt_mgr.cleanup_merged_worktrees(None) {
-                        Ok(n) if n > 0 => {
+                        Ok(r) if r.cleaned > 0 => {
+                            let n = r.cleaned;
                             tracing::info!("Auto-cleaned {n} merged worktree(s)")
                         }
                         Ok(_) => {}

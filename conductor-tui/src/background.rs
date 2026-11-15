@@ -608,7 +608,9 @@ pub fn poll_data(
             }
             if config.general.auto_cleanup_merged_branches {
                 match wt_mgr.cleanup_merged_worktrees(None) {
-                    Ok(n) if n > 0 => tracing::info!("Auto-cleaned {n} merged worktree(s)"),
+                    Ok(r) if r.cleaned > 0 => {
+                        tracing::info!("Auto-cleaned {} merged worktree(s)", r.cleaned)
+                    }
                     Ok(_) => {}
                     Err(e) => tracing::warn!("cleanup_merged_worktrees failed: {e}"),
                 }
