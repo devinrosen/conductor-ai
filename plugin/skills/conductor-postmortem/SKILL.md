@@ -21,6 +21,7 @@ Read the numbers from `conductor_run_stats` with `json = true` (or `conductor wo
 
 | Column | JSON |
 |---|---|
+| Workflow | `.workflow_name` (the top-level run's workflow; `.workflow_names` lists it and every child workflow) |
 | Outcome | `.status` |
 | Wall time | `.wall_ms` |
 | Cost | `.usage.cost_usd` |
