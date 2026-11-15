@@ -796,33 +796,17 @@ pub fn list_active_workflow_runs_for_repo(
     repo_id: &str,
     statuses: &[WorkflowRunStatus],
 ) -> Result<Vec<ConductorWorkflowRun>> {
-    let effective = effective_statuses(statuses);
-
-    let placeholders = sql_placeholders(effective.len());
-
-    let sql = format!(
-        "SELECT DISTINCT workflow_runs.* \
-             FROM workflow_runs \
-             LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-             WHERE (workflow_runs.repo_id = ? OR worktrees.repo_id = ?) \
-               AND ({ACTIVE_WORKTREE_GUARD}) \
-               AND workflow_runs.status IN ({placeholders}) \
-             ORDER BY workflow_runs.started_at DESC \
-             LIMIT 500"
-    );
-
-    let status_strings: Vec<String> = effective.iter().map(|s| s.to_string()).collect();
-    let mut all_params: Vec<rusqlite::types::Value> = vec![
-        rusqlite::types::Value::Text(repo_id.to_owned()),
-        rusqlite::types::Value::Text(repo_id.to_owned()),
-    ];
-    all_params.extend(status_strings.into_iter().map(rusqlite::types::Value::Text));
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(
-        rusqlite::params_from_iter(all_params.iter()),
-        row_to_conductor_run,
-    )?;
-    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    list_workflow_runs_page(
+        conn,
+        &WorkflowRunListFilter {
+            statuses,
+            repo_id: Some(repo_id),
+            worktree_id: None,
+            include_inactive: false,
+            limit: 500,
+            offset: 0,
+        },
+    )
 }
 
 /// Filter for [`list_workflow_runs_page`].
@@ -839,6 +823,9 @@ pub struct WorkflowRunListFilter<'a> {
     pub offset: usize,
 }
 
+/// The single query builder behind the status/repo/worktree run listings. No `DISTINCT`:
+/// `worktrees.id` is the primary key, so the join yields at most one row per run.
+///
 /// List workflow runs matching `f`, newest first (`started_at DESC, id DESC`, the
 /// second key keeps offset pages stable when two runs share a start time).
 pub fn list_workflow_runs_page(
@@ -870,7 +857,7 @@ pub fn list_workflow_runs_page(
     params.push(rusqlite::types::Value::Integer(f.offset as i64));
 
     let sql = format!(
-        "SELECT DISTINCT workflow_runs.* \
+        "SELECT workflow_runs.* \
              FROM workflow_runs \
              LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
              WHERE {where_sql} \

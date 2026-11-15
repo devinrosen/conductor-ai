@@ -357,6 +357,45 @@ fn test_list_workflow_runs_page_include_inactive() {
 }
 
 #[test]
+fn test_list_workflow_runs_page_repo_filter_direct_repo_id() {
+    let conn = setup_db();
+    let direct = create_repo_run(&conn, "r1");
+    let st = [WorkflowRunStatus::Pending];
+    for include_inactive in [false, true] {
+        let mut f = page_filter(&st, include_inactive, 50, 0);
+        f.repo_id = Some("r1");
+        let runs = crate::workflow::list_workflow_runs_page(&conn, &f).unwrap();
+        assert_eq!(runs.len(), 1, "include_inactive={include_inactive}");
+        assert_eq!(runs[0].id, direct.id);
+        f.repo_id = Some("r2");
+        let other = crate::workflow::list_workflow_runs_page(&conn, &f).unwrap();
+        assert!(other.is_empty(), "include_inactive={include_inactive}");
+    }
+}
+
+#[test]
+fn test_list_workflow_runs_page_ties_break_by_id_desc() {
+    let conn = setup_db();
+    for _ in 0..5 {
+        let run = create_worktree_run(&conn, "w1");
+        set_started_at(&conn, &run.id, "2024-01-01T00:00:00Z");
+    }
+    let st = [WorkflowRunStatus::Pending];
+    let mut ids: Vec<String> = Vec::new();
+    for offset in [0, 2, 4] {
+        let page =
+            crate::workflow::list_workflow_runs_page(&conn, &page_filter(&st, false, 2, offset))
+                .unwrap();
+        ids.extend(page.iter().map(|r| r.id.clone()));
+    }
+    assert_eq!(ids.len(), 5);
+    let mut expected = ids.clone();
+    expected.sort_by(|a, b| b.cmp(a));
+    expected.dedup();
+    assert_eq!(ids, expected, "pages disjoint and ordered by id DESC");
+}
+
+#[test]
 fn test_list_workflow_runs_page_repo_filter_via_worktree() {
     let conn = setup_db();
     let in_r1 = create_worktree_run(&conn, "w1");
