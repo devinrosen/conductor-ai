@@ -6,8 +6,9 @@ source "$(dirname "$0")/lib.sh"
 # The stub gh, driven by files in $GH_STUB_DIR:
 #   pr.json       what `gh pr view` prints (merged: state/mergeCommit are overridden once `gh pr merge` ran)
 #   reviews.json  one JSON array: the PR's reviews
-#   checks.json   what `gh pr checks` prints
+#   checks.json   what `gh pr checks` prints (checks.rc: its exit code, checks.err: its stderr)
 #   issues/N      the state of issue N (OPEN unless the file says CLOSED)
+#   comments.json existing PR comments (default [])
 #   comment       written: the body of `gh pr comment`
 #   merge         written: the arguments of `gh pr merge`; merge.body is its body file
 #   closed        written: one line per `gh issue close`
@@ -32,8 +33,16 @@ case "$1 $2" in
       cat "$d/pr.json"
     fi
     exit 0 ;;
-  "pr checks") cat "$d/checks.json"; exit 0 ;;
-  "api --paginate") cat "$d/reviews.json"; exit 0 ;;
+  "pr checks")
+    cat "$d/checks.json"
+    [ -f "$d/checks.err" ] && cat "$d/checks.err" >&2
+    exit "$(cat "$d/checks.rc" 2>/dev/null || echo 0)" ;;
+  "api --paginate")
+    case "$*" in
+      *issues/*/comments*) cat "$d/comments.json" 2>/dev/null || echo '[]' ;;
+      *) cat "$d/reviews.json" ;;
+    esac
+    exit 0 ;;
   "pr comment")
     while [ $# -gt 0 ]; do [ "$1" = "--body-file" ] && cp "$2" "$d/comment"; shift; done
     exit 0 ;;
@@ -225,6 +234,39 @@ run_ready
 assert_exit 1
 assert_stderr_contains "required checks still running: Test"
 
+case_begin "a failing required check with gh exit 1 is still refused by name"
+new_case
+echo '[{"name":"Clippy","bucket":"fail"}]' > "$stub/checks.json"
+echo 1 > "$stub/checks.rc"
+run_ready
+assert_exit 1
+assert_stderr_contains "required check failing: Clippy"
+
+case_begin "a pending required check with gh exit 8 is refused"
+new_case
+echo '[{"name":"Test","bucket":"pending"}]' > "$stub/checks.json"
+echo 8 > "$stub/checks.rc"
+run_ready
+assert_exit 1
+assert_stderr_contains "required checks still running: Test"
+
+case_begin "checks unreadable (no JSON, gh error): refused, not treated as none"
+new_case
+: > "$stub/checks.json"
+echo 1 > "$stub/checks.rc"
+echo "HTTP 401: bad credentials" > "$stub/checks.err"
+run_ready
+assert_exit 1
+assert_stderr_contains "could not read required checks"
+
+case_begin "no required checks reported by gh: continues"
+new_case
+: > "$stub/checks.json"
+echo 1 > "$stub/checks.rc"
+echo "no required checks reported on the 'x' branch" > "$stub/checks.err"
+run_ready
+assert_exit 0
+
 case_begin "a conflicting PR is refused"
 new_case
 set_pr '.mergeable = "CONFLICTING"'
@@ -276,6 +318,21 @@ assert_marker verified
 assert_eq "yes" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment posted"
 assert_eq "yes" "$(grep -q 'conductor-verification' "$stub/comment" && grep -q '01ABC' "$stub/comment" && echo yes || echo no)" "marker and run id in the comment"
 assert_eq "yes" "$(grep -q 'ran a\\|b line two' "$stub/comment" && echo yes || echo no)" "evidence on one line, pipe escaped"
+
+case_begin "post-verification: a report already posted for this head is not posted again"
+new_case
+echo "[{\"body\": \"<!-- conductor-verification -->\\n## x\\n\\nHead: \`${head:0:7}\`.\"}]" > "$stub/comments.json"
+run_post "$OK_REPORT"
+assert_exit 0
+assert_marker verified
+assert_eq "no" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment posted"
+
+case_begin "post-verification: a report for an older head does not block the post"
+new_case
+echo '[{"body": "<!-- conductor-verification -->\nHead: `abc1234`."}]' > "$stub/comments.json"
+run_post "$OK_REPORT"
+assert_exit 0
+assert_eq "yes" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment posted"
 
 case_begin "post-verification: failed verification posts, then exits 1"
 new_case
@@ -362,6 +419,23 @@ set_pr '.state = "CLOSED"'
 run_merge
 assert_exit 1
 assert_stderr_contains "no longer open"
+
+case_begin "squash-merge: a resume after the merge skips it and still closes issues"
+new_case
+set_pr '.state = "MERGED" | .mergeCommit = {oid: "feedface00000000000000000000000000000000"}'
+echo CLOSED > "$stub/issues/1"
+run_merge
+assert_exit 0
+assert_marker merged
+assert_eq "no" "$([ -f "$stub/merge" ] && echo yes || echo no)" "merge called"
+assert_eq "2" "$(cat "$stub/closed")" "hand-closed issue"
+
+case_begin "squash-merge: a PR merged at another head is refused"
+new_case
+set_pr '.state = "MERGED" | .headRefOid = "0123456789abcdef0123456789abcdef01234567"'
+run_merge
+assert_exit 1
+assert_stderr_contains "head changed"
 
 case_begin "squash-merge: dry run prints the message and merges nothing"
 new_case

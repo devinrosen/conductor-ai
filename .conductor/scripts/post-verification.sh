@@ -54,7 +54,17 @@ if [ "${DRY_RUN:-}" = "true" ]; then
   echo "[dry run] would comment on PR #${PR_NUMBER}:"
   cat "${BODY_FILE}"
 else
-  gh_retry gh pr comment "${PR_NUMBER}" --body-file "${BODY_FILE}" >/dev/null || refuse "could not post the report on PR #${PR_NUMBER}"
+  # A resume or re-run must not post a second report for the same head.
+  OWNER_REPO=$(gh_retry gh repo view --json nameWithOwner -q .nameWithOwner) || refuse "could not resolve the repository"
+  EXISTING=$(gh_retry gh api --paginate "repos/${OWNER_REPO}/issues/${PR_NUMBER}/comments" | jq -s --arg sha "${HEAD_SHA:0:7}" '
+    [ add // [] | .[] | select((.body // "") | contains("<!-- conductor-verification -->"))
+      | select((.body // "") | contains("Head: `" + $sha + "`")) ] | length') \
+    || refuse "could not list the comments of PR #${PR_NUMBER}"
+  if [ "${EXISTING}" -gt 0 ]; then
+    echo "A verification report for ${HEAD_SHA:0:7} is already on PR #${PR_NUMBER}; not posting another." >&2
+  else
+    gh_retry gh pr comment "${PR_NUMBER}" --body-file "${BODY_FILE}" >/dev/null || refuse "could not post the report on PR #${PR_NUMBER}"
+  fi
 fi
 
 if [ "${VERIFIED}" != "true" ]; then

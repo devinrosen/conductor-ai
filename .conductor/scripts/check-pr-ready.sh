@@ -98,8 +98,19 @@ if printf '%s' "${REVIEW}" | jq -e '(.body // "") | contains("changes the review
 fi
 
 # 5. Required checks.
-CHECKS=$(gh_retry gh pr checks "${PR_NUMBER}" --required --json name,bucket 2>/dev/null) || CHECKS="[]"
-[ -n "${CHECKS}" ] || CHECKS="[]"
+# gh pr checks exits 1 for a failing check and 8 for a pending one, still printing the
+# JSON: use that JSON whatever the exit code. Only gh's own "no required checks" message
+# means an empty list; any other failure with no JSON refuses.
+CHECKS_ERR=$(mktemp "${TMPDIR:-/tmp}/pr_checks_err.XXXXXX")
+trap 'rm -f "${CHECKS_ERR}"' EXIT
+CHECKS_RC=0
+CHECKS=$(gh_retry gh pr checks "${PR_NUMBER}" --required --json name,bucket 2>"${CHECKS_ERR}") || CHECKS_RC=$?
+if ! printf '%s' "${CHECKS}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+  if [ "${CHECKS_RC}" -ne 0 ] && ! grep -qi 'no required checks' "${CHECKS_ERR}"; then
+    refuse "could not read required checks for PR #${PR_NUMBER} (gh exit ${CHECKS_RC}): $(head -c 300 "${CHECKS_ERR}" | tr '\n' ' ')"
+  fi
+  CHECKS="[]"
+fi
 if [ "$(printf '%s' "${CHECKS}" | jq 'length')" -eq 0 ]; then
   echo "Warning: no required checks reported for PR #${PR_NUMBER}; continuing." >&2
 else

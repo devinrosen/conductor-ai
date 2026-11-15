@@ -33,7 +33,7 @@ Each is one line, which becomes the step error:
 - merge conflicts
 - the branch does not contain its base: the base is merged in and pushed, then the run stops so the new head gets reviewed (`iterate-pr`), and you re-run verify-and-merge
 
-With `dry_run`, scripts print what they would do instead of posting, merging or pushing.
+A `dry_run` of the workflow skips every script step (the engine records "dry-run: script not executed", `runkon-flow` `src/executors/script.rs`), so `check-pr-ready`, `post-verification` and `squash-merge` never run and nothing is posted, merged or pushed. Their `DRY_RUN=true` branches apply only when you run a script by hand, where it prints what it would do.
 
 ## The recipe
 

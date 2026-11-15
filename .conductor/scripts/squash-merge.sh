@@ -26,10 +26,18 @@ ISSUES="${LINKED_ISSUES:-}"
 PR=$(gh_retry gh pr view "${PR_NUMBER}" --json title,body,state,headRefOid,baseRefName,commits) \
   || refuse "could not read PR #${PR_NUMBER}"
 
+# A resume after gh pr merge succeeded finds the PR MERGED at the verified head: skip
+# the merge and go on to the issue closing.
+ALREADY_MERGED=""
 if [ "${DRY_RUN:-}" != "true" ]; then
-  [ "$(echo "${PR}" | jq -r '.state')" = "OPEN" ] || refuse "PR #${PR_NUMBER} is no longer open"
+  STATE=$(echo "${PR}" | jq -r '.state')
   [ "$(echo "${PR}" | jq -r '.headRefOid')" = "${HEAD_SHA}" ] \
     || refuse "PR #${PR_NUMBER} head changed since verification; re-run verify-and-merge"
+  case "${STATE}" in
+    OPEN) ;;
+    MERGED) ALREADY_MERGED=1; echo "PR #${PR_NUMBER} is already merged at ${HEAD_SHA:0:7}; resuming after the merge." >&2 ;;
+    *) refuse "PR #${PR_NUMBER} is no longer open" ;;
+  esac
 fi
 
 SUBJECT="$(echo "${PR}" | jq -r '.title') (#${PR_NUMBER})"
@@ -62,9 +70,11 @@ if [ "${DRY_RUN:-}" = "true" ]; then
   exit 0
 fi
 
-gh_retry gh pr merge "${PR_NUMBER}" --squash --match-head-commit "${HEAD_SHA}" \
-  --subject "${SUBJECT}" --body-file "${BODY_FILE}" >/dev/null \
-  || refuse "gh pr merge failed for PR #${PR_NUMBER}"
+if [ -z "${ALREADY_MERGED}" ]; then
+  gh_retry gh pr merge "${PR_NUMBER}" --squash --match-head-commit "${HEAD_SHA}" \
+    --subject "${SUBJECT}" --body-file "${BODY_FILE}" >/dev/null \
+    || refuse "gh pr merge failed for PR #${PR_NUMBER}"
+fi
 
 MERGED=$(gh_retry gh pr view "${PR_NUMBER}" --json state,mergeCommit) || refuse "could not re-read PR #${PR_NUMBER}"
 [ "$(echo "${MERGED}" | jq -r '.state')" = "MERGED" ] || refuse "PR #${PR_NUMBER} is not MERGED after gh pr merge"
