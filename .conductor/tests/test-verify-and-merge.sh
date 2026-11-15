@@ -321,11 +321,19 @@ assert_eq "yes" "$(grep -q 'ran a\\|b line two' "$stub/comment" && echo yes || e
 
 case_begin "post-verification: a report already posted for this head is not posted again"
 new_case
-echo "[{\"body\": \"<!-- conductor-verification -->\\n## x\\n\\nHead: \`${head:0:7}\`.\"}]" > "$stub/comments.json"
+echo "[{\"body\": \"<!-- conductor-verification -->\\n## x\\n\\nHead: \`${head:0:7}\`. Verdict: \`pass\`.\"}]" > "$stub/comments.json"
 run_post "$OK_REPORT"
 assert_exit 0
 assert_marker verified
 assert_eq "no" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment posted"
+
+case_begin "post-verification: an earlier failing report at the same head does not suppress a passing one"
+new_case
+echo "[{\"body\": \"<!-- conductor-verification -->\\n## x\\n\\nHead: \`${head:0:7}\`. Verdict: \`fail\`.\"}]" > "$stub/comments.json"
+run_post "$OK_REPORT"
+assert_exit 0
+assert_marker verified
+assert_eq "yes" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment posted"
 
 case_begin "post-verification: a report for an older head does not block the post"
 new_case

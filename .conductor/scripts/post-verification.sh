@@ -33,7 +33,7 @@ echo "${PRIOR_OUTPUT}" | jq -r --arg sha "${HEAD_SHA}" '
   "<!-- conductor-verification -->",
   "## verify-and-merge — \(if .verified then "Verified" else "Verification failed" end)",
   "",
-  "Head: `\($sha[0:7])`. Issues: \((.issues // []) | map("#\(.)") | join(", ") | if . == "" then "none" else . end).",
+  "Head: `\($sha[0:7])`. Verdict: `\(if .verified then "pass" else "fail" end)`. Issues: \((.issues // []) | map("#\(.)") | join(", ") | if . == "" then "none" else . end).",
   "",
   (.summary // ""),
   "",
@@ -54,11 +54,13 @@ if [ "${DRY_RUN:-}" = "true" ]; then
   echo "[dry run] would comment on PR #${PR_NUMBER}:"
   cat "${BODY_FILE}"
 else
-  # A resume or re-run must not post a second report for the same head.
+  # A resume or re-run must not post a second report for the same head and verdict;
+  # a pass after an earlier fail at the same head still posts.
+  VERDICT=pass; [ "${VERIFIED}" = "true" ] || VERDICT=fail
   OWNER_REPO=$(gh_retry gh repo view --json nameWithOwner -q .nameWithOwner) || refuse "could not resolve the repository"
-  EXISTING=$(gh_retry gh api --paginate "repos/${OWNER_REPO}/issues/${PR_NUMBER}/comments" | jq -s --arg sha "${HEAD_SHA:0:7}" '
+  EXISTING=$(gh_retry gh api --paginate "repos/${OWNER_REPO}/issues/${PR_NUMBER}/comments" | jq -s --arg sha "${HEAD_SHA:0:7}" --arg verdict "${VERDICT}" '
     [ add // [] | .[] | select((.body // "") | contains("<!-- conductor-verification -->"))
-      | select((.body // "") | contains("Head: `" + $sha + "`")) ] | length') \
+      | select((.body // "") | contains("Head: `" + $sha + "`. Verdict: `" + $verdict + "`")) ] | length') \
     || refuse "could not list the comments of PR #${PR_NUMBER}"
   if [ "${EXISTING}" -gt 0 ]; then
     echo "A verification report for ${HEAD_SHA:0:7} is already on PR #${PR_NUMBER}; not posting another." >&2
