@@ -24,6 +24,7 @@ import type {
   WorkflowDefSummary,
   WorkflowRun,
   WorkflowRunStep,
+  GatePlan,
   FanOutItem,
   RunWorkflowRequest,
   FeedbackRequest,
@@ -295,6 +296,17 @@ export const api = {
         selections: selections ?? null,
       }),
     }),
+  // The plan a waiting gate asks to review; null when there is no waiting gate or plan (404).
+  getGatePlan: async (runId: string): Promise<GatePlan | null> => {
+    const base = await getApiBaseUrl();
+    const res = await fetch(`${base}/workflows/runs/${runId}/gate/plan`);
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(body.error || `Request failed: ${res.status}`);
+    }
+    return res.json();
+  },
   rejectGate: (runId: string) =>
     request<void>(`/workflows/runs/${runId}/gate/reject`, { method: "POST" }),
 

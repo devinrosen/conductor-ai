@@ -150,6 +150,7 @@ use conductor_core::stats::ThemeUnlockStats;
         crate::routes::workflows::get_child_workflow_runs,
         crate::routes::workflows::cancel_workflow,
         crate::routes::workflows::resume_workflow_endpoint,
+        crate::routes::workflows::get_gate_plan,
         crate::routes::workflows::approve_gate,
         crate::routes::workflows::reject_gate,
         crate::routes::workflows::get_token_aggregates,
@@ -211,6 +212,7 @@ use conductor_core::stats::ThemeUnlockStats;
             ConversationWithRuns,
             // Workflow types
             WorkflowRun,
+            conductor_core::workflow::GatePlan,
             WorkflowRunStatus,
             WorkflowRunStep,
             WorkflowStepStatus,

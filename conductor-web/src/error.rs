@@ -45,6 +45,7 @@ impl IntoResponse for ApiError {
                     | ConductorError::AgentRunNotInConversation { .. }
                     | ConductorError::FeedbackRunMismatch { .. }
                     | ConductorError::ConversationNotFound { .. } => StatusCode::NOT_FOUND,
+                    ConductorError::PathNotAllowed { .. } => StatusCode::FORBIDDEN,
                     ConductorError::RepoAlreadyExists { .. }
                     | ConductorError::WorktreeAlreadyExists { .. }
                     | ConductorError::IssueSourceAlreadyExists { .. }

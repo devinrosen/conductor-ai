@@ -120,6 +120,9 @@ pub enum ConductorError {
     #[error("workflow step not found: {id}")]
     WorkflowStepNotFound { id: String },
 
+    #[error("plan_path is outside the run's worktree and git dir: {path}")]
+    PathNotAllowed { path: String },
+
     #[error("workflow step {step_id} does not belong to run {run_id}")]
     WorkflowStepNotInRun { step_id: String, run_id: String },
 
@@ -204,6 +207,7 @@ impl ConductorError {
             Self::WorkflowRunNotFound { .. } => 62,
             Self::WorkflowStepNotFound { .. } => 63,
             Self::WorkflowStepNotInRun { .. } => 64,
+            Self::PathNotAllowed { .. } => 66,
             Self::UnknownSourceType(_) => 43,
             Self::ConversationNotFound { .. } => 57,
             Self::ConversationHasActiveRun { .. } => 58,
@@ -260,6 +264,7 @@ mod tests {
             ConductorError::WorkflowCancelled,
             ConductorError::WorkflowRunAlreadyActive { name: "wf".into() },
             ConductorError::WorkflowRunNotFound { id: "id".into() },
+            ConductorError::PathNotAllowed { path: "p".into() },
             ConductorError::UnknownSourceType("jira".into()),
             ConductorError::ConversationNotFound { id: "id".into() },
             ConductorError::ConversationHasActiveRun { id: "id".into() },

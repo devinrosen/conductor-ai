@@ -270,6 +270,16 @@ export interface WorkflowRun {
   }> | null;
 }
 
+export interface GatePlan {
+  run_id: string;
+  step_id: string;
+  step_name: string;
+  plan_path: string;
+  content: string;
+  size_bytes: number;
+  truncated: boolean;
+}
+
 export interface WorkflowRunStep {
   id: string;
   workflow_run_id: string;
