@@ -35,7 +35,9 @@ async fn spawn_test_server_with_setup(setup: impl Fn(&Connection)) -> String {
         workflow_done_notify: None,
     };
 
-    let app = api_router().with_state(state);
+    let app = api_router()
+        .fallback(conductor_web::assets::static_handler)
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -178,6 +180,23 @@ async fn test_delete_repo() {
         .await
         .unwrap();
     assert!(repos.is_empty());
+}
+
+#[tokio::test]
+async fn test_unknown_api_route_returns_json_404() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/api/notifications"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    let ct = resp.headers()["content-type"].to_str().unwrap().to_string();
+    assert!(ct.starts_with("application/json"), "content-type: {ct}");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "no such API route: GET /api/notifications");
 }
 
 #[tokio::test]
