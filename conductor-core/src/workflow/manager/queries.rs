@@ -252,7 +252,7 @@ pub fn get_workflow_steps(
         &format!(
             "{} \
                  WHERE s.workflow_run_id = :workflow_run_id \
-                 ORDER BY s.position",
+                 ORDER BY s.position, s.id",
             *STEP_SELECT_EXPANDED
         ),
         named_params! { ":workflow_run_id": workflow_run_id },
@@ -332,7 +332,7 @@ fn fetch_steps_for_runs_filtered(
     let sql = format!(
         "{} \
              WHERE s.workflow_run_id IN ({placeholders}){status_clause} \
-             ORDER BY s.workflow_run_id, s.position",
+             ORDER BY s.workflow_run_id, s.position, s.id",
         *STEP_SELECT_EXPANDED
     );
     let combined = run_ids
