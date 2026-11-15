@@ -135,34 +135,169 @@ fn collect_step_names(nodes: &[WorkflowNode], out: &mut HashSet<String>) {
     }
 }
 
-/// Every word (run of `[A-Za-z0-9_]`) in the scripts the workflow runs.
-/// Scripts export extra variables through `FLOW_OUTPUT`, which can't be seen
-/// statically, so a variable named in a script counts as known.
-fn script_words<F>(workflow: &WorkflowDef, resolver: &F) -> HashSet<String>
+/// Names a script's text can put into its `FLOW_OUTPUT` JSON: identifiers in
+/// a `key:` or `"key":` position (jq object construction, literal JSON) and
+/// jq `--arg`-style variable names (`{$name}` shorthand). Comment lines,
+/// `${VAR:-}` forms and `scheme://` are skipped. Command words such as the
+/// `repo` in `gh repo view` are not keys, so they don't count (#3377). The scan
+/// is lenient on purpose and may return extra names, but a key the script
+/// builds from a variable is not seen.
+fn script_export_keys(text: &str) -> HashSet<String> {
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut keys = HashSet::new();
+    for line in text.lines() {
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
+        let bytes = line.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if !(bytes[i].is_ascii_alphabetic() || bytes[i] == b'_') {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < bytes.len() && is_ident(bytes[i] as char) {
+                i += 1;
+            }
+            let ident = &line[start..i];
+            // Skip `${NAME:-x}`, and a word glued to a preceding identifier.
+            let before = &line[..start];
+            let before = before.strip_suffix('"').unwrap_or(before);
+            if before.ends_with("${") {
+                continue;
+            }
+            let mut j = i;
+            if bytes.get(j) == Some(&b'"') {
+                j += 1;
+            }
+            while bytes.get(j) == Some(&b' ') || bytes.get(j) == Some(&b'\t') {
+                j += 1;
+            }
+            if bytes.get(j) == Some(&b':') && !line[j + 1..].starts_with("//") {
+                keys.insert(ident.to_string());
+            }
+        }
+        let words: Vec<&str> = line.split_whitespace().collect();
+        for pair in words.windows(2) {
+            if matches!(
+                pair[0],
+                "--arg" | "--argjson" | "--rawfile" | "--slurpfile"
+            ) {
+                let name: String = pair[1].chars().take_while(|c| is_ident(*c)).collect();
+                if !name.is_empty() {
+                    keys.insert(name);
+                }
+            }
+        }
+    }
+    keys
+}
+
+/// What the scripts a workflow runs export through `FLOW_OUTPUT`.
+struct ScriptExports {
+    /// Every script's keys: for texts that can't be tied to a step.
+    all: HashSet<String>,
+    /// Keys an agent's brief can see, by agent label: scripts before one of
+    /// its call sites, or in a loop shared with one. Union over call sites.
+    by_agent: HashMap<String, HashSet<String>>,
+}
+
+/// One script or agent call in source order, with its enclosing loop ids.
+enum WalkItem {
+    Script(HashSet<String>),
+    Call(String),
+}
+
+fn walk_exports<F>(
+    nodes: &[WorkflowNode],
+    resolver: &F,
+    loops: &mut Vec<usize>,
+    next_loop: &mut usize,
+    items: &mut Vec<(WalkItem, Vec<usize>)>,
+) where
+    F: Fn(&str) -> std::result::Result<std::path::PathBuf, String>,
+{
+    for node in nodes {
+        match node {
+            WorkflowNode::Script(s) => {
+                let keys = if s.run.contains("{{") {
+                    HashSet::new()
+                } else {
+                    resolver(&s.run)
+                        .ok()
+                        .and_then(|path| std::fs::read_to_string(path).ok())
+                        .map(|text| script_export_keys(&text))
+                        .unwrap_or_default()
+                };
+                items.push((WalkItem::Script(keys), loops.clone()));
+            }
+            WorkflowNode::Call(c) => {
+                items.push((WalkItem::Call(c.agent.label().to_string()), loops.clone()));
+            }
+            WorkflowNode::Parallel(p) => {
+                for a in &p.calls {
+                    items.push((WalkItem::Call(a.label().to_string()), loops.clone()));
+                }
+            }
+            _ => {}
+        }
+        if let Some(body) = node.body() {
+            let is_loop = matches!(node, WorkflowNode::While(_) | WorkflowNode::DoWhile(_));
+            if is_loop {
+                loops.push(*next_loop);
+                *next_loop += 1;
+            }
+            walk_exports(body, resolver, loops, next_loop, items);
+            if is_loop {
+                loops.pop();
+            }
+        }
+    }
+}
+
+/// Read the keys each script the workflow runs exports, and which of them an
+/// agent's brief can see. A script's export only reaches steps after it (or in
+/// the same loop, on the next iteration).
+fn script_exports<F>(workflow: &WorkflowDef, resolver: &F) -> ScriptExports
 where
     F: Fn(&str) -> std::result::Result<std::path::PathBuf, String>,
 {
-    let mut nodes = Vec::new();
-    collect_script_nodes(&workflow.body, &mut nodes);
-    collect_script_nodes(&workflow.always, &mut nodes);
-    let mut words = HashSet::new();
-    for node in nodes {
-        if node.run.contains("{{") {
-            continue;
+    let mut items = Vec::new();
+    let mut next_loop = 0;
+    walk_exports(
+        &workflow.body,
+        resolver,
+        &mut Vec::new(),
+        &mut next_loop,
+        &mut items,
+    );
+    walk_exports(
+        &workflow.always,
+        resolver,
+        &mut Vec::new(),
+        &mut next_loop,
+        &mut items,
+    );
+    let mut all = HashSet::new();
+    let mut by_agent: HashMap<String, HashSet<String>> = HashMap::new();
+    for (idx, (item, call_loops)) in items.iter().enumerate() {
+        match item {
+            WalkItem::Script(keys) => all.extend(keys.iter().cloned()),
+            WalkItem::Call(label) => {
+                let visible = by_agent.entry(label.clone()).or_default();
+                for (sidx, (sitem, s_loops)) in items.iter().enumerate() {
+                    if let WalkItem::Script(keys) = sitem {
+                        let shares_loop = s_loops.iter().any(|l| call_loops.contains(l));
+                        if sidx < idx || shares_loop {
+                            visible.extend(keys.iter().cloned());
+                        }
+                    }
+                }
+            }
         }
-        let Some(text) = resolver(&node.run)
-            .ok()
-            .and_then(|path| std::fs::read_to_string(path).ok())
-        else {
-            continue;
-        };
-        words.extend(
-            text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .filter(|w| !w.is_empty())
-                .map(str::to_string),
-        );
     }
-    words
+    ScriptExports { all, by_agent }
 }
 
 /// Where a validated text comes from; decides how the engine treats an
@@ -177,7 +312,7 @@ enum TextKind {
 
 /// Warn about `{{key}}` references that are neither a declared input, an
 /// engine or conductor variable, an `item.*` / `<step>.<field>` reference nor
-/// a word in a script the workflow runs: the engine leaves such a reference
+/// a key a script that can run before it exports: the engine leaves such a reference
 /// unsubstituted in a `.wf` source and removes it from an agent brief or
 /// snippet. `texts` are `(file label, text, kind)` triples. Each (key, file) is
 /// reported once. In briefs and snippets a `{{` whose span isn't a variable
@@ -185,18 +320,25 @@ enum TextKind {
 fn unknown_variable_warnings(
     workflow: &WorkflowDef,
     texts: &[(String, String, TextKind)],
-    script_words: &HashSet<String>,
+    exports: &ScriptExports,
 ) -> Vec<BatchValidationWarning> {
     let mut step_names = HashSet::new();
     collect_step_names(&workflow.body, &mut step_names);
     collect_step_names(&workflow.always, &mut step_names);
 
-    let is_known = |key: &str| -> bool {
+    let is_known = |key: &str, file: &str| -> bool {
+        let exported = match file
+            .strip_prefix("agent ")
+            .and_then(|label| exports.by_agent.get(label))
+        {
+            Some(keys) => keys.contains(key),
+            None => exports.all.contains(key),
+        };
         if key == "else"
             || workflow.inputs.iter().any(|i| i.name == key)
             || ENGINE_BUILTIN_VARIABLES.contains(&key)
             || super::coordinator::CONDUCTOR_INJECTED_VARIABLES.contains(&key)
-            || script_words.contains(key)
+            || exported
         {
             return true;
         }
@@ -209,7 +351,7 @@ fn unknown_variable_warnings(
         let mut seen: HashSet<&str> = HashSet::new();
         for span in placeholder_spans(text) {
             let key = span.key;
-            if is_variable_name(key) && !is_known(key) && seen.insert(key) {
+            if is_variable_name(key) && !is_known(key, file) && seen.insert(key) {
                 let fate = match kind {
                     TextKind::Source => "it is left unsubstituted at run time",
                     TextKind::Prompt => "it is removed from the prompt at run time",
@@ -570,7 +712,7 @@ where
         warnings.extend(unknown_variable_warnings(
             workflow,
             &texts,
-            &script_words(workflow, &script_resolver),
+            &script_exports(workflow, &script_resolver),
         ));
 
         warnings.extend(unknown_bots.iter().map(|b| BatchValidationWarning {
@@ -657,7 +799,7 @@ pub fn validate_template_sources(
             warnings.extend(unknown_variable_warnings(
                 def,
                 &[(format!("template {name}"), body.clone(), TextKind::Source)],
-                &script_words(def, &script_resolver),
+                &script_exports(def, &script_resolver),
             ));
             WorkflowValidationEntry {
                 name: format!("template:{name}"),
@@ -1166,6 +1308,104 @@ mod tests {
                 .any(|e| e.message.contains("not executable")),
             "got: {:?}",
             entry.errors
+        );
+    }
+
+    #[test]
+    fn export_keys_found_in_json_positions_only() {
+        let keys = script_export_keys(
+            "#!/bin/sh\n# repo: comment\n\
+             jq -n --arg runkon_version \"$v\" '{markers: [], context: $c, plan_path: $p}'\n\
+             echo '{\"markers\": [], \"exported_key\": \"v\"}'\n\
+             gh repo view --json nameWithOwner\n\
+             x=\"${REPO:-x}\"\ncurl https://x\n",
+        );
+        for k in ["plan_path", "exported_key", "runkon_version", "markers"] {
+            assert!(keys.contains(k), "missing {k}: {keys:?}");
+        }
+        for k in ["repo", "REPO", "nameWithOwner", "https"] {
+            assert!(!keys.contains(k), "unexpected {k}: {keys:?}");
+        }
+    }
+
+    fn vars_dir(script: &str, brief: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        write_script(dir.path(), "emit.sh", script);
+        write_file(
+            dir.path(),
+            ".conductor/agents/helper.md",
+            &format!("---\nrole: actor\n---\n{brief}\n"),
+        );
+        write_file(
+            dir.path(),
+            ".conductor/agents/later.md",
+            "---\nrole: actor\n---\n{{late_key}}\n",
+        );
+        dir
+    }
+
+    fn warning_msgs(dir: &tempfile::TempDir, body: &str) -> Vec<String> {
+        let src = format!(
+            "workflow vars {{ meta {{ trigger = \"manual\" targets = [\"worktree\"] }} {body} }}"
+        );
+        let wf_path = dir.path().join(".conductor/workflows/vars.wf");
+        write_file(dir.path(), ".conductor/workflows/vars.wf", &src);
+        let wf = parse_workflow_str(&src, wf_path.to_str().unwrap()).unwrap();
+        let entry = run_batch(dir.path(), wf);
+        entry.warnings.into_iter().map(|w| w.message).collect()
+    }
+
+    #[test]
+    fn brief_repo_not_exported_by_script_mentioning_gh_repo_view() {
+        let dir = vars_dir(
+            "#!/bin/sh\ngh repo view --json nameWithOwner\necho '{\"markers\": []}'\n",
+            "slug {{repo}}",
+        );
+        let msgs = warning_msgs(
+            &dir,
+            "call helper {} script emit { run = \".conductor/scripts/emit.sh\" }",
+        );
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("'{{repo}}'") && m.contains("agent helper")),
+            "got: {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn brief_sees_only_exports_from_earlier_scripts() {
+        let dir = vars_dir(
+            "#!/bin/sh\necho '{\"late_key\": \"v\"}'\n",
+            "{{late_key}}",
+        );
+        let msgs = warning_msgs(
+            &dir,
+            "call helper {} script emit { run = \".conductor/scripts/emit.sh\" } call later {}",
+        );
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("'{{late_key}}'") && m.contains("agent helper")),
+            "helper runs before the script: {msgs:?}"
+        );
+        assert!(
+            !msgs.iter().any(|m| m.contains("agent later")),
+            "later runs after the script: {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn brief_sees_exports_from_a_later_script_in_the_same_loop() {
+        let dir = vars_dir(
+            "#!/bin/sh\necho '{\"late_key\": \"v\"}'\n",
+            "{{late_key}}",
+        );
+        let msgs = warning_msgs(
+            &dir,
+            "do { max_iterations = 3 call helper {} script emit { run = \".conductor/scripts/emit.sh\" } } while emit.late_key",
+        );
+        assert!(
+            !msgs.iter().any(|m| m.contains("agent helper")),
+            "got: {msgs:?}"
         );
     }
 
