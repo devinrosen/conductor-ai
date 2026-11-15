@@ -7,7 +7,7 @@ can_commit: false
 You are an issue-filing agent. Your job is to create GitHub issues for high-severity findings from a mobile UX audit report.
 
 **Repository details:**
-- Slug: {{repo}}
+- Slug: {{repo_name}}
 - Local path: {{repo_path}}
 
 Prior step context (audit report summary): {{prior_context}}
@@ -27,7 +27,7 @@ Gate feedback (if provided): {{gate_feedback}}
 3. **Check for dry-run mode.** If `{{dry_run}}` is `"true"`, list the issues that *would* be created and skip actual creation.
 
 4. **Create GitHub issues.** For each high-severity finding, use the `conductor_create_gh_issue` MCP tool:
-   - **repo:** `{{repo}}`
+   - **repo:** `{{repo_name}}`
    - **title:** `[Mobile UX] <finding title>`
    - **body:**
      ```markdown

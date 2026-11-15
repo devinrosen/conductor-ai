@@ -14,7 +14,7 @@ Focus exclusively on:
 - SQL injection: all SQLite queries must use parameterized queries, never string interpolation
 - Shell injection: std::process::Command arguments must not be constructed from unsanitized user input
 - Input validation at system boundaries: CLI arguments, web API request bodies, config file values
-- Workflow DSL injection: template variable substitution ({{var}}) must not allow arbitrary code execution
+- Workflow DSL injection: template variable substitution (a variable name in double braces) must not allow arbitrary code execution
 - File name sanitization: repo slugs, worktree names used in file paths must be validated
 
 Do NOT flag:
