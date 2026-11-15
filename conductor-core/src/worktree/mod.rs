@@ -7,11 +7,12 @@ mod tests;
 
 pub use git_helpers::{list_remote_branches, MainHealthStatus};
 pub(crate) use git_helpers::{
-    lookup_merged, merged_prs_by_remote, skip_for_local_work, tracked_changes,
+    lookup_merged, merged_prs_by_remote, skip_for_live_run, skip_for_local_work, tracked_changes,
 };
 pub use manager::{
-    get_ticket_id_by_branch, label_to_branch_prefix, ActiveRunBaseNotice, SetBaseBranchOptions,
-    SetBaseBranchOutcome, WorktreeAdoptOptions, WorktreeCreateOptions, WorktreeManager,
+    get_ticket_id_by_branch, label_to_branch_prefix, ActiveRunBaseNotice, KeptWorktree,
+    MergedCleanup, SetBaseBranchOptions, SetBaseBranchOutcome, WorktreeAdoptOptions,
+    WorktreeCreateOptions, WorktreeManager,
 };
 pub use types::{Worktree, WorktreeStatus, WorktreeWithStatus};
 
