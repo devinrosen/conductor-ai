@@ -495,16 +495,14 @@ pub(super) fn tool_get_review(
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_helpers::{create_list_run, make_test_conductor};
+    use super::super::test_helpers::{create_list_run, err_text, make_test_conductor};
     use super::*;
     use serde_json::Value;
 
     fn run_stats_err(args: serde_json::Value) -> String {
         let (_f, conductor) = make_test_conductor();
         let Value::Object(map) = args else { panic!() };
-        let result = tool_run_stats(&conductor, &map);
-        assert_eq!(result.is_error, Some(true));
-        result.content[0].as_text().unwrap().text.clone()
+        err_text(&tool_run_stats(&conductor, &map))
     }
 
     #[test]

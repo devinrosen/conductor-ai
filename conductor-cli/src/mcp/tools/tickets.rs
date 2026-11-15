@@ -277,7 +277,7 @@ pub(super) fn tool_delete_ticket(
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_helpers::make_test_conductor;
+    use super::super::test_helpers::{err_text, make_test_conductor};
     use super::*;
     use serde_json::Value;
 
@@ -286,18 +286,8 @@ mod tests {
         let (_f, conductor) = make_test_conductor();
         let mut a = full_ticket_args("nope");
         a.insert("blocked_by".into(), serde_json::json!({"a": 1}));
-        let result = tool_upsert_ticket(&conductor, &a);
-        assert_eq!(result.is_error, Some(true));
-        let text = result.content[0]
-            .as_text()
-            .map(|t| t.text.as_str())
-            .unwrap();
+        let text = err_text(&tool_upsert_ticket(&conductor, &a));
         assert!(text.starts_with("blocked_by must be"), "{text}");
-    }
-
-    fn err_text(result: &rmcp::model::CallToolResult) -> String {
-        assert_eq!(result.is_error, Some(true));
-        result.content[0].as_text().unwrap().text.clone()
     }
 
     #[test]
