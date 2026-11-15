@@ -333,9 +333,9 @@ pub enum WorkflowCommands {
         #[arg(long)]
         lines: Option<usize>,
     },
-    /// Block until a workflow run (and its child runs) finishes, stalls, or times out
+    /// Block until a workflow run (and its child runs) finishes, stalls, waits at a gate, or times out
     #[command(
-        after_help = "Exit codes:\n  0  run completed\n  1  run failed or was cancelled\n  2  timeout\n  3  stalled (no live engine)\n\nExample:\n  conductor workflow wait <run-id> --timeout 3600 --json"
+        after_help = "Exit codes:\n  0  run completed\n  1  run failed or was cancelled\n  2  timeout\n  3  stalled (no live engine)\n  4  waiting at a gate (in the run or a child run)\n\nExample:\n  conductor workflow wait <run-id> --timeout 3600 --json"
     )]
     Wait {
         /// Workflow run ID
@@ -347,6 +347,9 @@ pub enum WorkflowCommands {
         /// seconds (default: 2x the engine lease TTL)
         #[arg(long)]
         stall_after: Option<u64>,
+        /// Keep waiting while a gate waits for a person, instead of returning with exit code 4
+        #[arg(long)]
+        through_gates: bool,
         /// Print the summary as JSON
         #[arg(long)]
         json: bool,

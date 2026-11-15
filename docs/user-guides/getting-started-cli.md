@@ -120,10 +120,10 @@ conductor workflow run-show <run-id>
 To block until a run (and its child runs) finishes, use `wait`:
 
 ```bash
-conductor workflow wait <run-id> [--timeout <secs>] [--stall-after <secs>] [--json]
+conductor workflow wait <run-id> [--timeout <secs>] [--stall-after <secs>] [--through-gates] [--json]
 ```
 
-It prints the final status, error, and last step. A non-terminal run with no lease or step activity for `--stall-after` seconds (default 60) is reported as stalled: its engine is gone, so resume it with `conductor workflow resume`. Agents can use the `conductor_wait_run` MCP tool instead.
+It prints the final status, error, and last step. A non-terminal run with no lease or step activity for `--stall-after` seconds (default 60) is reported as stalled: its engine is gone, so resume it with `conductor workflow resume`. `wait` also returns, with exit code 4, as soon as a step in the run or a child run waits at a gate for a person. The output names the gate, its run, prompt, timeout, options and plan path; approve it, then wait again. Pass `--through-gates` to keep waiting through gates. Agents can use the `conductor_wait_run` MCP tool instead (`through_gates: true` for the same opt-out).
 
 | Exit code | Meaning |
 |-----------|---------|
@@ -131,6 +131,7 @@ It prints the final status, error, and last step. A non-terminal run with no lea
 | 1 | Run failed or was cancelled |
 | 2 | Timeout |
 | 3 | Stalled (no live engine) |
+| 4 | Waiting at a gate (in the run or a child run) |
 
 ## Gates
 
