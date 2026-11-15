@@ -58,6 +58,7 @@ if ! result=$(jq -c '
     "review-test-coverage":      {name: "Test Coverage",      labels: ["enhancement"]},
     "review-db-migrations":      {name: "DB Migrations",      labels: ["bug"]},
     "review-workflow-semantics": {name: "Workflow Semantics", labels: ["bug"]},
+    "review-doc-accuracy":       {name: "Doc Accuracy",       labels: ["documentation"]},
     "validate-workflows":        {name: "Workflow Validation", labels: ["bug"]}
   };
   def sev_rank: if . == "critical" then 2 elif . == "warning" then 1 else 0 end;
