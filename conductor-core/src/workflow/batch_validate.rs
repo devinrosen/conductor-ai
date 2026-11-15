@@ -18,17 +18,52 @@ use runkon_flow::dsl::{
 /// Since runkon-flow 0.6.2-alpha a script that prints them fails its step.
 const LEGACY_OUTPUT_MARKER: &str = "CONDUCTOR_OUTPUT>>>";
 
-fn collect_script_nodes<'a>(nodes: &'a [WorkflowNode], out: &mut Vec<&'a ScriptNode>) {
-    for node in nodes {
-        match node {
-            WorkflowNode::Script(s) => out.push(s),
-            other => {
-                if let Some(body) = other.body() {
-                    collect_script_nodes(body, out);
+/// A script step or an agent call, as `ordered_steps` yields them.
+enum Step<'a> {
+    Script(&'a ScriptNode),
+    Call(String),
+}
+
+/// Every script step and agent call of a workflow in source order (`body`,
+/// then `always`), each with the ids of the loops enclosing it.
+fn ordered_steps(workflow: &WorkflowDef) -> Vec<(Step<'_>, Vec<usize>)> {
+    fn walk<'a>(
+        nodes: &'a [WorkflowNode],
+        loops: &mut Vec<usize>,
+        next_loop: &mut usize,
+        out: &mut Vec<(Step<'a>, Vec<usize>)>,
+    ) {
+        for node in nodes {
+            match node {
+                WorkflowNode::Script(s) => out.push((Step::Script(s), loops.clone())),
+                WorkflowNode::Call(c) => {
+                    out.push((Step::Call(c.agent.label().to_string()), loops.clone()));
+                }
+                WorkflowNode::Parallel(p) => {
+                    for a in &p.calls {
+                        out.push((Step::Call(a.label().to_string()), loops.clone()));
+                    }
+                }
+                _ => {}
+            }
+            if let Some(body) = node.body() {
+                let is_loop = matches!(node, WorkflowNode::While(_) | WorkflowNode::DoWhile(_));
+                if is_loop {
+                    loops.push(*next_loop);
+                    *next_loop += 1;
+                }
+                walk(body, loops, next_loop, out);
+                if is_loop {
+                    loops.pop();
                 }
             }
         }
     }
+    let mut out = Vec::new();
+    let mut next_loop = 0;
+    walk(&workflow.body, &mut Vec::new(), &mut next_loop, &mut out);
+    walk(&workflow.always, &mut Vec::new(), &mut next_loop, &mut out);
+    out
 }
 
 /// Report script steps whose script file still prints the legacy
@@ -38,16 +73,14 @@ fn check_legacy_output_markers<F>(workflow: &WorkflowDef, resolver: &F) -> Vec<V
 where
     F: Fn(&str) -> std::result::Result<std::path::PathBuf, String>,
 {
-    let mut nodes = Vec::new();
-    collect_script_nodes(&workflow.body, &mut nodes);
-    collect_script_nodes(&workflow.always, &mut nodes);
-
-    nodes
+    ordered_steps(workflow)
         .into_iter()
-        .filter(|node| !node.run.contains("{{"))
+        .filter_map(|(step, _)| match step {
+            Step::Script(node) => Some(node),
+            Step::Call(_) => None,
+        })
         .filter_map(|node| {
-            let path = resolver(&node.run).ok()?;
-            let contents = std::fs::read_to_string(&path).ok()?;
+            let (path, contents) = read_script_text(&node.run, resolver)?;
             contents
                 .contains(LEGACY_OUTPUT_MARKER)
                 .then(|| ValidationError {
@@ -200,57 +233,19 @@ struct ScriptExports {
     by_agent: HashMap<String, HashSet<String>>,
 }
 
-/// One script or agent call in source order, with its enclosing loop ids.
-enum WalkItem {
-    Script(HashSet<String>),
-    Call(String),
-}
-
-fn walk_exports<F>(
-    nodes: &[WorkflowNode],
-    resolver: &F,
-    loops: &mut Vec<usize>,
-    next_loop: &mut usize,
-    items: &mut Vec<(WalkItem, Vec<usize>)>,
-) where
+/// Read a script step's file. `None` for a `run` with a `{{…}}` placeholder
+/// (can't be resolved statically) and for a script that can't be resolved or
+/// read: `validate_script_steps` already reports missing ones.
+fn read_script_text<F>(run: &str, resolver: &F) -> Option<(std::path::PathBuf, String)>
+where
     F: Fn(&str) -> std::result::Result<std::path::PathBuf, String>,
 {
-    for node in nodes {
-        match node {
-            WorkflowNode::Script(s) => {
-                let keys = if s.run.contains("{{") {
-                    HashSet::new()
-                } else {
-                    resolver(&s.run)
-                        .ok()
-                        .and_then(|path| std::fs::read_to_string(path).ok())
-                        .map(|text| script_export_keys(&text))
-                        .unwrap_or_default()
-                };
-                items.push((WalkItem::Script(keys), loops.clone()));
-            }
-            WorkflowNode::Call(c) => {
-                items.push((WalkItem::Call(c.agent.label().to_string()), loops.clone()));
-            }
-            WorkflowNode::Parallel(p) => {
-                for a in &p.calls {
-                    items.push((WalkItem::Call(a.label().to_string()), loops.clone()));
-                }
-            }
-            _ => {}
-        }
-        if let Some(body) = node.body() {
-            let is_loop = matches!(node, WorkflowNode::While(_) | WorkflowNode::DoWhile(_));
-            if is_loop {
-                loops.push(*next_loop);
-                *next_loop += 1;
-            }
-            walk_exports(body, resolver, loops, next_loop, items);
-            if is_loop {
-                loops.pop();
-            }
-        }
+    if run.contains("{{") {
+        return None;
     }
+    let path = resolver(run).ok()?;
+    let text = std::fs::read_to_string(&path).ok()?;
+    Some((path, text))
 }
 
 /// Read the keys each script the workflow runs exports, and which of them an
@@ -260,35 +255,31 @@ fn script_exports<F>(workflow: &WorkflowDef, resolver: &F) -> ScriptExports
 where
     F: Fn(&str) -> std::result::Result<std::path::PathBuf, String>,
 {
-    let mut items = Vec::new();
-    let mut next_loop = 0;
-    walk_exports(
-        &workflow.body,
-        resolver,
-        &mut Vec::new(),
-        &mut next_loop,
-        &mut items,
-    );
-    walk_exports(
-        &workflow.always,
-        resolver,
-        &mut Vec::new(),
-        &mut next_loop,
-        &mut items,
-    );
+    let steps = ordered_steps(workflow);
     let mut all = HashSet::new();
     let mut by_agent: HashMap<String, HashSet<String>> = HashMap::new();
-    for (idx, (item, call_loops)) in items.iter().enumerate() {
-        match item {
-            WalkItem::Script(keys) => all.extend(keys.iter().cloned()),
-            WalkItem::Call(label) => {
-                let visible = by_agent.entry(label.clone()).or_default();
-                for (sidx, (sitem, s_loops)) in items.iter().enumerate() {
-                    if let WalkItem::Script(keys) = sitem {
-                        let shares_loop = s_loops.iter().any(|l| call_loops.contains(l));
-                        if sidx < idx || shares_loop {
-                            visible.extend(keys.iter().cloned());
-                        }
+    let script_keys: Vec<Option<HashSet<String>>> = steps
+        .iter()
+        .map(|(step, _)| match step {
+            Step::Script(s) => Some(
+                read_script_text(&s.run, resolver)
+                    .map(|(_, text)| script_export_keys(&text))
+                    .unwrap_or_default(),
+            ),
+            Step::Call(_) => None,
+        })
+        .collect();
+    for keys in script_keys.iter().flatten() {
+        all.extend(keys.iter().cloned());
+    }
+    for (idx, (step, call_loops)) in steps.iter().enumerate() {
+        if let Step::Call(label) = step {
+            let visible = by_agent.entry(label.clone()).or_default();
+            for (sidx, (_, s_loops)) in steps.iter().enumerate() {
+                if let Some(keys) = &script_keys[sidx] {
+                    let shares_loop = s_loops.iter().any(|l| call_loops.contains(l));
+                    if sidx < idx || shares_loop {
+                        visible.extend(keys.iter().cloned());
                     }
                 }
             }
