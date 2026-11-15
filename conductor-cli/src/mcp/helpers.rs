@@ -47,16 +47,27 @@ pub(crate) fn schema(fields: &[(&str, &str, bool)]) -> Arc<serde_json::Map<Strin
 
 /// Like `schema`, but each field includes an explicit JSON Schema type.
 /// fields: (name, json_type, description, required)
+///
+/// The pseudo-type `"string_list"` declares a list-shaped argument that accepts either a
+/// comma-separated string or an array of strings (see `get_list_arg`), emitted as `anyOf`.
 pub(crate) fn schema_typed(
     fields: &[(&str, &str, &str, bool)],
 ) -> Arc<serde_json::Map<String, Value>> {
     let mut props = serde_json::Map::new();
     let mut required = Vec::new();
     for (name, field_type, desc, req) in fields {
-        props.insert(
-            name.to_string(),
-            json!({ "type": field_type, "description": desc }),
-        );
+        let prop = if *field_type == "string_list" {
+            json!({
+                "anyOf": [
+                    { "type": "string" },
+                    { "type": "array", "items": { "type": "string" } }
+                ],
+                "description": desc
+            })
+        } else {
+            json!({ "type": field_type, "description": desc })
+        };
+        props.insert(name.to_string(), prop);
         if *req {
             required.push(Value::String(name.to_string()));
         }
@@ -71,6 +82,42 @@ pub(crate) fn schema_typed(
 /// Helper: extract an optional string arg from tool call arguments.
 pub(crate) fn get_arg<'a>(args: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a str> {
     args.get(key).and_then(|v| v.as_str())
+}
+
+/// Helper: extract a list-shaped arg. Accepts a comma-separated string, an array of strings,
+/// or a string holding a JSON array of strings. Entries are trimmed and empties dropped.
+/// A missing or `null` arg is an empty list; anything else is a one-line error naming `key`.
+pub(crate) fn get_list_arg(
+    args: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Vec<String>, String> {
+    let invalid = || format!("{key} must be a comma-separated string or an array of strings");
+    let clean = |items: Vec<String>| -> Vec<String> {
+        items
+            .into_iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    };
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(vec![]),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|v| v.as_str().map(String::from).ok_or_else(invalid))
+            .collect::<Result<Vec<_>, _>>()
+            .map(clean),
+        Some(Value::String(s)) => {
+            let t = s.trim();
+            if t.starts_with('[') {
+                serde_json::from_str::<Vec<String>>(t)
+                    .map(clean)
+                    .map_err(|_| invalid())
+            } else {
+                Ok(clean(t.split(',').map(String::from).collect()))
+            }
+        }
+        Some(_) => Err(invalid()),
+    }
 }
 
 /// Helper: extract an optional usize arg, accepting both JSON number and string representations.
@@ -124,6 +171,63 @@ mod tests {
         let mut m = serde_json::Map::new();
         m.insert("limit".into(), val);
         m
+    }
+
+    fn list_args(val: Value) -> serde_json::Map<String, Value> {
+        let mut m = serde_json::Map::new();
+        m.insert("labels".into(), val);
+        m
+    }
+
+    #[test]
+    fn get_list_arg_accepts_string_array_and_stringified_array() {
+        let want = vec!["bug".to_string(), "observability".to_string()];
+        assert_eq!(
+            get_list_arg(&list_args(json!("bug, observability")), "labels").unwrap(),
+            want
+        );
+        assert_eq!(
+            get_list_arg(&list_args(json!(["bug", " observability "])), "labels").unwrap(),
+            want
+        );
+        assert_eq!(
+            get_list_arg(&list_args(json!("[\"bug\",\"observability\"]")), "labels").unwrap(),
+            want
+        );
+    }
+
+    #[test]
+    fn get_list_arg_empty_and_missing() {
+        assert!(get_list_arg(&serde_json::Map::new(), "labels")
+            .unwrap()
+            .is_empty());
+        assert!(get_list_arg(&list_args(json!(null)), "labels")
+            .unwrap()
+            .is_empty());
+        assert!(get_list_arg(&list_args(json!("")), "labels")
+            .unwrap()
+            .is_empty());
+        assert!(get_list_arg(&list_args(json!(["", " "])), "labels")
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn get_list_arg_rejects_invalid_values() {
+        for v in [json!(42), json!({"a": 1}), json!(["bug", 1]), json!("[bug")] {
+            let err = get_list_arg(&list_args(v), "labels").unwrap_err();
+            assert!(err.starts_with("labels must be"), "{err}");
+            assert!(!err.contains('\n'));
+        }
+    }
+
+    #[test]
+    fn schema_typed_string_list_emits_any_of() {
+        let s = schema_typed(&[("labels", "string_list", "Labels", false)]);
+        let any_of = &s["properties"]["labels"]["anyOf"];
+        assert_eq!(any_of[0]["type"], "string");
+        assert_eq!(any_of[1]["type"], "array");
+        assert_eq!(any_of[1]["items"]["type"], "string");
     }
 
     #[test]

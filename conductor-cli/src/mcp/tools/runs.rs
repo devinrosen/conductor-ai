@@ -3,7 +3,7 @@ use rmcp::model::CallToolResult;
 use serde_json::Value;
 
 use crate::mcp::helpers::{
-    get_arg, get_arg_usize, get_bool_arg, pagination_hint, tool_err, tool_ok,
+    get_arg, get_arg_usize, get_bool_arg, get_list_arg, pagination_hint, tool_err, tool_ok,
 };
 use crate::mcp::resources::{
     format_run_detail_with_log, format_run_extra_lines, format_run_summary_line,
@@ -436,26 +436,21 @@ pub(super) fn tool_get_step_log(
     }
 }
 
-/// Split a comma-separated list of run ids, dropping blanks.
-fn split_run_ids(raw: &str) -> Vec<String> {
-    raw.split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect()
-}
-
 pub(super) fn tool_run_stats(
     conductor: &Conductor,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
-    let run_ids = split_run_ids(require_arg!(args, "run_id"));
+    let run_ids = match get_list_arg(args, "run_id") {
+        Ok(v) => v,
+        Err(msg) => return tool_err(msg),
+    };
     if run_ids.is_empty() {
         return tool_err("run_id must contain at least one workflow run id");
     }
-    let compare_ids = get_arg(args, "compare_run_id")
-        .map(split_run_ids)
-        .unwrap_or_default();
+    let compare_ids = match get_list_arg(args, "compare_run_id") {
+        Ok(v) => v,
+        Err(msg) => return tool_err(msg),
+    };
     let as_json = args.get("json").and_then(Value::as_bool).unwrap_or(false);
 
     match conductor_core::workflow::run_stats::render_run_stats(
@@ -2356,14 +2351,6 @@ mod tests {
             .unwrap()
             .iter()
             .any(|n| n.as_str().unwrap().contains("overrides the aggregator")));
-    }
-
-    #[test]
-    fn test_split_run_ids_trims_and_drops_blanks() {
-        assert_eq!(split_run_ids("a, b ,,c"), vec!["a", "b", "c"]);
-        assert_eq!(split_run_ids("  a  "), vec!["a"]);
-        assert!(split_run_ids("").is_empty());
-        assert!(split_run_ids(" , ,  ").is_empty());
     }
 
     #[test]

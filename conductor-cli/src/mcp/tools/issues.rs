@@ -2,7 +2,7 @@ use conductor_core::Conductor;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, tool_err, tool_ok};
+use crate::mcp::helpers::{get_arg, get_list_arg, tool_err, tool_ok};
 
 /// The `\nMilestone: <m>` output suffix, empty when no milestone was requested.
 fn milestone_line(milestone: Option<&str>) -> String {
@@ -22,12 +22,11 @@ pub(super) fn tool_create_gh_issue(
     let repo_slug = require_arg!(args, "repo");
     let title = require_arg!(args, "title");
     let body = require_arg!(args, "body");
-    let labels_raw = get_arg(args, "labels").unwrap_or("");
-    let labels: Vec<&str> = labels_raw
-        .split(',')
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .collect();
+    let label_list = match get_list_arg(args, "labels") {
+        Ok(v) => v,
+        Err(msg) => return tool_err(msg),
+    };
+    let labels: Vec<&str> = label_list.iter().map(String::as_str).collect();
     let run_id = get_arg(args, "run_id");
     let milestone = github::normalize_milestone(get_arg(args, "milestone"));
 
@@ -95,6 +94,20 @@ mod tests {
             m.insert(k.to_string(), Value::String(v.to_string()));
         }
         m
+    }
+
+    #[test]
+    fn test_create_gh_issue_invalid_labels_rejected_before_repo_lookup() {
+        let (_f, conductor) = make_test_conductor();
+        for labels in [serde_json::json!(42), serde_json::json!(["bug", 1])] {
+            let mut a = args_with(&[("repo", "nope"), ("title", "t"), ("body", "b")]);
+            a.insert("labels".into(), labels);
+            let result = tool_create_gh_issue(&conductor, &a);
+            assert_eq!(result.is_error, Some(true));
+            let text = result.content[0].as_text().map(|t| t.text.as_str()).unwrap();
+            assert!(text.starts_with("labels must be"), "{text}");
+            assert!(!text.contains('\n'));
+        }
     }
 
     #[test]

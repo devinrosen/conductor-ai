@@ -2,7 +2,7 @@ use std::process::{Command, Output};
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{ConductorError, Result};
+use crate::error::{ConductorError, Result, SubprocessFailure};
 use crate::tickets::{TicketInput, TicketLabelInput};
 
 /// Build an `"owner/repo"` slug from its two components.
@@ -45,6 +45,16 @@ fn run_gh_with_token(args: &[&str], token: Option<&str>) -> Result<Output> {
     }
 
     Ok(output)
+}
+
+/// Keep the error text `gh` prints before its usage dump (it prints the error, a blank
+/// line, then usage). Falls back to the trimmed full stderr if nothing precedes the blank line.
+fn gh_error_summary(stderr: &str) -> String {
+    let trimmed = stderr.trim();
+    match trimmed.split("\n\n").next().map(str::trim) {
+        Some(first) if !first.is_empty() => first.to_string(),
+        _ => trimmed.to_string(),
+    }
 }
 
 /// A lightweight reference to a GitHub issue (title + URL).
@@ -523,7 +533,20 @@ pub fn create_github_issue(
         args.push("--milestone");
         args.push(m);
     }
-    let output = run_gh_with_token(&args, token)?;
+    let output = build_gh_cmd(&args, token).output().map_err(|e| {
+        ConductorError::GhCli(SubprocessFailure::from_message(
+            "gh issue create",
+            format!("failed to run gh: {e}"),
+        ))
+    })?;
+    if !output.status.success() {
+        return Err(ConductorError::GhCli(SubprocessFailure {
+            command: "gh issue create".to_string(),
+            exit_code: output.status.code(),
+            stderr: gh_error_summary(&String::from_utf8_lossy(&output.stderr)),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        }));
+    }
 
     // `gh issue create` prints the issue URL on stdout, e.g.
     // https://github.com/owner/repo/issues/42
@@ -533,8 +556,9 @@ pub fn create_github_issue(
     let number = url.rsplit('/').next().unwrap_or("").to_string();
 
     if number.is_empty() {
-        return Err(ConductorError::TicketSync(format!(
-            "unexpected output from gh issue create: {url}"
+        return Err(ConductorError::GhCli(SubprocessFailure::from_message(
+            "gh issue create",
+            format!("unexpected output: {url}"),
         )));
     }
 
@@ -1049,6 +1073,24 @@ pub fn upsert_sticky_comment(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn gh_error_summary_drops_usage_block() {
+        let stderr = "invalid argument \"[\\\"bug\\\"\" for \"-l, --label\" flag\n\nCreate an issue on GitHub.\n\nUSAGE\n  gh issue create\n";
+        let got = gh_error_summary(stderr);
+        assert_eq!(got, "invalid argument \"[\\\"bug\\\"\" for \"-l, --label\" flag");
+        assert!(!got.contains('\n'));
+    }
+
+    #[test]
+    fn gh_error_summary_single_line_unchanged() {
+        assert_eq!(gh_error_summary("boom\n"), "boom");
+    }
+
+    #[test]
+    fn gh_error_summary_leading_blank_lines() {
+        assert_eq!(gh_error_summary("\n\nboom\n\nusage"), "boom");
+    }
+
     use super::*;
 
     #[test]
