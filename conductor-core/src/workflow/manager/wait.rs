@@ -7,8 +7,11 @@
 //!
 //! A run is *stalled* when it is non-terminal and its newest sign of life is older
 //! than `stall_after`. Signs of life across the run and all descendant runs are:
-//! `lease_until` (a live engine keeps it in the future), `started_at`, and each
-//! step's `started_at` / `ended_at`. "Lease stale AND no step progress" is used
+//! the lease's last renewal (`lease_until` minus the engine's lease TTL, capped at now;
+//! `lease_until` itself runs into the future and would make the age negative),
+//! `started_at`, and each step's `started_at` / `ended_at`. The age is therefore
+//! seconds since the last renewal / step start / step end, and never negative.
+//! "Lease stale AND no step progress" is used
 //! rather than OR, because long agent steps legitimately emit no step events for a
 //! long time while the engine keeps refreshing its lease.
 //!
@@ -102,12 +105,20 @@ pub struct WaitOptions {
     pub through_gates: bool,
 }
 
+/// The engine's lease TTL in seconds. Conductor runs every workflow with
+/// `WorkflowExecConfig::default()`, so this is the TTL actually in use; keep the
+/// derived lease renewal time in [`run_tree_liveness`] in step with it.
+fn engine_lease_ttl_secs() -> i64 {
+    runkon_flow::types::WorkflowExecConfig::default()
+        .lease_ttl_secs
+        .max(1)
+}
+
 impl Default for WaitOptions {
     fn default() -> Self {
-        let lease_ttl = runkon_flow::types::WorkflowExecConfig::default().lease_ttl_secs;
         Self {
             timeout: None,
-            stall_after: Duration::from_secs((lease_ttl.max(1) as u64) * 2),
+            stall_after: Duration::from_secs(engine_lease_ttl_secs() as u64 * 2),
             poll_interval: DEFAULT_POLL_INTERVAL,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             through_gates: false,
@@ -178,7 +189,7 @@ pub struct WaitSummary {
     pub status: String,
     pub error: Option<String>,
     pub elapsed_secs: u64,
-    /// Seconds since the newest sign of life in the run tree, if any.
+    /// Seconds since the newest sign of life in the run tree, if any. Never negative.
     pub last_signal_age_secs: Option<i64>,
     pub last_step: Option<WaitStepSummary>,
     /// Gates waiting for a person, oldest first. Only set for `GateWaiting`.
@@ -212,7 +223,8 @@ fn run_tree_liveness(conn: &Connection, run_id: &str) -> Result<(Option<i64>, us
         &format!(
             "{RUN_TREE_CTE},
          signals(ts) AS (
-           SELECT datetime(lease_until) FROM workflow_runs WHERE id IN (SELECT id FROM tree)
+           SELECT MIN(datetime(lease_until, '-' || :ttl || ' seconds'), datetime('now'))
+             FROM workflow_runs WHERE id IN (SELECT id FROM tree)
            UNION ALL SELECT datetime(started_at) FROM workflow_runs WHERE id IN (SELECT id FROM tree)
            UNION ALL SELECT datetime(started_at) FROM workflow_run_steps
              WHERE workflow_run_id IN (SELECT id FROM tree)
@@ -221,9 +233,10 @@ fn run_tree_liveness(conn: &Connection, run_id: &str) -> Result<(Option<i64>, us
          )
          SELECT CAST((julianday('now') - julianday(MAX(ts))) * 86400 AS INTEGER) FROM signals"
         ),
-        named_params![":root": run_id],
+        named_params![":root": run_id, ":ttl": engine_lease_ttl_secs()],
         |row| row.get(0),
     )?;
+    let age = age.map(|a| a.max(0));
 
     let live_descendants: i64 = conn.query_row(
         &format!(
@@ -850,9 +863,38 @@ mod tests {
             "-30 seconds",
         );
         let (age, _) = run_tree_liveness(&conn, "r").unwrap();
-        // Newest signal is the future lease, so age is <= 0, never ~a day.
-        assert!(age.unwrap() <= 0, "age was {age:?}");
+        // Newest signal is the lease renewal (~10s ago), so never negative and never ~a day.
+        assert!((0..=12).contains(&age.unwrap()), "age was {age:?}");
         assert!(eval(&conn, "r").is_none());
+    }
+
+    #[test]
+    fn future_lease_gives_non_negative_age() {
+        let conn = setup();
+        insert_run(&conn, "r", None, "running", Some("+25 seconds"), "-1 hours");
+        insert_step(&conn, "s", "r", "old", "-1 hours", Some("-59 minutes"));
+        let (age, _) = run_tree_liveness(&conn, "r").unwrap();
+        assert!((0..=8).contains(&age.unwrap()), "age was {age:?}");
+    }
+
+    #[test]
+    fn grace_lease_longer_than_ttl_clamps_to_zero() {
+        let conn = setup();
+        insert_run(&conn, "r", None, "running", Some("+60 seconds"), "-1 hours");
+        insert_step(&conn, "s", "r", "old", "-1 hours", Some("-59 minutes"));
+        let (age, _) = run_tree_liveness(&conn, "r").unwrap();
+        assert_eq!(age, Some(0));
+        assert!(eval(&conn, "r").is_none());
+    }
+
+    #[test]
+    fn expired_lease_stalls_from_last_renewal() {
+        let conn = setup();
+        insert_run(&conn, "r", None, "running", Some("-35 seconds"), "-1 hours");
+        insert_step(&conn, "s", "r", "old", "-1 hours", Some("-59 minutes"));
+        let s = eval(&conn, "r").unwrap();
+        assert_eq!(s.outcome, WaitOutcome::Stalled);
+        assert!(s.last_signal_age_secs.unwrap() >= 64);
     }
 
     #[test]
