@@ -130,8 +130,8 @@ pub use manager::steps::{
 };
 pub use manager::wait::{
     format_wait_progress, format_wait_summary, wait_for_workflow_run,
-    wait_for_workflow_run_with_progress, WaitOptions, WaitOutcome, WaitProgress, WaitStepSummary,
-    WaitSummary,
+    wait_for_workflow_run_with_progress, WaitGateSummary, WaitOptions, WaitOutcome, WaitProgress,
+    WaitStepSummary, WaitSummary,
 };
 pub use manager::InvalidWorkflowEntry;
 pub use output::{parse_flow_output, FlowOutput};

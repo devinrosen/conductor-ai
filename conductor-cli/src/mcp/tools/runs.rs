@@ -321,6 +321,7 @@ pub(super) fn tool_wait_run(
     let opts = WaitOptions::with_overrides(
         Some(Duration::from_secs(timeout_secs as u64)),
         get_arg_usize(args, "stall_after_secs").map(|s| Duration::from_secs(s as u64)),
+        get_bool_arg(args, "through_gates"),
     );
     let mut on_progress = |p: &conductor_core::workflow::WaitProgress| {
         if let Some(send) = progress {
@@ -739,6 +740,54 @@ mod tests {
         let text = result_text(&result);
         assert!(text.starts_with("outcome: timeout"), "got: {text}");
         assert!(!text.contains("capped"));
+    }
+
+    fn add_waiting_gate(conductor: &Conductor, run_id: &str) {
+        conductor
+            .conn
+            .execute(
+                "INSERT INTO workflow_run_steps \
+                 (id, workflow_run_id, step_name, role, position, status, started_at, gate_type) \
+                 VALUES (?1, ?2, 'human_review', 'gate', 0, 'waiting', \
+                         strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'human_review')",
+                rusqlite::params![conductor_core::new_id(), run_id],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn test_wait_run_gate_waiting_outcome() {
+        let (_f, conductor) = make_test_conductor();
+        let id = make_wait_run(
+            &conductor,
+            "running",
+            "strftime('%Y-%m-%dT%H:%M:%SZ','now')",
+            "datetime('now','+60 seconds')",
+        );
+        add_waiting_gate(&conductor, &id);
+        let result = tool_wait_run(&conductor, &wait_args(&id, &[("timeout_secs", 30)]), None);
+        assert_ne!(result.is_error, Some(true));
+        let text = result_text(&result);
+        assert!(text.starts_with("outcome: gate_waiting"), "got: {text}");
+        assert!(text.contains("human_review"), "got: {text}");
+        assert!(text.contains("gate-approve"), "got: {text}");
+    }
+
+    #[test]
+    fn test_wait_run_through_gates_times_out() {
+        let (_f, conductor) = make_test_conductor();
+        let id = make_wait_run(
+            &conductor,
+            "running",
+            "strftime('%Y-%m-%dT%H:%M:%SZ','now')",
+            "datetime('now','+60 seconds')",
+        );
+        add_waiting_gate(&conductor, &id);
+        let mut args = wait_args(&id, &[("timeout_secs", 0)]);
+        args.insert("through_gates".into(), Value::Bool(true));
+        let result = tool_wait_run(&conductor, &args, None);
+        let text = result_text(&result);
+        assert!(text.starts_with("outcome: timeout"), "got: {text}");
     }
 
     #[test]

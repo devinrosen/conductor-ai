@@ -562,11 +562,13 @@ pub fn handle_workflow(
             id,
             timeout,
             stall_after,
+            through_gates,
             json,
         } => {
             let opts = conductor_core::workflow::WaitOptions::with_overrides(
                 timeout.map(std::time::Duration::from_secs),
                 stall_after.map(std::time::Duration::from_secs),
+                through_gates,
             );
             let summary = conductor_core::workflow::wait_for_workflow_run(conn, &id, &opts)?;
             if json {
