@@ -37,6 +37,10 @@ const TOP_LEVEL_FILTER: &str =
 /// `dry_run`. Qualified so it works both with and without the `worktrees` join.
 const DRY_RUN_FILTER: &str = "(:include_dry_run = 1 OR workflow_runs.dry_run = 0)";
 
+/// Predicate for lists that never show dry-run runs (no `include_dry_run` opt-in).
+/// Qualified so it works both with and without the `worktrees` join.
+const NOT_DRY_RUN: &str = "workflow_runs.dry_run = 0";
+
 /// Flags shared by the filtered run lists. `include_dry_run` is off by default, so
 /// smokes stay out of display lists unless asked for.
 #[derive(Clone, Copy, Debug, Default)]
@@ -172,7 +176,7 @@ pub fn list_runs_by_status(
     let placeholders = sql_placeholders(statuses.len());
     let mut conditions = vec![
         format!("status IN ({placeholders})"),
-        "dry_run = 0".to_string(),
+        NOT_DRY_RUN.to_string(),
     ];
     let mut param_values: Vec<String> = statuses.iter().map(|s| s.to_string()).collect();
 
@@ -482,6 +486,7 @@ pub fn list_workflow_runs_filtered(
     conn: &Connection,
     worktree_id: &str,
     status: Option<WorkflowRunStatus>,
+    include_dry_run: bool,
 ) -> Result<Vec<ConductorWorkflowRun>> {
     if let Some(s) = status {
         let status_str = s.to_string();
@@ -490,14 +495,14 @@ pub fn list_workflow_runs_filtered(
             &format!(
                 "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
                      WHERE worktree_id = :worktree_id AND status = :status \
-                       AND dry_run = 0 \
+                       AND {DRY_RUN_FILTER} \
                      ORDER BY started_at DESC"
             ),
-            named_params! { ":worktree_id": worktree_id, ":status": status_str },
+            named_params! { ":worktree_id": worktree_id, ":status": status_str, ":include_dry_run": include_dry_run },
             row_to_conductor_run,
         )
     } else {
-        list_workflow_runs(conn, worktree_id)
+        list_workflow_runs_for_worktree(conn, worktree_id, include_dry_run)
     }
 }
 
@@ -581,7 +586,7 @@ pub fn list_all_workflow_runs(
                  FROM workflow_runs \
                  LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
                  WHERE ({ACTIVE_WORKTREE_GUARD}) \
-                   AND workflow_runs.dry_run = 0 \
+                   AND {NOT_DRY_RUN} \
                  ORDER BY workflow_runs.started_at DESC LIMIT :limit"
         ),
         named_params! { ":limit": limit as i64 },
@@ -684,7 +689,7 @@ pub fn list_workflow_runs_by_repo_id(
                  LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
                  WHERE workflow_runs.repo_id = :repo_id \
                    AND ({ACTIVE_WORKTREE_GUARD}) \
-                   AND workflow_runs.dry_run = 0 \
+                   AND {NOT_DRY_RUN} \
                  ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
         ),
         named_params! { ":repo_id": repo_id, ":limit": limit as i64, ":offset": offset as i64 },
@@ -721,7 +726,7 @@ pub fn list_root_workflow_runs(
         conn,
         &format!(
             "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
-                 WHERE parent_workflow_run_id IS NULL AND dry_run = 0 \
+                 WHERE parent_workflow_run_id IS NULL AND {NOT_DRY_RUN} \
                  ORDER BY started_at DESC LIMIT :limit"
         ),
         named_params! { ":limit": limit as i64 },
@@ -746,7 +751,7 @@ pub fn list_active_non_worktree_workflow_runs(
         &format!(
             "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
                  WHERE parent_workflow_run_id IS NULL \
-                   AND dry_run = 0 \
+                   AND {NOT_DRY_RUN} \
                    AND worktree_id IS NULL \
                    AND (\
                        status IN ('running', 'waiting') \
@@ -823,12 +828,14 @@ pub fn list_workflow_runs_for_repo(
 ) -> Result<Vec<ConductorWorkflowRun>> {
     query_collect(
         conn,
-        "SELECT DISTINCT workflow_runs.* \
+        &format!(
+            "SELECT DISTINCT workflow_runs.* \
              FROM workflow_runs \
              LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
              WHERE (workflow_runs.repo_id = :repo_id OR worktrees.repo_id = :repo_id) \
-               AND workflow_runs.dry_run = 0 \
-             ORDER BY workflow_runs.started_at DESC LIMIT :limit",
+               AND {NOT_DRY_RUN} \
+             ORDER BY workflow_runs.started_at DESC LIMIT :limit"
+        ),
         named_params! { ":repo_id": repo_id, ":limit": limit as i64 },
         row_to_conductor_run,
     )
@@ -851,9 +858,11 @@ pub fn list_active_workflow_runs_for_repo(
             statuses,
             repo_id: Some(repo_id),
             worktree_id: None,
-            include_inactive: false,
             // A running smoke is genuinely active for its few seconds.
-            include_dry_run: true,
+            flags: RunListFlags {
+                include_dry_run: true,
+                ..RunListFlags::default()
+            },
             limit: 500,
             offset: 0,
         },
@@ -868,10 +877,8 @@ pub struct WorkflowRunListFilter<'a> {
     pub repo_id: Option<&'a str>,
     /// Restrict to a single worktree.
     pub worktree_id: Option<&'a str>,
-    /// When false, runs on non-active worktrees are excluded.
-    pub include_inactive: bool,
-    /// When false, dry-run runs (smokes and their children) are excluded.
-    pub include_dry_run: bool,
+    /// `include_inactive` and `include_dry_run` apply; `top_level_only` is ignored.
+    pub flags: RunListFlags,
     pub limit: usize,
     pub offset: usize,
 }
@@ -904,11 +911,11 @@ pub fn list_workflow_runs_page(
         clauses.push("workflow_runs.worktree_id = ?".to_string());
         params.push(rusqlite::types::Value::Text(wt.to_owned()));
     }
-    if !f.include_inactive {
+    if !f.flags.include_inactive {
         clauses.push(format!("({ACTIVE_WORKTREE_GUARD})"));
     }
-    if !f.include_dry_run {
-        clauses.push("workflow_runs.dry_run = 0".to_string());
+    if !f.flags.include_dry_run {
+        clauses.push(NOT_DRY_RUN.to_string());
     }
     let where_sql = clauses.join(" AND ");
     params.push(rusqlite::types::Value::Integer(f.limit as i64));

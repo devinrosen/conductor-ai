@@ -282,8 +282,10 @@ fn page_filter<'a>(
         statuses,
         repo_id: None,
         worktree_id: None,
-        include_inactive,
-        include_dry_run: false,
+        flags: crate::workflow::RunListFlags {
+            include_inactive,
+            ..Default::default()
+        },
         limit,
         offset,
     }
@@ -675,9 +677,13 @@ fn test_list_workflow_runs_filtered_with_status() {
     )
     .unwrap();
 
-    let runs =
-        crate::workflow::list_workflow_runs_filtered(&conn, "w1", Some(WorkflowRunStatus::Running))
-            .unwrap();
+    let runs = crate::workflow::list_workflow_runs_filtered(
+        &conn,
+        "w1",
+        Some(WorkflowRunStatus::Running),
+        false,
+    )
+    .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
     assert!(
@@ -705,7 +711,7 @@ fn test_list_workflow_runs_filtered_none_returns_all() {
     )
     .unwrap();
 
-    let runs = crate::workflow::list_workflow_runs_filtered(&conn, "w1", None).unwrap();
+    let runs = crate::workflow::list_workflow_runs_filtered(&conn, "w1", None, false).unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
     assert!(
@@ -5462,6 +5468,7 @@ fn test_dry_run_runs_hidden_from_display_lists() {
                 &conn,
                 "w1",
                 Some(WorkflowRunStatus::Pending),
+                false,
             )
             .unwrap(),
         ),
@@ -5565,7 +5572,10 @@ fn test_dry_run_runs_shown_with_include_dry_run() {
     let page = crate::workflow::list_workflow_runs_page(
         &conn,
         &crate::workflow::WorkflowRunListFilter {
-            include_dry_run: true,
+            flags: crate::workflow::RunListFlags {
+                include_dry_run: true,
+                ..Default::default()
+            },
             ..page_filter(&[], false, 50, 0)
         },
     )
