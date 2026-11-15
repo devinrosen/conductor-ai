@@ -736,7 +736,18 @@ fn test_list_workflow_runs_by_repo_id_filtered_with_status() {
     )
     .unwrap();
 
-    let runs = crate::workflow::list_workflow_runs_by_repo_id_filtered(&conn, "r1", 50, 0, Some(WorkflowRunStatus::Running), crate::workflow::RunListFlags { include_inactive: false, top_level_only: false, include_dry_run: false })
+    let runs = crate::workflow::list_workflow_runs_by_repo_id_filtered(
+        &conn,
+        "r1",
+        50,
+        0,
+        Some(WorkflowRunStatus::Running),
+        crate::workflow::RunListFlags {
+            include_inactive: false,
+            top_level_only: false,
+            include_dry_run: false,
+        },
+    )
     .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
@@ -765,7 +776,18 @@ fn test_list_workflow_runs_by_repo_id_filtered_none_returns_all() {
     )
     .unwrap();
 
-    let runs = crate::workflow::list_workflow_runs_by_repo_id_filtered(&conn, "r1", 50, 0, None, crate::workflow::RunListFlags { include_inactive: false, top_level_only: false, include_dry_run: false })
+    let runs = crate::workflow::list_workflow_runs_by_repo_id_filtered(
+        &conn,
+        "r1",
+        50,
+        0,
+        None,
+        crate::workflow::RunListFlags {
+            include_inactive: false,
+            top_level_only: false,
+            include_dry_run: false,
+        },
+    )
     .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
@@ -799,7 +821,17 @@ fn test_list_workflow_runs_filtered_paginated_with_status() {
     .unwrap();
 
     // First page: limit=1, offset=0 — exactly one pending run.
-    let page1 = crate::workflow::list_workflow_runs_filtered_paginated(&conn, "w1", Some(WorkflowRunStatus::Pending), 1, 0, crate::workflow::RunListFlags { top_level_only: false, ..Default::default() })
+    let page1 = crate::workflow::list_workflow_runs_filtered_paginated(
+        &conn,
+        "w1",
+        Some(WorkflowRunStatus::Pending),
+        1,
+        0,
+        crate::workflow::RunListFlags {
+            top_level_only: false,
+            ..Default::default()
+        },
+    )
     .unwrap();
     assert_eq!(
         page1.len(),
@@ -808,7 +840,17 @@ fn test_list_workflow_runs_filtered_paginated_with_status() {
     );
 
     // Second page: limit=1, offset=1 — the other pending run.
-    let page2 = crate::workflow::list_workflow_runs_filtered_paginated(&conn, "w1", Some(WorkflowRunStatus::Pending), 1, 1, crate::workflow::RunListFlags { top_level_only: false, ..Default::default() })
+    let page2 = crate::workflow::list_workflow_runs_filtered_paginated(
+        &conn,
+        "w1",
+        Some(WorkflowRunStatus::Pending),
+        1,
+        1,
+        crate::workflow::RunListFlags {
+            top_level_only: false,
+            ..Default::default()
+        },
+    )
     .unwrap();
     assert_eq!(
         page2.len(),
@@ -832,14 +874,32 @@ fn test_list_workflow_runs_filtered_paginated_none_delegates() {
     }
 
     // None — no status filter, pagination alone controls results.
-    let page1 =
-        crate::workflow::list_workflow_runs_filtered_paginated(&conn, "w1", None, 2, 0, crate::workflow::RunListFlags { top_level_only: false, ..Default::default() })
-            .unwrap();
+    let page1 = crate::workflow::list_workflow_runs_filtered_paginated(
+        &conn,
+        "w1",
+        None,
+        2,
+        0,
+        crate::workflow::RunListFlags {
+            top_level_only: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert_eq!(page1.len(), 2, "limit=2 must return exactly 2 runs");
 
-    let page2 =
-        crate::workflow::list_workflow_runs_filtered_paginated(&conn, "w1", None, 2, 2, crate::workflow::RunListFlags { top_level_only: false, ..Default::default() })
-            .unwrap();
+    let page2 = crate::workflow::list_workflow_runs_filtered_paginated(
+        &conn,
+        "w1",
+        None,
+        2,
+        2,
+        crate::workflow::RunListFlags {
+            top_level_only: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert_eq!(
         page2.len(),
         1,
@@ -864,7 +924,17 @@ fn test_list_all_workflow_runs_filtered_paginated_with_status() {
     )
     .unwrap();
 
-    let runs = crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, Some(WorkflowRunStatus::Running), 50, 0, crate::workflow::RunListFlags { include_inactive: false, top_level_only: false, include_dry_run: false })
+    let runs = crate::workflow::list_all_workflow_runs_filtered_paginated(
+        &conn,
+        Some(WorkflowRunStatus::Running),
+        50,
+        0,
+        crate::workflow::RunListFlags {
+            include_inactive: false,
+            top_level_only: false,
+            include_dry_run: false,
+        },
+    )
     .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
@@ -893,7 +963,17 @@ fn test_list_all_workflow_runs_filtered_paginated_none() {
     )
     .unwrap();
 
-    let runs = crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 50, 0, crate::workflow::RunListFlags { include_inactive: false, top_level_only: false, include_dry_run: false })
+    let runs = crate::workflow::list_all_workflow_runs_filtered_paginated(
+        &conn,
+        None,
+        50,
+        0,
+        crate::workflow::RunListFlags {
+            include_inactive: false,
+            top_level_only: false,
+            include_dry_run: false,
+        },
+    )
     .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
@@ -910,7 +990,17 @@ fn test_list_all_workflow_runs_filtered_paginated_excludes_inactive_worktrees() 
     conn.execute("UPDATE worktrees SET status = 'merged' WHERE id = 'w2'", [])
         .unwrap();
 
-    let runs = crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 50, 0, crate::workflow::RunListFlags { include_inactive: false, top_level_only: false, include_dry_run: false })
+    let runs = crate::workflow::list_all_workflow_runs_filtered_paginated(
+        &conn,
+        None,
+        50,
+        0,
+        crate::workflow::RunListFlags {
+            include_inactive: false,
+            top_level_only: false,
+            include_dry_run: false,
+        },
+    )
     .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
@@ -939,9 +1029,18 @@ fn test_list_all_workflow_runs_filtered_paginated_include_inactive() {
     )
     .unwrap();
 
-    let runs =
-        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 50, 0, crate::workflow::RunListFlags { include_inactive: true, top_level_only: false, include_dry_run: false })
-            .unwrap();
+    let runs = crate::workflow::list_all_workflow_runs_filtered_paginated(
+        &conn,
+        None,
+        50,
+        0,
+        crate::workflow::RunListFlags {
+            include_inactive: true,
+            top_level_only: false,
+            include_dry_run: false,
+        },
+    )
+    .unwrap();
     let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
     for r in [&active_run, &merged_run, &abandoned_run] {
         assert!(ids.contains(&r.id.as_str()), "run {} must appear", r.id);
@@ -951,7 +1050,17 @@ fn test_list_all_workflow_runs_filtered_paginated_include_inactive() {
         "must be newest first"
     );
 
-    let pending = crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, Some(WorkflowRunStatus::Pending), 50, 0, crate::workflow::RunListFlags { include_inactive: true, top_level_only: false, include_dry_run: false })
+    let pending = crate::workflow::list_all_workflow_runs_filtered_paginated(
+        &conn,
+        Some(WorkflowRunStatus::Pending),
+        50,
+        0,
+        crate::workflow::RunListFlags {
+            include_inactive: true,
+            top_level_only: false,
+            include_dry_run: false,
+        },
+    )
     .unwrap();
     assert_eq!(pending.len(), 3);
 }
@@ -977,10 +1086,32 @@ fn test_list_workflow_runs_by_repo_id_filtered_include_inactive() {
     .unwrap();
 
     for status in [None, Some(WorkflowRunStatus::Pending)] {
-        let hidden = crate::workflow::list_workflow_runs_by_repo_id_filtered(&conn, &repo_id, 50, 0, status.clone(), crate::workflow::RunListFlags { include_inactive: false, top_level_only: false, include_dry_run: false })
+        let hidden = crate::workflow::list_workflow_runs_by_repo_id_filtered(
+            &conn,
+            &repo_id,
+            50,
+            0,
+            status.clone(),
+            crate::workflow::RunListFlags {
+                include_inactive: false,
+                top_level_only: false,
+                include_dry_run: false,
+            },
+        )
         .unwrap();
         assert!(!hidden.iter().any(|r| r.id == merged_run.id));
-        let shown = crate::workflow::list_workflow_runs_by_repo_id_filtered(&conn, &repo_id, 50, 0, status, crate::workflow::RunListFlags { include_inactive: true, top_level_only: false, include_dry_run: false })
+        let shown = crate::workflow::list_workflow_runs_by_repo_id_filtered(
+            &conn,
+            &repo_id,
+            50,
+            0,
+            status,
+            crate::workflow::RunListFlags {
+                include_inactive: true,
+                top_level_only: false,
+                include_dry_run: false,
+            },
+        )
         .unwrap();
         assert!(shown.iter().any(|r| r.id == merged_run.id));
     }
@@ -5233,18 +5364,49 @@ fn test_list_runs_top_level_only_applies_before_pagination() {
     }
 
     // Children sort first; a page of 2 would be all children without the filter.
-    let unfiltered = crate::workflow::list_workflow_runs_by_repo_id_filtered(&conn, "r1", 2, 0, None, crate::workflow::RunListFlags { include_inactive: false, top_level_only: false, include_dry_run: false })
+    let unfiltered = crate::workflow::list_workflow_runs_by_repo_id_filtered(
+        &conn,
+        "r1",
+        2,
+        0,
+        None,
+        crate::workflow::RunListFlags {
+            include_inactive: false,
+            top_level_only: false,
+            include_dry_run: false,
+        },
+    )
     .unwrap();
     assert!(unfiltered.iter().all(|r| child_ids.contains(&r.id)));
 
-    let top = crate::workflow::list_workflow_runs_by_repo_id_filtered(&conn, "r1", 2, 0, None, crate::workflow::RunListFlags { include_inactive: false, top_level_only: true, include_dry_run: false })
+    let top = crate::workflow::list_workflow_runs_by_repo_id_filtered(
+        &conn,
+        "r1",
+        2,
+        0,
+        None,
+        crate::workflow::RunListFlags {
+            include_inactive: false,
+            top_level_only: true,
+            include_dry_run: false,
+        },
+    )
     .unwrap();
     assert_eq!(top.len(), 1);
     assert_eq!(top[0].id, root.id);
 
-    let all_top =
-        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 2, 0, crate::workflow::RunListFlags { include_inactive: false, top_level_only: true, include_dry_run: false })
-            .unwrap();
+    let all_top = crate::workflow::list_all_workflow_runs_filtered_paginated(
+        &conn,
+        None,
+        2,
+        0,
+        crate::workflow::RunListFlags {
+            include_inactive: false,
+            top_level_only: true,
+            include_dry_run: false,
+        },
+    )
+    .unwrap();
     assert_eq!(all_top.len(), 1);
     assert_eq!(all_top[0].id, root.id);
 }
@@ -5252,7 +5414,9 @@ fn test_list_runs_top_level_only_applies_before_pagination() {
 // ── dry-run runs are hidden from display lists ───────────────────────────
 
 /// A dry-run repo-level run (a smoke) with a dry-run child, as `validate --dry-run` records them.
-fn create_dry_run_pair(conn: &rusqlite::Connection) -> (ConductorWorkflowRun, ConductorWorkflowRun) {
+fn create_dry_run_pair(
+    conn: &rusqlite::Connection,
+) -> (ConductorWorkflowRun, ConductorWorkflowRun) {
     let parent_id = make_parent_id(conn, "w1");
     let mk = |parent: Option<&str>| {
         crate::workflow::create_workflow_run_with_targets(
@@ -5384,14 +5548,14 @@ fn test_dry_run_runs_shown_with_include_dry_run() {
         ..Default::default()
     };
 
-    let by_repo = crate::workflow::list_workflow_runs_by_repo_id_filtered(
-        &conn, "r1", 50, 0, None, flags,
-    )
-    .unwrap();
+    let by_repo =
+        crate::workflow::list_workflow_runs_by_repo_id_filtered(&conn, "r1", 50, 0, None, flags)
+            .unwrap();
     let all = crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 50, 0, flags)
         .unwrap();
-    let wt = crate::workflow::list_workflow_runs_filtered_paginated(&conn, "w1", None, 50, 0, flags)
-        .unwrap();
+    let wt =
+        crate::workflow::list_workflow_runs_filtered_paginated(&conn, "w1", None, 50, 0, flags)
+            .unwrap();
     let wt_all = crate::workflow::list_workflow_runs_for_worktree(&conn, "w1", true).unwrap();
     let page = crate::workflow::list_workflow_runs_page(
         &conn,

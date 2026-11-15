@@ -143,24 +143,14 @@ pub(super) fn tool_list_runs(
                 Err(e) => return tool_err(e),
             };
             match conductor_core::workflow::list_workflow_runs_filtered_paginated(
-                conn,
-                &wt.id,
-                status,
-                limit,
-                offset,
-                flags,
+                conn, &wt.id, status, limit, offset, flags,
             ) {
                 Ok(r) => r,
                 Err(e) => return tool_err(e),
             }
         } else {
             match conductor_core::workflow::list_workflow_runs_by_repo_id_filtered(
-                conn,
-                &repo.id,
-                limit,
-                offset,
-                status,
-                flags,
+                conn, &repo.id, limit, offset, status, flags,
             ) {
                 Ok(r) => r,
                 Err(e) => return tool_err(e),
@@ -201,11 +191,7 @@ pub(super) fn tool_list_runs(
             repos.into_iter().map(|r| (r.id, r.slug)).collect();
 
         let runs = match conductor_core::workflow::list_all_workflow_runs_filtered_paginated(
-            conn,
-            status,
-            limit,
-            offset,
-            flags,
+            conn, status, limit, offset, flags,
         ) {
             Ok(r) => r,
             Err(e) => return tool_err(e),
@@ -1700,7 +1686,11 @@ mod tests {
         };
 
         // (repo, worktree) scopes: all repos, one repo, one worktree.
-        for scope in [None, Some(("dry-test-repo", None)), Some(("dry-test-repo", Some("feat-dry")))] {
+        for scope in [
+            None,
+            Some(("dry-test-repo", None)),
+            Some(("dry-test-repo", Some("feat-dry"))),
+        ] {
             let mut args = empty_args();
             if let Some((repo_slug, wt)) = scope {
                 args.insert("repo".into(), Value::String(repo_slug.into()));
@@ -1710,9 +1700,18 @@ mod tests {
             }
             let default_text = text_of(&args);
             assert!(default_text.contains(&real_id), "{scope:?}: {default_text}");
-            assert!(!default_text.contains(&smoke_id), "{scope:?}: {default_text}");
-            assert!(!default_text.contains(&child_id), "{scope:?}: {default_text}");
-            assert!(!default_text.contains("dry_run: true"), "{scope:?}: {default_text}");
+            assert!(
+                !default_text.contains(&smoke_id),
+                "{scope:?}: {default_text}"
+            );
+            assert!(
+                !default_text.contains(&child_id),
+                "{scope:?}: {default_text}"
+            );
+            assert!(
+                !default_text.contains("dry_run: true"),
+                "{scope:?}: {default_text}"
+            );
 
             args.insert("include_dry_run".into(), Value::Bool(true));
             let text = text_of(&args);
