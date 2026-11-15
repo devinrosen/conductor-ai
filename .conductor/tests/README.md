@@ -2,9 +2,10 @@
 
 Fixture tests for the decision logic in `.conductor/scripts/`: `aggregate-reviews.sh`,
 `show-plan-decisions.sh`, the `detect-*.sh` scripts (including `detect-engine-doc-changes.sh`) with `lib-diff-range.sh`, `fmt-fix.sh`,
-`submit-review.sh`, `pr-body.sh` (the PR description builder) and `verify.sh` (which checks run).
-Plain bash (3.2 compatible), plus `jq`, `git` and `rustfmt`. CI runs them as the **Pipeline Scripts**
-job when `.conductor/scripts/**` or `.conductor/tests/**` changes.
+`submit-review.sh`, `pr-body.sh` (the PR description builder) and `verify.sh` (which checks run), plus
+`scripts/release/bump.sh` (the release commit).
+Plain bash (3.2 compatible), plus `jq`, `git`, `cargo` and `rustfmt`. CI runs them as the **Pipeline Scripts**
+job when `.conductor/scripts/**`, `.conductor/tests/**` or `scripts/release/**` changes.
 
 ```bash
 .conductor/tests/run.sh                      # everything
