@@ -311,26 +311,17 @@ impl RkActionExecutorAdapter {
                         crate::agent::log_parsing::read_log_result(&log_path)
                             .and_then(|r| r.session_id)
                             .or_else(|| {
-                                let conn = self
-                                    .conn
-                                    .lock()
-                                    .map_err(|e| {
-                                        tracing::warn!(
-                                            "step '{}': db lock poisoned, cannot look up session for run {child_run_id}: {e}",
-                                            params.name
-                                        );
-                                    })
-                                    .ok()?;
-                                match crate::agent::AgentManager::new(&conn).get_run(&child_run_id) {
-                                    Ok(run) => run.and_then(|r| r.session_id),
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "step '{}': cannot look up session for run {child_run_id}: {e}",
-                                            params.name
-                                        );
-                                        None
-                                    }
-                                }
+                                with_conn_best_effort(
+                                    &self.conn,
+                                    &params.name,
+                                    &format!("look up session for run {child_run_id}"),
+                                    |conn| {
+                                        Ok(crate::agent::AgentManager::new(conn)
+                                            .get_run(&child_run_id)?
+                                            .and_then(|r| r.session_id))
+                                    },
+                                )
+                                .flatten()
                             })
                     };
                     // A session a human took over interactively (#3163) must not be
@@ -446,30 +437,18 @@ fn headless_resumable_session(
     session: Option<String>,
 ) -> Option<String> {
     let sid = session?;
-    let conn = conn
-        .lock()
-        .map_err(|e| {
-            tracing::warn!(
-                "step '{step}': db lock poisoned, cannot check session ownership for run {child_run_id}: {e}"
-            );
-        })
-        .ok()?;
-    match crate::session::takeover::resumable_session_id(&conn, Some(&sid)) {
-        Ok(resumable) => {
-            if resumable.is_none() {
-                tracing::warn!(
-                    "step '{step}': session {sid} was taken over interactively; not resuming it to finish the turn"
-                );
-            }
-            resumable
-        }
-        Err(e) => {
-            tracing::warn!(
-                "step '{step}': cannot check session ownership for run {child_run_id}: {e}"
-            );
-            None
-        }
+    let resumable = with_conn_best_effort(
+        conn,
+        step,
+        &format!("check session ownership for run {child_run_id}"),
+        |conn| crate::session::takeover::resumable_session_id(conn, Some(&sid)),
+    )?;
+    if resumable.is_none() {
+        tracing::warn!(
+            "step '{step}': session {sid} was taken over interactively; not resuming it to finish the turn"
+        );
     }
+    resumable
 }
 
 /// The prior run id when runkon reused its output as-is. With a correction the
@@ -558,20 +537,26 @@ fn prompt_warnings(agent: &str, prompt: &str) -> Vec<String> {
 }
 
 /// Run a best-effort DB operation: a DB error or poisoned lock is logged with
-/// the step name and `what`, never propagated.
-fn with_conn_best_effort(
+/// the step name and `what`, never propagated. Returns the closure's value, or
+/// `None` after the warning.
+fn with_conn_best_effort<T>(
     conn: &Mutex<rusqlite::Connection>,
     step: &str,
     what: &str,
-    f: impl FnOnce(&rusqlite::Connection) -> crate::error::Result<()>,
-) {
+    f: impl FnOnce(&rusqlite::Connection) -> crate::error::Result<T>,
+) -> Option<T> {
     match conn.lock() {
-        Ok(conn) => {
-            if let Err(e) = f(&conn) {
+        Ok(conn) => match f(&conn) {
+            Ok(v) => Some(v),
+            Err(e) => {
                 tracing::warn!("step '{step}': failed to {what}: {e}");
+                None
             }
+        },
+        Err(e) => {
+            tracing::warn!("step '{step}': db lock poisoned, cannot {what}: {e}");
+            None
         }
-        Err(e) => tracing::warn!("step '{step}': db lock poisoned, cannot {what}: {e}"),
     }
 }
 
@@ -770,6 +755,21 @@ mod tests {
             .unwrap()
             .execute_batch("DROP TABLE agent_runs")
             .unwrap();
+        assert_eq!(
+            headless_resumable_session(&conn, "step", "h1", Some("sess-1".into())),
+            None
+        );
+    }
+
+    #[test]
+    fn finish_turn_does_not_resume_when_lock_is_poisoned() {
+        let conn = std::sync::Arc::new(conn_with_headless_run("sess-1"));
+        let c2 = conn.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = c2.lock().unwrap();
+            panic!("poison");
+        })
+        .join();
         assert_eq!(
             headless_resumable_session(&conn, "step", "h1", Some("sess-1".into())),
             None
