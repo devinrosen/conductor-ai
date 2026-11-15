@@ -111,6 +111,9 @@ pub struct SkippedStep {
 #[derive(Debug, Clone, Serialize)]
 pub struct RunStats {
     pub run_ids: Vec<String>,
+    /// Workflow of the first run in `run_ids` (the top-level run); `workflow_names`
+    /// lists every workflow in the run trees.
+    pub workflow_name: String,
     pub workflow_names: Vec<String>,
     pub status: String,
     pub started_at: Option<String>,
@@ -759,8 +762,14 @@ pub fn collect_run_stats(conn: &Connection, root_run_ids: &[String]) -> Result<R
         .map(|r| r.status.clone())
         .unwrap_or_default();
 
+    let workflow_name = run_by_id
+        .get(root_run_ids[0].as_str())
+        .map(|r| r.workflow_name.clone())
+        .unwrap_or_default();
+
     Ok(RunStats {
         run_ids: root_run_ids.to_vec(),
+        workflow_name,
         workflow_names,
         status,
         started_at: started_raw,
@@ -1682,8 +1691,22 @@ mod tests {
         let s = collect_run_stats(&conn, &["R1".to_string(), "R2".to_string()]).unwrap();
         assert_eq!(s.agent_runs, 2);
         assert!((s.usage.cost_usd - 3.0).abs() < 1e-9);
+        assert_eq!(s.workflow_name, "ticket-to-pr");
         assert_eq!(s.workflow_names, vec!["ticket-to-pr", "iterate-pr"]);
         assert_eq!(s.wall_ms, 2 * 59 * 60_000);
+    }
+
+    #[test]
+    fn workflow_name_is_the_root_run_not_a_child() {
+        let conn = db();
+        wf_run(&conn, "R", "ticket-to-pr", "P1", None);
+        wf_run(&conn, "C", "iterate-pr", "P2", Some("R"));
+        let s = collect_run_stats(&conn, &["R".to_string()]).unwrap();
+        assert_eq!(s.workflow_name, "ticket-to-pr");
+        assert_eq!(s.workflow_names, vec!["ticket-to-pr", "iterate-pr"]);
+        let json = render_run_stats(&conn, &["R".to_string()], &[], true).unwrap();
+        let v: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["workflow_name"], "ticket-to-pr", "{json}");
     }
 
     #[test]
