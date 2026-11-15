@@ -599,7 +599,11 @@ pub fn format_wait_summary(s: &WaitSummary) -> String {
                     out.push_str(&format!("  plan: {p}\n"));
                 }
             }
-            let gate_run = s.gates.first().map(|g| g.run_id.as_str()).unwrap_or(&s.run_id);
+            let gate_run = s
+                .gates
+                .first()
+                .map(|g| g.run_id.as_str())
+                .unwrap_or(&s.run_id);
             out.push_str(&format!(
                 "hint: waiting for a person. Approve with `conductor workflow gate-approve {gate_run}` \
                  (or conductor_approve_gate), then wait again.\n"
@@ -1227,7 +1231,14 @@ mod tests {
     fn child_waiting_gate_reports_child_run() {
         let conn = setup();
         live_run(&conn, "root");
-        insert_run(&conn, "kid", Some("root"), "running", Some("+20 seconds"), "-1 hours");
+        insert_run(
+            &conn,
+            "kid",
+            Some("root"),
+            "running",
+            Some("+20 seconds"),
+            "-1 hours",
+        );
         insert_gate_step(&conn, "g", "kid", "human_review", 1, "waiting", None, false);
         let s = eval(&conn, "root").unwrap();
         assert_eq!(s.outcome, WaitOutcome::GateWaiting);
@@ -1269,7 +1280,14 @@ mod tests {
     #[test]
     fn stalled_beats_gate_waiting() {
         let conn = setup();
-        insert_run(&conn, "r", None, "running", Some("-300 seconds"), "-1 hours");
+        insert_run(
+            &conn,
+            "r",
+            None,
+            "running",
+            Some("-300 seconds"),
+            "-1 hours",
+        );
         conn.execute(
             "INSERT INTO workflow_run_steps \
              (id, workflow_run_id, step_name, role, position, status, started_at, gate_type) \
@@ -1292,7 +1310,14 @@ mod tests {
         ] {
             let conn = setup();
             live_run(&conn, "r");
-            insert_step(&conn, "p", "r", "show-plan-decisions", "-1 minutes", Some("-50 seconds"));
+            insert_step(
+                &conn,
+                "p",
+                "r",
+                "show-plan-decisions",
+                "-1 minutes",
+                Some("-50 seconds"),
+            );
             set_step(&conn, "p", "completed", 0, None);
             conn.execute(
                 "UPDATE workflow_run_steps SET structured_output = :o WHERE id = 'p'",

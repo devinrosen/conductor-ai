@@ -632,7 +632,12 @@ fn workflow_wait_exit_codes() {
 #[test]
 fn workflow_wait_gate_exit_code() {
     let home = tempfile::tempdir().unwrap();
-    let id = insert_wait_run(home.path(), "running", "-1 hours", "datetime('now','+60 seconds')");
+    let id = insert_wait_run(
+        home.path(),
+        "running",
+        "-1 hours",
+        "datetime('now','+60 seconds')",
+    );
     let conn = conductor_core::db::open_database(&home.path().join("conductor.db")).unwrap();
     conn.execute(
         "INSERT INTO workflow_run_steps \
