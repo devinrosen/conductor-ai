@@ -51,9 +51,11 @@ fn unavailable(reason: impl Into<String>) -> ConductorError {
     }
 }
 
-/// An I/O failure that names the path and the cause, so a 500 can be diagnosed.
+/// An I/O failure that keeps the `io::ErrorKind`. The path and OS cause go to the log
+/// only; the message is what the web layer sends to the client, so it names no path.
 fn io_failure(what: &str, path: &Path, e: std::io::Error) -> ConductorError {
-    ConductorError::Workflow(format!("{what} {}: {e}", path.display()))
+    tracing::warn!(path = %path.display(), error = %e, "gate plan: {what}");
+    ConductorError::Io(std::io::Error::new(e.kind(), what.to_string()))
 }
 
 /// Find the run's waiting gate, its `plan_path` and the directory the path must sit in.
@@ -147,10 +149,8 @@ fn own_git_dir(root: &Path) -> Option<PathBuf> {
 pub fn read_gate_plan(target: &GatePlanTarget) -> Result<GatePlan> {
     let root = std::fs::canonicalize(&target.root).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            unavailable(format!(
-                "the worktree {} is not on disk",
-                target.root.display()
-            ))
+            tracing::warn!(path = %target.root.display(), "gate plan: worktree is not on disk");
+            unavailable("the run's worktree is not on disk")
         } else {
             io_failure("could not resolve the worktree", &target.root, e)
         }
@@ -172,7 +172,8 @@ fn read_plan_within(target: &GatePlanTarget, root: &Path, allowed: &[PathBuf]) -
     // Resolves `..` and symlinks, so an escape through either is caught below.
     let resolved = std::fs::canonicalize(&joined).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            unavailable(format!("the plan file {} does not exist", joined.display()))
+            tracing::warn!(path = %joined.display(), "gate plan: plan file does not exist");
+            unavailable("the plan file does not exist")
         } else {
             io_failure("could not resolve the plan file", &joined, e)
         }
@@ -450,7 +451,7 @@ mod tests {
     }
 
     #[test]
-    fn unreadable_plan_file_is_an_io_error_naming_the_path() {
+    fn unreadable_plan_file_keeps_its_kind_and_hides_the_path() {
         use std::os::unix::fs::PermissionsExt;
         let (_tmp, _main, wt) = repo_with_worktree();
         let plan = wt.join("PLAN.md");
@@ -460,8 +461,14 @@ mod tests {
             return; // running as root: permissions don't apply
         }
         let err = read_gate_plan(&target(&wt, "PLAN.md")).unwrap_err();
-        assert!(matches!(err, ConductorError::Workflow(_)), "{err:?}");
-        assert!(err.to_string().contains("PLAN.md"), "{err}");
+        match &err {
+            ConductorError::Io(io) => {
+                assert_eq!(io.kind(), std::io::ErrorKind::PermissionDenied)
+            }
+            other => panic!("expected Io, got {other:?}"),
+        }
+        let shown = err.to_string();
+        assert!(!shown.contains(wt.to_str().unwrap()), "{shown}");
     }
 
     #[test]
