@@ -25,7 +25,7 @@ workflow verify-and-merge {
   script post-verification {
     run = ".conductor/scripts/post-verification.sh"
     as  = "reviewer"
-    env = { PRIOR_OUTPUT = "{{prior_output}}" PR_NUMBER = "{{pr_number}}" HEAD_SHA = "{{head_sha}}" DRY_RUN = "{{dry_run}}" }
+    env = { PRIOR_OUTPUT = "{{prior_output}}" PR_NUMBER = "{{pr_number}}" HEAD_SHA = "{{head_sha}}" DRY_RUN = "{{dry_run}}" TRUSTED_REVIEW_BOTS = "conductor-ai-reviewer[bot]" }
   }
 
   if confirm {

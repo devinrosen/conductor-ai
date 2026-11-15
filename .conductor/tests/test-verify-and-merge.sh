@@ -322,6 +322,17 @@ assert_exit 1
 assert_stderr_contains "conflicts with release/0.22.2"
 assert_eq "" "$(git status --porcelain)" "clean tree after the aborted merge"
 
+case_begin "behind the base, merge fails without a conflict: git's message is kept"
+new_case
+git checkout -q main && commit_file "$repo" base.txt newer "newer base" && git push -q origin main:release/0.22.2 && git checkout -q feature
+mkdir -p "$repo/.git/hooks" && printf '#!/bin/sh\necho "pre-merge hook said no" >&2\nexit 1\n' > "$repo/.git/hooks/pre-merge-commit" && chmod +x "$repo/.git/hooks/pre-merge-commit"
+git -C "$repo" config core.hooksPath "$repo/.git/hooks"
+run_ready
+assert_exit 1
+assert_stderr_contains "merging origin/release/0.22.2 failed"
+assert_stderr_contains "pre-merge hook said no"
+assert_eq "" "$(git status --porcelain)" "clean tree after the aborted merge"
+
 # --- post-verification.sh ---
 
 run_post() { # PRIOR [ENV=VAL...]
@@ -344,7 +355,7 @@ assert_eq "yes" "$(grep -q 'ran a\\|b line two' "$stub/comment" && echo yes || e
 
 case_begin "post-verification: a report already posted for this head is not posted again"
 new_case
-echo "[{\"body\": \"<!-- conductor-verification -->\\n## x\\n\\nHead: \`${head:0:7}\`. Verdict: \`pass\`.\"}]" > "$stub/comments.json"
+echo "[{\"author_association\": \"MEMBER\", \"body\": \"<!-- conductor-verification -->\\n## x\\n\\nHead: \`${head:0:7}\`. Verdict: \`pass\`.\"}]" > "$stub/comments.json"
 run_post "$OK_REPORT"
 assert_exit 0
 assert_marker verified
@@ -352,7 +363,7 @@ assert_eq "no" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment poste
 
 case_begin "post-verification: an earlier failing report at the same head does not suppress a passing one"
 new_case
-echo "[{\"body\": \"<!-- conductor-verification -->\\n## x\\n\\nHead: \`${head:0:7}\`. Verdict: \`fail\`.\"}]" > "$stub/comments.json"
+echo "[{\"author_association\": \"MEMBER\", \"body\": \"<!-- conductor-verification -->\\n## x\\n\\nHead: \`${head:0:7}\`. Verdict: \`fail\`.\"}]" > "$stub/comments.json"
 run_post "$OK_REPORT"
 assert_exit 0
 assert_marker verified
@@ -360,10 +371,24 @@ assert_eq "yes" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment post
 
 case_begin "post-verification: a report for an older head does not block the post"
 new_case
-echo '[{"body": "<!-- conductor-verification -->\nHead: `abc1234`."}]' > "$stub/comments.json"
+echo '[{"author_association": "MEMBER", "body": "<!-- conductor-verification -->\nHead: `abc1234`."}]' > "$stub/comments.json"
 run_post "$OK_REPORT"
 assert_exit 0
 assert_eq "yes" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment posted"
+
+case_begin "post-verification: a look-alike report from an untrusted author does not suppress the post"
+new_case
+echo "[{\"author_association\": \"NONE\", \"user\": {\"login\": \"someone\", \"type\": \"User\"}, \"body\": \"<!-- conductor-verification -->\\n## x\\n\\nHead: \`${head:0:7}\`. Verdict: \`pass\`.\"}]" > "$stub/comments.json"
+run_post "$OK_REPORT"
+assert_exit 0
+assert_eq "yes" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment posted"
+
+case_begin "post-verification: a report by a listed bot counts as already posted"
+new_case
+echo "[{\"author_association\": \"NONE\", \"user\": {\"login\": \"conductor-ai-reviewer[bot]\", \"type\": \"Bot\"}, \"body\": \"<!-- conductor-verification -->\\n## x\\n\\nHead: \`${head:0:7}\`. Verdict: \`pass\`.\"}]" > "$stub/comments.json"
+run_post "$OK_REPORT" TRUSTED_REVIEW_BOTS="conductor-ai-reviewer[bot]"
+assert_exit 0
+assert_eq "no" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment posted"
 
 case_begin "post-verification: failed verification posts, then exits 1"
 new_case
@@ -374,7 +399,7 @@ assert_eq "yes" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment post
 
 case_begin "post-verification: a failing report already posted for this head is not posted again"
 new_case
-echo "[{\"body\": \"<!-- conductor-verification -->\\n## x\\n\\nHead: \`${head:0:7}\`. Verdict: \`fail\`.\"}]" > "$stub/comments.json"
+echo "[{\"author_association\": \"MEMBER\", \"body\": \"<!-- conductor-verification -->\\n## x\\n\\nHead: \`${head:0:7}\`. Verdict: \`fail\`.\"}]" > "$stub/comments.json"
 run_post "$BAD_REPORT"
 assert_exit 1
 assert_stderr_contains "verification failed: it does not work"
@@ -382,7 +407,7 @@ assert_eq "no" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment poste
 
 case_begin "post-verification: a failing report posts after an earlier pass at the same head"
 new_case
-echo "[{\"body\": \"<!-- conductor-verification -->\\n## x\\n\\nHead: \`${head:0:7}\`. Verdict: \`pass\`.\"}]" > "$stub/comments.json"
+echo "[{\"author_association\": \"MEMBER\", \"body\": \"<!-- conductor-verification -->\\n## x\\n\\nHead: \`${head:0:7}\`. Verdict: \`pass\`.\"}]" > "$stub/comments.json"
 run_post "$BAD_REPORT"
 assert_exit 1
 assert_eq "yes" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment posted"

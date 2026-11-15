@@ -137,9 +137,15 @@ if ! git merge-base --is-ancestor "origin/${BASE_BRANCH}" HEAD; then
   if is_true "${DRY_RUN}"; then
     refuse "branch does not contain origin/${BASE_BRANCH} (dry run: not merging it in)"
   fi
-  if ! git merge --no-edit "origin/${BASE_BRANCH}" >/dev/null 2>&1; then
+  if ! MERGE_OUT=$(git merge --no-edit "origin/${BASE_BRANCH}" 2>&1); then
+    # Unmerged paths mean a real conflict; anything else (no git identity, a hook,
+    # unrelated histories, a dirty index) keeps git's own message.
+    CONFLICTED=$(git ls-files -u | head -1)
     git merge --abort >/dev/null 2>&1 || true
-    refuse "branch conflicts with ${BASE_BRANCH}; run rebase-and-fix"
+    if [ -n "${CONFLICTED}" ]; then
+      refuse "branch conflicts with ${BASE_BRANCH}; run rebase-and-fix"
+    fi
+    refuse "merging origin/${BASE_BRANCH} failed: $(printf '%s' "${MERGE_OUT}" | tr '\n' ' ' | head -c 300)"
   fi
   git_push_retry origin HEAD >/dev/null || refuse "merged ${BASE_BRANCH} into the branch but the push failed"
   refuse "merged ${BASE_BRANCH} into the branch (new head $(git rev-parse --short HEAD)); re-review with iterate-pr, then re-run verify-and-merge"

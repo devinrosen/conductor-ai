@@ -6,6 +6,7 @@
 #
 # Fails closed: an unreadable report, a head that moved, or a working tree the agent
 # changed exits 1 without posting, so nothing the agent altered can be merged.
+# TRUSTED_REVIEW_BOTS: bot logins whose earlier report counts as already posted.
 set -euo pipefail
 
 # shellcheck source=lib-gh-retry.sh
@@ -58,8 +59,13 @@ else
   # a pass after an earlier fail at the same head still posts.
   VERDICT=pass; [ "${VERIFIED}" = "true" ] || VERDICT=fail
   OWNER_REPO=$(gh_retry gh repo view --json nameWithOwner -q .nameWithOwner) || refuse "could not resolve the repository"
-  EXISTING=$(gh_retry gh api --paginate "repos/${OWNER_REPO}/issues/${PR_NUMBER}/comments" | jq -s --arg sha "${HEAD_SHA:0:7}" --arg verdict "${VERDICT}" '
-    [ add // [] | .[] | select((.body // "") | contains("<!-- conductor-verification -->"))
+  # Only a report from a trusted author counts (the same rule as check-pr-ready's review
+  # check): anyone else's look-alike comment must not suppress the real report.
+  EXISTING=$(gh_retry gh api --paginate "repos/${OWNER_REPO}/issues/${PR_NUMBER}/comments" | jq -s --arg sha "${HEAD_SHA:0:7}" --arg verdict "${VERDICT}" --arg bots "${TRUSTED_REVIEW_BOTS:-}" '
+    ($bots | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""))) as $trusted_bots
+    | [ add // [] | .[] | select((.body // "") | contains("<!-- conductor-verification -->"))
+      | select((.author_association as $a | ["OWNER","MEMBER","COLLABORATOR"] | index($a))
+               or ((.user.type // "") == "Bot" and ((.user.login // "") as $l | $trusted_bots | index($l))))
       | select((.body // "") | contains("Head: `" + $sha + "`. Verdict: `" + $verdict + "`")) ] | length') \
     || refuse "could not list the comments of PR #${PR_NUMBER}"
   if [ "${EXISTING}" -gt 0 ]; then
