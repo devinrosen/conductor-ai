@@ -199,11 +199,15 @@ mod tests {
         let conn = &conductor.conn;
 
         let wf = create_list_run(conn, "wf", None, None);
+        // Older schemas enforce a foreign key on parent_run_id; switch it off
+        // so the dangling parent can be set up.
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
         conn.execute(
             "UPDATE workflow_runs SET parent_run_id = ?1 WHERE id = ?2",
             rusqlite::params!["01NOSUCHPARENT", wf],
         )
         .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
 
         let err = resolve_link_run_id(conn, &wf).unwrap_err();
         assert!(err.contains(&wf), "{err}");
