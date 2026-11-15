@@ -2,7 +2,7 @@
 
 Fixture tests for the decision logic in `.conductor/scripts/`: `aggregate-reviews.sh`,
 `show-plan-decisions.sh`, the `detect-*.sh` scripts (including `detect-engine-doc-changes.sh`) with `lib-diff-range.sh`, `fmt-fix.sh`,
-`submit-review.sh`, `pr-body.sh` (the PR description builder) and `verify.sh` (which checks run), plus
+`submit-review.sh`, `check-pr-ready.sh`, `post-verification.sh` and `squash-merge.sh` (verify-and-merge), `pr-body.sh` (the PR description builder) and `verify.sh` (which checks run), plus
 `scripts/release/bump.sh` (the release commit).
 Plain bash (3.2 compatible), plus `jq`, `git`, `cargo` and `rustfmt`. CI runs them as the **Pipeline Scripts**
 job when `.conductor/scripts/**`, `.conductor/tests/**` or `scripts/release/**` changes.
@@ -31,7 +31,7 @@ Pass JSON strings with `jq --arg`.
 
 `test-submit-review.sh` puts a stub `gh` first on `PATH` (`write_stub`). Files in `$GH_STUB_DIR`
 drive it: `user` (without it `gh api user` fails like a GitHub App token), `author`, `poster`,
-`reviews.json` (one JSON array per page; `gh pr review` appends to the last) and `drop_post`. A call
+`reviews.json` (one JSON array per page; `gh pr review` appends to the last) and `drop_post`. `test-verify-and-merge.sh` has its own stub, driven by `pr.json`, `reviews.json`, `checks.json` and `issues/N`, which logs `gh pr merge`, `gh pr comment` and `gh issue close` calls. A call
 the stub doesn't know fails, so a test can't reach the network. Copy it for another script that calls `gh`.
 
 ## Stubbing cargo
