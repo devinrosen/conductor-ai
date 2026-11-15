@@ -315,7 +315,7 @@ fn build_summary(
 
 /// The `plan_path` the step just before `step` (same run) stored in its structured output.
 /// An empty value, a missing key or malformed JSON gives `None`.
-fn preceding_plan_path(
+pub(crate) fn preceding_plan_path(
     conn: &Connection,
     step: &crate::workflow::WorkflowRunStep,
 ) -> Result<Option<String>> {

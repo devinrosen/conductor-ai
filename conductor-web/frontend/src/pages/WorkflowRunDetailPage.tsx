@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, Link } from "react-router";
 import { api } from "../api/client";
-import type { WorkflowRun, WorkflowRunStep } from "../api/types";
+import type { GatePlan, WorkflowRun, WorkflowRunStep } from "../api/types";
 import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { TrainProgress } from "../components/shared/TrainProgress";
@@ -82,6 +82,9 @@ export function WorkflowRunDetailPage() {
   const [gateSelections, setGateSelections] = useState<Set<string>>(new Set());
   const [gateSubmitting, setGateSubmitting] = useState(false);
   const [gateError, setGateError] = useState<string | null>(null);
+  const [gatePlan, setGatePlan] = useState<GatePlan | null>(null);
+  const [gatePlanError, setGatePlanError] = useState<string | null>(null);
+  const [gatePlanLoading, setGatePlanLoading] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -194,7 +197,18 @@ export function WorkflowRunDetailPage() {
     setGateFeedback("");
     setGateSelections(new Set());
     setGateError(null);
+    setGatePlan(null);
+    setGatePlanError(null);
+    setGatePlanLoading(true);
     setGateModalOpen(true);
+    // The plan is context for the decision; a failed fetch never blocks approve/reject.
+    api
+      .getGatePlan(step.workflow_run_id)
+      .then((plan) => setGatePlan(plan))
+      .catch((err) =>
+        setGatePlanError(err instanceof Error ? err.message : "Failed to load plan"),
+      )
+      .finally(() => setGatePlanLoading(false));
   }
 
   function toggleChildExpand(childRunId: string) {
@@ -579,7 +593,7 @@ export function WorkflowRunDetailPage() {
             role="dialog"
             aria-modal="true"
             aria-label={`Gate: ${gateStep.step_name}`}
-            className="bg-white rounded-lg shadow-lg max-w-lg w-full mx-4"
+            className={`bg-white rounded-lg shadow-lg w-full mx-4 max-h-[90vh] overflow-y-auto ${gatePlan ? "max-w-3xl" : "max-w-lg"}`}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="px-6 py-4 border-b border-gray-200">
@@ -600,6 +614,30 @@ export function WorkflowRunDetailPage() {
                   <div className="px-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-md text-gray-800 whitespace-pre-wrap">
                     {gateStep.gate_prompt}
                   </div>
+                </div>
+              )}
+
+              {gatePlanLoading && (
+                <p className="text-xs text-gray-400">Loading plan…</p>
+              )}
+              {gatePlanError && (
+                <p className="text-xs text-red-600">Could not load the plan: {gatePlanError}</p>
+              )}
+              {gatePlan && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Plan</label>
+                  <p className="text-xs text-gray-400 font-mono break-all mb-1">
+                    {gatePlan.plan_path}
+                  </p>
+                  <pre className="max-h-[50vh] overflow-y-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-xs bg-gray-50 border border-gray-200 rounded-md text-gray-800">
+                    {gatePlan.content}
+                  </pre>
+                  {gatePlan.truncated && (
+                    <p className="text-xs text-amber-600 mt-1">
+                      Showing the first {Math.round(gatePlan.content.length / 1024)} KiB of{" "}
+                      {Math.round(gatePlan.size_bytes / 1024)} KiB.
+                    </p>
+                  )}
                 </div>
               )}
 

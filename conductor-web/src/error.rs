@@ -39,12 +39,14 @@ impl IntoResponse for ApiError {
                     | ConductorError::TicketNotFound { .. }
                     | ConductorError::WorkflowRunNotFound { .. }
                     | ConductorError::WorkflowStepNotFound { .. }
+                    | ConductorError::GatePlanUnavailable { .. }
                     | ConductorError::WorkflowStepNotInRun { .. }
                     | ConductorError::AgentRunNotFound { .. }
                     | ConductorError::FeedbackNotFound { .. }
                     | ConductorError::AgentRunNotInConversation { .. }
                     | ConductorError::FeedbackRunMismatch { .. }
                     | ConductorError::ConversationNotFound { .. } => StatusCode::NOT_FOUND,
+                    ConductorError::PathNotAllowed { .. } => StatusCode::FORBIDDEN,
                     ConductorError::RepoAlreadyExists { .. }
                     | ConductorError::WorktreeAlreadyExists { .. }
                     | ConductorError::IssueSourceAlreadyExists { .. }

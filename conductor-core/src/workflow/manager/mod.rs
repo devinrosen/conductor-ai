@@ -15,6 +15,7 @@
 pub(crate) mod definitions;
 pub(crate) mod failure_chain;
 pub(crate) mod fan_out;
+pub(crate) mod gate_plan;
 mod helpers;
 pub(crate) mod lifecycle;
 pub(crate) mod queries;

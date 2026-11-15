@@ -1571,6 +1571,44 @@ pub async fn get_workflow_step_log(
 
 #[utoipa::path(
     get,
+    path = "/api/workflows/runs/{id}/gate/plan",
+    params(
+        ("id" = String, Path, description = "Workflow run ID"),
+    ),
+    responses(
+        (status = 200, description = "The plan the waiting gate asks to review", body = conductor_core::workflow::GatePlan),
+        (status = 403, description = "plan_path is outside the run's worktree and git dir"),
+        (status = 404, description = "No waiting gate, no plan_path, or the file is missing"),
+    ),
+    tag = "workflows",
+)]
+/// GET /api/workflows/runs/{id}/gate/plan
+///
+/// The contents of the waiting gate's `plan_path` (from the preceding step's structured
+/// output), capped at 256 KiB. Only files inside the run's worktree or its git dir.
+pub async fn get_gate_plan(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> Result<Json<conductor_core::workflow::GatePlan>, ApiError> {
+    use conductor_core::workflow::{read_gate_plan, resolve_gate_plan_target};
+
+    // Hold the DB lock only for the DB queries; the file and git work runs off it.
+    let target = {
+        let db = state.db.lock().await;
+        resolve_gate_plan_target(&db, &run_id)?
+    };
+    let plan = tokio::task::spawn_blocking(move || read_gate_plan(&target))
+        .await
+        .map_err(|e| {
+            ApiError::Core(ConductorError::Workflow(format!(
+                "plan read task failed: {e}"
+            )))
+        })??;
+    Ok(Json(plan))
+}
+
+#[utoipa::path(
+    get,
     path = "/api/workflows/runs/{id}/children",
     params(
         ("id" = String, Path, description = "Workflow run ID"),
@@ -3071,6 +3109,140 @@ mod tests {
         .unwrap()
         .id
         .clone()
+    }
+
+    // --- get_gate_plan tests ---
+
+    /// A run waiting at a gate whose preceding step emitted `plan_path`; the run's
+    /// worktree is `root`.
+    async fn seed_plan_gate(state: &AppState, root: &std::path::Path, plan_path: &str) -> String {
+        let run_id = seed_workflow_fixtures(state).await;
+        let db = state.db.lock().await;
+        db.execute(
+            "UPDATE worktrees SET path = ?1 WHERE id = 'w1'",
+            [root.to_str().unwrap()],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE workflow_runs SET worktree_id = 'w1' WHERE id = ?1",
+            [&run_id],
+        )
+        .unwrap();
+        let out = serde_json::json!({ "plan_path": plan_path }).to_string();
+        db.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, position, status, started_at, structured_output) \
+             VALUES ('p1', ?1, 'plan', 'actor', 0, 'completed', '2026-01-01T00:00:00Z', ?2)",
+            rusqlite::params![run_id, out],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, position, status, started_at, gate_type) \
+             VALUES ('g1', ?1, 'human_review', 'gate', 1, 'waiting', '2026-01-01T00:00:01Z', 'human_review')",
+            [&run_id],
+        )
+        .unwrap();
+        run_id
+    }
+
+    #[tokio::test]
+    async fn gate_plan_without_waiting_gate_is_404() {
+        let state = empty_state();
+        let run_id = seed_workflow_fixtures(&state).await;
+        let (status, _) =
+            get_response(&format!("/api/workflows/runs/{run_id}/gate/plan"), state).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn gate_plan_returns_the_file_inside_the_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("PLAN.md"), "# the plan").unwrap();
+        let state = empty_state();
+        let plan = tmp.path().join("PLAN.md");
+        let run_id = seed_plan_gate(&state, tmp.path(), plan.to_str().unwrap()).await;
+        let (status, body) =
+            get_response(&format!("/api/workflows/runs/{run_id}/gate/plan"), state).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["content"], "# the plan");
+        assert_eq!(body["truncated"], false);
+    }
+
+    #[tokio::test]
+    async fn gate_plan_without_plan_path_is_404() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = empty_state();
+        let run_id = seed_plan_gate(&state, tmp.path(), "PLAN.md").await;
+        state
+            .db
+            .lock()
+            .await
+            .execute(
+                "UPDATE workflow_run_steps SET structured_output = '{}' WHERE id = 'p1'",
+                [],
+            )
+            .unwrap();
+        let (status, _) =
+            get_response(&format!("/api/workflows/runs/{run_id}/gate/plan"), state).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn gate_plan_for_a_run_with_no_worktree_or_repo_is_404() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = empty_state();
+        let run_id = seed_plan_gate(&state, tmp.path(), "PLAN.md").await;
+        state
+            .db
+            .lock()
+            .await
+            .execute(
+                "UPDATE workflow_runs SET worktree_id = NULL, repo_id = NULL WHERE id = ?1",
+                [&run_id],
+            )
+            .unwrap();
+        let (status, _) =
+            get_response(&format!("/api/workflows/runs/{run_id}/gate/plan"), state).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn gate_plan_with_a_missing_file_is_404() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = empty_state();
+        let run_id = seed_plan_gate(&state, tmp.path(), "NOPE.md").await;
+        let (status, body) =
+            get_response(&format!("/api/workflows/runs/{run_id}/gate/plan"), state).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    }
+
+    #[tokio::test]
+    async fn gate_plan_over_the_cap_is_truncated() {
+        let cap = conductor_core::workflow::GATE_PLAN_MAX_BYTES as usize;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("PLAN.md"), vec![b'a'; cap + 10]).unwrap();
+        let state = empty_state();
+        let run_id = seed_plan_gate(&state, tmp.path(), "PLAN.md").await;
+        let (status, body) =
+            get_response(&format!("/api/workflows/runs/{run_id}/gate/plan"), state).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["truncated"], true);
+        assert_eq!(body["content"].as_str().unwrap().len(), cap);
+        assert_eq!(body["size_bytes"], (cap + 10) as u64);
+    }
+
+    #[tokio::test]
+    async fn gate_plan_outside_the_worktree_is_403() {
+        let wt = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        std::fs::write(other.path().join("secret.txt"), "s").unwrap();
+        let state = empty_state();
+        let secret = other.path().join("secret.txt");
+        let run_id = seed_plan_gate(&state, wt.path(), secret.to_str().unwrap()).await;
+        let (status, _) =
+            get_response(&format!("/api/workflows/runs/{run_id}/gate/plan"), state).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

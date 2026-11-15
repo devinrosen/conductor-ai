@@ -80,6 +80,9 @@ pub use manager::fan_out::{
     reset_running_items_without_child_run, set_fan_out_total, skip_fan_out_items_by_item_ids,
     update_fan_out_item_running, update_fan_out_item_terminal,
 };
+pub use manager::gate_plan::{
+    read_gate_plan, resolve_gate_plan_target, GatePlan, GatePlanTarget, GATE_PLAN_MAX_BYTES,
+};
 pub use manager::lifecycle::{
     cancel_run, create_workflow_run, create_workflow_run_with_targets, fail_workflow_run,
     mark_run_resuming, persist_workflow_metrics, set_dismissed, set_waiting_blocked_on,
