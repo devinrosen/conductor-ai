@@ -81,12 +81,18 @@ macro_rules! impl_rk_item_provider_trait {
             }
             fn items(
                 &self,
-                _ctx: &dyn runkon_flow::traits::run_context::RunContext,
+                ctx: &dyn runkon_flow::traits::run_context::RunContext,
                 _info: &runkon_flow::traits::item_provider::ProviderInfo,
                 scope: Option<&dyn std::any::Any>,
                 filter: &HashMap<String, String>,
             ) -> Result<Vec<runkon_flow::traits::item_provider::FanOutItem>, EngineError> {
-                delegate_items(&self.conn, &self.config, scope, filter, self.provider())
+                delegate_items(
+                    &self.conn,
+                    &self.config,
+                    scope,
+                    filter,
+                    self.items_provider(ctx),
+                )
             }
             fn supports_ordered(&self) -> bool {
                 self.provider().supports_ordered()
@@ -118,6 +124,12 @@ macro_rules! impl_rk_item_provider {
             fn provider(&self) -> impl ItemProvider {
                 $inner
             }
+            fn items_provider(
+                &self,
+                _ctx: &dyn runkon_flow::traits::run_context::RunContext,
+            ) -> impl ItemProvider {
+                self.provider()
+            }
         }
         impl_rk_item_provider_trait!($name, $provider_name);
     };
@@ -145,6 +157,12 @@ macro_rules! impl_rk_item_provider {
             fn provider(&self) -> impl ItemProvider {
                 ($make_provider)(self.repo_id.clone())
             }
+            fn items_provider(
+                &self,
+                _ctx: &dyn runkon_flow::traits::run_context::RunContext,
+            ) -> impl ItemProvider {
+                self.provider()
+            }
         }
         impl_rk_item_provider_trait!($name, $provider_name);
     };
@@ -169,10 +187,44 @@ impl_rk_item_provider!(
     crate::workflow::item_provider::workflow_runs::WorkflowRunsProvider
 );
 
-// WorktreesProvider requires repo_id; worktree_id is not available in this context.
-impl_rk_item_provider!(RkWorktreesItemProvider, "worktrees", repo_id, |repo_id| {
-    crate::workflow::item_provider::worktrees::WorktreesProvider::new(repo_id, None)
-});
+/// Hand-written (not macro-generated) because `items()` also reads the parent
+/// run's worktree id from the run context: `foreach over worktrees` without a
+/// `scope.base_branch` lists the worktrees based on the parent's branch.
+pub(crate) struct RkWorktreesItemProvider {
+    conn: Arc<Mutex<rusqlite::Connection>>,
+    config: crate::config::Config,
+    repo_id: Option<String>,
+}
+
+impl RkWorktreesItemProvider {
+    pub(crate) fn new(
+        conn: Arc<Mutex<rusqlite::Connection>>,
+        config: crate::config::Config,
+        repo_id: Option<String>,
+    ) -> Self {
+        Self {
+            conn,
+            config,
+            repo_id,
+        }
+    }
+    fn provider(&self) -> impl ItemProvider {
+        crate::workflow::item_provider::worktrees::WorktreesProvider::new(
+            self.repo_id.clone(),
+            None,
+        )
+    }
+    fn items_provider(
+        &self,
+        ctx: &dyn runkon_flow::traits::run_context::RunContext,
+    ) -> impl ItemProvider {
+        crate::workflow::item_provider::worktrees::WorktreesProvider::new(
+            self.repo_id.clone(),
+            ctx.get(crate::workflow::engine_keys::WORKTREE_ID),
+        )
+    }
+}
+impl_rk_item_provider_trait!(RkWorktreesItemProvider, "worktrees");
 
 #[cfg(test)]
 mod tests {
@@ -225,5 +277,40 @@ mod tests {
             result.unwrap().is_empty(),
             "dependencies for nonexistent step should be empty"
         );
+    }
+
+    #[test]
+    fn rk_worktrees_provider_uses_parent_worktree_from_run_context() {
+        use runkon_flow::traits::item_provider::{ItemProvider as RkItemProvider, ProviderInfo};
+        use runkon_flow::traits::run_context::NoopRunContext;
+
+        let conn = crate::test_helpers::setup_db();
+        // setup_db seeds repo r1 with worktree w1 (branch feat/test).
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, base_branch, created_at) \
+             VALUES ('w-child', 'r1', 'child', 'feat/child', '/tmp/ws', 'active', 'feat/test', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        let provider = RkWorktreesItemProvider::new(
+            Arc::new(Mutex::new(conn)),
+            crate::config::Config::default(),
+            Some("r1".to_string()),
+        );
+        let info = ProviderInfo::default();
+        let scope = provider.parse_scope(None).unwrap();
+
+        let vars = HashMap::from([(crate::workflow::engine_keys::WORKTREE_ID, "w1".to_string())]);
+        let ctx = NoopRunContext::with_vars(vars);
+        let items = provider
+            .items(&ctx, &info, scope.as_deref(), &HashMap::new())
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].item_id, "w-child");
+
+        let empty = NoopRunContext::default();
+        assert!(provider
+            .items(&empty, &info, scope.as_deref(), &HashMap::new())
+            .is_err());
     }
 }
