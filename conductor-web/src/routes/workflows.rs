@@ -864,6 +864,16 @@ pub struct ListAllRunsQuery {
     /// Include runs on merged or abandoned worktrees. Defaults to true when `worktree` is given
     /// or every requested status is terminal (completed, failed, cancelled), otherwise false.
     pub include_inactive: Option<bool>,
+    /// Include dry-run runs (`conductor workflow validate --dry-run` smokes and runs started with
+    /// dry run) and their child runs. Defaults to false.
+    pub include_dry_run: Option<bool>,
+}
+
+/// Query params for GET /api/worktrees/{id}/workflows/runs
+#[derive(Deserialize, utoipa::IntoParams)]
+pub struct WorktreeRunsQuery {
+    /// Include dry-run runs and their child runs. Defaults to false.
+    pub include_dry_run: Option<bool>,
 }
 
 const DEFAULT_RUNS_LIMIT: usize = 50;
@@ -894,7 +904,7 @@ fn default_include_inactive(
     ),
     tag = "workflows",
 )]
-/// GET /api/workflows/runs?status=<csv>&repo=<id|slug>&worktree=<id>&limit=<n>&offset=<n>&include_inactive=<bool>
+/// GET /api/workflows/runs?status=<csv>&repo=<id|slug>&worktree=<id>&limit=<n>&offset=<n>&include_inactive=<bool>&include_dry_run=<bool>
 pub async fn list_all_workflow_runs_handler(
     State(state): State<AppState>,
     Query(params): Query<ListAllRunsQuery>,
@@ -951,6 +961,7 @@ pub async fn list_all_workflow_runs_handler(
             repo_id: repo_id.as_deref(),
             worktree_id: params.worktree.as_deref(),
             include_inactive,
+            include_dry_run: params.include_dry_run.unwrap_or(false),
             limit: effective_runs_limit(params.limit),
             offset: params.offset.unwrap_or(0),
         },
@@ -1163,19 +1174,25 @@ pub async fn list_all_workflow_runs_handler(
     path = "/api/worktrees/{id}/workflows/runs",
     params(
         ("id" = String, Path, description = "Worktree ID"),
+        WorktreeRunsQuery,
     ),
     responses(
         (status = 200, description = "List of workflow runs for worktree", body = Vec<ConductorWorkflowRun>),
     ),
     tag = "workflows",
 )]
-/// GET /api/worktrees/{id}/workflows/runs
+/// GET /api/worktrees/{id}/workflows/runs?include_dry_run=<bool>
 pub async fn list_workflow_runs(
     State(state): State<AppState>,
     Path(worktree_id): Path<String>,
+    Query(params): Query<WorktreeRunsQuery>,
 ) -> Result<Json<Vec<ConductorWorkflowRun>>, ApiError> {
     let db = state.db.lock().await;
-    let runs = conductor_core::workflow::list_workflow_runs(&db, &worktree_id)?;
+    let runs = conductor_core::workflow::list_workflow_runs_for_worktree(
+        &db,
+        &worktree_id,
+        params.include_dry_run.unwrap_or(false),
+    )?;
     Ok(Json(runs))
 }
 
@@ -2119,6 +2136,47 @@ mod tests {
             rt.block_on(get_response("/api/workflows/runs?status=completed", state));
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.as_array().unwrap().len(), 50);
+    }
+
+    #[test]
+    fn runs_hide_dry_runs_unless_include_dry_run() {
+        let state = seeded_state();
+        let real = seed_runs(&state, "w1", WorkflowRunStatus::Completed, 1, 0);
+        let dry = seed_runs(&state, "w1", WorkflowRunStatus::Completed, 2, 10);
+        {
+            let db = state.db.blocking_lock();
+            for id in &dry {
+                db.execute("UPDATE workflow_runs SET dry_run = 1 WHERE id = ?1", [id])
+                    .unwrap();
+            }
+        }
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        for base in [
+            "/api/workflows/runs?status=completed",
+            "/api/worktrees/w1/workflows/runs",
+        ] {
+            let sep = if base.contains('?') { '&' } else { '?' };
+            let (status, body) = rt.block_on(get_response(base, state.clone()));
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(ids_of(&body), real, "{base}: dry runs hidden by default");
+
+            let (_, body) = rt.block_on(get_response(
+                &format!("{base}{sep}include_dry_run=true"),
+                state.clone(),
+            ));
+            let mut got = ids_of(&body);
+            got.sort();
+            let mut want: Vec<String> = real.iter().chain(dry.iter()).cloned().collect();
+            want.sort();
+            assert_eq!(got, want, "{base}: include_dry_run shows them");
+            let marked = body
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|r| r["dry_run"] == serde_json::json!(true))
+                .count();
+            assert_eq!(marked, 2, "{base}: dry runs carry dry_run: true");
+        }
     }
 
     #[test]

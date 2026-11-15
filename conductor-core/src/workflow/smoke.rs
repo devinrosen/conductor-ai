@@ -10,6 +10,11 @@
 //! effects runs. The gate resolver wrapper below only matters if the engine
 //! ever polls a gate in a dry run.
 //!
+//! A smoke that stops on purpose ends with no `failed` run row. The root is set
+//! `cancelled`, and so is every descendant run the engine left `failed`: runkon-flow's
+//! parallel executor counts the stop as a branch failure, so a child run holding a
+//! `parallel` block (e.g. `review-pr`) would otherwise be recorded as failed.
+//!
 //! The pieces:
 //! - [`SmokeStop`]: shared handle that records the first stop point.
 //! - [`SmokeStopActionExecutor`]: the action registry's catch-all in smoke mode.
@@ -290,6 +295,37 @@ fn ensure_cancelled(
     Ok(())
 }
 
+/// Make every descendant run of a smoke that stopped on purpose end `cancelled`.
+///
+/// The engine's parallel executor counts a branch's smoke stop as a branch failure,
+/// and the fail-fast path then records the child run `failed` (runkon-flow logs
+/// "finished with failures" for it). A passing smoke must leave no `failed` run, so
+/// every descendant that isn't `completed` or `cancelled` is set to `cancelled`.
+/// A `completed` child ran to the end before the stop and stays as it is. Step rows
+/// are left as the engine wrote them.
+fn cancel_smoke_descendants(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+    reason: &str,
+    depth: u32,
+) -> std::result::Result<(), String> {
+    if depth > 16 {
+        return Ok(());
+    }
+    let children = crate::workflow::list_child_workflow_runs(conn, run_id)
+        .map_err(|e| format!("failed to list child runs of smoke run {run_id}: {e}"))?;
+    for child in children {
+        if !matches!(
+            child.status,
+            WorkflowRunStatus::Completed | WorkflowRunStatus::Cancelled
+        ) {
+            ensure_cancelled(conn, &child.id, reason)?;
+        }
+        cancel_smoke_descendants(conn, &child.id, reason, depth + 1)?;
+    }
+    Ok(())
+}
+
 fn db_open_error(path: &std::path::Path, e: &dyn std::fmt::Display) -> String {
     format!("failed to open database at {}: {e}", path.display())
 }
@@ -335,7 +371,9 @@ pub fn smoke_run_workflow(mut params: WorkflowExecStandalone) -> SmokeOutcome {
     let result = match (run, stopped_at) {
         (Ok(_) | Err(ConductorError::WorkflowCancelled), Some(point)) => {
             match (conn.as_ref(), run_id.as_deref()) {
-                (Ok(conn), Some(id)) => match ensure_cancelled(conn, id, &point.reason()) {
+                (Ok(conn), Some(id)) => match ensure_cancelled(conn, id, &point.reason())
+                    .and_then(|()| cancel_smoke_descendants(conn, id, &point.reason(), 0))
+                {
                     Ok(()) => SmokeResult::Passed {
                         stopped_at: Some(point),
                     },

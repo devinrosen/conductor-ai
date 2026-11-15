@@ -32,6 +32,23 @@ use crate::workflow::WorkflowRunStatus;
 const TOP_LEVEL_FILTER: &str =
     "(:top_level_only = 0 OR workflow_runs.parent_workflow_run_id IS NULL)";
 
+/// Predicate (bound by `:include_dry_run`) that hides dry-run runs: `validate --dry-run`
+/// smokes (and their child runs, which carry `dry_run = 1` too) and runs started with
+/// `dry_run`. Qualified so it works both with and without the `worktrees` join.
+const DRY_RUN_FILTER: &str = "(:include_dry_run = 1 OR workflow_runs.dry_run = 0)";
+
+/// Flags shared by the filtered run lists. `include_dry_run` is off by default, so
+/// smokes stay out of display lists unless asked for.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RunListFlags {
+    /// Include runs on merged and abandoned worktrees.
+    pub include_inactive: bool,
+    /// Exclude child runs (those with a parent workflow run).
+    pub top_level_only: bool,
+    /// Include dry-run runs and their child runs.
+    pub include_dry_run: bool,
+}
+
 /// SQL fragment that filters to runs whose worktree is active or which have no worktree.
 const ACTIVE_WORKTREE_GUARD: &str =
     "workflow_runs.worktree_id IS NULL OR worktrees.status = 'active'";
@@ -153,7 +170,10 @@ pub fn list_runs_by_status(
     workflow_name: Option<&str>,
 ) -> Result<Vec<WorkflowRunQueryResult>> {
     let placeholders = sql_placeholders(statuses.len());
-    let mut conditions = vec![format!("status IN ({placeholders})")];
+    let mut conditions = vec![
+        format!("status IN ({placeholders})"),
+        "dry_run = 0".to_string(),
+    ];
     let mut param_values: Vec<String> = statuses.iter().map(|s| s.to_string()).collect();
 
     if let Some(name) = workflow_name {
@@ -431,17 +451,29 @@ pub fn get_active_run_for_worktree(
         .optional()?)
 }
 
+/// All runs of a worktree, newest first. Dry runs are hidden; see
+/// [`list_workflow_runs_for_worktree`] to show them.
 pub fn list_workflow_runs(
     conn: &Connection,
     worktree_id: &str,
+) -> Result<Vec<ConductorWorkflowRun>> {
+    list_workflow_runs_for_worktree(conn, worktree_id, false)
+}
+
+/// All runs of a worktree, newest first. `include_dry_run` also returns dry-run runs
+/// (smokes and their children).
+pub fn list_workflow_runs_for_worktree(
+    conn: &Connection,
+    worktree_id: &str,
+    include_dry_run: bool,
 ) -> Result<Vec<ConductorWorkflowRun>> {
     query_collect(
         conn,
         &format!(
             "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
-             WHERE worktree_id = :worktree_id ORDER BY started_at DESC"
+             WHERE worktree_id = :worktree_id AND {DRY_RUN_FILTER} ORDER BY started_at DESC"
         ),
-        named_params! { ":worktree_id": worktree_id },
+        named_params! { ":worktree_id": worktree_id, ":include_dry_run": include_dry_run },
         row_to_conductor_run,
     )
 }
@@ -458,6 +490,7 @@ pub fn list_workflow_runs_filtered(
             &format!(
                 "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
                      WHERE worktree_id = :worktree_id AND status = :status \
+                       AND dry_run = 0 \
                      ORDER BY started_at DESC"
             ),
             named_params! { ":worktree_id": worktree_id, ":status": status_str },
@@ -472,18 +505,17 @@ pub fn list_workflow_runs_filtered(
 /// When `include_inactive` is false, only runs on `active` worktrees (or with no
 /// worktree) are returned; when true, runs on merged and abandoned worktrees are
 /// returned too. When `top_level_only` is true, child runs (those with a parent
-/// workflow run) are excluded before `limit`/`offset` apply. Ordered by
-/// `started_at DESC`.
+/// workflow run) are excluded before `limit`/`offset` apply. Dry runs are hidden unless
+/// `include_dry_run` is set. Ordered by `started_at DESC`.
 pub fn list_workflow_runs_by_repo_id_filtered(
     conn: &Connection,
     repo_id: &str,
     limit: usize,
     offset: usize,
     status: Option<WorkflowRunStatus>,
-    include_inactive: bool,
-    top_level_only: bool,
+    flags: RunListFlags,
 ) -> Result<Vec<ConductorWorkflowRun>> {
-    let guard = if include_inactive {
+    let guard = if flags.include_inactive {
         "1 = 1"
     } else {
         ACTIVE_WORKTREE_GUARD
@@ -499,22 +531,25 @@ pub fn list_workflow_runs_by_repo_id_filtered(
                    AND ({guard}) \
                    AND (:status IS NULL OR workflow_runs.status = :status) \
                    AND {TOP_LEVEL_FILTER} \
+                   AND {DRY_RUN_FILTER} \
                  ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
         ),
-        named_params! { ":repo_id": repo_id, ":status": status_str, ":top_level_only": top_level_only, ":limit": limit as i64, ":offset": offset as i64 },
+        named_params! { ":repo_id": repo_id, ":status": status_str, ":top_level_only": flags.top_level_only, ":include_dry_run": flags.include_dry_run, ":limit": limit as i64, ":offset": offset as i64 },
         row_to_conductor_run,
     )
 }
 
 /// Like `list_workflow_runs_filtered` but with explicit limit and offset for pagination.
-/// When `top_level_only` is true, child runs are excluded before `limit`/`offset` apply.
+/// When `flags.top_level_only` is true, child runs are excluded before `limit`/`offset`
+/// apply. `flags.include_inactive` is ignored (the list is worktree-scoped). Dry runs are
+/// hidden unless `flags.include_dry_run` is set.
 pub fn list_workflow_runs_filtered_paginated(
     conn: &Connection,
     worktree_id: &str,
     status: Option<WorkflowRunStatus>,
     limit: usize,
     offset: usize,
-    top_level_only: bool,
+    flags: RunListFlags,
 ) -> Result<Vec<ConductorWorkflowRun>> {
     let status_str = status.map(|s| s.to_string());
     query_collect(
@@ -524,16 +559,17 @@ pub fn list_workflow_runs_filtered_paginated(
                  WHERE worktree_id = :worktree_id \
                    AND (:status IS NULL OR status = :status) \
                    AND {TOP_LEVEL_FILTER} \
+                   AND {DRY_RUN_FILTER} \
                  ORDER BY started_at DESC LIMIT :limit OFFSET :offset"
         ),
-        named_params! { ":worktree_id": worktree_id, ":status": status_str, ":top_level_only": top_level_only, ":limit": limit as i64, ":offset": offset as i64 },
+        named_params! { ":worktree_id": worktree_id, ":status": status_str, ":top_level_only": flags.top_level_only, ":include_dry_run": flags.include_dry_run, ":limit": limit as i64, ":offset": offset as i64 },
         row_to_conductor_run,
     )
 }
 
 /// List recent workflow runs across all worktrees, ordered by started_at DESC.
 /// Only includes runs whose associated worktree is `active` (or runs with no
-/// worktree, i.e. ephemeral/repo-targeted runs).
+/// worktree, i.e. ephemeral/repo-targeted runs). Dry runs are hidden.
 pub fn list_all_workflow_runs(
     conn: &Connection,
     limit: usize,
@@ -544,7 +580,8 @@ pub fn list_all_workflow_runs(
             "SELECT workflow_runs.* \
                  FROM workflow_runs \
                  LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-                 WHERE {ACTIVE_WORKTREE_GUARD} \
+                 WHERE ({ACTIVE_WORKTREE_GUARD}) \
+                   AND workflow_runs.dry_run = 0 \
                  ORDER BY workflow_runs.started_at DESC LIMIT :limit"
         ),
         named_params! { ":limit": limit as i64 },
@@ -596,16 +633,16 @@ pub fn list_active_workflow_runs(
 /// Covers all repos. When `include_inactive` is false the active-worktree guard is
 /// identical to `list_all_workflow_runs`; when true, runs on merged and abandoned
 /// worktrees are returned too. When `top_level_only` is true, child runs are
-/// excluded before `limit`/`offset` apply.
+/// excluded before `limit`/`offset` apply. Dry runs are hidden unless `include_dry_run`
+/// is set.
 pub fn list_all_workflow_runs_filtered_paginated(
     conn: &Connection,
     status: Option<WorkflowRunStatus>,
     limit: usize,
     offset: usize,
-    include_inactive: bool,
-    top_level_only: bool,
+    flags: RunListFlags,
 ) -> Result<Vec<ConductorWorkflowRun>> {
-    let guard = if include_inactive {
+    let guard = if flags.include_inactive {
         "1 = 1"
     } else {
         ACTIVE_WORKTREE_GUARD
@@ -620,9 +657,10 @@ pub fn list_all_workflow_runs_filtered_paginated(
                  WHERE ({guard}) \
                    AND (:status IS NULL OR workflow_runs.status = :status) \
                    AND {TOP_LEVEL_FILTER} \
+                   AND {DRY_RUN_FILTER} \
                  ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
         ),
-        named_params! { ":status": status_str, ":top_level_only": top_level_only, ":limit": limit as i64, ":offset": offset as i64 },
+        named_params! { ":status": status_str, ":top_level_only": flags.top_level_only, ":include_dry_run": flags.include_dry_run, ":limit": limit as i64, ":offset": offset as i64 },
         row_to_conductor_run,
     )
 }
@@ -631,6 +669,7 @@ pub fn list_all_workflow_runs_filtered_paginated(
 /// Unlike `list_all_workflow_runs` + filter, this queries directly by `repo_id`
 /// so older per-repo runs beyond a global cap are never silently omitted.
 /// Only includes runs whose associated worktree is `active` (or runs with no worktree).
+/// Dry runs are hidden.
 pub fn list_workflow_runs_by_repo_id(
     conn: &Connection,
     repo_id: &str,
@@ -645,6 +684,7 @@ pub fn list_workflow_runs_by_repo_id(
                  LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
                  WHERE workflow_runs.repo_id = :repo_id \
                    AND ({ACTIVE_WORKTREE_GUARD}) \
+                   AND workflow_runs.dry_run = 0 \
                  ORDER BY workflow_runs.started_at DESC LIMIT :limit OFFSET :offset"
         ),
         named_params! { ":repo_id": repo_id, ":limit": limit as i64, ":offset": offset as i64 },
@@ -660,7 +700,14 @@ pub fn list_workflow_runs_paginated(
     limit: usize,
     offset: usize,
 ) -> Result<Vec<ConductorWorkflowRun>> {
-    list_workflow_runs_filtered_paginated(conn, worktree_id, None, limit, offset, false)
+    list_workflow_runs_filtered_paginated(
+        conn,
+        worktree_id,
+        None,
+        limit,
+        offset,
+        RunListFlags::default(),
+    )
 }
 
 /// List recent root workflow runs (those with no parent workflow run) across all
@@ -674,7 +721,7 @@ pub fn list_root_workflow_runs(
         conn,
         &format!(
             "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
-                 WHERE parent_workflow_run_id IS NULL \
+                 WHERE parent_workflow_run_id IS NULL AND dry_run = 0 \
                  ORDER BY started_at DESC LIMIT :limit"
         ),
         named_params! { ":limit": limit as i64 },
@@ -699,6 +746,7 @@ pub fn list_active_non_worktree_workflow_runs(
         &format!(
             "SELECT {RUN_COLUMNS}{CONDUCTOR_METRICS_COLUMNS}{CONDUCTOR_RUN_EXTRA} FROM workflow_runs \
                  WHERE parent_workflow_run_id IS NULL \
+                   AND dry_run = 0 \
                    AND worktree_id IS NULL \
                    AND (\
                        status IN ('running', 'waiting') \
@@ -778,7 +826,8 @@ pub fn list_workflow_runs_for_repo(
         "SELECT DISTINCT workflow_runs.* \
              FROM workflow_runs \
              LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
-             WHERE workflow_runs.repo_id = :repo_id OR worktrees.repo_id = :repo_id \
+             WHERE (workflow_runs.repo_id = :repo_id OR worktrees.repo_id = :repo_id) \
+               AND workflow_runs.dry_run = 0 \
              ORDER BY workflow_runs.started_at DESC LIMIT :limit",
         named_params! { ":repo_id": repo_id, ":limit": limit as i64 },
         row_to_conductor_run,
@@ -803,6 +852,8 @@ pub fn list_active_workflow_runs_for_repo(
             repo_id: Some(repo_id),
             worktree_id: None,
             include_inactive: false,
+            // A running smoke is genuinely active for its few seconds.
+            include_dry_run: true,
             limit: 500,
             offset: 0,
         },
@@ -819,6 +870,8 @@ pub struct WorkflowRunListFilter<'a> {
     pub worktree_id: Option<&'a str>,
     /// When false, runs on non-active worktrees are excluded.
     pub include_inactive: bool,
+    /// When false, dry-run runs (smokes and their children) are excluded.
+    pub include_dry_run: bool,
     pub limit: usize,
     pub offset: usize,
 }
@@ -853,6 +906,9 @@ pub fn list_workflow_runs_page(
     }
     if !f.include_inactive {
         clauses.push(format!("({ACTIVE_WORKTREE_GUARD})"));
+    }
+    if !f.include_dry_run {
+        clauses.push("workflow_runs.dry_run = 0".to_string());
     }
     let where_sql = clauses.join(" AND ");
     params.push(rusqlite::types::Value::Integer(f.limit as i64));
