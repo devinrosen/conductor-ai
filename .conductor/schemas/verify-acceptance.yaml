@@ -1,0 +1,46 @@
+fields:
+  verified:
+    type: boolean
+    desc: "true only when no criterion is `fail` and every check the recipe requires passed; false when the recipe is missing"
+  issues:
+    type: array
+    desc: "Numbers of the issues whose criteria were checked"
+    items: number
+  criteria:
+    type: array
+    desc: "One entry per acceptance criterion"
+    items:
+      criterion:
+        type: string
+        desc: "The criterion, as the issue words it"
+      status:
+        type: string
+        desc: "pass, fail or not_verifiable (only checkable after merge, or not checkable from here)"
+      evidence:
+        type: string
+        desc: "What was run or read, and what it showed"
+  checks:
+    type: array
+    desc: "Every command run to verify, in order"
+    items:
+      command: string
+      result:
+        type: string
+        desc: "pass or fail"
+      excerpt:
+        type: string
+        desc: "A short excerpt of the output"
+  run_ids:
+    type: array
+    desc: "Run IDs of `workflow validate --dry-run` smokes; empty when none were needed"
+    items: string
+  summary:
+    type: string
+    desc: "Two or three sentences: what was verified and what failed or could not be verified"
+  context:
+    type: string
+    desc: "One or two sentences: VERIFIED, or what failed"
+
+markers:
+  verified: "verified == true"
+  verification_failed: "verified == false"

@@ -1,0 +1,58 @@
+---
+name: verify-and-merge
+description: Check a conductor-reviewed PR is ready, verify it live against its issue's acceptance criteria, post the evidence as a PR comment, then squash-merge it
+version: "1.0.0"
+target_types:
+  - worktree
+hints:
+  - "The scripts (check-pr-ready.sh, post-verification.sh, squash-merge.sh), the brief (.conductor/agents/verify-acceptance.md) and the output schema (.conductor/schemas/verify-acceptance.yaml) are generic: copy them from conductor-ai as the reference implementation, together with lib-gh-retry.sh and lib-git-retry.sh, which they source. Adapt the `as` identities to the ones the repo has (developer, reviewer, merger)"
+  - "The repo must supply .conductor/verify-recipe.md: how to build the branch, how to exercise each kind of change (CLI, API, UI), what never to touch (production data, real config homes) and which pipeline checks to run. check-pr-ready refuses without it, and the verify-acceptance brief fails clearly on its own"
+  - "check-pr-ready trusts only the latest <!-- conductor-review --> review on the head commit from an OWNER, MEMBER or COLLABORATOR author that is not dismissed, as reuse-review.sh does, and reads approval from the conductor-review-data:v1 payload. If the repo's submit-review differs, keep those checks. A review posted as a COMMENT because the PR changed the review pipeline (withheld approval) needs reviewDecision APPROVED or the confirm input"
+  - "Every refusal is a one-line reason on stderr and exit 1, which becomes the step error: a release PR into the default branch, a draft, a stale or missing review, a failing or pending required check, a conflict, a branch that does not contain its base (the base is merged in and pushed, then the run stops so the new head gets reviewed)"
+  - "Head pinning: check-pr-ready captures head_sha once, post-verification refuses if the head or working tree changed, and squash-merge passes --match-head-commit, so a push during verification is never merged unverified"
+  - "If the repo uses release branches, the recipe confirms the PR targets the open release branch, and a release to default-branch PR stays a manual rebase-merge"
+  - "squash-merge closes the linked issues itself when the merge did not (a release-branch merge does not close them); if issues live outside GitHub (Jira), adapt that part. It does not delete the worktree, because the run is executing in it: it prints the cleanup command"
+---
+workflow verify-and-merge {
+  meta {
+    description = "Check a reviewed PR is ready, verify it live against its issue's acceptance criteria, post the evidence, then squash-merge"
+    trigger     = "manual"
+    targets     = ["worktree"] // the agent builds and runs the branch; the ephemeral --pr clone can't (see merge-when-ready)
+    group       = "Development"
+  }
+
+  inputs {
+    confirm boolean
+  }
+
+  script check-pr-ready {
+    run = ".conductor/scripts/check-pr-ready.sh"
+    env = { CONFIRM = "{{confirm}}" DRY_RUN = "{{dry_run}}" TICKET_SOURCE_ID = "{{ticket_source_id}}" }
+  }
+
+  call verify-acceptance {
+    output  = "verify-acceptance"
+    as      = "developer"
+    retries = 1
+  }
+
+  script post-verification {
+    run = ".conductor/scripts/post-verification.sh"
+    as  = "reviewer"
+    env = { PRIOR_OUTPUT = "{{prior_output}}" PR_NUMBER = "{{pr_number}}" HEAD_SHA = "{{head_sha}}" DRY_RUN = "{{dry_run}}" }
+  }
+
+  if confirm {
+    gate human_review {
+      prompt     = "verify-and-merge posted its verification report on the PR (see the post-verification step). Approve to squash-merge, or reject to leave the PR open."
+      timeout    = "72h"
+      on_timeout = fail
+    }
+  }
+
+  script squash-merge {
+    run = ".conductor/scripts/squash-merge.sh"
+    as  = "merger"
+    env = { PR_NUMBER = "{{pr_number}}" HEAD_SHA = "{{head_sha}}" BASE_BRANCH = "{{base_branch}}" LINKED_ISSUES = "{{linked_issues}}" DRY_RUN = "{{dry_run}}" }
+  }
+}
