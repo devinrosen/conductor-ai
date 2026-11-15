@@ -960,11 +960,8 @@ pub async fn list_all_workflow_runs_handler(
             statuses: &statuses,
             repo_id: repo_id.as_deref(),
             worktree_id: params.worktree.as_deref(),
-            flags: conductor_core::workflow::RunListFlags {
-                include_inactive,
-                include_dry_run: params.include_dry_run.unwrap_or(false),
-                ..Default::default()
-            },
+            include_inactive,
+            include_dry_run: params.include_dry_run.unwrap_or(false),
             limit: effective_runs_limit(params.limit),
             offset: params.offset.unwrap_or(0),
         },

@@ -282,10 +282,8 @@ fn page_filter<'a>(
         statuses,
         repo_id: None,
         worktree_id: None,
-        flags: crate::workflow::RunListFlags {
-            include_inactive,
-            ..Default::default()
-        },
+        include_inactive,
+        include_dry_run: false,
         limit,
         offset,
     }
@@ -694,6 +692,26 @@ fn test_list_workflow_runs_filtered_with_status() {
         !ids.contains(&pending_run.id.as_str()),
         "pending run must not appear"
     );
+}
+
+#[test]
+fn test_list_workflow_runs_filtered_include_dry_run() {
+    let conn = setup_db();
+    let real = create_worktree_run(&conn, "w1");
+    let (root, _child) = create_dry_run_pair(&conn);
+    let status = Some(root.status.clone());
+    let ids = |s: Option<WorkflowRunStatus>, dry: bool| -> Vec<String> {
+        crate::workflow::list_workflow_runs_filtered(&conn, "w1", s, dry)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id.clone())
+            .collect()
+    };
+    assert!(ids(status.clone(), true).contains(&root.id));
+    assert!(!ids(status.clone(), false).contains(&root.id));
+    assert!(ids(None, true).contains(&root.id));
+    assert!(ids(None, true).contains(&real.id));
+    assert!(!ids(None, false).contains(&root.id));
 }
 
 #[test]
@@ -5572,10 +5590,7 @@ fn test_dry_run_runs_shown_with_include_dry_run() {
     let page = crate::workflow::list_workflow_runs_page(
         &conn,
         &crate::workflow::WorkflowRunListFilter {
-            flags: crate::workflow::RunListFlags {
-                include_dry_run: true,
-                ..Default::default()
-            },
+            include_dry_run: true,
             ..page_filter(&[], false, 50, 0)
         },
     )

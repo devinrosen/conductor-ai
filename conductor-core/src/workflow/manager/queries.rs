@@ -859,10 +859,8 @@ pub fn list_active_workflow_runs_for_repo(
             repo_id: Some(repo_id),
             worktree_id: None,
             // A running smoke is genuinely active for its few seconds.
-            flags: RunListFlags {
-                include_dry_run: true,
-                ..RunListFlags::default()
-            },
+            include_inactive: false,
+            include_dry_run: true,
             limit: 500,
             offset: 0,
         },
@@ -877,8 +875,10 @@ pub struct WorkflowRunListFilter<'a> {
     pub repo_id: Option<&'a str>,
     /// Restrict to a single worktree.
     pub worktree_id: Option<&'a str>,
-    /// `include_inactive` and `include_dry_run` apply; `top_level_only` is ignored.
-    pub flags: RunListFlags,
+    /// Include runs on merged and abandoned worktrees.
+    pub include_inactive: bool,
+    /// Include dry-run runs and their child runs.
+    pub include_dry_run: bool,
     pub limit: usize,
     pub offset: usize,
 }
@@ -911,10 +911,10 @@ pub fn list_workflow_runs_page(
         clauses.push("workflow_runs.worktree_id = ?".to_string());
         params.push(rusqlite::types::Value::Text(wt.to_owned()));
     }
-    if !f.flags.include_inactive {
+    if !f.include_inactive {
         clauses.push(format!("({ACTIVE_WORKTREE_GUARD})"));
     }
-    if !f.flags.include_dry_run {
+    if !f.include_dry_run {
         clauses.push(NOT_DRY_RUN.to_string());
     }
     let where_sql = clauses.join(" AND ");
