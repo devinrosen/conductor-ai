@@ -136,7 +136,21 @@ macro_rules! impl_rk_item_provider {
     // Variant: with repo_id — `$make_provider` is a closure `|repo_id| <expr>` that
     // receives `self.repo_id` and returns a provider.  Using a closure avoids any
     // direct reference to `self` at the macro call site (which is not a method scope).
+    // The provider used for `items()` is the same one.
     ($name:ident, $provider_name:literal, repo_id, $make_provider:expr) => {
+        impl_rk_item_provider!(
+            $name,
+            $provider_name,
+            repo_id,
+            $make_provider,
+            |repo_id: Option<String>, _ctx: &dyn runkon_flow::traits::run_context::RunContext| {
+                ($make_provider)(repo_id)
+            }
+        );
+    };
+    // Variant: with repo_id and a separate `items()` provider — `$make_items` is a
+    // closure `|repo_id, ctx| <expr>` for adapters whose `items()` reads the run context.
+    ($name:ident, $provider_name:literal, repo_id, $make_provider:expr, $make_items:expr) => {
         pub(crate) struct $name {
             conn: Arc<Mutex<rusqlite::Connection>>,
             config: crate::config::Config,
@@ -159,9 +173,9 @@ macro_rules! impl_rk_item_provider {
             }
             fn items_provider(
                 &self,
-                _ctx: &dyn runkon_flow::traits::run_context::RunContext,
+                ctx: &dyn runkon_flow::traits::run_context::RunContext,
             ) -> impl ItemProvider {
-                self.provider()
+                ($make_items)(self.repo_id.clone(), ctx)
             }
         }
         impl_rk_item_provider_trait!($name, $provider_name);
@@ -187,44 +201,21 @@ impl_rk_item_provider!(
     crate::workflow::item_provider::workflow_runs::WorkflowRunsProvider
 );
 
-/// Hand-written (not macro-generated) because `items()` also reads the parent
-/// run's worktree id from the run context: `foreach over worktrees` without a
-/// `scope.base_branch` lists the worktrees based on the parent's branch.
-pub(crate) struct RkWorktreesItemProvider {
-    conn: Arc<Mutex<rusqlite::Connection>>,
-    config: crate::config::Config,
-    repo_id: Option<String>,
-}
-
-impl RkWorktreesItemProvider {
-    pub(crate) fn new(
-        conn: Arc<Mutex<rusqlite::Connection>>,
-        config: crate::config::Config,
-        repo_id: Option<String>,
-    ) -> Self {
-        Self {
-            conn,
-            config,
+// `items()` also reads the parent run's worktree id from the run context:
+// `foreach over worktrees` without a `scope.base_branch` lists the worktrees
+// based on the parent's branch.
+impl_rk_item_provider!(
+    RkWorktreesItemProvider,
+    "worktrees",
+    repo_id,
+    |repo_id| crate::workflow::item_provider::worktrees::WorktreesProvider::new(repo_id, None),
+    |repo_id: Option<String>, ctx: &dyn runkon_flow::traits::run_context::RunContext| {
+        crate::workflow::item_provider::worktrees::WorktreesProvider::new(
             repo_id,
-        }
-    }
-    fn provider(&self) -> impl ItemProvider {
-        crate::workflow::item_provider::worktrees::WorktreesProvider::new(
-            self.repo_id.clone(),
-            None,
-        )
-    }
-    fn items_provider(
-        &self,
-        ctx: &dyn runkon_flow::traits::run_context::RunContext,
-    ) -> impl ItemProvider {
-        crate::workflow::item_provider::worktrees::WorktreesProvider::new(
-            self.repo_id.clone(),
             ctx.get(crate::workflow::engine_keys::WORKTREE_ID),
         )
     }
-}
-impl_rk_item_provider_trait!(RkWorktreesItemProvider, "worktrees");
+);
 
 #[cfg(test)]
 mod tests {

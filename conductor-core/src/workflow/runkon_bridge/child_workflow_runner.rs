@@ -119,6 +119,25 @@ fn validate_child_worktree_input(
     }
 }
 
+/// A child normally shares the parent's worktree, so the active-run guard
+/// skips depth > 0. A retargeted child runs in another worktree and must not
+/// start beside that worktree's active run. Smoke runs skip the guard.
+fn guard_retargeted_child(
+    conn: &rusqlite::Connection,
+    workflow_name: &str,
+    target: &ChildTarget,
+    smoke: bool,
+) -> std::result::Result<(), String> {
+    if !target.retargeted || smoke {
+        return Ok(());
+    }
+    if let Some(wt_id) = &target.worktree_id {
+        super::super::coordinator::guard_active_run(conn, wt_id, false)
+            .map_err(|e| format!("child workflow '{workflow_name}': worktree '{wt_id}': {e}"))?;
+    }
+    Ok(())
+}
+
 /// Resolve where a child runs. With no (or an empty) `worktree_id` input the
 /// child inherits the parent's worktree, working dir, repo and repo path. With
 /// one, all four come from that worktree.
@@ -363,17 +382,8 @@ impl runkon_flow::engine::ChildWorkflowRunner for ConductorChildWorkflowRunner {
             // A child normally shares the parent's worktree, so the active-run
             // guard skips depth > 0. A retargeted child runs in another
             // worktree and must not start beside its active run.
-            if target.retargeted && self.smoke.is_none() {
-                if let Some(wt_id) = &target.worktree_id {
-                    super::super::coordinator::guard_active_run(&conn, wt_id, false).map_err(
-                        |e| {
-                            EngineError::Workflow(format!(
-                                "child workflow '{workflow_name}': worktree '{wt_id}': {e}"
-                            ))
-                        },
-                    )?;
-                }
-            }
+            guard_retargeted_child(&conn, workflow_name, &target, self.smoke.is_some())
+                .map_err(EngineError::Workflow)?;
             target
         };
 
@@ -683,6 +693,48 @@ mod tests {
         assert_eq!(t.working_dir, "/item/wt");
         assert_eq!(t.repo_id.as_deref(), Some("r-item"));
         assert_eq!(t.repo_path, "/item/repo");
+    }
+
+    #[test]
+    fn retargeted_child_is_rejected_beside_an_active_run_unless_smoke() {
+        let conn = crate::test_helpers::setup_db();
+        crate::test_helpers::insert_test_repo(&conn, "r-item", "item-repo", "/item/repo");
+        crate::test_helpers::insert_test_worktree(&conn, "w-item", "r-item", "item-wt", "/item/wt");
+        let parent = crate::agent::AgentManager::new(&conn)
+            .create_run(Some("w-item"), "workflow", None)
+            .unwrap();
+        let run = crate::workflow::create_workflow_run(
+            &conn,
+            "busy-wf",
+            Some("w-item"),
+            &parent.id,
+            false,
+            "manual",
+            None,
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET status = 'running' WHERE id = ?1",
+            rusqlite::params![run.id],
+        )
+        .unwrap();
+        let target = |retargeted| ChildTarget {
+            worktree_id: Some("w-item".to_string()),
+            working_dir: "/item/wt".to_string(),
+            repo_path: "/item/repo".to_string(),
+            repo_id: Some("r-item".to_string()),
+            retargeted,
+        };
+
+        let err = guard_retargeted_child(&conn, "ticket-to-pr", &target(true), false).unwrap_err();
+        assert!(
+            err.contains("w-item") && err.contains("ticket-to-pr"),
+            "{err}"
+        );
+        // Smoke mode skips the guard.
+        guard_retargeted_child(&conn, "ticket-to-pr", &target(true), true).unwrap();
+        // A child sharing the parent's worktree is never guarded.
+        guard_retargeted_child(&conn, "ticket-to-pr", &target(false), false).unwrap();
     }
 
     #[test]
