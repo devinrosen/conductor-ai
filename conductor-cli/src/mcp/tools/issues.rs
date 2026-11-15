@@ -25,12 +25,27 @@ fn resolve_link_run_id(
     use conductor_core::agent::AgentManager;
 
     let agent_mgr = AgentManager::new(conn);
-    if matches!(agent_mgr.get_run(run_id), Ok(Some(_))) {
+    let lookup_err = |e: &dyn std::fmt::Display| format!("failed to look up run {run_id}: {e}");
+
+    if agent_mgr
+        .get_run(run_id)
+        .map_err(|e| lookup_err(&e))?
+        .is_some()
+    {
         return Ok((run_id.to_string(), None));
     }
-    if let Ok(Some(wf)) = conductor_core::workflow::get_workflow_run(conn, run_id) {
+    if let Some(wf) =
+        conductor_core::workflow::get_workflow_run(conn, run_id).map_err(|e| lookup_err(&e))?
+    {
         let parent = wf.parent_run_id.clone();
-        if !parent.is_empty() && matches!(agent_mgr.get_run(&parent), Ok(Some(_))) {
+        if parent.is_empty() {
+            return Err(format!("workflow run {run_id} has no parent agent run"));
+        }
+        if agent_mgr
+            .get_run(&parent)
+            .map_err(|e| format!("failed to look up parent agent run {parent}: {e}"))?
+            .is_some()
+        {
             return Ok((parent, Some(run_id.to_string())));
         }
         return Err(format!(
