@@ -231,6 +231,40 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_link_run_id_workflow_run_with_empty_parent() {
+        use super::super::test_helpers::create_list_run;
+        let (_f, conductor) = make_test_conductor();
+        let conn = &conductor.conn;
+
+        let wf = create_list_run(conn, "wf", None, None);
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET parent_run_id = '' WHERE id = ?1",
+            rusqlite::params![wf],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+
+        let err = resolve_link_run_id(conn, &wf).unwrap_err();
+        assert!(err.contains(&wf), "{err}");
+        assert!(err.contains("has no parent agent run"), "{err}");
+        assert!(!err.contains("no longer exists"), "{err}");
+    }
+
+    #[test]
+    fn test_resolve_link_run_id_propagates_lookup_error() {
+        let (_f, conductor) = make_test_conductor();
+        let conn = &conductor.conn;
+
+        conn.execute_batch("PRAGMA foreign_keys = OFF; DROP TABLE agent_runs;")
+            .unwrap();
+
+        let err = resolve_link_run_id(conn, "01ANYRUN").unwrap_err();
+        assert!(err.contains("failed to look up run 01ANYRUN"), "{err}");
+        assert!(!err.contains("neither an agent run"), "{err}");
+    }
+
+    #[test]
     fn test_create_gh_issue_unknown_run_id_rejected_before_repo_lookup() {
         let (_f, conductor) = make_test_conductor();
         let a = args_with(&[
