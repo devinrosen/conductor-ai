@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use crate::agent_config::{self, AgentSpec};
 use crate::prompt_config;
 use crate::schema_config;
+use crate::workflow::placeholder_scan::{is_variable_name, runaway_placeholders};
 use runkon_flow::dsl::{
     default_skills_dir, detect_workflow_cycles, make_script_resolver, validate_script_steps,
     validate_workflow_semantics, AgentRef, ScriptNode, ValidationContext, ValidationError,
@@ -162,22 +163,26 @@ where
     words
 }
 
-fn is_variable_name(key: &str) -> bool {
-    let mut chars = key.chars();
-    chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+/// Where a validated text comes from; decides how the engine treats an
+/// unresolved `{{…}}` in it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TextKind {
+    /// A `.wf` source or template body: unresolved references stay as written.
+    Source,
+    /// An agent brief or prompt snippet: unresolved references are removed.
+    Prompt,
 }
 
 /// Warn about `{{key}}` references that are neither a declared input, an
 /// engine or conductor variable, an `item.*` / `<step>.<field>` reference nor
 /// a word in a script the workflow runs: the engine leaves such a reference
-/// unsubstituted. `texts` are `(file label, text)` pairs: the `.wf` source,
-/// agent briefs and prompt snippets. Each (key, file) is reported once.
+/// unsubstituted in a `.wf` source and removes it from an agent brief or
+/// snippet. `texts` are `(file label, text, kind)` triples. Each (key, file) is
+/// reported once. In briefs and snippets a `{{` whose span isn't a variable
+/// name is reported too, since the engine drops the whole span.
 fn unknown_variable_warnings(
     workflow: &WorkflowDef,
-    texts: &[(String, String)],
+    texts: &[(String, String, TextKind)],
     script_words: &HashSet<String>,
 ) -> Vec<BatchValidationWarning> {
     let mut step_names = HashSet::new();
@@ -198,7 +203,7 @@ fn unknown_variable_warnings(
     };
 
     let mut warnings = Vec::new();
-    for (file, text) in texts {
+    for (file, text, kind) in texts {
         let mut seen: HashSet<&str> = HashSet::new();
         let mut rest = text.as_str();
         while let Some(open) = rest.find("{{") {
@@ -207,11 +212,22 @@ fn unknown_variable_warnings(
             let key = &after[..close];
             rest = &after[close + 2..];
             if is_variable_name(key) && !is_known(key) && seen.insert(key) {
+                let fate = match kind {
+                    TextKind::Source => "it is left unsubstituted at run time",
+                    TextKind::Prompt => "it is removed from the prompt at run time",
+                };
                 warnings.push(BatchValidationWarning {
                     message: format!(
                         "unknown variable '{{{{{key}}}}}' in {file} (not an input, built-in or \
-                         script export); it is left unsubstituted at run time"
+                         script export); {fate}"
                     ),
+                });
+            }
+        }
+        if *kind == TextKind::Prompt {
+            for hit in runaway_placeholders(text) {
+                warnings.push(BatchValidationWarning {
+                    message: format!("{file}: {}", hit.describe()),
                 });
             }
         }
@@ -524,9 +540,9 @@ where
         wf_errors.extend(registry_errors(&validation_engine, workflow));
 
         // --- Unknown {{variables}} (warnings) ---
-        let mut texts: Vec<(String, String)> = Vec::new();
+        let mut texts: Vec<(String, String, TextKind)> = Vec::new();
         if let Ok(src) = std::fs::read_to_string(&workflow.source_path) {
-            texts.push((workflow.source_path.clone(), src));
+            texts.push((workflow.source_path.clone(), src, TextKind::Source));
         }
         for r in &wf_refs.agents {
             if let Ok(agent) = agent_config::load_agent(
@@ -536,7 +552,7 @@ where
                 Some(wf_name),
                 &all_plugin_dirs,
             ) {
-                texts.push((format!("agent {}", r.label()), agent.prompt));
+                texts.push((format!("agent {}", r.label()), agent.prompt, TextKind::Prompt));
             }
         }
         for snippet in &wf_refs.snippets {
@@ -546,7 +562,7 @@ where
                 &prompt_config::PromptSnippetRef::from_str_value(snippet),
                 Some(wf_name),
             ) {
-                texts.push((format!("snippet {snippet}"), text));
+                texts.push((format!("snippet {snippet}"), text, TextKind::Prompt));
             }
         }
         warnings.extend(unknown_variable_warnings(
@@ -638,7 +654,7 @@ pub fn validate_template_sources(
             errors.extend(registry_errors(&engine, def));
             warnings.extend(unknown_variable_warnings(
                 def,
-                &[(format!("template {name}"), body.clone())],
+                &[(format!("template {name}"), body.clone(), TextKind::Source)],
                 &script_words(def, &script_resolver),
             ));
             WorkflowValidationEntry {
@@ -1205,6 +1221,35 @@ mod tests {
                 "{known} must not warn: {msgs:?}"
             );
         }
+    }
+
+    #[test]
+    fn batch_runaway_placeholder_in_agent_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(
+            dir.path(),
+            ".conductor/agents/runaway.md",
+            "---\nrole: actor\n---\nIf it shows a literal `{{`, stop.\nThen fetch {{ticket_id}}.\n",
+        );
+        write_file(
+            dir.path(),
+            ".conductor/agents/clean.md",
+            "---\nrole: actor\n---\nFetch {{ticket_id}}.\n",
+        );
+        let src = r#"workflow rp {
+            meta { trigger = "manual" targets = ["worktree"] }
+            call runaway {}
+            call clean {}
+        }"#;
+        let wf_path = dir.path().join(".conductor/workflows/rp.wf");
+        write_file(dir.path(), ".conductor/workflows/rp.wf", src);
+        let wf = parse_workflow_str(src, wf_path.to_str().unwrap()).unwrap();
+        let entry = run_batch(dir.path(), wf);
+        let msgs: Vec<&str> = entry.warnings.iter().map(|w| w.message.as_str()).collect();
+        let hits: Vec<_> = msgs.iter().filter(|m| m.contains("lines 4-5")).collect();
+        assert_eq!(hits.len(), 1, "got: {msgs:?}");
+        assert!(hits[0].contains("agent runaway"), "got: {msgs:?}");
+        assert!(!msgs.iter().any(|m| m.contains("agent clean")), "{msgs:?}");
     }
 
     fn template_source(name: &str, body: &str) -> (String, String) {

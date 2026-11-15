@@ -26,6 +26,8 @@ pub enum StepLogMode {
     Tail { lines: usize },
     /// The whole log file.
     Full,
+    /// The prompt the agent was given, as stored on its run, with its length.
+    Prompt,
 }
 
 impl StepLogMode {
@@ -37,8 +39,9 @@ impl StepLogMode {
             "result" => Ok(Self::Result),
             "tail" => Ok(Self::Tail { lines }),
             "full" => Ok(Self::Full),
+            "prompt" => Ok(Self::Prompt),
             other => Err(ConductorError::Workflow(format!(
-                "Invalid mode '{other}': expected one of 'result', 'tail', 'full'"
+                "Invalid mode '{other}': expected one of 'result', 'tail', 'full', 'prompt'"
             ))),
         }
     }
@@ -53,6 +56,11 @@ pub enum StepLogSource {
         log_path: PathBuf,
         /// The agent run's stored result text, used when the log has no result event.
         agent_result_text: Option<String>,
+        /// The prompt the agent run was started with: its first `prompt` event. `None`
+        /// for runs that stored none (older runs, other runtimes, a failed spawn).
+        prompt: Option<String>,
+        /// Run-time warnings about the prompt (`Prompt warning: …` system events).
+        prompt_warnings: Vec<String>,
     },
     /// A script step: the capped stderr log runkon wrote for the attempt, recorded in
     /// the step row's `output_file`. `None` when the attempt left no log.
@@ -120,6 +128,19 @@ pub fn resolve_step_log_target(
         .ok_or_else(|| ConductorError::Agent(format!("agent run not found: {child_run_id}")))?;
     let log_path = run.log_path()?;
     let output_error = step_has_output_error(&step);
+    let events = AgentManager::new(conn).list_events_for_run(&child_run_id)?;
+    let prompt = events
+        .iter()
+        .find(|e| e.kind == crate::agent::types::EVENT_KIND_PROMPT)
+        .map(|e| e.summary.clone());
+    let prompt_warnings = events
+        .iter()
+        .filter(|e| {
+            e.kind == crate::agent::types::EVENT_KIND_SYSTEM
+                && e.summary.starts_with("Prompt warning:")
+        })
+        .map(|e| e.summary.clone())
+        .collect();
 
     Ok(StepLogTarget {
         run_id: run_id.to_string(),
@@ -128,6 +149,8 @@ pub fn resolve_step_log_target(
             child_run_id,
             log_path,
             agent_result_text: run.result_text,
+            prompt,
+            prompt_warnings,
         },
         output_error,
     })
@@ -140,6 +163,7 @@ pub fn render_step_log(target: &StepLogTarget, mode: StepLogMode) -> Result<Stri
     }
     match mode {
         StepLogMode::Full => read_log(target),
+        StepLogMode::Prompt => Ok(render_prompt(target)),
         StepLogMode::Tail { lines } => {
             let excerpt = output_excerpt(target, || final_text(target));
             Ok(format!(
@@ -163,6 +187,33 @@ pub fn render_step_log(target: &StepLogTarget, mode: StepLogMode) -> Result<Stri
             }
         }
     }
+}
+
+/// Render the stored prompt with its length. This is the prompt conductor rendered
+/// for the agent, before the session's startup context is prepended.
+fn render_prompt(target: &StepLogTarget) -> String {
+    let head = header(target, None);
+    let StepLogSource::Agent {
+        prompt,
+        prompt_warnings,
+        ..
+    } = &target.source
+    else {
+        return head;
+    };
+    let mut out = head;
+    for w in prompt_warnings {
+        out.push_str(&format!("{w}\n"));
+    }
+    match prompt {
+        Some(text) => out.push_str(&format!(
+            "--- prompt ({} chars, {} lines; as rendered, before the startup context) ---\n{text}\n",
+            text.chars().count(),
+            text.lines().count()
+        )),
+        None => out.push_str("No stored prompt for this run.\n"),
+    }
+    out
 }
 
 /// The parsed FLOW_OUTPUT excerpt to show in the header; only for steps whose output failed to parse.
@@ -249,6 +300,10 @@ fn render_script_log(
             "{head}{}",
             render_tail_of(&contents, lines, "lines")
         )),
+        StepLogMode::Prompt => Err(ConductorError::Workflow(format!(
+            "Step '{}' is a script step and has no prompt",
+            step.step_name
+        ))),
         // runkon caps the log at about 64 KiB, so the whole of it is the result.
         StepLogMode::Result => Ok(format!("{head}--- log ---\n{contents}")),
     }
@@ -329,6 +384,8 @@ mod tests {
                 child_run_id: "c1".into(),
                 log_path: path.clone(),
                 agent_result_text: db_result.map(String::from),
+                prompt: None,
+                prompt_warnings: Vec::new(),
             },
             output_error: false,
         };
@@ -368,6 +425,52 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("result") && err.contains("tail") && err.contains("full"));
+        assert!(err.contains("prompt"));
+        assert_eq!(
+            StepLogMode::parse(Some("prompt"), None).unwrap(),
+            StepLogMode::Prompt
+        );
+    }
+
+    #[test]
+    fn prompt_mode_shows_stored_prompt_with_length() {
+        let (mut t, path) = target("{}\n", None);
+        if let StepLogSource::Agent {
+            prompt,
+            prompt_warnings,
+            ..
+        } = &mut t.source
+        {
+            *prompt = Some("héllo\nworld".into());
+            prompt_warnings.push("Prompt warning: agent a: lines 1-2".into());
+        }
+        let out = render_step_log(&t, StepLogMode::Prompt).unwrap();
+        assert!(out.contains("prompt (11 chars, 2 lines"), "{out}");
+        assert!(out.contains("héllo\nworld"), "{out}");
+        assert!(out.contains("Prompt warning: agent a"), "{out}");
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn prompt_mode_without_stored_prompt() {
+        let (t, path) = target("{}\n", None);
+        let out = render_step_log(&t, StepLogMode::Prompt).unwrap();
+        assert!(out.contains("No stored prompt"), "{out}");
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn prompt_mode_on_script_step_errors() {
+        let t = StepLogTarget {
+            run_id: "r1".into(),
+            step: sample_step(),
+            source: StepLogSource::Script { log_path: None },
+            output_error: false,
+        };
+        let err = render_step_log(&t, StepLogMode::Prompt)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no prompt"), "{err}");
     }
 
     #[test]
@@ -435,6 +538,8 @@ mod tests {
             child_run_id: "c1".into(),
             log_path: path,
             agent_result_text: None,
+            prompt: None,
+            prompt_warnings: Vec::new(),
         };
         let err = render_step_log(&t, StepLogMode::Full)
             .unwrap_err()

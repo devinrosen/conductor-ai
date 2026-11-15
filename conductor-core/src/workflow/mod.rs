@@ -22,6 +22,7 @@ pub(crate) mod manager;
 pub(crate) mod output;
 mod output_excerpt;
 pub(crate) mod panic_db_sink;
+pub(crate) mod placeholder_scan;
 // `pub(crate)` so binary crates (TUI, web, desktop) cannot construct
 // `SqliteWorkflowPersistence` directly. They must use the higher-level
 // wrappers in this module (e.g. `recover_stuck_steps_from_db`).

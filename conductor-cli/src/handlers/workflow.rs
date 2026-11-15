@@ -1436,6 +1436,15 @@ mod step_log_cli_tests {
     }
 
     #[test]
+    fn prompt_mode_is_accepted() {
+        let (mode, lines) = parse(&["--mode", "prompt"]).unwrap();
+        assert_eq!(
+            StepLogMode::parse(Some(&mode), lines).unwrap(),
+            StepLogMode::Prompt
+        );
+    }
+
+    #[test]
     fn invalid_mode_is_rejected_by_the_handler_parse() {
         let (mode, lines) = parse(&["--mode", "bogus"]).unwrap();
         let err = StepLogMode::parse(Some(&mode), lines).unwrap_err();
