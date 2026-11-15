@@ -3,7 +3,9 @@
 The semantics of the `.wf` language, organised by construct. Each rule has a
 one-line example and the engine behaviour behind it. Authors and reviewers of
 workflows, scripts, agent briefs and templates should treat this as the place
-to check a rule before relying on it.
+to check a rule before relying on it. Changes to this directory are fact-checked
+against the runkon source by the Doc Accuracy reviewer in `review-pr`, so every
+rule should be traceable to source.
 
 The engine is [runkon-flow](https://github.com/runkon/runkon), consumed from
 crates.io, so the source of truth for behaviour is that crate (version pinned

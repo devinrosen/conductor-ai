@@ -71,6 +71,12 @@ agg "$( { rev review-architecture false "[$(finding src/a.rs 10 critical)]"; } |
 assert_exit 0
 assert_marker has_blocking_findings; assert_no_marker has_warnings
 
+case_begin "a Doc Accuracy critical finding blocks, under its reviewer name"
+agg "$( { rev review-doc-accuracy false "[$(finding docs/workflow/language.md 10 critical)]"; rev review-security true '[]'; } | arr)"
+assert_exit 0
+assert_marker has_blocking_findings; assert_no_marker approved
+assert_jq '.overall_approved == false and (.blocking_findings | map(.reviewer) == ["Doc Accuracy"])'
+
 case_begin "a suggestion-severity finding does not block an approving reviewer"
 agg "$( { rev review-architecture true "[$(finding src/a.rs 10 suggestion)]"; } | arr)"
 assert_exit 0; assert_marker approved
