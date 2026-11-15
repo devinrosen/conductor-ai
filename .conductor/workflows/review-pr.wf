@@ -50,6 +50,17 @@ workflow review-pr {
     }
   }
 
+  // Doc Accuracy (#3336): fires on docs/workflow/** or the Workflow Semantics
+  // brief, and exports runkon_version and runkon_src for the reviewer.
+  script detect-engine-doc-changes {
+    run = ".conductor/scripts/detect-engine-doc-changes.sh"
+    env = {
+      BASE_BRANCH = "{{base_branch}}"
+      SCOPE       = "{{scope}}"
+      SINCE       = "{{since}}"
+    }
+  }
+
   // Deterministic validation of workflows and templates (#3290): an unknown
   // gate type, agent, schema or script fails here even if every LLM reviewer
   // misses it (#3281). Its reviewer-shaped output blocks through the aggregator.
@@ -74,6 +85,7 @@ workflow review-pr {
     call review-test-coverage      { retries = 1  if = "detect-file-types.has_code_changes" }
     call review-db-migrations      { retries = 1  if = "detect-db-migrations.has_db_migrations" }
     call review-workflow-semantics { retries = 1  if = "detect-workflow-changes.has_workflow_changes" }
+    call review-doc-accuracy       { retries = 1  if = "detect-engine-doc-changes.has_engine_doc_changes" }
   }
 
   // Replies posted on the PR since the last conductor review, so findings

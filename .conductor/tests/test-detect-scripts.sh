@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# detect-db-migrations.sh, detect-file-types.sh, detect-workflow-changes.sh and
-# lib-diff-range.sh against a scratch repo with a fake origin/main.
+# detect-db-migrations.sh, detect-file-types.sh, detect-workflow-changes.sh,
+# detect-engine-doc-changes.sh and lib-diff-range.sh against a scratch repo with a fake origin/main.
 set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
@@ -21,7 +21,7 @@ commit_file "$repo" side.txt side "side"
 SIDE=$(git rev-parse HEAD)
 git checkout -q feature
 
-ALL="detect-db-migrations.sh detect-file-types.sh detect-workflow-changes.sh"
+ALL="detect-db-migrations.sh detect-file-types.sh detect-workflow-changes.sh detect-engine-doc-changes.sh"
 
 case_begin "full scope sets all three markers"
 run_script detect-db-migrations.sh BASE_BRANCH=main
@@ -105,5 +105,81 @@ filter_case "nested .md is not a code extension" no pkg/notes.md
 filter_case "Cargo.lock is code" code Cargo.lock
 filter_case "code plus a workflow sets both markers" code src/lib.rs .github/workflows/ci.yml
 filter_case "a file name with a space and quote yields valid JSON" code "src/we ird \"name\".rs"
+
+# --- detect-engine-doc-changes (#3336) ---
+# A stub cargo that only logs, and a fake CARGO_HOME, so the tests never reach
+# the network or the real registry.
+DOC_STUB=$(scratch_dir)
+mkdir -p "$DOC_STUB/bin"
+printf '#!/usr/bin/env bash\necho "$*" >> "%s/calls"\nexit 0\n' "$DOC_STUB" > "$DOC_STUB/bin/cargo"
+chmod +x "$DOC_STUB/bin/cargo"
+FAKE_HOME=$(scratch_dir)
+mkdir -p "$FAKE_HOME/registry/src/idx/runkon-flow-1.2.3-alpha"
+LOCK_BODY=$(printf '[[package]]\nname = "runkon-flow-executors"\nversion = "9.9.9"\n\n[[package]]\nname = "runkon-flow"\nversion = "1.2.3-alpha"\n')
+
+doc_case() { # NAME EXPECT(yes|no) FILE...
+  local name="$1" expect="$2"
+  shift 2
+  git checkout -q -B docs origin/main
+  commit_file "$repo" Cargo.lock "$LOCK_BODY" "lock"
+  local f
+  for f in "$@"; do commit_file "$repo" "$f" x "add $f"; done
+  rm -f "$DOC_STUB/calls"
+  run_script detect-engine-doc-changes.sh BASE_BRANCH=main "CARGO_HOME=$FAKE_HOME" "PATH=$DOC_STUB/bin:$PATH"
+  case_begin "detect-engine-doc-changes: $name"
+  assert_exit 0
+  if [ "$expect" = yes ]; then
+    assert_marker has_engine_doc_changes
+    assert_jq '.runkon_version == "1.2.3-alpha"'
+    assert_jq ".runkon_src == \"$FAKE_HOME/registry/src/idx\""
+  else
+    assert_no_markers
+    assert_jq '.runkon_version == "" and .runkon_src == ""'
+  fi
+}
+doc_case "docs/workflow/language.md triggers" yes docs/workflow/language.md
+doc_case "a nested docs/workflow file triggers" yes docs/workflow/sub/x.md
+doc_case "the Workflow Semantics brief triggers" yes .conductor/agents/review-workflow-semantics.md
+doc_case "another agent brief does not" no .conductor/agents/review-security.md
+doc_case "docs/VISION.md does not" no docs/VISION.md
+doc_case "README.md does not" no README.md
+
+case_begin "detect-engine-doc-changes: the locked version is used, not another package's"
+git checkout -q -B docs origin/main
+commit_file "$repo" Cargo.lock "$LOCK_BODY" "lock"
+commit_file "$repo" docs/workflow/language.md x "doc"
+run_script detect-engine-doc-changes.sh BASE_BRANCH=main "CARGO_HOME=$FAKE_HOME" "PATH=$DOC_STUB/bin:$PATH"
+assert_jq '.runkon_version == "1.2.3-alpha"'
+[ ! -f "$DOC_STUB/calls" ] || fail "cargo ran although the source was present"
+
+case_begin "detect-engine-doc-changes: a missing source still emits the marker, after cargo fetch"
+EMPTY_HOME=$(scratch_dir)
+mkdir -p "$EMPTY_HOME/registry/src/idx"
+rm -f "$DOC_STUB/calls"
+run_script detect-engine-doc-changes.sh BASE_BRANCH=main "CARGO_HOME=$EMPTY_HOME" "PATH=$DOC_STUB/bin:$PATH"
+assert_exit 0; assert_marker has_engine_doc_changes
+assert_jq '.runkon_version == "1.2.3-alpha" and .runkon_src == ""'
+assert_stderr_contains "not found"
+grep -q '^fetch' "$DOC_STUB/calls" 2>/dev/null || fail "cargo fetch was not called"
+
+case_begin "detect-engine-doc-changes: no Cargo.lock gives an empty version and still exits 0"
+git checkout -q -B docs origin/main
+commit_file "$repo" docs/workflow/language.md x "doc"
+run_script detect-engine-doc-changes.sh BASE_BRANCH=main "CARGO_HOME=$FAKE_HOME" "PATH=$DOC_STUB/bin:$PATH"
+assert_exit 0; assert_marker has_engine_doc_changes
+assert_jq '.runkon_version == "" and .runkon_src == ""'
+
+case_begin "detect-engine-doc-changes: a malformed Cargo.lock version is dropped, the marker still fires"
+git checkout -q -B docs origin/main
+BAD_VERSION='../../x 1.0 0 injected'
+commit_file "$repo" Cargo.lock "$(printf '[[package]]\nname = "runkon-flow"\nversion = "%s"\n' "$BAD_VERSION")" "lock"
+commit_file "$repo" docs/workflow/language.md x "doc"
+rm -f "$DOC_STUB/calls"
+run_script detect-engine-doc-changes.sh BASE_BRANCH=main "CARGO_HOME=$FAKE_HOME" "PATH=$DOC_STUB/bin:$PATH"
+assert_exit 0; assert_marker has_engine_doc_changes
+assert_jq '.runkon_version == "" and .runkon_src == ""'
+assert_stdout_not_contains "injected"
+assert_stdout_not_contains "../../x"
+assert_stderr_contains "malformed"
 
 finish
