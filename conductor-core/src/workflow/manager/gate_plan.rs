@@ -45,7 +45,9 @@ pub struct GatePlan {
 }
 
 fn not_found(msg: &str) -> ConductorError {
-    ConductorError::WorkflowStepNotFound { id: msg.to_string() }
+    ConductorError::WorkflowStepNotFound {
+        id: msg.to_string(),
+    }
 }
 
 /// Find the run's waiting gate, its `plan_path` and the directory the path must sit in.
@@ -111,11 +113,7 @@ pub fn read_gate_plan(target: &GatePlanTarget) -> Result<GatePlan> {
     read_plan_within(target, &root, &allowed)
 }
 
-fn read_plan_within(
-    target: &GatePlanTarget,
-    root: &Path,
-    allowed: &[PathBuf],
-) -> Result<GatePlan> {
+fn read_plan_within(target: &GatePlanTarget, root: &Path, allowed: &[PathBuf]) -> Result<GatePlan> {
     let raw = Path::new(&target.plan_path);
     let joined = if raw.is_absolute() {
         raw.to_path_buf()
@@ -189,7 +187,10 @@ mod tests {
         git(&main, &["init", "-q"]);
         git(&main, &["commit", "-q", "--allow-empty", "-m", "init"]);
         let wt = tmp.path().join("wt");
-        git(&main, &["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "b"]);
+        git(
+            &main,
+            &["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "b"],
+        );
         (tmp, main, wt)
     }
 
@@ -210,7 +211,10 @@ mod tests {
     fn plan_in_the_worktree_is_returned_absolute_or_relative() {
         let (_tmp, _main, wt) = repo_with_worktree();
         std::fs::write(wt.join("PLAN.md"), "hi").unwrap();
-        for p in [wt.join("PLAN.md").to_str().unwrap().to_string(), "PLAN.md".into()] {
+        for p in [
+            wt.join("PLAN.md").to_str().unwrap().to_string(),
+            "PLAN.md".into(),
+        ] {
             assert_eq!(read_gate_plan(&target(&wt, &p)).unwrap().content, "hi");
         }
     }
@@ -268,8 +272,11 @@ mod tests {
     /// A run with a plan step (position 0, `structured_output`) and a waiting gate (position 1).
     fn run_waiting_at_gate(conn: &Connection, structured_output: Option<&str>) {
         crate::test_helpers::insert_test_wf_run(conn, "r", "wf", "waiting", None);
-        conn.execute("UPDATE workflow_runs SET worktree_id = 'w1' WHERE id = 'r'", [])
-            .unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET worktree_id = 'w1' WHERE id = 'r'",
+            [],
+        )
+        .unwrap();
         crate::test_helpers::insert_test_wf_step(
             conn,
             "plan",
@@ -298,7 +305,11 @@ mod tests {
 
     #[test]
     fn gate_without_plan_path_is_not_found() {
-        for output in [None, Some(r#"{"summary":"x"}"#), Some(r#"{"plan_path":""}"#)] {
+        for output in [
+            None,
+            Some(r#"{"summary":"x"}"#),
+            Some(r#"{"plan_path":""}"#),
+        ] {
             let conn = crate::test_helpers::setup_db();
             run_waiting_at_gate(&conn, output);
             assert!(
@@ -317,7 +328,8 @@ mod tests {
         let conn = crate::test_helpers::setup_db();
         run_waiting_at_gate(&conn, Some(r#"{"plan_path":"PLAN.md"}"#));
         conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
-        conn.execute("DELETE FROM worktrees WHERE id = 'w1'", []).unwrap();
+        conn.execute("DELETE FROM worktrees WHERE id = 'w1'", [])
+            .unwrap();
         assert!(matches!(
             resolve_gate_plan_target(&conn, "r").unwrap_err(),
             ConductorError::WorkflowStepNotFound { .. }
