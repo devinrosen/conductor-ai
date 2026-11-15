@@ -583,7 +583,10 @@ mod tests {
     fn prompt_warnings_flag_runaway_placeholder() {
         let w = prompt_warnings("a", "x `{{` y\nz {{ticket_id}}");
         assert_eq!(w.len(), 1);
-        assert!(w[0].contains("agent a") && w[0].contains("lines 1-2"), "{w:?}");
+        assert!(
+            w[0].contains("agent a") && w[0].contains("lines 1-2"),
+            "{w:?}"
+        );
         assert!(prompt_warnings("a", "fine {{ticket_id}}").is_empty());
     }
 

@@ -552,7 +552,11 @@ where
                 Some(wf_name),
                 &all_plugin_dirs,
             ) {
-                texts.push((format!("agent {}", r.label()), agent.prompt, TextKind::Prompt));
+                texts.push((
+                    format!("agent {}", r.label()),
+                    agent.prompt,
+                    TextKind::Prompt,
+                ));
             }
         }
         for snippet in &wf_refs.snippets {

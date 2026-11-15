@@ -132,8 +132,7 @@ mod tests {
     #[test]
     fn matches_engine_substitution() {
         let text = "a `{{` b\nc\nd {{x}} e {{ y }} f {{open";
-        let rendered =
-            runkon_flow::prompt_builder::substitute_variables(text, &HashMap::new());
+        let rendered = runkon_flow::prompt_builder::substitute_variables(text, &HashMap::new());
         let dropped: usize = runaway_placeholders(text)
             .iter()
             .map(|h| h.dropped_chars)
