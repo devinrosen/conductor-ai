@@ -1542,7 +1542,7 @@ fn test_cleanup_merged_worktrees_skips_branch_reuse_after_old_merge() {
         .unwrap();
 
     assert_eq!(
-        count, 0,
+        count.cleaned, 0,
         "worktree created after old merge should not be cleaned up"
     );
 
