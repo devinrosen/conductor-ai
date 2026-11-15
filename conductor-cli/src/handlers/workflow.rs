@@ -40,6 +40,42 @@ impl ExecTarget {
             target_label: Some(format!("{}/{}", r.slug, wt.slug)),
         }
     }
+
+    fn for_repo(r: &conductor_core::repo::Repo) -> Self {
+        Self {
+            worktree_id: None,
+            working_dir: r.local_path.clone(),
+            repo_path: r.local_path.clone(),
+            ticket_id: None,
+            repo_id: Some(r.id.clone()),
+            target_label: Some(r.slug.clone()),
+        }
+    }
+
+    /// A repo-level target: a registered repo with no worktree.
+    fn is_repo_level(&self) -> bool {
+        self.worktree_id.is_none() && self.repo_id.is_some()
+    }
+}
+
+/// Resolve a directory to the registered worktree containing it, else the
+/// registered repo whose checkout contains it. Returns the workflow lookup
+/// paths `(wt_path, repo_path)` and the target. `None` when `dir` is in neither.
+fn resolve_dir_target(
+    conn: &rusqlite::Connection,
+    config: &Config,
+    dir: &std::path::Path,
+) -> anyhow::Result<Option<(String, String, ExecTarget)>> {
+    let repo_mgr = RepoManager::new(conn, config);
+    if let Some(wt) = WorktreeManager::new(conn, config).find_by_cwd(dir)? {
+        let r = repo_mgr.get_by_id(&wt.repo_id)?;
+        let target = ExecTarget::for_worktree(&wt, &r);
+        return Ok(Some((wt.path, r.local_path, target)));
+    }
+    Ok(repo_mgr.find_by_path(dir)?.map(|r| {
+        let target = ExecTarget::for_repo(&r);
+        (r.local_path.clone(), r.local_path, target)
+    }))
 }
 
 /// The per-run options that vary between standalone run call sites.
@@ -378,14 +414,7 @@ pub fn handle_workflow(
                 run_and_report(exec_params(
                     config,
                     workflow,
-                    ExecTarget {
-                        worktree_id: None,
-                        working_dir: r.local_path.clone(),
-                        repo_path: r.local_path.clone(),
-                        ticket_id: None,
-                        repo_id: Some(r.id.clone()),
-                        target_label: Some(r.slug.clone()),
-                    },
+                    ExecTarget::for_repo(&r),
                     ExecOptions {
                         model: model.clone(),
                         exec_config: exec_config.clone(),
@@ -782,15 +811,24 @@ pub fn handle_workflow(
                 let dir = path.clone().unwrap_or_else(|| ".".to_string());
                 (dir.clone(), dir)
             } else if let Some(ref dir) = path {
-                smoke_target = Some(ExecTarget {
-                    worktree_id: None,
-                    working_dir: dir.clone(),
-                    repo_path: dir.clone(),
-                    ticket_id: None,
-                    repo_id: None,
-                    target_label: Some(dir.clone()),
-                });
-                (dir.clone(), dir.clone())
+                let abs = std::path::absolute(dir)?;
+                if let Some((wt_path, repo_path, target)) =
+                    resolve_dir_target(conn, config, &abs)?
+                {
+                    smoke_target = Some(target);
+                    (wt_path, repo_path)
+                } else {
+                    // Unregistered directory: used as-is, no database ids.
+                    smoke_target = Some(ExecTarget {
+                        worktree_id: None,
+                        working_dir: dir.clone(),
+                        repo_path: dir.clone(),
+                        ticket_id: None,
+                        repo_id: None,
+                        target_label: Some(dir.clone()),
+                    });
+                    (dir.clone(), dir.clone())
+                }
             } else if repo.is_some() && worktree.is_some() {
                 let repo_mgr = RepoManager::new(conn, config);
                 // SAFETY: guarded by `repo.is_some()` above
@@ -812,17 +850,16 @@ pub fn handle_workflow(
                 );
             } else {
                 let cwd = std::env::current_dir()?;
-                let wt_mgr = WorktreeManager::new(conn, config);
-                let wt = wt_mgr.find_by_cwd(&cwd)?.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Could not detect repo/worktree from current directory. \
-                         Run from inside a conductor-managed worktree, or pass <repo> <worktree> explicitly."
-                    )
-                })?;
-                let repo_mgr = RepoManager::new(conn, config);
-                let r = repo_mgr.get_by_id(&wt.repo_id)?;
-                smoke_target = Some(ExecTarget::for_worktree(&wt, &r));
-                (wt.path, r.local_path)
+                let (wt_path, repo_path, target) = resolve_dir_target(conn, config, &cwd)?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Could not detect a registered repo or worktree from the current \
+                             directory. Run from inside a registered repo's checkout or a \
+                             conductor worktree, pass <repo> <worktree>, or pass --path <dir>."
+                        )
+                    })?;
+                smoke_target = Some(target);
+                (wt_path, repo_path)
             };
 
             // Collect workflows to validate.
@@ -939,6 +976,20 @@ pub fn handle_workflow(
                     .iter()
                     .filter(|w| !statically_failed.contains(w.name.as_str()))
                 {
+                    if target.is_repo_level() && !wf.targets.iter().any(|t| t == "repo") {
+                        let reason = format!(
+                            "targets {:?}; a smoke run needs a worktree: pass <repo> <worktree>, \
+                             or --path <worktree dir>",
+                            wf.targets
+                        );
+                        if all {
+                            println!("SMOKE SKIP  {}  {reason}", wf.name);
+                        } else {
+                            println!("SMOKE FAIL  {}  {reason}", wf.name);
+                            smoke_failed += 1;
+                        }
+                        continue;
+                    }
                     smoke_failed += smoke_one(
                         conn,
                         config,

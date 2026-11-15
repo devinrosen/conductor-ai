@@ -159,6 +159,18 @@ impl<'a> RepoManager<'a> {
         Ok(repos.into_iter().map(|r| r.enrich(self.config)).collect())
     }
 
+    /// Find the registered repo whose `local_path` contains `dir` (the repo's
+    /// main checkout or a subdirectory of it). The longest `local_path` wins.
+    ///
+    /// Returns `None` when no registered repo matches.
+    pub fn find_by_path(&self, dir: &Path) -> Result<Option<Repo>> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .filter(|r| dir_contains(&r.local_path, dir))
+            .max_by_key(|r| r.local_path.len()))
+    }
+
     pub fn get_by_id(&self, id: &str) -> Result<Repo> {
         self.conn
             .query_row(
@@ -240,6 +252,20 @@ impl<'a> RepoManager<'a> {
 }
 
 /// Derive a repo slug from a remote URL (e.g. "https://github.com/org/repo.git" → "repo").
+/// True when `dir` is `stored` or inside it. Compares the raw paths first, then
+/// canonicalized ones (macOS `/var` vs `/private/var`, symlinked homes). A path
+/// that can't be canonicalized only matches on the raw comparison.
+pub(crate) fn dir_contains(stored: &str, dir: &Path) -> bool {
+    let stored = Path::new(stored);
+    if dir.starts_with(stored) {
+        return true;
+    }
+    match (stored.canonicalize(), dir.canonicalize()) {
+        (Ok(s), Ok(d)) => d.starts_with(s),
+        _ => false,
+    }
+}
+
 pub fn derive_slug_from_url(remote_url: &str) -> String {
     let last = remote_url.rsplit('/').next().unwrap_or("repo");
     last.strip_suffix(".git").unwrap_or(last).to_string()
@@ -610,5 +636,48 @@ mod tests {
             .to_string_lossy()
             .to_string();
         assert_eq!(result, expected);
+    }
+
+    fn register_at(mgr: &RepoManager, slug: &str, path: &str) {
+        mgr.register(slug, path, &format!("https://example.com/{slug}.git"), None)
+            .unwrap();
+    }
+
+    #[test]
+    fn test_find_by_path_exact_subdir_none_and_longest() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+        register_at(&mgr, "outer", "/tmp/nonexistent-3382/outer");
+        register_at(&mgr, "inner", "/tmp/nonexistent-3382/outer/inner");
+
+        let find = |p: &str| mgr.find_by_path(Path::new(p)).unwrap().map(|r| r.slug);
+        assert_eq!(find("/tmp/nonexistent-3382/outer").as_deref(), Some("outer"));
+        assert_eq!(
+            find("/tmp/nonexistent-3382/outer/src/lib").as_deref(),
+            Some("outer")
+        );
+        assert_eq!(
+            find("/tmp/nonexistent-3382/outer/inner/src").as_deref(),
+            Some("inner")
+        );
+        assert_eq!(find("/tmp/nonexistent-3382/other"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_find_by_path_matches_through_a_symlink() {
+        let real = tempfile::tempdir().unwrap();
+        let link_parent = tempfile::tempdir().unwrap();
+        let link = link_parent.path().join("link");
+        std::os::unix::fs::symlink(real.path(), &link).unwrap();
+
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+        register_at(&mgr, "linked", link.to_str().unwrap());
+
+        let found = mgr.find_by_path(real.path()).unwrap();
+        assert_eq!(found.map(|r| r.slug).as_deref(), Some("linked"));
     }
 }
