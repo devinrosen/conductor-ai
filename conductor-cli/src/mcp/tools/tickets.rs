@@ -2,18 +2,7 @@ use conductor_core::Conductor;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, get_arg_usize, tool_err, tool_ok};
-
-fn parse_comma_arg(args: &serde_json::Map<String, Value>, key: &str) -> Vec<String> {
-    get_arg(args, key)
-        .map(|s| {
-            s.split(',')
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
-}
+use crate::mcp::helpers::{get_arg, get_arg_usize, get_list_arg, tool_err, tool_ok};
 
 pub(super) fn tool_list_tickets(
     conductor: &Conductor,
@@ -24,7 +13,7 @@ pub(super) fn tool_list_tickets(
 
     let repo_slug = require_arg!(args, "repo");
 
-    let labels = parse_comma_arg(args, "label");
+    let labels = list_arg!(args, "label");
     let search = get_arg(args, "search").map(|s| s.to_string());
     let include_closed = get_arg(args, "include_closed") == Some("true");
 
@@ -177,11 +166,11 @@ pub(super) fn tool_upsert_ticket(
     let state = require_arg!(args, "state");
     let body = get_arg(args, "body").unwrap_or("").to_string();
     let url = get_arg(args, "url").unwrap_or("").to_string();
-    let labels = parse_comma_arg(args, "labels");
+    let labels = list_arg!(args, "labels");
     let assignee = get_arg(args, "assignee").map(|s| s.to_string());
     let priority = get_arg(args, "priority").map(|s| s.to_string());
-    let blocked_by = parse_comma_arg(args, "blocked_by");
-    let children = parse_comma_arg(args, "children");
+    let blocked_by = list_arg!(args, "blocked_by");
+    let children = list_arg!(args, "children");
     let parent = get_arg(args, "parent").map(|s| s.to_string());
 
     let conn = &conductor.conn;
@@ -288,9 +277,45 @@ pub(super) fn tool_delete_ticket(
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_helpers::make_test_conductor;
+    use super::super::test_helpers::{err_text, make_test_conductor};
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn test_upsert_ticket_invalid_blocked_by_rejected() {
+        let (_f, conductor) = make_test_conductor();
+        let mut a = full_ticket_args("nope");
+        a.insert("blocked_by".into(), serde_json::json!({"a": 1}));
+        let text = err_text(&tool_upsert_ticket(&conductor, &a));
+        assert!(text.starts_with("blocked_by must be"), "{text}");
+    }
+
+    #[test]
+    fn test_upsert_ticket_invalid_labels_rejected() {
+        let (_f, conductor) = make_test_conductor();
+        let mut a = full_ticket_args("nope");
+        a.insert("labels".into(), serde_json::json!(42));
+        let text = err_text(&tool_upsert_ticket(&conductor, &a));
+        assert!(text.starts_with("labels must be"), "{text}");
+    }
+
+    #[test]
+    fn test_upsert_ticket_invalid_children_rejected() {
+        let (_f, conductor) = make_test_conductor();
+        let mut a = full_ticket_args("nope");
+        a.insert("children".into(), serde_json::json!([1]));
+        let text = err_text(&tool_upsert_ticket(&conductor, &a));
+        assert!(text.starts_with("children must be"), "{text}");
+    }
+
+    #[test]
+    fn test_list_tickets_invalid_label_rejected() {
+        let (_f, conductor) = make_test_conductor();
+        let mut a = args_with("repo", "nope");
+        a.insert("label".into(), serde_json::json!([1]));
+        let text = err_text(&tool_list_tickets(&conductor, &a));
+        assert!(text.starts_with("label must be"), "{text}");
+    }
 
     fn empty_args() -> serde_json::Map<String, Value> {
         serde_json::Map::new()

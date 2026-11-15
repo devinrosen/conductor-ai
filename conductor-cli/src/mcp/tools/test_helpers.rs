@@ -41,3 +41,9 @@ pub(crate) fn create_list_run(
     .id
     .clone()
 }
+
+/// Assert `result` is an error and return its first text content.
+pub(crate) fn err_text(result: &rmcp::model::CallToolResult) -> String {
+    assert_eq!(result.is_error, Some(true));
+    result.content[0].as_text().unwrap().text.clone()
+}

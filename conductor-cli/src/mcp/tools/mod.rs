@@ -82,16 +82,23 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
             "conductor_list_tickets",
             "List tickets for a repo. Filters: label, search, include_closed. \
              Individual tickets with full body available at `conductor://ticket/{repo}/{id}`.",
-            schema(&[
-                ("repo", "Repo slug (e.g. my-repo)", true),
+            schema_typed(&[
+                ("repo", "string", "Repo slug (e.g. my-repo)", true),
                 (
                     "label",
-                    "Filter by label name (comma-separated for multiple, e.g. 'bug,enhancement')",
+                    "string_list",
+                    "Filter by label name (array of strings or comma-separated, e.g. 'bug,enhancement')",
                     false,
                 ),
-                ("search", "Text search against ticket title and body", false),
+                (
+                    "search",
+                    "string",
+                    "Text search against ticket title and body",
+                    false,
+                ),
                 (
                     "include_closed",
+                    "string",
                     "Set to 'true' to include closed tickets (default: open only)",
                     false,
                 ),
@@ -394,14 +401,14 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
             schema_typed(&[
                 (
                     "run_id",
-                    "string",
-                    "Workflow run ID; comma-separated IDs are combined into one report",
+                    "string_list",
+                    "Workflow run ID; an array or comma-separated IDs are combined into one report",
                     true,
                 ),
                 (
                     "compare_run_id",
-                    "string",
-                    "Run ID(s) to compare against, comma-separated",
+                    "string_list",
+                    "Run ID(s) to compare against (array of strings or comma-separated)",
                     false,
                 ),
                 (
@@ -716,17 +723,28 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
             "conductor_create_gh_issue",
             "Create a GitHub issue in a registered repo. Returns the issue number and URL. \
              Optionally files it in an open milestone and links it to an agent run for tracking.",
-            schema(&[
-                ("repo", "Repo slug (registered conductor repo)", true),
-                ("title", "Issue title", true),
-                ("body", "Issue body (markdown)", true),
-                ("labels", "Comma-separated label names (optional)", false),
+            schema_typed(&[
+                ("repo", "string", "Repo slug (registered conductor repo)", true),
+                ("title", "string", "Issue title", true),
+                ("body", "string", "Issue body (markdown)", true),
+                (
+                    "labels",
+                    "string_list",
+                    "Label names: an array of strings or a comma-separated string (optional)",
+                    false,
+                ),
                 (
                     "milestone",
+                    "string",
                     "Milestone title to file the issue in (optional; must be an open milestone in the repo, otherwise the call fails and lists them)",
                     false,
                 ),
-                ("run_id", "Agent run ID for tracking (optional)", false),
+                (
+                    "run_id",
+                    "string",
+                    "Agent run ID for tracking (optional)",
+                    false,
+                ),
             ]),
         ),
         Tool::new(
@@ -735,20 +753,20 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
              Use this from a sync workflow to keep tickets current without modifying conductor-ai source code. \
              Dependency fields use replace semantics: `children` replaces all child relationships on every call \
              (omit children to leave existing children unchanged); `parent` replaces any existing parent relationship.",
-            schema(&[
-                ("repo",        "Repo slug",                                                                                                                           true),
-                ("source_type", "Free-form source identifier, e.g. 'sdlc', 'linear'",                                                                                 true),
-                ("source_id",   "Unique ID in the source system",                                                                                                      true),
-                ("title",       "Ticket title",                                                                                                                        true),
-                ("state",       "open | in_progress | closed",                                                                                                         true),
-                ("body",        "Ticket body/description",                                                                                                             false),
-                ("url",         "URL to the ticket in the source system",                                                                                              false),
-                ("labels",      "Comma-separated label names",                                                                                                         false),
-                ("assignee",    "Assignee username or name",                                                                                                           false),
-                ("priority",    "Priority string",                                                                                                                     false),
-                ("blocked_by",  "Comma-separated source IDs of tickets that block this one",                                                                           false),
-                ("children",    "Comma-separated source IDs of child tickets (this ticket is parent). REPLACES existing children on every call — include all children or previously set ones will be removed.", false),
-                ("parent",      "Source ID of the parent ticket within the same source_type. Sets this ticket as a child of that parent. REPLACES any existing parent — last write wins.", false),
+            schema_typed(&[
+                ("repo", "string", "Repo slug", true),
+                ("source_type", "string", "Free-form source identifier, e.g. 'sdlc', 'linear'", true),
+                ("source_id", "string", "Unique ID in the source system", true),
+                ("title", "string", "Ticket title", true),
+                ("state", "string", "open | in_progress | closed", true),
+                ("body", "string", "Ticket body/description", false),
+                ("url", "string", "URL to the ticket in the source system", false),
+                ("labels", "string_list", "Label names (array of strings or comma-separated)", false),
+                ("assignee", "string", "Assignee username or name", false),
+                ("priority", "string", "Priority string", false),
+                ("blocked_by", "string_list", "Source IDs (array of strings or comma-separated) of tickets that block this one", false),
+                ("children", "string_list", "Source IDs (array of strings or comma-separated) of child tickets (this ticket is parent). REPLACES existing children on every call — include all children or previously set ones will be removed.", false),
+                ("parent", "string", "Source ID of the parent ticket within the same source_type. Sets this ticket as a child of that parent. REPLACES any existing parent — last write wins.", false),
             ]),
         ),
         Tool::new(
@@ -828,6 +846,18 @@ mod tests {
     use super::test_helpers::make_test_conductor;
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn create_gh_issue_labels_schema_accepts_string_or_array() {
+        let tool = conductor_tools()
+            .into_iter()
+            .find(|t| t.name == "conductor_create_gh_issue")
+            .unwrap();
+        let any_of = &tool.input_schema["properties"]["labels"]["anyOf"];
+        assert_eq!(any_of[0]["type"], "string");
+        assert_eq!(any_of[1]["type"], "array");
+        assert_eq!(any_of[1]["items"]["type"], "string");
+    }
 
     fn empty_args() -> serde_json::Map<String, Value> {
         serde_json::Map::new()
