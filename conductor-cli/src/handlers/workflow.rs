@@ -623,7 +623,7 @@ pub fn handle_workflow(
         } => {
             use conductor_core::workflow::{render_step_log, resolve_step_log_target, StepLogMode};
             let mode = StepLogMode::parse(Some(&mode), lines)?;
-            let target = resolve_step_log_target(conn, &run_id, &step_name)?;
+            let target = resolve_step_log_target(conn, &run_id, &step_name, mode)?;
             print!("{}", render_step_log(&target, mode)?);
         }
         WorkflowCommands::RunShow { id } => {

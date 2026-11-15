@@ -48,35 +48,59 @@ impl RunawayPlaceholder {
     }
 }
 
-/// Find every `{{ … }}` span the engine would remove although it is not a
-/// variable name. Mirrors the engine's scan: the first `}}` after a `{{`, no
-/// nesting; an unclosed `{{` is kept verbatim and not reported.
-pub(crate) fn runaway_placeholders(text: &str) -> Vec<RunawayPlaceholder> {
-    let mut out = Vec::new();
+/// Start of the system-event summary recorded for a prompt warning. The adapter
+/// writes events with it and `step-log` reads them back by it, so both build on
+/// this one constant.
+pub(crate) const PROMPT_WARNING_PREFIX: &str = "Prompt warning:";
+
+/// One `{{ … }}` span as the engine's substitution sees it.
+pub(crate) struct PlaceholderSpan<'a> {
+    /// Byte offset of the opening `{{`.
+    pub open: usize,
+    /// Byte offset just past the closing `}}`.
+    pub end: usize,
+    /// Everything between the delimiters.
+    pub key: &'a str,
+}
+
+/// Iterate the `{{ … }}` spans of `text` the way the engine does: the first
+/// `}}` after a `{{`, no nesting; an unclosed `{{` ends the scan.
+pub(crate) fn placeholder_spans(text: &str) -> impl Iterator<Item = PlaceholderSpan<'_>> {
     let mut pos = 0;
-    while let Some(rel) = text[pos..].find("{{") {
-        let open = pos + rel;
+    std::iter::from_fn(move || {
+        let open = pos + text[pos..].find("{{")?;
         let key_start = open + 2;
-        let Some(close_rel) = text[key_start..].find("}}") else {
-            break;
-        };
-        let key = &text[key_start..key_start + close_rel];
-        let end = key_start + close_rel + 2;
-        // `{{#if x}}`, `{{else}}` and `{{/if}}` are conditional tags the engine
-        // resolves before substitution, not placeholders.
-        let is_tag = key.starts_with('#') || key.starts_with('/') || key == "else";
-        if !is_variable_name(key) && !is_tag {
-            let start_line = text[..open].matches('\n').count() + 1;
-            let end_line = start_line + key.matches('\n').count();
-            out.push(RunawayPlaceholder {
+        let close = key_start + text[key_start..].find("}}")?;
+        pos = close + 2;
+        Some(PlaceholderSpan {
+            open,
+            end: pos,
+            key: &text[key_start..close],
+        })
+    })
+}
+
+/// Find every `{{ … }}` span the engine would remove although it is not a
+/// variable name. Mirrors the engine's scan (see [`placeholder_spans`]); an
+/// unclosed `{{` is kept verbatim and not reported.
+pub(crate) fn runaway_placeholders(text: &str) -> Vec<RunawayPlaceholder> {
+    placeholder_spans(text)
+        .filter(|span| {
+            // `{{#if x}}`, `{{else}}` and `{{/if}}` are conditional tags the engine
+            // resolves before substitution, not placeholders.
+            let is_tag =
+                span.key.starts_with('#') || span.key.starts_with('/') || span.key == "else";
+            !is_variable_name(span.key) && !is_tag
+        })
+        .map(|span| {
+            let start_line = text[..span.open].matches('\n').count() + 1;
+            RunawayPlaceholder {
                 start_line,
-                end_line,
-                dropped_chars: text[open..end].chars().count(),
-            });
-        }
-        pos = end;
-    }
-    out
+                end_line: start_line + span.key.matches('\n').count(),
+                dropped_chars: text[span.open..span.end].chars().count(),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

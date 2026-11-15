@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use rusqlite::Connection;
 
 use super::output_excerpt::{flow_output_excerpt, step_has_output_error};
+use super::placeholder_scan::PROMPT_WARNING_PREFIX;
 use super::WorkflowRunStep;
 use crate::agent::{final_result_text, AgentManager};
 use crate::error::{ConductorError, Result};
@@ -80,11 +81,13 @@ pub struct StepLogTarget {
 }
 
 /// Find the step named `step_name` in `run_id` (last iteration wins; among script
-/// retry attempts of one iteration, the latest attempt wins) and its log.
+/// retry attempts of one iteration, the latest attempt wins) and its log. `mode` is
+/// the mode the target will be rendered in: only `Prompt` loads the stored prompt.
 pub fn resolve_step_log_target(
     conn: &Connection,
     run_id: &str,
     step_name: &str,
+    mode: StepLogMode,
 ) -> Result<StepLogTarget> {
     super::get_workflow_run(conn, run_id)?
         .ok_or_else(|| ConductorError::WorkflowRunNotFound { id: run_id.into() })?;
@@ -128,19 +131,31 @@ pub fn resolve_step_log_target(
         .ok_or_else(|| ConductorError::Agent(format!("agent run not found: {child_run_id}")))?;
     let log_path = run.log_path()?;
     let output_error = step_has_output_error(&step);
-    let events = AgentManager::new(conn).list_events_for_run(&child_run_id)?;
-    let prompt = events
-        .iter()
-        .find(|e| e.kind == crate::agent::types::EVENT_KIND_PROMPT)
-        .map(|e| e.summary.clone());
-    let prompt_warnings = events
-        .iter()
-        .filter(|e| {
-            e.kind == crate::agent::types::EVENT_KIND_SYSTEM
-                && e.summary.starts_with("Prompt warning:")
-        })
-        .map(|e| e.summary.clone())
-        .collect();
+    // Only `Prompt` mode shows the prompt or its warnings, so only it reads the events.
+    let (prompt, prompt_warnings) = if mode == StepLogMode::Prompt {
+        let events = AgentManager::new(conn)
+            .list_events_for_run(&child_run_id)
+            .map_err(|e| {
+                ConductorError::Agent(format!(
+                    "failed to read events for agent run {child_run_id}: {e}"
+                ))
+            })?;
+        let prompt = events
+            .iter()
+            .find(|e| e.kind == crate::agent::types::EVENT_KIND_PROMPT)
+            .map(|e| e.summary.clone());
+        let warnings = events
+            .iter()
+            .filter(|e| {
+                e.kind == crate::agent::types::EVENT_KIND_SYSTEM
+                    && e.summary.starts_with(PROMPT_WARNING_PREFIX)
+            })
+            .map(|e| e.summary.clone())
+            .collect();
+        (prompt, warnings)
+    } else {
+        (None, Vec::new())
+    };
 
     Ok(StepLogTarget {
         run_id: run_id.to_string(),
@@ -445,7 +460,7 @@ mod tests {
         } = &mut t.source
         {
             *prompt = Some("héllo\nworld".into());
-            prompt_warnings.push("Prompt warning: agent a: lines 1-2".into());
+            prompt_warnings.push(format!("{PROMPT_WARNING_PREFIX} agent a: lines 1-2"));
         }
         let out = render_step_log(&t, StepLogMode::Prompt).unwrap();
         assert!(out.contains("prompt (11 chars, 2 lines"), "{out}");
@@ -565,9 +580,91 @@ mod tests {
     }
 
     #[test]
+    fn resolve_prompt_mode_reads_prompt_and_only_warnings() {
+        let (conn, run_id) = db_with_run();
+        let seeded = seed_step_with_agent_run(
+            &conn,
+            &run_id,
+            "plan",
+            0,
+            WorkflowStepStatus::Completed,
+            None,
+            None,
+            "",
+        );
+        let mgr = AgentManager::new(&conn);
+        let warning = format!("{PROMPT_WARNING_PREFIX} agent a: lines 1-2");
+        for (kind, summary) in [
+            (crate::agent::types::EVENT_KIND_SYSTEM, warning.as_str()),
+            (crate::agent::types::EVENT_KIND_PROMPT, "first prompt"),
+            (crate::agent::types::EVENT_KIND_SYSTEM, "unrelated"),
+            (crate::agent::types::EVENT_KIND_PROMPT, "second prompt"),
+        ] {
+            mgr.create_event(
+                &seeded.child_run_id,
+                kind,
+                summary,
+                "2026-01-01T00:00:00Z",
+                None,
+            )
+            .unwrap();
+        }
+        let t = resolve_step_log_target(&conn, &run_id, "plan", StepLogMode::Prompt).unwrap();
+        let StepLogSource::Agent {
+            prompt,
+            prompt_warnings,
+            ..
+        } = &t.source
+        else {
+            panic!("expected an agent source");
+        };
+        assert_eq!(prompt.as_deref(), Some("first prompt"));
+        assert_eq!(prompt_warnings, &vec![warning]);
+
+        // Other modes skip the event read.
+        let t = resolve_step_log_target(&conn, &run_id, "plan", StepLogMode::Result).unwrap();
+        let StepLogSource::Agent {
+            prompt,
+            prompt_warnings,
+            ..
+        } = &t.source
+        else {
+            panic!("expected an agent source");
+        };
+        assert!(prompt.is_none() && prompt_warnings.is_empty());
+        std::fs::remove_file(seeded.log_path).ok();
+    }
+
+    #[test]
+    fn resolve_prompt_mode_without_events_is_empty() {
+        let (conn, run_id) = db_with_run();
+        let seeded = seed_step_with_agent_run(
+            &conn,
+            &run_id,
+            "plan",
+            0,
+            WorkflowStepStatus::Completed,
+            None,
+            None,
+            "",
+        );
+        let t = resolve_step_log_target(&conn, &run_id, "plan", StepLogMode::Prompt).unwrap();
+        let StepLogSource::Agent {
+            prompt,
+            prompt_warnings,
+            ..
+        } = &t.source
+        else {
+            panic!("expected an agent source");
+        };
+        assert!(prompt.is_none() && prompt_warnings.is_empty());
+        std::fs::remove_file(seeded.log_path).ok();
+    }
+
+    #[test]
     fn resolve_unknown_run_errors() {
         let (conn, _) = db_with_run();
-        let err = resolve_step_log_target(&conn, "nope", "plan").unwrap_err();
+        let err = resolve_step_log_target(&conn, "nope", "plan", StepLogMode::Result).unwrap_err();
         assert!(
             matches!(err, ConductorError::WorkflowRunNotFound { .. }),
             "{err}"
@@ -577,7 +674,7 @@ mod tests {
     #[test]
     fn resolve_unknown_step_errors() {
         let (conn, run_id) = db_with_run();
-        let err = resolve_step_log_target(&conn, &run_id, "missing")
+        let err = resolve_step_log_target(&conn, &run_id, "missing", StepLogMode::Result)
             .unwrap_err()
             .to_string();
         assert!(err.contains("Step 'missing' not found"), "{err}");
@@ -587,7 +684,7 @@ mod tests {
     fn resolve_step_without_agent_run_errors() {
         let (conn, run_id) = db_with_run();
         insert_step(&conn, &run_id, "gate", "actor", false, 0, 0).unwrap();
-        let err = resolve_step_log_target(&conn, &run_id, "gate")
+        let err = resolve_step_log_target(&conn, &run_id, "gate", StepLogMode::Result)
             .unwrap_err()
             .to_string();
         assert!(err.contains("has no agent run"), "{err}");
@@ -601,7 +698,7 @@ mod tests {
         let second =
             seed_step_with_agent_run(&conn, &run_id, "plan", 1, done.clone(), None, None, "");
         let first = seed_step_with_agent_run(&conn, &run_id, "plan", 0, done, None, None, "");
-        let t = resolve_step_log_target(&conn, &run_id, "plan").unwrap();
+        let t = resolve_step_log_target(&conn, &run_id, "plan", StepLogMode::Result).unwrap();
         assert_eq!(t.step.iteration, 1);
         let StepLogSource::Agent {
             child_run_id,
@@ -631,7 +728,7 @@ mod tests {
             Some("<<<FLOW_OUTPUT>>>\n{bad\n<<<END_FLOW_OUTPUT>>>"),
             "{\"type\":\"assistant\"}\n",
         );
-        let t = resolve_step_log_target(&conn, &run_id, "plan").unwrap();
+        let t = resolve_step_log_target(&conn, &run_id, "plan", StepLogMode::Result).unwrap();
         assert!(t.output_error);
         let out = render_step_log(&t, StepLogMode::Result).unwrap();
         assert!(
@@ -681,7 +778,7 @@ mod tests {
         let (conn, run_id) = db_with_run();
         let log = script_log_file("--- stderr ---\nwarn one\nboom\n");
         seed_script_step(&conn, &run_id, "build", 0, Some(&log));
-        let t = resolve_step_log_target(&conn, &run_id, "build").unwrap();
+        let t = resolve_step_log_target(&conn, &run_id, "build", StepLogMode::Result).unwrap();
         assert!(matches!(t.source, StepLogSource::Script { .. }));
 
         let out = render_step_log(&t, StepLogMode::Result).unwrap();
@@ -700,7 +797,7 @@ mod tests {
     fn script_step_without_output_file_says_no_log() {
         let (conn, run_id) = db_with_run();
         seed_script_step(&conn, &run_id, "quiet", 0, None);
-        let t = resolve_step_log_target(&conn, &run_id, "quiet").unwrap();
+        let t = resolve_step_log_target(&conn, &run_id, "quiet", StepLogMode::Result).unwrap();
         let out = render_step_log(&t, StepLogMode::Result).unwrap();
         assert!(out.contains("left no log"), "{out}");
     }
@@ -710,7 +807,7 @@ mod tests {
         let (conn, run_id) = db_with_run();
         let gone = std::env::temp_dir().join("test-script-log-gone-xyz.log");
         seed_script_step(&conn, &run_id, "build", 0, Some(&gone));
-        let t = resolve_step_log_target(&conn, &run_id, "build").unwrap();
+        let t = resolve_step_log_target(&conn, &run_id, "build", StepLogMode::Result).unwrap();
         let err = render_step_log(&t, StepLogMode::Result)
             .unwrap_err()
             .to_string();
@@ -725,7 +822,7 @@ mod tests {
         // Seed the later attempt first so row order can't explain the result.
         seed_script_step(&conn, &run_id, "build", 1, Some(&second));
         seed_script_step(&conn, &run_id, "build", 0, Some(&first));
-        let t = resolve_step_log_target(&conn, &run_id, "build").unwrap();
+        let t = resolve_step_log_target(&conn, &run_id, "build", StepLogMode::Result).unwrap();
         let out = render_step_log(&t, StepLogMode::Full).unwrap();
         assert!(out.contains("second attempt"), "{out}");
         std::fs::remove_file(first).ok();

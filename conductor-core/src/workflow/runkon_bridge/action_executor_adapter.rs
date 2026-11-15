@@ -547,7 +547,13 @@ fn record_step_usage(
 fn prompt_warnings(agent: &str, prompt: &str) -> Vec<String> {
     crate::workflow::placeholder_scan::runaway_placeholders(prompt)
         .iter()
-        .map(|hit| format!("Prompt warning: agent {agent}: {}", hit.describe()))
+        .map(|hit| {
+            format!(
+                "{} agent {agent}: {}",
+                crate::workflow::placeholder_scan::PROMPT_WARNING_PREFIX,
+                hit.describe()
+            )
+        })
         .collect()
 }
 
@@ -587,6 +593,7 @@ mod tests {
             w[0].contains("agent a") && w[0].contains("lines 1-2"),
             "{w:?}"
         );
+        assert!(w[0].starts_with(crate::workflow::placeholder_scan::PROMPT_WARNING_PREFIX));
         assert!(prompt_warnings("a", "fine {{ticket_id}}").is_empty());
     }
 

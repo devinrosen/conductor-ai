@@ -426,7 +426,7 @@ pub(super) fn tool_get_step_log(
         Ok(m) => m,
         Err(e) => return tool_err(e),
     };
-    let target = match resolve_step_log_target(&conductor.conn, run_id, step_name) {
+    let target = match resolve_step_log_target(&conductor.conn, run_id, step_name, mode) {
         Ok(t) => t,
         Err(e) => return tool_err(e),
     };

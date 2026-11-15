@@ -4,7 +4,9 @@ use std::collections::{HashMap, HashSet};
 use crate::agent_config::{self, AgentSpec};
 use crate::prompt_config;
 use crate::schema_config;
-use crate::workflow::placeholder_scan::{is_variable_name, runaway_placeholders};
+use crate::workflow::placeholder_scan::{
+    is_variable_name, placeholder_spans, runaway_placeholders,
+};
 use runkon_flow::dsl::{
     default_skills_dir, detect_workflow_cycles, make_script_resolver, validate_script_steps,
     validate_workflow_semantics, AgentRef, ScriptNode, ValidationContext, ValidationError,
@@ -205,12 +207,8 @@ fn unknown_variable_warnings(
     let mut warnings = Vec::new();
     for (file, text, kind) in texts {
         let mut seen: HashSet<&str> = HashSet::new();
-        let mut rest = text.as_str();
-        while let Some(open) = rest.find("{{") {
-            let after = &rest[open + 2..];
-            let Some(close) = after.find("}}") else { break };
-            let key = &after[..close];
-            rest = &after[close + 2..];
+        for span in placeholder_spans(text) {
+            let key = span.key;
             if is_variable_name(key) && !is_known(key) && seen.insert(key) {
                 let fate = match kind {
                     TextKind::Source => "it is left unsubstituted at run time",
