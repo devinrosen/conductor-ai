@@ -265,6 +265,80 @@ mod tests {
         assert_eq!(got.size_bytes, GATE_PLAN_MAX_BYTES + 10);
     }
 
+    /// A run with a plan step (position 0, `structured_output`) and a waiting gate (position 1).
+    fn run_waiting_at_gate(conn: &Connection, structured_output: Option<&str>) {
+        crate::test_helpers::insert_test_wf_run(conn, "r", "wf", "waiting", None);
+        conn.execute("UPDATE workflow_runs SET worktree_id = 'w1' WHERE id = 'r'", [])
+            .unwrap();
+        crate::test_helpers::insert_test_wf_step(
+            conn,
+            "plan",
+            "r",
+            "plan",
+            "agent",
+            "completed",
+            0,
+            "2026-01-01T00:00:00Z",
+            None,
+            None,
+        );
+        conn.execute(
+            "UPDATE workflow_run_steps SET structured_output = ?1 WHERE id = 'plan'",
+            rusqlite::params![structured_output],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, status, position, gate_type) \
+             VALUES ('gate', 'r', 'human_review', 'gate', 'waiting', 1, 'human_review')",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn gate_without_plan_path_is_not_found() {
+        for output in [None, Some(r#"{"summary":"x"}"#), Some(r#"{"plan_path":""}"#)] {
+            let conn = crate::test_helpers::setup_db();
+            run_waiting_at_gate(&conn, output);
+            assert!(
+                matches!(
+                    resolve_gate_plan_target(&conn, "r").unwrap_err(),
+                    ConductorError::WorkflowStepNotFound { .. }
+                ),
+                "{output:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn deleted_worktree_is_not_found() {
+        // The worktree row is gone: resolving finds no root.
+        let conn = crate::test_helpers::setup_db();
+        run_waiting_at_gate(&conn, Some(r#"{"plan_path":"PLAN.md"}"#));
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        conn.execute("DELETE FROM worktrees WHERE id = 'w1'", []).unwrap();
+        assert!(matches!(
+            resolve_gate_plan_target(&conn, "r").unwrap_err(),
+            ConductorError::WorkflowStepNotFound { .. }
+        ));
+
+        // The row is there but the directory was removed from disk.
+        let conn = crate::test_helpers::setup_db();
+        run_waiting_at_gate(&conn, Some(r#"{"plan_path":"PLAN.md"}"#));
+        let t = resolve_gate_plan_target(&conn, "r").unwrap();
+        assert_eq!(t.plan_path, "PLAN.md");
+        let tmp = tempfile::tempdir().unwrap();
+        let gone = GatePlanTarget {
+            root: tmp.path().join("deleted"),
+            ..t
+        };
+        assert!(matches!(
+            read_gate_plan(&gone).unwrap_err(),
+            ConductorError::WorkflowStepNotFound { .. }
+        ));
+    }
+
     #[test]
     fn no_waiting_gate_is_not_found() {
         let conn = crate::test_helpers::setup_db();
