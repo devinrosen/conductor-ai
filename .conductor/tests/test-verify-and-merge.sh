@@ -349,6 +349,22 @@ assert_exit 1
 assert_stderr_contains "verification failed: it does not work"
 assert_eq "yes" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment posted"
 
+case_begin "post-verification: a failing report already posted for this head is not posted again"
+new_case
+echo "[{\"body\": \"<!-- conductor-verification -->\\n## x\\n\\nHead: \`${head:0:7}\`. Verdict: \`fail\`.\"}]" > "$stub/comments.json"
+run_post "$BAD_REPORT"
+assert_exit 1
+assert_stderr_contains "verification failed: it does not work"
+assert_eq "no" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment posted"
+
+case_begin "post-verification: a failing report posts after an earlier pass at the same head"
+new_case
+echo "[{\"body\": \"<!-- conductor-verification -->\\n## x\\n\\nHead: \`${head:0:7}\`. Verdict: \`pass\`.\"}]" > "$stub/comments.json"
+run_post "$BAD_REPORT"
+assert_exit 1
+assert_eq "yes" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment posted"
+assert_eq "yes" "$(grep -q 'Verdict: `fail`' "$stub/comment" && echo yes || echo no)" "fail verdict in the comment"
+
 case_begin "post-verification: unreadable report exits 1 without posting"
 new_case
 run_post "not json"
