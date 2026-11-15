@@ -180,10 +180,7 @@ fn script_export_keys(text: &str) -> HashSet<String> {
         }
         let words: Vec<&str> = line.split_whitespace().collect();
         for pair in words.windows(2) {
-            if matches!(
-                pair[0],
-                "--arg" | "--argjson" | "--rawfile" | "--slurpfile"
-            ) {
+            if matches!(pair[0], "--arg" | "--argjson" | "--rawfile" | "--slurpfile") {
                 let name: String = pair[1].chars().take_while(|c| is_ident(*c)).collect();
                 if !name.is_empty() {
                     keys.insert(name);
@@ -1374,10 +1371,7 @@ mod tests {
 
     #[test]
     fn brief_sees_only_exports_from_earlier_scripts() {
-        let dir = vars_dir(
-            "#!/bin/sh\necho '{\"late_key\": \"v\"}'\n",
-            "{{late_key}}",
-        );
+        let dir = vars_dir("#!/bin/sh\necho '{\"late_key\": \"v\"}'\n", "{{late_key}}");
         let msgs = warning_msgs(
             &dir,
             "call helper {} script emit { run = \".conductor/scripts/emit.sh\" } call later {}",
@@ -1395,10 +1389,7 @@ mod tests {
 
     #[test]
     fn brief_sees_exports_from_a_later_script_in_the_same_loop() {
-        let dir = vars_dir(
-            "#!/bin/sh\necho '{\"late_key\": \"v\"}'\n",
-            "{{late_key}}",
-        );
+        let dir = vars_dir("#!/bin/sh\necho '{\"late_key\": \"v\"}'\n", "{{late_key}}");
         let msgs = warning_msgs(
             &dir,
             "do { max_iterations = 3 call helper {} script emit { run = \".conductor/scripts/emit.sh\" } } while emit.late_key",
