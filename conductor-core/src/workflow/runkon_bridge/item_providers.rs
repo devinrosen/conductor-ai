@@ -297,7 +297,9 @@ mod tests {
             crate::config::Config::default(),
             Some("r1".to_string()),
         );
-        let info = ProviderInfo::default();
+        let info = ProviderInfo {
+            step_id: "s1".to_string(),
+        };
         let scope = provider.parse_scope(None).unwrap();
 
         let vars = HashMap::from([(crate::workflow::engine_keys::WORKTREE_ID, "w1".to_string())]);
