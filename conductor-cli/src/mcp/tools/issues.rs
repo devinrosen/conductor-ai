@@ -29,7 +29,7 @@ fn resolve_link_run_id(
         return Ok((run_id.to_string(), None));
     }
     if let Ok(Some(wf)) = conductor_core::workflow::get_workflow_run(conn, run_id) {
-        let parent = wf.parent_run_id;
+        let parent = wf.parent_run_id.clone();
         if !parent.is_empty() && matches!(agent_mgr.get_run(&parent), Ok(Some(_))) {
             return Ok((parent, Some(run_id.to_string())));
         }
@@ -178,7 +178,8 @@ mod tests {
         let parent = conductor_core::workflow::get_workflow_run(conn, &wf)
             .unwrap()
             .unwrap()
-            .parent_run_id;
+            .parent_run_id
+            .clone();
         assert_eq!(
             resolve_link_run_id(conn, &wf).unwrap(),
             (parent, Some(wf.clone()))
