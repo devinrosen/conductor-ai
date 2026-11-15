@@ -1,0 +1,44 @@
+// Generated from template: verify-and-merge v1.0.0
+workflow verify-and-merge {
+  meta {
+    description = "Check a reviewed PR is ready, verify it live against its issue's acceptance criteria, post the evidence, then squash-merge"
+    trigger     = "manual"
+    targets     = ["worktree"] // the agent builds and runs the branch; the ephemeral --pr clone can't (see merge-when-ready)
+    group       = "Development"
+  }
+
+  inputs {
+    confirm boolean
+  }
+
+  script check-pr-ready {
+    run = ".conductor/scripts/check-pr-ready.sh"
+    env = { CONFIRM = "{{confirm}}" DRY_RUN = "{{dry_run}}" TICKET_SOURCE_ID = "{{ticket_source_id}}" TRUSTED_REVIEW_BOTS = "conductor-ai-reviewer[bot]" }
+  }
+
+  call verify-acceptance {
+    output  = "verify-acceptance"
+    as      = "developer"
+    retries = 1
+  }
+
+  script post-verification {
+    run = ".conductor/scripts/post-verification.sh"
+    as  = "reviewer"
+    env = { PRIOR_OUTPUT = "{{prior_output}}" PR_NUMBER = "{{pr_number}}" HEAD_SHA = "{{head_sha}}" DRY_RUN = "{{dry_run}}" TRUSTED_REVIEW_BOTS = "conductor-ai-reviewer[bot]" }
+  }
+
+  if confirm {
+    gate human_review {
+      prompt     = "verify-and-merge posted its verification report on the PR (see the post-verification step). Approve to squash-merge, or reject to leave the PR open."
+      timeout    = "72h"
+      on_timeout = fail
+    }
+  }
+
+  script squash-merge {
+    run = ".conductor/scripts/squash-merge.sh"
+    as  = "merger"
+    env = { PR_NUMBER = "{{pr_number}}" HEAD_SHA = "{{head_sha}}" BASE_BRANCH = "{{base_branch}}" LINKED_ISSUES = "{{linked_issues}}" DRY_RUN = "{{dry_run}}" }
+  }
+}
