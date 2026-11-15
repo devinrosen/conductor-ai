@@ -60,10 +60,15 @@ say() { echo "==> $*"; }
 leftovers=
 leftover() { leftovers="${leftovers}${*}"$'\n'; }
 
-# Installed version of the conductor plugin; empty when claude fails or it isn't installed.
+# Installed version of the conductor plugin. Prints it and returns 0; prints nothing and
+# returns 0 when the plugin isn't installed; returns 1 (error on stderr) when
+# `claude plugin list` or its JSON can't be read, so callers can tell that from "not installed".
 plugin_version() {
-  { claude plugin list --json 2>/dev/null \
-    | jq -r --arg id "$plugin" '.[] | select(.id == $id) | .version' | head -n1; } || true
+  local out ver rc
+  out=$(claude plugin list --json) || { rc=$?; echo "claude plugin list failed (exit $rc)" >&2; return 1; }
+  ver=$(jq -r --arg id "$plugin" '.[] | select(.id == $id) | .version' <<<"$out") \
+    || { echo "could not parse claude plugin list output" >&2; return 1; }
+  printf '%s' "${ver%%$'\n'*}"
 }
 
 # --- Preflight -------------------------------------------------------------
@@ -185,7 +190,11 @@ if [[ $dry == 1 ]]; then
   echo "[dry-run] would run: claude plugin marketplace update $marketplace"
   echo "[dry-run] would run: claude plugin update $plugin"
   if command -v claude >/dev/null; then
-    echo "plugin $plugin is currently at: $(plugin_version)"
+    if cur=$(plugin_version); then
+      echo "plugin $plugin is currently at: ${cur:-not installed}"
+    else
+      echo "warning: could not read the plugin version"
+    fi
   else
     echo "warning: claude not found on PATH; plugin would not be updated"
     leftover "update the plugin: $plugin_cmds"
@@ -197,7 +206,7 @@ else
     echo "warning: claude not found on PATH; plugin not updated"
     leftover "update the plugin: $plugin_cmds"
   else
-    before=$(plugin_version)
+    before=$(plugin_version) || before=
     if ! claude plugin marketplace update "$marketplace"; then
       echo "warning: claude plugin marketplace update $marketplace failed"
       leftover "update the plugin: $plugin_cmds"
@@ -205,8 +214,10 @@ else
       echo "warning: claude plugin update $plugin failed"
       leftover "update the plugin: claude plugin update $plugin"
     else
-      after=$(plugin_version)
-      if [[ -z $after ]]; then
+      if ! after=$(plugin_version); then
+        echo "warning: could not read the plugin version after the update"
+        leftover "could not read the plugin version (claude plugin list failed); check: claude plugin list"
+      elif [[ -z $after ]]; then
         echo "warning: plugin $plugin is not installed"
         leftover "conductor plugin not installed: claude plugin install $plugin"
       elif [[ $after != "$v" ]]; then
