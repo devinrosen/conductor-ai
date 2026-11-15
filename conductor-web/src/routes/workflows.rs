@@ -3170,6 +3170,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gate_plan_without_plan_path_is_404() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = empty_state();
+        let run_id = seed_plan_gate(&state, tmp.path(), "PLAN.md").await;
+        state
+            .db
+            .lock()
+            .await
+            .execute(
+                "UPDATE workflow_run_steps SET structured_output = '{}' WHERE id = 'p1'",
+                [],
+            )
+            .unwrap();
+        let (status, _) =
+            get_response(&format!("/api/workflows/runs/{run_id}/gate/plan"), state).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn gate_plan_for_a_run_with_no_worktree_or_repo_is_404() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = empty_state();
+        let run_id = seed_plan_gate(&state, tmp.path(), "PLAN.md").await;
+        state
+            .db
+            .lock()
+            .await
+            .execute(
+                "UPDATE workflow_runs SET worktree_id = NULL, repo_id = NULL WHERE id = ?1",
+                [&run_id],
+            )
+            .unwrap();
+        let (status, _) =
+            get_response(&format!("/api/workflows/runs/{run_id}/gate/plan"), state).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn gate_plan_with_a_missing_file_is_404() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = empty_state();
+        let run_id = seed_plan_gate(&state, tmp.path(), "NOPE.md").await;
+        let (status, body) =
+            get_response(&format!("/api/workflows/runs/{run_id}/gate/plan"), state).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    }
+
+    #[tokio::test]
+    async fn gate_plan_over_the_cap_is_truncated() {
+        let cap = conductor_core::workflow::GATE_PLAN_MAX_BYTES as usize;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("PLAN.md"), vec![b'a'; cap + 10]).unwrap();
+        let state = empty_state();
+        let run_id = seed_plan_gate(&state, tmp.path(), "PLAN.md").await;
+        let (status, body) =
+            get_response(&format!("/api/workflows/runs/{run_id}/gate/plan"), state).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["truncated"], true);
+        assert_eq!(body["content"].as_str().unwrap().len(), cap);
+        assert_eq!(body["size_bytes"], (cap + 10) as u64);
+    }
+
+    #[tokio::test]
     async fn gate_plan_outside_the_worktree_is_403() {
         let wt = tempfile::tempdir().unwrap();
         let other = tempfile::tempdir().unwrap();

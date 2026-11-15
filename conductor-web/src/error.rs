@@ -39,6 +39,7 @@ impl IntoResponse for ApiError {
                     | ConductorError::TicketNotFound { .. }
                     | ConductorError::WorkflowRunNotFound { .. }
                     | ConductorError::WorkflowStepNotFound { .. }
+                    | ConductorError::GatePlanUnavailable { .. }
                     | ConductorError::WorkflowStepNotInRun { .. }
                     | ConductorError::AgentRunNotFound { .. }
                     | ConductorError::FeedbackNotFound { .. }

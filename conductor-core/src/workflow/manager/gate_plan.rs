@@ -44,19 +44,29 @@ pub struct GatePlan {
     pub truncated: bool,
 }
 
-fn not_found(msg: &str) -> ConductorError {
-    ConductorError::WorkflowStepNotFound {
-        id: msg.to_string(),
+/// A 404-class "there is no plan to show" error carrying a human-readable reason.
+fn unavailable(reason: impl Into<String>) -> ConductorError {
+    ConductorError::GatePlanUnavailable {
+        reason: reason.into(),
     }
+}
+
+/// An I/O failure that names the path and the cause, so a 500 can be diagnosed.
+fn io_failure(what: &str, path: &Path, e: std::io::Error) -> ConductorError {
+    ConductorError::Workflow(format!("{what} {}: {e}", path.display()))
 }
 
 /// Find the run's waiting gate, its `plan_path` and the directory the path must sit in.
 /// Database work only; no filesystem access.
 pub fn resolve_gate_plan_target(conn: &Connection, run_id: &str) -> Result<GatePlanTarget> {
     let step = find_waiting_gate(conn, run_id)?
-        .ok_or_else(|| not_found("no waiting gate for this run"))?;
-    let plan_path = preceding_plan_path(conn, &step)?
-        .ok_or_else(|| not_found("the step before this gate emitted no plan_path"))?;
+        .ok_or_else(|| unavailable(format!("run {run_id} has no waiting gate")))?;
+    let plan_path = preceding_plan_path(conn, &step)?.ok_or_else(|| {
+        unavailable(format!(
+            "the step before gate {} in run {run_id} emitted no plan_path",
+            step.step_name
+        ))
+    })?;
     let run = get_workflow_run(conn, run_id)?
         .ok_or_else(|| ConductorError::WorkflowRunNotFound { id: run_id.into() })?;
     let root: Option<String> = if let Some(wt) = run.worktree_id.as_deref() {
@@ -76,7 +86,11 @@ pub fn resolve_gate_plan_target(conn: &Connection, run_id: &str) -> Result<GateP
     } else {
         None
     };
-    let root = root.ok_or_else(|| not_found("the run has no worktree or repo to read from"))?;
+    let root = root.ok_or_else(|| {
+        unavailable(format!(
+            "run {run_id} has no worktree or repo on record to read from"
+        ))
+    })?;
     Ok(GatePlanTarget {
         run_id: run_id.to_string(),
         step_id: step.id,
@@ -88,24 +102,59 @@ pub fn resolve_gate_plan_target(conn: &Connection, run_id: &str) -> Result<GateP
 
 /// The root's own git dir (`<main>/.git/worktrees/<name>` for a linked worktree), never
 /// the common dir, which holds the repo config and every other worktree's files.
+///
+/// A failure is logged, not returned: the worktree itself stays readable, but a plan in
+/// the git dir then reads as outside the allow-list, so the log is how to find out why.
 fn own_git_dir(root: &Path) -> Option<PathBuf> {
-    let out = std::process::Command::new("git")
+    let out = match std::process::Command::new("git")
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--absolute-git-dir"])
         .output()
-        .ok()?;
+    {
+        Ok(out) => out,
+        Err(e) => {
+            tracing::warn!(root = %root.display(), error = %e, "gate plan: could not run git to find the git dir");
+            return None;
+        }
+    };
     if !out.status.success() {
+        tracing::warn!(
+            root = %root.display(),
+            status = %out.status,
+            stderr = %String::from_utf8_lossy(&out.stderr).trim(),
+            "gate plan: git rev-parse --absolute-git-dir failed"
+        );
         return None;
     }
-    let s = String::from_utf8(out.stdout).ok()?;
-    std::fs::canonicalize(s.trim()).ok()
+    let dir = match String::from_utf8(out.stdout) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(root = %root.display(), error = %e, "gate plan: git dir is not UTF-8");
+            return None;
+        }
+    };
+    match std::fs::canonicalize(dir.trim()) {
+        Ok(p) => Some(p),
+        Err(e) => {
+            tracing::warn!(root = %root.display(), git_dir = dir.trim(), error = %e, "gate plan: could not canonicalize the git dir");
+            None
+        }
+    }
 }
 
 /// Read the plan file, refusing a path outside the worktree and its git dir.
 pub fn read_gate_plan(target: &GatePlanTarget) -> Result<GatePlan> {
-    let root = std::fs::canonicalize(&target.root)
-        .map_err(|_| not_found("the run's worktree is not on disk"))?;
+    let root = std::fs::canonicalize(&target.root).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            unavailable(format!(
+                "the worktree {} is not on disk",
+                target.root.display()
+            ))
+        } else {
+            io_failure("could not resolve the worktree", &target.root, e)
+        }
+    })?;
     let mut allowed = vec![root.clone()];
     if let Some(git_dir) = own_git_dir(&root) {
         allowed.push(git_dir);
@@ -123,9 +172,9 @@ fn read_plan_within(target: &GatePlanTarget, root: &Path, allowed: &[PathBuf]) -
     // Resolves `..` and symlinks, so an escape through either is caught below.
     let resolved = std::fs::canonicalize(&joined).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            not_found("the plan file does not exist")
+            unavailable(format!("the plan file {} does not exist", joined.display()))
         } else {
-            ConductorError::Io(e)
+            io_failure("could not resolve the plan file", &joined, e)
         }
     })?;
     if !allowed.iter().any(|a| resolved.starts_with(a)) {
@@ -133,8 +182,11 @@ fn read_plan_within(target: &GatePlanTarget, root: &Path, allowed: &[PathBuf]) -
             path: target.plan_path.clone(),
         });
     }
-    let file = std::fs::File::open(&resolved)?;
-    let meta = file.metadata()?;
+    let file = std::fs::File::open(&resolved)
+        .map_err(|e| io_failure("could not open the plan file", &resolved, e))?;
+    let meta = file
+        .metadata()
+        .map_err(|e| io_failure("could not stat the plan file", &resolved, e))?;
     if !meta.is_file() {
         return Err(ConductorError::PathNotAllowed {
             path: target.plan_path.clone(),
@@ -142,7 +194,9 @@ fn read_plan_within(target: &GatePlanTarget, root: &Path, allowed: &[PathBuf]) -
     }
     let size_bytes = meta.len();
     let mut buf = Vec::new();
-    file.take(GATE_PLAN_MAX_BYTES).read_to_end(&mut buf)?;
+    file.take(GATE_PLAN_MAX_BYTES)
+        .read_to_end(&mut buf)
+        .map_err(|e| io_failure("could not read the plan file", &resolved, e))?;
     Ok(GatePlan {
         run_id: target.run_id.clone(),
         step_id: target.step_id.clone(),
@@ -254,7 +308,7 @@ mod tests {
         ));
         assert!(matches!(
             read_gate_plan(&target(&wt, "nope.md")).unwrap_err(),
-            ConductorError::WorkflowStepNotFound { .. }
+            ConductorError::GatePlanUnavailable { .. }
         ));
     }
 
@@ -315,7 +369,7 @@ mod tests {
             assert!(
                 matches!(
                     resolve_gate_plan_target(&conn, "r").unwrap_err(),
-                    ConductorError::WorkflowStepNotFound { .. }
+                    ConductorError::GatePlanUnavailable { .. }
                 ),
                 "{output:?}"
             );
@@ -332,7 +386,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             resolve_gate_plan_target(&conn, "r").unwrap_err(),
-            ConductorError::WorkflowStepNotFound { .. }
+            ConductorError::GatePlanUnavailable { .. }
         ));
 
         // The row is there but the directory was removed from disk.
@@ -347,8 +401,67 @@ mod tests {
         };
         assert!(matches!(
             read_gate_plan(&gone).unwrap_err(),
-            ConductorError::WorkflowStepNotFound { .. }
+            ConductorError::GatePlanUnavailable { .. }
         ));
+    }
+
+    #[test]
+    fn run_with_no_worktree_or_repo_is_unavailable() {
+        let conn = crate::test_helpers::setup_db();
+        run_waiting_at_gate(&conn, Some(r#"{"plan_path":"PLAN.md"}"#));
+        conn.execute(
+            "UPDATE workflow_runs SET worktree_id = NULL WHERE id = 'r'",
+            [],
+        )
+        .unwrap();
+        let err = resolve_gate_plan_target(&conn, "r").unwrap_err();
+        assert!(
+            matches!(err, ConductorError::GatePlanUnavailable { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn repo_targeted_run_uses_the_repos_local_path() {
+        let conn = crate::test_helpers::setup_db();
+        run_waiting_at_gate(&conn, Some(r#"{"plan_path":"PLAN.md"}"#));
+        let local: String = conn
+            .query_row("SELECT local_path FROM repos LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        let repo_id: String = conn
+            .query_row("SELECT id FROM repos LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET worktree_id = NULL, repo_id = ?1 WHERE id = 'r'",
+            [&repo_id],
+        )
+        .unwrap();
+        let t = resolve_gate_plan_target(&conn, "r").unwrap();
+        assert_eq!(t.root, PathBuf::from(local));
+
+        // The repo row is gone: no root to read from.
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        conn.execute("DELETE FROM repos WHERE id = ?1", [&repo_id])
+            .unwrap();
+        assert!(matches!(
+            resolve_gate_plan_target(&conn, "r").unwrap_err(),
+            ConductorError::GatePlanUnavailable { .. }
+        ));
+    }
+
+    #[test]
+    fn unreadable_plan_file_is_an_io_error_naming_the_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_tmp, _main, wt) = repo_with_worktree();
+        let plan = wt.join("PLAN.md");
+        std::fs::write(&plan, "x").unwrap();
+        std::fs::set_permissions(&plan, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::File::open(&plan).is_ok() {
+            return; // running as root: permissions don't apply
+        }
+        let err = read_gate_plan(&target(&wt, "PLAN.md")).unwrap_err();
+        assert!(matches!(err, ConductorError::Workflow(_)), "{err:?}");
+        assert!(err.to_string().contains("PLAN.md"), "{err}");
     }
 
     #[test]
@@ -357,7 +470,7 @@ mod tests {
         crate::test_helpers::insert_test_wf_run(&conn, "r", "wf", "running", None);
         assert!(matches!(
             resolve_gate_plan_target(&conn, "r").unwrap_err(),
-            ConductorError::WorkflowStepNotFound { .. }
+            ConductorError::GatePlanUnavailable { .. }
         ));
     }
 }

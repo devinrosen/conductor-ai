@@ -120,6 +120,9 @@ pub enum ConductorError {
     #[error("workflow step not found: {id}")]
     WorkflowStepNotFound { id: String },
 
+    #[error("gate plan unavailable: {reason}")]
+    GatePlanUnavailable { reason: String },
+
     #[error("plan_path is outside the run's worktree and git dir: {path}")]
     PathNotAllowed { path: String },
 
@@ -208,6 +211,7 @@ impl ConductorError {
             Self::WorkflowStepNotFound { .. } => 63,
             Self::WorkflowStepNotInRun { .. } => 64,
             Self::PathNotAllowed { .. } => 66,
+            Self::GatePlanUnavailable { .. } => 67,
             Self::UnknownSourceType(_) => 43,
             Self::ConversationNotFound { .. } => 57,
             Self::ConversationHasActiveRun { .. } => 58,

@@ -48,16 +48,26 @@ import type {
 } from "./types";
 import { getApiBaseUrl } from "./transport";
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+// Fetch and check ok. Statuses in `allowStatus` are returned to the caller instead of thrown.
+async function fetchChecked(
+  path: string,
+  options?: RequestInit,
+  allowStatus: number[] = [],
+): Promise<Response> {
   const base = await getApiBaseUrl();
   const res = await fetch(`${base}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
-  if (!res.ok) {
+  if (!res.ok && !allowStatus.includes(res.status)) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error || `Request failed: ${res.status}`);
   }
+  return res;
+}
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetchChecked(path, options);
   if (res.status === 204) return undefined as T;
   return res.json();
 }
@@ -298,13 +308,8 @@ export const api = {
     }),
   // The plan a waiting gate asks to review; null when there is no waiting gate or plan (404).
   getGatePlan: async (runId: string): Promise<GatePlan | null> => {
-    const base = await getApiBaseUrl();
-    const res = await fetch(`${base}/workflows/runs/${runId}/gate/plan`);
+    const res = await fetchChecked(`/workflows/runs/${runId}/gate/plan`, undefined, [404]);
     if (res.status === 404) return null;
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(body.error || `Request failed: ${res.status}`);
-    }
     return res.json();
   },
   rejectGate: (runId: string) =>
