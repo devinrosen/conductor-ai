@@ -169,4 +169,17 @@ run_script detect-engine-doc-changes.sh BASE_BRANCH=main "CARGO_HOME=$FAKE_HOME"
 assert_exit 0; assert_marker has_engine_doc_changes
 assert_jq '.runkon_version == "" and .runkon_src == ""'
 
+case_begin "detect-engine-doc-changes: a malformed Cargo.lock version is dropped, the marker still fires"
+git checkout -q -B docs origin/main
+BAD_VERSION='../../x 1.0 0 injected'
+commit_file "$repo" Cargo.lock "$(printf '[[package]]\nname = "runkon-flow"\nversion = "%s"\n' "$BAD_VERSION")" "lock"
+commit_file "$repo" docs/workflow/language.md x "doc"
+rm -f "$DOC_STUB/calls"
+run_script detect-engine-doc-changes.sh BASE_BRANCH=main "CARGO_HOME=$FAKE_HOME" "PATH=$DOC_STUB/bin:$PATH"
+assert_exit 0; assert_marker has_engine_doc_changes
+assert_jq '.runkon_version == "" and .runkon_src == ""'
+assert_stdout_not_contains "injected"
+assert_stdout_not_contains "../../x"
+assert_stderr_contains "malformed"
+
 finish
