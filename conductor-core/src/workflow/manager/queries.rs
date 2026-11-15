@@ -823,11 +823,13 @@ pub struct WorkflowRunListFilter<'a> {
     pub offset: usize,
 }
 
-/// The single query builder behind the status/repo/worktree run listings. No `DISTINCT`:
-/// `worktrees.id` is the primary key, so the join yields at most one row per run.
-///
 /// List workflow runs matching `f`, newest first (`started_at DESC, id DESC`, the
 /// second key keeps offset pages stable when two runs share a start time).
+///
+/// Used by `list_active_workflow_runs_for_repo` and the `GET /api/workflows/runs` route.
+/// `list_active_workflow_runs` and `list_all_workflow_runs_filtered_paginated` still
+/// carry their own SQL. No `DISTINCT`: `worktrees.id` is the primary key, so the join
+/// yields at most one row per run.
 pub fn list_workflow_runs_page(
     conn: &Connection,
     f: &WorkflowRunListFilter,
