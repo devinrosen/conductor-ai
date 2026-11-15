@@ -630,6 +630,40 @@ fn workflow_wait_exit_codes() {
 }
 
 #[test]
+fn workflow_wait_gate_exit_code() {
+    let home = tempfile::tempdir().unwrap();
+    let id = insert_wait_run(home.path(), "running", "-1 hours", "datetime('now','+60 seconds')");
+    let conn = conductor_core::db::open_database(&home.path().join("conductor.db")).unwrap();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, started_at, gate_type) \
+         VALUES (?1, ?2, 'human_review', 'gate', 1, 'waiting', \
+                 strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'human_review')",
+        rusqlite::params![conductor_core::new_id(), id],
+    )
+    .unwrap();
+    drop(conn);
+
+    let out = conductor_cmd(home.path())
+        .args(["workflow", "wait", &id, "--json"])
+        .assert()
+        .code(4)
+        .get_output()
+        .stdout
+        .clone();
+    let json: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(json["outcome"], "gate_waiting");
+    assert_eq!(json["gates"][0]["step_name"], "human_review");
+    assert_eq!(json["gates"][0]["run_id"], id.as_str());
+
+    conductor_cmd(home.path())
+        .args(["workflow", "wait", &id, "--through-gates", "--timeout", "0"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("outcome: timeout"));
+}
+
+#[test]
 fn workflow_wait_json_output() {
     let home = tempfile::tempdir().unwrap();
     let id = insert_wait_run(home.path(), "failed", "-1 hours", "NULL");

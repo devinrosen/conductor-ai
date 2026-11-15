@@ -416,8 +416,11 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
             "conductor_wait_run",
             "Block until a workflow run (and its child runs) reaches a terminal status, its \
              engine is detected dead (stalled), or timeout_secs passes. Returns the outcome \
-             (completed|failed|cancelled|timeout|stalled), error, and the last step with its \
-             context. Prefer this over polling conductor_get_run. If the outcome is timeout the run is \
+             (completed|failed|cancelled|timeout|stalled|gate_waiting), error, and the last step with its \
+             context. gate_waiting means a step in the run or a child run waits at a gate for a person: \
+             the result lists each gate's run_id, step, type, prompt, timeout, options and plan path. \
+             Approve it (conductor_approve_gate with the gate's run_id), then call again. Pass \
+             through_gates to keep waiting instead. Prefer this over polling conductor_get_run. If the outcome is timeout the run is \
              still going: call conductor_wait_run again. Without a progress token the wait is \
              capped at 1500s so clients that abort silent calls after 30 minutes don't cut it off.",
             Arc::new({
@@ -434,6 +437,10 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
                             runs::WAIT_MAX_TIMEOUT_SECS,
                             runs::WAIT_MAX_TIMEOUT_NO_PROGRESS_SECS
                         )
+                    },
+                    "through_gates": {
+                        "type": "boolean",
+                        "description": "Keep waiting through human gates instead of returning gate_waiting (default false)"
                     },
                     "stall_after_secs": {
                         "type": "integer",

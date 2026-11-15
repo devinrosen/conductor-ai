@@ -12,21 +12,36 @@
 //! rather than OR, because long agent steps legitimately emit no step events for a
 //! long time while the engine keeps refreshing its lease.
 //!
+//! ## Gates
+//!
+//! A wait also ends with [`WaitOutcome::GateWaiting`] when a step in the run or a
+//! descendant run is a gate that is `waiting`, has no approval recorded and belongs to a
+//! run that has not ended. A person has to act, so a caller blocked on the run should
+//! know. `through_gates` turns this off. Each poll checks terminal, then stalled, then
+//! gates: a dead engine sitting at a gate stays `Stalled`, because approving the gate
+//! alone won't move it and the useful action is `resume`.
+//!
 //! All timestamps are normalized with `datetime()` in SQL: `lease_until` is written
 //! as `YYYY-MM-DD HH:MM:SS` while `started_at`/`ended_at` are RFC 3339, and comparing
 //! them as strings is wrong (see #3076).
 
 use std::time::{Duration, Instant};
 
-use rusqlite::{named_params, Connection};
+use rusqlite::{named_params, Connection, OptionalExtension};
 use serde::Serialize;
 
 use crate::error::{ConductorError, Result};
 use crate::workflow::{ConductorWorkflowRun, WorkflowRunStatus, WorkflowStepStatus};
 
+use crate::workflow::constants::STEP_COLUMNS_WITH_PREFIX;
+use crate::workflow::helpers::{
+    backfill_gate_type, gate_step_sql, gate_type_or_name, parse_gate_options,
+};
+
 use super::failure_chain::{
     chain_or_empty, failed_call_step_chain, format_failure_cause, is_workflow_call_step,
 };
+use super::helpers::row_to_workflow_step;
 use super::queries::{get_workflow_run, get_workflow_steps};
 
 /// How often the wait loop re-checks the run.
@@ -47,16 +62,19 @@ pub enum WaitOutcome {
     Cancelled,
     Timeout,
     Stalled,
+    /// A step in the run or a child run waits at a gate for a person.
+    GateWaiting,
 }
 
 impl WaitOutcome {
-    /// Process exit code: 0 completed, 1 failed or cancelled, 2 timeout, 3 stalled.
+    /// Process exit code: 0 completed, 1 failed or cancelled, 2 timeout, 3 stalled, 4 waiting at a gate.
     pub fn exit_code(self) -> i32 {
         match self {
             Self::Completed => 0,
             Self::Failed | Self::Cancelled => 1,
             Self::Timeout => 2,
             Self::Stalled => 3,
+            Self::GateWaiting => 4,
         }
     }
 
@@ -67,6 +85,7 @@ impl WaitOutcome {
             Self::Cancelled => "cancelled",
             Self::Timeout => "timeout",
             Self::Stalled => "stalled",
+            Self::GateWaiting => "gate_waiting",
         }
     }
 }
@@ -80,6 +99,9 @@ pub struct WaitOptions {
     pub poll_interval: Duration,
     /// How often the progress callback fires while the run is still going.
     pub progress_interval: Duration,
+    /// Keep waiting while a gate waits for a person, instead of returning
+    /// [`WaitOutcome::GateWaiting`].
+    pub through_gates: bool,
 }
 
 impl Default for WaitOptions {
@@ -90,16 +112,22 @@ impl Default for WaitOptions {
             stall_after: Duration::from_secs((lease_ttl.max(1) as u64) * 2),
             poll_interval: DEFAULT_POLL_INTERVAL,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            through_gates: false,
         }
     }
 }
 
 impl WaitOptions {
     /// Defaults with optional caller overrides, shared by the CLI and the MCP tool.
-    pub fn with_overrides(timeout: Option<Duration>, stall_after: Option<Duration>) -> Self {
+    pub fn with_overrides(
+        timeout: Option<Duration>,
+        stall_after: Option<Duration>,
+        through_gates: bool,
+    ) -> Self {
         let defaults = Self::default();
         Self {
             timeout,
+            through_gates,
             stall_after: stall_after.unwrap_or(defaults.stall_after),
             ..defaults
         }
@@ -121,6 +149,27 @@ pub struct WaitStepSummary {
     pub ended_at: Option<String>,
 }
 
+/// A gate waiting for a person, as reported by a [`WaitOutcome::GateWaiting`] wait.
+#[derive(Debug, Clone, Serialize)]
+pub struct WaitGateSummary {
+    /// The run that owns the gate step: the child's when the gate is in a child run.
+    pub run_id: String,
+    pub workflow_name: String,
+    pub step_id: String,
+    pub step_name: String,
+    pub gate_type: String,
+    /// The prompt as stored, before template rendering.
+    pub prompt: Option<String>,
+    /// The gate's timeout as written in the workflow, e.g. `24h`.
+    pub timeout: Option<String>,
+    /// Choices of a multi-select gate.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+    /// `plan_path` emitted by the step before the gate, if any.
+    pub plan_path: Option<String>,
+    pub waiting_since: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct WaitSummary {
     pub run_id: String,
@@ -133,6 +182,9 @@ pub struct WaitSummary {
     /// Seconds since the newest sign of life in the run tree, if any.
     pub last_signal_age_secs: Option<i64>,
     pub last_step: Option<WaitStepSummary>,
+    /// Gates waiting for a person, oldest first. Only set for `GateWaiting`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gates: Vec<WaitGateSummary>,
 }
 
 /// Snapshot passed to the progress callback while a wait is in flight.
@@ -245,10 +297,85 @@ fn build_summary(
         elapsed_secs: started.elapsed().as_secs(),
         last_signal_age_secs: age,
         last_step: last_step_summary(conn, run_id)?,
+        gates: Vec::new(),
     })
 }
 
-/// Classify one snapshot. `Some` if the run is finished or stalled, `None` to keep polling.
+/// The `plan_path` the step just before `step` (same run) stored in its structured output.
+/// An empty value, a missing key or malformed JSON gives `None`.
+fn preceding_plan_path(
+    conn: &Connection,
+    step: &crate::workflow::WorkflowRunStep,
+) -> Result<Option<String>> {
+    let path: Option<Option<String>> = conn
+        .query_row(
+            "SELECT CASE WHEN json_valid(structured_output)
+                         THEN NULLIF(json_extract(structured_output, '$.plan_path'), '')
+                    END
+             FROM workflow_run_steps
+             WHERE workflow_run_id = :run AND position < :pos
+             ORDER BY position DESC, datetime(started_at) DESC
+             LIMIT 1",
+            named_params![":run": step.workflow_run_id, ":pos": step.position],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(path.flatten())
+}
+
+/// Gates in the run tree that wait for a person: `waiting`, no approval recorded, and in
+/// a run that has not ended. Oldest first.
+fn waiting_gates_in_tree(conn: &Connection, run_id: &str) -> Result<Vec<WaitGateSummary>> {
+    let sql = format!(
+        "{RUN_TREE_CTE}
+         SELECT {cols}, r.workflow_name AS workflow_name
+         FROM workflow_run_steps s
+         JOIN workflow_runs r ON r.id = s.workflow_run_id
+         WHERE s.workflow_run_id IN (SELECT id FROM tree)
+           AND {gate}
+           AND s.status = 'waiting'
+           AND s.gate_approved_at IS NULL
+           AND r.status NOT IN ('completed', 'failed', 'cancelled')
+         ORDER BY datetime(s.started_at), s.position",
+        cols = STEP_COLUMNS_WITH_PREFIX.as_str(),
+        gate = gate_step_sql("s"),
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(named_params![":root": run_id], |row| {
+            let step = backfill_gate_type(row_to_workflow_step(row)?);
+            let workflow_name: String = row.get("workflow_name")?;
+            Ok((step, workflow_name))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut gates = Vec::with_capacity(rows.len());
+    for (step, workflow_name) in rows {
+        // A broken lookup must not hide the wait result.
+        let plan_path = preceding_plan_path(conn, &step).unwrap_or_else(|e| {
+            tracing::warn!("plan_path lookup failed for step {}: {e}", step.id);
+            None
+        });
+        gates.push(WaitGateSummary {
+            run_id: step.workflow_run_id.clone(),
+            workflow_name,
+            step_id: step.id.clone(),
+            step_name: step.step_name.clone(),
+            gate_type: gate_type_or_name(&step).to_string(),
+            prompt: step.gate_prompt.clone(),
+            timeout: step.gate_timeout.clone(),
+            options: step
+                .gate_options
+                .as_deref()
+                .map(parse_gate_options)
+                .unwrap_or_default(),
+            plan_path,
+            waiting_since: step.started_at.clone(),
+        });
+    }
+    Ok(gates)
+}
+
+/// Classify one snapshot. `Some` if the run is finished, stalled or waiting at a gate, `None` to keep polling.
 ///
 /// A future progress signal for engines that are alive but stuck (#2837) can extend
 /// the "sign of life" set here.
@@ -283,6 +410,14 @@ fn evaluate(
             WaitOutcome::Stalled,
             started,
         )?));
+    }
+    if !opts.through_gates {
+        let gates = waiting_gates_in_tree(conn, run_id)?;
+        if !gates.is_empty() {
+            let mut summary = build_summary(conn, &run, WaitOutcome::GateWaiting, started)?;
+            summary.gates = gates;
+            return Ok(Some(summary));
+        }
     }
     Ok(None)
 }
@@ -445,6 +580,31 @@ pub fn format_wait_summary(s: &WaitSummary) -> String {
                 s.run_id
             ));
         }
+        WaitOutcome::GateWaiting => {
+            for g in &s.gates {
+                out.push_str(&format!(
+                    "gate: {} [{}] in run {} ({})\n",
+                    g.step_name, g.gate_type, g.run_id, g.workflow_name
+                ));
+                if let Some(p) = &g.prompt {
+                    out.push_str(&format!("  prompt: {p}\n"));
+                }
+                if let Some(t) = &g.timeout {
+                    out.push_str(&format!("  timeout: {t}\n"));
+                }
+                if !g.options.is_empty() {
+                    out.push_str(&format!("  options: {}\n", g.options.join(", ")));
+                }
+                if let Some(p) = &g.plan_path {
+                    out.push_str(&format!("  plan: {p}\n"));
+                }
+            }
+            let gate_run = s.gates.first().map(|g| g.run_id.as_str()).unwrap_or(&s.run_id);
+            out.push_str(&format!(
+                "hint: waiting for a person. Approve with `conductor workflow gate-approve {gate_run}` \
+                 (or conductor_approve_gate), then wait again.\n"
+            ));
+        }
         WaitOutcome::Timeout => {
             out.push_str("hint: run is still in progress; wait again to keep waiting.\n");
         }
@@ -532,6 +692,7 @@ mod tests {
             stall_after: Duration::from_secs(60),
             poll_interval: Duration::ZERO,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            through_gates: false,
         }
     }
 
@@ -844,6 +1005,7 @@ mod tests {
             elapsed_secs: 5,
             last_signal_age_secs: Some(123),
             last_step: None,
+            gates: Vec::new(),
         }
     }
 
@@ -1008,5 +1170,203 @@ mod tests {
         assert_eq!(format_wait_progress(&p), "running (waited 5m)");
         assert_eq!(format_minutes(30), "<1m");
         assert_eq!(format_minutes(3900), "1h 05m");
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn insert_gate_step(
+        conn: &Connection,
+        id: &str,
+        run_id: &str,
+        name: &str,
+        position: i64,
+        status: &str,
+        options_json: Option<&str>,
+        approved: bool,
+    ) {
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, position, status, started_at, gate_type, \
+              gate_prompt, gate_timeout, gate_options, gate_approved_at) \
+             VALUES (:id, :run, :name, 'gate', :pos, :status, \
+                     strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-10 seconds'), 'human_review', \
+                     'Review {{plan_path}}', '24h', :opts, \
+                     CASE WHEN :approved THEN strftime('%Y-%m-%dT%H:%M:%SZ', 'now') END)",
+            named_params![
+                ":id": id, ":run": run_id, ":name": name, ":pos": position,
+                ":status": status, ":opts": options_json, ":approved": approved
+            ],
+        )
+        .unwrap();
+    }
+
+    fn live_run(conn: &Connection, id: &str) {
+        insert_run(conn, id, None, "running", Some("+20 seconds"), "-1 hours");
+    }
+
+    #[test]
+    fn root_waiting_gate_returns_gate_waiting() {
+        let conn = setup();
+        live_run(&conn, "r");
+        insert_gate_step(&conn, "g", "r", "human_review", 1, "waiting", None, false);
+        let s = eval(&conn, "r").unwrap();
+        assert_eq!(s.outcome, WaitOutcome::GateWaiting);
+        assert_eq!(s.outcome.exit_code(), 4);
+        assert_eq!(s.outcome.as_str(), "gate_waiting");
+        assert_eq!(s.gates.len(), 1);
+        let g = &s.gates[0];
+        assert_eq!(g.run_id, "r");
+        assert_eq!(g.step_name, "human_review");
+        assert_eq!(g.gate_type, "human_review");
+        assert_eq!(g.prompt.as_deref(), Some("Review {{plan_path}}"));
+        assert_eq!(g.timeout.as_deref(), Some("24h"));
+        assert!(g.options.is_empty());
+        assert_eq!(g.plan_path, None);
+    }
+
+    #[test]
+    fn child_waiting_gate_reports_child_run() {
+        let conn = setup();
+        live_run(&conn, "root");
+        insert_run(&conn, "kid", Some("root"), "running", Some("+20 seconds"), "-1 hours");
+        insert_gate_step(&conn, "g", "kid", "human_review", 1, "waiting", None, false);
+        let s = eval(&conn, "root").unwrap();
+        assert_eq!(s.outcome, WaitOutcome::GateWaiting);
+        assert_eq!(s.run_id, "root");
+        assert_eq!(s.gates[0].run_id, "kid");
+    }
+
+    #[test]
+    fn through_gates_keeps_polling() {
+        let conn = setup();
+        live_run(&conn, "r");
+        insert_gate_step(&conn, "g", "r", "human_review", 1, "waiting", None, false);
+        let o = WaitOptions {
+            through_gates: true,
+            ..opts()
+        };
+        assert!(evaluate(&conn, "r", &o, Instant::now()).unwrap().is_none());
+    }
+
+    #[test]
+    fn approved_completed_and_running_gates_are_not_reported() {
+        let conn = setup();
+        live_run(&conn, "r");
+        insert_gate_step(&conn, "a", "r", "approved", 1, "waiting", None, true);
+        insert_gate_step(&conn, "b", "r", "done", 2, "completed", None, false);
+        insert_gate_step(&conn, "c", "r", "starting", 3, "running", None, false);
+        assert!(eval(&conn, "r").is_none());
+    }
+
+    #[test]
+    fn waiting_gate_in_cancelled_child_is_not_reported() {
+        let conn = setup();
+        live_run(&conn, "root");
+        insert_run(&conn, "kid", Some("root"), "cancelled", None, "-1 hours");
+        insert_gate_step(&conn, "g", "kid", "human_review", 1, "waiting", None, false);
+        assert!(eval(&conn, "root").is_none());
+    }
+
+    #[test]
+    fn stalled_beats_gate_waiting() {
+        let conn = setup();
+        insert_run(&conn, "r", None, "running", Some("-300 seconds"), "-1 hours");
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, position, status, started_at, gate_type) \
+             VALUES ('g', 'r', 'human_review', 'gate', 1, 'waiting', \
+                     strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 hours'), 'human_review')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(eval(&conn, "r").unwrap().outcome, WaitOutcome::Stalled);
+    }
+
+    #[test]
+    fn plan_path_comes_from_the_preceding_step() {
+        for (output, want) in [
+            (Some(r#"{"plan_path":"/x/PLAN.md"}"#), Some("/x/PLAN.md")),
+            (Some(r#"{"plan_path":""}"#), None),
+            (Some(r#"{"markers":[]}"#), None),
+            (Some("not json"), None),
+            (None, None),
+        ] {
+            let conn = setup();
+            live_run(&conn, "r");
+            insert_step(&conn, "p", "r", "show-plan-decisions", "-1 minutes", Some("-50 seconds"));
+            set_step(&conn, "p", "completed", 0, None);
+            conn.execute(
+                "UPDATE workflow_run_steps SET structured_output = :o WHERE id = 'p'",
+                named_params![":o": output],
+            )
+            .unwrap();
+            insert_gate_step(&conn, "g", "r", "human_review", 1, "waiting", None, false);
+            let s = eval(&conn, "r").unwrap();
+            assert_eq!(s.gates[0].plan_path.as_deref(), want, "output {output:?}");
+        }
+    }
+
+    #[test]
+    fn multi_select_options_are_listed() {
+        let conn = setup();
+        live_run(&conn, "r");
+        insert_gate_step(
+            &conn,
+            "g",
+            "r",
+            "pick",
+            1,
+            "waiting",
+            Some(r#"[{"value":"a"},{"value":"b"}]"#),
+            false,
+        );
+        let s = eval(&conn, "r").unwrap();
+        assert_eq!(s.gates[0].options, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn format_gate_waiting_lists_gate_and_approve_hint() {
+        let mut s = summary(WaitOutcome::GateWaiting);
+        s.gates = vec![WaitGateSummary {
+            run_id: "kid1".into(),
+            workflow_name: "child-wf".into(),
+            step_id: "s1".into(),
+            step_name: "human_review".into(),
+            gate_type: "human_review".into(),
+            prompt: Some("Approve the plan".into()),
+            timeout: Some("24h".into()),
+            options: vec!["a".into(), "b".into()],
+            plan_path: Some("/x/PLAN.md".into()),
+            waiting_since: None,
+        }];
+        let text = format_wait_summary(&s);
+        assert!(text.starts_with("outcome: gate_waiting\n"));
+        assert!(text.contains("gate: human_review [human_review] in run kid1 (child-wf)"));
+        assert!(text.contains("  prompt: Approve the plan"));
+        assert!(text.contains("  timeout: 24h"));
+        assert!(text.contains("  options: a, b"));
+        assert!(text.contains("  plan: /x/PLAN.md"));
+        assert!(text.contains("conductor workflow gate-approve kid1"));
+    }
+
+    #[test]
+    fn gates_key_only_serialized_when_present() {
+        let json = serde_json::to_value(summary(WaitOutcome::Completed)).unwrap();
+        assert!(json.get("gates").is_none());
+        let mut s = summary(WaitOutcome::GateWaiting);
+        s.gates = vec![WaitGateSummary {
+            run_id: "r".into(),
+            workflow_name: "wf".into(),
+            step_id: "s".into(),
+            step_name: "g".into(),
+            gate_type: "human_approval".into(),
+            prompt: None,
+            timeout: None,
+            options: vec![],
+            plan_path: None,
+            waiting_since: None,
+        }];
+        let json = serde_json::to_value(s).unwrap();
+        assert_eq!(json["outcome"], "gate_waiting");
+        assert_eq!(json["gates"][0]["step_name"], "g");
     }
 }
