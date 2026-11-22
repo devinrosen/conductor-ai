@@ -689,6 +689,14 @@ fn workflow_wait_gate_exit_code() {
     let conn = conductor_core::db::open_database(&home.path().join("conductor.db")).unwrap();
     conn.execute(
         "INSERT INTO workflow_run_steps \
+         (id, workflow_run_id, step_name, role, position, status, started_at, context_out) \
+         VALUES (?1, ?2, 'show-plan-decisions', 'script', 0, 'completed', \
+                 strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 minutes'), 'Q1\nDefault: D1')",
+        rusqlite::params![conductor_core::new_id(), id],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO workflow_run_steps \
          (id, workflow_run_id, step_name, role, position, status, started_at, gate_type) \
          VALUES (?1, ?2, 'human_review', 'gate', 1, 'waiting', \
                  strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'human_review')",
@@ -708,6 +716,7 @@ fn workflow_wait_gate_exit_code() {
     assert_eq!(json["outcome"], "gate_waiting");
     assert_eq!(json["gates"][0]["step_name"], "human_review");
     assert_eq!(json["gates"][0]["run_id"], id.as_str());
+    assert_eq!(json["gates"][0]["context"], "Q1\nDefault: D1");
 
     conductor_cmd(home.path())
         .args(["workflow", "wait", &id, "--through-gates", "--timeout", "0"])

@@ -301,11 +301,16 @@ fn render_script_log(
     if let Some(err) = step.step_error.as_deref() {
         head.push_str(&format!("step error: {err}\n"));
     }
+    let flow_output = flow_output_section(step);
     let Some(path) = log_path else {
-        return Ok(format!(
+        let mut out = format!(
             "{head}Script step '{}' left no log: it wrote nothing to stderr or outside FLOW_OUTPUT, or ran before runkon 0.10.\n",
             step.step_name
-        ));
+        );
+        if let Some(section) = flow_output {
+            out.push_str(&section);
+        }
+        return Ok(out);
     };
     let contents = std::fs::read_to_string(path).map_err(|e| {
         ConductorError::Workflow(format!(
@@ -315,16 +320,48 @@ fn render_script_log(
             path.display()
         ))
     })?;
+    let tail_section = flow_output.unwrap_or_default();
     match mode {
+        // "Full" is the raw log file; callers may pipe it.
         StepLogMode::Full => Ok(contents),
         StepLogMode::Tail { lines } => Ok(format!(
-            "{head}{}",
+            "{head}{}{tail_section}",
             render_tail_of(&contents, lines, "lines")
         )),
         StepLogMode::Prompt => unreachable!("rejected above"),
         // runkon caps the log at about 64 KiB, so the whole of it is the result.
-        StepLogMode::Result => Ok(format!("{head}--- log ---\n{contents}")),
+        StepLogMode::Result => Ok(format!("{head}--- log ---\n{contents}{tail_section}")),
     }
+}
+
+/// The FLOW_OUTPUT the engine stored on a script step's row (`context_out`, `markers_out`),
+/// rendered as a section. `None` when the step emitted neither context nor markers.
+fn flow_output_section(step: &WorkflowRunStep) -> Option<String> {
+    let context = step.context_out.as_deref().filter(|c| !c.is_empty());
+    let raw_markers = step.markers_out.as_deref().map(str::trim);
+    let markers: Option<String> = match raw_markers {
+        None | Some("") => None,
+        Some(raw) => match serde_json::from_str::<Vec<String>>(raw) {
+            Ok(list) if list.is_empty() => None,
+            Ok(list) => Some(list.join(", ")),
+            Err(_) => Some(raw.to_string()),
+        },
+    };
+    if context.is_none() && markers.is_none() {
+        return None;
+    }
+    let mut out = format!(
+        "--- FLOW_OUTPUT ---\nmarkers: {}\n",
+        markers.as_deref().unwrap_or("(none)")
+    );
+    if let Some(c) = context {
+        out.push_str("context:\n");
+        out.push_str(c);
+        if !c.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    Some(out)
 }
 
 fn header(target: &StepLogTarget, excerpt: Option<&str>) -> String {
@@ -376,14 +413,19 @@ fn render_tail_of(contents: &str, n: usize, unit: &str) -> String {
 }
 
 fn truncate_line(line: &str) -> String {
-    if line.len() <= MAX_LINE_BYTES {
-        return line.to_string();
+    truncate_utf8(line, MAX_LINE_BYTES)
+}
+
+/// Cut `s` to at most `max_bytes` on a character boundary, noting how many bytes were dropped.
+pub(crate) fn truncate_utf8(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
     }
-    let mut end = MAX_LINE_BYTES;
-    while !line.is_char_boundary(end) {
+    let mut end = max_bytes;
+    while !s.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}… [truncated {} bytes]", &line[..end], line.len() - end)
+    format!("{}… [truncated {} bytes]", &s[..end], s.len() - end)
 }
 
 #[cfg(test)]
@@ -800,6 +842,82 @@ mod tests {
         let t = resolve_step_log_target(&conn, &run_id, "quiet", StepLogMode::Result).unwrap();
         let out = render_step_log(&t, StepLogMode::Result).unwrap();
         assert!(out.contains("left no log"), "{out}");
+    }
+
+    fn set_flow_output(conn: &Connection, run_id: &str, ctx: Option<&str>, markers: Option<&str>) {
+        conn.execute(
+            "UPDATE workflow_run_steps SET context_out = ?1, markers_out = ?2 \
+             WHERE workflow_run_id = ?3",
+            rusqlite::params![ctx, markers, run_id],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn script_step_no_log_shows_flow_output() {
+        let (conn, run_id) = db_with_run();
+        seed_script_step(&conn, &run_id, "decide", 0, None);
+        set_flow_output(
+            &conn,
+            &run_id,
+            Some("Decisions:\n1. Q\n   Default: D"),
+            Some(r#"["needs_decision","x"]"#),
+        );
+        let t = resolve_step_log_target(&conn, &run_id, "decide", StepLogMode::Result).unwrap();
+        for mode in [
+            StepLogMode::Result,
+            StepLogMode::Tail { lines: 5 },
+            StepLogMode::Full,
+        ] {
+            let out = render_step_log(&t, mode).unwrap();
+            assert!(out.contains("left no log"), "{out}");
+            assert!(out.contains("--- FLOW_OUTPUT ---"), "{out}");
+            assert!(out.contains("markers: needs_decision, x"), "{out}");
+            assert!(out.contains("1. Q\n   Default: D"), "{out}");
+        }
+    }
+
+    #[test]
+    fn script_step_no_log_no_flow_output_has_no_section() {
+        let (conn, run_id) = db_with_run();
+        seed_script_step(&conn, &run_id, "quiet", 0, None);
+        set_flow_output(&conn, &run_id, Some(""), Some("[]"));
+        let t = resolve_step_log_target(&conn, &run_id, "quiet", StepLogMode::Result).unwrap();
+        let out = render_step_log(&t, StepLogMode::Result).unwrap();
+        assert!(!out.contains("--- FLOW_OUTPUT ---"), "{out}");
+    }
+
+    #[test]
+    fn script_step_log_then_flow_output_but_full_stays_raw() {
+        let (conn, run_id) = db_with_run();
+        let log = script_log_file("stderr line\n");
+        seed_script_step(&conn, &run_id, "build", 0, Some(&log));
+        set_flow_output(&conn, &run_id, Some("the context"), Some("[]"));
+        let t = resolve_step_log_target(&conn, &run_id, "build", StepLogMode::Result).unwrap();
+
+        let out = render_step_log(&t, StepLogMode::Result).unwrap();
+        let log_at = out.find("stderr line").unwrap();
+        let section_at = out.find("--- FLOW_OUTPUT ---").unwrap();
+        assert!(log_at < section_at, "{out}");
+        assert!(out.contains("markers: (none)"), "{out}");
+        assert!(out.contains("the context"), "{out}");
+
+        let out = render_step_log(&t, StepLogMode::Tail { lines: 5 }).unwrap();
+        assert!(out.contains("the context"), "{out}");
+
+        let out = render_step_log(&t, StepLogMode::Full).unwrap();
+        assert_eq!(out, "stderr line\n");
+        std::fs::remove_file(log).ok();
+    }
+
+    #[test]
+    fn script_step_malformed_markers_shown_raw() {
+        let (conn, run_id) = db_with_run();
+        seed_script_step(&conn, &run_id, "odd", 0, None);
+        set_flow_output(&conn, &run_id, None, Some("not-json"));
+        let t = resolve_step_log_target(&conn, &run_id, "odd", StepLogMode::Result).unwrap();
+        let out = render_step_log(&t, StepLogMode::Result).unwrap();
+        assert!(out.contains("markers: not-json"), "{out}");
     }
 
     #[test]
