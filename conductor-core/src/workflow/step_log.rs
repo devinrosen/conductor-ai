@@ -413,14 +413,19 @@ fn render_tail_of(contents: &str, n: usize, unit: &str) -> String {
 }
 
 fn truncate_line(line: &str) -> String {
-    if line.len() <= MAX_LINE_BYTES {
-        return line.to_string();
+    truncate_utf8(line, MAX_LINE_BYTES)
+}
+
+/// Cut `s` to at most `max_bytes` on a character boundary, noting how many bytes were dropped.
+pub(crate) fn truncate_utf8(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
     }
-    let mut end = MAX_LINE_BYTES;
-    while !line.is_char_boundary(end) {
+    let mut end = max_bytes;
+    while !s.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}… [truncated {} bytes]", &line[..end], line.len() - end)
+    format!("{}… [truncated {} bytes]", &s[..end], s.len() - end)
 }
 
 #[cfg(test)]

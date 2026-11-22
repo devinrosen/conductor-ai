@@ -365,18 +365,7 @@ pub(crate) fn preceding_plan_path(
 const MAX_GATE_CONTEXT_BYTES: usize = 8 * 1024;
 
 fn cap_context(context: &str) -> String {
-    if context.len() <= MAX_GATE_CONTEXT_BYTES {
-        return context.to_string();
-    }
-    let mut end = MAX_GATE_CONTEXT_BYTES;
-    while !context.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!(
-        "{}… [truncated {} bytes]",
-        &context[..end],
-        context.len() - end
-    )
+    crate::workflow::step_log::truncate_utf8(context, MAX_GATE_CONTEXT_BYTES)
 }
 
 /// Gates in the run tree that wait for a person: `waiting`, no approval recorded, and in
