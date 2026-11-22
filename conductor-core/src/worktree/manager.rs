@@ -845,7 +845,8 @@ impl<'a> WorktreeManager<'a> {
             if let Some(wt) = self.get_by_path(repo_id, slug_or_branch)? {
                 return Ok(wt);
             }
-            if let Some((other_slug, repo_slug)) = self.find_path_in_other_repo(repo_id, slug_or_branch)
+            if let Some((other_slug, repo_slug)) =
+                self.find_path_in_other_repo(repo_id, slug_or_branch)
             {
                 return Err(ConductorError::WorktreeNotFound {
                     slug: format!(
