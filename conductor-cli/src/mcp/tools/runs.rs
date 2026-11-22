@@ -1813,6 +1813,38 @@ mod tests {
     }
 
     #[test]
+    fn test_get_step_log_shows_flow_output_of_script_without_log() {
+        let (f, conductor) = make_test_conductor();
+        let (run_id, step_id) = make_run_with_step(f.path(), "show-plan-decisions");
+        let conn = conductor_core::db::open_database(f.path()).expect("open db");
+        conn.execute(
+            "UPDATE workflow_run_steps SET role = 'script', output_file = NULL, \
+             context_out = ?1, markers_out = ?2 WHERE id = ?3",
+            rusqlite::params![
+                "The plan needs your decision.\n1. Q one\n   Default: D",
+                r#"["needs_decision"]"#,
+                step_id
+            ],
+        )
+        .unwrap();
+
+        let mut args = args_with("run_id", &run_id);
+        args.insert(
+            "step_name".to_string(),
+            Value::String("show-plan-decisions".to_string()),
+        );
+        let result = tool_get_step_log(&conductor, &args);
+        assert_ne!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("1. Q one"), "{text}");
+        assert!(text.contains("Default: D"), "{text}");
+        assert!(text.contains("needs_decision"), "{text}");
+    }
+
+    #[test]
     fn test_get_run_not_blocked_by_open_write_transaction() {
         // Regression for #3093: a write transaction held open on another
         // connection must not make get_run wait (WAL readers don't block).
