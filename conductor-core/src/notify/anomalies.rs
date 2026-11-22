@@ -156,6 +156,66 @@ pub(crate) fn reaped_event(
     }
 }
 
+/// Fields shared by the cost and duration spike events.
+struct SpikeCommon<'a> {
+    run_id: &'a str,
+    workflow_name: &'a str,
+    target_label: Option<&'a str>,
+    multiple: f64,
+    duration_ms: Option<i64>,
+    repo_slug: &'a str,
+    branch: &'a str,
+    parent_workflow_run_id: Option<&'a str>,
+    repo_id: Option<&'a str>,
+    worktree_id: Option<&'a str>,
+}
+
+/// Build a spike event: the shared fields plus `extra` (e.g. `cost_usd`).
+fn spike_event(
+    web_url: Option<&str>,
+    kind: &str,
+    title: &str,
+    c: &SpikeCommon<'_>,
+    extra: Option<(&str, String)>,
+) -> Event {
+    let label = notification_body(c.workflow_name, c.target_label);
+    let deep_link = build_workflow_deep_link(web_url, c.repo_id, c.worktree_id, c.run_id);
+    let is_root = c.parent_workflow_run_id.is_none();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let mut fields: std::collections::HashMap<String, String> = [
+        ("run_id".to_string(), c.run_id.to_string()),
+        ("workflow_name".into(), c.workflow_name.into()),
+        (
+            "parent_workflow_run_id".into(),
+            c.parent_workflow_run_id.unwrap_or("").into(),
+        ),
+        ("repo_slug".into(), c.repo_slug.into()),
+        ("branch".into(), c.branch.into()),
+        (
+            "duration_ms".into(),
+            c.duration_ms.map(|ms| ms.to_string()).unwrap_or_default(),
+        ),
+        ("url".into(), deep_link.as_deref().unwrap_or("").into()),
+        ("timestamp".into(), now),
+        ("multiple".into(), c.multiple.to_string()),
+        ("is_root".into(), is_root.to_string()),
+    ]
+    .into_iter()
+    .collect();
+    if let Some((k, v)) = extra {
+        fields.insert(k.into(), v);
+    }
+
+    Event {
+        kind: kind.into(),
+        title: title.into(),
+        body: label,
+        severity: Severity::Warning,
+        fields: fields.into_iter().collect(),
+    }
+}
+
 /// Parameters for [`fire_cost_spike_notification`].
 pub struct CostSpikeArgs<'a> {
     pub run_id: &'a str,
@@ -173,42 +233,25 @@ pub struct CostSpikeArgs<'a> {
 
 /// Build the `workflow_run.cost_spike` event. `web_url` is `[notifications] web_url`.
 pub(crate) fn cost_spike_event(web_url: Option<&str>, params: &CostSpikeArgs<'_>) -> Event {
-    let label = notification_body(params.workflow_name, params.target_label);
-    let deep_link =
-        build_workflow_deep_link(web_url, params.repo_id, params.worktree_id, params.run_id);
-    let is_root = params.parent_workflow_run_id.is_none();
-    let now = chrono::Utc::now().to_rfc3339();
-
-    Event {
-        kind: WORKFLOW_RUN_COST_SPIKE.into(),
-        title: "Conductor \u{2014} Cost Spike".into(),
-        body: label,
-        severity: Severity::Warning,
-        fields: [
-            ("run_id".into(), params.run_id.into()),
-            ("workflow_name".into(), params.workflow_name.into()),
-            (
-                "parent_workflow_run_id".into(),
-                params.parent_workflow_run_id.unwrap_or("").into(),
-            ),
-            ("repo_slug".into(), params.repo_slug.into()),
-            ("branch".into(), params.branch.into()),
-            (
-                "duration_ms".into(),
-                params
-                    .duration_ms
-                    .map(|ms| ms.to_string())
-                    .unwrap_or_default(),
-            ),
-            ("url".into(), deep_link.as_deref().unwrap_or("").into()),
-            ("timestamp".into(), now),
-            ("multiple".into(), params.multiple.to_string()),
-            ("cost_usd".into(), params.cost_usd.to_string()),
-            ("is_root".into(), is_root.to_string()),
-        ]
-        .into_iter()
-        .collect(),
-    }
+    let common = SpikeCommon {
+        run_id: params.run_id,
+        workflow_name: params.workflow_name,
+        target_label: params.target_label,
+        multiple: params.multiple,
+        duration_ms: params.duration_ms,
+        repo_slug: params.repo_slug,
+        branch: params.branch,
+        parent_workflow_run_id: params.parent_workflow_run_id,
+        repo_id: params.repo_id,
+        worktree_id: params.worktree_id,
+    };
+    spike_event(
+        web_url,
+        WORKFLOW_RUN_COST_SPIKE,
+        "Conductor \u{2014} Cost Spike",
+        &common,
+        Some(("cost_usd", params.cost_usd.to_string())),
+    )
 }
 
 /// Fire a cost-spike notification for a completed workflow run.
@@ -250,41 +293,25 @@ pub struct DurationSpikeArgs<'a> {
 
 /// Build the `workflow_run.duration_spike` event. `web_url` is `[notifications] web_url`.
 pub(crate) fn duration_spike_event(web_url: Option<&str>, params: &DurationSpikeArgs<'_>) -> Event {
-    let label = notification_body(params.workflow_name, params.target_label);
-    let deep_link =
-        build_workflow_deep_link(web_url, params.repo_id, params.worktree_id, params.run_id);
-    let is_root = params.parent_workflow_run_id.is_none();
-    let now = chrono::Utc::now().to_rfc3339();
-
-    Event {
-        kind: WORKFLOW_RUN_DURATION_SPIKE.into(),
-        title: "Conductor \u{2014} Duration Spike".into(),
-        body: label,
-        severity: Severity::Warning,
-        fields: [
-            ("run_id".into(), params.run_id.into()),
-            ("workflow_name".into(), params.workflow_name.into()),
-            (
-                "parent_workflow_run_id".into(),
-                params.parent_workflow_run_id.unwrap_or("").into(),
-            ),
-            ("repo_slug".into(), params.repo_slug.into()),
-            ("branch".into(), params.branch.into()),
-            (
-                "duration_ms".into(),
-                params
-                    .duration_ms
-                    .map(|ms| ms.to_string())
-                    .unwrap_or_default(),
-            ),
-            ("url".into(), deep_link.as_deref().unwrap_or("").into()),
-            ("timestamp".into(), now),
-            ("multiple".into(), params.multiple.to_string()),
-            ("is_root".into(), is_root.to_string()),
-        ]
-        .into_iter()
-        .collect(),
-    }
+    let common = SpikeCommon {
+        run_id: params.run_id,
+        workflow_name: params.workflow_name,
+        target_label: params.target_label,
+        multiple: params.multiple,
+        duration_ms: params.duration_ms,
+        repo_slug: params.repo_slug,
+        branch: params.branch,
+        parent_workflow_run_id: params.parent_workflow_run_id,
+        repo_id: params.repo_id,
+        worktree_id: params.worktree_id,
+    };
+    spike_event(
+        web_url,
+        WORKFLOW_RUN_DURATION_SPIKE,
+        "Conductor \u{2014} Duration Spike",
+        &common,
+        None,
+    )
 }
 
 /// Fire a duration-spike notification for a completed workflow run.

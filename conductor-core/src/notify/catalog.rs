@@ -40,9 +40,6 @@ pub struct EventSpec {
     pub description: &'static str,
     /// A `workflow_run.*` event (the web matrix offers the `:root` modifier for these).
     pub is_workflow: bool,
-    /// Needs a threshold on the hook (`threshold_multiple` or `gate_pending_ms`), so the web
-    /// matrix leaves it out.
-    pub needs_threshold: bool,
     pub fields: &'static [EventField],
 }
 
@@ -50,6 +47,13 @@ impl EventSpec {
     /// True when the event carries `is_root`, which `:root` filters on.
     pub fn supports_root(&self) -> bool {
         self.fields.iter().any(|f| f.name == "is_root")
+    }
+
+    /// True when a hook needs a threshold for this event (`threshold_multiple` or
+    /// `gate_pending_ms`), so the web matrix leaves it out. Derived from
+    /// [`Self::threshold_setting`] so the two can't disagree.
+    pub fn needs_threshold(&self) -> bool {
+        self.threshold_setting().is_some()
     }
 
     /// The threshold setting a hook needs for this event, if any.
@@ -272,7 +276,6 @@ pub const EVENTS: &[EventSpec] = &[
         label: "Workflow completed",
         description: "A workflow run finished successfully",
         is_workflow: true,
-        needs_threshold: false,
         fields: WORKFLOW_COMPLETED_FIELDS,
     },
     EventSpec {
@@ -280,7 +283,6 @@ pub const EVENTS: &[EventSpec] = &[
         label: "Workflow failed",
         description: "A workflow run failed",
         is_workflow: true,
-        needs_threshold: false,
         fields: WORKFLOW_FAILED_FIELDS,
     },
     EventSpec {
@@ -288,7 +290,6 @@ pub const EVENTS: &[EventSpec] = &[
         label: "Dead workflow detected",
         description: "A stuck workflow run was reaped and could not be auto-resumed",
         is_workflow: true,
-        needs_threshold: false,
         fields: REAPED_FIELDS,
     },
     EventSpec {
@@ -296,7 +297,6 @@ pub const EVENTS: &[EventSpec] = &[
         label: "Orphaned workflows resumed",
         description: "Orphaned or stuck workflow runs were automatically resumed on startup",
         is_workflow: true,
-        needs_threshold: false,
         fields: ORPHAN_RESUMED_FIELDS,
     },
     EventSpec {
@@ -304,7 +304,6 @@ pub const EVENTS: &[EventSpec] = &[
         label: "Workflow cost spike",
         description: "A completed workflow run cost a multiple of its baseline",
         is_workflow: true,
-        needs_threshold: true,
         fields: COST_SPIKE_FIELDS,
     },
     EventSpec {
@@ -312,7 +311,6 @@ pub const EVENTS: &[EventSpec] = &[
         label: "Workflow duration spike",
         description: "A completed workflow run took a multiple of its baseline duration",
         is_workflow: true,
-        needs_threshold: true,
         fields: DURATION_SPIKE_FIELDS,
     },
     EventSpec {
@@ -321,7 +319,6 @@ pub const EVENTS: &[EventSpec] = &[
         description:
             "A standalone agent run finished successfully (not fired for interactive sessions)",
         is_workflow: false,
-        needs_threshold: false,
         fields: AGENT_COMPLETED_FIELDS,
     },
     EventSpec {
@@ -329,7 +326,6 @@ pub const EVENTS: &[EventSpec] = &[
         label: "Agent failed",
         description: "A standalone agent run failed",
         is_workflow: false,
-        needs_threshold: false,
         fields: AGENT_FAILED_FIELDS,
     },
     EventSpec {
@@ -337,7 +333,6 @@ pub const EVENTS: &[EventSpec] = &[
         label: "Gate waiting",
         description: "A workflow gate is waiting for a person (approval, review, CI)",
         is_workflow: false,
-        needs_threshold: false,
         fields: GATE_WAITING_FIELDS,
     },
     EventSpec {
@@ -345,7 +340,6 @@ pub const EVENTS: &[EventSpec] = &[
         label: "Gate pending too long",
         description: "A gate has been waiting longer than `gate_pending_ms` (default 30 minutes)",
         is_workflow: false,
-        needs_threshold: true,
         fields: GATE_PENDING_FIELDS,
     },
     EventSpec {
@@ -353,7 +347,6 @@ pub const EVENTS: &[EventSpec] = &[
         label: "Feedback requested",
         description: "An agent asked for feedback and is blocked on the answer",
         is_workflow: false,
-        needs_threshold: false,
         fields: FEEDBACK_FIELDS,
     },
     EventSpec {
@@ -361,7 +354,6 @@ pub const EVENTS: &[EventSpec] = &[
         label: "Session idle",
         description: "An interactive session finished a turn and has stayed idle for `delay_secs`",
         is_workflow: false,
-        needs_threshold: false,
         fields: SESSION_IDLE_FIELDS,
     },
 ];
@@ -373,7 +365,7 @@ pub fn event_spec(name: &str) -> Option<&'static EventSpec> {
 
 /// The events the web hook × event matrix offers: every one without a threshold.
 pub fn matrix_events() -> impl Iterator<Item = &'static EventSpec> {
-    EVENTS.iter().filter(|e| !e.needs_threshold)
+    EVENTS.iter().filter(|e| !e.needs_threshold())
 }
 
 /// Comma-separated list of every event name, for error and warning messages.
@@ -480,7 +472,7 @@ pub fn events_json() -> Vec<EventJson> {
             description: e.description,
             workflow_event: e.is_workflow,
             supports_root: e.supports_root(),
-            needs_threshold: e.needs_threshold,
+            needs_threshold: e.needs_threshold(),
             threshold_setting: e.threshold_setting(),
             fields: e
                 .fields
