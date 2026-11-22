@@ -394,13 +394,13 @@ pub fn resume_as_background_child(
 /// Shared child-side driver. Runs `exec` on a thread, waits up to `wait` for
 /// the run ID (when `wait_for_id`) or a startup error, reports the outcome on
 /// `write_fd`, then redirects stdio and waits for `exec` to finish.
-fn drive_detached<E: std::fmt::Display>(
+fn drive_detached(
     notify_pair: RunIdPair,
     wait_for_id: bool,
     wait: Duration,
     db_path: Option<PathBuf>,
     write_fd: i32,
-    exec: impl FnOnce() -> std::result::Result<(), E> + Send + 'static,
+    exec: impl FnOnce() -> conductor_core::Result<()> + Send + 'static,
 ) -> ! {
     // Slot to capture early startup errors (before the run record is created).
     let error_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -409,10 +409,13 @@ fn drive_detached<E: std::fmt::Display>(
 
     // Returns Ok(()) on success or Err(error_string) so the main thread can
     // detect post-notification failures and clean up the DB.
-    let exec_handle = std::thread::spawn(move || -> std::result::Result<(), String> {
+    // The bool is `should_fail_run_after(err)`, decided where the error type
+    // is still known.
+    let exec_handle = std::thread::spawn(move || -> std::result::Result<(), (String, bool)> {
         match exec() {
             Ok(()) => Ok(()),
             Err(e) => {
+                let fail_run = should_fail_run_after(&e);
                 let msg = e.to_string();
                 *error_slot_bg.lock().unwrap_or_else(|e| e.into_inner()) = Some(msg.clone());
                 // Wake the main thread so it can surface the error. Taking the
@@ -420,7 +423,7 @@ fn drive_detached<E: std::fmt::Display>(
                 // check and its wait.
                 let _guard = notify_pair_bg.0.lock().unwrap_or_else(|e| e.into_inner());
                 notify_pair_bg.1.notify_one();
-                Err(msg)
+                Err((msg, fail_run))
             }
         }
     });
@@ -498,7 +501,10 @@ fn drive_detached<E: std::fmt::Display>(
     // must mark it (and the parent agent run) as failed.
     let error_msg = match &exec_result {
         Ok(Ok(())) => None,
-        Ok(Err(e)) => Some(e.clone()),
+        // Another process took the run over (#3435): it owns the run's status
+        // now, so writing `failed` here would overwrite its result.
+        Ok(Err((_, false))) => std::process::exit(1),
+        Ok(Err((e, true))) => Some(e.clone()),
         Err(payload) => Some(panic_message(payload.as_ref())),
     };
 
@@ -522,6 +528,14 @@ fn drive_detached<E: std::fmt::Display>(
     }
 
     std::process::exit(0);
+}
+
+/// Whether the detached child should mark the run failed after `err`.
+///
+/// A lost lease means another process claimed the run and is executing it, so
+/// the child must leave the run and its parent agent run alone (#3435).
+fn should_fail_run_after(err: &conductor_core::error::ConductorError) -> bool {
+    !matches!(err, conductor_core::error::ConductorError::WorkflowLeaseLost)
 }
 
 /// Best-effort cleanup when a background workflow fails after the run ID
@@ -838,6 +852,14 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(agent.status.to_string(), "failed");
+    }
+
+    #[test]
+    fn lease_loss_does_not_fail_the_run() {
+        use conductor_core::error::ConductorError;
+        assert!(!should_fail_run_after(&ConductorError::WorkflowLeaseLost));
+        assert!(should_fail_run_after(&ConductorError::WorkflowCancelled));
+        assert!(should_fail_run_after(&ConductorError::Workflow("x".into())));
     }
 
     #[test]

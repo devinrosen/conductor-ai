@@ -114,6 +114,9 @@ pub enum ConductorError {
     #[error("workflow cancelled")]
     WorkflowCancelled,
 
+    #[error("workflow lease lost to another process")]
+    WorkflowLeaseLost,
+
     #[error("workflow run not found: {id}")]
     WorkflowRunNotFound { id: String },
 
@@ -206,6 +209,7 @@ impl ConductorError {
             Self::NoPendingFeedbackForRun { .. } => 56,
             Self::Workflow(_) => 60,
             Self::WorkflowCancelled => 65,
+            Self::WorkflowLeaseLost => 68,
             Self::WorkflowRunAlreadyActive { .. } => 61,
             Self::WorkflowRunNotFound { .. } => 62,
             Self::WorkflowStepNotFound { .. } => 63,
@@ -266,6 +270,7 @@ mod tests {
             },
             ConductorError::Workflow("wf".into()),
             ConductorError::WorkflowCancelled,
+            ConductorError::WorkflowLeaseLost,
             ConductorError::WorkflowRunAlreadyActive { name: "wf".into() },
             ConductorError::WorkflowRunNotFound { id: "id".into() },
             ConductorError::PathNotAllowed { path: "p".into() },

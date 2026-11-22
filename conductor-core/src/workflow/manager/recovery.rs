@@ -349,6 +349,15 @@ pub fn reap_orphaned_workflow_runs(conn: &Connection) -> Result<usize> {
     Ok(reaped)
 }
 
+/// Root `running` runs with no active step whose age exceeds `threshold_secs`
+/// and whose lease is expired or unset.
+///
+/// A live engine's `lease_until` (refreshed every 10s by runkon's refresh
+/// thread, through long steps and between steps) is the ownership signal.
+/// Conductor never writes `last_heartbeat`, so the age falls back to
+/// `started_at`. Without the lease check, any run older than the threshold was
+/// claimable in the gap between two steps, and a second process executed it
+/// alongside the live one (#3435).
 pub fn detect_stuck_workflow_run_ids(
     conn: &Connection,
     threshold_secs: i64,
@@ -363,6 +372,7 @@ pub fn detect_stuck_workflow_run_ids(
                  WHERE wrs.workflow_run_id = workflow_runs.id \
                    AND wrs.status IN ('running', 'pending', 'waiting') \
                ) \
+               AND (lease_until IS NULL OR datetime(lease_until) <= datetime('now')) \
                AND ( \
                  CAST(strftime('%s', 'now') AS INTEGER) - \
                  CAST(strftime('%s', COALESCE(last_heartbeat, started_at)) AS INTEGER) \
@@ -548,6 +558,9 @@ fn cas_claim_ids_and_notify(
     Ok(claimed)
 }
 
+/// Claim root runs that look stuck between steps (see
+/// [`detect_stuck_workflow_run_ids`]). A run whose lease is still valid is
+/// owned by a live engine and is never claimed (#3435).
 pub fn claim_stuck_workflows(
     conn: &Connection,
     config: &Config,
