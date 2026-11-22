@@ -177,6 +177,11 @@ pub struct WaitGateSummary {
     pub options: Vec<String>,
     /// `plan_path` emitted by the step before the gate, if any.
     pub plan_path: Option<String>,
+    /// `context` the step just before the gate emitted in its FLOW_OUTPUT, if any. For
+    /// ticket-to-pr's plan gate that is the plan's questions and defaults
+    /// (from show-plan-decisions). Capped at about 8 KiB.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
     pub waiting_since: Option<String>,
 }
 
@@ -313,26 +318,65 @@ fn build_summary(
     })
 }
 
-/// The `plan_path` the step just before `step` (same run) stored in its structured output.
-/// An empty value, a missing key or malformed JSON gives `None`.
-pub(crate) fn preceding_plan_path(
+/// What the step just before a gate emitted.
+#[derive(Debug, Default)]
+pub(crate) struct PrecedingOutput {
+    pub plan_path: Option<String>,
+    pub context: Option<String>,
+}
+
+/// The `plan_path` (from structured output) and FLOW_OUTPUT `context` of the step just
+/// before `step` (same run). An empty value, a missing key or malformed JSON gives `None`.
+pub(crate) fn preceding_step_output(
     conn: &Connection,
     step: &crate::workflow::WorkflowRunStep,
-) -> Result<Option<String>> {
-    let path: Option<Option<String>> = conn
+) -> Result<PrecedingOutput> {
+    let row: Option<(Option<String>, Option<String>)> = conn
         .query_row(
             "SELECT CASE WHEN json_valid(structured_output)
                          THEN NULLIF(json_extract(structured_output, '$.plan_path'), '')
-                    END
+                    END,
+                    NULLIF(context_out, '')
              FROM workflow_run_steps
              WHERE workflow_run_id = :run AND position < :pos
              ORDER BY position DESC, datetime(started_at) DESC
              LIMIT 1",
             named_params![":run": step.workflow_run_id, ":pos": step.position],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    Ok(path.flatten())
+    let (plan_path, context) = row.unwrap_or_default();
+    Ok(PrecedingOutput {
+        plan_path,
+        context: context.map(|c| cap_context(&c)),
+    })
+}
+
+/// The `plan_path` the step just before `step` stored in its structured output.
+pub(crate) fn preceding_plan_path(
+    conn: &Connection,
+    step: &crate::workflow::WorkflowRunStep,
+) -> Result<Option<String>> {
+    Ok(preceding_step_output(conn, step)?.plan_path)
+}
+
+/// Longest gate `context` a wait result carries, so a gate after a chatty step can't bloat
+/// every poll.
+const MAX_GATE_CONTEXT_BYTES: usize = 8 * 1024;
+
+fn cap_context(context: &str) -> String {
+    if context.len() <= MAX_GATE_CONTEXT_BYTES {
+        return context.to_string();
+    }
+    let mut end = MAX_GATE_CONTEXT_BYTES;
+    while !context.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{}… [truncated {} bytes]",
+        &context[..end],
+        context.len() - end
+    )
 }
 
 /// Gates in the run tree that wait for a person: `waiting`, no approval recorded, and in
@@ -359,10 +403,11 @@ fn waiting_gates_in_tree(conn: &Connection, run_id: &str) -> Result<Vec<WaitGate
     let mut gates = Vec::with_capacity(rows.len());
     for (step, workflow_name, _target_label) in rows {
         // A broken lookup must not hide the wait result.
-        let plan_path = preceding_plan_path(conn, &step).unwrap_or_else(|e| {
-            tracing::warn!("plan_path lookup failed for step {}: {e}", step.id);
-            None
-        });
+        let PrecedingOutput { plan_path, context } =
+            preceding_step_output(conn, &step).unwrap_or_else(|e| {
+                tracing::warn!("preceding step lookup failed for step {}: {e}", step.id);
+                PrecedingOutput::default()
+            });
         gates.push(WaitGateSummary {
             run_id: step.workflow_run_id.clone(),
             workflow_name,
@@ -377,6 +422,7 @@ fn waiting_gates_in_tree(conn: &Connection, run_id: &str) -> Result<Vec<WaitGate
                 .map(parse_gate_options)
                 .unwrap_or_default(),
             plan_path,
+            context,
             waiting_since: step.started_at.clone(),
         });
     }
@@ -605,6 +651,12 @@ pub fn format_wait_summary(s: &WaitSummary) -> String {
                 }
                 if let Some(p) = &g.plan_path {
                     out.push_str(&format!("  plan: {p}\n"));
+                }
+                if let Some(c) = &g.context {
+                    out.push_str("  context:\n");
+                    for line in c.lines() {
+                        out.push_str(&format!("    {line}\n"));
+                    }
                 }
             }
             let gate_run = s
@@ -1370,6 +1422,55 @@ mod tests {
         }
     }
 
+    fn gate_after_step_with_context(context: Option<&str>) -> WaitSummary {
+        let conn = setup();
+        live_run(&conn, "r");
+        insert_step(
+            &conn,
+            "p",
+            "r",
+            "show-plan-decisions",
+            "-1 minutes",
+            Some("-50 seconds"),
+        );
+        set_step(&conn, "p", "completed", 0, None);
+        conn.execute(
+            "UPDATE workflow_run_steps SET context_out = :c WHERE id = 'p'",
+            named_params![":c": context],
+        )
+        .unwrap();
+        insert_gate_step(&conn, "g", "r", "human_review", 1, "waiting", None, false);
+        eval(&conn, "r").unwrap()
+    }
+
+    #[test]
+    fn gate_context_comes_from_the_preceding_step() {
+        let ctx = "The plan needs your decision.\n1. Q\n   Default: D";
+        let s = gate_after_step_with_context(Some(ctx));
+        assert_eq!(s.gates[0].context.as_deref(), Some(ctx));
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["gates"][0]["context"], ctx);
+    }
+
+    #[test]
+    fn empty_gate_context_is_omitted() {
+        for ctx in [None, Some("")] {
+            let s = gate_after_step_with_context(ctx);
+            assert_eq!(s.gates[0].context, None);
+            let json = serde_json::to_value(&s).unwrap();
+            assert!(json["gates"][0].get("context").is_none());
+        }
+    }
+
+    #[test]
+    fn long_gate_context_is_truncated() {
+        let long = "é".repeat(MAX_GATE_CONTEXT_BYTES);
+        let s = gate_after_step_with_context(Some(&long));
+        let got = s.gates[0].context.as_deref().unwrap();
+        assert!(got.contains("… [truncated"), "{got}");
+        assert!(got.len() < long.len());
+    }
+
     #[test]
     fn multi_select_options_are_listed() {
         let conn = setup();
@@ -1401,6 +1502,7 @@ mod tests {
             timeout: Some("24h".into()),
             options: vec!["a".into(), "b".into()],
             plan_path: Some("/x/PLAN.md".into()),
+            context: Some("Questions:\n1. Q\n   Default: D".into()),
             waiting_since: None,
         }];
         let text = format_wait_summary(&s);
@@ -1410,6 +1512,7 @@ mod tests {
         assert!(text.contains("  timeout: 24h"));
         assert!(text.contains("  options: a, b"));
         assert!(text.contains("  plan: /x/PLAN.md"));
+        assert!(text.contains("  context:\n    Questions:\n    1. Q\n       Default: D\n"));
         assert!(text.contains("conductor workflow gate-approve kid1"));
     }
 
@@ -1428,6 +1531,7 @@ mod tests {
             timeout: None,
             options: vec![],
             plan_path: None,
+            context: None,
             waiting_since: None,
         }];
         let json = serde_json::to_value(s).unwrap();
