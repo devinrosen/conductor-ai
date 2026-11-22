@@ -111,3 +111,35 @@ pub(crate) fn map_worktree_row(row: &rusqlite::Row) -> rusqlite::Result<Worktree
         base_branch: row.get("base_branch")?,
     })
 }
+
+/// Select list and join shared by every query that needs a worktree row plus the repo fields
+/// merged-PR cleanup uses. A macro, so `concat!` can append a `WHERE` at compile time. Pair
+/// with [`map_worktree_with_repo_row`].
+macro_rules! worktree_with_repo_select {
+    () => {
+        "SELECT w.*, r.local_path AS repo_local_path, r.remote_url AS repo_remote_url, \
+         r.slug AS repo_slug \
+         FROM worktrees w JOIN repos r ON r.id = w.repo_id"
+    };
+}
+pub(crate) use worktree_with_repo_select;
+
+/// A worktree joined with its repo's path, remote and slug, as selected by
+/// [`WORKTREE_WITH_REPO_SELECT`].
+pub(crate) struct WorktreeWithRepo {
+    pub wt: Worktree,
+    pub repo_path: String,
+    pub remote_url: String,
+    pub repo_slug: String,
+}
+
+pub(crate) fn map_worktree_with_repo_row(
+    row: &rusqlite::Row,
+) -> rusqlite::Result<WorktreeWithRepo> {
+    Ok(WorktreeWithRepo {
+        wt: map_worktree_row(row)?,
+        repo_path: row.get("repo_local_path")?,
+        remote_url: row.get("repo_remote_url")?,
+        repo_slug: row.get("repo_slug")?,
+    })
+}

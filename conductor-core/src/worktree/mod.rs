@@ -14,7 +14,7 @@ pub use manager::{
     MergedCleanup, SetBaseBranchOptions, SetBaseBranchOutcome, WorktreeAdoptOptions,
     WorktreeCreateOptions, WorktreeManager,
 };
-pub(crate) use types::map_worktree_row;
+pub(crate) use types::{map_worktree_with_repo_row, worktree_with_repo_select, WorktreeWithRepo};
 pub use types::{Worktree, WorktreeStatus, WorktreeWithStatus};
 
 // Column constants used by both types.rs and manager.rs — live here to avoid circular deps.

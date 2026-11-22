@@ -144,6 +144,10 @@ pub fn fire_worktree_created(hooks: &[HookConfig], args: &WorktreeEventArgs<'_>)
 /// for N worktrees' hooks one after another: hooks of different worktrees deliberately do
 /// not overlap, because cleanup scripts often share caches, simulators or tmux state.
 ///
+/// The total wait of a bulk pass is therefore bounded by N × (longest matching hook
+/// `timeout_ms` + the 2 s grace period): with the default 10 s timeout, N = 20 worktrees can
+/// block the pass for at most about 4 minutes, and only when every hook runs to its timeout.
+///
 /// No-op when no hooks are configured, and then nothing is claimed in `notification_log`,
 /// so a hook added later can still be told about old records when they are purged.
 pub fn fire_worktree_removed(

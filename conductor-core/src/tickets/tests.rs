@@ -483,10 +483,10 @@ fn test_mark_worktrees_artifacts_query_returns_correct_paths() {
         .unwrap()
         .query_map(rusqlite::named_params! { ":repo_id": "r1" }, |row| {
             Ok((
-                row.get("local_path")?,
+                row.get("repo_local_path")?,
                 row.get("path")?,
                 row.get("branch")?,
-                row.get("remote_url")?,
+                row.get("repo_remote_url")?,
             ))
         })
         .unwrap()
@@ -524,10 +524,10 @@ fn test_mark_worktrees_artifacts_skips_already_merged() {
         .unwrap()
         .query_map(rusqlite::named_params! { ":repo_id": "r1" }, |row| {
             Ok((
-                row.get("local_path")?,
+                row.get("repo_local_path")?,
                 row.get("path")?,
                 row.get("branch")?,
-                row.get("remote_url")?,
+                row.get("repo_remote_url")?,
             ))
         })
         .unwrap()

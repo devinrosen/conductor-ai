@@ -23,22 +23,14 @@ pub struct TicketSyncer<'a> {
     hooks: &'a [crate::config::HookConfig],
 }
 
-pub(in crate::tickets) const CLOSED_TICKET_ARTIFACTS_SQL: &str =
-    "SELECT w.*, r.local_path, r.remote_url, r.slug AS repo_slug
-     FROM worktrees w
-     JOIN repos r ON r.id = w.repo_id
+pub(in crate::tickets) const CLOSED_TICKET_ARTIFACTS_SQL: &str = concat!(
+    crate::worktree::worktree_with_repo_select!(),
+    "
      WHERE w.repo_id = :repo_id
        AND w.status != 'merged'
        AND w.ticket_id IS NOT NULL
-       AND w.ticket_id IN (SELECT id FROM tickets WHERE state = 'closed')";
-
-/// A worktree of a closed ticket, with the repo fields artifact cleanup needs.
-struct ClosedTicketArtifact {
-    wt: crate::worktree::Worktree,
-    repo_path: String,
-    remote_url: String,
-    repo_slug: String,
-}
+       AND w.ticket_id IN (SELECT id FROM tickets WHERE state = 'closed')"
+);
 
 /// Look up the internal ULID for a dependency ticket by its source_id.
 /// Checks `id_map` first (O(1) in-batch lookup) then falls back to a DB query.
@@ -913,18 +905,11 @@ impl<'a> TicketSyncer<'a> {
         merge_check: impl Fn(&str, &[String]) -> HashMap<String, MergedPr>,
     ) -> Result<usize> {
         // Collect git paths before updating so we can clean up worktree dirs and branches.
-        let artifacts: Vec<ClosedTicketArtifact> = query_collect(
+        let artifacts: Vec<crate::worktree::WorktreeWithRepo> = query_collect(
             self.conn,
             CLOSED_TICKET_ARTIFACTS_SQL,
             named_params! { ":repo_id": repo_id },
-            |row| {
-                Ok(ClosedTicketArtifact {
-                    wt: crate::worktree::map_worktree_row(row)?,
-                    repo_path: row.get("local_path")?,
-                    remote_url: row.get("remote_url")?,
-                    repo_slug: row.get("repo_slug")?,
-                })
-            },
+            crate::worktree::map_worktree_with_repo_row,
         )?;
 
         let merged_by_remote = crate::worktree::merged_prs_by_remote(
@@ -937,7 +922,7 @@ impl<'a> TicketSyncer<'a> {
         let now = Utc::now().to_rfc3339();
         let mut count = 0usize;
 
-        for ClosedTicketArtifact {
+        for crate::worktree::WorktreeWithRepo {
             wt,
             repo_path,
             remote_url,

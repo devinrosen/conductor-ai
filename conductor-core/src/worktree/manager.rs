@@ -13,7 +13,10 @@ use crate::repo::RepoManager;
 use crate::tickets::TicketSyncer;
 
 use super::git_helpers::*;
-use super::types::{map_worktree_row, Worktree, WorktreeStatus, WorktreeWithStatus};
+use super::types::{
+    map_worktree_row, map_worktree_with_repo_row, worktree_with_repo_select, Worktree,
+    WorktreeStatus, WorktreeWithRepo, WorktreeWithStatus,
+};
 use super::{WORKTREE_COLUMNS, WORKTREE_COLUMNS_W};
 
 /// Map a ticket label to the conventional-commit branch prefix it implies.
@@ -280,14 +283,6 @@ pub fn get_ticket_id_by_branch(
         |row| row.get("ticket_id"),
     )
     .map_err(worktree_not_found(branch))
-}
-
-/// An active worktree joined with the repo fields merged-PR cleanup needs.
-struct CleanupCandidate {
-    wt: Worktree,
-    repo_path: String,
-    remote_url: String,
-    repo_slug: String,
 }
 
 /// A merged worktree that cleanup kept because a run is still live in it.
@@ -1703,31 +1698,20 @@ impl<'a> WorktreeManager<'a> {
         merge_check: impl Fn(&str, &[String]) -> std::collections::HashMap<String, MergedPr>,
         pull_fn: impl Fn(&str, &str) -> std::result::Result<(), String>,
     ) -> Result<MergedCleanup> {
-        let base_query = format!(
-            "SELECT {}, r.local_path AS repo_local_path, r.remote_url AS repo_remote_url, r.slug AS repo_slug
-                 FROM worktrees w
-                 JOIN repos r ON r.id = w.repo_id
-                 WHERE w.status = 'active'",
-            *WORKTREE_COLUMNS_W
-        );
+        let base_query = concat!(worktree_with_repo_select!(), " WHERE w.status = 'active'");
         let query = match repo_slug {
             Some(_) => format!("{base_query} AND r.slug = :slug"),
-            None => base_query,
+            None => base_query.to_string(),
         };
 
-        let mapper = |row: &rusqlite::Row| -> rusqlite::Result<CleanupCandidate> {
-            Ok(CleanupCandidate {
-                wt: map_worktree_row(row)?,
-                repo_path: row.get("repo_local_path")?,
-                remote_url: row.get("repo_remote_url")?,
-                repo_slug: row.get("repo_slug")?,
-            })
-        };
-        let rows: Vec<CleanupCandidate> = match repo_slug {
-            Some(slug) => {
-                query_collect(self.conn, &query, named_params! { ":slug": slug }, mapper)?
-            }
-            None => query_collect(self.conn, &query, [], mapper)?,
+        let rows: Vec<WorktreeWithRepo> = match repo_slug {
+            Some(slug) => query_collect(
+                self.conn,
+                &query,
+                named_params! { ":slug": slug },
+                map_worktree_with_repo_row,
+            )?,
+            None => query_collect(self.conn, &query, [], map_worktree_with_repo_row)?,
         };
 
         let merged_by_remote = merged_prs_by_remote(
@@ -1745,7 +1729,7 @@ impl<'a> WorktreeManager<'a> {
             std::collections::HashSet::new();
 
         for cand in &rows {
-            let CleanupCandidate {
+            let WorktreeWithRepo {
                 wt,
                 repo_path,
                 remote_url,
