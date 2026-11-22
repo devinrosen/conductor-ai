@@ -349,13 +349,28 @@ pub fn reap_orphaned_workflow_runs(conn: &Connection) -> Result<usize> {
     Ok(reaped)
 }
 
+/// SQL condition: the run's lease is unset or expired. `datetime()` normalises
+/// both the `YYYY-MM-DD HH:MM:SS` and RFC 3339 forms before comparing. Shared by
+/// every reclaim path so they agree on whether a lease has expired.
+const LEASE_EXPIRED_SQL: &str = "(lease_until IS NULL OR datetime(lease_until) <= datetime('now'))";
+
+/// Root `running` runs with no active step whose age exceeds `threshold_secs`
+/// and whose lease is expired or unset.
+///
+/// A live engine's `lease_until` (refreshed every 10s by runkon's refresh
+/// thread, through long steps and between steps) is the ownership signal.
+/// Conductor never writes `last_heartbeat`, so the age falls back to
+/// `started_at`. Without the lease check, any run older than the threshold was
+/// claimable in the gap between two steps, and a second process executed it
+/// alongside the live one (#3435).
 pub fn detect_stuck_workflow_run_ids(
     conn: &Connection,
     threshold_secs: i64,
 ) -> Result<Vec<String>> {
     query_collect(
         conn,
-        "SELECT id FROM workflow_runs \
+        &format!(
+            "SELECT id FROM workflow_runs \
              WHERE status = 'running' \
                AND parent_workflow_run_id IS NULL \
                AND NOT EXISTS ( \
@@ -363,10 +378,12 @@ pub fn detect_stuck_workflow_run_ids(
                  WHERE wrs.workflow_run_id = workflow_runs.id \
                    AND wrs.status IN ('running', 'pending', 'waiting') \
                ) \
+               AND {LEASE_EXPIRED_SQL} \
                AND ( \
                  CAST(strftime('%s', 'now') AS INTEGER) - \
                  CAST(strftime('%s', COALESCE(last_heartbeat, started_at)) AS INTEGER) \
-               ) > :threshold_secs",
+               ) > :threshold_secs"
+        ),
         named_params![":threshold_secs": threshold_secs],
         |row| row.get("id"),
     )
@@ -548,6 +565,9 @@ fn cas_claim_ids_and_notify(
     Ok(claimed)
 }
 
+/// Claim root runs that look stuck between steps (see
+/// [`detect_stuck_workflow_run_ids`]). A run whose lease is still valid is
+/// owned by a live engine and is never claimed (#3435).
 pub fn claim_stuck_workflows(
     conn: &Connection,
     config: &Config,
@@ -588,7 +608,8 @@ pub fn claim_expired_lease_runs(
     // the executor died before creating any steps.
     let orphaned: Vec<(String, String, Option<String>)> = query_collect(
         conn,
-        "SELECT id, workflow_name, target_label FROM workflow_runs \
+        &format!(
+            "SELECT id, workflow_name, target_label FROM workflow_runs \
              WHERE status = 'running' \
                AND parent_workflow_run_id IS NULL \
                AND NOT EXISTS ( \
@@ -596,7 +617,8 @@ pub fn claim_expired_lease_runs(
                  WHERE wrs.workflow_run_id = workflow_runs.id \
                    AND wrs.status IN ('running', 'pending', 'waiting') \
                ) \
-               AND (lease_until < datetime('now') OR lease_until IS NULL)",
+               AND {LEASE_EXPIRED_SQL}"
+        ),
         [],
         |row| {
             Ok((
