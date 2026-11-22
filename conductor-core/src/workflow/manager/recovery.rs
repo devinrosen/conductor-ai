@@ -358,13 +358,19 @@ pub fn reap_orphaned_workflow_runs(conn: &Connection) -> Result<usize> {
 /// `started_at`. Without the lease check, any run older than the threshold was
 /// claimable in the gap between two steps, and a second process executed it
 /// alongside the live one (#3435).
+/// SQL condition: the run's lease is unset or expired. `datetime()` normalises
+/// both the `YYYY-MM-DD HH:MM:SS` and RFC 3339 forms before comparing. Shared by
+/// every reclaim path so they agree on whether a lease has expired.
+const LEASE_EXPIRED_SQL: &str = "(lease_until IS NULL OR datetime(lease_until) <= datetime('now'))";
+
 pub fn detect_stuck_workflow_run_ids(
     conn: &Connection,
     threshold_secs: i64,
 ) -> Result<Vec<String>> {
     query_collect(
         conn,
-        "SELECT id FROM workflow_runs \
+        &format!(
+            "SELECT id FROM workflow_runs \
              WHERE status = 'running' \
                AND parent_workflow_run_id IS NULL \
                AND NOT EXISTS ( \
@@ -372,11 +378,12 @@ pub fn detect_stuck_workflow_run_ids(
                  WHERE wrs.workflow_run_id = workflow_runs.id \
                    AND wrs.status IN ('running', 'pending', 'waiting') \
                ) \
-               AND (lease_until IS NULL OR datetime(lease_until) <= datetime('now')) \
+               AND {LEASE_EXPIRED_SQL} \
                AND ( \
                  CAST(strftime('%s', 'now') AS INTEGER) - \
                  CAST(strftime('%s', COALESCE(last_heartbeat, started_at)) AS INTEGER) \
-               ) > :threshold_secs",
+               ) > :threshold_secs"
+        ),
         named_params![":threshold_secs": threshold_secs],
         |row| row.get("id"),
     )
@@ -601,7 +608,8 @@ pub fn claim_expired_lease_runs(
     // the executor died before creating any steps.
     let orphaned: Vec<(String, String, Option<String>)> = query_collect(
         conn,
-        "SELECT id, workflow_name, target_label FROM workflow_runs \
+        &format!(
+            "SELECT id, workflow_name, target_label FROM workflow_runs \
              WHERE status = 'running' \
                AND parent_workflow_run_id IS NULL \
                AND NOT EXISTS ( \
@@ -609,7 +617,8 @@ pub fn claim_expired_lease_runs(
                  WHERE wrs.workflow_run_id = workflow_runs.id \
                    AND wrs.status IN ('running', 'pending', 'waiting') \
                ) \
-               AND (lease_until < datetime('now') OR lease_until IS NULL)",
+               AND {LEASE_EXPIRED_SQL}"
+        ),
         [],
         |row| {
             Ok((

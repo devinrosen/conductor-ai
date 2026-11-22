@@ -503,7 +503,13 @@ fn drive_detached(
         Ok(Ok(())) => None,
         // Another process took the run over (#3435): it owns the run's status
         // now, so writing `failed` here would overwrite its result.
-        Ok(Err((_, false))) => std::process::exit(1),
+        // Exit with the lease-lost code so a wrapper can tell this from a real
+        // failure. stdio is already /dev/null here, so the message is only
+        // visible if the parent re-attached it.
+        Ok(Err((e, false))) => {
+            eprintln!("run stopped: {e}; another process owns it");
+            std::process::exit(conductor_core::error::ConductorError::WorkflowLeaseLost.exit_code())
+        }
         Ok(Err((e, true))) => Some(e.clone()),
         Err(payload) => Some(panic_message(payload.as_ref())),
     };
