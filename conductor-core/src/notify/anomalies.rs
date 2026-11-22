@@ -174,12 +174,8 @@ pub struct CostSpikeArgs<'a> {
 /// Build the `workflow_run.cost_spike` event. `web_url` is `[notifications] web_url`.
 pub(crate) fn cost_spike_event(web_url: Option<&str>, params: &CostSpikeArgs<'_>) -> Event {
     let label = notification_body(params.workflow_name, params.target_label);
-    let deep_link = build_workflow_deep_link(
-        web_url,
-        params.repo_id,
-        params.worktree_id,
-        params.run_id,
-    );
+    let deep_link =
+        build_workflow_deep_link(web_url, params.repo_id, params.worktree_id, params.run_id);
     let is_root = params.parent_workflow_run_id.is_none();
     let now = chrono::Utc::now().to_rfc3339();
 
@@ -255,12 +251,8 @@ pub struct DurationSpikeArgs<'a> {
 /// Build the `workflow_run.duration_spike` event. `web_url` is `[notifications] web_url`.
 pub(crate) fn duration_spike_event(web_url: Option<&str>, params: &DurationSpikeArgs<'_>) -> Event {
     let label = notification_body(params.workflow_name, params.target_label);
-    let deep_link = build_workflow_deep_link(
-        web_url,
-        params.repo_id,
-        params.worktree_id,
-        params.run_id,
-    );
+    let deep_link =
+        build_workflow_deep_link(web_url, params.repo_id, params.worktree_id, params.run_id);
     let is_root = params.parent_workflow_run_id.is_none();
     let now = chrono::Utc::now().to_rfc3339();
 

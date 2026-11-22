@@ -1021,7 +1021,6 @@ fn headless_completed_still_notifies() {
     assert!(t[0].succeeded);
 }
 
-
 // --- registry drift: every produced event matches notify/catalog.rs ---
 
 /// Assert `ev` has a registered kind, only registered fields, and every always-set field.
@@ -1244,7 +1243,9 @@ fn every_synthetic_event_matches_registry() {
 
 #[test]
 fn synthetic_unknown_event_error_lists_every_registered_event() {
-    let err = build_synthetic_event("bad.event", "t").unwrap_err().to_string();
+    let err = build_synthetic_event("bad.event", "t")
+        .unwrap_err()
+        .to_string();
     for spec in EVENTS {
         assert!(err.contains(spec.name), "error should list {}", spec.name);
     }

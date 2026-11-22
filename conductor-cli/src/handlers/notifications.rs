@@ -41,7 +41,10 @@ pub fn handle_notifications(command: NotificationsCommands, config: &Config) -> 
 /// The `notify events` output: the registry as text, or as pretty JSON.
 fn render_events(json: bool) -> Result<String> {
     if json {
-        Ok(format!("{}\n", serde_json::to_string_pretty(&events_json())?))
+        Ok(format!(
+            "{}\n",
+            serde_json::to_string_pretty(&events_json())?
+        ))
     } else {
         Ok(events_text())
     }

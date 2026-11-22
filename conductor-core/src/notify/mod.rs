@@ -12,8 +12,8 @@ mod tests;
 pub mod transitions;
 
 pub use anomalies::*;
-pub use dedup::{try_claim_notification, SqliteDedupStore};
 pub use catalog::{event_spec, matrix_events, EventField, EventSpec, EVENTS};
+pub use dedup::{try_claim_notification, SqliteDedupStore};
 pub use event::{build_synthetic_event, build_synthetic_for_pattern};
 pub use gates::*;
 pub use runkon_notify::HookRunner;

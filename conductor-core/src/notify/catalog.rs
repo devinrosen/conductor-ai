@@ -202,7 +202,10 @@ const GATE_WAITING_FIELDS: &[EventField] = &[
         "step_name",
         "Gate step name, or `<n> gates pending` for a grouped notification",
     ),
-    maybe("repo_slug", "Repository slug; single-gate notifications only"),
+    maybe(
+        "repo_slug",
+        "Repository slug; single-gate notifications only",
+    ),
     maybe("branch", "Branch name; single-gate notifications only"),
     maybe(
         "ticket_url",
@@ -231,10 +234,7 @@ const FEEDBACK_FIELDS: &[EventField] = &[
     f("feedback_id", "Feedback request ID"),
     PROMPT_PREVIEW,
     f("repo_slug", "Repository slug, resolved from the agent run"),
-    f(
-        "branch",
-        "Branch name; empty for repo-scoped agents",
-    ),
+    f("branch", "Branch name; empty for repo-scoped agents"),
     f(
         "worktree_slug",
         "Worktree slug; empty for repo-scoped agents",
@@ -248,10 +248,7 @@ const SESSION_IDLE_FIELDS: &[EventField] = &[
     REPO_SLUG,
     BRANCH,
     f("worktree_slug", "Worktree slug; empty when none"),
-    f(
-        "prompt_preview",
-        "First ~100 chars of the turn's prompt",
-    ),
+    f("prompt_preview", "First ~100 chars of the turn's prompt"),
     f(
         "last_message_preview",
         "First ~100 chars of the last assistant message",
@@ -321,7 +318,8 @@ pub const EVENTS: &[EventSpec] = &[
     EventSpec {
         name: AGENT_RUN_COMPLETED,
         label: "Agent completed",
-        description: "A standalone agent run finished successfully (not fired for interactive sessions)",
+        description:
+            "A standalone agent run finished successfully (not fired for interactive sessions)",
         is_workflow: false,
         needs_threshold: false,
         fields: AGENT_COMPLETED_FIELDS,
@@ -533,7 +531,11 @@ mod tests {
     #[test]
     fn event_names_are_unique_and_fields_are_unique_per_event() {
         for (i, e) in EVENTS.iter().enumerate() {
-            assert!(EVENTS[i + 1..].iter().all(|o| o.name != e.name), "{}", e.name);
+            assert!(
+                EVENTS[i + 1..].iter().all(|o| o.name != e.name),
+                "{}",
+                e.name
+            );
             for (j, fl) in e.fields.iter().enumerate() {
                 assert!(
                     e.fields[j + 1..].iter().all(|o| o.name != fl.name),
@@ -573,7 +575,10 @@ mod tests {
             unmatched_on_arms("gate.waiting, bogus.thing"),
             vec!["bogus.thing".to_string()]
         );
-        assert_eq!(unmatched_on_arms("worktree.*"), vec!["worktree.*".to_string()]);
+        assert_eq!(
+            unmatched_on_arms("worktree.*"),
+            vec!["worktree.*".to_string()]
+        );
         assert_eq!(
             unmatched_on_arms("workflow_run.stale"),
             vec!["workflow_run.stale".to_string()]

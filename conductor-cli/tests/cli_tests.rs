@@ -1423,7 +1423,10 @@ fn notify_events_json_lists_every_event_with_fields() {
         let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
         let events = v.as_array().unwrap();
         let names: Vec<&str> = events.iter().map(|e| e["name"].as_str().unwrap()).collect();
-        let expected: Vec<&str> = conductor_core::notify::EVENTS.iter().map(|e| e.name).collect();
+        let expected: Vec<&str> = conductor_core::notify::EVENTS
+            .iter()
+            .map(|e| e.name)
+            .collect();
         assert_eq!(names, expected);
         let gate = events.iter().find(|e| e["name"] == "gate.waiting").unwrap();
         assert!(gate["fields"]

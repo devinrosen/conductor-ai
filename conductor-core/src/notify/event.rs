@@ -58,9 +58,12 @@ pub fn build_synthetic_event(name: &str, now: impl Into<String>) -> Result<Event
         },
         // The remaining events go through the production builders, so a test notification
         // carries exactly the fields a real one does.
-        catalog::WORKFLOW_RUN_ORPHAN_RESUMED => {
-            anomalies::orphan_resumed_event(&run_id, 1, "test-workflow".into(), Some("test-repo/main"))
-        }
+        catalog::WORKFLOW_RUN_ORPHAN_RESUMED => anomalies::orphan_resumed_event(
+            &run_id,
+            1,
+            "test-workflow".into(),
+            Some("test-repo/main"),
+        ),
         catalog::WORKFLOW_RUN_REAPED => anomalies::reaped_event(
             &run_id,
             "test-workflow",
@@ -122,24 +125,22 @@ pub fn build_synthetic_event(name: &str, now: impl Into<String>) -> Result<Event
             branch: "main",
             ticket_url: Some(ticket_url),
         }),
-        catalog::GATE_PENDING_TOO_LONG => {
-            anomalies::gate_pending_too_long_event(
-                None,
-                &anomalies::GatePendingTooLongArgs {
-                    step_id: "test-step",
-                    step_name: "test-gate",
-                    workflow_run_id: &run_id,
-                    workflow_name: "test-workflow",
-                    target_label: Some("test-repo/main"),
-                    pending_ms: 1_800_000,
-                    duration_ms: Some(1000),
-                    repo_slug: "test-repo",
-                    branch: "main",
-                    repo_id: None,
-                    worktree_id: None,
-                },
-            )
-        }
+        catalog::GATE_PENDING_TOO_LONG => anomalies::gate_pending_too_long_event(
+            None,
+            &anomalies::GatePendingTooLongArgs {
+                step_id: "test-step",
+                step_name: "test-gate",
+                workflow_run_id: &run_id,
+                workflow_name: "test-workflow",
+                target_label: Some("test-repo/main"),
+                pending_ms: 1_800_000,
+                duration_ms: Some(1000),
+                repo_slug: "test-repo",
+                branch: "main",
+                repo_id: None,
+                worktree_id: None,
+            },
+        ),
         catalog::FEEDBACK_REQUESTED => {
             // Share the production event definition so the test notification cannot drift.
             runs::feedback_event(&runs::FeedbackNotificationParams {
@@ -154,17 +155,17 @@ pub fn build_synthetic_event(name: &str, now: impl Into<String>) -> Result<Event
         catalog::SESSION_IDLE => {
             // Share the production event definition so the test notification cannot drift.
             super::session_idle::session_idle_event(&super::session_idle::IdleSession {
-                    run_id: run_id.clone(),
-                    session_id: Some("test-session".into()),
-                    idle_since: now.clone(),
-                    worktree_id: Some("test-worktree-id".into()),
-                    worktree_slug: Some("test-worktree".into()),
-                    repo_slug: "test-repo".into(),
-                    branch: "main".into(),
-                    prompt: "Fix the flaky test".into(),
-                    last_message: Some("Done. The test now passes.".into()),
-                    background_tasks: Some(0),
-                    turn_duration_ms: Some(1000),
+                run_id: run_id.clone(),
+                session_id: Some("test-session".into()),
+                idle_since: now.clone(),
+                worktree_id: Some("test-worktree-id".into()),
+                worktree_slug: Some("test-worktree".into()),
+                repo_slug: "test-repo".into(),
+                branch: "main".into(),
+                prompt: "Fix the flaky test".into(),
+                last_message: Some("Done. The test now passes.".into()),
+                background_tasks: Some(0),
+                turn_duration_ms: Some(1000),
             })
         }
         other => {
