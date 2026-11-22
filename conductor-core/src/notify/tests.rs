@@ -1290,6 +1290,24 @@ fn wt_args() -> crate::notify::WorktreeEventArgs<'static> {
     }
 }
 
+/// The catalog is what `conductor notify events` prints, so a worktree event must carry
+/// exactly the fields it lists, no more and no fewer.
+#[test]
+fn worktree_events_carry_exactly_the_cataloged_fields() {
+    use std::collections::BTreeSet;
+    let created = crate::notify::worktree::worktree_created_event(&wt_args());
+    let removed = crate::notify::worktree::worktree_removed_event(
+        &wt_args(),
+        crate::notify::WorktreeRemovedReason::Merged,
+    );
+    for ev in [created, removed] {
+        let spec = event_spec(&ev.kind).expect("worktree event is cataloged");
+        let produced: BTreeSet<&str> = ev.fields.keys().map(String::as_str).collect();
+        let listed: BTreeSet<&str> = spec.fields.iter().map(|f| f.name).collect();
+        assert_eq!(produced, listed, "fields of {}", spec.name);
+    }
+}
+
 fn shell_hook(on: &str, run: String) -> HookConfig {
     HookConfig {
         on: on.into(),

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use runkon_notify::{Event, HookRunner, Severity};
 
 use crate::config::HookConfig;
-use crate::worktree::WorktreeStatus;
+use crate::worktree::{Worktree, WorktreeStatus};
 
 use super::catalog::{WORKTREE_CREATED, WORKTREE_REMOVED};
 use super::try_claim_notification;
@@ -33,6 +33,21 @@ pub struct WorktreeEventArgs<'a> {
     pub path: &'a str,
     pub base_branch: Option<&'a str>,
     pub pr_number: Option<u64>,
+}
+
+impl<'a> WorktreeEventArgs<'a> {
+    /// Describe `wt` (a row of the `worktrees` table) in repo `repo_slug`.
+    pub fn from_worktree(repo_slug: &'a str, wt: &'a Worktree, pr_number: Option<u64>) -> Self {
+        Self {
+            repo_slug,
+            worktree_slug: &wt.slug,
+            worktree_id: &wt.id,
+            branch: &wt.branch,
+            path: &wt.path,
+            base_branch: wt.base_branch.as_deref(),
+            pr_number,
+        }
+    }
 }
 
 /// Why a worktree was removed.
@@ -123,6 +138,11 @@ pub fn fire_worktree_created(hooks: &[HookConfig], args: &WorktreeEventArgs<'_>)
 }
 
 /// Fire `worktree.removed` once per worktree ID.
+///
+/// Waits for the hooks of this one worktree (bounded by their timeouts). Bulk paths
+/// (`cleanup`, `reap`, `purge`, ticket sync) call this once per worktree, so they wait
+/// for N worktrees' hooks one after another: hooks of different worktrees deliberately do
+/// not overlap, because cleanup scripts often share caches, simulators or tmux state.
 ///
 /// No-op when no hooks are configured, and then nothing is claimed in `notification_log`,
 /// so a hook added later can still be told about old records when they are purged.

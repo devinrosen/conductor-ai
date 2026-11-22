@@ -75,7 +75,7 @@ pub(super) fn tool_sync_tickets(
             "No issue sources configured for {repo_slug}. Use `conductor repo sources add` to configure one."
         ));
     }
-    let syncer = TicketSyncer::new(conn);
+    let syncer = TicketSyncer::new(conn).with_hooks(&config.notify.hooks);
 
     // Single-ticket sync path
     if let Some(ticket_id_str) = ticket_id_arg {

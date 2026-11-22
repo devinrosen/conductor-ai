@@ -282,6 +282,14 @@ pub fn get_ticket_id_by_branch(
     .map_err(worktree_not_found(branch))
 }
 
+/// An active worktree joined with the repo fields merged-PR cleanup needs.
+struct CleanupCandidate {
+    wt: Worktree,
+    repo_path: String,
+    remote_url: String,
+    repo_slug: String,
+}
+
 /// A merged worktree that cleanup kept because a run is still live in it.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct KeptWorktree {
@@ -505,15 +513,11 @@ impl<'a> WorktreeManager<'a> {
 
         crate::notify::fire_worktree_created(
             &self.config.notify.hooks,
-            &crate::notify::WorktreeEventArgs {
-                repo_slug: &repo.slug,
-                worktree_slug: &worktree.slug,
-                worktree_id: &worktree.id,
-                branch: &worktree.branch,
-                path: &worktree.path,
-                base_branch: worktree.base_branch.as_deref(),
-                pr_number: from_pr.map(u64::from),
-            },
+            &crate::notify::WorktreeEventArgs::from_worktree(
+                &repo.slug,
+                &worktree,
+                from_pr.map(u64::from),
+            ),
         );
 
         Ok((worktree, warnings))
@@ -530,15 +534,7 @@ impl<'a> WorktreeManager<'a> {
         crate::notify::fire_worktree_removed(
             self.conn,
             &self.config.notify.hooks,
-            &crate::notify::WorktreeEventArgs {
-                repo_slug,
-                worktree_slug: &wt.slug,
-                worktree_id: &wt.id,
-                branch: &wt.branch,
-                path: &wt.path,
-                base_branch: wt.base_branch.as_deref(),
-                pr_number,
-            },
+            &crate::notify::WorktreeEventArgs::from_worktree(repo_slug, wt, pr_number),
             reason,
         );
     }
@@ -1707,33 +1703,27 @@ impl<'a> WorktreeManager<'a> {
         merge_check: impl Fn(&str, &[String]) -> std::collections::HashMap<String, MergedPr>,
         pull_fn: impl Fn(&str, &str) -> std::result::Result<(), String>,
     ) -> Result<MergedCleanup> {
-        let base_query =
-            "SELECT w.id, w.branch, w.path, r.local_path, r.remote_url, w.repo_id, w.base_branch, w.created_at, w.slug AS wt_slug, r.slug AS repo_slug
+        let base_query = format!(
+            "SELECT {}, r.local_path AS repo_local_path, r.remote_url AS repo_remote_url, r.slug AS repo_slug
                  FROM worktrees w
                  JOIN repos r ON r.id = w.repo_id
-                 WHERE w.status = 'active'";
+                 WHERE w.status = 'active'",
+            *WORKTREE_COLUMNS_W
+        );
         let query = match repo_slug {
             Some(_) => format!("{base_query} AND r.slug = :slug"),
-            None => base_query.to_string(),
+            None => base_query,
         };
 
-        let mapper = |row: &rusqlite::Row| -> rusqlite::Result<[String; 10]> {
-            Ok([
-                row.get("id")?,
-                row.get("branch")?,
-                row.get("path")?,
-                row.get("local_path")?,
-                row.get("remote_url")?,
-                row.get("repo_id")?,
-                row.get::<_, Option<String>>("base_branch")?
-                    .unwrap_or_default(),
-                row.get::<_, Option<String>>("created_at")?
-                    .unwrap_or_default(),
-                row.get("wt_slug")?,
-                row.get("repo_slug")?,
-            ])
+        let mapper = |row: &rusqlite::Row| -> rusqlite::Result<CleanupCandidate> {
+            Ok(CleanupCandidate {
+                wt: map_worktree_row(row)?,
+                repo_path: row.get("repo_local_path")?,
+                remote_url: row.get("repo_remote_url")?,
+                repo_slug: row.get("repo_slug")?,
+            })
         };
-        let rows: Vec<[String; 10]> = match repo_slug {
+        let rows: Vec<CleanupCandidate> = match repo_slug {
             Some(slug) => {
                 query_collect(self.conn, &query, named_params! { ":slug": slug }, mapper)?
             }
@@ -1741,7 +1731,8 @@ impl<'a> WorktreeManager<'a> {
         };
 
         let merged_by_remote = merged_prs_by_remote(
-            rows.iter().map(|r| (r[4].as_str(), r[1].as_str())),
+            rows.iter()
+                .map(|c| (c.remote_url.as_str(), c.wt.branch.as_str())),
             merge_check,
         );
 
@@ -1753,9 +1744,19 @@ impl<'a> WorktreeManager<'a> {
         let mut pulled_bases: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
 
-        for row in &rows {
-            let [wt_id, branch, wt_path, repo_path, remote_url, repo_id, base_branch, wt_created_at, wt_slug, repo_slug_str] =
-                row;
+        for cand in &rows {
+            let CleanupCandidate {
+                wt,
+                repo_path,
+                remote_url,
+                repo_slug: repo_slug_str,
+            } = cand;
+            let wt_id = &wt.id;
+            let branch = &wt.branch;
+            let wt_path = &wt.path;
+            let repo_id = &wt.repo_id;
+            let base_branch = wt.base_branch.as_deref().unwrap_or_default();
+            let wt_created_at = wt.created_at.as_str();
             let Some(merged) = lookup_merged(&merged_by_remote, remote_url, branch) else {
                 continue;
             };
@@ -1765,7 +1766,7 @@ impl<'a> WorktreeManager<'a> {
             // reused for a new worktree — do not clean it up.
             if !merged_at.is_empty()
                 && !wt_created_at.is_empty()
-                && wt_created_at.as_str() > merged_at.as_str()
+                && wt_created_at > merged_at.as_str()
             {
                 tracing::debug!(
                     worktree = %wt_id,
@@ -1813,22 +1814,14 @@ impl<'a> WorktreeManager<'a> {
             crate::notify::fire_worktree_removed(
                 self.conn,
                 &self.config.notify.hooks,
-                &crate::notify::WorktreeEventArgs {
-                    repo_slug: repo_slug_str,
-                    worktree_slug: wt_slug,
-                    worktree_id: wt_id,
-                    branch,
-                    path: wt_path,
-                    base_branch: Some(base_branch.as_str()).filter(|b| !b.is_empty()),
-                    pr_number: merged.number,
-                },
+                &crate::notify::WorktreeEventArgs::from_worktree(repo_slug_str, wt, merged.number),
                 crate::notify::WorktreeRemovedReason::Merged,
             );
 
             pruned_repos.insert(repo_path.as_str());
 
             // Auto-pull base branch worktree if tracked and active
-            let pull_key = (repo_id.clone(), base_branch.clone());
+            let pull_key = (repo_id.clone(), base_branch.to_string());
             if !base_branch.is_empty() && !pulled_bases.contains(&pull_key) {
                 match self.get_by_branch(repo_id, base_branch) {
                     Ok(base_wt) if base_wt.status == WorktreeStatus::Active => {

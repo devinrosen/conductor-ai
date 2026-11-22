@@ -24,7 +24,7 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
                 repo_mgr.list()?
             };
 
-            let syncer = TicketSyncer::new(conn);
+            let syncer = TicketSyncer::new(conn).with_hooks(&config.notify.hooks);
             let source_mgr = IssueSourceManager::new(conn);
 
             for r in repos {

@@ -1532,4 +1532,22 @@ mod tests {
         assert_eq!(result["fix/x"].head_oid, "bbb");
         assert_eq!(result["fix/x"].merged_at, "2024-03-01T00:00:00Z");
     }
+
+    #[test]
+    fn test_parse_merged_branches_json_reads_pr_number() {
+        let json = r#"[
+            {"headRefName": "fix/x", "mergedAt": "2024-03-01T00:00:00Z", "number": 42}
+        ]"#;
+        let result = parse_merged_branches_json(json, &["fix/x".to_string()]);
+        assert_eq!(result["fix/x"].number, Some(42));
+    }
+
+    #[test]
+    fn test_parse_merged_branches_json_missing_number_is_none() {
+        let json = r#"[
+            {"headRefName": "fix/x", "mergedAt": "2024-03-01T00:00:00Z"}
+        ]"#;
+        let result = parse_merged_branches_json(json, &["fix/x".to_string()]);
+        assert_eq!(result["fix/x"].number, None);
+    }
 }

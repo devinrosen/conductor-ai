@@ -96,7 +96,7 @@ pub struct WorktreeWithStatus {
     pub ticket_url: Option<String>,
 }
 
-pub(super) fn map_worktree_row(row: &rusqlite::Row) -> rusqlite::Result<Worktree> {
+pub(crate) fn map_worktree_row(row: &rusqlite::Row) -> rusqlite::Result<Worktree> {
     Ok(Worktree {
         id: row.get("id")?,
         repo_id: row.get("repo_id")?,
