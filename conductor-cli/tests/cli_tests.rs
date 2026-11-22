@@ -1409,3 +1409,38 @@ fn workflow_validate_dry_run_all_exits_nonzero_when_one_workflow_fails() {
         .stdout(predicate::str::contains("SMOKE PASS  smoke"))
         .stdout(predicate::str::contains("bogus_gate"));
 }
+
+#[test]
+fn notify_events_json_lists_every_event_with_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    // `notify` is the short alias; `notifications` is the long name.
+    for group in ["notify", "notifications"] {
+        let out = conductor_cmd(dir.path())
+            .args([group, "events", "--json"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{group} events --json failed");
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let events = v.as_array().unwrap();
+        let names: Vec<&str> = events.iter().map(|e| e["name"].as_str().unwrap()).collect();
+        let expected: Vec<&str> = conductor_core::notify::EVENTS.iter().map(|e| e.name).collect();
+        assert_eq!(names, expected);
+        let gate = events.iter().find(|e| e["name"] == "gate.waiting").unwrap();
+        assert!(gate["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["env"] == "RUNKON_NOTIFY_FIELD_STEP_NAME"));
+    }
+}
+
+#[test]
+fn notify_events_text_lists_gate_waiting() {
+    let dir = tempfile::tempdir().unwrap();
+    conductor_cmd(dir.path())
+        .args(["notify", "events"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("gate.waiting"))
+        .stdout(predicate::str::contains("RUNKON_NOTIFY_FIELD_STEP_NAME"));
+}

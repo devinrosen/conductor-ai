@@ -272,18 +272,7 @@ fn hooks_as_runkon_translates_all() {
 
 #[test]
 fn build_synthetic_event_all_valid_kinds() {
-    let kinds = [
-        "workflow_run.completed",
-        "workflow_run.failed",
-        "workflow_run.stale",
-        "workflow_run.reaped",
-        "workflow_run.orphan_resumed",
-        "agent_run.completed",
-        "agent_run.failed",
-        "gate.waiting",
-        "feedback.requested",
-        "session.idle",
-    ];
+    let kinds = EVENTS.iter().map(|e| e.name);
     for kind in kinds {
         let result = build_synthetic_event(kind, "2024-01-01T00:00:00Z");
         assert!(result.is_ok(), "expected Ok for '{kind}'");
@@ -1030,4 +1019,233 @@ fn headless_completed_still_notifies() {
     let t = agent_transitions("claude", Running, Completed);
     assert_eq!(t.len(), 1);
     assert!(t[0].succeeded);
+}
+
+
+// --- registry drift: every produced event matches notify/catalog.rs ---
+
+/// Assert `ev` has a registered kind, only registered fields, and every always-set field.
+fn assert_matches_registry(ev: &runkon_notify::Event, what: &str) {
+    let spec = event_spec(&ev.kind)
+        .unwrap_or_else(|| panic!("{what}: kind '{}' is not in EVENTS", ev.kind));
+    for key in ev.fields.keys() {
+        assert!(
+            spec.fields.iter().any(|f| f.name == key),
+            "{what}: field '{key}' of {} is not listed in EVENTS",
+            spec.name
+        );
+    }
+    for field in spec.fields.iter().filter(|f| f.always) {
+        assert!(
+            ev.fields.contains_key(field.name),
+            "{what}: always-set field '{}' of {} is missing",
+            field.name,
+            spec.name
+        );
+    }
+}
+
+#[test]
+fn every_produced_event_matches_registry() {
+    use crate::notify::{anomalies, gates, runs, session_idle};
+
+    let conn = crate::test_helpers::create_test_conn();
+    let cfg = NotificationConfig::default();
+    let ctx = NotificationCtx {
+        conn: &conn,
+        config: &cfg,
+        hooks: &[],
+        dedup_store: Arc::new(SqliteDedupStore::new(std::path::PathBuf::new())),
+    };
+    // No such run, so `cause` stays unset; the keys-subset check still covers it.
+    let run_id = "01TESTRUN00000000000000000".to_string();
+
+    let mut produced: Vec<String> = Vec::new();
+    let mut check = |ev: runkon_notify::Event, what: &str| {
+        assert_matches_registry(&ev, what);
+        produced.push(ev.kind);
+    };
+
+    for (succeeded, error) in [(true, None), (false, Some("boom")), (false, None)] {
+        for parent in [None, Some("01PARENT")] {
+            check(
+                runs::workflow_event(
+                    &ctx,
+                    &runs::WorkflowNotificationArgs {
+                        run_id: &run_id,
+                        workflow_name: "wf",
+                        target_label: Some("repo/main"),
+                        succeeded,
+                        parent_workflow_run_id: parent,
+                        repo_slug: "repo",
+                        branch: "main",
+                        duration_ms: Some(10),
+                        ticket_url: Some("https://example.com/1".into()),
+                        error,
+                        repo_id: None,
+                        worktree_id: None,
+                    },
+                ),
+                "workflow_event",
+            );
+        }
+    }
+
+    for (succeeded, error_msg) in [(true, None), (false, Some("boom")), (false, None)] {
+        check(
+            runs::agent_run_event(&runs::AgentRunNotificationArgs {
+                run_id: "r",
+                worktree_slug: Some("wt"),
+                succeeded,
+                error_msg,
+                repo_slug: "repo",
+                branch: "main",
+                duration_ms: None,
+                ticket_url: None,
+            }),
+            "agent_run_event",
+        );
+    }
+
+    check(
+        runs::feedback_event(&runs::FeedbackNotificationParams {
+            request_id: "f",
+            run_id: "r",
+            prompt_preview: "p",
+            repo_slug: "repo",
+            branch: "main",
+            worktree_slug: None,
+        }),
+        "feedback_event",
+    );
+    check(
+        gates::gate_event(&gates::GateNotificationParams {
+            step_id: "s",
+            step_name: "gate",
+            workflow_name: "wf",
+            target_label: None,
+            gate_type: None,
+            gate_prompt: None,
+            repo_slug: "repo",
+            branch: "main",
+            ticket_url: None,
+        }),
+        "gate_event",
+    );
+    check(
+        gates::grouped_gate_event(&gates::GroupedGateNotificationParams {
+            run_id: "r",
+            workflow_name: "wf",
+            target_label: None,
+            gate_types: vec![],
+            count: 3,
+        }),
+        "grouped_gate_event",
+    );
+    check(
+        anomalies::orphan_resumed_event("r", 2, "wf".into(), Some("repo/main")),
+        "orphan_resumed_event",
+    );
+    check(
+        anomalies::reaped_event("r", "wf", Some("repo/main"), "dead"),
+        "reaped_event",
+    );
+    check(
+        anomalies::cost_spike_event(
+            Some("http://localhost"),
+            &anomalies::CostSpikeArgs {
+                run_id: "r",
+                workflow_name: "wf",
+                target_label: None,
+                cost_usd: 1.0,
+                multiple: 3.0,
+                duration_ms: None,
+                repo_slug: "repo",
+                branch: "main",
+                parent_workflow_run_id: None,
+                repo_id: Some("rid"),
+                worktree_id: Some("wid"),
+            },
+        ),
+        "cost_spike_event",
+    );
+    check(
+        anomalies::duration_spike_event(
+            None,
+            &anomalies::DurationSpikeArgs {
+                run_id: "r",
+                workflow_name: "wf",
+                target_label: None,
+                multiple: 3.0,
+                duration_ms: Some(5),
+                repo_slug: "repo",
+                branch: "main",
+                parent_workflow_run_id: Some("p"),
+                repo_id: None,
+                worktree_id: None,
+            },
+        ),
+        "duration_spike_event",
+    );
+    check(
+        anomalies::gate_pending_too_long_event(
+            None,
+            &anomalies::GatePendingTooLongArgs {
+                step_id: "s",
+                step_name: "gate",
+                workflow_run_id: "r",
+                workflow_name: "wf",
+                target_label: None,
+                pending_ms: 1,
+                duration_ms: None,
+                repo_slug: "repo",
+                branch: "main",
+                repo_id: None,
+                worktree_id: None,
+            },
+        ),
+        "gate_pending_too_long_event",
+    );
+    check(
+        session_idle::session_idle_event(&session_idle::IdleSession {
+            run_id: "r".into(),
+            session_id: None,
+            idle_since: "2024-01-01T00:00:00Z".into(),
+            worktree_id: None,
+            worktree_slug: None,
+            repo_slug: "repo".into(),
+            branch: "main".into(),
+            prompt: "p".into(),
+            last_message: None,
+            background_tasks: None,
+            turn_duration_ms: None,
+        }),
+        "session_idle_event",
+    );
+
+    for spec in EVENTS {
+        assert!(
+            produced.iter().any(|k| k == spec.name),
+            "{} is in EVENTS but no producer builds it",
+            spec.name
+        );
+    }
+}
+
+#[test]
+fn every_synthetic_event_matches_registry() {
+    for spec in EVENTS {
+        let ev = build_synthetic_event(spec.name, "2024-01-01T00:00:00Z")
+            .unwrap_or_else(|e| panic!("no synthetic event for {}: {e}", spec.name));
+        assert_eq!(ev.kind, spec.name);
+        assert_matches_registry(&ev, "build_synthetic_event");
+    }
+}
+
+#[test]
+fn synthetic_unknown_event_error_lists_every_registered_event() {
+    let err = build_synthetic_event("bad.event", "t").unwrap_err().to_string();
+    for spec in EVENTS {
+        assert!(err.contains(spec.name), "error should list {}", spec.name);
+    }
 }

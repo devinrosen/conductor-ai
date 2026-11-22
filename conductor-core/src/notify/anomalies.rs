@@ -4,6 +4,10 @@ use runkon_notify::{DedupStore, Event, HookRunner, Severity};
 
 use crate::config::{hooks_as_runkon, HookConfig, NotificationConfig};
 
+use super::catalog::{
+    GATE_PENDING_TOO_LONG, WORKFLOW_RUN_COST_SPIKE, WORKFLOW_RUN_DURATION_SPIKE,
+    WORKFLOW_RUN_ORPHAN_RESUMED, WORKFLOW_RUN_REAPED,
+};
 use super::{build_workflow_deep_link, notification_body, parse_target_label};
 
 fn stale_notifications_active(config: &NotificationConfig, notify_hooks: &[HookConfig]) -> bool {
@@ -34,13 +38,6 @@ pub fn fire_orphan_resumed_notification(
     let first_run_id = run_ids.first().unwrap();
     let dedup_key = format!("orphan_resumed_{first_run_id}");
 
-    let n = run_ids.len();
-    let body = if n == 1 {
-        "1 stuck workflow run was automatically resumed".to_string()
-    } else {
-        format!("{n} stuck workflow runs were automatically resumed")
-    };
-
     let (workflow_name, target_label) = conn
         .query_row(
             "SELECT workflow_name, target_label FROM workflow_runs WHERE id = :id",
@@ -60,16 +57,41 @@ pub fn fire_orphan_resumed_notification(
             );
             (String::new(), None)
         });
-    let (repo_slug, branch) = parse_target_label(target_label.as_deref());
+    let event = orphan_resumed_event(
+        first_run_id,
+        run_ids.len(),
+        workflow_name,
+        target_label.as_deref(),
+    );
+
+    HookRunner::new(&hooks_as_runkon(notify_hooks))
+        .with_dedup_store(dedup_store)
+        .fire_with_dedup(&event, &dedup_key, "workflow_orphan_resumed");
+}
+
+/// Build the `workflow_run.orphan_resumed` event for `count` resumed runs; the fields
+/// describe the first one.
+pub(crate) fn orphan_resumed_event(
+    first_run_id: &str,
+    count: usize,
+    workflow_name: String,
+    target_label: Option<&str>,
+) -> Event {
+    let body = if count == 1 {
+        "1 stuck workflow run was automatically resumed".to_string()
+    } else {
+        format!("{count} stuck workflow runs were automatically resumed")
+    };
+    let (repo_slug, branch) = parse_target_label(target_label);
     let now = chrono::Utc::now().to_rfc3339();
 
-    let event = Event {
-        kind: "workflow_run.orphan_resumed".into(),
+    Event {
+        kind: WORKFLOW_RUN_ORPHAN_RESUMED.into(),
         title: "Conductor \u{2014} Workflows Resumed".into(),
         body,
         severity: Severity::Warning,
         fields: [
-            ("run_id".into(), first_run_id.clone()),
+            ("run_id".into(), first_run_id.to_string()),
             ("workflow_name".into(), workflow_name),
             ("repo_slug".into(), repo_slug.into()),
             ("branch".into(), branch.into()),
@@ -77,11 +99,7 @@ pub fn fire_orphan_resumed_notification(
         ]
         .into_iter()
         .collect(),
-    };
-
-    HookRunner::new(&hooks_as_runkon(notify_hooks))
-        .with_dedup_store(dedup_store)
-        .fire_with_dedup(&event, &dedup_key, "workflow_orphan_resumed");
+    }
 }
 
 /// Fire a notification when a stuck workflow run fails to auto-resume after being reaped.
@@ -102,12 +120,26 @@ pub fn fire_heartbeat_stuck_failed_notification(
         return;
     }
 
+    let event = reaped_event(run_id, workflow_name, target_label, error);
+
+    HookRunner::new(&hooks_as_runkon(notify_hooks))
+        .with_dedup_store(dedup_store)
+        .fire_with_dedup(&event, run_id, "workflow_run.reaped");
+}
+
+/// Build the `workflow_run.reaped` event.
+pub(crate) fn reaped_event(
+    run_id: &str,
+    workflow_name: &str,
+    target_label: Option<&str>,
+    error: &str,
+) -> Event {
     let (repo_slug, branch) = parse_target_label(target_label);
     let body = notification_body(workflow_name, target_label);
     let now = chrono::Utc::now().to_rfc3339();
 
-    let event = Event {
-        kind: "workflow_run.reaped".into(),
+    Event {
+        kind: WORKFLOW_RUN_REAPED.into(),
         title: "Conductor \u{2014} Dead Workflow Detected".into(),
         body,
         severity: Severity::Error,
@@ -121,11 +153,7 @@ pub fn fire_heartbeat_stuck_failed_notification(
         ]
         .into_iter()
         .collect(),
-    };
-
-    HookRunner::new(&hooks_as_runkon(notify_hooks))
-        .with_dedup_store(dedup_store)
-        .fire_with_dedup(&event, run_id, "workflow_run.reaped");
+    }
 }
 
 /// Parameters for [`fire_cost_spike_notification`].
@@ -143,25 +171,11 @@ pub struct CostSpikeArgs<'a> {
     pub worktree_id: Option<&'a str>,
 }
 
-/// Fire a cost-spike notification for a completed workflow run.
-///
-/// Deduped on `(run_id, "workflow_run.cost_spike")` via SQLite.
-/// The `when_field_gte: { "multiple" => threshold }` predicate on each hook config
-/// controls which hooks actually fire.
-pub fn fire_cost_spike_notification(
-    _conn: &rusqlite::Connection,
-    config: &NotificationConfig,
-    notify_hooks: &[HookConfig],
-    dedup_store: Arc<dyn DedupStore>,
-    params: &CostSpikeArgs<'_>,
-) {
-    if notify_hooks.is_empty() {
-        return;
-    }
-
+/// Build the `workflow_run.cost_spike` event. `web_url` is `[notifications] web_url`.
+pub(crate) fn cost_spike_event(web_url: Option<&str>, params: &CostSpikeArgs<'_>) -> Event {
     let label = notification_body(params.workflow_name, params.target_label);
     let deep_link = build_workflow_deep_link(
-        config.web_url.as_deref(),
+        web_url,
         params.repo_id,
         params.worktree_id,
         params.run_id,
@@ -169,8 +183,8 @@ pub fn fire_cost_spike_notification(
     let is_root = params.parent_workflow_run_id.is_none();
     let now = chrono::Utc::now().to_rfc3339();
 
-    let event = Event {
-        kind: "workflow_run.cost_spike".into(),
+    Event {
+        kind: WORKFLOW_RUN_COST_SPIKE.into(),
         title: "Conductor \u{2014} Cost Spike".into(),
         body: label,
         severity: Severity::Warning,
@@ -198,7 +212,26 @@ pub fn fire_cost_spike_notification(
         ]
         .into_iter()
         .collect(),
-    };
+    }
+}
+
+/// Fire a cost-spike notification for a completed workflow run.
+///
+/// Deduped on `(run_id, "workflow_run.cost_spike")` via SQLite.
+/// The `when_field_gte: { "multiple" => threshold }` predicate on each hook config
+/// controls which hooks actually fire.
+pub fn fire_cost_spike_notification(
+    _conn: &rusqlite::Connection,
+    config: &NotificationConfig,
+    notify_hooks: &[HookConfig],
+    dedup_store: Arc<dyn DedupStore>,
+    params: &CostSpikeArgs<'_>,
+) {
+    if notify_hooks.is_empty() {
+        return;
+    }
+
+    let event = cost_spike_event(config.web_url.as_deref(), params);
 
     HookRunner::new(&hooks_as_runkon(notify_hooks))
         .with_dedup_store(dedup_store)
@@ -219,25 +252,11 @@ pub struct DurationSpikeArgs<'a> {
     pub worktree_id: Option<&'a str>,
 }
 
-/// Fire a duration-spike notification for a completed workflow run.
-///
-/// Deduped on `(run_id, "workflow_run.duration_spike")` via SQLite.
-/// The `when_field_gte: { "multiple" => threshold }` predicate on each hook config
-/// controls which hooks actually fire.
-pub fn fire_duration_spike_notification(
-    _conn: &rusqlite::Connection,
-    config: &NotificationConfig,
-    notify_hooks: &[HookConfig],
-    dedup_store: Arc<dyn DedupStore>,
-    params: &DurationSpikeArgs<'_>,
-) {
-    if notify_hooks.is_empty() {
-        return;
-    }
-
+/// Build the `workflow_run.duration_spike` event. `web_url` is `[notifications] web_url`.
+pub(crate) fn duration_spike_event(web_url: Option<&str>, params: &DurationSpikeArgs<'_>) -> Event {
     let label = notification_body(params.workflow_name, params.target_label);
     let deep_link = build_workflow_deep_link(
-        config.web_url.as_deref(),
+        web_url,
         params.repo_id,
         params.worktree_id,
         params.run_id,
@@ -245,8 +264,8 @@ pub fn fire_duration_spike_notification(
     let is_root = params.parent_workflow_run_id.is_none();
     let now = chrono::Utc::now().to_rfc3339();
 
-    let event = Event {
-        kind: "workflow_run.duration_spike".into(),
+    Event {
+        kind: WORKFLOW_RUN_DURATION_SPIKE.into(),
         title: "Conductor \u{2014} Duration Spike".into(),
         body: label,
         severity: Severity::Warning,
@@ -273,7 +292,26 @@ pub fn fire_duration_spike_notification(
         ]
         .into_iter()
         .collect(),
-    };
+    }
+}
+
+/// Fire a duration-spike notification for a completed workflow run.
+///
+/// Deduped on `(run_id, "workflow_run.duration_spike")` via SQLite.
+/// The `when_field_gte: { "multiple" => threshold }` predicate on each hook config
+/// controls which hooks actually fire.
+pub fn fire_duration_spike_notification(
+    _conn: &rusqlite::Connection,
+    config: &NotificationConfig,
+    notify_hooks: &[HookConfig],
+    dedup_store: Arc<dyn DedupStore>,
+    params: &DurationSpikeArgs<'_>,
+) {
+    if notify_hooks.is_empty() {
+        return;
+    }
+
+    let event = duration_spike_event(config.web_url.as_deref(), params);
 
     HookRunner::new(&hooks_as_runkon(notify_hooks))
         .with_dedup_store(dedup_store)
@@ -293,6 +331,46 @@ pub struct GatePendingTooLongArgs<'a> {
     pub branch: &'a str,
     pub repo_id: Option<&'a str>,
     pub worktree_id: Option<&'a str>,
+}
+
+/// Build the `gate.pending_too_long` event. `web_url` is `[notifications] web_url`.
+pub(crate) fn gate_pending_too_long_event(
+    web_url: Option<&str>,
+    params: &GatePendingTooLongArgs<'_>,
+) -> Event {
+    let label = notification_body(params.workflow_name, params.target_label);
+    let deep_link = build_workflow_deep_link(
+        web_url,
+        params.repo_id,
+        params.worktree_id,
+        params.workflow_run_id,
+    );
+    let now = chrono::Utc::now().to_rfc3339();
+
+    Event {
+        kind: GATE_PENDING_TOO_LONG.into(),
+        title: "Conductor \u{2014} Gate Pending Too Long".into(),
+        body: label,
+        severity: Severity::Warning,
+        fields: [
+            ("run_id".into(), params.workflow_run_id.into()),
+            ("step_name".into(), params.step_name.into()),
+            ("repo_slug".into(), params.repo_slug.into()),
+            ("branch".into(), params.branch.into()),
+            (
+                "duration_ms".into(),
+                params
+                    .duration_ms
+                    .map(|ms| ms.to_string())
+                    .unwrap_or_default(),
+            ),
+            ("url".into(), deep_link.as_deref().unwrap_or("").into()),
+            ("timestamp".into(), now),
+            ("pending_ms".into(), params.pending_ms.to_string()),
+        ]
+        .into_iter()
+        .collect(),
+    }
 }
 
 /// Fire a notification when a gate step has been waiting longer than the configured threshold.
@@ -316,39 +394,7 @@ pub fn fire_gate_pending_too_long_notification(
         return;
     }
 
-    let label = notification_body(params.workflow_name, params.target_label);
-    let deep_link = build_workflow_deep_link(
-        config.web_url.as_deref(),
-        params.repo_id,
-        params.worktree_id,
-        params.workflow_run_id,
-    );
-    let now = chrono::Utc::now().to_rfc3339();
-
-    let event = Event {
-        kind: "gate.pending_too_long".into(),
-        title: "Conductor \u{2014} Gate Pending Too Long".into(),
-        body: label,
-        severity: Severity::Warning,
-        fields: [
-            ("run_id".into(), params.workflow_run_id.into()),
-            ("step_name".into(), params.step_name.into()),
-            ("repo_slug".into(), params.repo_slug.into()),
-            ("branch".into(), params.branch.into()),
-            (
-                "duration_ms".into(),
-                params
-                    .duration_ms
-                    .map(|ms| ms.to_string())
-                    .unwrap_or_default(),
-            ),
-            ("url".into(), deep_link.as_deref().unwrap_or("").into()),
-            ("timestamp".into(), now),
-            ("pending_ms".into(), params.pending_ms.to_string()),
-        ]
-        .into_iter()
-        .collect(),
-    };
+    let event = gate_pending_too_long_event(config.web_url.as_deref(), params);
 
     HookRunner::new(&hooks_as_runkon(notify_hooks))
         .with_dedup_store(dedup_store)

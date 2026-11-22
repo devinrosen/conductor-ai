@@ -2,44 +2,8 @@ use runkon_notify::{Event, Severity};
 
 use crate::error::{ConductorError, Result};
 
-/// All non-threshold lifecycle event names with their display labels and whether
-/// they are workflow events (supporting the `:root` modifier).
-///
-/// This is the authoritative list used by `GET /api/config/hooks/events` to populate
-/// the hook × event matrix UI. Threshold-based events (`workflow_run.cost_spike`,
-/// `workflow_run.duration_spike`, `gate.pending_too_long`) are excluded because they
-/// require additional filter fields that cannot be represented as simple checkboxes.
-///
-/// Tuple: `(event_name, display_label, is_workflow_event)`.
-pub const ALL_EVENTS: &[(&str, &str, bool)] = &[
-    ("workflow_run.completed", "Workflow completed", true),
-    ("workflow_run.failed", "Workflow failed", true),
-    ("workflow_run.stale", "Workflow step stale", true),
-    ("workflow_run.reaped", "Dead workflow detected", true),
-    (
-        "workflow_run.orphan_resumed",
-        "Orphaned workflows resumed",
-        true,
-    ),
-    ("agent_run.completed", "Agent completed", false),
-    ("agent_run.failed", "Agent failed", false),
-    ("gate.waiting", "Gate waiting", false),
-    ("feedback.requested", "Feedback requested", false),
-    ("session.idle", "Session idle", false),
-];
-
-const VALID_SYNTHETIC_EVENTS: &[&str] = &[
-    "workflow_run.completed",
-    "workflow_run.failed",
-    "workflow_run.stale",
-    "workflow_run.reaped",
-    "workflow_run.orphan_resumed",
-    "agent_run.completed",
-    "agent_run.failed",
-    "gate.waiting",
-    "feedback.requested",
-    "session.idle",
-];
+use super::catalog::{self, EVENTS};
+use super::{anomalies, gates, runs};
 
 /// Build a synthetic test [`Event`] for the given concrete event name.
 ///
@@ -50,9 +14,9 @@ pub fn build_synthetic_event(name: &str, now: impl Into<String>) -> Result<Event
     let url = "http://localhost".to_string();
     let ticket_url = "https://github.com/example-org/example-repo/issues/42".to_string();
 
-    let ev = match name {
-        "workflow_run.completed" => Event {
-            kind: "workflow_run.completed".into(),
+    let mut ev = match name {
+        catalog::WORKFLOW_RUN_COMPLETED => Event {
+            kind: name.into(),
             title: "Conductor \u{2014} Workflow Completed".into(),
             body: "test-workflow on test-repo/main".into(),
             severity: Severity::Info,
@@ -65,14 +29,14 @@ pub fn build_synthetic_event(name: &str, now: impl Into<String>) -> Result<Event
                 ("duration_ms".into(), "1000".into()),
                 ("ticket_url".into(), ticket_url),
                 ("url".into(), url),
-                ("timestamp".into(), now),
+                ("timestamp".into(), now.clone()),
                 ("is_root".into(), "true".into()),
             ]
             .into_iter()
             .collect(),
         },
-        "workflow_run.failed" => Event {
-            kind: "workflow_run.failed".into(),
+        catalog::WORKFLOW_RUN_FAILED => Event {
+            kind: name.into(),
             title: "Conductor \u{2014} Workflow Failed".into(),
             body: "test-workflow on test-repo/main".into(),
             severity: Severity::Error,
@@ -85,126 +49,111 @@ pub fn build_synthetic_event(name: &str, now: impl Into<String>) -> Result<Event
                 ("duration_ms".into(), "1000".into()),
                 ("ticket_url".into(), ticket_url),
                 ("url".into(), url),
-                ("timestamp".into(), now),
+                ("timestamp".into(), now.clone()),
                 ("is_root".into(), "true".into()),
                 ("error".into(), "Test error".into()),
             ]
             .into_iter()
             .collect(),
         },
-        "workflow_run.stale" | "workflow_run.orphan_resumed" => Event {
-            kind: name.into(),
-            title: "Conductor \u{2014} Workflows Resumed".into(),
-            body: "Orphaned workflow runs resumed".into(),
-            severity: Severity::Warning,
-            fields: [
-                ("run_id".into(), run_id),
-                ("workflow_name".into(), "test-workflow".into()),
-                ("repo_slug".into(), "test-repo".into()),
-                ("branch".into(), "main".into()),
-                ("duration_ms".into(), "1000".into()),
-                ("ticket_url".into(), ticket_url),
-                ("url".into(), url),
-                ("timestamp".into(), now),
-            ]
-            .into_iter()
-            .collect(),
-        },
-        "workflow_run.reaped" => Event {
-            kind: "workflow_run.reaped".into(),
-            title: "Conductor \u{2014} Dead Workflow Detected".into(),
-            body: "test-workflow on test-repo/main".into(),
-            severity: Severity::Error,
-            fields: [
-                ("run_id".into(), run_id),
-                ("workflow_name".into(), "test-workflow".into()),
-                ("repo_slug".into(), "test-repo".into()),
-                ("branch".into(), "main".into()),
-                ("duration_ms".into(), "1000".into()),
-                ("ticket_url".into(), ticket_url),
-                ("url".into(), url),
-                ("timestamp".into(), now),
-                ("error".into(), "Test error".into()),
-            ]
-            .into_iter()
-            .collect(),
-        },
-        "agent_run.completed" => Event {
-            kind: "agent_run.completed".into(),
-            title: "Conductor \u{2014} Agent Completed".into(),
-            body: "Test Agent Run".into(),
-            severity: Severity::Info,
-            fields: [
-                ("run_id".into(), run_id),
-                ("repo_slug".into(), "test-repo".into()),
-                ("branch".into(), "main".into()),
-                ("duration_ms".into(), "1000".into()),
-                ("ticket_url".into(), ticket_url),
-                ("url".into(), url),
-                ("timestamp".into(), now),
-            ]
-            .into_iter()
-            .collect(),
-        },
-        "agent_run.failed" => Event {
-            kind: "agent_run.failed".into(),
-            title: "Conductor \u{2014} Agent Failed".into(),
-            body: "Test Agent Run".into(),
-            severity: Severity::Error,
-            fields: [
-                ("run_id".into(), run_id),
-                ("repo_slug".into(), "test-repo".into()),
-                ("branch".into(), "main".into()),
-                ("duration_ms".into(), "1000".into()),
-                ("ticket_url".into(), ticket_url),
-                ("url".into(), url),
-                ("timestamp".into(), now),
-                ("error".into(), "Test error".into()),
-            ]
-            .into_iter()
-            .collect(),
-        },
-        "gate.waiting" => Event {
-            kind: "gate.waiting".into(),
-            title: "Conductor \u{2014} Gate Waiting".into(),
-            body: "Test Run".into(),
-            severity: Severity::Info,
-            fields: [
-                ("run_id".into(), run_id),
-                ("step_name".into(), "test-gate".into()),
-                ("repo_slug".into(), "test-repo".into()),
-                ("branch".into(), "main".into()),
-                ("duration_ms".into(), "1000".into()),
-                ("ticket_url".into(), ticket_url),
-                ("url".into(), url),
-                ("timestamp".into(), now),
-            ]
-            .into_iter()
-            .collect(),
-        },
-        "feedback.requested" => {
+        // The remaining events go through the production builders, so a test notification
+        // carries exactly the fields a real one does.
+        catalog::WORKFLOW_RUN_ORPHAN_RESUMED => {
+            anomalies::orphan_resumed_event(&run_id, 1, "test-workflow".into(), Some("test-repo/main"))
+        }
+        catalog::WORKFLOW_RUN_REAPED => anomalies::reaped_event(
+            &run_id,
+            "test-workflow",
+            Some("test-repo/main"),
+            "Test error",
+        ),
+        catalog::WORKFLOW_RUN_COST_SPIKE => anomalies::cost_spike_event(
+            None,
+            &anomalies::CostSpikeArgs {
+                run_id: &run_id,
+                workflow_name: "test-workflow",
+                target_label: Some("test-repo/main"),
+                cost_usd: 4.2,
+                multiple: 3.5,
+                duration_ms: Some(1000),
+                repo_slug: "test-repo",
+                branch: "main",
+                parent_workflow_run_id: None,
+                repo_id: None,
+                worktree_id: None,
+            },
+        ),
+        catalog::WORKFLOW_RUN_DURATION_SPIKE => anomalies::duration_spike_event(
+            None,
+            &anomalies::DurationSpikeArgs {
+                run_id: &run_id,
+                workflow_name: "test-workflow",
+                target_label: Some("test-repo/main"),
+                multiple: 3.5,
+                duration_ms: Some(1000),
+                repo_slug: "test-repo",
+                branch: "main",
+                parent_workflow_run_id: None,
+                repo_id: None,
+                worktree_id: None,
+            },
+        ),
+        catalog::AGENT_RUN_COMPLETED | catalog::AGENT_RUN_FAILED => {
+            let failed = name == catalog::AGENT_RUN_FAILED;
+            runs::agent_run_event(&runs::AgentRunNotificationArgs {
+                run_id: &run_id,
+                worktree_slug: Some("Test Agent Run"),
+                succeeded: !failed,
+                error_msg: failed.then_some("Test error"),
+                repo_slug: "test-repo",
+                branch: "main",
+                duration_ms: Some(1000),
+                ticket_url: Some(ticket_url),
+            })
+        }
+        catalog::GATE_WAITING => gates::gate_event(&gates::GateNotificationParams {
+            step_id: &run_id,
+            step_name: "test-gate",
+            workflow_name: "Test Run",
+            target_label: None,
+            gate_type: None,
+            gate_prompt: None,
+            repo_slug: "test-repo",
+            branch: "main",
+            ticket_url: Some(ticket_url),
+        }),
+        catalog::GATE_PENDING_TOO_LONG => {
+            anomalies::gate_pending_too_long_event(
+                None,
+                &anomalies::GatePendingTooLongArgs {
+                    step_id: "test-step",
+                    step_name: "test-gate",
+                    workflow_run_id: &run_id,
+                    workflow_name: "test-workflow",
+                    target_label: Some("test-repo/main"),
+                    pending_ms: 1_800_000,
+                    duration_ms: Some(1000),
+                    repo_slug: "test-repo",
+                    branch: "main",
+                    repo_id: None,
+                    worktree_id: None,
+                },
+            )
+        }
+        catalog::FEEDBACK_REQUESTED => {
             // Share the production event definition so the test notification cannot drift.
-            let mut ev = super::runs::feedback_event(&super::runs::FeedbackNotificationParams {
+            runs::feedback_event(&runs::FeedbackNotificationParams {
                 request_id: "01TESTFEEDBACK000000000000",
                 run_id: &run_id,
                 prompt_preview: "Is this correct?",
                 repo_slug: "test-repo",
                 branch: "main",
                 worktree_slug: Some("test-worktree"),
-            });
-            ev.fields.extend([
-                ("duration_ms".into(), "1000".into()),
-                ("ticket_url".into(), ticket_url),
-                ("url".into(), url),
-                // feedback_event stamps Utc::now(); honor the injected clock.
-                ("timestamp".into(), now),
-            ]);
-            ev
+            })
         }
-        "session.idle" => {
+        catalog::SESSION_IDLE => {
             // Share the production event definition so the test notification cannot drift.
-            let mut ev =
-                super::session_idle::session_idle_event(&super::session_idle::IdleSession {
+            super::session_idle::session_idle_event(&super::session_idle::IdleSession {
                     run_id: run_id.clone(),
                     session_id: Some("test-session".into()),
                     idle_since: now.clone(),
@@ -216,21 +165,17 @@ pub fn build_synthetic_event(name: &str, now: impl Into<String>) -> Result<Event
                     last_message: Some("Done. The test now passes.".into()),
                     background_tasks: Some(0),
                     turn_duration_ms: Some(1000),
-                });
-            ev.fields.extend([
-                ("url".into(), url),
-                // session_idle_event stamps Utc::now(); honor the injected clock.
-                ("timestamp".into(), now),
-            ]);
-            ev
+            })
         }
         other => {
             return Err(ConductorError::InvalidInput(format!(
                 "unknown event name: '{other}'. Valid events: {}",
-                VALID_SYNTHETIC_EVENTS.join(", ")
+                catalog::event_names_csv()
             )))
         }
     };
+    // Builders stamp Utc::now(); honor the injected clock.
+    ev.fields.insert("timestamp".into(), now);
     Ok(ev)
 }
 
@@ -240,10 +185,10 @@ pub fn build_synthetic_event(name: &str, now: impl Into<String>) -> Result<Event
 /// `workflow_run.completed` for `"*"` or any unrecognized pattern.
 pub fn build_synthetic_for_pattern(pattern: &str, now: impl Into<String>) -> Event {
     let now = now.into();
-    for &name in VALID_SYNTHETIC_EVENTS {
-        if runkon_notify::hooks::on_pattern_matches(pattern, name) {
-            return build_synthetic_event(name, &now)
-                .expect("VALID_SYNTHETIC_EVENTS entry must match a build_synthetic_event() arm");
+    for spec in EVENTS {
+        if runkon_notify::hooks::on_pattern_matches(pattern, spec.name) {
+            return build_synthetic_event(spec.name, &now)
+                .expect("every EVENTS entry must match a build_synthetic_event() arm");
         }
     }
     build_synthetic_event("workflow_run.completed", now)
