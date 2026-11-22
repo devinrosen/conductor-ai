@@ -1551,27 +1551,26 @@ impl<'a> WorktreeManager<'a> {
     ///
     /// Returns the number of worktrees cleaned up.
     pub fn reap_stale_worktrees(&self) -> Result<usize> {
-        // (worktree, repo local path, repo slug)
-        let stale: Vec<(Worktree, String, String)> = query_collect(
+        let stale: Vec<WorktreeWithRepo> = query_collect(
             self.conn,
-            "SELECT w.*, r.local_path AS repo_local_path, r.slug AS repo_slug
-             FROM worktrees w
-             JOIN repos r ON r.id = w.repo_id
-             WHERE w.status IN ('merged', 'abandoned')",
+            concat!(
+                worktree_with_repo_select!(),
+                " WHERE w.status IN ('merged', 'abandoned')"
+            ),
             [],
-            |row| {
-                Ok((
-                    map_worktree_row(row)?,
-                    row.get("repo_local_path")?,
-                    row.get("repo_slug")?,
-                ))
-            },
+            map_worktree_with_repo_row,
         )?;
 
         let mut reaped = 0;
         let mut pruned_repos = std::collections::HashSet::new();
 
-        for (wt, repo_path, repo_slug) in &stale {
+        for WorktreeWithRepo {
+            wt,
+            repo_path,
+            repo_slug,
+            ..
+        } in &stale
+        {
             let wt_id = &wt.id;
             if !Path::new(&wt.path).exists() {
                 // Backfill completed_at if missing even when path is already gone
@@ -1624,21 +1623,17 @@ impl<'a> WorktreeManager<'a> {
 
         // Announce each removal before the rows go. Rows whose removal was already announced
         // are skipped by the per-worktree dedup; older rows get `reason = deleted`.
+        // One predicate for the announced rows and the deleted rows.
+        const PURGE_WHERE: &str =
+            "repo_id = :repo_id AND (:slug IS NULL OR slug = :slug) AND status != 'active'";
+
         if !self.config.notify.hooks.is_empty() {
-            let doomed: Vec<Worktree> = match name {
-                Some(slug) => query_collect(
-                    self.conn,
-                    "SELECT * FROM worktrees WHERE repo_id = :repo_id AND slug = :slug AND status != 'active'",
-                    named_params! { ":repo_id": repo.id, ":slug": slug },
-                    map_worktree_row,
-                )?,
-                None => query_collect(
-                    self.conn,
-                    "SELECT * FROM worktrees WHERE repo_id = :repo_id AND status != 'active'",
-                    named_params! { ":repo_id": repo.id },
-                    map_worktree_row,
-                )?,
-            };
+            let doomed: Vec<Worktree> = query_collect(
+                self.conn,
+                &format!("SELECT * FROM worktrees WHERE {PURGE_WHERE}"),
+                named_params! { ":repo_id": repo.id, ":slug": name },
+                map_worktree_row,
+            )?;
             for wt in &doomed {
                 self.fire_removed(
                     &repo.slug,
@@ -1649,17 +1644,10 @@ impl<'a> WorktreeManager<'a> {
             }
         }
 
-        let count = if let Some(slug) = name {
-            self.conn.execute(
-                "DELETE FROM worktrees WHERE repo_id = :repo_id AND slug = :slug AND status != 'active'",
-                named_params! { ":repo_id": repo.id, ":slug": slug },
-            )?
-        } else {
-            self.conn.execute(
-                "DELETE FROM worktrees WHERE repo_id = :repo_id AND status != 'active'",
-                named_params! { ":repo_id": repo.id },
-            )?
-        };
+        let count = self.conn.execute(
+            &format!("DELETE FROM worktrees WHERE {PURGE_WHERE}"),
+            named_params! { ":repo_id": repo.id, ":slug": name },
+        )?;
 
         Ok(count)
     }
@@ -1795,11 +1783,11 @@ impl<'a> WorktreeManager<'a> {
             // Delete remote branch (best-effort)
             delete_remote_branch(repo_path, branch);
 
-            crate::notify::fire_worktree_removed(
-                self.conn,
-                &self.config.notify.hooks,
-                &crate::notify::WorktreeEventArgs::from_worktree(repo_slug_str, wt, merged.number),
+            self.fire_removed(
+                repo_slug_str,
+                wt,
                 crate::notify::WorktreeRemovedReason::Merged,
+                merged.number,
             );
 
             pruned_repos.insert(repo_path.as_str());

@@ -134,7 +134,7 @@ pub fn fire_worktree_created(hooks: &[HookConfig], args: &WorktreeEventArgs<'_>)
     if hooks.is_empty() {
         return;
     }
-    dispatch_and_wait(hooks, &worktree_created_event(args));
+    dispatch_and_wait(hooks, &worktree_created_event(args), args);
 }
 
 /// Fire `worktree.removed` once per worktree ID.
@@ -164,17 +164,19 @@ pub fn fire_worktree_removed(
         Ok(true) => {}
         Err(e) => {
             tracing::warn!(
+                repo = args.repo_slug,
+                worktree = args.worktree_slug,
                 worktree_id = args.worktree_id,
                 "worktree.removed dedup claim failed, firing anyway: {e}"
             );
         }
     }
-    dispatch_and_wait(hooks, &worktree_removed_event(args, reason));
+    dispatch_and_wait(hooks, &worktree_removed_event(args, reason), args);
 }
 
 /// Run every hook matching `event` on its own thread and wait for them, up to the longest
 /// `timeout_ms` plus a grace period. Failures and stragglers are logged.
-fn dispatch_and_wait(hooks: &[HookConfig], event: &Event) {
+fn dispatch_and_wait(hooks: &[HookConfig], event: &Event, args: &WorktreeEventArgs<'_>) {
     let (tx, rx) = mpsc::channel::<(usize, Result<(), String>)>();
     let mut max_timeout = DEFAULT_HOOK_TIMEOUT_MS;
     for (i, hook) in hooks.iter().enumerate() {
@@ -199,6 +201,10 @@ fn dispatch_and_wait(hooks: &[HookConfig], event: &Event) {
                 if let Err(msg) = result {
                     tracing::warn!(
                         event = %event.kind,
+                        repo = args.repo_slug,
+                        worktree = args.worktree_slug,
+                        worktree_id = args.worktree_id,
+                        hook_index = i,
                         on = %hooks[i].on,
                         error = %msg,
                         "worktree hook failed"
@@ -208,6 +214,9 @@ fn dispatch_and_wait(hooks: &[HookConfig], event: &Event) {
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 tracing::warn!(
                     event = %event.kind,
+                    repo = args.repo_slug,
+                    worktree = args.worktree_slug,
+                    worktree_id = args.worktree_id,
                     still_running = pending,
                     "worktree hooks still running at the deadline; not waiting"
                 );

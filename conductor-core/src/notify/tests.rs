@@ -1309,20 +1309,7 @@ fn worktree_events_carry_exactly_the_cataloged_fields() {
 }
 
 fn shell_hook(on: &str, run: String) -> HookConfig {
-    HookConfig {
-        on: on.into(),
-        run: Some(run),
-        url: None,
-        headers: None,
-        timeout_ms: Some(5_000),
-        threshold_multiple: None,
-        gate_pending_ms: None,
-        workflow: None,
-        root_workflows_only: None,
-        repo: None,
-        branch: None,
-        step: None,
-    }
+    HookConfig::shell(on, run)
 }
 
 #[test]

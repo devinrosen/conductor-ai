@@ -3445,20 +3445,10 @@ fn test_cleanup_keeps_worktree_with_only_a_live_child_workflow_run() {
 
 fn hook_config(on: &str, run: String) -> Config {
     let mut config = Config::default();
-    config.notify.hooks.push(crate::config::HookConfig {
-        on: on.into(),
-        run: Some(run),
-        url: None,
-        headers: None,
-        timeout_ms: Some(5_000),
-        threshold_multiple: None,
-        gate_pending_ms: None,
-        workflow: None,
-        root_workflows_only: None,
-        repo: None,
-        branch: None,
-        step: None,
-    });
+    config
+        .notify
+        .hooks
+        .push(crate::config::HookConfig::shell(on, run));
     config
 }
 

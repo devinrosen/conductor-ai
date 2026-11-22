@@ -3085,23 +3085,14 @@ fn test_query_dep_pairs_for_repo_cross_repo() {
 fn test_mark_worktrees_for_closed_tickets_fires_worktree_removed() {
     let conn = setup_db();
     let out = tempfile::NamedTempFile::new().unwrap();
-    let hooks = vec![crate::config::HookConfig {
-        on: "worktree.removed".into(),
-        run: Some(format!(
+    let hooks = vec![crate::config::HookConfig::shell(
+        "worktree.removed",
+        format!(
             "env | grep RUNKON_NOTIFY_FIELD_ | sort >> {0}; echo -- >> {0}",
             out.path().display()
-        )),
-        url: None,
-        headers: None,
-        timeout_ms: Some(5_000),
-        threshold_multiple: None,
-        gate_pending_ms: None,
-        workflow: None,
-        root_workflows_only: None,
-        repo: None,
-        branch: None,
-        step: None,
-    }];
+        ),
+    )];
+
     let syncer = TicketSyncer::new(&conn).with_hooks(&hooks);
 
     syncer

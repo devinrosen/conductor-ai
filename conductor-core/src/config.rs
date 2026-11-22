@@ -241,6 +241,17 @@ pub struct HookConfig {
 }
 
 impl HookConfig {
+    /// Test constructor: a shell hook for `on` that runs `run` with a 5 s timeout.
+    #[cfg(test)]
+    pub(crate) fn shell(on: &str, run: impl Into<String>) -> Self {
+        Self {
+            on: on.into(),
+            run: Some(run.into()),
+            timeout_ms: Some(5_000),
+            ..Default::default()
+        }
+    }
+
     /// Translate this conductor `HookConfig` into a `runkon_notify::HookConfig` for dispatch.
     ///
     /// The user-facing TOML structure is unchanged; conductor-specific filter fields
