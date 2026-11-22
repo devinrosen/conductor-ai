@@ -4057,6 +4057,82 @@ fn test_step_error_persisted_on_schema_validation_failure() {
 // claim_stuck_workflows
 // ────────────────────────────────────────────────────────────────────────────
 
+fn set_lease(conn: &Connection, run_id: &str, lease_expr: &str) {
+    conn.execute(
+        &format!("UPDATE workflow_runs SET lease_until = {lease_expr} WHERE id = :id"),
+        named_params! { ":id": run_id },
+    )
+    .unwrap();
+}
+
+/// #3435: a live engine's unexpired lease keeps a between-steps run from being claimed.
+#[test]
+fn test_claim_stuck_workflows_skips_run_with_unexpired_lease() {
+    let conn = setup_db();
+    insert_running_root_run(&conn, "live-lease");
+    set_lease(&conn, "live-lease", "datetime('now', '+30 seconds')");
+    assert!(crate::workflow::detect_stuck_workflow_run_ids(&conn, 60)
+        .unwrap()
+        .is_empty());
+    let claimed = crate::workflow::claim_stuck_workflows(&conn, &Config::default(), None).unwrap();
+    assert!(claimed.is_empty());
+    assert_eq!(get_run_status(&conn, "live-lease"), "running");
+    let error: Option<String> = conn
+        .query_row(
+            "SELECT error FROM workflow_runs WHERE id = 'live-lease'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(error.is_none());
+}
+
+/// An RFC 3339 lease is normalised, so it still counts as unexpired.
+#[test]
+fn test_detect_stuck_workflow_run_ids_skips_rfc3339_unexpired_lease() {
+    let conn = setup_db();
+    insert_running_root_run(&conn, "live-rfc");
+    set_lease(
+        &conn,
+        "live-rfc",
+        "strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+30 seconds')",
+    );
+    assert!(crate::workflow::detect_stuck_workflow_run_ids(&conn, 60)
+        .unwrap()
+        .is_empty());
+}
+
+/// claim_expired_lease_runs normalises RFC 3339 leases before comparing.
+#[test]
+fn test_claim_expired_lease_runs_rfc3339_expired_and_unexpired() {
+    let conn = setup_db();
+    insert_running_root_run(&conn, "rfc-dead");
+    insert_running_root_run(&conn, "rfc-live");
+    set_lease(
+        &conn,
+        "rfc-dead",
+        "strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-30 seconds')",
+    );
+    set_lease(
+        &conn,
+        "rfc-live",
+        "strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+30 seconds')",
+    );
+    let claimed = crate::workflow::claim_expired_lease_runs(&conn, &Config::default()).unwrap();
+    let ids: Vec<&str> = claimed.iter().map(|(id, _, _)| id.as_str()).collect();
+    assert_eq!(ids, vec!["rfc-dead"]);
+}
+
+/// Regression guard: an expired lease is still recovered.
+#[test]
+fn test_claim_stuck_workflows_claims_run_with_expired_lease() {
+    let conn = setup_db();
+    insert_running_root_run(&conn, "dead-lease");
+    set_lease(&conn, "dead-lease", "datetime('now', '-5 seconds')");
+    let claimed = crate::workflow::claim_stuck_workflows(&conn, &Config::default(), None).unwrap();
+    assert_eq!(claimed, vec!["dead-lease".to_string()]);
+}
+
 /// A stuck run (running, all steps terminal, old ended_at) should be detected,
 /// CAS-flipped to failed, and counted as resumed.
 #[test]

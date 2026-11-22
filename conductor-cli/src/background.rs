@@ -394,13 +394,13 @@ pub fn resume_as_background_child(
 /// Shared child-side driver. Runs `exec` on a thread, waits up to `wait` for
 /// the run ID (when `wait_for_id`) or a startup error, reports the outcome on
 /// `write_fd`, then redirects stdio and waits for `exec` to finish.
-fn drive_detached<E: std::fmt::Display>(
+fn drive_detached(
     notify_pair: RunIdPair,
     wait_for_id: bool,
     wait: Duration,
     db_path: Option<PathBuf>,
     write_fd: i32,
-    exec: impl FnOnce() -> std::result::Result<(), E> + Send + 'static,
+    exec: impl FnOnce() -> conductor_core::error::Result<()> + Send + 'static,
 ) -> ! {
     // Slot to capture early startup errors (before the run record is created).
     let error_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -409,10 +409,13 @@ fn drive_detached<E: std::fmt::Display>(
 
     // Returns Ok(()) on success or Err(error_string) so the main thread can
     // detect post-notification failures and clean up the DB.
-    let exec_handle = std::thread::spawn(move || -> std::result::Result<(), String> {
+    // The bool is `should_fail_run_after(err)`, decided where the error type
+    // is still known.
+    let exec_handle = std::thread::spawn(move || -> std::result::Result<(), (String, bool)> {
         match exec() {
             Ok(()) => Ok(()),
             Err(e) => {
+                let fail_run = should_fail_run_after(&e);
                 let msg = e.to_string();
                 *error_slot_bg.lock().unwrap_or_else(|e| e.into_inner()) = Some(msg.clone());
                 // Wake the main thread so it can surface the error. Taking the
@@ -420,7 +423,7 @@ fn drive_detached<E: std::fmt::Display>(
                 // check and its wait.
                 let _guard = notify_pair_bg.0.lock().unwrap_or_else(|e| e.into_inner());
                 notify_pair_bg.1.notify_one();
-                Err(msg)
+                Err((msg, fail_run))
             }
         }
     });
@@ -496,20 +499,28 @@ fn drive_detached<E: std::fmt::Display>(
     // already sent the run ID to the parent. In that case the workflow_run
     // row exists in the DB but may still be in pending/running status. We
     // must mark it (and the parent agent run) as failed.
+    // The run ID was set in the notify pair before the parent was notified.
+    let run_id = notify_pair
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     let error_msg = match &exec_result {
         Ok(Ok(())) => None,
-        Ok(Err(e)) => Some(e.clone()),
+        // Another process took the run over (#3435): it owns the run's status
+        // now, so writing `failed` here would overwrite its result.
+        // stdio is /dev/null by now, so append the message to the run's log
+        // file, which outlives this process, and exit with the lease-lost code
+        // so a wrapper can tell this from a real failure.
+        Ok(Err((e, false))) => {
+            log_lease_lost(run_id.as_deref(), e);
+            std::process::exit(lease_lost_exit_code())
+        }
+        Ok(Err((e, true))) => Some(e.clone()),
         Err(payload) => Some(panic_message(payload.as_ref())),
     };
 
     if let Some(error_msg) = error_msg {
-        // Extract the run ID from the notify pair (it was set before notification).
-        let run_id = notify_pair
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-
         if let Some(run_id) = run_id {
             // Best-effort cleanup: open a fresh DB connection and mark the
             // workflow run + parent agent run as failed. Errors here are
@@ -522,6 +533,38 @@ fn drive_detached<E: std::fmt::Display>(
     }
 
     std::process::exit(0);
+}
+
+/// Whether the detached child should mark the run failed after `err`.
+///
+/// A lost lease means another process claimed the run and is executing it, so
+/// the child must leave the run and its parent agent run alone (#3435).
+fn should_fail_run_after(err: &conductor_core::error::ConductorError) -> bool {
+    !matches!(
+        err,
+        conductor_core::error::ConductorError::WorkflowLeaseLost
+    )
+}
+
+/// Exit code of a detached child that lost its run's lease.
+fn lease_lost_exit_code() -> i32 {
+    conductor_core::error::ConductorError::WorkflowLeaseLost.exit_code()
+}
+
+/// Best-effort: append why this process stopped to the run's log file.
+fn log_lease_lost(run_id: Option<&str>, msg: &str) {
+    use std::io::Write;
+    let Some(path) = run_id.and_then(|id| conductor_core::config::workflow_log_path(id).ok())
+    else {
+        return;
+    };
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(path)
+    {
+        let _ = writeln!(f, "run stopped: {msg}; another process owns it");
+    }
 }
 
 /// Best-effort cleanup when a background workflow fails after the run ID
@@ -838,6 +881,40 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(agent.status.to_string(), "failed");
+    }
+
+    #[test]
+    fn log_lease_lost_appends_message_to_run_log() {
+        let run_id = conductor_core::new_id();
+        let path = conductor_core::config::workflow_log_path(&run_id).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "earlier line\n").unwrap();
+
+        log_lease_lost(Some(&run_id), "lease lost");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.starts_with("earlier line\n"));
+        assert!(content.ends_with("run stopped: lease lost; another process owns it\n"));
+    }
+
+    #[test]
+    fn log_lease_lost_without_run_id_or_with_invalid_id_writes_nothing() {
+        // Neither call may panic or create a file.
+        log_lease_lost(None, "lease lost");
+        log_lease_lost(Some("../etc/passwd"), "lease lost");
+    }
+
+    #[test]
+    fn lease_lost_exit_code_is_68() {
+        assert_eq!(lease_lost_exit_code(), 68);
+    }
+
+    #[test]
+    fn lease_loss_does_not_fail_the_run() {
+        use conductor_core::error::ConductorError;
+        assert!(!should_fail_run_after(&ConductorError::WorkflowLeaseLost));
+        assert!(should_fail_run_after(&ConductorError::WorkflowCancelled));
+        assert!(should_fail_run_after(&ConductorError::Workflow("x".into())));
     }
 
     #[test]

@@ -34,6 +34,9 @@ impl From<ConductorError> for EngineError {
             ConductorError::WorkflowCancelled => EngineError::Cancelled(
                 runkon_flow::cancellation_reason::CancellationReason::UserRequested(None),
             ),
+            ConductorError::WorkflowLeaseLost => EngineError::Cancelled(
+                runkon_flow::cancellation_reason::CancellationReason::LeaseLost,
+            ),
             other => EngineError::Workflow(other.to_string()),
         }
     }
@@ -58,7 +61,9 @@ pub(super) fn conductor_config_dir() -> runkon_flow_executors::ConfigDir {
 /// propagates as a cancellation rather than a generic workflow failure.
 pub(super) fn wrap_child_workflow_err(e: ConductorError, ctx: String) -> EngineError {
     match e {
-        ConductorError::WorkflowCancelled => EngineError::from(e),
+        ConductorError::WorkflowCancelled | ConductorError::WorkflowLeaseLost => {
+            EngineError::from(e)
+        }
         other => EngineError::Workflow(format!("{ctx}: {other}")),
     }
 }
@@ -194,6 +199,25 @@ mod tests {
             matches!(err, EngineError::Cancelled(_)),
             "WorkflowCancelled should map to EngineError::Cancelled, got: {err:?}"
         );
+    }
+
+    #[test]
+    fn conductor_error_lease_lost_becomes_engine_lease_lost() {
+        let err: EngineError = ConductorError::WorkflowLeaseLost.into();
+        assert!(
+            matches!(
+                err,
+                EngineError::Cancelled(
+                    runkon_flow::cancellation_reason::CancellationReason::LeaseLost
+                )
+            ),
+            "got: {err:?}"
+        );
+        let wrapped = wrap_child_workflow_err(ConductorError::WorkflowLeaseLost, "ctx".into());
+        assert!(matches!(
+            wrapped,
+            EngineError::Cancelled(runkon_flow::cancellation_reason::CancellationReason::LeaseLost)
+        ));
     }
 
     #[test]

@@ -554,6 +554,9 @@ fn map_engine_error(
     phase: &str,
 ) -> ConductorError {
     match e {
+        runkon_flow::engine_error::EngineError::Cancelled(
+            runkon_flow::cancellation_reason::CancellationReason::LeaseLost,
+        ) => ConductorError::WorkflowLeaseLost,
         runkon_flow::engine_error::EngineError::Cancelled(_) => ConductorError::WorkflowCancelled,
         other => ConductorError::Workflow(format!(
             "workflow '{workflow_name}' {phase} failed: {other}"
@@ -1542,6 +1545,28 @@ pub(crate) fn gate_test_def(gate_type: &str, extra: &str) -> runkon_flow::dsl::W
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn map_engine_error_distinguishes_lease_lost_from_cancel() {
+        use runkon_flow::cancellation_reason::CancellationReason;
+        use runkon_flow::engine_error::EngineError;
+        assert!(matches!(
+            super::map_engine_error(
+                EngineError::Cancelled(CancellationReason::LeaseLost),
+                "w",
+                "run"
+            ),
+            ConductorError::WorkflowLeaseLost
+        ));
+        assert!(matches!(
+            super::map_engine_error(
+                EngineError::Cancelled(CancellationReason::UserRequested(None)),
+                "w",
+                "run"
+            ),
+            ConductorError::WorkflowCancelled
+        ));
+    }
+
     use super::*;
     use runkon_flow::dsl::{InputDecl, InputType, WorkflowDef, WorkflowTrigger};
     use std::collections::HashMap;
