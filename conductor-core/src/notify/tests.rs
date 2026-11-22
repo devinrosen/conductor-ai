@@ -1226,6 +1226,27 @@ fn every_produced_event_matches_registry() {
         "session_idle_event",
     );
 
+    let wt_args = crate::notify::WorktreeEventArgs {
+        repo_slug: "repo",
+        worktree_slug: "wt",
+        worktree_id: "id",
+        branch: "feat/x",
+        path: "/tmp/wt",
+        base_branch: None,
+        pr_number: None,
+    };
+    check(
+        crate::notify::worktree::worktree_created_event(&wt_args),
+        "worktree_created_event",
+    );
+    check(
+        crate::notify::worktree::worktree_removed_event(
+            &wt_args,
+            crate::notify::WorktreeRemovedReason::Abandoned,
+        ),
+        "worktree_removed_event",
+    );
+
     for spec in EVENTS {
         assert!(
             produced.iter().any(|k| k == spec.name),
@@ -1253,4 +1274,96 @@ fn synthetic_unknown_event_error_lists_every_registered_event() {
     for spec in EVENTS {
         assert!(err.contains(spec.name), "error should list {}", spec.name);
     }
+}
+
+// --- worktree.created / worktree.removed ---
+
+fn wt_args() -> crate::notify::WorktreeEventArgs<'static> {
+    crate::notify::WorktreeEventArgs {
+        repo_slug: "repo",
+        worktree_slug: "wt",
+        worktree_id: "01WT",
+        branch: "feat/x",
+        path: "/tmp/wt",
+        base_branch: Some("main"),
+        pr_number: Some(7),
+    }
+}
+
+fn shell_hook(on: &str, run: String) -> HookConfig {
+    HookConfig {
+        on: on.into(),
+        run: Some(run),
+        url: None,
+        headers: None,
+        timeout_ms: Some(5_000),
+        threshold_multiple: None,
+        gate_pending_ms: None,
+        workflow: None,
+        root_workflows_only: None,
+        repo: None,
+        branch: None,
+        step: None,
+    }
+}
+
+#[test]
+fn worktree_event_builders_carry_fields_and_reason() {
+    let ev = crate::notify::worktree::worktree_removed_event(
+        &wt_args(),
+        crate::notify::WorktreeRemovedReason::Merged,
+    );
+    assert_eq!(ev.fields["reason"], "merged");
+    assert_eq!(ev.fields["pr_number"], "7");
+    assert_eq!(ev.fields["path"], "/tmp/wt");
+    let mut a = wt_args();
+    a.base_branch = None;
+    a.pr_number = None;
+    let ev = crate::notify::worktree::worktree_created_event(&a);
+    assert_eq!(ev.fields["base_branch"], "");
+    assert_eq!(ev.fields["pr_number"], "");
+    assert!(!ev.fields.contains_key("reason"));
+}
+
+#[test]
+fn worktree_removed_fires_once_per_worktree() {
+    let conn = crate::test_helpers::create_test_conn();
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.txt");
+    let hooks = vec![shell_hook(
+        "worktree.removed",
+        format!("echo $RUNKON_NOTIFY_FIELD_REASON >> {}", out.display()),
+    )];
+    let reason = crate::notify::WorktreeRemovedReason::Merged;
+    crate::notify::fire_worktree_removed(&conn, &hooks, &wt_args(), reason);
+    crate::notify::fire_worktree_removed(&conn, &hooks, &wt_args(), reason);
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), "merged\n");
+}
+
+#[test]
+fn worktree_removed_failing_hook_returns_normally() {
+    let conn = crate::test_helpers::create_test_conn();
+    let hooks = vec![shell_hook("worktree.*", "exit 1".into())];
+    crate::notify::fire_worktree_removed(
+        &conn,
+        &hooks,
+        &wt_args(),
+        crate::notify::WorktreeRemovedReason::Abandoned,
+    );
+    crate::notify::fire_worktree_created(&hooks, &wt_args());
+}
+
+#[test]
+fn worktree_removed_without_hooks_claims_nothing() {
+    let conn = crate::test_helpers::create_test_conn();
+    crate::notify::fire_worktree_removed(
+        &conn,
+        &[],
+        &wt_args(),
+        crate::notify::WorktreeRemovedReason::Merged,
+    );
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM notification_log", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 0);
 }

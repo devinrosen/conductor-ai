@@ -40,6 +40,11 @@ flowchart TD
     subgraph SS["session domain"]
         SI["session.idle"]
     end
+
+    subgraph WT["worktree domain"]
+        WTC["worktree.created"]
+        WTR["worktree.removed"]
+    end
 ```
 
 The `EVENTS` registry in `conductor-core/src/notify/catalog.rs` is the single list of events a hook can match, with each event's fields; `conductor notify events` prints it and the field tables below are generated from it. Drift tests build every event through the real producers and fail when a kind or field is missing from the registry. The hook × event matrix UI uses the non-threshold events; `workflow_run.cost_spike`, `workflow_run.duration_spike`, and `gate.pending_too_long` require threshold filter fields and are excluded from it.
@@ -54,7 +59,7 @@ Which binaries fire which notification functions, all of which ultimately call `
 graph LR
     TUI["conductor-tui\n(background poll thread)"]
     WEB["conductor-web\n(tokio background task)"]
-    CLI["conductor-cli\n(management only)"]
+    CLI["conductor-cli\n(management + worktree commands)"]
 
     FWN["fire_workflow_notification()"]
     FAN["fire_agent_run_notification()"]
@@ -64,6 +69,8 @@ graph LR
     FCN["fire_cost_spike_notification()"]
     FDN["fire_duration_spike_notification()"]
     FORN["fire_orphan_resumed_notification()"]
+    FWTC["fire_worktree_created()"]
+    FWTR["fire_worktree_removed()"]
 
     TUI --> FWN
     TUI --> FAN
@@ -81,7 +88,14 @@ graph LR
     WEB --> FDN
     WEB --> FORN
 
-    CLI -->|"conductor notifications\nlist / test / mark-read"| MGMT["management commands\n(no lifecycle events fired)"]
+    TUI --> FWTC
+    TUI --> FWTR
+    WEB --> FWTC
+    WEB --> FWTR
+    CLI -->|"worktree create"| FWTC
+    CLI -->|"worktree delete / cleanup / purge"| FWTR
+
+    CLI -->|"conductor notifications\nlist / test / mark-read"| MGMT["management commands\n(no events fired)"]
 ```
 
 All fire functions are defined in `conductor-core/src/notify/` and re-exported from `conductor-core/src/notify/mod.rs`.
@@ -459,7 +473,58 @@ An interactive session finished a turn and has stayed idle for `delay_secs`.
 | `RUNKON_NOTIFY_FIELD_IDLE_SINCE` | yes | RFC 3339 time of the `Stop` |
 | `RUNKON_NOTIFY_FIELD_TIMESTAMP` | yes | RFC 3339 time the event was built |
 
+#### `worktree.created`
+
+A worktree checkout was created (not fired when an existing checkout is adopted).
+
+| Variable | Always set | Description |
+|---|---|---|
+| `RUNKON_NOTIFY_FIELD_REPO_SLUG` | yes | Repository slug |
+| `RUNKON_NOTIFY_FIELD_WORKTREE_SLUG` | yes | Worktree slug |
+| `RUNKON_NOTIFY_FIELD_WORKTREE_ID` | yes | Conductor worktree ID |
+| `RUNKON_NOTIFY_FIELD_BRANCH` | yes | Branch name |
+| `RUNKON_NOTIFY_FIELD_PATH` | yes | Absolute checkout path |
+| `RUNKON_NOTIFY_FIELD_BASE_BRANCH` | yes | Base branch; empty when none |
+| `RUNKON_NOTIFY_FIELD_PR_NUMBER` | yes | PR number when created with `--from-pr`; empty otherwise |
+| `RUNKON_NOTIFY_FIELD_TIMESTAMP` | yes | RFC 3339 time the event was built |
+
+#### `worktree.removed`
+
+A worktree's folder and branch were removed (delete, cleanup, ticket sync or purge); fires once per worktree.
+
+| Variable | Always set | Description |
+|---|---|---|
+| `RUNKON_NOTIFY_FIELD_REPO_SLUG` | yes | Repository slug |
+| `RUNKON_NOTIFY_FIELD_WORKTREE_SLUG` | yes | Worktree slug |
+| `RUNKON_NOTIFY_FIELD_WORKTREE_ID` | yes | Conductor worktree ID |
+| `RUNKON_NOTIFY_FIELD_BRANCH` | yes | Branch name |
+| `RUNKON_NOTIFY_FIELD_PATH` | yes | Absolute checkout path; still set after the folder is gone |
+| `RUNKON_NOTIFY_FIELD_BASE_BRANCH` | yes | Base branch; empty when none |
+| `RUNKON_NOTIFY_FIELD_PR_NUMBER` | yes | Merged PR number when known (cleanup and ticket sync); empty otherwise |
+| `RUNKON_NOTIFY_FIELD_REASON` | yes | `merged`, `abandoned` or `deleted` (record purged without an earlier removal event) |
+| `RUNKON_NOTIFY_FIELD_TIMESTAMP` | yes | RFC 3339 time the event was built |
+
 <!-- END GENERATED: notify-events -->
+
+### Worktree events
+
+`worktree.created` and `worktree.removed` fire from `conductor-core`'s worktree code, so the CLI, MCP, TUI, web, ticket sync and the background merged-PR cleanup all fire them. The fields are listed under each event above.
+
+- `worktree.created` fires after the checkout, dependency install and database row exist. `worktree adopt` does not fire it.
+- `worktree.removed` fires after the folder and branch are gone: from `worktree delete`, `worktree cleanup` (merged PRs), closed-ticket sync, stale-worktree reaping and `worktree purge`. `path` stays set so a hook can match caches keyed by the checkout path.
+- `reason` is `merged` (the worktree ended merged), `abandoned` (deleted while unmerged) or `deleted` (`purge` removed a completed record whose removal was never announced, such as one completed before these events existed, so a hook can clean up after worktrees that are already gone). The first `purge` after an upgrade can therefore fire many events in a row.
+- `worktree.removed` fires once per worktree ID, deduped in `notification_log`, even when several processes clean up at once. With no hooks configured nothing is recorded, so a hook added later still hears about old records when they are purged.
+- These hooks run synchronously: the command that triggered the event waits for them, up to the longest hook `timeout_ms` (default 10 s) plus a short grace period, so a short-lived CLI command doesn't exit before the hook runs.
+- A failing or timed-out hook is logged and never stops the create or removal.
+- Unlike other events, a hook with both `run` and `url` runs only its `run` command for worktree events.
+
+Example: remove per-worktree build caches when a worktree goes away.
+
+```toml
+[[notify.hooks]]
+on = "worktree.removed"
+run = 'rm -rf "$HOME/.cache/my-builds/$RUNKON_NOTIFY_FIELD_WORKTREE_SLUG"'
+```
 
 ### `session.idle`
 

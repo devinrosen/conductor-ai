@@ -10,6 +10,7 @@ pub mod session_idle;
 #[cfg(test)]
 mod tests;
 pub mod transitions;
+pub mod worktree;
 
 pub use anomalies::*;
 pub use catalog::{event_spec, matrix_events, EventField, EventSpec, EVENTS};
@@ -20,6 +21,7 @@ pub use runkon_notify::HookRunner;
 pub use runs::*;
 pub use session_idle::*;
 pub use transitions::*;
+pub use worktree::*;
 
 /// Pending feedback requests and waiting gates older than this are recorded as notified but
 /// not announced, so a first start doesn't burst for months-old items.
