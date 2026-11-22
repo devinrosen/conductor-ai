@@ -483,10 +483,10 @@ fn test_mark_worktrees_artifacts_query_returns_correct_paths() {
         .unwrap()
         .query_map(rusqlite::named_params! { ":repo_id": "r1" }, |row| {
             Ok((
-                row.get("local_path")?,
+                row.get("repo_local_path")?,
                 row.get("path")?,
                 row.get("branch")?,
-                row.get("remote_url")?,
+                row.get("repo_remote_url")?,
             ))
         })
         .unwrap()
@@ -524,10 +524,10 @@ fn test_mark_worktrees_artifacts_skips_already_merged() {
         .unwrap()
         .query_map(rusqlite::named_params! { ":repo_id": "r1" }, |row| {
             Ok((
-                row.get("local_path")?,
+                row.get("repo_local_path")?,
                 row.get("path")?,
                 row.get("branch")?,
-                row.get("remote_url")?,
+                row.get("repo_remote_url")?,
             ))
         })
         .unwrap()
@@ -3079,4 +3079,83 @@ fn test_query_dep_pairs_for_repo_cross_repo() {
     let r3_pairs = query_dep_pairs_for_repo(&conn, "blocks", "r3").unwrap();
     assert_eq!(r3_pairs.len(), 1);
     assert_eq!(r3_pairs[0].2.source_id, "c1");
+}
+
+#[test]
+fn test_mark_worktrees_for_closed_tickets_fires_worktree_removed() {
+    let conn = setup_db();
+    let out = tempfile::NamedTempFile::new().unwrap();
+    let hooks = vec![crate::config::HookConfig::shell(
+        "worktree.removed",
+        format!(
+            "env | grep RUNKON_NOTIFY_FIELD_ | sort >> {0}; echo -- >> {0}",
+            out.path().display()
+        ),
+    )];
+
+    let syncer = TicketSyncer::new(&conn).with_hooks(&hooks);
+
+    syncer
+        .upsert_tickets("r1", &[make_ticket("1", "One"), make_ticket("2", "Two")])
+        .unwrap();
+    let ticket_id = |source_id: &str| -> String {
+        conn.query_row(
+            "SELECT id FROM tickets WHERE source_id = :s",
+            rusqlite::named_params! { ":s": source_id },
+            |row| row.get("id"),
+        )
+        .unwrap()
+    };
+    // wt1 has no base branch (NULL); wt2 targets release/1.
+    insert_worktree(&conn, "wt1", "r1", Some(&ticket_id("1")), "active");
+    insert_worktree(&conn, "wt2", "r1", Some(&ticket_id("2")), "active");
+    conn.execute(
+        "UPDATE worktrees SET base_branch = 'release/1' WHERE id = 'wt2'",
+        [],
+    )
+    .unwrap();
+    syncer
+        .close_missing_tickets("r1", "github", &["999"])
+        .unwrap();
+
+    let count = syncer
+        .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, branches: &[String]| {
+            branches
+                .iter()
+                .map(|b| {
+                    (
+                        b.clone(),
+                        crate::github::MergedPr {
+                            number: Some(55),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect()
+        })
+        .unwrap();
+    assert_eq!(count, 2);
+
+    let log = std::fs::read_to_string(out.path()).unwrap();
+    let events: Vec<&str> = log.split("--\n").filter(|e| !e.trim().is_empty()).collect();
+    assert_eq!(events.len(), 2, "one worktree.removed per worktree: {log}");
+    let event_for = |slug: &str| -> &str {
+        events
+            .iter()
+            .copied()
+            .find(|e| e.contains(&format!("RUNKON_NOTIFY_FIELD_WORKTREE_SLUG={slug}\n")))
+            .unwrap_or_else(|| panic!("no event for {slug}: {log}"))
+    };
+    let wt1 = event_for("wt-wt1");
+    for want in [
+        "RUNKON_NOTIFY_FIELD_REPO_SLUG=test-repo",
+        "RUNKON_NOTIFY_FIELD_BRANCH=feat/wt1",
+        "RUNKON_NOTIFY_FIELD_PATH=/tmp/wt-wt1",
+        "RUNKON_NOTIFY_FIELD_BASE_BRANCH=\n",
+        "RUNKON_NOTIFY_FIELD_PR_NUMBER=55",
+        "RUNKON_NOTIFY_FIELD_REASON=merged",
+    ] {
+        assert!(wt1.contains(want), "missing {want:?} in {wt1}");
+    }
+    assert!(event_for("wt-wt2").contains("RUNKON_NOTIFY_FIELD_BASE_BRANCH=release/1\n"));
 }

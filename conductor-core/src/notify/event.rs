@@ -172,6 +172,25 @@ pub fn build_synthetic_event(name: &str, now: impl Into<String>) -> Result<Event
                 turn_duration_ms: Some(1000),
             })
         }
+        catalog::WORKTREE_CREATED | catalog::WORKTREE_REMOVED => {
+            let args = super::worktree::WorktreeEventArgs {
+                repo_slug: "test-repo",
+                worktree_slug: "feat-test",
+                worktree_id: "01TESTWORKTREE000000000000",
+                branch: "feat/test",
+                path: "/tmp/test-worktree",
+                base_branch: Some("main"),
+                pr_number: Some(42),
+            };
+            if name == catalog::WORKTREE_CREATED {
+                super::worktree::worktree_created_event(&args)
+            } else {
+                super::worktree::worktree_removed_event(
+                    &args,
+                    super::worktree::WorktreeRemovedReason::Merged,
+                )
+            }
+        }
         other => {
             return Err(ConductorError::InvalidInput(format!(
                 "unknown event name: '{other}'. Valid events: {}",

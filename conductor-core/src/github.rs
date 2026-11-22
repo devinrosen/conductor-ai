@@ -762,6 +762,8 @@ pub struct MergedPr {
     pub merged_at: String,
     /// `headRefOid` of the PR. Empty means unknown.
     pub head_oid: String,
+    /// PR number, when known.
+    pub number: Option<u64>,
 }
 
 /// Given a remote URL and a list of branch names, return the subset of branches
@@ -790,7 +792,7 @@ pub fn merged_branches_for_repo(
         "--state",
         "merged",
         "--json",
-        "headRefName,mergedAt,headRefOid",
+        "headRefName,mergedAt,headRefOid,number",
         "--limit",
         &limit,
     ]) else {
@@ -814,6 +816,8 @@ pub(crate) fn parse_merged_branches_json(
         merged_at: String,
         #[serde(rename = "headRefOid", default)]
         head_ref_oid: String,
+        #[serde(default)]
+        number: Option<u64>,
     }
     let Ok(prs) = serde_json::from_str::<Vec<PrHead>>(json) else {
         return std::collections::HashMap::new();
@@ -826,6 +830,7 @@ pub(crate) fn parse_merged_branches_json(
             result.entry(p.head_ref_name).or_insert(MergedPr {
                 merged_at: p.merged_at,
                 head_oid: p.head_ref_oid,
+                number: p.number,
             });
         }
     }
@@ -1526,5 +1531,23 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result["fix/x"].head_oid, "bbb");
         assert_eq!(result["fix/x"].merged_at, "2024-03-01T00:00:00Z");
+    }
+
+    #[test]
+    fn test_parse_merged_branches_json_reads_pr_number() {
+        let json = r#"[
+            {"headRefName": "fix/x", "mergedAt": "2024-03-01T00:00:00Z", "number": 42}
+        ]"#;
+        let result = parse_merged_branches_json(json, &["fix/x".to_string()]);
+        assert_eq!(result["fix/x"].number, Some(42));
+    }
+
+    #[test]
+    fn test_parse_merged_branches_json_missing_number_is_none() {
+        let json = r#"[
+            {"headRefName": "fix/x", "mergedAt": "2024-03-01T00:00:00Z"}
+        ]"#;
+        let result = parse_merged_branches_json(json, &["fix/x".to_string()]);
+        assert_eq!(result["fix/x"].number, None);
     }
 }
