@@ -383,6 +383,53 @@ fn workflow_run_background_prints_run_id_and_completes() {
     assert_eq!(status, "completed");
 }
 
+/// `workflow run` accepts a worktree path as the target.
+#[cfg(unix)]
+#[test]
+fn workflow_run_background_accepts_a_worktree_path() {
+    let home = tempfile::tempdir().unwrap();
+    let wt = setup_valid_workflow_fixture();
+    register_worktree_fixture(home.path(), wt.path());
+
+    let out = conductor_cmd(home.path())
+        .args([
+            "workflow",
+            "run",
+            "hello",
+            "r",
+            wt.path().to_str().unwrap(),
+            "--background",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim().len(), 26);
+}
+
+/// `workflow runs` resolves a worktree path target; an unknown path names the expected form.
+#[cfg(unix)]
+#[test]
+fn workflow_runs_resolves_a_worktree_path() {
+    let home = tempfile::tempdir().unwrap();
+    let wt = setup_valid_workflow_fixture();
+    register_worktree_fixture(home.path(), wt.path());
+
+    conductor_cmd(home.path())
+        .args(["workflow", "runs", "r", wt.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No workflow runs found."));
+    conductor_cmd(home.path())
+        .args(["workflow", "runs", "r", "/no/such/path"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("pass a worktree slug"));
+}
+
 /// An unknown worktree is reported with its cause, not as a silent child exit.
 #[cfg(unix)]
 #[test]
@@ -402,7 +449,8 @@ fn workflow_run_background_reports_unknown_worktree() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("worktree not found"));
+        .stderr(predicate::str::contains("worktree not found"))
+        .stderr(predicate::str::contains("pass a worktree slug"));
 }
 
 /// Run the hidden `workflow launch-detached` with `spec` on stdin. Its notify fd
@@ -1417,4 +1465,42 @@ fn workflow_validate_dry_run_all_exits_nonzero_when_one_workflow_fails() {
         .failure()
         .stdout(predicate::str::contains("SMOKE PASS  smoke"))
         .stdout(predicate::str::contains("bogus_gate"));
+}
+
+#[test]
+fn notify_events_json_lists_every_event_with_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    // `notify` is the short alias; `notifications` is the long name.
+    for group in ["notify", "notifications"] {
+        let out = conductor_cmd(dir.path())
+            .args([group, "events", "--json"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{group} events --json failed");
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let events = v.as_array().unwrap();
+        let names: Vec<&str> = events.iter().map(|e| e["name"].as_str().unwrap()).collect();
+        let expected: Vec<&str> = conductor_core::notify::EVENTS
+            .iter()
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(names, expected);
+        let gate = events.iter().find(|e| e["name"] == "gate.waiting").unwrap();
+        assert!(gate["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["env"] == "RUNKON_NOTIFY_FIELD_STEP_NAME"));
+    }
+}
+
+#[test]
+fn notify_events_text_lists_gate_waiting() {
+    let dir = tempfile::tempdir().unwrap();
+    conductor_cmd(dir.path())
+        .args(["notify", "events"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("gate.waiting"))
+        .stdout(predicate::str::contains("RUNKON_NOTIFY_FIELD_STEP_NAME"));
 }

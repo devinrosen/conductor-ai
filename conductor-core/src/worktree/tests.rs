@@ -555,10 +555,21 @@ fn test_update_status_to_abandoned_sets_completed_at() {
 // ---- get_by_slug_or_branch tests ----
 
 fn insert_test_worktree(conn: &Connection, id: &str, repo_id: &str, slug: &str, branch: &str) {
+    insert_worktree_row(conn, id, repo_id, slug, branch, "/tmp/ws");
+}
+
+fn insert_worktree_row(
+    conn: &Connection,
+    id: &str,
+    repo_id: &str,
+    slug: &str,
+    branch: &str,
+    path: &str,
+) {
     conn.execute(
         "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
-         VALUES (:id, :repo_id, :slug, :branch, '/tmp/ws', 'active', '2024-01-01T00:00:00Z')",
-        named_params! { ":id": id, ":repo_id": repo_id, ":slug": slug, ":branch": branch },
+         VALUES (:id, :repo_id, :slug, :branch, :path, 'active', '2024-01-01T00:00:00Z')",
+        named_params! { ":id": id, ":repo_id": repo_id, ":slug": slug, ":branch": branch, ":path": path },
     )
     .unwrap();
 }
@@ -601,8 +612,12 @@ fn test_get_by_slug_or_branch_branch_match() {
     assert_eq!(wt.id, "wt1");
 }
 
+fn insert_wt_at(conn: &Connection, id: &str, repo_id: &str, slug: &str, path: &str) {
+    insert_worktree_row(conn, id, repo_id, slug, &format!("b/{slug}"), path);
+}
+
 #[test]
-fn test_get_by_slug_or_branch_did_you_mean() {
+fn test_get_by_slug_or_branch_unknown_name() {
     let conn = crate::test_helpers::setup_db();
     let config = Config::default();
     insert_test_worktree(
@@ -613,15 +628,178 @@ fn test_get_by_slug_or_branch_did_you_mean() {
         "feat/123-my-feature",
     );
     insert_test_worktree(&conn, "wt2", "r1", "fix-456-other", "fix/456-other");
+    insert_test_worktree(&conn, "wt3", "r1", "chore-zzz", "chore/zzz");
 
     let mgr = WorktreeManager::new(&conn, &config);
     let err = mgr
-        .get_by_slug_or_branch("r1", "totally-wrong")
+        .get_by_slug_or_branch("r1", "feat-123-my-featur")
         .unwrap_err()
         .to_string();
-    assert!(err.contains("totally-wrong"), "error: {err}");
-    assert!(err.contains("did you mean"), "error: {err}");
-    assert!(err.contains("feat-123-my-feature"), "error: {err}");
+    assert!(err.contains("feat-123-my-featur"), "error: {err}");
+    assert!(err.contains("test-repo"), "error: {err}");
+    assert!(err.contains("pass a worktree slug"), "error: {err}");
+    assert!(err.contains("conductor worktree list"), "error: {err}");
+    assert!(err.contains("e.g. feat-123-my-feature"), "error: {err}");
+}
+
+#[test]
+fn test_get_by_slug_or_branch_path_and_trailing_slash() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    let dir = TempDir::new().unwrap();
+    let wt_path = dir.path().join("feat-a");
+    fs::create_dir_all(&wt_path).unwrap();
+    let path = wt_path.to_string_lossy().into_owned();
+    insert_wt_at(&conn, "wt1", "r1", "feat-a", &path);
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    assert_eq!(mgr.get_by_slug_or_branch("r1", &path).unwrap().id, "wt1");
+    assert_eq!(
+        mgr.get_by_slug_or_branch("r1", &format!("{path}/"))
+            .unwrap()
+            .id,
+        "wt1"
+    );
+    assert_eq!(mgr.get_by_slug_or_branch("r1", "feat-a").unwrap().id, "wt1");
+}
+
+#[test]
+fn test_get_by_slug_or_branch_canonicalized_path() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    let dir = TempDir::new().unwrap();
+    let real = dir.path().join("real");
+    fs::create_dir_all(&real).unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    insert_wt_at(&conn, "wt1", "r1", "feat-a", &real.to_string_lossy());
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let wt = mgr
+        .get_by_slug_or_branch("r1", &link.to_string_lossy())
+        .unwrap();
+    assert_eq!(wt.id, "wt1");
+}
+
+#[test]
+fn test_get_by_slug_or_branch_unknown_path_suggests_last_component() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    insert_wt_at(&conn, "wt1", "r1", "feat-123-my-feature", "/x/ws/r1/a");
+    insert_wt_at(&conn, "wt2", "r1", "fix-456-other", "/x/ws/r1/b");
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let err = mgr
+        .get_by_slug_or_branch("r1", "/x/ws/r1/feat-123-my-featur/")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("e.g. feat-123-my-feature"), "error: {err}");
+}
+
+#[test]
+fn test_get_by_slug_or_branch_path_in_other_repo() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    crate::test_helpers::insert_test_repo(&conn, "r2", "other-repo", "/tmp/other");
+    insert_wt_at(&conn, "wt9", "r2", "feat-z", "/x/ws/other-repo/feat-z");
+
+    let mgr = WorktreeManager::new(&conn, &config);
+    let err = mgr
+        .get_by_slug_or_branch("r1", "/x/ws/other-repo/feat-z")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("other-repo"), "error: {err}");
+    assert!(err.contains("feat-z"), "error: {err}");
+}
+
+#[test]
+fn test_closest_slugs_order_and_cap() {
+    use super::manager::closest_slugs;
+    let slugs = ["zzz", "feat-abc", "feat-abd-long", "feat-abx", "other"];
+    let got = closest_slugs("feat-abc", &slugs, 3);
+    assert_eq!(got.len(), 3);
+    assert_eq!(got[0], "feat-abc");
+    assert!(closest_slugs("x", &[], 3).is_empty());
+}
+
+#[test]
+fn test_closest_slugs_ranking_tiers_ties_and_edges() {
+    use super::manager::closest_slugs;
+    // Substring (tier 1) outranks a closer-by-edit-distance non-substring.
+    let got = closest_slugs("feat-login", &["feat-logan", "feat-login-page"], 2);
+    assert_eq!(got, vec!["feat-login-page", "feat-logan"]);
+    // A slug contained in the needle is also a substring match.
+    let got = closest_slugs(
+        "feat-login-page-x",
+        &["zzzzzzzzzzzzzzzzzz", "feat-login"],
+        2,
+    );
+    assert_eq!(got[0], "feat-login");
+    // Ties keep input order.
+    assert_eq!(
+        closest_slugs("abc", &["abd", "abe", "abf"], 3),
+        vec!["abd", "abe", "abf"]
+    );
+    // Fewer candidates than n.
+    assert_eq!(closest_slugs("a", &["only"], 3), vec!["only"]);
+    // An empty needle is never a substring match: pure edit distance.
+    assert_eq!(
+        closest_slugs("", &["long-slug", "ab"], 2),
+        vec!["ab", "long-slug"]
+    );
+    // Exact match is case-insensitive.
+    assert_eq!(
+        closest_slugs("FEAT-A", &["zzz", "feat-a"], 1),
+        vec!["feat-a"]
+    );
+}
+
+#[test]
+fn test_get_by_slug_or_branch_relative_and_tilde_paths() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    let dir = TempDir::new().unwrap();
+    let wt_path = dir.path().join("feat-a");
+    fs::create_dir_all(&wt_path).unwrap();
+    insert_wt_at(&conn, "wt1", "r1", "feat-a", &wt_path.to_string_lossy());
+    let mgr = WorktreeManager::new(&conn, &config);
+
+    // `~/...` expands against HOME; `./x` resolves against the cwd.
+    // Both mutate process state, so they are exercised in one test.
+    let old_home = std::env::var_os("HOME");
+    let old_cwd = std::env::current_dir().unwrap();
+    std::env::set_var("HOME", dir.path());
+    let tilde = mgr.get_by_slug_or_branch("r1", "~/feat-a").map(|w| w.id);
+    std::env::set_current_dir(dir.path()).unwrap();
+    let relative = mgr.get_by_slug_or_branch("r1", "./feat-a").map(|w| w.id);
+    std::env::set_current_dir(old_cwd).unwrap();
+    match old_home {
+        Some(h) => std::env::set_var("HOME", h),
+        None => std::env::remove_var("HOME"),
+    }
+    assert_eq!(tilde.unwrap(), "wt1");
+    assert_eq!(relative.unwrap(), "wt1");
+}
+
+#[test]
+fn test_get_by_slug_or_branch_unmatched_path_falls_through_to_not_found() {
+    let conn = crate::test_helpers::setup_db();
+    let config = Config::default();
+    insert_wt_at(&conn, "wt1", "r1", "feat-a", "/x/ws/r1/a");
+    let mgr = WorktreeManager::new(&conn, &config);
+
+    // A name containing `/` is tried as a path, then reports not-found.
+    let err = mgr
+        .get_by_slug_or_branch("r1", "no/such-thing")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("no/such-thing"), "error: {err}");
+    assert!(err.contains("pass a worktree slug"), "error: {err}");
+    let err = mgr
+        .get_by_slug_or_branch("r1", "./missing")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("./missing"), "error: {err}");
 }
 
 #[test]
@@ -636,8 +814,8 @@ fn test_get_by_slug_or_branch_empty_repo() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("anything"), "error: {err}");
-    // No "did you mean" hint when repo has no worktrees
-    assert!(!err.contains("did you mean"), "error: {err}");
+    // No example slugs when repo has no worktrees
+    assert!(!err.contains("e.g."), "error: {err}");
 }
 
 #[test]

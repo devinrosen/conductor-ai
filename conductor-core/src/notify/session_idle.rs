@@ -326,7 +326,7 @@ pub(crate) fn session_idle_event(s: &IdleSession) -> Event {
     let last = s.last_message.as_deref().map(preview).unwrap_or_default();
     let body = session_idle_body(label, &last);
     Event {
-        kind: "session.idle".into(),
+        kind: super::catalog::SESSION_IDLE.into(),
         title: "Conductor \u{2014} Session idle".into(),
         body,
         severity: Severity::Info,

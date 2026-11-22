@@ -1,6 +1,6 @@
 # Notification Hooks — Architecture Reference
 
-> Source files: `conductor-core/src/notify/event.rs`, `conductor-core/src/notify/dedup.rs`, `conductor-core/src/notify/runs.rs`, `conductor-core/src/notify/anomalies.rs`, `conductor-core/src/notify/gates.rs`
+> Source files: `conductor-core/src/notify/catalog.rs`, `conductor-core/src/notify/event.rs`, `conductor-core/src/notify/dedup.rs`, `conductor-core/src/notify/runs.rs`, `conductor-core/src/notify/anomalies.rs`, `conductor-core/src/notify/gates.rs`
 
 This document covers the full conductor notification system: every event type and what fires it, which binaries participate, the dispatch pipeline from event construction to hook execution, filter resolution logic, and the DB table involved.
 
@@ -21,7 +21,6 @@ flowchart TD
         WRR["workflow_run.reaped"]
         WCS["workflow_run.cost_spike"]
         WDS["workflow_run.duration_spike"]
-        WRS["workflow_run.stale"]
     end
 
     subgraph AG["agent_run domain"]
@@ -43,7 +42,7 @@ flowchart TD
     end
 ```
 
-The `ALL_EVENTS` constant in `conductor-core/src/notify/event.rs` lists the ten non-threshold events used to populate the hook × event matrix UI. `workflow_run.cost_spike`, `workflow_run.duration_spike`, and `gate.pending_too_long` require threshold filter fields and are excluded from that list.
+The `EVENTS` registry in `conductor-core/src/notify/catalog.rs` is the single list of events a hook can match, with each event's fields; `conductor notify events` prints it and the field tables below are generated from it. Drift tests build every event through the real producers and fail when a kind or field is missing from the registry. The hook × event matrix UI uses the non-threshold events; `workflow_run.cost_spike`, `workflow_run.duration_spike`, and `gate.pending_too_long` require threshold filter fields and are excluded from it.
 
 ---
 
@@ -65,7 +64,6 @@ graph LR
     FCN["fire_cost_spike_notification()"]
     FDN["fire_duration_spike_notification()"]
     FORN["fire_orphan_resumed_notification()"]
-    FSN["fire_stale_workflow_notification()"]
 
     TUI --> FWN
     TUI --> FAN
@@ -75,7 +73,6 @@ graph LR
     TUI --> FCN
     TUI --> FDN
     TUI --> FORN
-    TUI --> FSN
 
     WEB --> FWN
     WEB --> FAN
@@ -228,6 +225,8 @@ The `on` field accepts a comma-separated list of patterns. Each sub-pattern may 
 | `workflow_run.*:root` | All workflow events, root runs only |
 | `feature/*` | Branch glob (used in `branch` filter, not `on`) |
 
+An `on` arm that matches no event never fires. Loading the config logs a warning for each one, naming the valid events.
+
 The `:root` suffix causes `runkon-notify` to check that `event.fields["is_root"] == "true"`. Producers set this field when `parent_workflow_run_id.is_none()`. The `root_workflows_only` conductor config field is translated to `:root`-suffixed `on` arms at dispatch time; it is not a separate runtime check.
 
 ---
@@ -264,82 +263,209 @@ All variables are injected into shell hook commands by `runkon-notify` when a ho
 
 | Variable | Value | Notes |
 |---|---|---|
-| `RUNKON_NOTIFY_EVENT` | `workflow_run.completed` etc. | Dotted event kind |
+| `RUNKON_NOTIFY_KIND` | `workflow_run.completed` etc. | Dotted event kind |
 | `RUNKON_NOTIFY_TITLE` | `"Conductor — Workflow Completed"` | Human-readable title |
 | `RUNKON_NOTIFY_BODY` | `"my-wf on repo/branch"` | Human-readable body |
 | `RUNKON_NOTIFY_SEVERITY` | `info` / `warning` / `error` | Severity level |
 
 ### Event fields (via `RUNKON_NOTIFY_FIELD_<UPPER_KEY>`)
 
-All entries in the event `fields` map are injected as `RUNKON_NOTIFY_FIELD_<UPPER_KEY>`. For example, a field `run_id` becomes `RUNKON_NOTIFY_FIELD_RUN_ID`.
+All entries in the event `fields` map are injected as `RUNKON_NOTIFY_FIELD_<UPPER_KEY>`. For example, a field `run_id` becomes `RUNKON_NOTIFY_FIELD_RUN_ID`. There are no fields common to every event: each event sets the ones listed under it. Run `conductor notify events` (add `--json` for scripts) to print the same list.
 
-#### Common fields (all events)
+"Always set" is `no` when a variant or condition can leave the field out; the description says which. A field that is always set can still be an empty string.
 
-| Variable | Example value | Notes |
+<!-- BEGIN GENERATED: notify-events -->
+#### `workflow_run.completed`
+
+A workflow run finished successfully. (supports `:root`)
+
+| Variable | Always set | Description |
 |---|---|---|
-| `RUNKON_NOTIFY_FIELD_RUN_ID` | ULID string | Workflow or agent run ID |
-| `RUNKON_NOTIFY_FIELD_TIMESTAMP` | ISO 8601 | When the event fired |
-| `RUNKON_NOTIFY_FIELD_URL` | Deep link URL | Empty string when not available |
-| `RUNKON_NOTIFY_FIELD_REPO_SLUG` | `"conductor-ai"` | Repository slug |
-| `RUNKON_NOTIFY_FIELD_BRANCH` | `"main"` | Branch name |
-| `RUNKON_NOTIFY_FIELD_DURATION_MS` | `"12345"` | Run duration; empty string when `None` |
-| `RUNKON_NOTIFY_FIELD_TICKET_URL` | Issue/ticket URL | Empty string when `None` |
+| `RUNKON_NOTIFY_FIELD_RUN_ID` | yes | Workflow run ID |
+| `RUNKON_NOTIFY_FIELD_WORKFLOW_NAME` | yes | Workflow name |
+| `RUNKON_NOTIFY_FIELD_PARENT_WORKFLOW_RUN_ID` | yes | Parent workflow run ID; empty for root runs |
+| `RUNKON_NOTIFY_FIELD_REPO_SLUG` | yes | Repository slug |
+| `RUNKON_NOTIFY_FIELD_BRANCH` | yes | Branch name |
+| `RUNKON_NOTIFY_FIELD_DURATION_MS` | yes | Run duration in ms; empty when unknown |
+| `RUNKON_NOTIFY_FIELD_TICKET_URL` | yes | Linked ticket URL; empty when none |
+| `RUNKON_NOTIFY_FIELD_URL` | yes | Web UI deep link; empty when `[web] url` is not set |
+| `RUNKON_NOTIFY_FIELD_TIMESTAMP` | yes | RFC 3339 time the event was built |
+| `RUNKON_NOTIFY_FIELD_IS_ROOT` | yes | `true` when the run has no parent, else `false` |
 
-#### Workflow events (`workflow_run.*`)
+#### `workflow_run.failed`
 
-| Variable | Example value | Notes |
+A workflow run failed. (supports `:root`)
+
+| Variable | Always set | Description |
 |---|---|---|
-| `RUNKON_NOTIFY_FIELD_WORKFLOW_NAME` | `"ticket-to-pr"` | All `workflow_run.*` |
-| `RUNKON_NOTIFY_FIELD_PARENT_WORKFLOW_RUN_ID` | parent run ULID | Empty string for root runs |
-| `RUNKON_NOTIFY_FIELD_IS_ROOT` | `"true"` / `"false"` | `true` when no parent |
+| `RUNKON_NOTIFY_FIELD_RUN_ID` | yes | Workflow run ID |
+| `RUNKON_NOTIFY_FIELD_WORKFLOW_NAME` | yes | Workflow name |
+| `RUNKON_NOTIFY_FIELD_PARENT_WORKFLOW_RUN_ID` | yes | Parent workflow run ID; empty for root runs |
+| `RUNKON_NOTIFY_FIELD_REPO_SLUG` | yes | Repository slug |
+| `RUNKON_NOTIFY_FIELD_BRANCH` | yes | Branch name |
+| `RUNKON_NOTIFY_FIELD_DURATION_MS` | yes | Run duration in ms; empty when unknown |
+| `RUNKON_NOTIFY_FIELD_TICKET_URL` | yes | Linked ticket URL; empty when none |
+| `RUNKON_NOTIFY_FIELD_URL` | yes | Web UI deep link; empty when `[web] url` is not set |
+| `RUNKON_NOTIFY_FIELD_TIMESTAMP` | yes | RFC 3339 time the event was built |
+| `RUNKON_NOTIFY_FIELD_IS_ROOT` | yes | `true` when the run has no parent, else `false` |
+| `RUNKON_NOTIFY_FIELD_CAUSE` | no | Nested failing step, e.g. `workflow:review-pr › submit-review: exited 1`; set only when one was found |
+| `RUNKON_NOTIFY_FIELD_ERROR` | no | Error message, ending with ` — cause: <cause>` when a cause was found; set only when there is an error or cause |
 
-#### Spike events
+#### `workflow_run.reaped`
 
-| Variable | Example value | Notes |
+A stuck workflow run was reaped and could not be auto-resumed.
+
+| Variable | Always set | Description |
 |---|---|---|
-| `RUNKON_NOTIFY_FIELD_MULTIPLE` | `"3.5"` | `workflow_run.cost_spike`, `workflow_run.duration_spike` |
-| `RUNKON_NOTIFY_FIELD_COST_USD` | `"0.42"` | `workflow_run.cost_spike` only; absent when `None` |
+| `RUNKON_NOTIFY_FIELD_RUN_ID` | yes | Workflow run ID |
+| `RUNKON_NOTIFY_FIELD_WORKFLOW_NAME` | yes | Workflow name |
+| `RUNKON_NOTIFY_FIELD_REPO_SLUG` | yes | Repository slug |
+| `RUNKON_NOTIFY_FIELD_BRANCH` | yes | Branch name |
+| `RUNKON_NOTIFY_FIELD_ERROR` | yes | Why the run could not be resumed |
+| `RUNKON_NOTIFY_FIELD_TIMESTAMP` | yes | RFC 3339 time the event was built |
 
-#### Error events
+#### `workflow_run.orphan_resumed`
 
-| Variable | Example value | Notes |
+Orphaned or stuck workflow runs were automatically resumed on startup.
+
+| Variable | Always set | Description |
 |---|---|---|
-| `RUNKON_NOTIFY_FIELD_ERROR` | Error message | `workflow_run.failed`, `agent_run.failed`, `workflow_run.reaped`; empty string when `None`. For `workflow_run.failed` with a failing sub-workflow, ends with ` — cause: <cause>` |
-| `RUNKON_NOTIFY_FIELD_CAUSE` | `"workflow:review-pr › submit-review: exited 1"` | `workflow_run.failed` only, when a nested failing step was found |
+| `RUNKON_NOTIFY_FIELD_RUN_ID` | yes | First resumed workflow run ID |
+| `RUNKON_NOTIFY_FIELD_WORKFLOW_NAME` | yes | Workflow name |
+| `RUNKON_NOTIFY_FIELD_REPO_SLUG` | yes | Repository slug |
+| `RUNKON_NOTIFY_FIELD_BRANCH` | yes | Branch name |
+| `RUNKON_NOTIFY_FIELD_TIMESTAMP` | yes | RFC 3339 time the event was built |
 
-#### Gate events
+#### `workflow_run.cost_spike`
 
-| Variable | Example value | Notes |
+A completed workflow run cost a multiple of its baseline. (supports `:root`; needs `threshold_multiple` on the hook)
+
+| Variable | Always set | Description |
 |---|---|---|
-| `RUNKON_NOTIFY_FIELD_STEP_NAME` | `"human-review"` | `gate.waiting`, `gate.pending_too_long` |
-| `RUNKON_NOTIFY_FIELD_PENDING_MS` | `"90000"` | `gate.pending_too_long` only |
+| `RUNKON_NOTIFY_FIELD_RUN_ID` | yes | Workflow run ID |
+| `RUNKON_NOTIFY_FIELD_WORKFLOW_NAME` | yes | Workflow name |
+| `RUNKON_NOTIFY_FIELD_PARENT_WORKFLOW_RUN_ID` | yes | Parent workflow run ID; empty for root runs |
+| `RUNKON_NOTIFY_FIELD_REPO_SLUG` | yes | Repository slug |
+| `RUNKON_NOTIFY_FIELD_BRANCH` | yes | Branch name |
+| `RUNKON_NOTIFY_FIELD_DURATION_MS` | yes | Run duration in ms; empty when unknown |
+| `RUNKON_NOTIFY_FIELD_URL` | yes | Web UI deep link; empty when `[web] url` is not set |
+| `RUNKON_NOTIFY_FIELD_TIMESTAMP` | yes | RFC 3339 time the event was built |
+| `RUNKON_NOTIFY_FIELD_MULTIPLE` | yes | Multiple over the baseline, e.g. `3.5` |
+| `RUNKON_NOTIFY_FIELD_COST_USD` | yes | Run cost in USD |
+| `RUNKON_NOTIFY_FIELD_IS_ROOT` | yes | `true` when the run has no parent, else `false` |
 
-#### Feedback events
+#### `workflow_run.duration_spike`
 
-| Variable | Example value | Notes |
+A completed workflow run took a multiple of its baseline duration. (supports `:root`; needs `threshold_multiple` on the hook)
+
+| Variable | Always set | Description |
 |---|---|---|
-| `RUNKON_NOTIFY_FIELD_PROMPT_PREVIEW` | First ~100 chars of prompt | `feedback.requested` |
-| `RUNKON_NOTIFY_FIELD_RUN_ID` | `"01ABCDEF..."` | `feedback.requested`: the agent run that asked (previously held the feedback request id) |
-| `RUNKON_NOTIFY_FIELD_FEEDBACK_ID` | `"01GHIJKL..."` | `feedback.requested`: the feedback request id |
-| `RUNKON_NOTIFY_FIELD_REPO_SLUG` / `RUNKON_NOTIFY_FIELD_BRANCH` | `"conductor-ai"` / `"feat/x"` | `feedback.requested`: resolved from the agent run; `BRANCH` is empty for repo-scoped agents |
-| `RUNKON_NOTIFY_FIELD_WORKTREE_SLUG` | `"feat-x"` | `feedback.requested`: empty for repo-scoped agents |
+| `RUNKON_NOTIFY_FIELD_RUN_ID` | yes | Workflow run ID |
+| `RUNKON_NOTIFY_FIELD_WORKFLOW_NAME` | yes | Workflow name |
+| `RUNKON_NOTIFY_FIELD_PARENT_WORKFLOW_RUN_ID` | yes | Parent workflow run ID; empty for root runs |
+| `RUNKON_NOTIFY_FIELD_REPO_SLUG` | yes | Repository slug |
+| `RUNKON_NOTIFY_FIELD_BRANCH` | yes | Branch name |
+| `RUNKON_NOTIFY_FIELD_DURATION_MS` | yes | Run duration in ms; empty when unknown |
+| `RUNKON_NOTIFY_FIELD_URL` | yes | Web UI deep link; empty when `[web] url` is not set |
+| `RUNKON_NOTIFY_FIELD_TIMESTAMP` | yes | RFC 3339 time the event was built |
+| `RUNKON_NOTIFY_FIELD_MULTIPLE` | yes | Multiple over the baseline, e.g. `3.5` |
+| `RUNKON_NOTIFY_FIELD_IS_ROOT` | yes | `true` when the run has no parent, else `false` |
 
-The `feedback.requested` body is `<worktree slug>: <prompt>`, falling back to the repo slug, or the bare prompt when neither is known.
+#### `agent_run.completed`
+
+A standalone agent run finished successfully (not fired for interactive sessions).
+
+| Variable | Always set | Description |
+|---|---|---|
+| `RUNKON_NOTIFY_FIELD_RUN_ID` | yes | Agent run ID |
+| `RUNKON_NOTIFY_FIELD_REPO_SLUG` | yes | Repository slug |
+| `RUNKON_NOTIFY_FIELD_BRANCH` | yes | Branch name |
+| `RUNKON_NOTIFY_FIELD_DURATION_MS` | yes | Run duration in ms; empty when unknown |
+| `RUNKON_NOTIFY_FIELD_TICKET_URL` | yes | Linked ticket URL; empty when none |
+| `RUNKON_NOTIFY_FIELD_TIMESTAMP` | yes | RFC 3339 time the event was built |
+
+#### `agent_run.failed`
+
+A standalone agent run failed.
+
+| Variable | Always set | Description |
+|---|---|---|
+| `RUNKON_NOTIFY_FIELD_RUN_ID` | yes | Agent run ID |
+| `RUNKON_NOTIFY_FIELD_REPO_SLUG` | yes | Repository slug |
+| `RUNKON_NOTIFY_FIELD_BRANCH` | yes | Branch name |
+| `RUNKON_NOTIFY_FIELD_DURATION_MS` | yes | Run duration in ms; empty when unknown |
+| `RUNKON_NOTIFY_FIELD_TICKET_URL` | yes | Linked ticket URL; empty when none |
+| `RUNKON_NOTIFY_FIELD_TIMESTAMP` | yes | RFC 3339 time the event was built |
+| `RUNKON_NOTIFY_FIELD_ERROR` | no | Error message; set only when the run recorded one |
+
+#### `gate.waiting`
+
+A workflow gate is waiting for a person (approval, review, CI).
+
+| Variable | Always set | Description |
+|---|---|---|
+| `RUNKON_NOTIFY_FIELD_RUN_ID` | yes | Workflow step ID for a single gate, workflow run ID for a grouped notification |
+| `RUNKON_NOTIFY_FIELD_STEP_NAME` | yes | Gate step name, or `<n> gates pending` for a grouped notification |
+| `RUNKON_NOTIFY_FIELD_REPO_SLUG` | no | Repository slug; single-gate notifications only |
+| `RUNKON_NOTIFY_FIELD_BRANCH` | no | Branch name; single-gate notifications only |
+| `RUNKON_NOTIFY_FIELD_TICKET_URL` | no | Linked ticket URL, empty when none; single-gate notifications only |
+| `RUNKON_NOTIFY_FIELD_COUNT` | no | Number of gates pending in the run; grouped notifications only |
+| `RUNKON_NOTIFY_FIELD_TIMESTAMP` | yes | RFC 3339 time the event was built |
+
+#### `gate.pending_too_long`
+
+A gate has been waiting longer than `gate_pending_ms` (default 30 minutes). (needs `gate_pending_ms` on the hook)
+
+| Variable | Always set | Description |
+|---|---|---|
+| `RUNKON_NOTIFY_FIELD_RUN_ID` | yes | Workflow run ID |
+| `RUNKON_NOTIFY_FIELD_STEP_NAME` | yes | Gate step name |
+| `RUNKON_NOTIFY_FIELD_REPO_SLUG` | yes | Repository slug |
+| `RUNKON_NOTIFY_FIELD_BRANCH` | yes | Branch name |
+| `RUNKON_NOTIFY_FIELD_DURATION_MS` | yes | Run duration in ms; empty when unknown |
+| `RUNKON_NOTIFY_FIELD_URL` | yes | Web UI deep link; empty when `[web] url` is not set |
+| `RUNKON_NOTIFY_FIELD_TIMESTAMP` | yes | RFC 3339 time the event was built |
+| `RUNKON_NOTIFY_FIELD_PENDING_MS` | yes | How long the gate has been waiting, in ms |
+
+#### `feedback.requested`
+
+An agent asked for feedback and is blocked on the answer.
+
+| Variable | Always set | Description |
+|---|---|---|
+| `RUNKON_NOTIFY_FIELD_RUN_ID` | yes | The agent run that asked |
+| `RUNKON_NOTIFY_FIELD_FEEDBACK_ID` | yes | Feedback request ID |
+| `RUNKON_NOTIFY_FIELD_PROMPT_PREVIEW` | yes | First ~100 chars of the prompt |
+| `RUNKON_NOTIFY_FIELD_REPO_SLUG` | yes | Repository slug, resolved from the agent run |
+| `RUNKON_NOTIFY_FIELD_BRANCH` | yes | Branch name; empty for repo-scoped agents |
+| `RUNKON_NOTIFY_FIELD_WORKTREE_SLUG` | yes | Worktree slug; empty for repo-scoped agents |
+| `RUNKON_NOTIFY_FIELD_TIMESTAMP` | yes | RFC 3339 time the event was built |
+
+#### `session.idle`
+
+An interactive session finished a turn and has stayed idle for `delay_secs`.
+
+| Variable | Always set | Description |
+|---|---|---|
+| `RUNKON_NOTIFY_FIELD_RUN_ID` | yes | The agent run |
+| `RUNKON_NOTIFY_FIELD_SESSION_ID` | yes | Claude Code session ID; empty when unknown |
+| `RUNKON_NOTIFY_FIELD_REPO_SLUG` | yes | Repository slug |
+| `RUNKON_NOTIFY_FIELD_BRANCH` | yes | Branch name |
+| `RUNKON_NOTIFY_FIELD_WORKTREE_SLUG` | yes | Worktree slug; empty when none |
+| `RUNKON_NOTIFY_FIELD_PROMPT_PREVIEW` | yes | First ~100 chars of the turn's prompt |
+| `RUNKON_NOTIFY_FIELD_LAST_MESSAGE_PREVIEW` | yes | First ~100 chars of the last assistant message |
+| `RUNKON_NOTIFY_FIELD_BACKGROUND_TASKS` | yes | Background tasks still running at `Stop` (`0` when none) |
+| `RUNKON_NOTIFY_FIELD_TURN_DURATION_MS` | yes | Prompt to `Stop` in ms; empty when unknown |
+| `RUNKON_NOTIFY_FIELD_IDLE_SINCE` | yes | RFC 3339 time of the `Stop` |
+| `RUNKON_NOTIFY_FIELD_TIMESTAMP` | yes | RFC 3339 time the event was built |
+
+<!-- END GENERATED: notify-events -->
 
 ### `session.idle`
 
 Fires when an interactive Claude Code session (RFC 021) finished a turn and has stayed idle for `delay_secs`: the developer's move. It is separate from `feedback.requested` (blocked on a permission prompt), so a hook can route or silence it with its own `on` filter.
 
-| Field | Example | Notes |
-|---|---|---|
-| `RUNKON_NOTIFY_FIELD_RUN_ID` | `"01ABCDEF..."` | The agent run |
-| `RUNKON_NOTIFY_FIELD_SESSION_ID` | | Claude Code session id |
-| `RUNKON_NOTIFY_FIELD_REPO_SLUG` / `RUNKON_NOTIFY_FIELD_BRANCH` / `RUNKON_NOTIFY_FIELD_WORKTREE_SLUG` | | Where the session runs |
-| `RUNKON_NOTIFY_FIELD_PROMPT_PREVIEW` | | First ~100 chars of the turn's prompt |
-| `RUNKON_NOTIFY_FIELD_LAST_MESSAGE_PREVIEW` | | First ~100 chars of the last assistant message |
-| `RUNKON_NOTIFY_FIELD_BACKGROUND_TASKS` | `"2"` | Background tasks still running at `Stop` (`"0"` when none) |
-| `RUNKON_NOTIFY_FIELD_TURN_DURATION_MS` | `"20000"` | Prompt to `Stop`; empty when unknown |
-| `RUNKON_NOTIFY_FIELD_IDLE_SINCE` | | RFC 3339 time of the `Stop` |
+The fields are listed under `session.idle` above.
 
 The body is `<worktree slug>: <last message preview>`.
 
