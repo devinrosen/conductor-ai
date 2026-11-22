@@ -1,6 +1,7 @@
 use crate::config::{HookConfig, NotificationConfig};
 
 pub mod anomalies;
+pub mod catalog;
 pub mod dedup;
 pub mod event;
 pub mod gates;
@@ -11,8 +12,9 @@ mod tests;
 pub mod transitions;
 
 pub use anomalies::*;
+pub use catalog::{event_spec, matrix_events, EventField, EventSpec, EVENTS};
 pub use dedup::{try_claim_notification, SqliteDedupStore};
-pub use event::{build_synthetic_event, build_synthetic_for_pattern, ALL_EVENTS};
+pub use event::{build_synthetic_event, build_synthetic_for_pattern};
 pub use gates::*;
 pub use runkon_notify::HookRunner;
 pub use runs::*;
