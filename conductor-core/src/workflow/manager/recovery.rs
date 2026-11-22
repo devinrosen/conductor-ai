@@ -349,6 +349,11 @@ pub fn reap_orphaned_workflow_runs(conn: &Connection) -> Result<usize> {
     Ok(reaped)
 }
 
+/// SQL condition: the run's lease is unset or expired. `datetime()` normalises
+/// both the `YYYY-MM-DD HH:MM:SS` and RFC 3339 forms before comparing. Shared by
+/// every reclaim path so they agree on whether a lease has expired.
+const LEASE_EXPIRED_SQL: &str = "(lease_until IS NULL OR datetime(lease_until) <= datetime('now'))";
+
 /// Root `running` runs with no active step whose age exceeds `threshold_secs`
 /// and whose lease is expired or unset.
 ///
@@ -358,11 +363,6 @@ pub fn reap_orphaned_workflow_runs(conn: &Connection) -> Result<usize> {
 /// `started_at`. Without the lease check, any run older than the threshold was
 /// claimable in the gap between two steps, and a second process executed it
 /// alongside the live one (#3435).
-/// SQL condition: the run's lease is unset or expired. `datetime()` normalises
-/// both the `YYYY-MM-DD HH:MM:SS` and RFC 3339 forms before comparing. Shared by
-/// every reclaim path so they agree on whether a lease has expired.
-const LEASE_EXPIRED_SQL: &str = "(lease_until IS NULL OR datetime(lease_until) <= datetime('now'))";
-
 pub fn detect_stuck_workflow_run_ids(
     conn: &Connection,
     threshold_secs: i64,

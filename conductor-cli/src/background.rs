@@ -503,12 +503,17 @@ fn drive_detached(
         Ok(Ok(())) => None,
         // Another process took the run over (#3435): it owns the run's status
         // now, so writing `failed` here would overwrite its result.
-        // Exit with the lease-lost code so a wrapper can tell this from a real
-        // failure. stdio is already /dev/null here, so the message is only
-        // visible if the parent re-attached it.
+        // stdio is /dev/null by now, so append the message to the run's log
+        // file, which outlives this process, and exit with the lease-lost code
+        // so a wrapper can tell this from a real failure.
         Ok(Err((e, false))) => {
-            eprintln!("run stopped: {e}; another process owns it");
-            std::process::exit(conductor_core::error::ConductorError::WorkflowLeaseLost.exit_code())
+            let run_id = notify_pair
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            log_lease_lost(run_id.as_deref(), e);
+            std::process::exit(lease_lost_exit_code())
         }
         Ok(Err((e, true))) => Some(e.clone()),
         Err(payload) => Some(panic_message(payload.as_ref())),
@@ -545,6 +550,27 @@ fn should_fail_run_after(err: &conductor_core::error::ConductorError) -> bool {
         err,
         conductor_core::error::ConductorError::WorkflowLeaseLost
     )
+}
+
+/// Exit code of a detached child that lost its run's lease.
+fn lease_lost_exit_code() -> i32 {
+    conductor_core::error::ConductorError::WorkflowLeaseLost.exit_code()
+}
+
+/// Best-effort: append why this process stopped to the run's log file.
+fn log_lease_lost(run_id: Option<&str>, msg: &str) {
+    use std::io::Write;
+    let Some(path) = run_id.and_then(|id| conductor_core::config::workflow_log_path(id).ok())
+    else {
+        return;
+    };
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(path)
+    {
+        let _ = writeln!(f, "run stopped: {msg}; another process owns it");
+    }
 }
 
 /// Best-effort cleanup when a background workflow fails after the run ID
@@ -861,6 +887,11 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(agent.status.to_string(), "failed");
+    }
+
+    #[test]
+    fn lease_lost_exit_code_is_68() {
+        assert_eq!(lease_lost_exit_code(), 68);
     }
 
     #[test]

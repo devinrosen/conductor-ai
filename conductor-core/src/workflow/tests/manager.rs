@@ -4102,6 +4102,27 @@ fn test_detect_stuck_workflow_run_ids_skips_rfc3339_unexpired_lease() {
         .is_empty());
 }
 
+/// claim_expired_lease_runs normalises RFC 3339 leases before comparing.
+#[test]
+fn test_claim_expired_lease_runs_rfc3339_expired_and_unexpired() {
+    let conn = setup_db();
+    insert_running_root_run(&conn, "rfc-dead");
+    insert_running_root_run(&conn, "rfc-live");
+    set_lease(
+        &conn,
+        "rfc-dead",
+        "strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-30 seconds')",
+    );
+    set_lease(
+        &conn,
+        "rfc-live",
+        "strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+30 seconds')",
+    );
+    let claimed = crate::workflow::claim_expired_lease_runs(&conn, &Config::default()).unwrap();
+    let ids: Vec<&str> = claimed.iter().map(|(id, _, _)| id.as_str()).collect();
+    assert_eq!(ids, vec!["rfc-dead"]);
+}
+
 /// Regression guard: an expired lease is still recovered.
 #[test]
 fn test_claim_stuck_workflows_claims_run_with_expired_lease() {
