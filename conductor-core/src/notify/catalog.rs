@@ -278,7 +278,10 @@ const WORKTREE_CREATED_FIELDS: &[EventField] = &[
     BRANCH,
     f("path", "Absolute checkout path"),
     f("base_branch", "Base branch; empty when none"),
-    f("pr_number", "PR number when created with `--from-pr`; empty otherwise"),
+    f(
+        "pr_number",
+        "PR number when created with `--from-pr`; empty otherwise",
+    ),
     TIMESTAMP,
 ];
 
@@ -287,7 +290,10 @@ const WORKTREE_REMOVED_FIELDS: &[EventField] = &[
     f("worktree_slug", "Worktree slug"),
     f("worktree_id", "Conductor worktree ID"),
     BRANCH,
-    f("path", "Absolute checkout path; still set after the folder is gone"),
+    f(
+        "path",
+        "Absolute checkout path; still set after the folder is gone",
+    ),
     f("base_branch", "Base branch; empty when none"),
     f(
         "pr_number",

@@ -3583,7 +3583,10 @@ fn test_create_fires_worktree_created() {
         .unwrap();
 
     let text = fs::read_to_string(&out).unwrap();
-    assert!(text.contains("RUNKON_NOTIFY_FIELD_REPO_SLUG=myrepo"), "{text}");
+    assert!(
+        text.contains("RUNKON_NOTIFY_FIELD_REPO_SLUG=myrepo"),
+        "{text}"
+    );
     assert!(text.contains("RUNKON_NOTIFY_FIELD_WORKTREE_SLUG=feat-9-thing"));
     assert!(text.contains(&format!("RUNKON_NOTIFY_FIELD_PATH={}", wt.path)));
     assert!(text.contains("RUNKON_NOTIFY_FIELD_BRANCH=feat/9-thing"));
@@ -3602,6 +3605,12 @@ fn test_delete_unmerged_worktree_fires_removed_with_reason_abandoned() {
 
     let text = fs::read_to_string(&out).unwrap();
     assert_eq!(text.matches("--\n").count(), 1, "fired once: {text}");
-    assert!(text.contains("RUNKON_NOTIFY_FIELD_REASON=abandoned"), "{text}");
-    assert!(text.contains("RUNKON_NOTIFY_FIELD_REPO_SLUG=test-repo"), "{text}");
+    assert!(
+        text.contains("RUNKON_NOTIFY_FIELD_REASON=abandoned"),
+        "{text}"
+    );
+    assert!(
+        text.contains("RUNKON_NOTIFY_FIELD_REPO_SLUG=test-repo"),
+        "{text}"
+    );
 }
