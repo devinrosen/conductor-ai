@@ -4,5 +4,5 @@ pub use conductor_core::notify::{
     fire_gate_pending_too_long_notification, fire_grouped_gate_notification,
     fire_workflow_notification, AgentRunNotificationArgs, CostSpikeArgs, DurationSpikeArgs,
     FeedbackNotificationParams, FeedbackRunContext, GateNotificationParams, GatePendingTooLongArgs,
-    GroupedGateNotificationParams, NotificationCtx, WorkflowNotificationArgs,
+    GroupedGateNotificationParams, NotificationCtx, SpikeCommon, WorkflowNotificationArgs,
 };

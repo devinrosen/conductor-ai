@@ -4,6 +4,10 @@ use runkon_notify::{DedupStore, Event, HookRunner, Severity};
 
 use crate::config::{hooks_as_runkon, HookConfig, NotificationConfig};
 
+use super::catalog::{
+    AGENT_RUN_COMPLETED, AGENT_RUN_FAILED, FEEDBACK_REQUESTED, WORKFLOW_RUN_COMPLETED,
+    WORKFLOW_RUN_FAILED,
+};
 use super::{build_workflow_deep_link, notification_body, should_notify};
 
 /// Narrow context bundle for [`fire_workflow_notification`].
@@ -196,13 +200,13 @@ pub(crate) fn workflow_event(
 
     let (kind, title, severity) = if params.succeeded {
         (
-            "workflow_run.completed",
+            WORKFLOW_RUN_COMPLETED,
             "Conductor \u{2014} Workflow Completed",
             Severity::Info,
         )
     } else {
         (
-            "workflow_run.failed",
+            WORKFLOW_RUN_FAILED,
             "Conductor \u{2014} Workflow Failed",
             Severity::Error,
         )
@@ -230,7 +234,7 @@ pub(crate) fn feedback_event(params: &FeedbackNotificationParams<'_>) -> Event {
         None => params.prompt_preview.to_string(),
     };
     Event {
-        kind: "feedback.requested".into(),
+        kind: FEEDBACK_REQUESTED.into(),
         title: "Conductor \u{2014} Feedback Requested".into(),
         body,
         severity: Severity::Info,
@@ -292,6 +296,15 @@ pub fn fire_agent_run_notification(
     } else {
         "agent_failed"
     };
+    let event = agent_run_event(params);
+
+    HookRunner::new(&hooks_as_runkon(notify_hooks))
+        .with_dedup_store(dedup_store)
+        .fire_with_dedup(&event, params.run_id, event_type);
+}
+
+/// Build the `agent_run.completed` / `agent_run.failed` event.
+pub(crate) fn agent_run_event(params: &AgentRunNotificationArgs<'_>) -> Event {
     let label = params.worktree_slug.unwrap_or(params.run_id).to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
@@ -321,27 +334,23 @@ pub fn fire_agent_run_notification(
 
     let (kind, title, severity) = if params.succeeded {
         (
-            "agent_run.completed",
+            AGENT_RUN_COMPLETED,
             "Conductor \u{2014} Agent Completed",
             Severity::Info,
         )
     } else {
         (
-            "agent_run.failed",
+            AGENT_RUN_FAILED,
             "Conductor \u{2014} Agent Failed",
             Severity::Error,
         )
     };
 
-    let event = Event {
+    Event {
         kind: kind.into(),
         title: title.into(),
         body: label,
         severity,
         fields,
-    };
-
-    HookRunner::new(&hooks_as_runkon(notify_hooks))
-        .with_dedup_store(dedup_store)
-        .fire_with_dedup(&event, params.run_id, event_type);
+    }
 }
