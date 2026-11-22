@@ -231,20 +231,27 @@ pub struct CostSpikeArgs<'a> {
     pub worktree_id: Option<&'a str>,
 }
 
+impl<'a> CostSpikeArgs<'a> {
+    /// The fields every spike event shares.
+    fn common(&self) -> SpikeCommon<'a> {
+        SpikeCommon {
+            run_id: self.run_id,
+            workflow_name: self.workflow_name,
+            target_label: self.target_label,
+            multiple: self.multiple,
+            duration_ms: self.duration_ms,
+            repo_slug: self.repo_slug,
+            branch: self.branch,
+            parent_workflow_run_id: self.parent_workflow_run_id,
+            repo_id: self.repo_id,
+            worktree_id: self.worktree_id,
+        }
+    }
+}
+
 /// Build the `workflow_run.cost_spike` event. `web_url` is `[notifications] web_url`.
 pub(crate) fn cost_spike_event(web_url: Option<&str>, params: &CostSpikeArgs<'_>) -> Event {
-    let common = SpikeCommon {
-        run_id: params.run_id,
-        workflow_name: params.workflow_name,
-        target_label: params.target_label,
-        multiple: params.multiple,
-        duration_ms: params.duration_ms,
-        repo_slug: params.repo_slug,
-        branch: params.branch,
-        parent_workflow_run_id: params.parent_workflow_run_id,
-        repo_id: params.repo_id,
-        worktree_id: params.worktree_id,
-    };
+    let common = params.common();
     spike_event(
         web_url,
         WORKFLOW_RUN_COST_SPIKE,
@@ -291,20 +298,27 @@ pub struct DurationSpikeArgs<'a> {
     pub worktree_id: Option<&'a str>,
 }
 
+impl<'a> DurationSpikeArgs<'a> {
+    /// The fields every spike event shares.
+    fn common(&self) -> SpikeCommon<'a> {
+        SpikeCommon {
+            run_id: self.run_id,
+            workflow_name: self.workflow_name,
+            target_label: self.target_label,
+            multiple: self.multiple,
+            duration_ms: self.duration_ms,
+            repo_slug: self.repo_slug,
+            branch: self.branch,
+            parent_workflow_run_id: self.parent_workflow_run_id,
+            repo_id: self.repo_id,
+            worktree_id: self.worktree_id,
+        }
+    }
+}
+
 /// Build the `workflow_run.duration_spike` event. `web_url` is `[notifications] web_url`.
 pub(crate) fn duration_spike_event(web_url: Option<&str>, params: &DurationSpikeArgs<'_>) -> Event {
-    let common = SpikeCommon {
-        run_id: params.run_id,
-        workflow_name: params.workflow_name,
-        target_label: params.target_label,
-        multiple: params.multiple,
-        duration_ms: params.duration_ms,
-        repo_slug: params.repo_slug,
-        branch: params.branch,
-        parent_workflow_run_id: params.parent_workflow_run_id,
-        repo_id: params.repo_id,
-        worktree_id: params.worktree_id,
-    };
+    let common = params.common();
     spike_event(
         web_url,
         WORKFLOW_RUN_DURATION_SPIKE,
