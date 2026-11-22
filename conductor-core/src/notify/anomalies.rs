@@ -157,17 +157,17 @@ pub(crate) fn reaped_event(
 }
 
 /// Fields shared by the cost and duration spike events.
-struct SpikeCommon<'a> {
-    run_id: &'a str,
-    workflow_name: &'a str,
-    target_label: Option<&'a str>,
-    multiple: f64,
-    duration_ms: Option<i64>,
-    repo_slug: &'a str,
-    branch: &'a str,
-    parent_workflow_run_id: Option<&'a str>,
-    repo_id: Option<&'a str>,
-    worktree_id: Option<&'a str>,
+pub struct SpikeCommon<'a> {
+    pub run_id: &'a str,
+    pub workflow_name: &'a str,
+    pub target_label: Option<&'a str>,
+    pub multiple: f64,
+    pub duration_ms: Option<i64>,
+    pub repo_slug: &'a str,
+    pub branch: &'a str,
+    pub parent_workflow_run_id: Option<&'a str>,
+    pub repo_id: Option<&'a str>,
+    pub worktree_id: Option<&'a str>,
 }
 
 /// Build a spike event: the shared fields plus `extra` (e.g. `cost_usd`).
@@ -218,45 +218,17 @@ fn spike_event(
 
 /// Parameters for [`fire_cost_spike_notification`].
 pub struct CostSpikeArgs<'a> {
-    pub run_id: &'a str,
-    pub workflow_name: &'a str,
-    pub target_label: Option<&'a str>,
+    pub common: SpikeCommon<'a>,
     pub cost_usd: f64,
-    pub multiple: f64,
-    pub duration_ms: Option<i64>,
-    pub repo_slug: &'a str,
-    pub branch: &'a str,
-    pub parent_workflow_run_id: Option<&'a str>,
-    pub repo_id: Option<&'a str>,
-    pub worktree_id: Option<&'a str>,
-}
-
-impl<'a> CostSpikeArgs<'a> {
-    /// The fields every spike event shares.
-    fn common(&self) -> SpikeCommon<'a> {
-        SpikeCommon {
-            run_id: self.run_id,
-            workflow_name: self.workflow_name,
-            target_label: self.target_label,
-            multiple: self.multiple,
-            duration_ms: self.duration_ms,
-            repo_slug: self.repo_slug,
-            branch: self.branch,
-            parent_workflow_run_id: self.parent_workflow_run_id,
-            repo_id: self.repo_id,
-            worktree_id: self.worktree_id,
-        }
-    }
 }
 
 /// Build the `workflow_run.cost_spike` event. `web_url` is `[notifications] web_url`.
 pub(crate) fn cost_spike_event(web_url: Option<&str>, params: &CostSpikeArgs<'_>) -> Event {
-    let common = params.common();
     spike_event(
         web_url,
         WORKFLOW_RUN_COST_SPIKE,
         "Conductor \u{2014} Cost Spike",
-        &common,
+        &params.common,
         Some(("cost_usd", params.cost_usd.to_string())),
     )
 }
@@ -281,49 +253,21 @@ pub fn fire_cost_spike_notification(
 
     HookRunner::new(&hooks_as_runkon(notify_hooks))
         .with_dedup_store(dedup_store)
-        .fire_with_dedup(&event, params.run_id, "workflow_run.cost_spike");
+        .fire_with_dedup(&event, params.common.run_id, "workflow_run.cost_spike");
 }
 
 /// Parameters for [`fire_duration_spike_notification`].
 pub struct DurationSpikeArgs<'a> {
-    pub run_id: &'a str,
-    pub workflow_name: &'a str,
-    pub target_label: Option<&'a str>,
-    pub multiple: f64,
-    pub duration_ms: Option<i64>,
-    pub repo_slug: &'a str,
-    pub branch: &'a str,
-    pub parent_workflow_run_id: Option<&'a str>,
-    pub repo_id: Option<&'a str>,
-    pub worktree_id: Option<&'a str>,
-}
-
-impl<'a> DurationSpikeArgs<'a> {
-    /// The fields every spike event shares.
-    fn common(&self) -> SpikeCommon<'a> {
-        SpikeCommon {
-            run_id: self.run_id,
-            workflow_name: self.workflow_name,
-            target_label: self.target_label,
-            multiple: self.multiple,
-            duration_ms: self.duration_ms,
-            repo_slug: self.repo_slug,
-            branch: self.branch,
-            parent_workflow_run_id: self.parent_workflow_run_id,
-            repo_id: self.repo_id,
-            worktree_id: self.worktree_id,
-        }
-    }
+    pub common: SpikeCommon<'a>,
 }
 
 /// Build the `workflow_run.duration_spike` event. `web_url` is `[notifications] web_url`.
 pub(crate) fn duration_spike_event(web_url: Option<&str>, params: &DurationSpikeArgs<'_>) -> Event {
-    let common = params.common();
     spike_event(
         web_url,
         WORKFLOW_RUN_DURATION_SPIKE,
         "Conductor \u{2014} Duration Spike",
-        &common,
+        &params.common,
         None,
     )
 }
@@ -348,7 +292,7 @@ pub fn fire_duration_spike_notification(
 
     HookRunner::new(&hooks_as_runkon(notify_hooks))
         .with_dedup_store(dedup_store)
-        .fire_with_dedup(&event, params.run_id, "workflow_run.duration_spike");
+        .fire_with_dedup(&event, params.common.run_id, "workflow_run.duration_spike");
 }
 
 /// Parameters for [`fire_gate_pending_too_long_notification`].
