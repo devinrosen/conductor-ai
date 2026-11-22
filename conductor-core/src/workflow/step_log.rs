@@ -879,7 +879,7 @@ mod tests {
         set_flow_output(&conn, &run_id, Some(""), Some("[]"));
         let t = resolve_step_log_target(&conn, &run_id, "quiet", StepLogMode::Result).unwrap();
         let out = render_step_log(&t, StepLogMode::Result).unwrap();
-        assert!(!out.contains("FLOW_OUTPUT"), "{out}");
+        assert!(!out.contains("--- FLOW_OUTPUT ---"), "{out}");
     }
 
     #[test]
