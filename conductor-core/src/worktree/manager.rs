@@ -13,7 +13,10 @@ use crate::repo::RepoManager;
 use crate::tickets::TicketSyncer;
 
 use super::git_helpers::*;
-use super::types::{map_worktree_row, Worktree, WorktreeStatus, WorktreeWithStatus};
+use super::types::{
+    map_worktree_row, map_worktree_with_repo_row, worktree_with_repo_select, Worktree,
+    WorktreeStatus, WorktreeWithRepo, WorktreeWithStatus,
+};
 use super::{WORKTREE_COLUMNS, WORKTREE_COLUMNS_W};
 
 /// Map a ticket label to the conventional-commit branch prefix it implies.
@@ -503,7 +506,32 @@ impl<'a> WorktreeManager<'a> {
             ],
         )?;
 
+        crate::notify::fire_worktree_created(
+            &self.config.notify.hooks,
+            &crate::notify::WorktreeEventArgs::from_worktree(
+                &repo.slug,
+                &worktree,
+                from_pr.map(u64::from),
+            ),
+        );
+
         Ok((worktree, warnings))
+    }
+
+    /// Fire `worktree.removed` for `wt` (once per worktree ID). Hook failures are only logged.
+    fn fire_removed(
+        &self,
+        repo_slug: &str,
+        wt: &Worktree,
+        reason: crate::notify::WorktreeRemovedReason,
+        pr_number: Option<u64>,
+    ) {
+        crate::notify::fire_worktree_removed(
+            self.conn,
+            &self.config.notify.hooks,
+            &crate::notify::WorktreeEventArgs::from_worktree(repo_slug, wt, pr_number),
+            reason,
+        );
     }
 
     /// Register an existing on-disk git worktree into conductor's DB without
@@ -1237,6 +1265,13 @@ impl<'a> WorktreeManager<'a> {
             ..worktree
         };
 
+        self.fire_removed(
+            &repo.slug,
+            &deleted_wt,
+            crate::notify::WorktreeRemovedReason::from(&deleted_wt.status),
+            None,
+        );
+
         Ok(deleted_wt)
     }
 
@@ -1516,42 +1551,48 @@ impl<'a> WorktreeManager<'a> {
     ///
     /// Returns the number of worktrees cleaned up.
     pub fn reap_stale_worktrees(&self) -> Result<usize> {
-        let stale: Vec<(String, String, String, String, Option<String>)> = query_collect(
+        let stale: Vec<WorktreeWithRepo> = query_collect(
             self.conn,
-            "SELECT w.id, r.local_path, w.path, w.branch, w.completed_at
-             FROM worktrees w
-             JOIN repos r ON r.id = w.repo_id
-             WHERE w.status IN ('merged', 'abandoned')",
+            concat!(
+                worktree_with_repo_select!(),
+                " WHERE w.status IN ('merged', 'abandoned')"
+            ),
             [],
-            |row| {
-                Ok((
-                    row.get("id")?,
-                    row.get("local_path")?,
-                    row.get("path")?,
-                    row.get("branch")?,
-                    row.get("completed_at")?,
-                ))
-            },
+            map_worktree_with_repo_row,
         )?;
 
         let mut reaped = 0;
         let mut pruned_repos = std::collections::HashSet::new();
 
-        for (wt_id, repo_path, wt_path, branch, completed_at) in &stale {
-            if !Path::new(wt_path).exists() {
+        for WorktreeWithRepo {
+            wt,
+            repo_path,
+            repo_slug,
+            ..
+        } in &stale
+        {
+            let wt_id = &wt.id;
+            if !Path::new(&wt.path).exists() {
                 // Backfill completed_at if missing even when path is already gone
-                if completed_at.is_none() {
+                if wt.completed_at.is_none() {
                     self.backfill_completed_at(wt_id)?;
                     reaped += 1;
                 }
                 continue;
             }
 
-            remove_git_artifacts(repo_path, wt_path, branch);
+            remove_git_artifacts(repo_path, &wt.path, &wt.branch);
             pruned_repos.insert(repo_path.clone());
+            // Deduped per worktree: a no-op when the removal was already announced.
+            self.fire_removed(
+                repo_slug,
+                wt,
+                crate::notify::WorktreeRemovedReason::from(&wt.status),
+                None,
+            );
 
             // Backfill completed_at if NULL
-            if completed_at.is_none() {
+            if wt.completed_at.is_none() {
                 self.backfill_completed_at(wt_id)?;
             }
 
@@ -1580,17 +1621,33 @@ impl<'a> WorktreeManager<'a> {
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
 
-        let count = if let Some(slug) = name {
-            self.conn.execute(
-                "DELETE FROM worktrees WHERE repo_id = :repo_id AND slug = :slug AND status != 'active'",
-                named_params! { ":repo_id": repo.id, ":slug": slug },
-            )?
-        } else {
-            self.conn.execute(
-                "DELETE FROM worktrees WHERE repo_id = :repo_id AND status != 'active'",
-                named_params! { ":repo_id": repo.id },
-            )?
-        };
+        // Announce each removal before the rows go. Rows whose removal was already announced
+        // are skipped by the per-worktree dedup; older rows get `reason = deleted`.
+        // One predicate for the announced rows and the deleted rows.
+        const PURGE_WHERE: &str =
+            "repo_id = :repo_id AND (:slug IS NULL OR slug = :slug) AND status != 'active'";
+
+        if !self.config.notify.hooks.is_empty() {
+            let doomed: Vec<Worktree> = query_collect(
+                self.conn,
+                &format!("SELECT * FROM worktrees WHERE {PURGE_WHERE}"),
+                named_params! { ":repo_id": repo.id, ":slug": name },
+                map_worktree_row,
+            )?;
+            for wt in &doomed {
+                self.fire_removed(
+                    &repo.slug,
+                    wt,
+                    crate::notify::WorktreeRemovedReason::Deleted,
+                    None,
+                );
+            }
+        }
+
+        let count = self.conn.execute(
+            &format!("DELETE FROM worktrees WHERE {PURGE_WHERE}"),
+            named_params! { ":repo_id": repo.id, ":slug": name },
+        )?;
 
         Ok(count)
     }
@@ -1629,39 +1686,25 @@ impl<'a> WorktreeManager<'a> {
         merge_check: impl Fn(&str, &[String]) -> std::collections::HashMap<String, MergedPr>,
         pull_fn: impl Fn(&str, &str) -> std::result::Result<(), String>,
     ) -> Result<MergedCleanup> {
-        let base_query =
-            "SELECT w.id, w.branch, w.path, r.local_path, r.remote_url, w.repo_id, w.base_branch, w.created_at
-                 FROM worktrees w
-                 JOIN repos r ON r.id = w.repo_id
-                 WHERE w.status = 'active'";
+        let base_query = concat!(worktree_with_repo_select!(), " WHERE w.status = 'active'");
         let query = match repo_slug {
             Some(_) => format!("{base_query} AND r.slug = :slug"),
             None => base_query.to_string(),
         };
 
-        let mapper = |row: &rusqlite::Row| -> rusqlite::Result<[String; 8]> {
-            Ok([
-                row.get("id")?,
-                row.get("branch")?,
-                row.get("path")?,
-                row.get("local_path")?,
-                row.get("remote_url")?,
-                row.get("repo_id")?,
-                row.get::<_, Option<String>>("base_branch")?
-                    .unwrap_or_default(),
-                row.get::<_, Option<String>>("created_at")?
-                    .unwrap_or_default(),
-            ])
-        };
-        let rows: Vec<[String; 8]> = match repo_slug {
-            Some(slug) => {
-                query_collect(self.conn, &query, named_params! { ":slug": slug }, mapper)?
-            }
-            None => query_collect(self.conn, &query, [], mapper)?,
+        let rows: Vec<WorktreeWithRepo> = match repo_slug {
+            Some(slug) => query_collect(
+                self.conn,
+                &query,
+                named_params! { ":slug": slug },
+                map_worktree_with_repo_row,
+            )?,
+            None => query_collect(self.conn, &query, [], map_worktree_with_repo_row)?,
         };
 
         let merged_by_remote = merged_prs_by_remote(
-            rows.iter().map(|r| (r[4].as_str(), r[1].as_str())),
+            rows.iter()
+                .map(|c| (c.remote_url.as_str(), c.wt.branch.as_str())),
             merge_check,
         );
 
@@ -1673,9 +1716,19 @@ impl<'a> WorktreeManager<'a> {
         let mut pulled_bases: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
 
-        for row in &rows {
-            let [wt_id, branch, wt_path, repo_path, remote_url, repo_id, base_branch, wt_created_at] =
-                row;
+        for cand in &rows {
+            let WorktreeWithRepo {
+                wt,
+                repo_path,
+                remote_url,
+                repo_slug: repo_slug_str,
+            } = cand;
+            let wt_id = &wt.id;
+            let branch = &wt.branch;
+            let wt_path = &wt.path;
+            let repo_id = &wt.repo_id;
+            let base_branch = wt.base_branch.as_deref().unwrap_or_default();
+            let wt_created_at = wt.created_at.as_str();
             let Some(merged) = lookup_merged(&merged_by_remote, remote_url, branch) else {
                 continue;
             };
@@ -1685,7 +1738,7 @@ impl<'a> WorktreeManager<'a> {
             // reused for a new worktree — do not clean it up.
             if !merged_at.is_empty()
                 && !wt_created_at.is_empty()
-                && wt_created_at.as_str() > merged_at.as_str()
+                && wt_created_at > merged_at.as_str()
             {
                 tracing::debug!(
                     worktree = %wt_id,
@@ -1730,10 +1783,17 @@ impl<'a> WorktreeManager<'a> {
             // Delete remote branch (best-effort)
             delete_remote_branch(repo_path, branch);
 
+            self.fire_removed(
+                repo_slug_str,
+                wt,
+                crate::notify::WorktreeRemovedReason::Merged,
+                merged.number,
+            );
+
             pruned_repos.insert(repo_path.as_str());
 
             // Auto-pull base branch worktree if tracked and active
-            let pull_key = (repo_id.clone(), base_branch.clone());
+            let pull_key = (repo_id.clone(), base_branch.to_string());
             if !base_branch.is_empty() && !pulled_bases.contains(&pull_key) {
                 match self.get_by_branch(repo_id, base_branch) {
                     Ok(base_wt) if base_wt.status == WorktreeStatus::Active => {
@@ -2769,6 +2829,7 @@ mod tests {
                         MergedPr {
                             merged_at: String::new(),
                             head_oid: head_oid.clone(),
+                            number: None,
                         },
                     )
                 })

@@ -3438,3 +3438,169 @@ fn test_cleanup_keeps_worktree_with_only_a_live_child_workflow_run() {
     assert!(out.kept_for_active_run[0].reason.contains("child"));
     assert_eq!(w1_status(&conn), "active");
 }
+
+// -----------------------------------------------------------------------
+// worktree.created / worktree.removed hook events
+// -----------------------------------------------------------------------
+
+fn hook_config(on: &str, run: String) -> Config {
+    let mut config = Config::default();
+    config
+        .notify
+        .hooks
+        .push(crate::config::HookConfig::shell(on, run));
+    config
+}
+
+/// A hook that appends `KEY=value` lines for every `RUNKON_NOTIFY_FIELD_*` plus a `--` separator.
+fn recording_hook(on: &str, out: &Path) -> Config {
+    hook_config(
+        on,
+        format!(
+            "env | grep RUNKON_NOTIFY_FIELD_ >> {0}; echo -- >> {0}",
+            out.display()
+        ),
+    )
+}
+
+fn merged_pr_7(
+    _: &str,
+    branches: &[String],
+) -> std::collections::HashMap<String, crate::github::MergedPr> {
+    branches
+        .iter()
+        .map(|b| {
+            (
+                b.clone(),
+                crate::github::MergedPr {
+                    number: Some(7),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn test_cleanup_fires_worktree_removed_once_with_fields() {
+    let conn = crate::test_helpers::setup_db();
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("out.txt");
+    let config = recording_hook("worktree.removed", &out);
+    let mgr = WorktreeManager::new(&conn, &config);
+
+    let cleaned = mgr
+        .cleanup_merged_worktrees_with_merge_check(None, merged_pr_7, |_, _| Ok(()))
+        .unwrap()
+        .cleaned;
+    assert_eq!(cleaned, 1);
+
+    let text = fs::read_to_string(&out).unwrap();
+    assert_eq!(text.matches("--\n").count(), 1, "fired once: {text}");
+    for key in [
+        "RUNKON_NOTIFY_FIELD_REPO_SLUG=test-repo",
+        "RUNKON_NOTIFY_FIELD_BRANCH=feat/test",
+        "RUNKON_NOTIFY_FIELD_PR_NUMBER=7",
+        "RUNKON_NOTIFY_FIELD_REASON=merged",
+        "RUNKON_NOTIFY_FIELD_PATH=",
+        "RUNKON_NOTIFY_FIELD_WORKTREE_SLUG=",
+        "RUNKON_NOTIFY_FIELD_BASE_BRANCH=",
+    ] {
+        assert!(text.contains(key), "missing {key} in {text}");
+    }
+
+    // A later purge of the same record doesn't announce it again.
+    mgr.purge("test-repo", None).unwrap();
+    assert_eq!(fs::read_to_string(&out).unwrap().matches("--\n").count(), 1);
+}
+
+#[test]
+fn test_cleanup_continues_when_worktree_hook_fails() {
+    let conn = crate::test_helpers::setup_db();
+    let config = hook_config("worktree.removed", "exit 1".into());
+    let mgr = WorktreeManager::new(&conn, &config);
+
+    let cleaned = mgr
+        .cleanup_merged_worktrees_with_merge_check(None, merged_pr_7, |_, _| Ok(()))
+        .unwrap()
+        .cleaned;
+    assert_eq!(cleaned, 1);
+    let status: String = conn
+        .query_row("SELECT status FROM worktrees WHERE id = 'w1'", [], |r| {
+            r.get("status")
+        })
+        .unwrap();
+    assert_eq!(status, "merged");
+}
+
+#[test]
+fn test_purge_backfills_removed_event_with_reason_deleted() {
+    let conn = crate::test_helpers::setup_db();
+    conn.execute(
+        "UPDATE worktrees SET status = 'abandoned', completed_at = '2024-06-01T00:00:00Z' WHERE id = 'w1'",
+        [],
+    )
+    .unwrap();
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("out.txt");
+    let config = recording_hook("worktree.removed", &out);
+    let mgr = WorktreeManager::new(&conn, &config);
+
+    assert_eq!(mgr.purge("test-repo", None).unwrap(), 1);
+    let text = fs::read_to_string(&out).unwrap();
+    assert_eq!(text.matches("--\n").count(), 1);
+    assert!(text.contains("RUNKON_NOTIFY_FIELD_REASON=deleted"));
+}
+
+#[test]
+fn test_create_fires_worktree_created() {
+    let (tmp, remote, local) = setup_repo_with_remote();
+    let conn = crate::test_helpers::setup_db();
+    let out = tmp.path().join("created.txt");
+    let mut config = recording_hook("worktree.created", &out);
+    config.general.workspace_root = tmp.path().to_path_buf();
+    crate::repo::RepoManager::new(&conn, &config)
+        .register(
+            "myrepo",
+            local.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+        )
+        .unwrap();
+    let mgr = WorktreeManager::new(&conn, &config);
+    let (wt, _) = mgr
+        .create("myrepo", "feat-9-thing", Default::default())
+        .unwrap();
+
+    let text = fs::read_to_string(&out).unwrap();
+    assert!(
+        text.contains("RUNKON_NOTIFY_FIELD_REPO_SLUG=myrepo"),
+        "{text}"
+    );
+    assert!(text.contains("RUNKON_NOTIFY_FIELD_WORKTREE_SLUG=feat-9-thing"));
+    assert!(text.contains(&format!("RUNKON_NOTIFY_FIELD_PATH={}", wt.path)));
+    assert!(text.contains("RUNKON_NOTIFY_FIELD_BRANCH=feat/9-thing"));
+}
+
+#[test]
+fn test_delete_unmerged_worktree_fires_removed_with_reason_abandoned() {
+    let conn = crate::test_helpers::setup_db();
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("out.txt");
+    let config = recording_hook("worktree.removed", &out);
+    let mgr = WorktreeManager::new(&conn, &config);
+
+    let wt = mgr.delete("test-repo", "feat-test").unwrap();
+    assert_eq!(wt.status, WorktreeStatus::Abandoned);
+
+    let text = fs::read_to_string(&out).unwrap();
+    assert_eq!(text.matches("--\n").count(), 1, "fired once: {text}");
+    assert!(
+        text.contains("RUNKON_NOTIFY_FIELD_REASON=abandoned"),
+        "{text}"
+    );
+    assert!(
+        text.contains("RUNKON_NOTIFY_FIELD_REPO_SLUG=test-repo"),
+        "{text}"
+    );
+}

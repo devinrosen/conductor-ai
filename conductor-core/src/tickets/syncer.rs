@@ -18,16 +18,19 @@ use super::{
 
 pub struct TicketSyncer<'a> {
     pub(super) conn: &'a Connection,
+    /// `[[notify.hooks]]` for the `worktree.removed` events ticket sync fires. Empty unless
+    /// the caller supplies its `Config`'s hooks with [`TicketSyncer::with_hooks`].
+    hooks: &'a [crate::config::HookConfig],
 }
 
-pub(in crate::tickets) const CLOSED_TICKET_ARTIFACTS_SQL: &str =
-    "SELECT w.id, r.local_path, w.path, w.branch, r.remote_url
-     FROM worktrees w
-     JOIN repos r ON r.id = w.repo_id
+pub(in crate::tickets) const CLOSED_TICKET_ARTIFACTS_SQL: &str = concat!(
+    crate::worktree::worktree_with_repo_select!(),
+    "
      WHERE w.repo_id = :repo_id
        AND w.status != 'merged'
        AND w.ticket_id IS NOT NULL
-       AND w.ticket_id IN (SELECT id FROM tickets WHERE state = 'closed')";
+       AND w.ticket_id IN (SELECT id FROM tickets WHERE state = 'closed')"
+);
 
 /// Look up the internal ULID for a dependency ticket by its source_id.
 /// Checks `id_map` first (O(1) in-batch lookup) then falls back to a DB query.
@@ -64,7 +67,14 @@ fn resolve_dep_ticket_id(
 
 impl<'a> TicketSyncer<'a> {
     pub fn new(conn: &'a Connection) -> Self {
-        Self { conn }
+        Self { conn, hooks: &[] }
+    }
+
+    /// Fire `worktree.removed` through these hooks (the caller's `config.notify.hooks`)
+    /// when ticket sync removes a merged worktree.
+    pub fn with_hooks(mut self, hooks: &'a [crate::config::HookConfig]) -> Self {
+        self.hooks = hooks;
+        self
     }
 
     /// Upsert a batch of tickets for a repo. Returns the number of tickets upserted.
@@ -895,32 +905,31 @@ impl<'a> TicketSyncer<'a> {
         merge_check: impl Fn(&str, &[String]) -> HashMap<String, MergedPr>,
     ) -> Result<usize> {
         // Collect git paths before updating so we can clean up worktree dirs and branches.
-        let artifacts: Vec<(String, String, String, String, String)> = query_collect(
+        let artifacts: Vec<crate::worktree::WorktreeWithRepo> = query_collect(
             self.conn,
             CLOSED_TICKET_ARTIFACTS_SQL,
             named_params! { ":repo_id": repo_id },
-            |row| {
-                Ok((
-                    row.get("id")?,
-                    row.get("local_path")?,
-                    row.get("path")?,
-                    row.get("branch")?,
-                    row.get("remote_url")?,
-                ))
-            },
+            crate::worktree::map_worktree_with_repo_row,
         )?;
 
         let merged_by_remote = crate::worktree::merged_prs_by_remote(
             artifacts
                 .iter()
-                .map(|(_, _, _, branch, remote_url)| (remote_url.as_str(), branch.as_str())),
+                .map(|a| (a.remote_url.as_str(), a.wt.branch.as_str())),
             merge_check,
         );
 
         let now = Utc::now().to_rfc3339();
         let mut count = 0usize;
 
-        for (worktree_id, repo_path, worktree_path, branch, remote_url) in &artifacts {
+        for crate::worktree::WorktreeWithRepo {
+            wt,
+            repo_path,
+            remote_url,
+            repo_slug,
+        } in &artifacts
+        {
+            let (worktree_id, worktree_path, branch) = (&wt.id, &wt.path, &wt.branch);
             let Some(merged) =
                 crate::worktree::lookup_merged(&merged_by_remote, remote_url, branch)
             else {
@@ -947,6 +956,13 @@ impl<'a> TicketSyncer<'a> {
             )?;
             count += 1;
             crate::worktree::WorktreeManager::remove_artifacts(repo_path, worktree_path, branch);
+
+            crate::notify::fire_worktree_removed(
+                self.conn,
+                self.hooks,
+                &crate::notify::WorktreeEventArgs::from_worktree(repo_slug, wt, merged.number),
+                crate::notify::WorktreeRemovedReason::Merged,
+            );
         }
 
         Ok(count)

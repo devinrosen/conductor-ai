@@ -20,6 +20,8 @@ pub const GATE_WAITING: &str = "gate.waiting";
 pub const GATE_PENDING_TOO_LONG: &str = "gate.pending_too_long";
 pub const FEEDBACK_REQUESTED: &str = "feedback.requested";
 pub const SESSION_IDLE: &str = "session.idle";
+pub const WORKTREE_CREATED: &str = "worktree.created";
+pub const WORKTREE_REMOVED: &str = "worktree.removed";
 
 /// One field of an event, exposed to shell hooks as `RUNKON_NOTIFY_FIELD_<UPPER_NAME>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -269,6 +271,41 @@ const SESSION_IDLE_FIELDS: &[EventField] = &[
     TIMESTAMP,
 ];
 
+const WORKTREE_CREATED_FIELDS: &[EventField] = &[
+    REPO_SLUG,
+    f("worktree_slug", "Worktree slug"),
+    f("worktree_id", "Conductor worktree ID"),
+    BRANCH,
+    f("path", "Absolute checkout path"),
+    f("base_branch", "Base branch; empty when none"),
+    f(
+        "pr_number",
+        "PR number when created with `--from-pr`; empty otherwise",
+    ),
+    TIMESTAMP,
+];
+
+const WORKTREE_REMOVED_FIELDS: &[EventField] = &[
+    REPO_SLUG,
+    f("worktree_slug", "Worktree slug"),
+    f("worktree_id", "Conductor worktree ID"),
+    BRANCH,
+    f(
+        "path",
+        "Absolute checkout path; still set after the folder is gone",
+    ),
+    f("base_branch", "Base branch; empty when none"),
+    f(
+        "pr_number",
+        "Merged PR number when known (cleanup and ticket sync); empty otherwise",
+    ),
+    f(
+        "reason",
+        "`merged`, `abandoned` or `deleted` (record purged without an earlier removal event)",
+    ),
+    TIMESTAMP,
+];
+
 /// Every event `[[notify.hooks]]` can match, in display order.
 pub const EVENTS: &[EventSpec] = &[
     EventSpec {
@@ -355,6 +392,20 @@ pub const EVENTS: &[EventSpec] = &[
         description: "An interactive session finished a turn and has stayed idle for `delay_secs`",
         is_workflow: false,
         fields: SESSION_IDLE_FIELDS,
+    },
+    EventSpec {
+        name: WORKTREE_CREATED,
+        label: "Worktree created",
+        description: "A worktree checkout was created (not fired when an existing checkout is adopted)",
+        is_workflow: false,
+        fields: WORKTREE_CREATED_FIELDS,
+    },
+    EventSpec {
+        name: WORKTREE_REMOVED,
+        label: "Worktree removed",
+        description: "A worktree's folder and branch were removed (delete, cleanup, ticket sync or purge); fires once per worktree",
+        is_workflow: false,
+        fields: WORKTREE_REMOVED_FIELDS,
     },
 ];
 
@@ -567,10 +618,8 @@ mod tests {
             unmatched_on_arms("gate.waiting, bogus.thing"),
             vec!["bogus.thing".to_string()]
         );
-        assert_eq!(
-            unmatched_on_arms("worktree.*"),
-            vec!["worktree.*".to_string()]
-        );
+        assert_eq!(unmatched_on_arms("pr.*"), vec!["pr.*".to_string()]);
+        assert!(unmatched_on_arms("worktree.*").is_empty());
         assert_eq!(
             unmatched_on_arms("workflow_run.stale"),
             vec!["workflow_run.stale".to_string()]

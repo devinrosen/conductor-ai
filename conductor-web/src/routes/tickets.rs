@@ -140,7 +140,7 @@ pub async fn sync_tickets(
     let config = state.config.read().await;
     let repo = RepoManager::new(&db, &config).get_by_id(&repo_id)?;
     let source_mgr = IssueSourceManager::new(&db);
-    let syncer = TicketSyncer::new(&db);
+    let syncer = TicketSyncer::new(&db).with_hooks(&config.notify.hooks);
 
     let sources = source_mgr.list(&repo.id)?;
     let repo_owner = github::parse_github_remote(&repo.remote_url)

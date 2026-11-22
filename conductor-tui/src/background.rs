@@ -943,7 +943,7 @@ fn sync_all_tickets(tx: &BackgroundSender) {
     let repo_mgr = RepoManager::new(&conn, &config);
     let Ok(repos) = repo_mgr.list() else { return };
 
-    let syncer = TicketSyncer::new(&conn);
+    let syncer = TicketSyncer::new(&conn).with_hooks(&config.notify.hooks);
     let source_mgr = IssueSourceManager::new(&conn);
 
     for repo in repos {
