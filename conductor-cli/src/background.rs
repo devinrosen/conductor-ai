@@ -400,7 +400,7 @@ fn drive_detached(
     wait: Duration,
     db_path: Option<PathBuf>,
     write_fd: i32,
-    exec: impl FnOnce() -> conductor_core::Result<()> + Send + 'static,
+    exec: impl FnOnce() -> conductor_core::error::Result<()> + Send + 'static,
 ) -> ! {
     // Slot to capture early startup errors (before the run record is created).
     let error_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
