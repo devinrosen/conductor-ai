@@ -3588,3 +3588,20 @@ fn test_create_fires_worktree_created() {
     assert!(text.contains(&format!("RUNKON_NOTIFY_FIELD_PATH={}", wt.path)));
     assert!(text.contains("RUNKON_NOTIFY_FIELD_BRANCH=feat/9-thing"));
 }
+
+#[test]
+fn test_delete_unmerged_worktree_fires_removed_with_reason_abandoned() {
+    let conn = crate::test_helpers::setup_db();
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("out.txt");
+    let config = recording_hook("worktree.removed", &out);
+    let mgr = WorktreeManager::new(&conn, &config);
+
+    let wt = mgr.delete("test-repo", "feat-test").unwrap();
+    assert_eq!(wt.status, WorktreeStatus::Abandoned);
+
+    let text = fs::read_to_string(&out).unwrap();
+    assert_eq!(text.matches("--\n").count(), 1, "fired once: {text}");
+    assert!(text.contains("RUNKON_NOTIFY_FIELD_REASON=abandoned"), "{text}");
+    assert!(text.contains("RUNKON_NOTIFY_FIELD_REPO_SLUG=test-repo"), "{text}");
+}
