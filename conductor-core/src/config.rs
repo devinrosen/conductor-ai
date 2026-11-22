@@ -203,7 +203,8 @@ impl Default for WorkflowNotificationConfig {
 pub struct HookConfig {
     /// Glob pattern for event names, e.g. `"*"`, `"workflow_run.*"`, `"gate.waiting"`.
     pub on: String,
-    /// Shell command to run (passed to `sh -c`). Receives `CONDUCTOR_*` env vars.
+    /// Shell command to run (passed to `sh -c`). Receives `RUNKON_NOTIFY_*` env vars
+    /// (`conductor notify events` lists each event's fields).
     #[serde(default)]
     pub run: Option<String>,
     /// URL to POST JSON payload to.
@@ -938,6 +939,19 @@ fn load_config_from(path: &std::path::Path) -> Result<Config> {
         );
     }
 
+    // An `on` arm that matches no event never fires; say so, with the valid names.
+    for (i, hook) in config.notify.hooks.iter().enumerate() {
+        for arm in crate::notify::catalog::unmatched_on_arms(&hook.on) {
+            tracing::warn!(
+                "[[notify.hooks]] #{} on = \"{}\": `{arm}` matches no event; valid events: {}; \
+                 run `conductor notify events` for their fields",
+                i + 1,
+                hook.on,
+                crate::notify::catalog::event_names_csv()
+            );
+        }
+    }
+
     // Deprecation: warn if [general].theme is still present — it moved to [tui].theme.
     if raw.get("general").and_then(|g| g.get("theme")).is_some() {
         tracing::warn!(
@@ -1634,6 +1648,27 @@ installation_id = 789012
         assert!(
             raw.get("github").and_then(|g| g.get("app")).is_some(),
             "[github.app] should survive save when app is None in memory"
+        );
+    }
+
+    #[test]
+    fn test_load_config_with_unmatched_hook_on_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[notify.hooks]]
+on = "gate.waiting, bogus.thing"
+url = "https://example.com/hook"
+"#,
+        )
+        .unwrap();
+        let config = load_config_from(&path).unwrap();
+        assert_eq!(config.notify.hooks.len(), 1);
+        assert_eq!(
+            crate::notify::catalog::unmatched_on_arms(&config.notify.hooks[0].on),
+            vec!["bogus.thing".to_string()]
         );
     }
 

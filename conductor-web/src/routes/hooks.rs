@@ -5,7 +5,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use conductor_core::config::{hooks_dir, save_config, HookConfig};
-use conductor_core::notify::{build_synthetic_for_pattern, HookRunner, ALL_EVENTS};
+use conductor_core::notify::{build_synthetic_for_pattern, matrix_events, HookRunner};
 
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -261,12 +261,11 @@ pub async fn test_hook(
     tag = "hooks",
 )]
 pub async fn list_hook_events() -> Json<Vec<HookEventEntry>> {
-    let events = ALL_EVENTS
-        .iter()
-        .map(|(name, label, is_workflow)| HookEventEntry {
-            name,
-            label,
-            is_workflow: *is_workflow,
+    let events = matrix_events()
+        .map(|e| HookEventEntry {
+            name: e.name,
+            label: e.label,
+            is_workflow: e.is_workflow,
         })
         .collect();
     Json(events)

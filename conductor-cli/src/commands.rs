@@ -52,7 +52,8 @@ pub enum Commands {
         #[command(subcommand)]
         command: DevCommands,
     },
-    /// Manage notification hooks
+    /// Manage notification hooks (alias: notify)
+    #[command(visible_alias = "notify")]
     Notifications {
         #[command(subcommand)]
         command: NotificationsCommands,
@@ -132,10 +133,15 @@ pub enum ConversationCommands {
 pub enum NotificationsCommands {
     /// Fire a synthetic notification event through all configured hooks (for testing)
     Test {
-        /// Event name to fire. Valid values: workflow_run.completed, workflow_run.failed,
-        /// agent_run.completed, agent_run.failed, gate.waiting, feedback.requested, session.idle
+        /// Event name to fire; `conductor notify events` lists the valid names
         #[arg(default_value = "workflow_run.completed")]
         event: String,
+    },
+    /// List the events a `[[notify.hooks]]` entry can match, with the fields each sets
+    Events {
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
     },
 }
 

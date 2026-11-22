@@ -103,7 +103,10 @@ Additional variables for specific events:
 | `feedback.requested` | Agent is waiting for human feedback input |
 
 Use `*` to match all events, `workflow_run.*` to match all workflow events, or
-an exact event name to match only that event.
+an exact event name to match only that event. Run `conductor notify events` for
+the full list of events and the `RUNKON_NOTIFY_FIELD_*` variables each one sets
+(`--json` for scripts). A hook whose `on` matches no event logs a warning when
+the config loads.
 
 ## HTTP Hooks
 

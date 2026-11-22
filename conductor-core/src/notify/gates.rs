@@ -5,6 +5,7 @@ use runkon_notify::{DedupStore, Event, HookRunner, Severity};
 use crate::config::{hooks_as_runkon, HookConfig, NotificationConfig};
 use crate::workflow::GateType;
 
+use super::catalog::GATE_WAITING;
 use super::notification_body;
 
 /// Build the notification title and body for a gate based on its type.
@@ -109,11 +110,20 @@ pub fn fire_gate_notification(
         return;
     }
 
+    let event = gate_event(params);
+
+    HookRunner::new(&hooks_as_runkon(notify_hooks))
+        .with_dedup_store(dedup_store)
+        .fire_with_dedup(&event, params.step_id, "gate_waiting");
+}
+
+/// Build the `gate.waiting` event for one gate. `run_id` holds the workflow step id.
+pub(crate) fn gate_event(params: &GateNotificationParams<'_>) -> Event {
     let label = notification_body(params.workflow_name, params.target_label);
     let now = chrono::Utc::now().to_rfc3339();
 
-    let event = Event {
-        kind: "gate.waiting".into(),
+    Event {
+        kind: GATE_WAITING.into(),
         title: "Conductor \u{2014} Gate Waiting".into(),
         body: label,
         severity: Severity::Info,
@@ -130,11 +140,7 @@ pub fn fire_gate_notification(
         ]
         .into_iter()
         .collect(),
-    };
-
-    HookRunner::new(&hooks_as_runkon(notify_hooks))
-        .with_dedup_store(dedup_store)
-        .fire_with_dedup(&event, params.step_id, "gate_waiting");
+    }
 }
 
 /// Determine the most "actionable" gate type from a slice of optional gate types.
@@ -197,25 +203,14 @@ pub struct GroupedGateNotificationParams<'a> {
     pub count: usize,
 }
 
-/// Fire a single grouped desktop notification for multiple gates in the same run.
-///
-/// Deduped on `(run_id, "gates_grouped")` via SQLite.
-pub fn fire_grouped_gate_notification(
-    _conn: &rusqlite::Connection,
-    config: &NotificationConfig,
-    notify_hooks: &[HookConfig],
-    dedup_store: Arc<dyn DedupStore>,
-    params: &GroupedGateNotificationParams<'_>,
-) {
-    if !super::notification_sink_configured(config, notify_hooks) {
-        return;
-    }
-
+/// Build the `gate.waiting` event for several gates in one run. `run_id` holds the
+/// workflow run id.
+pub(crate) fn grouped_gate_event(params: &GroupedGateNotificationParams<'_>) -> Event {
     let label = notification_body(params.workflow_name, params.target_label);
     let now = chrono::Utc::now().to_rfc3339();
 
-    let event = Event {
-        kind: "gate.waiting".into(),
+    Event {
+        kind: GATE_WAITING.into(),
         title: "Conductor \u{2014} Gate Waiting".into(),
         body: label,
         severity: Severity::Info,
@@ -230,7 +225,24 @@ pub fn fire_grouped_gate_notification(
         ]
         .into_iter()
         .collect(),
-    };
+    }
+}
+
+/// Fire a single grouped desktop notification for multiple gates in the same run.
+///
+/// Deduped on `(run_id, "gates_grouped")` via SQLite.
+pub fn fire_grouped_gate_notification(
+    _conn: &rusqlite::Connection,
+    config: &NotificationConfig,
+    notify_hooks: &[HookConfig],
+    dedup_store: Arc<dyn DedupStore>,
+    params: &GroupedGateNotificationParams<'_>,
+) {
+    if !super::notification_sink_configured(config, notify_hooks) {
+        return;
+    }
+
+    let event = grouped_gate_event(params);
 
     HookRunner::new(&hooks_as_runkon(notify_hooks))
         .with_dedup_store(dedup_store)

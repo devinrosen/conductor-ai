@@ -184,19 +184,21 @@ pub fn spawn_db_poller(
                                                     &config.notify.hooks,
                                                     dedup_store.clone(),
                                                     &crate::notify::CostSpikeArgs {
-                                                        run_id: &t.run_id,
-                                                        workflow_name: &t.workflow_name,
-                                                        target_label: t.target_label.as_deref(),
+                                                        common: crate::notify::SpikeCommon {
+                                                            run_id: &t.run_id,
+                                                            workflow_name: &t.workflow_name,
+                                                            target_label: t.target_label.as_deref(),
+                                                            multiple,
+                                                            duration_ms: run.total_duration_ms,
+                                                            repo_slug: &t.repo_slug,
+                                                            branch: &t.branch,
+                                                            parent_workflow_run_id: t
+                                                                .parent_workflow_run_id
+                                                                .as_deref(),
+                                                            repo_id: t.repo_id.as_deref(),
+                                                            worktree_id: t.worktree_id.as_deref(),
+                                                        },
                                                         cost_usd,
-                                                        multiple,
-                                                        duration_ms: run.total_duration_ms,
-                                                        repo_slug: &t.repo_slug,
-                                                        branch: &t.branch,
-                                                        parent_workflow_run_id: t
-                                                            .parent_workflow_run_id
-                                                            .as_deref(),
-                                                        repo_id: t.repo_id.as_deref(),
-                                                        worktree_id: t.worktree_id.as_deref(),
                                                     },
                                                 );
                                             }
@@ -212,18 +214,20 @@ pub fn spawn_db_poller(
                                                     &config.notify.hooks,
                                                     dedup_store.clone(),
                                                     &crate::notify::DurationSpikeArgs {
-                                                        run_id: &t.run_id,
-                                                        workflow_name: &t.workflow_name,
-                                                        target_label: t.target_label.as_deref(),
-                                                        multiple,
-                                                        duration_ms: run.total_duration_ms,
-                                                        repo_slug: &t.repo_slug,
-                                                        branch: &t.branch,
-                                                        parent_workflow_run_id: t
-                                                            .parent_workflow_run_id
-                                                            .as_deref(),
-                                                        repo_id: t.repo_id.as_deref(),
-                                                        worktree_id: t.worktree_id.as_deref(),
+                                                        common: crate::notify::SpikeCommon {
+                                                            run_id: &t.run_id,
+                                                            workflow_name: &t.workflow_name,
+                                                            target_label: t.target_label.as_deref(),
+                                                            multiple,
+                                                            duration_ms: run.total_duration_ms,
+                                                            repo_slug: &t.repo_slug,
+                                                            branch: &t.branch,
+                                                            parent_workflow_run_id: t
+                                                                .parent_workflow_run_id
+                                                                .as_deref(),
+                                                            repo_id: t.repo_id.as_deref(),
+                                                            worktree_id: t.worktree_id.as_deref(),
+                                                        },
                                                     },
                                                 );
                                             }
