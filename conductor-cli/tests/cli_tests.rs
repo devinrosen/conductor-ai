@@ -402,7 +402,8 @@ fn workflow_run_background_reports_unknown_worktree() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("worktree not found"));
+        .stderr(predicate::str::contains("worktree not found"))
+        .stderr(predicate::str::contains("pass a worktree slug"));
 }
 
 /// Run the hidden `workflow launch-detached` with `spec` on stdin. Its notify fd

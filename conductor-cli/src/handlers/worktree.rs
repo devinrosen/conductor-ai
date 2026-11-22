@@ -87,6 +87,7 @@ pub fn handle_worktree(
                 eprintln!("warning: {warning}");
             }
             println!("Created worktree: {} ({})", wt.slug, wt.branch);
+            println!("  Slug: {}", wt.slug);
             println!("  Path: {}", wt.path);
 
             if auto_agent {
@@ -250,6 +251,7 @@ pub fn handle_worktree(
                 "Adopted worktree '{}' (branch: {}) in repo '{}'",
                 wt.slug, wt.branch, repo
             );
+            println!("  Slug: {}", wt.slug);
             println!("  Path: {}", wt.path);
         }
         WorktreeCommands::CreateStack {
@@ -269,6 +271,7 @@ pub fn handle_worktree(
                     eprintln!("warning: {warning}");
                 }
                 println!("Created worktree: {} ({})", wt.slug, wt.branch);
+                println!("  Slug: {}", wt.slug);
                 println!("  Path: {}", wt.path);
             }
             println!("Stack of {} worktree(s) created.", results.len());

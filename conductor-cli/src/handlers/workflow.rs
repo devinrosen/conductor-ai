@@ -236,7 +236,7 @@ pub fn handle_workflow(
             let agent_mgr = conductor_core::agent::AgentManager::new(conn);
             let runs = if let Some(wt_slug) = worktree {
                 let wt_mgr = WorktreeManager::new(conn, config);
-                let wt = wt_mgr.get_by_slug(&r.id, &wt_slug)?;
+                let wt = wt_mgr.get_by_slug_or_branch(&r.id, &wt_slug)?;
                 agent_mgr.list_for_worktree(&wt.id)?
             } else {
                 agent_mgr.list_for_repo(&r.id)?
@@ -277,7 +277,7 @@ pub fn handle_workflow(
                 let wt_slug = worktree
                     .as_deref()
                     .context("--worktree is required when --path is not used")?;
-                let wt = wt_mgr.get_by_slug(&r.id, wt_slug)?;
+                let wt = wt_mgr.get_by_slug_or_branch(&r.id, wt_slug)?;
                 (wt.path, r.local_path)
             };
 
@@ -516,7 +516,7 @@ pub fn handle_workflow(
                 let repo_mgr = RepoManager::new(conn, config);
                 let r = repo_mgr.get_by_slug(&repo_slug)?;
                 let wt_mgr = WorktreeManager::new(conn, config);
-                let wt = wt_mgr.get_by_slug(&r.id, &worktree_slug)?;
+                let wt = wt_mgr.get_by_slug_or_branch(&r.id, &worktree_slug)?;
 
                 let workflow =
                     conductor_core::workflow::load_def_by_name(&wt.path, &r.local_path, &name)?;
@@ -525,7 +525,7 @@ pub fn handle_workflow(
                 conductor_core::workflow::apply_workflow_input_defaults(&workflow, &mut input_map)?;
 
                 let node_count = workflow.total_nodes();
-                let wt_label = format!("{repo_slug}/{worktree_slug}");
+                let wt_label = format!("{repo_slug}/{}", wt.slug);
 
                 #[cfg(unix)]
                 if let Some(notify_fd) = background_notify_fd {
@@ -563,7 +563,7 @@ pub fn handle_workflow(
 
                 println!(
                     "Running workflow '{}' ({} nodes) on {}/{}...",
-                    workflow.name, node_count, repo_slug, worktree_slug
+                    workflow.name, node_count, repo_slug, wt.slug
                 );
 
                 run_and_report(exec_params(
@@ -834,7 +834,7 @@ pub fn handle_workflow(
                 let r = repo_mgr.get_by_slug(repo.as_deref().unwrap())?;
                 let wt_mgr = WorktreeManager::new(conn, config);
                 // SAFETY: guarded by `worktree.is_some()` above
-                let wt = wt_mgr.get_by_slug(&r.id, worktree.as_deref().unwrap())?;
+                let wt = wt_mgr.get_by_slug_or_branch(&r.id, worktree.as_deref().unwrap())?;
                 smoke_target = Some(ExecTarget::for_worktree(&wt, &r));
                 (wt.path, r.local_path)
             } else if repo.is_some() || worktree.is_some() {

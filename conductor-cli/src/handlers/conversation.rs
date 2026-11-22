@@ -24,7 +24,7 @@ pub fn handle_conversation(
             let repo_rec = repo_mgr.get_by_slug(&repo)?;
 
             let wt_mgr = WorktreeManager::new(conn, config);
-            let wt = wt_mgr.get_by_slug(&repo_rec.id, &worktree)?;
+            let wt = wt_mgr.get_by_slug_or_branch(&repo_rec.id, &worktree)?;
 
             let conv_mgr = ConversationManager::new(conn);
 

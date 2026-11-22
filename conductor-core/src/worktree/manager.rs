@@ -821,8 +821,10 @@ impl<'a> WorktreeManager<'a> {
             .map_err(worktree_not_found(branch))
     }
 
-    /// Try to resolve a worktree by slug first, then by branch name.
-    /// If neither matches, returns a "did you mean" error listing available slugs.
+    /// Try to resolve a worktree by slug, then branch name, then registered path
+    /// (trailing slash ignored; canonicalized when the path exists).
+    /// If none match, returns an error naming the repo, the expected form and
+    /// the closest slugs.
     pub fn get_by_slug_or_branch(&self, repo_id: &str, slug_or_branch: &str) -> Result<Worktree> {
         match self.get_by_slug(repo_id, slug_or_branch) {
             Ok(wt) => return Ok(wt),
@@ -836,17 +838,109 @@ impl<'a> WorktreeManager<'a> {
             Err(e) => return Err(e),
         }
 
-        // Neither slug nor branch matched — build a "did you mean" error.
+        let looks_like_path = slug_or_branch.contains('/')
+            || slug_or_branch.starts_with('~')
+            || slug_or_branch.starts_with('.');
+        if looks_like_path {
+            if let Some(wt) = self.get_by_path(repo_id, slug_or_branch)? {
+                return Ok(wt);
+            }
+            if let Some((other_slug, repo_slug)) = self.find_path_in_other_repo(repo_id, slug_or_branch)
+            {
+                return Err(ConductorError::WorktreeNotFound {
+                    slug: format!(
+                        "\"{slug_or_branch}\" is worktree {other_slug} of repo {repo_slug}, not this repo"
+                    ),
+                });
+            }
+        }
+
+        let repo_slug: String = self
+            .conn
+            .query_row(
+                "SELECT slug FROM repos WHERE id = :id",
+                named_params![":id": repo_id],
+                |r| r.get(0),
+            )
+            .unwrap_or_else(|_| repo_id.to_string());
         let available = self.list_by_repo_id(repo_id, false).unwrap_or_default();
-        let suggestions: Vec<&str> = available.iter().take(5).map(|w| w.slug.as_str()).collect();
-        let hint = if suggestions.is_empty() {
+        let slugs: Vec<&str> = available.iter().map(|w| w.slug.as_str()).collect();
+        let needle = slug_or_branch
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or(slug_or_branch);
+        let closest = closest_slugs(needle, &slugs, 3);
+        let example = if closest.is_empty() {
             String::new()
         } else {
-            format!(" — did you mean one of: {}", suggestions.join(", "))
+            format!(", e.g. {}", closest.join(", "))
         };
         Err(ConductorError::WorktreeNotFound {
-            slug: format!("{slug_or_branch}{hint}"),
+            slug: format!(
+                "no worktree named \"{slug_or_branch}\" in {repo_slug}; pass a worktree slug, branch or path (conductor worktree list {repo_slug}){example}"
+            ),
         })
+    }
+
+    /// Normalize a user-supplied path: expand `~`, make absolute, trim trailing `/`.
+    fn normalize_path_arg(arg: &str) -> String {
+        let mut p = arg.to_string();
+        if p == "~" || p.starts_with("~/") {
+            if let Ok(home) = std::env::var("HOME") {
+                p = format!("{}{}", home.trim_end_matches('/'), &p[1..]);
+            }
+        }
+        if !p.starts_with('/') {
+            if let Ok(cwd) = std::env::current_dir() {
+                p = cwd.join(&p).to_string_lossy().into_owned();
+            }
+        }
+        while p.len() > 1 && p.ends_with('/') {
+            p.pop();
+        }
+        p
+    }
+
+    /// Resolve a worktree of `repo_id` by its registered path.
+    fn get_by_path(&self, repo_id: &str, arg: &str) -> Result<Option<Worktree>> {
+        let path = Self::normalize_path_arg(arg);
+        let exact = self
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = :repo_id AND path = :path"
+                ),
+                named_params![":repo_id": repo_id, ":path": path],
+                map_worktree_row,
+            )
+            .optional()?;
+        if exact.is_some() {
+            return Ok(exact);
+        }
+        let Ok(canon) = std::fs::canonicalize(&path) else {
+            return Ok(None);
+        };
+        Ok(self
+            .list_by_repo_id(repo_id, false)?
+            .into_iter()
+            .find(|w| std::fs::canonicalize(&w.path).ok().as_deref() == Some(canon.as_path())))
+    }
+
+    /// If `arg` is the path of a worktree in a different repo, return
+    /// `(worktree slug, repo slug)`.
+    fn find_path_in_other_repo(&self, repo_id: &str, arg: &str) -> Option<(String, String)> {
+        let path = Self::normalize_path_arg(arg);
+        self.conn
+            .query_row(
+                "SELECT w.slug, r.slug FROM worktrees w JOIN repos r ON r.id = w.repo_id \
+                 WHERE w.path = :path AND w.repo_id != :repo_id LIMIT 1",
+                named_params![":path": path, ":repo_id": repo_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .ok()
+            .flatten()
     }
 
     pub fn list_by_ticket(&self, ticket_id: &str) -> Result<Vec<Worktree>> {
@@ -1678,6 +1772,44 @@ impl<'a> WorktreeManager<'a> {
             kept_for_active_run,
         })
     }
+}
+
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut cur = vec![i + 1];
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            cur.push((prev[j] + cost).min(prev[j + 1] + 1).min(cur[j] + 1));
+        }
+        prev = cur;
+    }
+    prev[b.len()]
+}
+
+/// Rank `slugs` by closeness to `needle` (exact case-insensitive match, then
+/// substring either way, then edit distance) and return up to `n`.
+/// Ties keep the input order.
+pub(super) fn closest_slugs<'a>(needle: &str, slugs: &[&'a str], n: usize) -> Vec<&'a str> {
+    let needle = needle.to_lowercase();
+    let mut ranked: Vec<(usize, usize, &'a str)> = slugs
+        .iter()
+        .map(|s| {
+            let l = s.to_lowercase();
+            let tier = if l == needle {
+                0
+            } else if !needle.is_empty() && (l.contains(&needle) || needle.contains(&l)) {
+                1
+            } else {
+                2
+            };
+            (tier, levenshtein(&needle, &l), *s)
+        })
+        .collect();
+    ranked.sort_by_key(|(t, d, _)| (*t, *d));
+    ranked.into_iter().take(n).map(|(_, _, s)| s).collect()
 }
 
 #[cfg(test)]

@@ -237,7 +237,7 @@ pub enum WorkflowCommands {
     Runs {
         /// Repository slug
         repo: String,
-        /// Filter by worktree slug
+        /// Filter by worktree slug, branch or path
         worktree: Option<String>,
     },
     /// List available workflow definitions for a repo/worktree
@@ -245,7 +245,7 @@ pub enum WorkflowCommands {
         /// Repo slug (required unless --path is given)
         #[arg(required_unless_present = "path")]
         repo: Option<String>,
-        /// Worktree slug (required unless --path is given)
+        /// Worktree slug, branch or path (required unless --path is given)
         #[arg(required_unless_present = "path")]
         worktree: Option<String>,
         /// Path to a repo root directory; skips DB lookup
@@ -262,7 +262,7 @@ pub enum WorkflowCommands {
         /// Repo slug (required unless --pr, --repo, --workflow-run, or --ticket is used)
         #[arg(required_unless_present_any = &["pr", "repo_flag", "workflow_run", "ticket"])]
         repo: Option<String>,
-        /// Worktree slug (required unless --pr, --repo, --workflow-run, or --ticket is used)
+        /// Worktree slug, branch or path (required unless --pr, --repo, --workflow-run, or --ticket is used)
         #[arg(required_unless_present_any = &["pr", "repo_flag", "workflow_run", "ticket"])]
         worktree: Option<String>,
         /// Run the workflow against a GitHub PR URL or reference (e.g. https://github.com/owner/repo/pull/123)
@@ -398,7 +398,7 @@ pub enum WorkflowCommands {
         all: bool,
         /// Repo slug (optional; auto-detected from CWD when omitted: the worktree, or a registered repo's main checkout)
         repo: Option<String>,
-        /// Worktree slug (optional; auto-detected from CWD when omitted)
+        /// Worktree slug, branch or path (optional; auto-detected from CWD when omitted)
         worktree: Option<String>,
         /// Directory to validate against: inside a registered worktree or repo checkout it
         /// resolves to that target; any other directory is used as-is without the database

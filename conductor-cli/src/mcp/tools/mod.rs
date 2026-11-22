@@ -234,7 +234,7 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
                 );
                 props.insert(
                     "worktree".into(),
-                    json!({ "type": "string", "description": "Worktree slug or branch name (optional)" }),
+                    json!({ "type": "string", "description": "Worktree slug, branch name or path (optional)" }),
                 );
                 props.insert(
                     "pr".into(),
@@ -295,7 +295,7 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
                 (
                     "worktree",
                     "string",
-                    "Worktree slug or branch name to filter by (optional)",
+                    "Worktree slug, branch name or path to filter by (optional)",
                     false,
                 ),
                 (
@@ -347,7 +347,7 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
                 ),
                 (
                     "worktree",
-                    "Worktree slug or branch name to filter by (optional; requires repo)",
+                    "Worktree slug, branch name or path to filter by (optional; requires repo)",
                     false,
                 ),
                 (
