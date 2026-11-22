@@ -499,6 +499,12 @@ fn drive_detached(
     // already sent the run ID to the parent. In that case the workflow_run
     // row exists in the DB but may still be in pending/running status. We
     // must mark it (and the parent agent run) as failed.
+    // The run ID was set in the notify pair before the parent was notified.
+    let run_id = notify_pair
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     let error_msg = match &exec_result {
         Ok(Ok(())) => None,
         // Another process took the run over (#3435): it owns the run's status
@@ -507,11 +513,6 @@ fn drive_detached(
         // file, which outlives this process, and exit with the lease-lost code
         // so a wrapper can tell this from a real failure.
         Ok(Err((e, false))) => {
-            let run_id = notify_pair
-                .0
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone();
             log_lease_lost(run_id.as_deref(), e);
             std::process::exit(lease_lost_exit_code())
         }
@@ -520,13 +521,6 @@ fn drive_detached(
     };
 
     if let Some(error_msg) = error_msg {
-        // Extract the run ID from the notify pair (it was set before notification).
-        let run_id = notify_pair
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-
         if let Some(run_id) = run_id {
             // Best-effort cleanup: open a fresh DB connection and mark the
             // workflow run + parent agent run as failed. Errors here are
@@ -887,6 +881,27 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(agent.status.to_string(), "failed");
+    }
+
+    #[test]
+    fn log_lease_lost_appends_message_to_run_log() {
+        let run_id = conductor_core::new_id();
+        let path = conductor_core::config::workflow_log_path(&run_id).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "earlier line\n").unwrap();
+
+        log_lease_lost(Some(&run_id), "lease lost");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.starts_with("earlier line\n"));
+        assert!(content.ends_with("run stopped: lease lost; another process owns it\n"));
+    }
+
+    #[test]
+    fn log_lease_lost_without_run_id_or_with_invalid_id_writes_nothing() {
+        // Neither call may panic or create a file.
+        log_lease_lost(None, "lease lost");
+        log_lease_lost(Some("../etc/passwd"), "lease lost");
     }
 
     #[test]
