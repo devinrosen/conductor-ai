@@ -87,7 +87,7 @@ pub fn handle_worktree(
                 eprintln!("warning: {warning}");
             }
             println!("Created worktree: {} ({})", wt.slug, wt.branch);
-            println!("  Path: {}", wt.path);
+            print_slug_and_path(&wt);
 
             if auto_agent {
                 if let Some(ref tid) = ticket {
@@ -250,7 +250,7 @@ pub fn handle_worktree(
                 "Adopted worktree '{}' (branch: {}) in repo '{}'",
                 wt.slug, wt.branch, repo
             );
-            println!("  Path: {}", wt.path);
+            print_slug_and_path(&wt);
         }
         WorktreeCommands::CreateStack {
             repo,
@@ -269,12 +269,18 @@ pub fn handle_worktree(
                     eprintln!("warning: {warning}");
                 }
                 println!("Created worktree: {} ({})", wt.slug, wt.branch);
-                println!("  Path: {}", wt.path);
+                print_slug_and_path(wt);
             }
             println!("Stack of {} worktree(s) created.", results.len());
         }
     }
     Ok(())
+}
+
+/// Print the `Slug:` and `Path:` lines that end a create/adopt summary.
+fn print_slug_and_path(wt: &conductor_core::worktree::Worktree) {
+    println!("  Slug: {}", wt.slug);
+    println!("  Path: {}", wt.path);
 }
 
 /// Lines printed by `worktree cleanup` for a cleanup outcome.

@@ -383,6 +383,53 @@ fn workflow_run_background_prints_run_id_and_completes() {
     assert_eq!(status, "completed");
 }
 
+/// `workflow run` accepts a worktree path as the target.
+#[cfg(unix)]
+#[test]
+fn workflow_run_background_accepts_a_worktree_path() {
+    let home = tempfile::tempdir().unwrap();
+    let wt = setup_valid_workflow_fixture();
+    register_worktree_fixture(home.path(), wt.path());
+
+    let out = conductor_cmd(home.path())
+        .args([
+            "workflow",
+            "run",
+            "hello",
+            "r",
+            wt.path().to_str().unwrap(),
+            "--background",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim().len(), 26);
+}
+
+/// `workflow runs` resolves a worktree path target; an unknown path names the expected form.
+#[cfg(unix)]
+#[test]
+fn workflow_runs_resolves_a_worktree_path() {
+    let home = tempfile::tempdir().unwrap();
+    let wt = setup_valid_workflow_fixture();
+    register_worktree_fixture(home.path(), wt.path());
+
+    conductor_cmd(home.path())
+        .args(["workflow", "runs", "r", wt.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No workflow runs found."));
+    conductor_cmd(home.path())
+        .args(["workflow", "runs", "r", "/no/such/path"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("pass a worktree slug"));
+}
+
 /// An unknown worktree is reported with its cause, not as a silent child exit.
 #[cfg(unix)]
 #[test]
@@ -402,7 +449,8 @@ fn workflow_run_background_reports_unknown_worktree() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("worktree not found"));
+        .stderr(predicate::str::contains("worktree not found"))
+        .stderr(predicate::str::contains("pass a worktree slug"));
 }
 
 /// Run the hidden `workflow launch-detached` with `spec` on stdin. Its notify fd

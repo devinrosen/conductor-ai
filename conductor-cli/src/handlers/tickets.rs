@@ -112,7 +112,7 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
 
             let wt_mgr = WorktreeManager::new(conn, config);
             let wt = wt_mgr
-                .get_by_slug(&r.id, &worktree)
+                .get_by_slug_or_branch(&r.id, &worktree)
                 .map_err(|e| anyhow::anyhow!("Worktree not found: {worktree}: {e}"))?;
 
             if wt.ticket_id.is_some() {
