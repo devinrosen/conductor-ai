@@ -1550,7 +1550,11 @@ mod tests {
         use runkon_flow::cancellation_reason::CancellationReason;
         use runkon_flow::engine_error::EngineError;
         assert!(matches!(
-            super::map_engine_error(EngineError::Cancelled(CancellationReason::LeaseLost), "w", "run"),
+            super::map_engine_error(
+                EngineError::Cancelled(CancellationReason::LeaseLost),
+                "w",
+                "run"
+            ),
             ConductorError::WorkflowLeaseLost
         ));
         assert!(matches!(

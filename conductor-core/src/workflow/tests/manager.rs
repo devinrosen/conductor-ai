@@ -4071,9 +4071,10 @@ fn test_claim_stuck_workflows_skips_run_with_unexpired_lease() {
     let conn = setup_db();
     insert_running_root_run(&conn, "live-lease");
     set_lease(&conn, "live-lease", "datetime('now', '+30 seconds')");
-    assert!(crate::workflow::detect_stuck_workflow_run_ids(&conn, 60).unwrap().is_empty());
-    let claimed =
-        crate::workflow::claim_stuck_workflows(&conn, &Config::default(), None).unwrap();
+    assert!(crate::workflow::detect_stuck_workflow_run_ids(&conn, 60)
+        .unwrap()
+        .is_empty());
+    let claimed = crate::workflow::claim_stuck_workflows(&conn, &Config::default(), None).unwrap();
     assert!(claimed.is_empty());
     assert_eq!(get_run_status(&conn, "live-lease"), "running");
     let error: Option<String> = conn
@@ -4096,7 +4097,9 @@ fn test_detect_stuck_workflow_run_ids_skips_rfc3339_unexpired_lease() {
         "live-rfc",
         "strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+30 seconds')",
     );
-    assert!(crate::workflow::detect_stuck_workflow_run_ids(&conn, 60).unwrap().is_empty());
+    assert!(crate::workflow::detect_stuck_workflow_run_ids(&conn, 60)
+        .unwrap()
+        .is_empty());
 }
 
 /// Regression guard: an expired lease is still recovered.
@@ -4105,8 +4108,7 @@ fn test_claim_stuck_workflows_claims_run_with_expired_lease() {
     let conn = setup_db();
     insert_running_root_run(&conn, "dead-lease");
     set_lease(&conn, "dead-lease", "datetime('now', '-5 seconds')");
-    let claimed =
-        crate::workflow::claim_stuck_workflows(&conn, &Config::default(), None).unwrap();
+    let claimed = crate::workflow::claim_stuck_workflows(&conn, &Config::default(), None).unwrap();
     assert_eq!(claimed, vec!["dead-lease".to_string()]);
 }
 

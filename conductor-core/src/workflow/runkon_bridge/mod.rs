@@ -61,7 +61,9 @@ pub(super) fn conductor_config_dir() -> runkon_flow_executors::ConfigDir {
 /// propagates as a cancellation rather than a generic workflow failure.
 pub(super) fn wrap_child_workflow_err(e: ConductorError, ctx: String) -> EngineError {
     match e {
-        ConductorError::WorkflowCancelled | ConductorError::WorkflowLeaseLost => EngineError::from(e),
+        ConductorError::WorkflowCancelled | ConductorError::WorkflowLeaseLost => {
+            EngineError::from(e)
+        }
         other => EngineError::Workflow(format!("{ctx}: {other}")),
     }
 }

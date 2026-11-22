@@ -535,7 +535,10 @@ fn drive_detached(
 /// A lost lease means another process claimed the run and is executing it, so
 /// the child must leave the run and its parent agent run alone (#3435).
 fn should_fail_run_after(err: &conductor_core::error::ConductorError) -> bool {
-    !matches!(err, conductor_core::error::ConductorError::WorkflowLeaseLost)
+    !matches!(
+        err,
+        conductor_core::error::ConductorError::WorkflowLeaseLost
+    )
 }
 
 /// Best-effort cleanup when a background workflow fails after the run ID
