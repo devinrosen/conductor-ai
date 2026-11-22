@@ -403,8 +403,8 @@ fn waiting_gates_in_tree(conn: &Connection, run_id: &str) -> Result<Vec<WaitGate
     let mut gates = Vec::with_capacity(rows.len());
     for (step, workflow_name, _target_label) in rows {
         // A broken lookup must not hide the wait result.
-        let PrecedingOutput { plan_path, context } =
-            preceding_step_output(conn, &step).unwrap_or_else(|e| {
+        let PrecedingOutput { plan_path, context } = preceding_step_output(conn, &step)
+            .unwrap_or_else(|e| {
                 tracing::warn!("preceding step lookup failed for step {}: {e}", step.id);
                 PrecedingOutput::default()
             });
