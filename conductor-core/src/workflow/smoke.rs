@@ -295,42 +295,17 @@ fn ensure_cancelled(
     Ok(())
 }
 
-/// Make every descendant run of a smoke that stopped on purpose end `cancelled`.
+/// Make the smoke run's tree end the way a passing smoke must: the agent run
+/// driving `run_id` and each descendant's driver end `cancelled` with the smoke
+/// reason, and every descendant run that isn't `completed` or `cancelled` does too.
 ///
 /// The engine's parallel executor counts a branch's smoke stop as a branch failure,
 /// and the fail-fast path then records the child run `failed` (runkon-flow logs
-/// "finished with failures" for it). A passing smoke must leave no `failed` run, so
-/// every descendant that isn't `completed` or `cancelled` is set to `cancelled`.
-/// A `completed` child ran to the end before the stop and stays as it is. Step rows
-/// are left as the engine wrote them.
+/// "finished with failures" for it). A passing smoke must leave no `failed` run or
+/// agent run. A `completed` run or driver ran to the end before the stop and stays
+/// as it is. Step rows are left as the engine wrote them. `run_id` itself is handled
+/// by `ensure_cancelled`; only its driver is finalized here.
 fn cancel_smoke_descendants(
-    conn: &rusqlite::Connection,
-    run_id: &str,
-    reason: &str,
-    depth: u32,
-) -> std::result::Result<(), String> {
-    if depth > 16 {
-        return Ok(());
-    }
-    let children = crate::workflow::list_child_workflow_runs(conn, run_id)
-        .map_err(|e| format!("failed to list child runs of smoke run {run_id}: {e}"))?;
-    for child in children {
-        if !matches!(
-            child.status,
-            WorkflowRunStatus::Completed | WorkflowRunStatus::Cancelled
-        ) {
-            ensure_cancelled(conn, &child.id, reason)?;
-        }
-        cancel_smoke_descendants(conn, &child.id, reason, depth + 1)?;
-    }
-    Ok(())
-}
-
-/// Make the agent run driving the smoke run, and each descendant's driver, end
-/// `cancelled` with the smoke reason. A `completed` or `cancelled` driver is left as
-/// it is. The coordinator already finalizes drivers this way; this backs it up for
-/// any path that returned early.
-fn cancel_smoke_drivers(
     conn: &rusqlite::Connection,
     run_id: &str,
     reason: &str,
@@ -354,7 +329,13 @@ fn cancel_smoke_drivers(
     let children = crate::workflow::list_child_workflow_runs(conn, run_id)
         .map_err(|e| format!("failed to list child runs of smoke run {run_id}: {e}"))?;
     for child in children {
-        cancel_smoke_drivers(conn, &child.id, reason, depth + 1)?;
+        if !matches!(
+            child.status,
+            WorkflowRunStatus::Completed | WorkflowRunStatus::Cancelled
+        ) {
+            ensure_cancelled(conn, &child.id, reason)?;
+        }
+        cancel_smoke_descendants(conn, &child.id, reason, depth + 1)?;
     }
     Ok(())
 }
@@ -406,7 +387,6 @@ pub fn smoke_run_workflow(mut params: WorkflowExecStandalone) -> SmokeOutcome {
             match (conn.as_ref(), run_id.as_deref()) {
                 (Ok(conn), Some(id)) => match ensure_cancelled(conn, id, &point.reason())
                     .and_then(|()| cancel_smoke_descendants(conn, id, &point.reason(), 0))
-                    .and_then(|()| cancel_smoke_drivers(conn, id, &point.reason(), 0))
                 {
                     Ok(()) => SmokeResult::Passed {
                         stopped_at: Some(point),
@@ -564,13 +544,13 @@ mod tests {
     }
 
     #[test]
-    fn cancel_smoke_drivers_turns_a_failed_driver_cancelled() {
+    fn cancel_smoke_descendants_turns_a_failed_driver_cancelled() {
         let conn = crate::test_helpers::setup_db();
         let id = new_run(&conn);
         crate::agent::AgentManager::new(&conn)
             .update_run_failed(&driver_id(&conn, &id), "Workflow 'wf' failed")
             .unwrap();
-        cancel_smoke_drivers(&conn, &id, "smoke: reached agent step 'a'", 0).unwrap();
+        cancel_smoke_descendants(&conn, &id, "smoke: reached agent step 'a'", 0).unwrap();
         assert_eq!(
             driver_of(&conn, &id),
             (
@@ -581,7 +561,7 @@ mod tests {
     }
 
     #[test]
-    fn cancel_smoke_drivers_leaves_a_completed_driver() {
+    fn cancel_smoke_descendants_leaves_a_completed_driver() {
         let conn = crate::test_helpers::setup_db();
         let id = new_run(&conn);
         conn.execute(
@@ -589,7 +569,7 @@ mod tests {
             [driver_id(&conn, &id)],
         )
         .unwrap();
-        cancel_smoke_drivers(&conn, &id, "smoke", 0).unwrap();
+        cancel_smoke_descendants(&conn, &id, "smoke", 0).unwrap();
         assert_eq!(driver_of(&conn, &id).0, "completed");
     }
 

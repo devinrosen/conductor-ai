@@ -137,6 +137,17 @@ fn assert_drivers_cancelled(f: &Fixture, expected: usize) {
         )
         .unwrap();
     assert_eq!(failed, 0, "a passing smoke leaves no failed agent run");
+    let failed_notifications: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM notification_log WHERE event_type = 'agent_failed'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        failed_notifications, 0,
+        "a passing smoke fires no agent_failed notification"
+    );
 }
 
 #[test]
@@ -209,14 +220,19 @@ fn unknown_gate_type_fails_before_any_step() {
         other => panic!("expected a validation failure, got {other:?}"),
     }
     assert!(!ran(&f, "a"));
-    // A failing smoke is not reported as a stop: no driver is marked cancelled.
-    assert!(
-        drivers(&f)
-            .iter()
-            .all(|(_, status, _)| status != "cancelled"),
-        "{:?}",
-        drivers(&f)
-    );
+    // A failing smoke is not reported as a stop: its driver is never finalized as
+    // `cancelled` or `completed`. The error path leaves it `running` for the orphan
+    // reaper to fail once the run is terminal; pin that so a regression to either
+    // status shows up.
+    let drivers = drivers(&f);
+    assert!(!drivers.is_empty(), "the run has a driver");
+    for (name, status, text) in &drivers {
+        assert_eq!(status, "running", "{name} driver: {drivers:?}");
+        assert!(text.is_none(), "{name} driver: {drivers:?}");
+    }
+    // The run row is not recorded as a smoke stop either.
+    let run_id = outcome.run_id.expect("run id");
+    assert_ne!(run_status(&f, &run_id), "cancelled");
 }
 
 #[test]

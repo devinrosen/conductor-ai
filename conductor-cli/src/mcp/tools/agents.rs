@@ -304,6 +304,44 @@ mod tests {
     }
 
     #[test]
+    fn test_dispatch_list_agent_runs_hides_dry_run_driver_unless_included() {
+        use conductor_core::agent::AgentManager;
+        use conductor_core::db::open_database;
+
+        let (_f, conductor) = make_test_conductor();
+        let (real_id, driver_id) = {
+            let conn = open_database(_f.path()).expect("open db");
+            let mgr = AgentManager::new(&conn);
+            let real = mgr.create_run(None, "real task", None).unwrap();
+            let driver = mgr.create_run(None, "smoke driver", None).unwrap();
+            conductor_core::workflow::create_workflow_run(
+                &conn, "smoke", None, &driver.id, true, "manual", None,
+            )
+            .unwrap();
+            (real.id, driver.id)
+        };
+        let text_of = |result: &CallToolResult| {
+            assert_ne!(result.is_error, Some(true), "{:?}", result.content);
+            result.content[0]
+                .as_text()
+                .map(|t| t.text.clone())
+                .unwrap_or_default()
+        };
+
+        let hidden = text_of(&tool_list_agent_runs(&conductor, &empty_args()));
+        assert!(hidden.contains(&real_id), "got: {hidden}");
+        assert!(!hidden.contains(&driver_id), "got: {hidden}");
+
+        for value in [Value::Bool(true), Value::String("true".into())] {
+            let mut args = empty_args();
+            args.insert("include_dry_run".into(), value);
+            let shown = text_of(&tool_list_agent_runs(&conductor, &args));
+            assert!(shown.contains(&driver_id), "got: {shown}");
+            assert!(shown.contains(&real_id), "got: {shown}");
+        }
+    }
+
+    #[test]
     fn test_dispatch_list_agent_runs_waiting_for_feedback() {
         use conductor_core::agent::AgentManager;
         use conductor_core::db::open_database;

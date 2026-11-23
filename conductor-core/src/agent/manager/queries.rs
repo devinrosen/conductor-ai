@@ -1035,6 +1035,14 @@ mod tests {
         );
         assert_eq!(ids(mgr.list_for_repo("r1").unwrap()), vec![real.id.clone()]);
         assert_eq!(
+            mgr.latest_run_for_worktree("w1").unwrap().map(|r| r.id),
+            Some(real.id.clone())
+        );
+        assert_eq!(
+            ids(mgr.list_root_runs_for_worktree("w1").unwrap()),
+            vec![real.id.clone()]
+        );
+        assert_eq!(
             ids(mgr
                 .list_agent_runs(Some("w1"), None, None, 50, 0, false)
                 .unwrap()),

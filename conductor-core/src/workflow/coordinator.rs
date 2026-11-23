@@ -453,27 +453,16 @@ fn flow_engine_builder_with_gates(
     )
 }
 
-/// Build a [`runkon_flow::FlowEngine`] with all gate resolvers registered.
-#[allow(clippy::too_many_arguments)]
-/// Finalize the agent run driving a smoke run that stopped on purpose as
-/// `cancelled` with the smoke reason, not `failed` or left `running`.
-fn finalize_smoke_driver(
-    shared_conn: &Arc<std::sync::Mutex<Connection>>,
-    parent_run_id: &str,
-    reason: &str,
-) {
-    match lock_shared(shared_conn) {
-        Ok(guard) => {
-            if let Err(e) =
-                AgentManager::new(&guard).update_run_cancelled_with_reason(parent_run_id, reason)
-            {
-                tracing::warn!("Failed to mark parent run {parent_run_id} cancelled: {e}");
-            }
-        }
-        Err(e) => tracing::warn!("Failed to lock connection for parent run {parent_run_id}: {e}"),
+/// End the agent run driving a smoke run that stopped on purpose as `cancelled`
+/// with the smoke reason, not `failed` or left `running`. Shared by the error and
+/// success paths of `execute_workflow_standalone`.
+fn cancel_smoke_driver(agent_mgr: &AgentManager, parent_run_id: &str, reason: &str) {
+    if let Err(e) = agent_mgr.update_run_cancelled_with_reason(parent_run_id, reason) {
+        tracing::warn!("Failed to mark parent run {parent_run_id} cancelled: {e}");
     }
 }
 
+/// Build a [`runkon_flow::FlowEngine`] with all gate resolvers registered.
 #[allow(clippy::too_many_arguments)]
 fn build_flow_engine(
     persistence: &Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence>,
@@ -954,6 +943,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         params.smoke.as_ref(),
     )?;
 
+    let smoke_stop = params.smoke.as_ref().and_then(|s| s.stopped_at());
     let rk_result = match engine.run(&rk_def, &mut rk_state) {
         Ok(r) => r,
         Err(e) => {
@@ -974,14 +964,22 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
                     runkon_flow::cancellation_reason::CancellationReason::UserRequested(_)
                 )
             ) {
-                if let Some(point) = params.smoke.as_ref().and_then(|s| s.stopped_at()) {
-                    finalize_smoke_driver(&shared_conn, &parent_run_id, &point.reason());
+                if let Some(point) = &smoke_stop {
+                    match lock_shared(&shared_conn) {
+                        Ok(guard) => cancel_smoke_driver(
+                            &AgentManager::new(&guard),
+                            &parent_run_id,
+                            &point.reason(),
+                        ),
+                        Err(e) => tracing::warn!(
+                            "Failed to lock connection for parent run {parent_run_id}: {e}"
+                        ),
+                    }
                 }
             }
             return Err(map_engine_error(e, &workflow.name, "run"));
         }
     };
-    let smoke_stop = params.smoke.as_ref().and_then(|s| s.stopped_at());
 
     // Close the parent agent run. It was created without a subprocess_pid (workflow
     // parent runs never spawn a subprocess), so the orphan reaper would sweep it the
@@ -1018,11 +1016,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
             }
         } else if let Some(point) = &smoke_stop {
             // A smoke stopped on purpose: the run didn't fail.
-            if let Err(e) =
-                agent_mgr.update_run_cancelled_with_reason(&parent_run_id, &point.reason())
-            {
-                tracing::warn!("Failed to mark parent run {parent_run_id} cancelled: {e}");
-            }
+            cancel_smoke_driver(&agent_mgr, &parent_run_id, &point.reason());
         } else if let Err(e) = agent_mgr.update_run_failed(
             &parent_run_id,
             &format!("Workflow '{}' failed", workflow.name),
