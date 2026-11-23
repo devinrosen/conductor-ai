@@ -1617,15 +1617,78 @@ fn smoke_one(
             1
         }
     };
-    for w in &outcome.env_warnings {
-        let child = if w.workflow == workflow.name {
-            String::new()
-        } else {
-            format!(" in '{}'", w.workflow)
-        };
-        println!("SMOKE WARN  {}  {}{child}", workflow.name, w.describe());
+    for line in smoke_warn_lines(
+        &workflow.name,
+        &outcome.env_warnings,
+        &outcome.env_scan_errors,
+    ) {
+        println!("{line}");
     }
     code
+}
+
+/// The `SMOKE WARN` lines for a smoke outcome: one per unresolved script env
+/// input (with an ` in '<child>'` suffix for a child workflow) and one per
+/// scan error, so an incomplete scan never reads as a clean one.
+fn smoke_warn_lines(
+    workflow_name: &str,
+    warnings: &[conductor_core::workflow::UnresolvedEnvInput],
+    scan_errors: &[String],
+) -> Vec<String> {
+    let mut lines: Vec<String> = warnings
+        .iter()
+        .map(|w| {
+            let child = if w.workflow == workflow_name {
+                String::new()
+            } else {
+                format!(" in '{}'", w.workflow)
+            };
+            format!("SMOKE WARN  {workflow_name}  {}{child}", w.describe())
+        })
+        .collect();
+    lines.extend(
+        scan_errors
+            .iter()
+            .map(|e| format!("SMOKE WARN  {workflow_name}  script env scan incomplete: {e}")),
+    );
+    lines
+}
+
+#[cfg(test)]
+mod smoke_warn_tests {
+    use super::*;
+    use conductor_core::workflow::UnresolvedEnvInput;
+
+    fn warn(workflow: &str) -> UnresolvedEnvInput {
+        UnresolvedEnvInput {
+            workflow: workflow.into(),
+            step: "s".into(),
+            env_var: "E".into(),
+            input: "opt".into(),
+        }
+    }
+
+    #[test]
+    fn warn_line_has_child_suffix_only_for_a_child_workflow() {
+        let lines = smoke_warn_lines("parent", &[warn("parent"), warn("child")], &[]);
+        assert_eq!(
+            lines[0],
+            "SMOKE WARN  parent  script step 's' env E uses input 'opt', which has no value"
+        );
+        assert_eq!(
+            lines[1],
+            "SMOKE WARN  parent  script step 's' env E uses input 'opt', which has no value in 'child'"
+        );
+    }
+
+    #[test]
+    fn scan_errors_become_warn_lines() {
+        let lines = smoke_warn_lines("wf", &[], &["run r1: could not read the run".into()]);
+        assert_eq!(
+            lines,
+            vec!["SMOKE WARN  wf  script env scan incomplete: run r1: could not read the run"]
+        );
+    }
 }
 
 #[cfg(test)]

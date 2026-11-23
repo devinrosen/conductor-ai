@@ -1519,14 +1519,25 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     if let Err(e) = check_declared_inputs_resolved(&rk_def, &resume_inputs) {
         // The run is already marked resuming; don't leave it stuck running.
         let msg = e.to_string();
-        if let Ok(guard) = lock_shared(&shared_conn) {
-            let _ = crate::workflow::update_workflow_status(
-                &guard,
-                &wf_run.id,
-                WorkflowRunStatus::Failed,
-                Some(&msg),
-                Some(&msg),
-            );
+        match lock_shared(&shared_conn) {
+            Ok(guard) => {
+                if let Err(update_err) = crate::workflow::update_workflow_status(
+                    &guard,
+                    &wf_run.id,
+                    WorkflowRunStatus::Failed,
+                    Some(&msg),
+                    Some(&msg),
+                ) {
+                    tracing::warn!(
+                        run_id = %wf_run.id,
+                        "failed to mark run failed after an unresolved-input error: {update_err}"
+                    );
+                }
+            }
+            Err(lock_err) => tracing::warn!(
+                run_id = %wf_run.id,
+                "could not lock the database to mark run failed after an unresolved-input error: {lock_err}"
+            ),
         }
         return Err(e);
     }
@@ -1925,6 +1936,23 @@ mod tests {
         ]);
         let inputs = HashMap::from([("since".to_string(), String::new())]);
         check_declared_inputs_resolved(&wf, &inputs).expect("empty string is a value");
+    }
+
+    #[test]
+    fn check_required_inputs_errors_naming_the_missing_input() {
+        let wf = make_wf(vec![input_decl("ticket", true, InputType::String, None)]);
+        let err = check_required_workflow_inputs(&wf, &HashMap::new()).unwrap_err();
+        assert!(err.to_string().contains("'ticket'"), "{err}");
+    }
+
+    #[test]
+    fn check_required_inputs_accepts_present_or_optional() {
+        let wf = make_wf(vec![
+            input_decl("ticket", true, InputType::String, None),
+            input_decl("opt", false, InputType::String, None),
+        ]);
+        let inputs = HashMap::from([("ticket".to_string(), "1".to_string())]);
+        check_required_workflow_inputs(&wf, &inputs).expect("required present, optional absent");
     }
 
     #[test]

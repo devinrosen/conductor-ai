@@ -246,6 +246,9 @@ pub struct SmokeOutcome {
     pub result: SmokeResult,
     /// Script steps whose `env` uses a declared input that has no value.
     pub env_warnings: Vec<UnresolvedEnvInput>,
+    /// Reasons the env scan could not complete (database or snapshot errors).
+    /// Non-empty means `env_warnings` may be incomplete, not that it is clean.
+    pub env_scan_errors: Vec<String>,
 }
 
 /// A script step's `env` value that names a declared input with no value.
@@ -300,33 +303,45 @@ pub(crate) fn unresolved_env_inputs(
 }
 
 /// Scan a run and its descendants (depth-capped) with [`unresolved_env_inputs`],
-/// using each run's definition snapshot and stored inputs.
+/// using each run's definition snapshot and stored inputs. Failures are
+/// recorded in `errors` so an incomplete scan never looks like a clean one.
 fn scan_env_inputs(
     conn: &rusqlite::Connection,
     run_id: &str,
     depth: u32,
     out: &mut Vec<UnresolvedEnvInput>,
+    errors: &mut Vec<String>,
 ) {
     if depth > 16 {
         return;
     }
-    if let Ok(Some(run)) = crate::workflow::get_workflow_run(conn, run_id) {
-        if let Some(def) = run
-            .definition_snapshot
-            .as_deref()
-            .and_then(|s| serde_json::from_str::<crate::workflow::WorkflowDef>(s).ok())
-        {
-            for w in unresolved_env_inputs(&def, &run.inputs) {
-                if !out.contains(&w) {
-                    out.push(w);
+    match crate::workflow::get_workflow_run(conn, run_id) {
+        Ok(Some(run)) => {
+            if let Some(snapshot) = run.definition_snapshot.as_deref() {
+                match serde_json::from_str::<crate::workflow::WorkflowDef>(snapshot) {
+                    Ok(def) => {
+                        for w in unresolved_env_inputs(&def, &run.inputs) {
+                            if !out.contains(&w) {
+                                out.push(w);
+                            }
+                        }
+                    }
+                    Err(e) => errors.push(format!(
+                        "run {run_id}: definition snapshot did not parse: {e}"
+                    )),
                 }
             }
         }
+        Ok(None) => errors.push(format!("run {run_id}: run row not found")),
+        Err(e) => errors.push(format!("run {run_id}: could not read the run: {e}")),
     }
-    if let Ok(children) = crate::workflow::list_child_workflow_runs(conn, run_id) {
-        for child in children {
-            scan_env_inputs(conn, &child.id, depth + 1, out);
+    match crate::workflow::list_child_workflow_runs(conn, run_id) {
+        Ok(children) => {
+            for child in children {
+                scan_env_inputs(conn, &child.id, depth + 1, out, errors);
+            }
         }
+        Err(e) => errors.push(format!("run {run_id}: could not list child runs: {e}")),
     }
 }
 
@@ -520,13 +535,20 @@ pub fn smoke_run_workflow(mut params: WorkflowExecStandalone) -> SmokeOutcome {
         (Err(e), _) => fail(e.to_string()),
     };
     let mut env_warnings = Vec::new();
-    if let (Ok(conn), Some(id)) = (conn.as_ref(), run_id.as_deref()) {
-        scan_env_inputs(conn, id, 0, &mut env_warnings);
+    let mut env_scan_errors = Vec::new();
+    match (conn.as_ref(), run_id.as_deref()) {
+        (Ok(conn), Some(id)) => {
+            scan_env_inputs(conn, id, 0, &mut env_warnings, &mut env_scan_errors)
+        }
+        (Err(e), Some(_)) => env_scan_errors.push(db_open_error(&db_path, e)),
+        // No run row was created (the run failed before start): nothing to scan.
+        (_, None) => {}
     }
     SmokeOutcome {
         run_id,
         result,
         env_warnings,
+        env_scan_errors,
     }
 }
 
@@ -789,5 +811,50 @@ mod tests {
         );
         let got = unresolved_env_inputs(&wf, &std::collections::HashMap::new());
         assert_eq!(got.len(), 1, "{got:?}");
+    }
+
+    #[test]
+    fn scan_reports_a_stored_run_missing_a_declared_input() {
+        let conn = crate::test_helpers::setup_db();
+        let wf = env_wf(
+            vec![("opt", None)],
+            vec![WorkflowNode::Script(script(&[("A", "{{opt}}")]))],
+        );
+        let snapshot = serde_json::to_string(&wf).unwrap();
+        let parent = crate::agent::AgentManager::new(&conn)
+            .create_run(Some("w1"), "workflow", None)
+            .unwrap();
+        let run = crate::workflow::create_workflow_run(
+            &conn,
+            "wf",
+            Some("w1"),
+            &parent.id,
+            false,
+            "manual",
+            Some(&snapshot),
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        let mut errors = Vec::new();
+        scan_env_inputs(&conn, &run.id, 0, &mut out, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(
+            out[0].describe(),
+            "script step 's' env A uses input 'opt', which has no value"
+        );
+    }
+
+    #[test]
+    fn scan_errors_are_reported_not_swallowed() {
+        let conn = crate::test_helpers::create_test_conn();
+        let mut out = Vec::new();
+        let mut errors = Vec::new();
+        scan_env_inputs(&conn, "no-such-run", 0, &mut out, &mut errors);
+        assert!(out.is_empty());
+        assert!(
+            errors.iter().any(|e| e.contains("no-such-run")),
+            "{errors:?}"
+        );
     }
 }

@@ -497,3 +497,31 @@ fn find_failed_step_stops_recursing_in_a_chain_deeper_than_the_cap() {
     assert!(found.starts_with("step-c16 (in wf-c16)"), "{found}");
     assert!(!found.contains("c17"), "{found}");
 }
+
+#[test]
+fn smoke_reports_no_env_warning_when_defaults_are_applied() {
+    // A declared input used in a script env gets its default at run start, so
+    // the end-to-end smoke has nothing to warn about and no scan error.
+    let f = fixture();
+    let a = script(&f, "a", false);
+    let def = parse(&format!(
+        "inputs {{ opt default = \"v\" }}\nscript a {{ run = \"{a}\" env = {{ OPT = \"{{{{opt}}}}\" }} }}\ncall some-agent"
+    ));
+    let outcome = smoke_run_workflow(params(&f, def));
+    assert!(
+        matches!(outcome.result, SmokeResult::Passed { .. }),
+        "{:?}",
+        outcome.result
+    );
+    assert!(
+        outcome.env_warnings.is_empty(),
+        "{:?}",
+        outcome.env_warnings
+    );
+    assert!(
+        outcome.env_scan_errors.is_empty(),
+        "{:?}",
+        outcome.env_scan_errors
+    );
+    assert!(!ran(&f, "a"));
+}
