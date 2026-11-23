@@ -90,7 +90,7 @@ pub(crate) fn check_declared_inputs_resolved(
     let missing: Vec<String> = workflow
         .inputs
         .iter()
-        .filter(|d| (d.default.is_some() || d.input_type == InputType::Boolean))
+        .filter(|d| d.default.is_some() || d.input_type == InputType::Boolean)
         .filter(|d| !inputs.contains_key(&d.name))
         .map(|d| {
             if d.input_type == InputType::Boolean {
