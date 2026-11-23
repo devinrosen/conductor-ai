@@ -478,6 +478,14 @@ run_ready AUTO_REREVIEW=true
 assert_exit 1
 assert_stderr_contains "predates head"
 
+case_begin "earlier base merge, base fetch fails: refused with the fetch error, not predates head"
+merged_head_case
+git remote set-url origin "$stub/no-such-remote"
+run_ready AUTO_REREVIEW=true
+assert_exit 1
+assert_stderr_contains "could not fetch origin/release/0.22.2"
+git remote set-url origin "$origin"
+
 case_begin "behind the base with a conflict: merge aborted, refused"
 new_case
 git checkout -q main && commit_file "$repo" .conductor/verify-recipe.md other "conflicting base" && git push -q origin main:release/0.22.2 && git checkout -q feature

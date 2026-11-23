@@ -132,11 +132,14 @@ REVIEW=$(printf '%s' "${REVIEWS}" | jq -c --arg bots "${TRUSTED_REVIEW_BOTS:-}" 
 REVIEW_COMMIT=$(printf '%s' "${REVIEW}" | jq -r '.commit_id // ""')
 if [ "${REVIEW_COMMIT}" != "${PR_HEAD}" ]; then
   # An earlier run that merged the base leaves a head nothing re-reviewed (#3452).
-  if is_true "${AUTO_REREVIEW}" \
-     && git fetch --quiet origin "${BASE_BRANCH}" 2>/dev/null \
-     && base_merge_only "${REVIEW_COMMIT}" "${PR_HEAD}" "${BASE_BRANCH}"; then
-    STALE_BASE_MERGE=1
-  else
+  if is_true "${AUTO_REREVIEW}"; then
+    FETCH_ERR=$(git fetch --quiet origin "${BASE_BRANCH}" 2>&1) \
+      || refuse "could not fetch origin/${BASE_BRANCH} to check the head against the review: ${FETCH_ERR}"
+    if base_merge_only "${REVIEW_COMMIT}" "${PR_HEAD}" "${BASE_BRANCH}"; then
+      STALE_BASE_MERGE=1
+    fi
+  fi
+  if [ -z "${STALE_BASE_MERGE}" ]; then
     refuse "last conductor review (${REVIEW_COMMIT:0:7}) predates head ${PR_HEAD:0:7}"
   fi
 fi
