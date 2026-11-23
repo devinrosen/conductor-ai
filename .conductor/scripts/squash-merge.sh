@@ -7,8 +7,10 @@
 # Every gh call passes --repo, resolved once up front: the worktree can be removed under
 # the run once the PR merges, and gh would then fail to find the repo from the cwd (#3414).
 #
-# The commit subject is "<title> (#PR)"; the body is the PR's Summary section, a Closes
-# line per linked issue and the commits' Co-Authored-By trailers, deduplicated.
+# The commit subject is "<title> (#PR)"; the body is the PR's Summary section minus
+# sentences naming a local path (a /Users/ or /home/ directory, a .git/worktrees/ path or
+# a PLAN.md path, #3422), a Closes line per linked issue and the commits' Co-Authored-By
+# and Claude-Session trailers, deduplicated.
 # --match-head-commit means a push after verification is never merged. The branch is
 # not deleted (it is checked out by this worktree), and neither is the worktree: the
 # run is executing in it, so the cleanup command is printed instead (only while the
@@ -59,16 +61,36 @@ SUMMARY=$(echo "${PR}" | jq -r '.body // ""' | tr -d '\r' | awk '
 if [ -z "${SUMMARY}" ]; then
   SUMMARY=$(echo "${PR}" | jq -r '.body // ""' | tr -d '\r' | awk 'NF { p = 1 } p && !NF { exit } p { print }')
 fi
-SUMMARY=$(printf '%s' "${SUMMARY}" | awk 'BEGIN { RS = "" } { sub(/[[:space:]]+$/, ""); print }')
+# Drop sentences that name a machine-local path (POSIX awk: BSD awk has no \s or gensub).
+SUMMARY=$(printf '%s\n' "${SUMMARY}" | awk '
+  function names_local_path(t) {
+    return t ~ /(^|[[:space:](`"])\/(Users|home)\/[^[:space:]\/]+\// \
+      || t ~ /\.git\/worktrees\// \
+      || t ~ /\/[^[:space:]]*PLAN\.md([^[:alnum:]_]|$)/
+  }
+  {
+    if ($0 !~ /[^[:space:]]/) { print ""; next }
+    line = $0; out = ""
+    while (length(line) > 0) {
+      if (match(line, /[.!?][[:space:]]+/)) {
+        seg = substr(line, 1, RSTART); line = substr(line, RSTART + RLENGTH)
+      } else { seg = line; line = "" }
+      if (!names_local_path(seg)) out = (out == "" ? seg : out " " seg)
+    }
+    if (out != "") print out
+  }' | sed -e '/./,$!d' | awk 'BEGIN { RS = "" } { sub(/[[:space:]]+$/, ""); print }')
 
 BODY_FILE=$(mktemp "${TMPDIR:-/tmp}/squash_body.XXXXXX")
-trap 'rm -f "${BODY_FILE}"' EXIT
+TRAILER_SRC=$(mktemp "${TMPDIR:-/tmp}/squash_trailers.XXXXXX")
+trap 'rm -f "${BODY_FILE}" "${TRAILER_SRC}"' EXIT
 {
   [ -z "${SUMMARY}" ] || printf '%s\n\n' "${SUMMARY}"
   for n in ${ISSUES}; do printf 'Closes #%s\n' "${n}"; done
   [ -z "${ISSUES}" ] || printf '\n'
   echo "${PR}" | jq -r '[.commits[].messageBody // empty] | join("\n")' | tr -d '\r' \
-    | grep -iE '^Co-Authored-By:' | awk '!seen[tolower($0)]++' || true
+    > "${TRAILER_SRC}"
+  grep -iE '^Co-Authored-By:' "${TRAILER_SRC}" | awk '!seen[tolower($0)]++' || true
+  grep -iE '^Claude-Session:' "${TRAILER_SRC}" | awk '!seen[tolower($0)]++' || true
 } > "${BODY_FILE}"
 
 if [ "${DRY_RUN:-}" = "true" ]; then
