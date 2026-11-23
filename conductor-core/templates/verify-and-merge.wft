@@ -1,14 +1,14 @@
 ---
 name: verify-and-merge
 description: Check a conductor-reviewed PR is ready, verify it live against its issue's acceptance criteria, post the evidence as a PR comment, then squash-merge it
-version: "1.0.0"
+version: "1.1.0"
 target_types:
   - worktree
 hints:
-  - "The scripts (check-pr-ready.sh, post-verification.sh, squash-merge.sh), the brief (.conductor/agents/verify-acceptance.md) and the output schema (.conductor/schemas/verify-acceptance.yaml) are generic: copy them from conductor-ai as the reference implementation, together with lib-gh-retry.sh, lib-git-retry.sh and lib-trusted-review.sh, which they source. Adapt the `as` identities to the ones the repo has (developer, reviewer, merger)"
+  - "The scripts (check-pr-ready.sh, wait-for-pr-checks.sh, post-verification.sh, squash-merge.sh), the brief (.conductor/agents/verify-acceptance.md) and the output schema (.conductor/schemas/verify-acceptance.yaml) are generic: copy them from conductor-ai as the reference implementation, together with lib-gh-retry.sh, lib-git-retry.sh, lib-pr-checks.sh and lib-trusted-review.sh, which they source. The base-merge path calls the iterate-pr workflow (the iterate-pr template): without one in the repo, drop the `if check-pr-ready.base_merged` block and set the auto_rereview default to \"false\". Adapt the `as` identities to the ones the repo has (developer, reviewer, merger)"
   - "The repo must supply .conductor/verify-recipe.md: how to build the branch, how to exercise each kind of change (CLI, API, UI), what never to touch (production data, real config homes) and which pipeline checks to run. check-pr-ready refuses without it, and the verify-acceptance brief fails clearly on its own"
   - "check-pr-ready trusts only the latest <!-- conductor-review --> review on the head commit that is not dismissed, from an OWNER, MEMBER or COLLABORATOR author or from a bot named in TRUSTED_REVIEW_BOTS (set it in the check-pr-ready env to the repo's reviewer GitHub App login, e.g. conductor-ai-reviewer[bot]: GitHub reports app reviewers as author_association NONE, so without it their reviews never count), and reads approval from the conductor-review-data:v1 payload. If the repo's submit-review differs, keep those checks. A review posted as a COMMENT because the PR changed the review pipeline (withheld approval) needs reviewDecision APPROVED or the confirm input"
-  - "Every refusal is a one-line reason on stderr and exit 1, which becomes the step error: a release PR into the default branch, a draft, a stale or missing review, a failing or pending required check, a conflict, a branch that does not contain its base (the base is merged in and pushed, then the run stops so the new head gets reviewed)"
+  - "Every refusal is a one-line reason on stderr and exit 1, which becomes the step error: a release PR into the default branch, a draft, a stale or missing review, a failing or pending required check, a conflict, a branch that does not contain its base. The base is merged in and pushed; with auto_rereview (default true) the run then calls iterate-pr on the new head, waits for the required checks with wait-for-pr-checks.sh, re-runs check-pr-ready and verifies. With auto_rereview=false it stops there so the new head gets reviewed by hand"
   - "Head pinning: check-pr-ready captures head_sha once, post-verification refuses if the head or working tree changed, and squash-merge passes --match-head-commit, so a push during verification is never merged unverified"
   - "If the repo uses release branches, the recipe confirms the PR targets the open release branch, and a release to default-branch PR stays a manual rebase-merge"
   - "squash-merge closes the linked issues itself when the merge did not (a release-branch merge does not close them); if issues live outside GitHub (Jira), adapt that part. It does not delete the worktree, because the run is executing in it: it prints the cleanup command, only while the worktree still exists. It resolves the repository up front and passes an explicit --repo to every gh call, because the worktree can be removed under the run once the PR merges"
@@ -23,11 +23,31 @@ workflow verify-and-merge {
 
   inputs {
     confirm boolean
+    // "false" restores the old stop after a base merge: merge, push, refuse (#3436).
+    auto_rereview default = "true"
   }
 
   script check-pr-ready {
     run = ".conductor/scripts/check-pr-ready.sh"
-    env = { CONFIRM = "{{confirm}}" DRY_RUN = "{{dry_run}}" TICKET_SOURCE_ID = "{{ticket_source_id}}" }
+    env = { CONFIRM = "{{confirm}}" DRY_RUN = "{{dry_run}}" TICKET_SOURCE_ID = "{{ticket_source_id}}" AUTO_REREVIEW = "{{auto_rereview}}" }
+  }
+
+  // The base was merged in and pushed: the new head has no review and no CI yet (#3436).
+  // The re-check runs with AUTO_REREVIEW off, so a base that moves again refuses rather
+  // than starting a second round.
+  if check-pr-ready.base_merged {
+    call workflow iterate-pr
+
+    script wait-for-pr-checks {
+      run     = ".conductor/scripts/wait-for-pr-checks.sh"
+      env     = { PR_NUMBER = "{{pr_number}}" REQUIRED_CHECKS = "{{required_checks}}" DRY_RUN = "{{dry_run}}" }
+      timeout = 3000
+    }
+
+    script recheck-pr-ready {
+      run = ".conductor/scripts/check-pr-ready.sh"
+      env = { CONFIRM = "{{confirm}}" DRY_RUN = "{{dry_run}}" TICKET_SOURCE_ID = "{{ticket_source_id}}" AUTO_REREVIEW = "false" }
+    }
   }
 
   call verify-acceptance {

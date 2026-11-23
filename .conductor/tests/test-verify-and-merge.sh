@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# check-pr-ready.sh, post-verification.sh and squash-merge.sh end to end against a stub gh (#3407).
+# check-pr-ready.sh, wait-for-pr-checks.sh, post-verification.sh and squash-merge.sh end to end against a stub gh (#3407).
 set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
@@ -7,6 +7,7 @@ source "$(dirname "$0")/lib.sh"
 #   pr.json       what `gh pr view` prints (merged: state/mergeCommit are overridden once `gh pr merge` ran)
 #   reviews.json  one JSON array: the PR's reviews
 #   checks.json   what `gh pr checks` prints (checks.rc: its exit code, checks.err: its stderr)
+#   checks.seq/   instead of checks.json: numbered files (N, N.rc), one consumed per call, the last repeating
 #   issues/N      the state of issue N (OPEN unless the file says CLOSED)
 #   comments.json existing PR comments (default [])
 #   comment       written: the body of `gh pr comment`
@@ -55,6 +56,15 @@ case "$1 $2" in
     fi
     exit 0 ;;
   "pr checks")
+    if [ -d "$d/checks.seq" ]; then
+      n=$(cat "$d/checks.n" 2>/dev/null || echo 0)
+      last=$(ls "$d/checks.seq" | grep -v '\.rc$' | sort -n | tail -1)
+      [ "$n" -gt "$last" ] && n=$last
+      cat "$d/checks.seq/$n"
+      rc=$(cat "$d/checks.seq/$n.rc" 2>/dev/null || echo 0)
+      echo $((n + 1)) > "$d/checks.n"
+      exit "$rc"
+    fi
     cat "$d/checks.json"
     [ -f "$d/checks.err" ] && cat "$d/checks.err" >&2
     exit "$(cat "$d/checks.rc" 2>/dev/null || echo 0)" ;;
@@ -139,6 +149,7 @@ assert_marker pr_ready
 assert_jq ".head_sha == \"$head\" and .pr_number == \"7\" and .base_branch == \"release/0.22.2\""
 assert_jq '.linked_issues == "1 2"'
 assert_jq '.pr_title == "fix: a thing"'
+assert_jq '.required_checks == "Clippy,Test,Docs"'
 
 case_begin "no Closes line: falls back to TICKET_SOURCE_ID"
 new_case
@@ -339,6 +350,42 @@ assert_exit 1
 assert_stderr_contains "merged release/0.22.2 into the branch"
 assert_eq "$(git rev-parse HEAD)" "$(git -C "$origin" rev-parse feature)" "pushed head"
 
+case_begin "behind the base, AUTO_REREVIEW=true: merged, pushed, base_merged emitted"
+new_case
+git checkout -q main && commit_file "$repo" base.txt newer "newer base" && git push -q origin main:release/0.22.2 && git checkout -q feature
+run_ready AUTO_REREVIEW=true
+assert_exit 0
+assert_marker base_merged
+assert_jq ".head_sha == \"$(git rev-parse HEAD)\" and .head_sha != \"$head\" and .pr_number == \"7\""
+assert_jq '.required_checks == "Clippy,Test,Docs" and .linked_issues == "1 2"'
+assert_eq "$(git rev-parse HEAD)" "$(git -C "$origin" rev-parse feature)" "pushed head"
+
+case_begin "behind the base, AUTO_REREVIEW=false or an unresolved placeholder: refused as before"
+new_case
+git checkout -q main && commit_file "$repo" base.txt newer "newer base" && git push -q origin main:release/0.22.2 && git checkout -q feature
+run_ready AUTO_REREVIEW="{{auto_rereview}}"
+assert_exit 1
+assert_stderr_contains "merged release/0.22.2 into the branch"
+
+case_begin "AUTO_REREVIEW=true: a draft, a failing check and a stale review still refuse first"
+new_case
+git checkout -q main && commit_file "$repo" base.txt newer "newer base" && git push -q origin main:release/0.22.2 && git checkout -q feature
+set_pr '.isDraft = true'
+run_ready AUTO_REREVIEW=true
+assert_exit 1
+assert_stderr_contains "draft"
+set_pr '.isDraft = false'
+echo '[{"name":"Clippy","bucket":"fail"}]' > "$stub/checks.json"
+run_ready AUTO_REREVIEW=true
+assert_exit 1
+assert_stderr_contains "required check failing: Clippy"
+echo '[{"name":"Clippy","bucket":"pass"}]' > "$stub/checks.json"
+echo "[$(review 1 MEMBER COMMENTED "abc1234000000000000000000000000000000000" "$(review_body true)")]" > "$stub/reviews.json"
+run_ready AUTO_REREVIEW=true
+assert_exit 1
+assert_stderr_contains "predates head"
+assert_eq "$head" "$(git rev-parse HEAD)" "base not merged"
+
 case_begin "behind the base with a conflict: merge aborted, refused"
 new_case
 git checkout -q main && commit_file "$repo" .conductor/verify-recipe.md other "conflicting base" && git push -q origin main:release/0.22.2 && git checkout -q feature
@@ -357,6 +404,89 @@ assert_exit 1
 assert_stderr_contains "merging origin/release/0.22.2 failed"
 assert_stderr_contains "pre-merge hook said no"
 assert_eq "" "$(git status --porcelain)" "clean tree after the aborted merge"
+
+# --- wait-for-pr-checks.sh ---
+
+run_wait() { # [ENV=VAL...]
+  run_script wait-for-pr-checks.sh PATH="$stub/bin:$PATH" GH_STUB_DIR="$stub" GH_RETRY_DELAYS=0 \
+    PR_NUMBER=7 POLL_INTERVAL=0 WAIT_TIMEOUT=5 EMPTY_GRACE=1 "$@"
+}
+# seq N JSON [RC] — checks.seq/N
+seq() { mkdir -p "$stub/checks.seq"; echo "$2" > "$stub/checks.seq/$1"; [ -n "${3:-}" ] && echo "$3" > "$stub/checks.seq/$1.rc"; return 0; }
+ALL_PASS='[{"name":"Clippy","bucket":"pass"},{"name":"Test","bucket":"pass"}]'
+
+case_begin "wait: pending, then pass: checks_green"
+new_case
+seq 0 '[{"name":"Clippy","bucket":"pass"},{"name":"Test","bucket":"pending"}]' 8
+seq 1 "$ALL_PASS"
+run_wait REQUIRED_CHECKS="Clippy,Test"
+assert_exit 0
+assert_marker checks_green
+assert_eq "2" "$(cat "$stub/checks.n")" "polls"
+
+case_begin "wait: pending, then fail: refused naming the check"
+new_case
+seq 0 '[{"name":"Clippy","bucket":"pending"},{"name":"Test","bucket":"pending"}]' 8
+seq 1 '[{"name":"Clippy","bucket":"pass"},{"name":"Test","bucket":"fail"}]' 1
+run_wait REQUIRED_CHECKS="Clippy,Test"
+assert_exit 1
+assert_stderr_contains "required check failing on ${head:0:7}: Test"
+
+case_begin "wait: a required name not yet reported keeps waiting, then passes"
+new_case
+seq 0 '[{"name":"Clippy","bucket":"pass"}]'
+seq 1 "$ALL_PASS"
+run_wait REQUIRED_CHECKS="Clippy,Test"
+assert_exit 0
+assert_marker checks_green
+assert_eq "2" "$(cat "$stub/checks.n")" "polls"
+
+case_begin "wait: still pending at the timeout: refused"
+new_case
+seq 0 '[{"name":"Test","bucket":"pending"}]' 8
+run_wait REQUIRED_CHECKS="Test" WAIT_TIMEOUT=0
+assert_exit 1
+assert_stderr_contains "required checks still running on ${head:0:7} after"
+assert_stderr_contains "Test"
+
+case_begin "wait: a required name that never appears times out"
+new_case
+seq 0 '[{"name":"Clippy","bucket":"pass"}]'
+run_wait REQUIRED_CHECKS="Clippy,Test" WAIT_TIMEOUT=0
+assert_exit 1
+assert_stderr_contains "still running"
+assert_stderr_contains "Test"
+
+case_begin "wait: PR head lagging the local head never matches: refused at the timeout"
+new_case
+set_pr '.headRefOid = "0123456789abcdef0123456789abcdef01234567"'
+run_wait WAIT_TIMEOUT=0
+assert_exit 1
+assert_stderr_contains "is not the local head ${head:0:7}"
+
+case_begin "wait: no checks and none named: green after the grace"
+new_case
+: > "$stub/checks.json"
+echo 1 > "$stub/checks.rc"
+echo "no required checks reported on the 'x' branch" > "$stub/checks.err"
+run_wait EMPTY_GRACE=0
+assert_exit 0
+assert_marker checks_green
+
+case_begin "wait: unreadable gh output is refused"
+new_case
+: > "$stub/checks.json"
+echo 1 > "$stub/checks.rc"
+echo "HTTP 401: bad credentials" > "$stub/checks.err"
+run_wait
+assert_exit 1
+assert_stderr_contains "could not read required checks"
+
+case_begin "wait: dry run exits 0 without calling gh"
+new_case
+run_wait DRY_RUN=true
+assert_exit 0
+assert_marker checks_green
 
 # --- post-verification.sh ---
 
