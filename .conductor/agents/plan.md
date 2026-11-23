@@ -33,7 +33,7 @@ A non-empty `decisions` list stops the run at a gate before `implement`, so don'
 
 Write the plan to `PLAN.md` in the worktree's git directory, `"$(git rev-parse --git-dir)/PLAN.md"`, not the worktree root. That directory is private to this worktree and outside the working tree, so git never tracks or commits the file, and it stays available to the implement and triage-reviews steps for the rest of the run.
 
-Resolve the absolute path with `git rev-parse --absolute-git-dir` (the file is `<that>/PLAN.md`) and give that absolute path in the FLOW_OUTPUT `summary` and in your closing message. The user reviewing the plan won't find it among the worktree's files.
+Resolve the absolute path with `git rev-parse --absolute-git-dir` (the file is `<that>/PLAN.md`) and give that absolute path in your closing message only. The user reviewing the plan won't find it among the worktree's files. Keep it out of the FLOW_OUTPUT `summary` and out of any `Plan at …` sentence there: the summary becomes the PR's `## Summary` and the squash commit body, and a local path doesn't belong in the release history.
 
 ## Do NOT include verification commands in the plan
 

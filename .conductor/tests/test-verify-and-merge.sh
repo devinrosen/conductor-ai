@@ -648,6 +648,19 @@ assert_eq "no" "$([ -f "$stub/closed" ] && echo yes || echo no)" "issues the mer
 assert_eq "no" "$([ -s "$stub/norepo" ] && echo yes || echo no)" "gh calls without --repo"
 assert_stdout_contains "still here"
 
+case_begin "squash-merge: a local plan path is dropped and Claude-Session trailers are kept"
+new_case
+echo CLOSED > "$stub/issues/1"; echo CLOSED > "$stub/issues/2"
+set_pr '.body = "## Summary\n\nDoes a thing. Plan at /Users/someone/src/repo/.git/worktrees/fix-x/PLAN.md.\nPlan written to /home/u/r/.git/worktrees/y/PLAN.md.\n\n## Test plan\n\nnone"
+  | .commits = [{messageBody: "Co-Authored-By: Pat <p@x>\nClaude-Session: https://claude.ai/code/session_A"}, {messageBody: "claude-session: https://claude.ai/code/session_A\nClaude-Session: https://claude.ai/code/session_B"}]'
+run_merge
+assert_exit 0
+assert_eq "yes" "$(grep -q '^Does a thing\.$' "$stub/merge.body" && echo yes || echo no)" "summary kept"
+assert_eq "no" "$(grep -qE '/Users/|/home/|PLAN\.md|worktrees' "$stub/merge.body" && echo yes || echo no)" "local path in the body"
+assert_eq "2" "$(grep -ci '^Claude-Session:' "$stub/merge.body")" "deduplicated session trailers"
+assert_eq "1" "$(grep -ci '^Co-Authored-By:' "$stub/merge.body")" "co-authored-by trailers"
+assert_eq "no" "$(grep -q '^$' <(sed -n '1,2p' "$stub/merge.body" | sed -n '2p'; true) && echo no || echo yes)" "stray blank after summary"
+
 case_begin "squash-merge: an issue still open after polling is closed by hand"
 new_case
 echo CLOSED > "$stub/issues/1"

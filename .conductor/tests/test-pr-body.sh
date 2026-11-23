@@ -119,6 +119,23 @@ body "$(contexts "$(entry implement 'Nothing was built or tested here.')" "$(ent
 assert_exit 0
 assert_eq "" "$STDOUT" "stdout"
 
+case_begin "sentences naming a local plan path are dropped from the summary and implementation"
+PLAN_PATHS='{"summary":"Adds X. Plan written to /Users/me/r/.git/worktrees/w/PLAN.md.","tasks":[]}'
+body "$(contexts "$(entry plan x "$PLAN_PATHS")" "$(entry implement 'Changed Y. Plan at /home/me/r/.git/worktrees/w/PLAN.md. See ~/.conductor/config.toml.')")"
+assert_exit 0
+assert_stdout_contains "Adds X."
+assert_stdout_contains "Changed Y."
+assert_stdout_contains "~/.conductor/config.toml"
+case "$STDOUT" in *"/Users/"*|*"/home/"*|*PLAN.md*) fail "local path left in the body" ;; esac
+
+case_begin "a plan summary that is only the plan path falls back to the implement summary"
+PLAN_ONLY='{"summary":"Plan: /Users/me/r/.git/worktrees/w/PLAN.md","tasks":[]}'
+body "$(contexts "$(entry plan x "$PLAN_ONLY")" "$(entry implement 'Changed Y.')")"
+assert_exit 0
+assert_stdout_contains "## Summary"
+assert_stdout_contains "Changed Y."
+case "$STDOUT" in *PLAN.md*|*"## Implementation"*) fail "path kept or no fallback" ;; esac
+
 case_begin "unsubstituted template exits non-zero without stderr"
 body '{{prior_contexts}}'
 assert_exit_nonzero
