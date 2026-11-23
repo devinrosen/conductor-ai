@@ -151,6 +151,7 @@ pub use runkon_flow::traits::persistence::{
 pub use runkon_flow::types::FanOutItemRow;
 pub use smoke::{
     smoke_run_workflow, SmokeOutcome, SmokeResult, SmokeStop, SmokeStopKind, SmokeStopPoint,
+    SMOKE_REASON_PREFIX,
 };
 pub use step_log::{
     render_step_log, resolve_step_log_target, StepLogMode, StepLogSource, StepLogTarget,

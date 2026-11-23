@@ -1021,6 +1021,38 @@ fn headless_completed_still_notifies() {
     assert!(t[0].succeeded);
 }
 
+/// Seed `Running`, then report transitions when the run is cancelled with `reason`.
+fn cancelled_with(reason: &str) -> Vec<AgentTerminalTransition> {
+    use crate::agent::AgentRunStatus::*;
+    let mut seen = std::collections::HashMap::new();
+    let mut initialized = false;
+    let r0 = transition_run(Running, "claude");
+    detect_agent_terminal_transitions(
+        std::iter::once((Some("wt"), &r0)),
+        &mut seen,
+        &mut initialized,
+    );
+    let mut r1 = transition_run(Cancelled, "claude");
+    r1.result_text = Some(reason.into());
+    detect_agent_terminal_transitions(
+        std::iter::once((Some("wt"), &r1)),
+        &mut seen,
+        &mut initialized,
+    )
+}
+
+#[test]
+fn cancelled_smoke_driver_does_not_notify() {
+    assert!(cancelled_with("smoke: reached agent step 'review-architecture'").is_empty());
+}
+
+#[test]
+fn user_cancelled_agent_still_notifies() {
+    let t = cancelled_with("Cancelled by user");
+    assert_eq!(t.len(), 1);
+    assert!(!t[0].succeeded);
+}
+
 // --- registry drift: every produced event matches notify/catalog.rs ---
 
 /// Assert `ev` has a registered kind, only registered fields, and every always-set field.

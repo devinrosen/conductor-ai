@@ -102,10 +102,13 @@ impl SmokeStop {
     }
 }
 
+/// Start of every smoke cancellation reason (see [`SmokeStopPoint::reason`]).
+pub const SMOKE_REASON_PREFIX: &str = "smoke: reached ";
+
 impl SmokeStopPoint {
     /// The cancellation reason recorded on the run for this stop.
     pub fn reason(&self) -> String {
-        format!("smoke: reached {} step '{}'", self.kind, self.step)
+        format!("{SMOKE_REASON_PREFIX}{} step '{}'", self.kind, self.step)
     }
 }
 
