@@ -453,6 +453,15 @@ fn flow_engine_builder_with_gates(
     )
 }
 
+/// End the agent run driving a smoke run that stopped on purpose as `cancelled`
+/// with the smoke reason, not `failed` or left `running`. Shared by the error and
+/// success paths of `execute_workflow_standalone`.
+fn cancel_smoke_driver(agent_mgr: &AgentManager, parent_run_id: &str, reason: &str) {
+    if let Err(e) = super::smoke::cancel_driver(agent_mgr, parent_run_id, reason) {
+        tracing::warn!("{e}");
+    }
+}
+
 /// Build a [`runkon_flow::FlowEngine`] with all gate resolvers registered.
 #[allow(clippy::too_many_arguments)]
 fn build_flow_engine(
@@ -934,6 +943,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         params.smoke.as_ref(),
     )?;
 
+    let smoke_stop = params.smoke.as_ref().and_then(|s| s.stopped_at());
     let rk_result = match engine.run(&rk_def, &mut rk_state) {
         Ok(r) => r,
         Err(e) => {
@@ -947,6 +957,25 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
                 // behind. signal_lease_abort fires registry.cancel, but this
                 // ensures termination even if the cancel path had no PID.
                 terminate_subprocesses_on_lease_lost(&shared_conn, &wf_run_id, "run");
+            }
+            if matches!(
+                &e,
+                runkon_flow::engine_error::EngineError::Cancelled(
+                    runkon_flow::cancellation_reason::CancellationReason::UserRequested(_)
+                )
+            ) {
+                if let Some(point) = &smoke_stop {
+                    match lock_shared(&shared_conn) {
+                        Ok(guard) => cancel_smoke_driver(
+                            &AgentManager::new(&guard),
+                            &parent_run_id,
+                            &point.reason(),
+                        ),
+                        Err(e) => tracing::warn!(
+                            "Failed to lock connection for parent run {parent_run_id}: {e}"
+                        ),
+                    }
+                }
             }
             return Err(map_engine_error(e, &workflow.name, "run"));
         }
@@ -985,6 +1014,9 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
             ) {
                 tracing::warn!("Failed to mark parent run {parent_run_id} completed: {e}");
             }
+        } else if let Some(point) = &smoke_stop {
+            // A smoke stopped on purpose: the run didn't fail.
+            cancel_smoke_driver(&agent_mgr, &parent_run_id, &point.reason());
         } else if let Err(e) = agent_mgr.update_run_failed(
             &parent_run_id,
             &format!("Workflow '{}' failed", workflow.name),
