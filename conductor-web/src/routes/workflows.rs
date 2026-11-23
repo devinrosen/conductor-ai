@@ -962,6 +962,7 @@ pub async fn list_all_workflow_runs_handler(
             worktree_id: params.worktree.as_deref(),
             include_inactive,
             include_dry_run: params.include_dry_run.unwrap_or(false),
+            top_level_only: false,
             limit: effective_runs_limit(params.limit),
             offset: params.offset.unwrap_or(0),
         },

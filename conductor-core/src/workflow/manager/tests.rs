@@ -284,6 +284,7 @@ fn page_filter<'a>(
         worktree_id: None,
         include_inactive,
         include_dry_run: false,
+        top_level_only: false,
         limit,
         offset,
     }
