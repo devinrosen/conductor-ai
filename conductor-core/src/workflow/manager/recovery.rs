@@ -354,6 +354,18 @@ pub fn reap_orphaned_workflow_runs(conn: &Connection) -> Result<usize> {
 /// every reclaim path so they agree on whether a lease has expired.
 const LEASE_EXPIRED_SQL: &str = "(lease_until IS NULL OR datetime(lease_until) <= datetime('now'))";
 
+/// SQL condition: the run is a root `running` run with no active step (it
+/// includes zero-step runs). Shared by the stuck-run and expired-lease claims so
+/// the definition of "idle" can't drift between them. Unqualified columns refer
+/// to `workflow_runs`.
+const ROOT_RUN_IDLE_SQL: &str = "status = 'running' \
+     AND parent_workflow_run_id IS NULL \
+     AND NOT EXISTS ( \
+       SELECT 1 FROM workflow_run_steps wrs \
+       WHERE wrs.workflow_run_id = workflow_runs.id \
+         AND wrs.status IN ('running', 'pending', 'waiting') \
+     )";
+
 /// Root `running` runs with no active step whose age exceeds `threshold_secs`
 /// and whose lease is expired or unset.
 ///
@@ -371,13 +383,7 @@ pub fn detect_stuck_workflow_run_ids(
         conn,
         &format!(
             "SELECT id FROM workflow_runs \
-             WHERE status = 'running' \
-               AND parent_workflow_run_id IS NULL \
-               AND NOT EXISTS ( \
-                 SELECT 1 FROM workflow_run_steps wrs \
-                 WHERE wrs.workflow_run_id = workflow_runs.id \
-                   AND wrs.status IN ('running', 'pending', 'waiting') \
-               ) \
+             WHERE {ROOT_RUN_IDLE_SQL} \
                AND {LEASE_EXPIRED_SQL} \
                AND ( \
                  CAST(strftime('%s', 'now') AS INTEGER) - \
@@ -610,13 +616,7 @@ pub fn claim_expired_lease_runs(
         conn,
         &format!(
             "SELECT id, workflow_name, target_label FROM workflow_runs \
-             WHERE status = 'running' \
-               AND parent_workflow_run_id IS NULL \
-               AND NOT EXISTS ( \
-                 SELECT 1 FROM workflow_run_steps wrs \
-                 WHERE wrs.workflow_run_id = workflow_runs.id \
-                   AND wrs.status IN ('running', 'pending', 'waiting') \
-               ) \
+             WHERE {ROOT_RUN_IDLE_SQL} \
                AND {LEASE_EXPIRED_SQL}"
         ),
         [],
