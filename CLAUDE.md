@@ -238,7 +238,7 @@ gh pr create ...
 
 - All record IDs are ULIDs (sortable, collision-resistant)
 - All timestamps are ISO 8601 strings
-- Worktree branch naming auto-detects `feat-`/`fix-` prefix and normalizes to `feat/`/`fix/` branches. Other prefixes normalize the same way, so a worktree named `release-X.Y.Z` maps to the `release/X.Y.Z` branch and collides with a release branch; use a name like `bump-XYZ` for release-commit worktrees
+- Worktree branch naming maps a fixed list of name prefixes to branch prefixes: `feat-`, `fix-`, `bug-` (→ `fix/`), `release-`, `chore-`, `docs-`, `refactor-`, `test-`, `ci-` and `perf-` (`SLUG_PREFIXES` in `conductor-core/src/worktree/manager.rs`). Any other name gets `feat-` prepended: `bump-0223` becomes slug `feat-bump-0223` on branch `feat/bump-0223`. A worktree named `release-X.Y.Z` maps to the `release/X.Y.Z` branch and collides with the release branch; name a release-commit worktree `chore-bump-XYZ` (branch `chore/bump-XYZ`)
 - A GitHub issue filed after the last ticket sync isn't known to conductor yet: run a full `conductor_sync_tickets` (syncing that single ticket fails) before passing its number as `ticket_id`
 - JS dep auto-install detects package manager via lockfile: bun > pnpm > yarn > npm
 - Ticket upserts use `ON CONFLICT DO UPDATE` on `(repo_id, source_type, source_id)` for idempotency
