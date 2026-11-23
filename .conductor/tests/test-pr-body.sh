@@ -231,4 +231,37 @@ case "$STDOUT" in
   *) fail "section order should be Summary, Implementation, Decisions, Verification, Risks" ;;
 esac
 
+SMOKES='{"markers":[],"context":"PASS","passed":true,"checks":[{"name":"cargo build","status":"pass","summary":"ok"}],"smokes":[{"workflow":"child","reason":"changed","status":"pass","run_id":"01RUNCHILD","detail":""},{"workflow":"parent","reason":"calls child","status":"pass","run_id":"01RUNPARENT","detail":""},{"workflow":"ticket-to-pr","reason":"calls parent","status":"skip","run_id":"","detail":"no value for required input ticket_id"}]}'
+
+case_begin "smokes: a Smokes section after Verification with run IDs and the skip named"
+body "$(contexts "$(entry plan x "$PLAN")" "$(entry implement 'Did it.')" "$(entry verify PASS "$SMOKES")")"
+assert_exit 0
+assert_stdout_contains "## Smokes"
+assert_stdout_contains '- `child` (changed): pass, run `01RUNCHILD`'
+assert_stdout_contains '- `parent` (calls child): pass, run `01RUNPARENT`'
+assert_stdout_contains '- `ticket-to-pr` (calls parent): skipped, no value for required input ticket_id'
+case "$STDOUT" in
+  *"## Verification"*"## Smokes"*"## Risks and open questions"*) ;;
+  *) fail "section order should be Verification, Smokes, Risks" ;;
+esac
+
+case_begin "smokes: a failing smoke is listed as FAIL"
+FAILSM='{"passed":false,"checks":[],"smokes":[{"workflow":"child","reason":"changed","status":"fail","run_id":"01RUNBAD","detail":"x"}]}'
+body "$(contexts "$(entry plan x "$PLAN")" "$(entry implement 'Did it.')" "$(entry verify FAIL "$FAILSM")")"
+assert_stdout_contains '- `child` (changed): FAIL, run `01RUNBAD`'
+
+case_begin "smokes: none or an empty list gives no section"
+body "$(contexts "$(entry plan x "$PLAN")" "$(entry implement 'Did it.')" "$(entry verify PASS "$VERIFY_PASS")")"
+assert_stdout_not_contains "## Smokes"
+EMPTYSM=$(printf '%s' "$VERIFY_PASS" | jq -c '. + {smokes: []}')
+body "$(contexts "$(entry plan x "$PLAN")" "$(entry implement 'Did it.')" "$(entry verify PASS "$EMPTYSM")")"
+assert_stdout_not_contains "## Smokes"
+
+case_begin "smokes: PR_BODY_SECTION=smokes prints only the section"
+body "$(contexts "$(entry plan x "$PLAN")" "$(entry verify PASS "$SMOKES")")" PR_BODY_SECTION=smokes
+assert_stdout_contains "## Smokes"
+assert_stdout_not_contains "## Summary"
+body "$(contexts "$(entry verify PASS "$VERIFY_PASS")")" PR_BODY_SECTION=smokes
+assert_eq "" "$STDOUT" "section-only output without smokes"
+
 finish

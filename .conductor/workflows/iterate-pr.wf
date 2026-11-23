@@ -163,5 +163,15 @@ workflow iterate-pr {
       run = ".conductor/scripts/push.sh"
       as  = "developer"
     }
+
+    // verify ran the dry-run smokes when this cycle changed a .wf/.wft file: put them in
+    // the PR body's ## Smokes section (#3453). A no-op otherwise.
+    script update-pr-smokes {
+      run = ".conductor/scripts/update-pr-smokes.sh"
+      env = {
+        PR_NUMBER      = "{{pr_number}}"
+        PRIOR_CONTEXTS = "{{prior_contexts}}"
+      }
+    }
   } while push.pushed_new_commits
 }

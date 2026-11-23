@@ -17,7 +17,20 @@ case "$1" in
       exit 1
     fi
     ;;
-  run) echo "1/1 workflow(s) passed" ;;
+  run)
+    case "$*" in
+      *--dry-run*)
+        # workflow validate <name> --dry-run: the smoke call from smoke-workflows.sh
+        name=$(printf '%s\n' "$*" | sed -n -E 's/.* validate ([^ ]+) --dry-run.*/\1/p')
+        if [ -f "$CARGO_STUB_DIR/fail_smoke" ]; then
+          echo "SMOKE FAIL  ${name} at step 's': stub smoke failure  (run 01TESTFAIL)"
+          exit 1
+        fi
+        echo "SMOKE PASS  ${name}  stopped at agent step 'a'  (run 01TESTPASS)"
+        ;;
+      *) echo "1/1 workflow(s) passed" ;;
+    esac
+    ;;
 esac
 exit 0
 STUB
@@ -28,7 +41,7 @@ export PATH="$STUB_DIR/bin:$PATH"
 # switches to a feature branch and cd's into the repo.
 new_repo() {
   repo=$(scratch_repo)
-  rm -f "$STUB_DIR/fail_build" "$STUB_DIR/calls"
+  rm -f "$STUB_DIR/fail_build" "$STUB_DIR/fail_smoke" "$STUB_DIR/calls"
   commit_file "$repo" .conductor/tests/run.sh "#!/usr/bin/env bash
 touch \"\$PWD/ran-sentinel\"
 $1" init
@@ -91,5 +104,51 @@ run_script verify.sh FEATURE_BASE_BRANCH=main
 assert_eq "none" "$(check_status)" "check status"
 assert_jq '[.checks[] | select(.name == "conductor workflow validate")] | length == 1'
 [ ! -e "$repo/ran-sentinel" ] || fail "run.sh ran for a .wf-only change"
+
+smoke_status() { # status of the workflow smokes check, or "none"
+  flow_output | jq -r '[.checks[] | select(.name == "workflow smokes") | .status][0] // "none"'
+}
+
+case_begin "a .wf change runs the smokes and records the run ID"
+new_repo "$PASSING"
+commit_file "$repo" .conductor/workflows/x.wf "workflow x {}" change
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_exit 0
+assert_no_markers
+assert_eq "pass" "$(smoke_status)" "smokes status"
+assert_jq '.smokes | length == 1 and .[0].workflow == "x" and .[0].status == "pass" and .[0].run_id == "01TESTPASS"'
+
+case_begin "a failing smoke is a failed check and names the workflow and run"
+new_repo "$PASSING"
+touch "$STUB_DIR/fail_smoke"
+commit_file "$repo" .conductor/workflows/x.wf "workflow x {}" change
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_marker has_failures
+assert_eq "fail" "$(smoke_status)" "smokes status"
+assert_context_contains "x (changed) run 01TESTFAIL"
+assert_jq '.smokes[0].status == "fail"'
+
+case_begin "scripts-only change runs no smokes"
+new_repo "$PASSING"
+commit_file "$repo" .conductor/scripts/foo.sh "echo hi" change
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_eq "none" "$(smoke_status)" "smokes status"
+assert_jq '.smokes == []'
+
+case_begin "a .wft change smokes the same-name workflow"
+new_repo "$PASSING"
+commit_file "$repo" .conductor/workflows/x.wf "workflow x {}" base
+commit_file "$repo" conductor-core/templates/x.wft "template" change
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_eq "pass" "$(smoke_status)" "smokes status"
+assert_jq '.smokes[0].workflow == "x"'
+
+case_begin "smokes are skipped when cargo build fails"
+new_repo "$PASSING"
+touch "$STUB_DIR/fail_build"
+commit_file "$repo" .conductor/workflows/x.wf "workflow x {}" change
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_eq "skipped" "$(smoke_status)" "smokes status"
+assert_jq '.smokes == []'
 
 finish
