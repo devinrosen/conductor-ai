@@ -365,8 +365,8 @@ A completed workflow run cost a multiple of its baseline. (supports `:root`; nee
 | `RUNKON_NOTIFY_FIELD_URL` | yes | Web UI deep link; empty when `[web] url` is not set |
 | `RUNKON_NOTIFY_FIELD_TIMESTAMP` | yes | RFC 3339 time the event was built |
 | `RUNKON_NOTIFY_FIELD_MULTIPLE` | yes | Multiple over the baseline, e.g. `3.5` |
-| `RUNKON_NOTIFY_FIELD_COST_USD` | yes | Run cost in USD |
 | `RUNKON_NOTIFY_FIELD_IS_ROOT` | yes | `true` when the run has no parent, else `false` |
+| `RUNKON_NOTIFY_FIELD_COST_USD` | yes | Run cost in USD |
 
 #### `workflow_run.duration_spike`
 

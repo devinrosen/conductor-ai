@@ -153,32 +153,30 @@ const REAPED_FIELDS: &[EventField] = &[
     TIMESTAMP,
 ];
 
-const COST_SPIKE_FIELDS: &[EventField] = &[
-    RUN_ID_WORKFLOW,
-    WORKFLOW_NAME,
-    PARENT_RUN_ID,
-    REPO_SLUG,
-    BRANCH,
-    DURATION_MS,
-    URL,
-    TIMESTAMP,
-    MULTIPLE,
-    f("cost_usd", "Run cost in USD"),
-    IS_ROOT,
-];
+/// Declares a spike event's field list: the fields `spike_event` in
+/// `anomalies.rs` always sets, followed by the event's own extras. A macro
+/// because `const` slices cannot be concatenated.
+macro_rules! spike_fields {
+    ($($extra:expr),* $(,)?) => {
+        &[
+            RUN_ID_WORKFLOW,
+            WORKFLOW_NAME,
+            PARENT_RUN_ID,
+            REPO_SLUG,
+            BRANCH,
+            DURATION_MS,
+            URL,
+            TIMESTAMP,
+            MULTIPLE,
+            IS_ROOT,
+            $($extra),*
+        ]
+    };
+}
 
-const DURATION_SPIKE_FIELDS: &[EventField] = &[
-    RUN_ID_WORKFLOW,
-    WORKFLOW_NAME,
-    PARENT_RUN_ID,
-    REPO_SLUG,
-    BRANCH,
-    DURATION_MS,
-    URL,
-    TIMESTAMP,
-    MULTIPLE,
-    IS_ROOT,
-];
+const COST_SPIKE_FIELDS: &[EventField] = spike_fields![f("cost_usd", "Run cost in USD")];
+
+const DURATION_SPIKE_FIELDS: &[EventField] = spike_fields![];
 
 const AGENT_COMPLETED_FIELDS: &[EventField] = &[
     RUN_ID_AGENT,
