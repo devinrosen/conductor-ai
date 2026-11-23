@@ -397,6 +397,32 @@ fn test_list_workflow_runs_page_ties_break_by_id_desc() {
 }
 
 #[test]
+fn test_list_all_workflow_runs_filtered_paginated_ties_break_by_id_desc() {
+    let conn = setup_db();
+    for _ in 0..5 {
+        let run = create_worktree_run(&conn, "w1");
+        set_started_at(&conn, &run.id, "2024-01-01T00:00:00Z");
+    }
+    let mut ids: Vec<String> = Vec::new();
+    for offset in [0, 2, 4] {
+        let page = crate::workflow::list_all_workflow_runs_filtered_paginated(
+            &conn,
+            None,
+            2,
+            offset,
+            crate::workflow::RunListFlags::default(),
+        )
+        .unwrap();
+        ids.extend(page.iter().map(|r| r.id.clone()));
+    }
+    assert_eq!(ids.len(), 5);
+    let mut expected = ids.clone();
+    expected.sort_by(|a, b| b.cmp(a));
+    expected.dedup();
+    assert_eq!(ids, expected, "pages disjoint and ordered by id DESC");
+}
+
+#[test]
 fn test_list_workflow_runs_page_repo_filter_via_worktree() {
     let conn = setup_db();
     let in_r1 = create_worktree_run(&conn, "w1");
