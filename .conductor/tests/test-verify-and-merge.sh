@@ -486,6 +486,24 @@ run_ready AUTO_REREVIEW=true
 assert_exit 1
 assert_stderr_contains "is not in this checkout"
 
+case_begin "review without a commit id: refused with its own message, not predates head"
+merged_head_case
+echo "[$(review 1 MEMBER COMMENTED "" "$(review_body true)")]" > "$stub/reviews.json"
+run_ready AUTO_REREVIEW=true
+assert_exit 1
+assert_stderr_contains "has no commit id"
+
+case_begin "git rev-list fails after the ancestor check: refused with its own message, not predates head"
+merged_head_case
+real_git=$(command -v git)
+printf '#!/bin/sh\ncase "$*" in *"rev-list --first-parent"*) echo "fatal: bad object" >&2; exit 128;; esac\nexec %s "$@"\n' "$real_git" > "$stub/bin/git"
+chmod +x "$stub/bin/git"
+run_ready AUTO_REREVIEW=true
+rm -f "$stub/bin/git"
+assert_exit 1
+assert_stderr_contains "could not list commits"
+assert_stderr_contains "bad object"
+
 case_begin "earlier base merge, base fetch fails: refused with the fetch error, not predates head"
 merged_head_case
 git remote set-url origin "$stub/no-such-remote"
