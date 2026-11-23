@@ -295,6 +295,18 @@ fn ensure_cancelled(
     Ok(())
 }
 
+/// End the agent run driving a smoke run as `cancelled` with the smoke reason.
+/// The one place the rule lives; callers decide whether a failure is fatal.
+pub(super) fn cancel_driver(
+    agent_mgr: &crate::agent::AgentManager,
+    driver_id: &str,
+    reason: &str,
+) -> std::result::Result<(), String> {
+    agent_mgr
+        .update_run_cancelled_with_reason(driver_id, reason)
+        .map_err(|e| format!("failed to cancel driving agent run {driver_id}: {e}"))
+}
+
 /// Make the smoke run's tree end the way a passing smoke must: the agent run
 /// driving `run_id` and each descendant's driver end `cancelled` with the smoke
 /// reason, and every descendant run that isn't `completed` or `cancelled` does too.
@@ -322,9 +334,7 @@ fn cancel_smoke_descendants(
         )
         .map_err(|e| format!("failed to read driver of smoke run {run_id}: {e}"))?;
     if let Some(driver) = driver.filter(|d| !d.is_empty()) {
-        crate::agent::AgentManager::new(conn)
-            .update_run_cancelled_with_reason(&driver, reason)
-            .map_err(|e| format!("failed to cancel driving agent run {driver}: {e}"))?;
+        cancel_driver(&crate::agent::AgentManager::new(conn), &driver, reason)?;
     }
     let children = crate::workflow::list_child_workflow_runs(conn, run_id)
         .map_err(|e| format!("failed to list child runs of smoke run {run_id}: {e}"))?;

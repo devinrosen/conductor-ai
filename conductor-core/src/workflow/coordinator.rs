@@ -457,8 +457,8 @@ fn flow_engine_builder_with_gates(
 /// with the smoke reason, not `failed` or left `running`. Shared by the error and
 /// success paths of `execute_workflow_standalone`.
 fn cancel_smoke_driver(agent_mgr: &AgentManager, parent_run_id: &str, reason: &str) {
-    if let Err(e) = agent_mgr.update_run_cancelled_with_reason(parent_run_id, reason) {
-        tracing::warn!("Failed to mark parent run {parent_run_id} cancelled: {e}");
+    if let Err(e) = super::smoke::cancel_driver(agent_mgr, parent_run_id, reason) {
+        tracing::warn!("{e}");
     }
 }
 
