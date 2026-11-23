@@ -52,6 +52,7 @@ workflow iterate-pr {
 - `trigger = "scheduled"` requires exactly one of `every = "<duration>"` or `cron = "<5-field cron>"` in `meta` (optional `timezone`), checked at parse time. Both, neither, or a schedule field on a `manual` or `pr` workflow is a parse error. runkon only parses the schedule; conductor has no scheduler and does not run scheduled workflows.
 - Comments are `//` to end of line. `#` is **not** a comment; the lexer skips only `//`.
 - An input with neither `required` nor `default` is required. Inputs also take `description`.
+- A top-level run fills each declared `default` (and `"false"` for a `boolean` input) however it is started (CLI, MCP, web, TUI), stores the filled values on the run, and fails before creating the run if a `required` input is missing. Resume fills defaults again for runs stored without them.
 - Input values are strings. A `boolean` input is the string `"true"` or `"false"`; only a case-insensitive `"true"` counts as true.
 - Identifiers allow `[a-zA-Z0-9_-]`, so `push-and-pr` is one name.
 

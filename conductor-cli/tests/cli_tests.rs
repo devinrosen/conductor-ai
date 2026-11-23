@@ -515,6 +515,66 @@ fn workflow_launch_detached_reports_run_id_and_build_and_completes() {
     assert_eq!(status, "completed");
 }
 
+/// A run started through the MCP launch path with no inputs gets the declared
+/// defaults: the substituted value reaches a script step's env and the run's
+/// stored inputs include it (#3449).
+#[cfg(unix)]
+#[test]
+fn workflow_launch_detached_applies_input_defaults() {
+    let home = tempfile::tempdir().unwrap();
+    let wt = setup_valid_workflow_fixture();
+    let dir = wt.path().to_str().unwrap();
+    let out_file = wt.path().join("seen.txt");
+    let script = wt.path().join(".conductor/scripts/record.sh");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nprintf '%s' \"$AUTO_REREVIEW\" > '{}'\n",
+            out_file.display()
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    std::fs::write(
+        wt.path().join(".conductor/workflows/defaults.wf"),
+        "workflow defaults {\n  meta {\n    trigger = \"manual\"\n    targets = [\"worktree\"]\n  }\n  inputs {\n    auto_rereview default = \"true\"\n  }\n  script record {\n    run = \".conductor/scripts/record.sh\"\n    env = { AUTO_REREVIEW = \"{{auto_rereview}}\" }\n  }\n}\n",
+    )
+    .unwrap();
+    let spec = serde_json::json!({
+        "kind": "run",
+        "workflow_name": "defaults",
+        "working_dir": dir,
+        "repo_path": dir,
+    });
+    let out = launch_detached(home.path(), &spec.to_string());
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let reply = String::from_utf8(out.stderr).unwrap();
+    let run_id = reply.split_whitespace().next().unwrap();
+
+    let conn = conductor_core::db::open_database(&home.path().join("conductor.db")).unwrap();
+    let (status, inputs): (String, String) = conn
+        .query_row(
+            "SELECT status, inputs FROM workflow_runs WHERE id = ?1",
+            [run_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "completed");
+    assert_eq!(std::fs::read_to_string(&out_file).unwrap(), "true");
+    let inputs: std::collections::HashMap<String, String> = serde_json::from_str(&inputs).unwrap();
+    assert_eq!(
+        inputs.get("auto_rereview").map(String::as_str),
+        Some("true")
+    );
+}
+
 /// A workflow that does not exist is reported as an `ERROR:` line, not a silent exit.
 #[cfg(unix)]
 #[test]
