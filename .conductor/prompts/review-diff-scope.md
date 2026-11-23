@@ -50,6 +50,26 @@ turns picking through a fabricated diff.
 - Pure deletions with no replacement unless they introduce a regression
 - Formatting-only changes (whitespace, import ordering)
 
+## Previous review round
+
+The blocking findings of this PR's previous conductor review, if it had one. In an
+incremental review, the commits you are reviewing are mostly the answer to them:
+
+{{previous_round}}
+
+Rules for findings that touch the previous round (these apply to every scope):
+
+- **Don't undo a resolution.** Don't raise a finding against code that was added to
+  resolve one of the findings above (for example, calling the struct that fixed "the
+  filter's field is ignored" duplication) unless that code has a real defect. If it does,
+  name the earlier finding in your message and say why the new concern outweighs it.
+- **Don't escalate a conditional request.** If the previous round asked for something
+  only "if it can be done", "optionally" or "if practical", and it wasn't done, don't
+  re-raise it as a blocking finding.
+- **Don't repeat an addressed finding.** If the new commits address a finding above,
+  don't raise it again in other words. A finding that wasn't addressed may be raised
+  again, with the same wording.
+
 ## Path verification (required for every finding)
 
 Before emitting any entry in `findings`, verify that the cited `file` path
