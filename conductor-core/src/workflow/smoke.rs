@@ -713,7 +713,10 @@ mod tests {
         }
     }
 
-    fn env_wf(inputs: Vec<(&str, Option<&str>)>, nodes: Vec<WorkflowNode>) -> crate::workflow::WorkflowDef {
+    fn env_wf(
+        inputs: Vec<(&str, Option<&str>)>,
+        nodes: Vec<WorkflowNode>,
+    ) -> crate::workflow::WorkflowDef {
         use runkon_flow::dsl::{InputDecl, InputType, WorkflowTrigger};
         crate::workflow::WorkflowDef {
             name: "wf".to_string(),
