@@ -27,10 +27,17 @@ static STEP_SELECT_EXPANDED: std::sync::LazyLock<String> = std::sync::LazyLock::
 });
 use crate::workflow::WorkflowRunStatus;
 
+/// The bare top-level predicate, shared by the named-param [`TOP_LEVEL_FILTER`] and the
+/// positional [`query_run_page`] builder. A macro because `concat!` takes only literals.
+macro_rules! top_level_predicate {
+    () => {
+        "workflow_runs.parent_workflow_run_id IS NULL"
+    };
+}
+
 /// Predicate (bound by `:top_level_only`) that drops child runs. Qualified so it works
 /// both with and without the `worktrees` join.
-const TOP_LEVEL_FILTER: &str =
-    "(:top_level_only = 0 OR workflow_runs.parent_workflow_run_id IS NULL)";
+const TOP_LEVEL_FILTER: &str = concat!("(:top_level_only = 0 OR ", top_level_predicate!(), ")");
 
 /// Predicate (bound by `:include_dry_run`) that hides dry-run runs: `validate --dry-run`
 /// smokes (and their child runs, which carry `dry_run = 1` too) and runs started with
@@ -642,16 +649,17 @@ pub fn list_all_workflow_runs_filtered_paginated(
     let statuses = status.map(|s| [s]);
     query_run_page(
         conn,
-        &RunPageQuery {
-            statuses: statuses.as_ref().map(|s| s.as_slice()),
+        &WorkflowRunListFilter {
+            statuses: &[],
             repo_id: None,
             worktree_id: None,
             include_inactive: flags.include_inactive,
-            top_level_only: flags.top_level_only,
             include_dry_run: flags.include_dry_run,
             limit,
             offset,
         },
+        statuses.as_ref().map(|s| s.as_slice()),
+        flags.top_level_only,
     )
 }
 
@@ -878,41 +886,24 @@ pub fn list_workflow_runs_page(
     conn: &Connection,
     f: &WorkflowRunListFilter,
 ) -> Result<Vec<ConductorWorkflowRun>> {
-    query_run_page(
-        conn,
-        &RunPageQuery {
-            statuses: Some(effective_statuses(f.statuses)),
-            repo_id: f.repo_id,
-            worktree_id: f.worktree_id,
-            include_inactive: f.include_inactive,
-            top_level_only: false,
-            include_dry_run: f.include_dry_run,
-            limit: f.limit,
-            offset: f.offset,
-        },
-    )
-}
-
-/// Internal superset of [`WorkflowRunListFilter`] that [`query_run_page`] runs.
-struct RunPageQuery<'a> {
-    /// `None` applies no status filter; callers pass the defaulted list otherwise.
-    statuses: Option<&'a [WorkflowRunStatus]>,
-    repo_id: Option<&'a str>,
-    worktree_id: Option<&'a str>,
-    include_inactive: bool,
-    top_level_only: bool,
-    include_dry_run: bool,
-    limit: usize,
-    offset: usize,
+    query_run_page(conn, f, Some(effective_statuses(f.statuses)), false)
 }
 
 /// The one SELECT/JOIN/guard/ORDER BY behind every cross-worktree run list. No
 /// `DISTINCT`: `worktrees.id` is the primary key, so the join yields at most one row
 /// per run.
-fn query_run_page(conn: &Connection, q: &RunPageQuery) -> Result<Vec<ConductorWorkflowRun>> {
+///
+/// `statuses` replaces `f.statuses`, which this function does not read: `None` applies no
+/// status filter, `Some` is used as given (callers default it).
+fn query_run_page(
+    conn: &Connection,
+    f: &WorkflowRunListFilter,
+    statuses: Option<&[WorkflowRunStatus]>,
+    top_level_only: bool,
+) -> Result<Vec<ConductorWorkflowRun>> {
     let mut params: Vec<rusqlite::types::Value> = Vec::new();
     let mut clauses: Vec<String> = Vec::new();
-    if let Some(statuses) = q.statuses {
+    if let Some(statuses) = statuses {
         clauses.push(format!(
             "workflow_runs.status IN ({})",
             sql_placeholders(statuses.len())
@@ -923,22 +914,22 @@ fn query_run_page(conn: &Connection, q: &RunPageQuery) -> Result<Vec<ConductorWo
                 .map(|s| rusqlite::types::Value::Text(s.to_string())),
         );
     }
-    if let Some(repo_id) = q.repo_id {
+    if let Some(repo_id) = f.repo_id {
         clauses.push("(workflow_runs.repo_id = ? OR worktrees.repo_id = ?)".to_string());
         params.push(rusqlite::types::Value::Text(repo_id.to_owned()));
         params.push(rusqlite::types::Value::Text(repo_id.to_owned()));
     }
-    if let Some(wt) = q.worktree_id {
+    if let Some(wt) = f.worktree_id {
         clauses.push("workflow_runs.worktree_id = ?".to_string());
         params.push(rusqlite::types::Value::Text(wt.to_owned()));
     }
-    if !q.include_inactive {
+    if !f.include_inactive {
         clauses.push(format!("({ACTIVE_WORKTREE_GUARD})"));
     }
-    if q.top_level_only {
-        clauses.push("workflow_runs.parent_workflow_run_id IS NULL".to_string());
+    if top_level_only {
+        clauses.push(top_level_predicate!().to_string());
     }
-    if !q.include_dry_run {
+    if !f.include_dry_run {
         clauses.push(NOT_DRY_RUN.to_string());
     }
     let where_sql = if clauses.is_empty() {
@@ -946,8 +937,8 @@ fn query_run_page(conn: &Connection, q: &RunPageQuery) -> Result<Vec<ConductorWo
     } else {
         clauses.join(" AND ")
     };
-    params.push(rusqlite::types::Value::Integer(q.limit as i64));
-    params.push(rusqlite::types::Value::Integer(q.offset as i64));
+    params.push(rusqlite::types::Value::Integer(f.limit as i64));
+    params.push(rusqlite::types::Value::Integer(f.offset as i64));
 
     let sql = format!(
         "SELECT workflow_runs.* \

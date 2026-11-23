@@ -5673,3 +5673,71 @@ fn test_active_runs_for_repo_still_include_dry_runs() {
     let runs = crate::workflow::list_active_workflow_runs_for_repo(&conn, "r1", &[]).unwrap();
     assert!(ids_of(&runs).contains(&root.id.as_str()));
 }
+
+#[test]
+fn test_list_all_workflow_runs_filtered_paginated_status_and_inactive() {
+    let conn = setup_db();
+    let pending = create_worktree_run(&conn, "w1");
+    let done = create_worktree_run(&conn, "w1");
+    conn.execute(
+        "UPDATE workflow_runs SET status = 'completed' WHERE id = ?1",
+        [&done.id],
+    )
+    .unwrap();
+    let merged = create_worktree_run(&conn, "w2");
+    conn.execute("UPDATE worktrees SET status = 'merged' WHERE id = 'w2'", [])
+        .unwrap();
+
+    let list = |status, flags| {
+        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, status, 50, 0, flags)
+            .unwrap()
+    };
+    let default = crate::workflow::RunListFlags::default();
+
+    let only_pending = list(Some(WorkflowRunStatus::Pending), default);
+    assert_eq!(ids_of(&only_pending), vec![pending.id.as_str()]);
+
+    let only_done = list(Some(WorkflowRunStatus::Completed), default);
+    assert_eq!(ids_of(&only_done), vec![done.id.as_str()]);
+
+    let active_wt = list(None, default);
+    assert!(!ids_of(&active_wt).contains(&merged.id.as_str()));
+    assert_eq!(active_wt.len(), 2);
+
+    let with_inactive = list(
+        None,
+        crate::workflow::RunListFlags {
+            include_inactive: true,
+            ..default
+        },
+    );
+    assert!(ids_of(&with_inactive).contains(&merged.id.as_str()));
+    assert_eq!(with_inactive.len(), 3);
+}
+
+#[test]
+fn test_list_active_workflow_runs_keeps_dry_runs_and_breaks_ties_by_id() {
+    let conn = setup_db();
+    let (root, child) = create_dry_run_pair(&conn);
+    let a = create_worktree_run(&conn, "w1");
+    let b = create_worktree_run(&conn, "w1");
+    for id in [&root.id, &child.id, &a.id, &b.id] {
+        set_started_at(&conn, id, "2024-01-01T00:00:00Z");
+    }
+    let runs = crate::workflow::list_active_workflow_runs(&conn, &[]).unwrap();
+    let ids = ids_of(&runs);
+    assert!(
+        ids.contains(&root.id.as_str()),
+        "dry-run smoke stays listed"
+    );
+    assert!(ids.contains(&child.id.as_str()));
+    let mut expected: Vec<&str> = ids.clone();
+    expected.sort_by(|x, y| y.cmp(x));
+    assert_eq!(ids, expected, "ties ordered by id DESC");
+    assert_eq!(runs.len(), 4);
+
+    // Non-default status set: nothing is running, so nothing returns.
+    let running =
+        crate::workflow::list_active_workflow_runs(&conn, &[WorkflowRunStatus::Running]).unwrap();
+    assert!(running.is_empty());
+}
