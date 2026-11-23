@@ -383,7 +383,7 @@ echo '[{"name":"Clippy","bucket":"pass"}]' > "$stub/checks.json"
 echo "[$(review 1 MEMBER COMMENTED "abc1234000000000000000000000000000000000" "$(review_body true)")]" > "$stub/reviews.json"
 run_ready AUTO_REREVIEW=true
 assert_exit 1
-assert_stderr_contains "predates head"
+assert_stderr_contains "is not in this checkout"
 assert_eq "$head" "$(git rev-parse HEAD)" "base not merged"
 
 # merged_head_case — new_case, then an earlier run's work: the base moves, is merged into
@@ -477,6 +477,14 @@ echo "[$(review 1 MEMBER COMMENTED "$old" "$(review_body true)")]" > "$stub/revi
 run_ready AUTO_REREVIEW=true
 assert_exit 1
 assert_stderr_contains "predates head"
+assert_stderr_contains "not an ancestor"
+
+case_begin "review commit missing from the checkout: refused with its own message, not predates head"
+merged_head_case
+echo "[$(review 1 MEMBER COMMENTED "0123456789012345678901234567890123456789" "$(review_body true)")]" > "$stub/reviews.json"
+run_ready AUTO_REREVIEW=true
+assert_exit 1
+assert_stderr_contains "is not in this checkout"
 
 case_begin "earlier base merge, base fetch fails: refused with the fetch error, not predates head"
 merged_head_case

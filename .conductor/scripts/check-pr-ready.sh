@@ -46,10 +46,15 @@ is_true() { [ "${1:-}" = "true" ]; }
 # and every first-parent commit after it is a merge whose other parents are all on
 # origin/BASE, i.e. the head differs from the review only by merges of the base.
 base_merge_only() {
-  local r="$1" head="$2" base="$3" line c first p oldest="" oldest_first=""
-  [ -n "${r}" ] || return 1
-  git cat-file -e "${r}^{commit}" 2>/dev/null || return 1
-  git merge-base --is-ancestor "${r}" "${head}" || return 1
+  local r="$1" head="$2" base="$3" line c first p oldest="" oldest_first="" out
+  [ -n "${r}" ] || refuse "the last conductor review has no commit id, so the head ${head:0:7} can't be checked against it"
+  git cat-file -e "${r}^{commit}" 2>/dev/null \
+    || refuse "the last conductor review's commit ${r:0:7} is not in this checkout, so the head ${head:0:7} can't be checked against it"
+  # Git errors refuse with their own message; only a genuine non-base-merge head returns 1.
+  git merge-base --is-ancestor "${r}" "${head}" \
+    || refuse "last conductor review (${r:0:7}) predates head ${head:0:7} and is not an ancestor of it (branch rebased or force-pushed?)"
+  out=$(git rev-list --first-parent --parents "${r}..${head}" 2>&1) \
+    || refuse "could not list commits ${r:0:7}..${head:0:7}: ${out}"
   while read -r -a line; do
     c="${line[0]}"
     [ "${#line[@]}" -ge 3 ] || return 1
@@ -59,7 +64,7 @@ base_merge_only() {
     done
     oldest="${c}"
     oldest_first="${first}"
-  done < <(git rev-list --first-parent --parents "${r}..${head}")
+  done <<<"${out}"
   [ -n "${oldest}" ] && [ "${oldest_first}" = "${r}" ]
 }
 
