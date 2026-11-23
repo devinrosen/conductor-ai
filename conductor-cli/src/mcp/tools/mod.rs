@@ -338,27 +338,39 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
              pass the run_id to conductor_submit_agent_feedback to unblock them. \
              Use status=idle for interactive sessions between turns (alive, awaiting the developer). \
              When repo is omitted, runs across all repos are returned. \
-             Supports pagination via limit (default 50) and offset (default 0).",
-            schema(&[
+             Supports pagination via limit (default 50) and offset (default 0). \
+             Agent runs that drive a dry-run workflow run (`validate --dry-run` smokes) are hidden \
+             unless include_dry_run=true.",
+            schema_typed(&[
                 (
                     "repo",
+                    "string",
                     "Repo slug (optional; omit to list runs across all repos)",
                     false,
                 ),
                 (
                     "worktree",
+                    "string",
                     "Worktree slug, branch name or path to filter by (optional; requires repo)",
                     false,
                 ),
                 (
                     "status",
+                    "string",
                     "Filter by run status: running, waiting_for_feedback, idle, completed, failed, cancelled (optional)",
                     false,
                 ),
-                ("limit", "Max runs to return (default 50)", false),
+                ("limit", "string", "Max runs to return (default 50)", false),
                 (
                     "offset",
+                    "string",
                     "Number of runs to skip for pagination (default 0)",
+                    false,
+                ),
+                (
+                    "include_dry_run",
+                    "boolean",
+                    "Include agent runs that drive dry-run workflow runs (validate --dry-run smokes) (default false)",
                     false,
                 ),
             ]),

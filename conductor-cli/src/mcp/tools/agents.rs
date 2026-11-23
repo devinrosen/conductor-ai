@@ -2,7 +2,7 @@ use conductor_core::Conductor;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use crate::mcp::helpers::{get_arg, pagination_hint, tool_err, tool_ok};
+use crate::mcp::helpers::{get_arg, get_bool_arg, pagination_hint, tool_err, tool_ok};
 
 pub(super) fn tool_list_agent_runs(
     conductor: &Conductor,
@@ -68,6 +68,7 @@ pub(super) fn tool_list_agent_runs(
         status.as_ref(),
         limit,
         offset,
+        get_bool_arg(args, "include_dry_run"),
     ) {
         Ok(r) => r,
         Err(e) => return tool_err(e),

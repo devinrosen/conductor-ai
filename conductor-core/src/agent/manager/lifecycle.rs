@@ -356,6 +356,26 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Mark a run `cancelled` with a reason in `result_text`, overwriting `running`
+    /// and `failed` but leaving a `completed` or `cancelled` run as it is.
+    ///
+    /// Used when a smoke (`validate --dry-run`) stops a workflow on purpose, so its
+    /// driving agent run doesn't read as a failure.
+    pub fn update_run_cancelled_with_reason(&self, run_id: &str, reason: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE agent_runs SET status = 'cancelled', result_text = :reason, \
+             ended_at = :ended_at \
+             WHERE id = :id AND status NOT IN ('completed', 'cancelled')",
+            named_params! {
+                ":reason": reason,
+                ":ended_at": now,
+                ":id": run_id,
+            },
+        )?;
+        Ok(())
+    }
+
     /// Cancel a run: mark DB as cancelled first, then best-effort kill the subprocess.
     ///
     /// The DB update precedes the process kill so that a concurrent drain cannot

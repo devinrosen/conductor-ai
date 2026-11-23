@@ -326,6 +326,39 @@ fn cancel_smoke_descendants(
     Ok(())
 }
 
+/// Make the agent run driving the smoke run, and each descendant's driver, end
+/// `cancelled` with the smoke reason. A `completed` or `cancelled` driver is left as
+/// it is. The coordinator already finalizes drivers this way; this backs it up for
+/// any path that returned early.
+fn cancel_smoke_drivers(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+    reason: &str,
+    depth: u32,
+) -> std::result::Result<(), String> {
+    if depth > 16 {
+        return Ok(());
+    }
+    let driver: Option<String> = conn
+        .query_row(
+            "SELECT parent_run_id FROM workflow_runs WHERE id = ?1",
+            [run_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("failed to read driver of smoke run {run_id}: {e}"))?;
+    if let Some(driver) = driver.filter(|d| !d.is_empty()) {
+        crate::agent::AgentManager::new(conn)
+            .update_run_cancelled_with_reason(&driver, reason)
+            .map_err(|e| format!("failed to cancel driving agent run {driver}: {e}"))?;
+    }
+    let children = crate::workflow::list_child_workflow_runs(conn, run_id)
+        .map_err(|e| format!("failed to list child runs of smoke run {run_id}: {e}"))?;
+    for child in children {
+        cancel_smoke_drivers(conn, &child.id, reason, depth + 1)?;
+    }
+    Ok(())
+}
+
 fn db_open_error(path: &std::path::Path, e: &dyn std::fmt::Display) -> String {
     format!("failed to open database at {}: {e}", path.display())
 }
@@ -373,6 +406,7 @@ pub fn smoke_run_workflow(mut params: WorkflowExecStandalone) -> SmokeOutcome {
             match (conn.as_ref(), run_id.as_deref()) {
                 (Ok(conn), Some(id)) => match ensure_cancelled(conn, id, &point.reason())
                     .and_then(|()| cancel_smoke_descendants(conn, id, &point.reason(), 0))
+                    .and_then(|()| cancel_smoke_drivers(conn, id, &point.reason(), 0))
                 {
                     Ok(()) => SmokeResult::Passed {
                         stopped_at: Some(point),
@@ -508,6 +542,55 @@ mod tests {
             .unwrap();
         let err = ensure_cancelled(&conn, &id, "smoke").unwrap_err();
         assert!(err.contains("failed to cancel smoke run"), "{err}");
+    }
+
+    fn driver_of(conn: &rusqlite::Connection, run_id: &str) -> (String, Option<String>) {
+        conn.query_row(
+            "SELECT ar.status, ar.result_text FROM workflow_runs wr \
+             JOIN agent_runs ar ON ar.id = wr.parent_run_id WHERE wr.id = ?1",
+            [run_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap()
+    }
+
+    fn driver_id(conn: &rusqlite::Connection, run_id: &str) -> String {
+        conn.query_row(
+            "SELECT parent_run_id FROM workflow_runs WHERE id = ?1",
+            [run_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn cancel_smoke_drivers_turns_a_failed_driver_cancelled() {
+        let conn = crate::test_helpers::setup_db();
+        let id = new_run(&conn);
+        crate::agent::AgentManager::new(&conn)
+            .update_run_failed(&driver_id(&conn, &id), "Workflow 'wf' failed")
+            .unwrap();
+        cancel_smoke_drivers(&conn, &id, "smoke: reached agent step 'a'", 0).unwrap();
+        assert_eq!(
+            driver_of(&conn, &id),
+            (
+                "cancelled".to_string(),
+                Some("smoke: reached agent step 'a'".to_string())
+            )
+        );
+    }
+
+    #[test]
+    fn cancel_smoke_drivers_leaves_a_completed_driver() {
+        let conn = crate::test_helpers::setup_db();
+        let id = new_run(&conn);
+        conn.execute(
+            "UPDATE agent_runs SET status = 'completed' WHERE id = ?1",
+            [driver_id(&conn, &id)],
+        )
+        .unwrap();
+        cancel_smoke_drivers(&conn, &id, "smoke", 0).unwrap();
+        assert_eq!(driver_of(&conn, &id).0, "completed");
     }
 
     #[test]

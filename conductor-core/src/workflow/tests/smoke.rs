@@ -100,6 +100,44 @@ fn all_runs(f: &Fixture) -> Vec<(String, String, bool)> {
     rows
 }
 
+/// Every agent run driving a workflow run, as `(workflow_name, status, result_text)`.
+fn drivers(f: &Fixture) -> Vec<(String, String, Option<String>)> {
+    let conn = crate::db::open_database(&f.db_path).unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT wr.workflow_name, ar.status, ar.result_text FROM workflow_runs wr \
+             JOIN agent_runs ar ON ar.id = wr.parent_run_id ORDER BY wr.started_at",
+        )
+        .unwrap();
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    rows
+}
+
+fn assert_drivers_cancelled(f: &Fixture, expected: usize) {
+    let drivers = drivers(f);
+    assert_eq!(drivers.len(), expected, "{drivers:?}");
+    for (name, status, text) in &drivers {
+        assert_eq!(status, "cancelled", "{name} driver: {drivers:?}");
+        assert!(
+            text.as_deref().is_some_and(|t| t.starts_with("smoke: reached")),
+            "{name} driver carries the smoke reason: {drivers:?}"
+        );
+    }
+    let conn = crate::db::open_database(&f.db_path).unwrap();
+    let failed: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM agent_runs WHERE status = 'failed'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(failed, 0, "a passing smoke leaves no failed agent run");
+}
+
 #[test]
 fn script_then_agent_stops_at_the_agent() {
     let f = fixture();
@@ -120,6 +158,13 @@ fn script_then_agent_stops_at_the_agent() {
 
     let run_id = outcome.run_id.expect("run id");
     assert_eq!(run_status(&f, &run_id), "cancelled");
+    let drivers = drivers(&f);
+    assert_eq!(drivers[0].1, "cancelled");
+    assert_eq!(
+        drivers[0].2.as_deref(),
+        Some("smoke: reached agent step 'some-agent'")
+    );
+    assert_drivers_cancelled(&f, 1);
     let conn = crate::db::open_database(&f.db_path).unwrap();
     // The stub is the only executor: no agent run was ever spawned for a step.
     let steps = crate::workflow::get_workflow_steps(&conn, &run_id).unwrap();
@@ -163,6 +208,12 @@ fn unknown_gate_type_fails_before_any_step() {
         other => panic!("expected a validation failure, got {other:?}"),
     }
     assert!(!ran(&f, "a"));
+    // A failing smoke is not reported as a stop: no driver is marked cancelled.
+    assert!(
+        drivers(&f).iter().all(|(_, status, _)| status != "cancelled"),
+        "{:?}",
+        drivers(&f)
+    );
 }
 
 #[test]
@@ -194,6 +245,7 @@ fn child_workflow_stops_at_its_first_agent() {
         assert_eq!(status, "cancelled", "{name} must end cancelled: {runs:?}");
         assert!(dry_run, "{name} is recorded as a dry run: {runs:?}");
     }
+    assert_drivers_cancelled(&f, 2);
 }
 
 /// A child workflow with a `parallel` block: runkon-flow's parallel executor counts the
@@ -224,6 +276,7 @@ fn parallel_child_stop_leaves_no_failed_run() {
         runs.iter().all(|(_, status, _)| status == "cancelled"),
         "a passing smoke leaves no failed run: {runs:?}"
     );
+    assert_drivers_cancelled(&f, runs.len());
 }
 
 #[test]
@@ -250,6 +303,9 @@ fn scripts_only_workflow_completes() {
     assert_eq!(outcome.result, SmokeResult::Passed { stopped_at: None });
     assert!(!ran(&f, "a"), "smoke mode must never execute a script step");
     assert_eq!(run_status(&f, &outcome.run_id.unwrap()), "completed");
+    let drivers = drivers(&f);
+    assert_eq!(drivers.len(), 1, "{drivers:?}");
+    assert_eq!(drivers[0].1, "completed");
 }
 
 #[test]
