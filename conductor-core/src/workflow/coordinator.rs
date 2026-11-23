@@ -24,21 +24,15 @@ use super::types::{
 use super::WorkflowResult;
 use super::{WorkflowRunStatus, WorkflowStepStatus};
 
-/// Validate required workflow inputs are present and apply default values.
-///
-/// Returns an error if a required input is missing.
-pub fn apply_workflow_input_defaults(
+/// Fill declared input defaults (and `"false"` for boolean inputs) for any
+/// input the caller didn't supply. Never overwrites a supplied value and does
+/// not check required inputs.
+pub(crate) fn fill_workflow_input_defaults(
     workflow: &WorkflowDef,
     inputs: &mut HashMap<String, String>,
-) -> Result<()> {
+) {
     use runkon_flow::dsl::InputType;
     for input_decl in &workflow.inputs {
-        if input_decl.required && !inputs.contains_key(&input_decl.name) {
-            return Err(ConductorError::Workflow(format!(
-                "Missing required input: '{}'. Use --input {}=<value>.",
-                input_decl.name, input_decl.name
-            )));
-        }
         if let Some(ref default) = input_decl.default {
             inputs
                 .entry(input_decl.name.clone())
@@ -51,6 +45,25 @@ pub fn apply_workflow_input_defaults(
                 .or_insert_with(|| "false".to_string());
         }
     }
+}
+
+/// Validate required workflow inputs are present and apply default values.
+///
+/// Returns an error if a required input is missing. Idempotent; also called
+/// by `execute_workflow_standalone`, so every launcher gets defaults.
+pub fn apply_workflow_input_defaults(
+    workflow: &WorkflowDef,
+    inputs: &mut HashMap<String, String>,
+) -> Result<()> {
+    for input_decl in &workflow.inputs {
+        if input_decl.required && !inputs.contains_key(&input_decl.name) {
+            return Err(ConductorError::Workflow(format!(
+                "Missing required input: '{}'. Use --input {}=<value>.",
+                input_decl.name, input_decl.name
+            )));
+        }
+    }
+    fill_workflow_input_defaults(workflow, inputs);
     Ok(())
 }
 
@@ -687,6 +700,11 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
             &params.extra_plugin_dirs,
         )?;
 
+        // Fill declared defaults and check required inputs before any DB row
+        // exists, so every launcher (MCP, CLI, web, TUI) gets the same inputs.
+        let mut defaulted_inputs = params.inputs.clone();
+        apply_workflow_input_defaults(workflow, &mut defaulted_inputs)?;
+
         // Snapshot the definition.
         let snapshot_json = serde_json::to_string(workflow).map_err(|e| {
             ConductorError::Workflow(format!("Failed to serialize workflow definition: {e}"))
@@ -776,7 +794,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         }
 
         // Build merged inputs, injecting ticket/repo/worktree variables.
-        let mut merged_inputs = params.inputs.clone();
+        let mut merged_inputs = defaulted_inputs;
         if let Some(ref tid) = params.ticket_id {
             let ticket = crate::tickets::TicketSyncer::new(conn).get_by_id(tid)?;
             inject_ticket_variables(&ticket, &mut merged_inputs);
@@ -1449,6 +1467,16 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
 
     let rk_def = deserialize_workflow_snapshot(&snapshot_string)?;
 
+    // Fill declared defaults missing from the stored inputs (runs started
+    // before defaults were applied at run start). No required check, so an old
+    // run never becomes unresumable.
+    let mut resume_inputs = wf_run.inputs.clone();
+    fill_workflow_input_defaults(&rk_def, &mut resume_inputs);
+    if resume_inputs != wf_run.inputs {
+        let guard = lock_shared(&shared_conn)?;
+        crate::workflow::set_workflow_run_inputs(&guard, &wf_run.id, &resume_inputs)?;
+    }
+
     let RkEngineComponents {
         persistence,
         action_registry,
@@ -1508,7 +1536,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
             shutdown: input.shutdown.clone(),
             ..runkon_flow::types::WorkflowExecConfig::default()
         },
-        inputs: wf_run.inputs.clone(),
+        inputs: resume_inputs,
         parent_run_id: wf_run.parent_run_id.clone(),
         depth: 0,
         target_label: wf_run.target_label.clone(),
@@ -2528,8 +2556,7 @@ mod tests {
     fn execute_workflow_standalone_inputs_are_persisted() {
         // Verify that caller-supplied inputs are written to the DB before the
         // engine executes, so restarts and resumes can read them back.
-        // Note: apply_workflow_input_defaults is the caller's responsibility;
-        // here we pass a pre-merged map directly via params.inputs.
+        // Defaults are also applied at run start; this test supplies a value directly.
         let db_file = tempfile::NamedTempFile::new().unwrap();
         crate::test_helpers::seed_test_db_file(db_file.path());
 
@@ -2550,6 +2577,44 @@ mod tests {
             Some("staging"),
             "caller-supplied input values must be persisted to the DB before engine executes"
         );
+    }
+
+    fn stored_inputs(db: &std::path::Path) -> Option<HashMap<String, String>> {
+        let conn = crate::db::open_database(db).unwrap();
+        conn.query_row("SELECT inputs FROM workflow_runs LIMIT 1", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .ok()
+        .map(|j| serde_json::from_str(&j).unwrap())
+    }
+
+    #[test]
+    fn execute_workflow_standalone_applies_and_stores_defaults() {
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        crate::test_helpers::seed_test_db_file(db_file.path());
+        let mut params = make_standalone_params(db_file.path().to_path_buf(), None, None);
+        params.workflow = make_wf(vec![
+            input_decl("mode", false, InputType::String, Some("fast")),
+            input_decl("flag", false, InputType::Boolean, None),
+            input_decl("keep", false, InputType::String, Some("d")),
+        ]);
+        params.inputs.insert("keep".into(), "mine".into());
+        execute_workflow_standalone(&params).expect("run");
+        let inputs = stored_inputs(db_file.path()).expect("run row");
+        assert_eq!(inputs.get("mode").map(String::as_str), Some("fast"));
+        assert_eq!(inputs.get("flag").map(String::as_str), Some("false"));
+        assert_eq!(inputs.get("keep").map(String::as_str), Some("mine"));
+    }
+
+    #[test]
+    fn execute_workflow_standalone_missing_required_input_creates_no_run() {
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        crate::test_helpers::seed_test_db_file(db_file.path());
+        let mut params = make_standalone_params(db_file.path().to_path_buf(), None, None);
+        params.workflow = make_wf(vec![input_decl("must", true, InputType::String, None)]);
+        let err = execute_workflow_standalone(&params).unwrap_err();
+        assert!(err.to_string().contains("Missing required input"));
+        assert!(stored_inputs(db_file.path()).is_none());
     }
 
     // -------------------------------------------------------------------------
@@ -2654,6 +2719,29 @@ mod tests {
         assert!(
             result.all_succeeded,
             "resumed empty workflow must complete with all_succeeded=true"
+        );
+    }
+
+    #[test]
+    fn resume_workflow_standalone_fills_missing_defaults_and_stores_them() {
+        let db_file = tempfile::NamedTempFile::new().unwrap();
+        let snapshot = serde_json::to_string(&make_wf(vec![input_decl(
+            "auto_rereview",
+            false,
+            InputType::String,
+            Some("true"),
+        )]))
+        .unwrap();
+        let run_id = {
+            let conn = crate::test_helpers::open_test_db_file(db_file.path());
+            insert_failed_run_with_repo(&conn, Some(&snapshot))
+        };
+        let params = make_resume_standalone(&run_id, None, false, db_file.path().to_path_buf());
+        resume_workflow_standalone(&params).expect("resume must succeed");
+        let inputs = stored_inputs(db_file.path()).expect("run row");
+        assert_eq!(
+            inputs.get("auto_rereview").map(String::as_str),
+            Some("true")
         );
     }
 
