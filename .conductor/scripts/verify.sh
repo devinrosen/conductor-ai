@@ -15,8 +15,11 @@
 # .conductor/scripts/ or .conductor/tests/ also runs
 #   bash .conductor/tests/run.sh
 # (the pipeline script fixture tests, #3347). It needs no cargo build, so it
-# runs even when the build fails. Anything else (.md, frontend files) skips
-# the checks.
+# runs even when the build fails. A change to a .conductor/workflows/*.wf file or a
+# conductor-core/templates/*.wft template also runs the dry-run smokes CLAUDE.md
+# requires, through smoke-workflows.sh (#3453): `conductor workflow validate --dry-run`
+# of each changed workflow and of each workflow that calls one. Anything else (.md,
+# frontend files) skips the checks.
 #
 # Emits has_failures when any check failed or couldn't run, with a context
 # that names the failing checks, test names and the first compiler or clippy
@@ -53,6 +56,7 @@ all_crates=(conductor-core conductor-cli conductor-tui conductor-web)
 max_context=6000
 
 checks_json='[]'
+smokes_json='[]'
 failed=0
 fail_details=""
 pass_names=""
@@ -60,8 +64,8 @@ pass_names=""
 emit() {
   # $1 = markers JSON, $2 = context, $3 = passed (true/false)
   echo "<<<FLOW_OUTPUT>>>"
-  jq -cn --argjson markers "$1" --arg ctx "$2" --argjson passed "$3" --argjson checks "${checks_json}" \
-    '{markers: $markers, context: $ctx, passed: $passed, checks: $checks}'
+  jq -cn --argjson markers "$1" --arg ctx "$2" --argjson passed "$3" --argjson checks "${checks_json}" --argjson smokes "${smokes_json}" \
+    '{markers: $markers, context: $ctx, passed: $passed, checks: $checks, smokes: $smokes}'
   echo "<<<END_FLOW_OUTPUT>>>"
 }
 
@@ -85,6 +89,9 @@ $4}"
 crates=()
 validate_pipeline=0
 script_tests=0
+smoke_workflows=0
+smoke_unknown=0
+all_changed=""
 if [ -n "${VERIFY_CRATES:-}" ]; then
   read -ra crates <<< "${VERIFY_CRATES}"
 elif ! merge_base=$(git merge-base HEAD "origin/${base}" 2>/dev/null || git merge-base HEAD "${base}" 2>/dev/null); then
@@ -92,16 +99,21 @@ elif ! merge_base=$(git merge-base HEAD "origin/${base}" 2>/dev/null || git merg
   crates=("${all_crates[@]}")
   validate_pipeline=1
   script_tests=1
+  smoke_unknown=1
 elif ! changed=$(git diff --name-only "${merge_base}") || ! untracked=$(git ls-files --others --exclude-standard); then
   echo "WARNING: git could not list the changed files; checking every crate" >&2
   crates=("${all_crates[@]}")
   validate_pipeline=1
   script_tests=1
+  smoke_unknown=1
 else
   all_changed=$(printf '%s\n%s\n' "${changed}" "${untracked}")
   rust_files=$(printf '%s\n' "${all_changed}" | grep -E '\.rs$|(^|/)Cargo\.(toml|lock)$|(^|/)build\.rs$' || true)
   if printf '%s\n' "${all_changed}" | grep -qE '^(\.conductor/|conductor-core/templates/)'; then
     validate_pipeline=1
+  fi
+  if printf '%s\n' "${all_changed}" | grep -qE '^(\.conductor/workflows/[^/]+\.wf|conductor-core/templates/[^/]+\.wft)$'; then
+    smoke_workflows=1
   fi
   if printf '%s\n' "${all_changed}" | grep -qE '^\.conductor/(scripts|tests)/'; then
     script_tests=1
@@ -194,6 +206,35 @@ if [ "${validate_pipeline}" -eq 1 ]; then
     record "conductor workflow validate" pass "$(tail -n 1 "${logs}/validate.log")"
   else
     record "conductor workflow validate" fail "workflow or template validation failed" "$(grep -E '^(FAIL|\s*✗)' "${logs}/validate.log" | head -n 40)"
+  fi
+fi
+
+# --- workflow smokes -----------------------------------------------------------
+# CLAUDE.md's required `validate --dry-run` of each changed workflow and its callers
+# (#3453). Skipped after a build or validate failure: a smoke of a broken build or a
+# statically invalid workflow says nothing new. A skip inside smoke-workflows.sh (a
+# required input with no value) is recorded in `smokes` but isn't a failure.
+if [ "${smoke_workflows}" -eq 1 ] || { [ "${smoke_unknown}" -eq 1 ] && [ "${validate_pipeline}" -eq 1 ]; }; then
+  if [ "${smoke_workflows}" -eq 0 ]; then
+    record "workflow smokes" skipped "not run: could not list the changed files"
+  elif [ "${build_ok}" -eq 0 ]; then
+    record "workflow smokes" skipped "not run: cargo build failed"
+  elif [ "$(printf '%s' "${checks_json}" | jq -r '[.[] | select(.name == "conductor workflow validate") | .status][0]')" != "pass" ]; then
+    record "workflow smokes" skipped "not run: conductor workflow validate failed"
+  else
+    smoke_status=0
+    smoke_out=$(printf '%s\n' "${all_changed}" | bash "$(dirname "${BASH_SOURCE[0]}")/smoke-workflows.sh" 2> "${logs}/smokes.err") || smoke_status=$?
+    if smoke_json=$(jq -c '.smokes | arrays' <<< "${smoke_out}" 2>/dev/null) && [ -n "${smoke_json}" ]; then
+      smokes_json="${smoke_json}"
+      counts=$(jq -r '[(map(select(.status == "pass")) | length), (map(select(.status == "skip")) | length), (map(select(.status == "fail")) | length)] | "\(.[0]) passed, \(.[1]) skipped, \(.[2]) failed"' <<< "${smokes_json}")
+      if [ "${smoke_status}" -eq 0 ]; then
+        record "workflow smokes" pass "${counts}"
+      else
+        record "workflow smokes" fail "${counts}" "$(jq -r '.[] | select(.status == "fail") | "\(.workflow) (\(.reason))\(if .run_id != "" then " run " + .run_id else "" end):\n\(.detail)"' <<< "${smokes_json}" | head -n 40)"
+      fi
+    else
+      record "workflow smokes" fail "smoke-workflows.sh exited ${smoke_status} without a result" "$(tail -n 20 "${logs}/smokes.err")"
+    fi
   fi
 fi
 

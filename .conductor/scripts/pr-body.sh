@@ -18,8 +18,13 @@
 #                      criterion `deferred` instead of `fail` (#3423). PLAN_GATE_FEEDBACK unset or
 #                      the literal {{human_review.feedback}} (the gate never ran) omits it.
 #   ## Verification    what the last verify entry ran, when it passed
+#   ## Smokes          the last verify entry's `smokes` (#3453): each workflow whose dry-run smoke
+#                      verify ran (changed, or calling a changed child), its result and run ID.
+#                      A failing smoke is listed as FAIL, never dropped. Omitted when verify ran
+#                      no smokes (no .wf/.wft change)
 #   ## Risks and open questions
-# Output is empty (exit 0) when there is no plan or implement summary, so the caller falls
+# PR_BODY_SECTION=smokes prints only the ## Smokes section (empty when there is none), for
+# update-pr-smokes.sh. Output is empty (exit 0) when there is no plan or implement summary, so the caller falls
 # back to the commit bodies. Exit 1 with no stderr when PRIOR_CONTEXTS is unset, empty or
 # itself a bare {{...}} template; any other value goes to jq, which exits non-zero with its
 # error on stderr when it can't be parsed.
@@ -43,7 +48,9 @@ if [ -z "${PLAN_GATE_FEEDBACK+x}" ] || [ "$gate_feedback" = '{{human_review.feed
   gate_feedback=""
 fi
 
-printf '%s' "$contexts" | jq -r --argjson gate "$gate_ran" --arg fb "$gate_feedback" '
+section="${PR_BODY_SECTION:-}"
+
+printf '%s' "$contexts" | jq -r --arg section "$section" --argjson gate "$gate_ran" --arg fb "$gate_feedback" '
     def trim: gsub("^\\s+|\\s+$"; "");
     # A sentence that says the code was not built/tested/run (#3333). Keep narrow.
     def untested:
@@ -92,6 +99,22 @@ printf '%s' "$contexts" | jq -r --argjson gate "$gate_ran" --arg fb "$gate_feedb
             elif $o == null and ($c | test("^PASS")) then $c
             else "" end
         end;
+    def smokes_section:
+      verify as $v
+      | if $v == null then ""
+        else ($v.structured_output // null | if type == "string" then (try fromjson catch null) else . end) as $o
+          | ([($o // {} | .smokes // [])[] | select(type == "object" and ((.workflow // "") | length) > 0)]) as $sm
+          | if ($sm | length) == 0 then ""
+            else
+              "`conductor workflow validate --dry-run` from this branch\u0027s worktree:\n\n"
+              + ( $sm | map(
+                    "- `\(.workflow)`" + (if ((.reason // "") | length) > 0 then " (\(.reason))" else "" end) + ": "
+                    + ( if .status == "pass" then "pass" + (if ((.run_id // "") | length) > 0 then ", run `\(.run_id)`" else "" end)
+                        elif .status == "skip" then "skipped, " + (.detail // "" | split("\n") | first // "")
+                        else "FAIL" + (if ((.run_id // "") | length) > 0 then ", run `\(.run_id)`" else "" end) end )
+                  ) | join("\n") )
+            end
+        end;
     def decisions($p):
       ($p.decisions // [] | map(select(type == "object" and ((.question // "") | length) > 0))) as $d
       | if $gate != true or ($d | length) == 0 then ""
@@ -114,7 +137,10 @@ printf '%s' "$contexts" | jq -r --argjson gate "$gate_ran" --arg fb "$gate_feedb
                   + ( if ($df | length) > 0 then "\n\nDefers (if the default was kept): " + ($df | map(.defers | scrubpaths) | join("; ")) else "" end )
                 end )
         end;
-    plan as $p | decisions($p) as $dc | impl as $i | verification as $vf
+    if $section == "smokes" then
+      smokes_section | if . == "" then empty else "## Smokes\n\n" + . end
+    else
+    plan as $p | decisions($p) as $dc | impl as $i | verification as $vf | smokes_section as $sm
     | (($p.summary // "") | scrubpaths) as $s
     | ($p.risks // [] | map(select(type == "string" and length > 0))) as $r
     | if $s == "" and $i == "" then empty else
@@ -122,6 +148,8 @@ printf '%s' "$contexts" | jq -r --argjson gate "$gate_ran" --arg fb "$gate_feedb
         + ( if $s != "" and $i != "" then "\n\n## Implementation\n\n\($i)" else "" end )
         + ( if $dc != "" then "\n\n## Decisions\n\n\($dc)" else "" end )
         + ( if $vf != "" then "\n\n## Verification\n\n\($vf)" else "" end )
+        + ( if $sm != "" then "\n\n## Smokes\n\n\($sm)" else "" end )
         + ( if ($r | length) > 0 then "\n\n## Risks and open questions\n\n" + ($r | map("- " + .) | join("\n")) else "" end )
       end
+    end
   '
