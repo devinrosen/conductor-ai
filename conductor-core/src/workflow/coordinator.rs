@@ -474,6 +474,7 @@ fn finalize_smoke_driver(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_flow_engine(
     persistence: &Arc<dyn runkon_flow::traits::persistence::WorkflowPersistence>,
     event_sinks: &Arc<[Arc<dyn runkon_flow::EventSink>]>,
