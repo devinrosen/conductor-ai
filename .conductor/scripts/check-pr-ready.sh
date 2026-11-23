@@ -4,6 +4,7 @@
 # and merged. The reason becomes the step error.
 # Env vars: CONFIRM (the workflow's confirm input), DRY_RUN, TICKET_SOURCE_ID (fallback
 # for the linked issue), RECIPE_PATH (default .conductor/verify-recipe.md),
+# AUTO_REREVIEW ("true" turns on the base-merge path below; anything else refuses),
 # TRUSTED_REVIEW_BOTS (comma-separated bot logins whose reviews are trusted, e.g. the
 # repo's conductor reviewer GitHub App; GitHub reports such a bot as author_association
 # NONE, so without this its reviews never count).
@@ -12,11 +13,13 @@
 # repo's verify recipe exists; the local HEAD is the PR head; the latest trusted,
 # non-dismissed conductor review is on the head and All Clear (a withheld approval
 # needs a person's APPROVE, or confirm); required checks pass; no conflicts; the
-# branch contains its base (otherwise the base is merged in and pushed, and the run
-# stops: the new head is unreviewed).
+# branch contains its base (otherwise the base is merged in and pushed; the new head is
+# unreviewed, so with AUTO_REREVIEW=true it emits base_merged and the workflow re-reviews
+# and waits for CI, and otherwise the run stops).
 #
-# On success emits pr_ready plus pr_number, pr_title, base_branch, head_sha and
-# linked_issues (space-separated same-repo issue numbers from Closes/Fixes/Resolves).
+# On success emits pr_ready (or base_merged) plus pr_number, pr_title, base_branch,
+# head_sha, linked_issues (space-separated same-repo issue numbers from
+# Closes/Fixes/Resolves) and required_checks (comma-separated names seen before a merge).
 set -euo pipefail
 
 # shellcheck source=lib-gh-retry.sh
@@ -25,6 +28,8 @@ source "$(dirname "$0")/lib-gh-retry.sh"
 source "$(dirname "$0")/lib-trusted-review.sh"
 # shellcheck source=lib-git-retry.sh
 source "$(dirname "$0")/lib-git-retry.sh"
+# shellcheck source=lib-pr-checks.sh
+source "$(dirname "$0")/lib-pr-checks.sh"
 
 refuse() { echo "verify-and-merge: $*" >&2; exit 1; }
 
@@ -34,6 +39,8 @@ DRY_RUN="${DRY_RUN:-}"
 [[ "${CONFIRM}" == *"{{"* ]] && CONFIRM=""
 [[ "${DRY_RUN}" == *"{{"* ]] && DRY_RUN=""
 [[ "${TICKET_SOURCE_ID:-}" == *"{{"* ]] && TICKET_SOURCE_ID=""
+AUTO_REREVIEW="${AUTO_REREVIEW:-}"
+[[ "${AUTO_REREVIEW}" == *"{{"* ]] && AUTO_REREVIEW=""
 
 # 1. The PR for this branch.
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
@@ -104,20 +111,9 @@ if printf '%s' "${REVIEW}" | jq -e '(.body // "") | contains("changes the review
   fi
 fi
 
-# 5. Required checks.
-# gh pr checks exits 1 for a failing check and 8 for a pending one, still printing the
-# JSON: use that JSON whatever the exit code. Only gh's own "no required checks" message
-# means an empty list; any other failure with no JSON refuses.
-CHECKS_ERR=$(mktemp "${TMPDIR:-/tmp}/pr_checks_err.XXXXXX")
-trap 'rm -f "${CHECKS_ERR}"' EXIT
-CHECKS_RC=0
-CHECKS=$(gh_retry gh pr checks "${PR_NUMBER}" --required --json name,bucket 2>"${CHECKS_ERR}") || CHECKS_RC=$?
-if ! printf '%s' "${CHECKS}" | jq -e 'type == "array"' >/dev/null 2>&1; then
-  if [ "${CHECKS_RC}" -ne 0 ] && ! grep -qi 'no required checks' "${CHECKS_ERR}"; then
-    refuse "could not read required checks for PR #${PR_NUMBER} (gh exit ${CHECKS_RC}): $(head -c 300 "${CHECKS_ERR}" | tr '\n' ' ')"
-  fi
-  CHECKS="[]"
-fi
+# 5. Required checks (read by lib-pr-checks.sh: gh's JSON counts whatever its exit code).
+read_required_checks "${PR_NUMBER}" || refuse "${CHECKS_ERROR}"
+REQUIRED_NAMES=$(printf '%s' "${CHECKS}" | jq -r '[.[].name] | join(",")')
 if [ "$(printf '%s' "${CHECKS}" | jq 'length')" -eq 0 ]; then
   echo "Warning: no required checks reported for PR #${PR_NUMBER}; continuing." >&2
 else
@@ -129,6 +125,12 @@ fi
 
 # 6. Conflicts.
 [ "$(pr '.mergeable')" != "CONFLICTING" ] || refuse "PR #${PR_NUMBER} has merge conflicts with ${BASE_BRANCH}; run rebase-and-fix"
+
+# Linked issues: the rule close-linked-issues.yml uses, same-repo only.
+LINKED=$(pr '.body // ""' | tr -d '\r' | grep -oiE '(closes|fixes|resolves)[[:space:]]+#[0-9]+' | grep -oE '[0-9]+' | sort -un | tr '\n' ' ' | sed 's/ $//' || true)
+if [ -z "${LINKED}" ] && [[ "${TICKET_SOURCE_ID:-}" =~ ^[0-9]+$ ]]; then
+  LINKED="${TICKET_SOURCE_ID}"
+fi
 
 # 7. The branch must contain its base.
 git fetch --quiet origin "${BASE_BRANCH}" || refuse "could not fetch origin/${BASE_BRANCH}"
@@ -147,18 +149,24 @@ if ! git merge-base --is-ancestor "origin/${BASE_BRANCH}" HEAD; then
     refuse "merging origin/${BASE_BRANCH} failed: $(printf '%s' "${MERGE_OUT}" | tr '\n' ' ' | head -c 300)"
   fi
   git_push_retry origin HEAD >/dev/null || refuse "merged ${BASE_BRANCH} into the branch but the push failed"
-  refuse "merged ${BASE_BRANCH} into the branch (new head $(git rev-parse --short HEAD)); re-review with iterate-pr, then re-run verify-and-merge"
-fi
-
-# Linked issues: the rule close-linked-issues.yml uses, same-repo only.
-LINKED=$(pr '.body // ""' | tr -d '\r' | grep -oiE '(closes|fixes|resolves)[[:space:]]+#[0-9]+' | grep -oE '[0-9]+' | sort -un | tr '\n' ' ' | sed 's/ $//' || true)
-if [ -z "${LINKED}" ] && [[ "${TICKET_SOURCE_ID:-}" =~ ^[0-9]+$ ]]; then
-  LINKED="${TICKET_SOURCE_ID}"
+  NEW_HEAD=$(git rev-parse HEAD)
+  if is_true "${AUTO_REREVIEW}"; then
+    # Every other check passed: the merge is the only thing wrong. The workflow re-reviews
+    # the new head, waits for its checks and checks again (#3436).
+    jq -n --arg n "${PR_NUMBER}" --arg title "${PR_TITLE}" --arg base "${BASE_BRANCH}" \
+      --arg sha "${NEW_HEAD}" --arg issues "${LINKED}" --arg req "${REQUIRED_NAMES}" '
+      {markers: ["base_merged"],
+       context: "merged \($base) into the branch (new head \($sha[0:7])); re-reviewing with iterate-pr",
+       pr_number: $n, pr_title: $title, base_branch: $base, head_sha: $sha, linked_issues: $issues, required_checks: $req}' \
+      | { printf '<<<FLOW_OUTPUT>>>\n'; cat; printf '<<<END_FLOW_OUTPUT>>>\n'; }
+    exit 0
+  fi
+  refuse "merged ${BASE_BRANCH} into the branch (new head ${NEW_HEAD:0:7}); re-review with iterate-pr, then re-run verify-and-merge (or leave auto_rereview on)"
 fi
 
 jq -n --arg n "${PR_NUMBER}" --arg title "${PR_TITLE}" --arg base "${BASE_BRANCH}" \
-  --arg sha "${PR_HEAD}" --arg issues "${LINKED}" '
+  --arg sha "${PR_HEAD}" --arg issues "${LINKED}" --arg req "${REQUIRED_NAMES}" '
   {markers: ["pr_ready"],
    context: "PR #\($n) is ready to verify: reviewed on \($sha[0:7]), required checks green, base \($base).",
-   pr_number: $n, pr_title: $title, base_branch: $base, head_sha: $sha, linked_issues: $issues}' \
+   pr_number: $n, pr_title: $title, base_branch: $base, head_sha: $sha, linked_issues: $issues, required_checks: $req}' \
   | { printf '<<<FLOW_OUTPUT>>>\n'; cat; printf '<<<END_FLOW_OUTPUT>>>\n'; }
