@@ -21,6 +21,8 @@ set -euo pipefail
 
 # shellcheck source=lib-gh-retry.sh
 source "$(dirname "$0")/lib-gh-retry.sh"
+# shellcheck source=lib-trusted-review.sh
+source "$(dirname "$0")/lib-trusted-review.sh"
 # shellcheck source=lib-git-retry.sh
 source "$(dirname "$0")/lib-git-retry.sh"
 
@@ -74,15 +76,12 @@ LOCAL_HEAD=$(git rev-parse HEAD)
 OWNER_REPO=$(gh_retry gh repo view --json nameWithOwner -q .nameWithOwner) || refuse "could not resolve the repository"
 REVIEWS=$(gh_retry gh api --paginate "repos/${OWNER_REPO}/pulls/${PR_NUMBER}/reviews" | jq -s 'add // []') \
   || refuse "could not list the reviews of PR #${PR_NUMBER}"
-# Trusted: an OWNER/MEMBER/COLLABORATOR author, or a Bot listed in TRUSTED_REVIEW_BOTS.
-# Bots are matched by exact login and user.type, never by association: any installed
-# app or github-actions[bot] could post a review, so only the named ones count.
-REVIEW=$(printf '%s' "${REVIEWS}" | jq -c --arg bots "${TRUSTED_REVIEW_BOTS:-}" '
-  ($bots | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""))) as $trusted_bots
-  | [ .[] | select((.body // "") | contains("<!-- conductor-review -->"))
+# Trusted: an OWNER/MEMBER/COLLABORATOR author, or a Bot listed in TRUSTED_REVIEW_BOTS
+# (the rule lives in lib-trusted-review.sh).
+REVIEW=$(printf '%s' "${REVIEWS}" | jq -c --arg bots "${TRUSTED_REVIEW_BOTS:-}" "$(trusted_author_jq)"'
+  [ .[] | select((.body // "") | contains("<!-- conductor-review -->"))
         | select(.state != "DISMISSED")
-        | select((.author_association as $a | ["OWNER","MEMBER","COLLABORATOR"] | index($a))
-                 or ((.user.type // "") == "Bot" and ((.user.login // "") as $l | $trusted_bots | index($l)))) ]
+        | select(trusted_author($bots)) ]
   | sort_by(.submitted_at // "") | last // empty')
 [ -n "${REVIEW}" ] || refuse "no conductor review by a trusted author on PR #${PR_NUMBER}"
 REVIEW_COMMIT=$(printf '%s' "${REVIEW}" | jq -r '.commit_id // ""')

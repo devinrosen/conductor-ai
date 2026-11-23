@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # review-scope.sh — choose what the next review-pr run in iterate-pr covers
 # Called as a script step before each review-pr call. Env vars: PR_NUMBER,
-# FORCE_REVIEW (only the exact string "true" forces a re-review of an unchanged HEAD)
+# FORCE_REVIEW (only the exact string "true" forces a re-review of an unchanged HEAD),
+# TRUSTED_REVIEW_BOTS (comma-separated bot logins whose reviews are trusted, e.g. the
+# reviewer GitHub App, which GitHub reports as author_association NONE)
 #
 # Emits `review_scope` ("full" or "incremental") and `review_since` (a commit
 # SHA, or "") as FLOW_OUTPUT fields, exposed to later steps as
@@ -16,7 +18,8 @@
 # - reuse (marker `reuse_review`): HEAD is the commit the latest conductor review
 #   was submitted on, so re-reviewing identical code only produces new,
 #   non-deterministic findings (#3307). The review is reused when it isn't
-#   DISMISSED, its author is OWNER/MEMBER/COLLABORATOR and its body carries a
+#   DISMISSED, its author is OWNER/MEMBER/COLLABORATOR
+#   or a bot listed in TRUSTED_REVIEW_BOTS (lib-trusted-review.sh) and its body carries a
 #   readable conductor-review-data payload (see submit-review.sh). The scope
 #   fields then carry that review's own scope, for a pushback-only re-review.
 #   FORCE_REVIEW=true, or any failed check, gives a full review instead.
@@ -24,6 +27,9 @@
 #   history (rebase, force-push), or anything here fails. The first review of a
 #   PR always covers the whole PR, whatever the commit layout.
 set -euo pipefail
+
+# shellcheck source=lib-trusted-review.sh
+source "$(dirname "$0")/lib-trusted-review.sh"
 
 emit() {
   # $1 = scope, $2 = since, $3 = context, $4 = reused review id (optional)
@@ -71,7 +77,7 @@ if [ "$(git rev-parse HEAD)" = "$(git rev-parse "${SINCE}")" ]; then
     emit full "" "The last conductor review (${SINCE:0:8}) was dismissed; reviewing the full PR."
     exit 0
   fi
-  if ! echo "${LATEST}" | jq -e '.author_association as $a | ["OWNER","MEMBER","COLLABORATOR"] | index($a)' >/dev/null; then
+  if ! echo "${LATEST}" | jq -e --arg bots "${TRUSTED_REVIEW_BOTS:-}" "$(trusted_author_jq) trusted_author(\$bots)" >/dev/null; then
     emit full "" "The last conductor review (${SINCE:0:8}) is not from a trusted author; reviewing the full PR."
     exit 0
   fi

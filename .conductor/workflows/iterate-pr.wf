@@ -40,8 +40,9 @@ workflow iterate-pr {
     script review-scope {
       run = ".conductor/scripts/review-scope.sh"
       env = {
-        PR_NUMBER    = "{{pr_number}}"
-        FORCE_REVIEW = "{{force_review}}"
+        PR_NUMBER           = "{{pr_number}}"
+        FORCE_REVIEW        = "{{force_review}}"
+        TRUSTED_REVIEW_BOTS = "conductor-ai-reviewer[bot]"
       }
     }
 
@@ -55,8 +56,9 @@ workflow iterate-pr {
       script review-aggregator {
         run = ".conductor/scripts/reuse-review.sh"
         env = {
-          PR_NUMBER = "{{pr_number}}"
-          REVIEW_ID = "{{reuse_review_id}}"
+          PR_NUMBER           = "{{pr_number}}"
+          REVIEW_ID           = "{{reuse_review_id}}"
+          TRUSTED_REVIEW_BOTS = "conductor-ai-reviewer[bot]"
         }
       }
     }

@@ -11,6 +11,8 @@ set -euo pipefail
 
 # shellcheck source=lib-gh-retry.sh
 source "$(dirname "$0")/lib-gh-retry.sh"
+# shellcheck source=lib-trusted-review.sh
+source "$(dirname "$0")/lib-trusted-review.sh"
 
 refuse() { echo "verify-and-merge: $*" >&2; exit 1; }
 
@@ -61,11 +63,9 @@ else
   OWNER_REPO=$(gh_retry gh repo view --json nameWithOwner -q .nameWithOwner) || refuse "could not resolve the repository"
   # Only a report from a trusted author counts (the same rule as check-pr-ready's review
   # check): anyone else's look-alike comment must not suppress the real report.
-  EXISTING=$(gh_retry gh api --paginate "repos/${OWNER_REPO}/issues/${PR_NUMBER}/comments" | jq -s --arg sha "${HEAD_SHA:0:7}" --arg verdict "${VERDICT}" --arg bots "${TRUSTED_REVIEW_BOTS:-}" '
-    ($bots | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""))) as $trusted_bots
-    | [ add // [] | .[] | select((.body // "") | contains("<!-- conductor-verification -->"))
-      | select((.author_association as $a | ["OWNER","MEMBER","COLLABORATOR"] | index($a))
-               or ((.user.type // "") == "Bot" and ((.user.login // "") as $l | $trusted_bots | index($l))))
+  EXISTING=$(gh_retry gh api --paginate "repos/${OWNER_REPO}/issues/${PR_NUMBER}/comments" | jq -s --arg sha "${HEAD_SHA:0:7}" --arg verdict "${VERDICT}" --arg bots "${TRUSTED_REVIEW_BOTS:-}" "$(trusted_author_jq)"'
+    [ add // [] | .[] | select((.body // "") | contains("<!-- conductor-verification -->"))
+      | select(trusted_author($bots))
       | select((.body // "") | contains("Head: `" + $sha + "`. Verdict: `" + $verdict + "`")) ] | length') \
     || refuse "could not list the comments of PR #${PR_NUMBER}"
   if [ "${EXISTING}" -gt 0 ]; then
