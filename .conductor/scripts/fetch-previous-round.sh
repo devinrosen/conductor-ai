@@ -63,23 +63,30 @@ fi
 PAYLOAD=$(echo "${LAST}" | jq -c '
   (.body // "") | capture("<!-- conductor-review-data:v1 (?<d>[A-Za-z0-9+/=]+) -->").d
   | @base64d | fromjson
-  | select((.blocking_findings | type) == "array")' 2>/dev/null || true)
+  | select((.blocking_findings | type) == "array")
+  | select((.answered_findings // []) | type == "array")' 2>/dev/null || true)
 if [ -z "${PAYLOAD}" ]; then
   emit "The latest conductor review has no readable review data." "Unavailable: the latest conductor review has no readable review data."
   exit 0
 fi
 
-TEXT=$(jq -rn --argjson review "${LAST}" --argjson p "${PAYLOAD}" \
+if ! TEXT=$(jq -rn --argjson review "${LAST}" --argjson p "${PAYLOAD}" \
   --argjson max "${MAX_FINDINGS}" --argjson maxchars "${MAX_MESSAGE_CHARS}" '
   def trim: if length > $maxchars then .[0:$maxchars] + " [truncated]" else . end;
-  def line: "- [\(.severity // "warning")] \(.reviewer // "reviewer") — \(.file // "?"):\(.line // "?") — \((.message // "") | gsub("\\s+"; " ") | trim)";
+  def str($d): if . == null then $d else tostring end;
+  def line: if type == "object"
+    then "- [\(.severity | str("warning"))] \(.reviewer | str("reviewer")) — \(.file | str("?")):\(.line | str("?")) — \(.message | str("") | gsub("\\s+"; " ") | trim)"
+    else "- \(tostring | trim)" end;
   ($p.blocking_findings // []) as $b
   | ($p.answered_findings // []) as $a
   | "Conductor review on \(($review.commit_id // "")[0:8]) (scope \($p.scope // "full")): "
     + (if ($b | length) == 0 then "All Clear, no blocking findings." else "\($b | length) blocking finding(s)." end)
     + (if ($b | length) > 0 then "\n" + ([$b[:$max][] | line] | join("\n")) else "" end)
     + (if ($b | length) > $max then "\n- … \(($b | length) - $max) more not shown" else "" end)
-    + (if ($a | length) > 0 then "\nAnswered by a reply in that round:\n" + ([$a[:$max][] | line] | join("\n")) else "" end)')
+    + (if ($a | length) > 0 then "\nAnswered by a reply in that round:\n" + ([$a[:$max][] | line] | join("\n")) else "" end)' 2>&1); then
+  emit "Could not format the previous review's findings: ${TEXT}" "Unavailable: the latest conductor review's data could not be formatted."
+  exit 0
+fi
 
-COUNT=$(echo "${PAYLOAD}" | jq '.blocking_findings | length')
+COUNT=$(echo "${PAYLOAD}" | jq '.blocking_findings | length' 2>/dev/null || echo "?")
 emit "Previous conductor review on PR #${PR_NUMBER}: ${COUNT} blocking finding(s)." "${TEXT}"

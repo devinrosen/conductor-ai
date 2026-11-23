@@ -117,6 +117,25 @@ run_prev
 assert_exit 0
 assert_jq '.previous_round | startswith("Unavailable:")'
 
+case_begin "a non-array answered_findings: unavailable, the review still runs"
+new_case "$(review 1 "$BOT" Bot NONE COMMENTED 2026-01-01T00:00:00Z \
+  "$(body "$(jq -nc '{v: 1, overall_approved: true, blocking_findings: [], answered_findings: {x: 1}, scope: "full"}')")")"
+run_prev
+assert_exit 0
+assert_jq '.previous_round | startswith("Unavailable:")'
+
+case_begin "odd finding shapes are listed, not fatal"
+odd='[{"file":"src/a.rs","line":10,"reviewer":"DRY Abstraction","message":{"text":"not a string"}},
+      {"file":null,"line":null,"severity":"warning","message":null},
+      "a bare string"]'
+new_case "$(review 1 "$BOT" Bot NONE CHANGES_REQUESTED 2026-01-01T00:00:00Z "$(body "$(payload "$odd")")")"
+run_prev
+assert_exit 0
+assert_jq '.previous_round | contains("3 blocking finding(s)")'
+assert_jq '.previous_round | contains("- [warning] DRY Abstraction — src/a.rs:10 —")'
+assert_jq '.previous_round | contains("- [warning] reviewer — ?:? — ")'
+assert_jq '.previous_round | contains("- a bare string")'
+
 case_begin "the reviews can't be fetched: unavailable, the review still runs"
 new_case
 touch "$stub/fail_reviews"
