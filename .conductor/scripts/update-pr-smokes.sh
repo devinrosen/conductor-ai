@@ -18,7 +18,19 @@ emit() {
     | { printf '<<<FLOW_OUTPUT>>>\n'; cat; printf '<<<END_FLOW_OUTPUT>>>\n'; }
 }
 
-section=$(PR_BODY_SECTION=smokes "$(dirname "$0")/pr-body.sh" 2>/dev/null) || section=""
+render_err=$(mktemp "${TMPDIR:-/tmp}/pr-smokes-err.XXXXXX")
+if section=$(PR_BODY_SECTION=smokes "$(dirname "$0")/pr-body.sh" 2>"${render_err}"); then
+  render_rc=0
+else
+  render_rc=$?
+fi
+if [ "${render_rc}" -ne 0 ]; then
+  echo "WARNING: pr-body.sh failed (exit ${render_rc}): $(cat "${render_err}")" >&2
+  rm -f "${render_err}"
+  emit "Could not render smokes; PR body not updated."
+  exit 0
+fi
+rm -f "${render_err}"
 if [ -z "${section}" ]; then
   emit "No workflow smokes in this cycle; PR body unchanged."
   exit 0

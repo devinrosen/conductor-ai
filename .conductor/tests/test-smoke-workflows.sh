@@ -109,6 +109,7 @@ cat > "$STUB_DIR/conductor" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "$SMOKE_STUB_DIR/calls"
 name="$3"
+[ -f "$SMOKE_STUB_DIR/drain" ] && cat > /dev/null
 if [ -f "$SMOKE_STUB_DIR/$name.out" ]; then cat "$SMOKE_STUB_DIR/$name.out"; else
   echo "SMOKE PASS  $name  stopped at agent step 'a'  (run 01RUN$name)"
 fi
@@ -119,7 +120,7 @@ chmod +x "$STUB_DIR/conductor"
 
 # stub_reset — forget calls and canned output from the previous case.
 stub_reset() {
-  find "$STUB_DIR" -maxdepth 1 \( -name calls -o -name '*.out' -o -name '*.rc' \) -type f -delete
+  find "$STUB_DIR" -maxdepth 1 \( -name calls -o -name drain -o -name '*.out' -o -name '*.rc' \) -type f -delete
 }
 
 # stub_result WORKFLOW RC LINE — canned conductor output and exit code for one workflow.
@@ -195,6 +196,16 @@ smoke conductor-core/templates/orphan.wft
 assert_exit 0
 smokes_jq '.smokes | length == 1 and .[0].status == "skip" and (.[0].workflow | contains("orphan"))'
 [ ! -e "$STUB_DIR/calls" ] || fail "conductor was called for an orphan template"
+
+case_begin "a conductor that drains stdin does not drop the remaining targets"
+new_repo
+stub_reset
+touch "$STUB_DIR/drain"
+smoke .conductor/workflows/child.wf
+assert_exit 0
+smokes_jq '.smokes | length == 2 and all(.status == "pass")'
+assert_eq "workflow validate child --dry-run --path .
+workflow validate parent --dry-run --path ." "$(cat "$STUB_DIR/calls")" "conductor calls"
 
 # --- update-pr-smokes.sh ------------------------------------------------------------
 GH_DIR=$(scratch_dir)
@@ -280,5 +291,15 @@ touch "$GH_DIR/fail_edit"
 run_script update-pr-smokes.sh PR_NUMBER=7 "PRIOR_CONTEXTS=[$SMOKE_VERIFY]" "PATH=$GH_DIR/bin:$PATH" GH_RETRY_DELAYS=""
 assert_exit 0
 assert_stderr_contains "could not update"
+
+case_begin "update-pr-smokes: a pr-body.sh failure warns and is not reported as no smokes"
+printf '%s\n' "## Summary" > "$GH_DIR/body.md"
+rm -f "$GH_DIR/calls" "$GH_DIR/edited.md"
+run_script update-pr-smokes.sh PR_NUMBER=7 "PRIOR_CONTEXTS=not json" "PATH=$GH_DIR/bin:$PATH" GH_RETRY_DELAYS=""
+assert_exit 0
+assert_stderr_contains "pr-body.sh failed"
+assert_stdout_contains "Could not render smokes"
+assert_stdout_not_contains "No workflow smokes"
+[ ! -e "$GH_DIR/calls" ] || fail "gh was called: $(cat "$GH_DIR/calls")"
 
 finish
