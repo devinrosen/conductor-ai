@@ -1704,6 +1704,7 @@ mod stale_rows {
             &format!(
                 r#"workflow stale-wf {{
                     meta {{ trigger = "manual" targets = ["worktree"] }}
+                    inputs {{ x default = "v" }}
                     script a {{ run = "{a}" }}
                     script b {{ run = "{b}" }}
                     script c {{ run = "{c}" }}
@@ -1781,6 +1782,29 @@ mod stale_rows {
             .unwrap()
             .lines()
             .count()
+    }
+
+    #[test]
+    fn start_path_fills_a_defaulted_input_and_stores_it() {
+        let f = fixture();
+        let (conn, run_id) = run_first(&f);
+        let run = crate::workflow::get_workflow_run(&conn, &run_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.inputs.get("x").map(String::as_str), Some("v"));
+    }
+
+    #[test]
+    fn resume_restores_a_defaulted_input_missing_from_the_stored_run() {
+        let f = fixture();
+        let (conn, run_id) = run_first(&f);
+        crate::workflow::set_workflow_run_inputs(&conn, &run_id, &Default::default()).unwrap();
+        std::fs::remove_file(f.ws.path().join("broken")).unwrap();
+        assert!(resume(&f, &run_id, None, false));
+        let run = crate::workflow::get_workflow_run(&conn, &run_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.inputs.get("x").map(String::as_str), Some("v"));
     }
 
     #[test]

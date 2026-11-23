@@ -18,7 +18,8 @@ refuse() { echo "verify-and-merge: $*" >&2; exit 1; }
 
 [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] || refuse "no valid PR number"
 [[ "${HEAD_SHA:-}" =~ ^[0-9a-f]{7,40}$ ]] || refuse "no valid head SHA"
-[[ "${DRY_RUN:-}" == *"{{"* ]] && DRY_RUN=""
+# dry_run is an engine built-in, always set.
+DRY_RUN="${DRY_RUN:-}"
 
 echo "${PRIOR_OUTPUT:-}" | jq -e '(.verified | type) == "boolean" and (.criteria | type) == "array" and all(.criteria[]; type == "object")' >/dev/null 2>&1 \
   || refuse "verification report unreadable (verify-acceptance gave no verified/criteria)"

@@ -66,6 +66,17 @@ fn ordered_steps(workflow: &WorkflowDef) -> Vec<(Step<'_>, Vec<usize>)> {
     out
 }
 
+/// Every script step of a workflow, in source order.
+pub(crate) fn script_nodes(workflow: &WorkflowDef) -> Vec<&ScriptNode> {
+    ordered_steps(workflow)
+        .into_iter()
+        .filter_map(|(step, _)| match step {
+            Step::Script(node) => Some(node),
+            Step::Call(_) => None,
+        })
+        .collect()
+}
+
 /// Report script steps whose script file still prints the legacy
 /// `<<<CONDUCTOR_OUTPUT>>>` block (#3042). Scripts that can't be resolved or
 /// read are skipped: `validate_script_steps` already reports missing ones.

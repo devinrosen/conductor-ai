@@ -1560,7 +1560,9 @@ fn smoke_one(
             target.ticket_id = Some(tid.clone());
         }
     }
-    if let Err(e) = conductor_core::workflow::apply_workflow_input_defaults(workflow, &mut inputs) {
+    // Check required inputs only: defaults are filled (and checked) by the shared
+    // run-start path, so the smoke exercises the same path as a real run.
+    if let Err(e) = conductor_core::workflow::check_required_workflow_inputs(workflow, &inputs) {
         if skip_unfillable {
             println!("SMOKE SKIP  {}  ({e})", workflow.name);
             return 0;
@@ -1586,7 +1588,7 @@ fn smoke_one(
         .as_deref()
         .map(|id| format!("  (run {id})"))
         .unwrap_or_default();
-    match outcome.result {
+    let code = match outcome.result {
         SmokeResult::Passed {
             stopped_at: Some(point),
         } => {
@@ -1614,7 +1616,16 @@ fn smoke_one(
             println!("SMOKE FAIL  {}{at}: {error}{run}", workflow.name);
             1
         }
+    };
+    for w in &outcome.env_warnings {
+        let child = if w.workflow == workflow.name {
+            String::new()
+        } else {
+            format!(" in '{}'", w.workflow)
+        };
+        println!("SMOKE WARN  {}  {}{child}", workflow.name, w.describe());
     }
+    code
 }
 
 #[cfg(test)]
