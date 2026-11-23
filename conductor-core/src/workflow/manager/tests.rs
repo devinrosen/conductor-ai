@@ -284,6 +284,7 @@ fn page_filter<'a>(
         worktree_id: None,
         include_inactive,
         include_dry_run: false,
+        top_level_only: false,
         limit,
         offset,
     }
@@ -387,6 +388,32 @@ fn test_list_workflow_runs_page_ties_break_by_id_desc() {
         let page =
             crate::workflow::list_workflow_runs_page(&conn, &page_filter(&st, false, 2, offset))
                 .unwrap();
+        ids.extend(page.iter().map(|r| r.id.clone()));
+    }
+    assert_eq!(ids.len(), 5);
+    let mut expected = ids.clone();
+    expected.sort_by(|a, b| b.cmp(a));
+    expected.dedup();
+    assert_eq!(ids, expected, "pages disjoint and ordered by id DESC");
+}
+
+#[test]
+fn test_list_all_workflow_runs_filtered_paginated_ties_break_by_id_desc() {
+    let conn = setup_db();
+    for _ in 0..5 {
+        let run = create_worktree_run(&conn, "w1");
+        set_started_at(&conn, &run.id, "2024-01-01T00:00:00Z");
+    }
+    let mut ids: Vec<String> = Vec::new();
+    for offset in [0, 2, 4] {
+        let page = crate::workflow::list_all_workflow_runs_filtered_paginated(
+            &conn,
+            None,
+            2,
+            offset,
+            crate::workflow::RunListFlags::default(),
+        )
+        .unwrap();
         ids.extend(page.iter().map(|r| r.id.clone()));
     }
     assert_eq!(ids.len(), 5);
@@ -5646,4 +5673,153 @@ fn test_active_runs_for_repo_still_include_dry_runs() {
     let (root, _child) = create_dry_run_pair(&conn);
     let runs = crate::workflow::list_active_workflow_runs_for_repo(&conn, "r1", &[]).unwrap();
     assert!(ids_of(&runs).contains(&root.id.as_str()));
+}
+
+#[test]
+fn test_list_all_workflow_runs_filtered_paginated_status_and_inactive() {
+    let conn = setup_db();
+    let pending = create_worktree_run(&conn, "w1");
+    let done = create_worktree_run(&conn, "w1");
+    conn.execute(
+        "UPDATE workflow_runs SET status = 'completed' WHERE id = ?1",
+        [&done.id],
+    )
+    .unwrap();
+    let merged = create_worktree_run(&conn, "w2");
+    conn.execute("UPDATE worktrees SET status = 'merged' WHERE id = 'w2'", [])
+        .unwrap();
+
+    let list = |status, flags| {
+        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, status, 50, 0, flags)
+            .unwrap()
+    };
+    let default = crate::workflow::RunListFlags::default();
+
+    let only_pending = list(Some(WorkflowRunStatus::Pending), default);
+    assert_eq!(ids_of(&only_pending), vec![pending.id.as_str()]);
+
+    let only_done = list(Some(WorkflowRunStatus::Completed), default);
+    assert_eq!(ids_of(&only_done), vec![done.id.as_str()]);
+
+    let active_wt = list(None, default);
+    assert!(!ids_of(&active_wt).contains(&merged.id.as_str()));
+    assert_eq!(active_wt.len(), 2);
+
+    let with_inactive = list(
+        None,
+        crate::workflow::RunListFlags {
+            include_inactive: true,
+            ..default
+        },
+    );
+    assert!(ids_of(&with_inactive).contains(&merged.id.as_str()));
+    assert_eq!(with_inactive.len(), 3);
+}
+
+#[test]
+fn test_list_all_workflow_runs_filtered_paginated_none_returns_every_status() {
+    let conn = setup_db();
+    let all_statuses = [
+        WorkflowRunStatus::Pending,
+        WorkflowRunStatus::Running,
+        WorkflowRunStatus::Completed,
+        WorkflowRunStatus::Failed,
+        WorkflowRunStatus::Cancelled,
+        WorkflowRunStatus::Waiting,
+        WorkflowRunStatus::NeedsResume,
+        WorkflowRunStatus::Cancelling,
+    ];
+    let mut by_status = Vec::new();
+    for status in &all_statuses {
+        let run = create_worktree_run(&conn, "w1");
+        conn.execute(
+            "UPDATE workflow_runs SET status = ?1 WHERE id = ?2",
+            rusqlite::params![status.to_string(), run.id],
+        )
+        .unwrap();
+        by_status.push((status.clone(), run.id.clone()));
+    }
+    let default = crate::workflow::RunListFlags::default();
+
+    let none =
+        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 50, 0, default)
+            .unwrap();
+    assert_eq!(
+        none.len(),
+        all_statuses.len(),
+        "None applies no status filter"
+    );
+
+    for (status, id) in &by_status {
+        let only = crate::workflow::list_all_workflow_runs_filtered_paginated(
+            &conn,
+            Some(status.clone()),
+            50,
+            0,
+            default,
+        )
+        .unwrap();
+        assert_eq!(
+            ids_of(&only),
+            vec![id.as_str()],
+            "Some({status}) returns only that status"
+        );
+    }
+}
+
+#[test]
+fn test_list_workflow_runs_page_top_level_only_applies_before_limit() {
+    let conn = setup_db();
+    let parent = create_worktree_run(&conn, "w1");
+    set_started_at(&conn, &parent.id, "2024-01-01T00:00:00Z");
+    // Two newer children: without the filter they would fill a limit-2 page.
+    for ts in ["2024-01-02T00:00:00Z", "2024-01-03T00:00:00Z"] {
+        let child = create_worktree_run(&conn, "w1");
+        conn.execute(
+            "UPDATE workflow_runs SET parent_workflow_run_id = ?1 WHERE id = ?2",
+            [&parent.id, &child.id],
+        )
+        .unwrap();
+        set_started_at(&conn, &child.id, ts);
+    }
+
+    let page = |top_level_only| {
+        crate::workflow::list_workflow_runs_page(
+            &conn,
+            &crate::workflow::WorkflowRunListFilter {
+                top_level_only,
+                ..page_filter(&[], false, 2, 0)
+            },
+        )
+        .unwrap()
+    };
+    assert!(!ids_of(&page(false)).contains(&parent.id.as_str()));
+    assert_eq!(ids_of(&page(true)), vec![parent.id.as_str()]);
+}
+
+#[test]
+fn test_list_active_workflow_runs_keeps_dry_runs_and_breaks_ties_by_id() {
+    let conn = setup_db();
+    let (root, child) = create_dry_run_pair(&conn);
+    let a = create_worktree_run(&conn, "w1");
+    let b = create_worktree_run(&conn, "w1");
+    for id in [&root.id, &child.id, &a.id, &b.id] {
+        set_started_at(&conn, id, "2024-01-01T00:00:00Z");
+    }
+    let runs = crate::workflow::list_active_workflow_runs(&conn, &[]).unwrap();
+    let ids = ids_of(&runs);
+    assert!(
+        ids.contains(&root.id.as_str()),
+        "dry-run smoke stays listed"
+    );
+    assert!(ids.contains(&child.id.as_str()));
+    let mut expected: Vec<&str> = ids.clone();
+    expected.sort_by(|x, y| y.cmp(x));
+    assert_eq!(ids, expected, "ties ordered by id DESC");
+    assert_eq!(runs.len(), 4);
+
+    // Non-default status set: nothing is running, so nothing returns.
+    let running =
+        crate::workflow::list_active_workflow_runs(&conn, &[WorkflowRunStatus::Running]).unwrap();
+    assert!(running.is_empty());
 }
