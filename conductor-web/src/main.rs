@@ -596,6 +596,7 @@ async fn main() -> Result<()> {
                     Some(&conductor_core::agent::AgentRunStatus::Running),
                     100,
                     0,
+                    false,
                 )?;
                 let new_events_by_run: std::collections::HashMap<String, Vec<_>> = running_runs
                     .iter()

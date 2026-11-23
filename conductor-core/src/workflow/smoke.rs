@@ -102,10 +102,17 @@ impl SmokeStop {
     }
 }
 
+/// Start of every smoke cancellation reason (see [`SmokeStopPoint::reason`]).
+///
+/// `notify::transitions` matches this prefix on an agent run's result text to
+/// recognise a cancelled smoke driver and skip `agent_run.failed`. The coupling
+/// is pinned by `reason_starts_with_notify_prefix_for_every_kind`.
+pub const SMOKE_REASON_PREFIX: &str = "smoke: reached ";
+
 impl SmokeStopPoint {
     /// The cancellation reason recorded on the run for this stop.
     pub fn reason(&self) -> String {
-        format!("smoke: reached {} step '{}'", self.kind, self.step)
+        format!("{SMOKE_REASON_PREFIX}{} step '{}'", self.kind, self.step)
     }
 }
 
@@ -295,14 +302,28 @@ fn ensure_cancelled(
     Ok(())
 }
 
-/// Make every descendant run of a smoke that stopped on purpose end `cancelled`.
+/// End the agent run driving a smoke run as `cancelled` with the smoke reason.
+/// The one place the rule lives; callers decide whether a failure is fatal.
+pub(super) fn cancel_driver(
+    agent_mgr: &crate::agent::AgentManager,
+    driver_id: &str,
+    reason: &str,
+) -> std::result::Result<(), String> {
+    agent_mgr
+        .update_run_cancelled_with_reason(driver_id, reason)
+        .map_err(|e| format!("failed to cancel driving agent run {driver_id}: {e}"))
+}
+
+/// Make the smoke run's tree end the way a passing smoke must: the agent run
+/// driving `run_id` and each descendant's driver end `cancelled` with the smoke
+/// reason, and every descendant run that isn't `completed` or `cancelled` does too.
 ///
 /// The engine's parallel executor counts a branch's smoke stop as a branch failure,
 /// and the fail-fast path then records the child run `failed` (runkon-flow logs
-/// "finished with failures" for it). A passing smoke must leave no `failed` run, so
-/// every descendant that isn't `completed` or `cancelled` is set to `cancelled`.
-/// A `completed` child ran to the end before the stop and stays as it is. Step rows
-/// are left as the engine wrote them.
+/// "finished with failures" for it). A passing smoke must leave no `failed` run or
+/// agent run. A `completed` run or driver ran to the end before the stop and stays
+/// as it is. Step rows are left as the engine wrote them. `run_id` itself is handled
+/// by `ensure_cancelled`; only its driver is finalized here.
 fn cancel_smoke_descendants(
     conn: &rusqlite::Connection,
     run_id: &str,
@@ -311,6 +332,16 @@ fn cancel_smoke_descendants(
 ) -> std::result::Result<(), String> {
     if depth > 16 {
         return Ok(());
+    }
+    let driver: Option<String> = conn
+        .query_row(
+            "SELECT parent_run_id FROM workflow_runs WHERE id = ?1",
+            [run_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("failed to read driver of smoke run {run_id}: {e}"))?;
+    if let Some(driver) = driver.filter(|d| !d.is_empty()) {
+        cancel_driver(&crate::agent::AgentManager::new(conn), &driver, reason)?;
     }
     let children = crate::workflow::list_child_workflow_runs(conn, run_id)
         .map_err(|e| format!("failed to list child runs of smoke run {run_id}: {e}"))?;
@@ -440,6 +471,19 @@ mod tests {
         );
     }
 
+    /// `notify` recognises a cancelled smoke driver by this prefix on the agent
+    /// run's result text, so every stop kind's reason must carry it.
+    #[test]
+    fn reason_starts_with_notify_prefix_for_every_kind() {
+        for kind in [SmokeStopKind::Agent, SmokeStopKind::Gate] {
+            let reason = point("s", kind).reason();
+            assert!(
+                reason.starts_with(SMOKE_REASON_PREFIX),
+                "reason {reason:?} must start with {SMOKE_REASON_PREFIX:?}"
+            );
+        }
+    }
+
     fn new_run(conn: &rusqlite::Connection) -> String {
         let parent = crate::agent::AgentManager::new(conn)
             .create_run(Some("w1"), "workflow", None)
@@ -508,6 +552,55 @@ mod tests {
             .unwrap();
         let err = ensure_cancelled(&conn, &id, "smoke").unwrap_err();
         assert!(err.contains("failed to cancel smoke run"), "{err}");
+    }
+
+    fn driver_of(conn: &rusqlite::Connection, run_id: &str) -> (String, Option<String>) {
+        conn.query_row(
+            "SELECT ar.status, ar.result_text FROM workflow_runs wr \
+             JOIN agent_runs ar ON ar.id = wr.parent_run_id WHERE wr.id = ?1",
+            [run_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap()
+    }
+
+    fn driver_id(conn: &rusqlite::Connection, run_id: &str) -> String {
+        conn.query_row(
+            "SELECT parent_run_id FROM workflow_runs WHERE id = ?1",
+            [run_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn cancel_smoke_descendants_turns_a_failed_driver_cancelled() {
+        let conn = crate::test_helpers::setup_db();
+        let id = new_run(&conn);
+        crate::agent::AgentManager::new(&conn)
+            .update_run_failed(&driver_id(&conn, &id), "Workflow 'wf' failed")
+            .unwrap();
+        cancel_smoke_descendants(&conn, &id, "smoke: reached agent step 'a'", 0).unwrap();
+        assert_eq!(
+            driver_of(&conn, &id),
+            (
+                "cancelled".to_string(),
+                Some("smoke: reached agent step 'a'".to_string())
+            )
+        );
+    }
+
+    #[test]
+    fn cancel_smoke_descendants_leaves_a_completed_driver() {
+        let conn = crate::test_helpers::setup_db();
+        let id = new_run(&conn);
+        conn.execute(
+            "UPDATE agent_runs SET status = 'completed' WHERE id = ?1",
+            [driver_id(&conn, &id)],
+        )
+        .unwrap();
+        cancel_smoke_descendants(&conn, &id, "smoke", 0).unwrap();
+        assert_eq!(driver_of(&conn, &id).0, "completed");
     }
 
     #[test]

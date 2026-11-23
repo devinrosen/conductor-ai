@@ -66,7 +66,9 @@ impl<'a> AgentManager<'a> {
         let mut runs = query_collect(
             self.conn,
             &format!(
-                "{AGENT_RUN_SELECT} WHERE worktree_id = :worktree_id ORDER BY started_at DESC"
+                "{AGENT_RUN_SELECT} WHERE worktree_id = :worktree_id AND {} \
+                 ORDER BY started_at DESC",
+                not_dry_run_driver("agent_runs")
             ),
             named_params! { ":worktree_id": worktree_id },
             row_to_agent_run,
@@ -137,8 +139,9 @@ impl<'a> AgentManager<'a> {
                 "SELECT {AGENT_RUN_COLS_A_NULL_PLAN} \
                  FROM agent_runs a \
                  JOIN worktrees w ON a.worktree_id = w.id \
-                 WHERE w.repo_id = :repo_id \
-                 ORDER BY a.started_at DESC"
+                 WHERE w.repo_id = :repo_id AND {} \
+                 ORDER BY a.started_at DESC",
+                not_dry_run_driver("a")
             ),
             named_params! { ":repo_id": repo_id },
             row_to_agent_run,
@@ -215,8 +218,11 @@ impl<'a> AgentManager<'a> {
                  FROM agent_runs a \
                  INNER JOIN ( \
                      SELECT worktree_id, MAX(started_at) AS max_started \
-                     FROM agent_runs GROUP BY worktree_id \
-                 ) latest ON a.worktree_id = latest.worktree_id AND a.started_at = latest.max_started"
+                     FROM agent_runs WHERE {inner} GROUP BY worktree_id \
+                 ) latest ON a.worktree_id = latest.worktree_id AND a.started_at = latest.max_started \
+                 WHERE {outer}",
+                inner = not_dry_run_driver("agent_runs"),
+                outer = not_dry_run_driver("a")
             ),
             [],
             row_to_agent_run,
@@ -239,9 +245,12 @@ impl<'a> AgentManager<'a> {
                      SELECT ar.worktree_id, MAX(ar.started_at) AS max_started \
                      FROM agent_runs ar \
                      JOIN worktrees w ON ar.worktree_id = w.id \
-                     WHERE w.repo_id = :repo_id \
+                     WHERE w.repo_id = :repo_id AND {inner} \
                      GROUP BY ar.worktree_id \
-                 ) latest ON a.worktree_id = latest.worktree_id AND a.started_at = latest.max_started"
+                 ) latest ON a.worktree_id = latest.worktree_id AND a.started_at = latest.max_started \
+                 WHERE {outer}",
+                inner = not_dry_run_driver("ar"),
+                outer = not_dry_run_driver("a")
             ),
             named_params! { ":repo_id": repo_id },
             row_to_agent_run,
@@ -286,9 +295,10 @@ impl<'a> AgentManager<'a> {
             self.conn,
             &format!(
                 "{AGENT_RUN_SELECT} \
-                 WHERE worktree_id = :worktree_id AND parent_run_id IS NULL \
+                 WHERE worktree_id = :worktree_id AND parent_run_id IS NULL AND {} \
                  ORDER BY started_at DESC \
-                 LIMIT 1"
+                 LIMIT 1",
+                not_dry_run_driver("agent_runs")
             ),
             named_params! { ":worktree_id": worktree_id },
             row_to_agent_run,
@@ -345,7 +355,8 @@ impl<'a> AgentManager<'a> {
             self.conn,
             &format!(
                 "{AGENT_RUN_SELECT} WHERE worktree_id = :worktree_id AND parent_run_id IS NULL \
-                 ORDER BY started_at DESC"
+                 AND {} ORDER BY started_at DESC",
+                not_dry_run_driver("agent_runs")
             ),
             named_params! { ":worktree_id": worktree_id },
             row_to_agent_run,
@@ -362,6 +373,8 @@ impl<'a> AgentManager<'a> {
     /// - `repo_id` — requires JOIN with `worktrees` on `w.repo_id`
     /// - `status` — filter on `agent_runs.status`
     /// - `limit` / `offset` — pagination
+    /// - `include_dry_run` — when false, hides the agent runs that drive a dry-run
+    ///   workflow run (smokes)
     pub fn list_agent_runs(
         &self,
         worktree_id: Option<&str>,
@@ -369,6 +382,7 @@ impl<'a> AgentManager<'a> {
         status: Option<&AgentRunStatus>,
         limit: usize,
         offset: usize,
+        include_dry_run: bool,
     ) -> Result<Vec<AgentRun>> {
         // repo_id filter requires a JOIN; worktree_id/status use the plain SELECT.
         let use_join = repo_id.is_some();
@@ -397,6 +411,14 @@ impl<'a> AgentManager<'a> {
             param_values.push(rusqlite::types::Value::Text(s.to_string()));
             let col = if use_join { "ar.status" } else { "status" };
             where_parts.push(format!("{col} = ?"));
+        }
+
+        if !include_dry_run {
+            where_parts.push(not_dry_run_driver(if use_join {
+                "ar"
+            } else {
+                "agent_runs"
+            }));
         }
 
         let where_clause = if where_parts.is_empty() {
@@ -436,6 +458,21 @@ impl<'a> AgentManager<'a> {
             .ok_or_else(|| ConductorError::Agent(format!("agent run not found: {run_id}")))?;
         run.log_path()
     }
+}
+
+/// SQL predicate hiding the agent runs that drive a dry-run workflow run
+/// (`validate --dry-run` smokes and their children), matching how #3400 hides the
+/// workflow runs themselves. `alias` qualifies the agent run's `id` column.
+///
+/// The driving agent run is inserted a few statements before its `workflow_runs`
+/// row, so for a few milliseconds a smoke driver is still visible. At worst a
+/// notifier poll in that window re-reports a previous terminal run, which the dedup
+/// store blocks if it was already notified.
+fn not_dry_run_driver(alias: &str) -> String {
+    format!(
+        "NOT EXISTS (SELECT 1 FROM workflow_runs wr \
+         WHERE wr.parent_run_id = {alias}.id AND wr.dry_run = 1)"
+    )
 }
 
 #[cfg(test)]
@@ -730,7 +767,7 @@ mod tests {
         let r1 = mgr.create_run(Some("w1"), "Task 1", None).unwrap();
         let r2 = mgr.create_run(Some("w1"), "Task 2", None).unwrap();
 
-        let runs = mgr.list_agent_runs(None, None, None, 50, 0).unwrap();
+        let runs = mgr.list_agent_runs(None, None, None, 50, 0, false).unwrap();
         assert_eq!(runs.len(), 2);
         // newest first
         assert_eq!(runs[0].id, r2.id);
@@ -746,7 +783,9 @@ mod tests {
         let r1 = mgr.create_run(Some("w1"), "Task in w1", None).unwrap();
         let _r2 = mgr.create_run(Some("w2"), "Task in w2", None).unwrap();
 
-        let runs = mgr.list_agent_runs(Some("w1"), None, None, 50, 0).unwrap();
+        let runs = mgr
+            .list_agent_runs(Some("w1"), None, None, 50, 0, false)
+            .unwrap();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].id, r1.id);
     }
@@ -773,13 +812,27 @@ mod tests {
         .unwrap();
 
         let running = mgr
-            .list_agent_runs(Some("w1"), None, Some(&AgentRunStatus::Running), 50, 0)
+            .list_agent_runs(
+                Some("w1"),
+                None,
+                Some(&AgentRunStatus::Running),
+                50,
+                0,
+                false,
+            )
             .unwrap();
         assert_eq!(running.len(), 1);
         assert_eq!(running[0].id, r1.id);
 
         let completed = mgr
-            .list_agent_runs(Some("w1"), None, Some(&AgentRunStatus::Completed), 50, 0)
+            .list_agent_runs(
+                Some("w1"),
+                None,
+                Some(&AgentRunStatus::Completed),
+                50,
+                0,
+                false,
+            )
             .unwrap();
         assert_eq!(completed.len(), 1);
         assert_eq!(completed[0].id, r2.id);
@@ -805,7 +858,9 @@ mod tests {
         let r1 = mgr.create_run(Some("w1"), "r1 task", None).unwrap();
         let _r3 = mgr.create_run(Some("w3"), "r2 task", None).unwrap();
 
-        let runs = mgr.list_agent_runs(None, Some("r1"), None, 50, 0).unwrap();
+        let runs = mgr
+            .list_agent_runs(None, Some("r1"), None, 50, 0, false)
+            .unwrap();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].id, r1.id);
     }
@@ -849,27 +904,55 @@ mod tests {
 
         // repo_id=r1 + status=Running → only r1_running
         let running = mgr
-            .list_agent_runs(None, Some("r1"), Some(&AgentRunStatus::Running), 50, 0)
+            .list_agent_runs(
+                None,
+                Some("r1"),
+                Some(&AgentRunStatus::Running),
+                50,
+                0,
+                false,
+            )
             .unwrap();
         assert_eq!(running.len(), 1);
         assert_eq!(running[0].id, r1_running.id);
 
         // repo_id=r1 + status=Completed → only r1_completed
         let completed = mgr
-            .list_agent_runs(None, Some("r1"), Some(&AgentRunStatus::Completed), 50, 0)
+            .list_agent_runs(
+                None,
+                Some("r1"),
+                Some(&AgentRunStatus::Completed),
+                50,
+                0,
+                false,
+            )
             .unwrap();
         assert_eq!(completed.len(), 1);
         assert_eq!(completed[0].id, r1_completed.id);
 
         // repo_id=r2 + status=Running → only r2's run (excludes r1 runs)
         let r2_running = mgr
-            .list_agent_runs(None, Some("r2"), Some(&AgentRunStatus::Running), 50, 0)
+            .list_agent_runs(
+                None,
+                Some("r2"),
+                Some(&AgentRunStatus::Running),
+                50,
+                0,
+                false,
+            )
             .unwrap();
         assert_eq!(r2_running.len(), 1);
 
         // repo_id=r2 + status=Completed → nothing (r2 has no completed runs)
         let r2_completed = mgr
-            .list_agent_runs(None, Some("r2"), Some(&AgentRunStatus::Completed), 50, 0)
+            .list_agent_runs(
+                None,
+                Some("r2"),
+                Some(&AgentRunStatus::Completed),
+                50,
+                0,
+                false,
+            )
             .unwrap();
         assert_eq!(r2_completed.len(), 0);
     }
@@ -896,7 +979,7 @@ mod tests {
         .unwrap();
 
         let running = mgr
-            .list_agent_runs(None, None, Some(&AgentRunStatus::Running), 50, 0)
+            .list_agent_runs(None, None, Some(&AgentRunStatus::Running), 50, 0, false)
             .unwrap();
         assert_eq!(running.len(), 1);
         assert_eq!(running[0].id, r2.id);
@@ -912,11 +995,73 @@ mod tests {
                 .unwrap();
         }
 
-        let page1 = mgr.list_agent_runs(None, None, None, 3, 0).unwrap();
+        let page1 = mgr.list_agent_runs(None, None, None, 3, 0, false).unwrap();
         assert_eq!(page1.len(), 3);
 
-        let page2 = mgr.list_agent_runs(None, None, None, 3, 3).unwrap();
+        let page2 = mgr.list_agent_runs(None, None, None, 3, 3, false).unwrap();
         assert_eq!(page2.len(), 2);
+    }
+
+    #[test]
+    fn dry_run_driver_is_hidden_unless_included() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let real = mgr.create_run(Some("w1"), "real", None).unwrap();
+        // Make sure the driver is newer than the real run.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let driver = mgr.create_run(Some("w1"), "workflow", None).unwrap();
+        crate::workflow::create_workflow_run(
+            &conn,
+            "smoke",
+            Some("w1"),
+            &driver.id,
+            true,
+            "manual",
+            None,
+        )
+        .unwrap();
+
+        let latest = mgr.latest_runs_by_worktree().unwrap();
+        assert_eq!(latest["w1"].id, real.id);
+        let latest = mgr.latest_runs_by_worktree_for_repo("r1").unwrap();
+        assert_eq!(latest["w1"].id, real.id);
+
+        let ids = |runs: Vec<crate::agent::AgentRun>| -> Vec<String> {
+            runs.into_iter().map(|r| r.id).collect()
+        };
+        assert_eq!(
+            ids(mgr.list_for_worktree("w1").unwrap()),
+            vec![real.id.clone()]
+        );
+        assert_eq!(ids(mgr.list_for_repo("r1").unwrap()), vec![real.id.clone()]);
+        assert_eq!(
+            mgr.latest_run_for_worktree("w1").unwrap().map(|r| r.id),
+            Some(real.id.clone())
+        );
+        assert_eq!(
+            ids(mgr.list_root_runs_for_worktree("w1").unwrap()),
+            vec![real.id.clone()]
+        );
+        assert_eq!(
+            ids(mgr
+                .list_agent_runs(Some("w1"), None, None, 50, 0, false)
+                .unwrap()),
+            vec![real.id.clone()]
+        );
+        assert_eq!(
+            ids(mgr
+                .list_agent_runs(None, Some("r1"), None, 50, 0, false)
+                .unwrap()),
+            vec![real.id.clone()]
+        );
+        assert_eq!(
+            mgr.list_agent_runs(Some("w1"), None, None, 50, 0, true)
+                .unwrap()
+                .len(),
+            2
+        );
+        // Lookup by id still sees the driver.
+        assert!(mgr.get_run(&driver.id).unwrap().is_some());
     }
 
     #[test]

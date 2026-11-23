@@ -1,6 +1,6 @@
 use crate::agent::{AgentRun, AgentRunStatus};
 use crate::workflow::types::ConductorWorkflowRun;
-use crate::workflow::WorkflowRunStatus;
+use crate::workflow::{WorkflowRunStatus, SMOKE_REASON_PREFIX};
 
 use crate::session::hook::RUNTIME_INTERACTIVE;
 
@@ -122,6 +122,17 @@ pub fn detect_agent_terminal_transitions<'a>(
                 // An interactive session "completes" when the developer closes it, which
                 // they already know. Failures (reaped sessions) still notify.
                 if succeeded && run.runtime == RUNTIME_INTERACTIVE {
+                    seen.insert(run.id.clone(), run.status);
+                    continue;
+                }
+                // A smoke (`validate --dry-run`) ends its driving agent run cancelled on
+                // purpose; that is neither a failure nor worth a notification.
+                if run.status == AgentRunStatus::Cancelled
+                    && run
+                        .result_text
+                        .as_deref()
+                        .is_some_and(|t| t.starts_with(SMOKE_REASON_PREFIX))
+                {
                     seen.insert(run.id.clone(), run.status);
                     continue;
                 }

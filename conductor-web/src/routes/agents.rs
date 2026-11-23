@@ -284,7 +284,7 @@ pub async fn list_all_agent_runs(
 
     let db = state.db.lock().await;
     let mgr = AgentManager::new(&db);
-    let runs = mgr.list_agent_runs(None, None, status.as_ref(), 500, 0)?;
+    let runs = mgr.list_agent_runs(None, None, status.as_ref(), 500, 0, false)?;
     Ok(Json(runs))
 }
 
