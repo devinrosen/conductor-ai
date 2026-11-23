@@ -2,9 +2,9 @@
 # check-pr-ready.sh — first step of verify-and-merge (#3407). Refuses, with a one-line
 # reason on stderr and exit 1, unless the current branch's PR is ready to be verified
 # and merged. The reason becomes the step error.
-# Env vars: CONFIRM (the workflow's confirm input), DRY_RUN, TICKET_SOURCE_ID (fallback
+# Env vars: CONFIRM (the workflow's confirm input; must be true or false), DRY_RUN, TICKET_SOURCE_ID (fallback
 # for the linked issue), RECIPE_PATH (default .conductor/verify-recipe.md),
-# AUTO_REREVIEW ("true" turns on the base-merge path below; anything else refuses),
+# AUTO_REREVIEW (must be true or false; "true" turns on the base-merge path below),
 # TRUSTED_REVIEW_BOTS (comma-separated bot logins whose reviews are trusted, e.g. the
 # repo's conductor reviewer GitHub App; GitHub reports such a bot as author_association
 # NONE, so without this its reviews never count).
@@ -77,13 +77,18 @@ emit_base_merged() {
     | { printf '<<<FLOW_OUTPUT>>>\n'; cat; printf '<<<END_FLOW_OUTPUT>>>\n'; }
 }
 STALE_BASE_MERGE=""
+# CONFIRM (a boolean input) and AUTO_REREVIEW (an input with a default) always have a
+# value when the workflow's inputs resolve. The engine turns an unresolved placeholder
+# into an empty string, so an empty value means the input wasn't passed: refuse rather
+# than read it as "off" (#3449, #3454).
 CONFIRM="${CONFIRM:-}"
-DRY_RUN="${DRY_RUN:-}"
-[[ "${CONFIRM}" == *"{{"* ]] && CONFIRM=""
-[[ "${DRY_RUN}" == *"{{"* ]] && DRY_RUN=""
-[[ "${TICKET_SOURCE_ID:-}" == *"{{"* ]] && TICKET_SOURCE_ID=""
 AUTO_REREVIEW="${AUTO_REREVIEW:-}"
-[[ "${AUTO_REREVIEW}" == *"{{"* ]] && AUTO_REREVIEW=""
+case "${CONFIRM}" in true | false) ;; *) refuse "CONFIRM must be true or false, got '${CONFIRM}' (the workflow's confirm input has no value)" ;; esac
+case "${AUTO_REREVIEW}" in true | false) ;; *) refuse "AUTO_REREVIEW must be true or false, got '${AUTO_REREVIEW}' (the workflow's auto_rereview input has no value)" ;; esac
+# dry_run is an engine built-in, always set when run by the workflow engine.
+DRY_RUN="${DRY_RUN:-}"
+# ticket_source_id is injected only when the run has a ticket; it isn't a declared input.
+[[ "${TICKET_SOURCE_ID:-}" == *"{{"* ]] && TICKET_SOURCE_ID=""
 
 # 1. The PR for this branch.
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")

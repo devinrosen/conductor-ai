@@ -60,9 +60,9 @@ pub fn injected_variable_keys() -> &'static [&'static str] {
 }
 
 pub use coordinator::{
-    apply_workflow_input_defaults, execute_workflow_standalone, resume_workflow,
-    resume_workflow_standalone, spawn_claimed_runs, spawn_heartbeat_resume, spawn_workflow_resume,
-    validate_resume_preconditions,
+    apply_workflow_input_defaults, check_required_workflow_inputs, execute_workflow_standalone,
+    resume_workflow, resume_workflow_standalone, spawn_claimed_runs, spawn_heartbeat_resume,
+    spawn_workflow_resume, validate_resume_preconditions,
 };
 pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
 pub use manager::definitions::{
@@ -151,7 +151,7 @@ pub use runkon_flow::traits::persistence::{
 pub use runkon_flow::types::FanOutItemRow;
 pub use smoke::{
     smoke_run_workflow, SmokeOutcome, SmokeResult, SmokeStop, SmokeStopKind, SmokeStopPoint,
-    SMOKE_REASON_PREFIX,
+    UnresolvedEnvInput, SMOKE_REASON_PREFIX,
 };
 pub use step_log::{
     render_step_log, resolve_step_log_target, StepLogMode, StepLogSource, StepLogTarget,

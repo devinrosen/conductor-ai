@@ -39,6 +39,7 @@ emit() {
     | { printf '<<<FLOW_OUTPUT>>>\n'; cat; printf '<<<END_FLOW_OUTPUT>>>\n'; }
 }
 
+# pr_number is injected only when the branch has a PR; not a declared input (#3454).
 if [ -z "${PR_NUMBER:-}" ] || [[ "${PR_NUMBER}" == *"{{"* ]]; then
   PR_NUMBER=$(gh pr view --json number -q .number 2>/dev/null || true)
 fi
