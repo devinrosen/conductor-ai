@@ -78,6 +78,35 @@ fn resolve_dir_target(
     }))
 }
 
+/// The `(wt_path, repo_path)` script search dirs for `validate --templates`.
+/// Inside a registered worktree the worktree is searched first and the main
+/// checkout second; otherwise `dir` is used as-is. A failed lookup also falls
+/// back to `dir`, with a warning, so the user knows why a variable may be
+/// reported as unknown.
+fn template_script_dirs(conn: &Connection, config: &Config, dir: String) -> (String, String) {
+    let lookup = std::path::absolute(&dir)
+        .map_err(anyhow::Error::from)
+        .and_then(|abs| resolve_dir_target(conn, config, &abs))
+        .map(|found| found.map(|(wt_path, repo_path, _)| (wt_path, repo_path)));
+    pick_script_dirs(dir, lookup)
+}
+
+fn pick_script_dirs(
+    dir: String,
+    lookup: anyhow::Result<Option<(String, String)>>,
+) -> (String, String) {
+    match lookup {
+        Ok(Some(dirs)) => dirs,
+        Ok(None) => (dir.clone(), dir),
+        Err(e) => {
+            eprintln!(
+                "warning: could not resolve {dir} as a registered worktree, using it as-is: {e}"
+            );
+            (dir.clone(), dir)
+        }
+    }
+}
+
 /// The per-run options that vary between standalone run call sites.
 struct ExecOptions {
     model: Option<String>,
@@ -809,16 +838,7 @@ pub fn handle_workflow(
 
             let (wt_path, repo_path) = if templates_only {
                 let dir = path.clone().unwrap_or_else(|| ".".to_string());
-                // Inside a registered worktree, fall back to the main checkout
-                // for scripts. A failed lookup means "unregistered": use the
-                // directory as-is.
-                let registered = std::path::absolute(&dir)
-                    .ok()
-                    .and_then(|abs| resolve_dir_target(conn, config, &abs).ok().flatten());
-                match registered {
-                    Some((wt_path, repo_path, _)) => (wt_path, repo_path),
-                    None => (dir.clone(), dir),
-                }
+                template_script_dirs(conn, config, dir)
             } else if let Some(ref dir) = path {
                 let abs = std::path::absolute(dir)?;
                 if let Some((wt_path, repo_path, target)) = resolve_dir_target(conn, config, &abs)?
@@ -1594,5 +1614,50 @@ fn smoke_one(
             println!("SMOKE FAIL  {}{at}: {error}{run}", workflow.name);
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod script_dirs_tests {
+    use super::*;
+
+    #[test]
+    fn registered_worktree_uses_worktree_then_repo() {
+        let got = pick_script_dirs("/d".into(), Ok(Some(("/wt".into(), "/repo".into()))));
+        assert_eq!(got, ("/wt".to_string(), "/repo".to_string()));
+    }
+
+    #[test]
+    fn unregistered_dir_is_used_for_both() {
+        let got = pick_script_dirs("/d".into(), Ok(None));
+        assert_eq!(got, ("/d".to_string(), "/d".to_string()));
+    }
+
+    #[test]
+    fn lookup_error_falls_back_to_dir() {
+        let got = pick_script_dirs("/d".into(), Err(anyhow::anyhow!("db locked")));
+        assert_eq!(got, ("/d".to_string(), "/d".to_string()));
+    }
+
+    #[test]
+    fn db_lookup_selects_registered_worktree_and_unregistered_fallback() {
+        let conn = conductor_core::test_helpers::create_test_conn();
+        let config = Config::default();
+        conductor_core::test_helpers::insert_test_repo(&conn, "r1", "repo", "/tmp/sd-main");
+        conductor_core::test_helpers::insert_test_worktree(
+            &conn,
+            "w1",
+            "r1",
+            "feat-x",
+            "/tmp/sd-wt/feat-x",
+        );
+        assert_eq!(
+            template_script_dirs(&conn, &config, "/tmp/sd-wt/feat-x".into()),
+            ("/tmp/sd-wt/feat-x".to_string(), "/tmp/sd-main".to_string())
+        );
+        assert_eq!(
+            template_script_dirs(&conn, &config, "/tmp/sd-other".into()),
+            ("/tmp/sd-other".to_string(), "/tmp/sd-other".to_string())
+        );
     }
 }
