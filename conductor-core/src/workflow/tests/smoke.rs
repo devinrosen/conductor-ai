@@ -554,3 +554,23 @@ fn smoke_warns_about_a_declared_input_with_no_value_and_still_passes() {
     );
     assert!(!ran(&f, "a"));
 }
+
+#[test]
+fn scan_run_env_reports_a_database_open_failure() {
+    // The open failure can't be forced through smoke_run_workflow (the run needs
+    // the same database), so exercise the branch with a failed open directly.
+    let err = crate::error::ConductorError::Workflow("boom".into());
+    let path = std::path::Path::new("/nonexistent/conductor.db");
+    let (warnings, errors) = crate::workflow::smoke::scan_run_env(Err(&err), Some("run1"), path);
+    assert!(warnings.is_empty());
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].contains("/nonexistent/conductor.db"),
+        "{errors:?}"
+    );
+    assert!(errors[0].contains("boom"), "{errors:?}");
+
+    // No run row: nothing to scan, so no error even when the open failed.
+    let (w, e) = crate::workflow::smoke::scan_run_env(Err(&err), None, path);
+    assert!(w.is_empty() && e.is_empty());
+}

@@ -466,6 +466,26 @@ fn db_open_error(path: &std::path::Path, e: &dyn std::fmt::Display) -> String {
     format!("failed to open database at {}: {e}", path.display())
 }
 
+/// Scan a finished smoke run for unresolved env inputs. Takes the already
+/// attempted connection so the database-open failure branch can be tested
+/// directly: it can't be forced through `smoke_run_workflow`, which needs the
+/// same database to open for the run itself just before this point.
+pub(crate) fn scan_run_env(
+    conn: Result<&rusqlite::Connection, &ConductorError>,
+    run_id: Option<&str>,
+    db_path: &std::path::Path,
+) -> (Vec<UnresolvedEnvInput>, Vec<String>) {
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+    match (conn, run_id) {
+        (Ok(conn), Some(id)) => scan_env_inputs(conn, id, 0, &mut warnings, &mut errors),
+        (Err(e), Some(_)) => errors.push(db_open_error(db_path, e)),
+        // No run row was created (the run failed before start): nothing to scan.
+        (_, None) => {}
+    }
+    (warnings, errors)
+}
+
 /// Run `params` as a smoke run and classify the outcome.
 ///
 /// Sets `params.smoke`; every other field is used as given. The run is an
@@ -534,16 +554,7 @@ pub fn smoke_run_workflow(mut params: WorkflowExecStandalone) -> SmokeOutcome {
         )),
         (Err(e), _) => fail(e.to_string()),
     };
-    let mut env_warnings = Vec::new();
-    let mut env_scan_errors = Vec::new();
-    match (conn.as_ref(), run_id.as_deref()) {
-        (Ok(conn), Some(id)) => {
-            scan_env_inputs(conn, id, 0, &mut env_warnings, &mut env_scan_errors)
-        }
-        (Err(e), Some(_)) => env_scan_errors.push(db_open_error(&db_path, e)),
-        // No run row was created (the run failed before start): nothing to scan.
-        (_, None) => {}
-    }
+    let (env_warnings, env_scan_errors) = scan_run_env(conn.as_ref(), run_id.as_deref(), &db_path);
     SmokeOutcome {
         run_id,
         result,
