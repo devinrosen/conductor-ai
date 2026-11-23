@@ -497,3 +497,80 @@ fn find_failed_step_stops_recursing_in_a_chain_deeper_than_the_cap() {
     assert!(found.starts_with("step-c16 (in wf-c16)"), "{found}");
     assert!(!found.contains("c17"), "{found}");
 }
+
+#[test]
+fn smoke_reports_no_env_warning_when_defaults_are_applied() {
+    // A declared input used in a script env gets its default at run start, so
+    // the end-to-end smoke has nothing to warn about and no scan error.
+    let f = fixture();
+    let a = script(&f, "a", false);
+    let def = parse(&format!(
+        "inputs {{ opt default = \"v\" }}\nscript a {{ run = \"{a}\" env = {{ OPT = \"{{{{opt}}}}\" }} }}\ncall some-agent"
+    ));
+    let outcome = smoke_run_workflow(params(&f, def));
+    assert!(
+        matches!(outcome.result, SmokeResult::Passed { .. }),
+        "{:?}",
+        outcome.result
+    );
+    assert!(
+        outcome.env_warnings.is_empty(),
+        "{:?}",
+        outcome.env_warnings
+    );
+    assert!(
+        outcome.env_scan_errors.is_empty(),
+        "{:?}",
+        outcome.env_scan_errors
+    );
+    assert!(!ran(&f, "a"));
+}
+
+#[test]
+fn smoke_warns_about_a_declared_input_with_no_value_and_still_passes() {
+    // An optional input without a default, used in a script env, is reported
+    // while the smoke result is unchanged.
+    let f = fixture();
+    let a = script(&f, "a", false);
+    let mut def = parse(&format!(
+        "inputs {{ opt }}\nscript a {{ run = \"{a}\" env = {{ OPT = \"{{{{opt}}}}\" }} }}\ncall some-agent"
+    ));
+    // The parser makes a bare input required; only a hand-built def is optional.
+    def.inputs[0].required = false;
+    let outcome = smoke_run_workflow(params(&f, def));
+    assert!(
+        matches!(outcome.result, SmokeResult::Passed { .. }),
+        "{:?}",
+        outcome.result
+    );
+    assert_eq!(outcome.env_warnings.len(), 1, "{:?}", outcome.env_warnings);
+    assert_eq!(outcome.env_warnings[0].input, "opt");
+    assert_eq!(outcome.env_warnings[0].env_var, "OPT");
+    assert_eq!(outcome.env_warnings[0].workflow, "smoke-wf");
+    assert!(
+        outcome.env_scan_errors.is_empty(),
+        "{:?}",
+        outcome.env_scan_errors
+    );
+    assert!(!ran(&f, "a"));
+}
+
+#[test]
+fn scan_run_env_reports_a_database_open_failure() {
+    // The open failure can't be forced through smoke_run_workflow (the run needs
+    // the same database), so exercise the branch with a failed open directly.
+    let err = crate::error::ConductorError::Workflow("boom".into());
+    let path = std::path::Path::new("/nonexistent/conductor.db");
+    let (warnings, errors) = crate::workflow::smoke::scan_run_env(Err(&err), Some("run1"), path);
+    assert!(warnings.is_empty());
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].contains("/nonexistent/conductor.db"),
+        "{errors:?}"
+    );
+    assert!(errors[0].contains("boom"), "{errors:?}");
+
+    // No run row: nothing to scan, so no error even when the open failed.
+    let (w, e) = crate::workflow::smoke::scan_run_env(Err(&err), None, path);
+    assert!(w.is_empty() && e.is_empty());
+}

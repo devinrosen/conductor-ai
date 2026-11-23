@@ -15,6 +15,12 @@
 //! parallel executor counts the stop as a branch failure, so a child run holding a
 //! `parallel` block (e.g. `review-pr`) would otherwise be recorded as failed.
 //!
+//! Input defaults are filled only by the shared start path (the caller must not
+//! pre-fill them), so a launcher that skips the fill fails the smoke through the
+//! run-start check. After the run, each started run's script steps are scanned
+//! for an `env` value that uses a declared input with no value; those come back
+//! as [`SmokeOutcome::env_warnings`] and don't change the result (#3454).
+//!
 //! The pieces:
 //! - [`SmokeStop`]: shared handle that records the first stop point.
 //! - [`SmokeStopActionExecutor`]: the action registry's catch-all in smoke mode.
@@ -238,6 +244,105 @@ pub struct SmokeOutcome {
     /// The recorded run's ID, once the run row was created.
     pub run_id: Option<String>,
     pub result: SmokeResult,
+    /// Script steps whose `env` uses a declared input that has no value.
+    pub env_warnings: Vec<UnresolvedEnvInput>,
+    /// Reasons the env scan could not complete (database or snapshot errors).
+    /// Non-empty means `env_warnings` may be incomplete, not that it is clean.
+    pub env_scan_errors: Vec<String>,
+}
+
+/// A script step's `env` value that names a declared input with no value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnresolvedEnvInput {
+    /// The workflow that owns the step (a child workflow's name for a child).
+    pub workflow: String,
+    pub step: String,
+    pub env_var: String,
+    pub input: String,
+}
+
+impl UnresolvedEnvInput {
+    pub fn describe(&self) -> String {
+        format!(
+            "script step '{}' env {} uses input '{}', which has no value",
+            self.step, self.env_var, self.input
+        )
+    }
+}
+
+/// Script `env` placeholders of `workflow` that name a declared input missing
+/// from `inputs`. Pure: no DB access.
+pub(crate) fn unresolved_env_inputs(
+    workflow: &crate::workflow::WorkflowDef,
+    inputs: &std::collections::HashMap<String, String>,
+) -> Vec<UnresolvedEnvInput> {
+    use crate::workflow::batch_validate::script_nodes;
+    use crate::workflow::placeholder_scan::placeholder_spans;
+
+    let mut out = Vec::new();
+    for node in script_nodes(workflow) {
+        let mut vars: Vec<_> = node.env.iter().collect();
+        vars.sort();
+        for (var, value) in vars {
+            for span in placeholder_spans(value) {
+                let name = span.key.trim();
+                let declared = workflow.inputs.iter().any(|d| d.name == name);
+                let entry = UnresolvedEnvInput {
+                    workflow: workflow.name.clone(),
+                    step: node.name.clone(),
+                    env_var: var.clone(),
+                    input: name.to_string(),
+                };
+                if declared && !inputs.contains_key(name) && !out.contains(&entry) {
+                    out.push(entry);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Scan a run and its descendants (depth-capped) with [`unresolved_env_inputs`],
+/// using each run's definition snapshot and stored inputs. Failures are
+/// recorded in `errors` so an incomplete scan never looks like a clean one.
+fn scan_env_inputs(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+    depth: u32,
+    out: &mut Vec<UnresolvedEnvInput>,
+    errors: &mut Vec<String>,
+) {
+    if depth > 16 {
+        return;
+    }
+    match crate::workflow::get_workflow_run(conn, run_id) {
+        Ok(Some(run)) => {
+            if let Some(snapshot) = run.definition_snapshot.as_deref() {
+                match serde_json::from_str::<crate::workflow::WorkflowDef>(snapshot) {
+                    Ok(def) => {
+                        for w in unresolved_env_inputs(&def, &run.inputs) {
+                            if !out.contains(&w) {
+                                out.push(w);
+                            }
+                        }
+                    }
+                    Err(e) => errors.push(format!(
+                        "run {run_id}: definition snapshot did not parse: {e}"
+                    )),
+                }
+            }
+        }
+        Ok(None) => errors.push(format!("run {run_id}: run row not found")),
+        Err(e) => errors.push(format!("run {run_id}: could not read the run: {e}")),
+    }
+    match crate::workflow::list_child_workflow_runs(conn, run_id) {
+        Ok(children) => {
+            for child in children {
+                scan_env_inputs(conn, &child.id, depth + 1, out, errors);
+            }
+        }
+        Err(e) => errors.push(format!("run {run_id}: could not list child runs: {e}")),
+    }
 }
 
 impl SmokeOutcome {
@@ -361,6 +466,26 @@ fn db_open_error(path: &std::path::Path, e: &dyn std::fmt::Display) -> String {
     format!("failed to open database at {}: {e}", path.display())
 }
 
+/// Scan a finished smoke run for unresolved env inputs. Takes the already
+/// attempted connection so the database-open failure branch can be tested
+/// directly: it can't be forced through `smoke_run_workflow`, which needs the
+/// same database to open for the run itself just before this point.
+pub(crate) fn scan_run_env(
+    conn: Result<&rusqlite::Connection, &ConductorError>,
+    run_id: Option<&str>,
+    db_path: &std::path::Path,
+) -> (Vec<UnresolvedEnvInput>, Vec<String>) {
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+    match (conn, run_id) {
+        (Ok(conn), Some(id)) => scan_env_inputs(conn, id, 0, &mut warnings, &mut errors),
+        (Err(e), Some(_)) => errors.push(db_open_error(db_path, e)),
+        // No run row was created (the run failed before start): nothing to scan.
+        (_, None) => {}
+    }
+    (warnings, errors)
+}
+
 /// Run `params` as a smoke run and classify the outcome.
 ///
 /// Sets `params.smoke`; every other field is used as given. The run is an
@@ -429,12 +554,19 @@ pub fn smoke_run_workflow(mut params: WorkflowExecStandalone) -> SmokeOutcome {
         )),
         (Err(e), _) => fail(e.to_string()),
     };
-    SmokeOutcome { run_id, result }
+    let (env_warnings, env_scan_errors) = scan_run_env(conn.as_ref(), run_id.as_deref(), &db_path);
+    SmokeOutcome {
+        run_id,
+        result,
+        env_warnings,
+        env_scan_errors,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use runkon_flow::dsl::{Condition, IfNode, ScriptNode, WorkflowNode};
 
     fn point(step: &str, kind: SmokeStopKind) -> SmokeStopPoint {
         SmokeStopPoint {
@@ -612,5 +744,194 @@ mod tests {
             }
             other => panic!("expected a cancellation, got {other:?}"),
         }
+    }
+
+    fn env_wf(
+        inputs: Vec<(&str, Option<&str>)>,
+        nodes: Vec<WorkflowNode>,
+    ) -> crate::workflow::WorkflowDef {
+        use runkon_flow::dsl::{InputDecl, InputType, WorkflowTrigger};
+        crate::workflow::WorkflowDef {
+            name: "wf".to_string(),
+            title: None,
+            description: String::new(),
+            trigger: WorkflowTrigger::Manual,
+            targets: vec![],
+            group: None,
+            inputs: inputs
+                .into_iter()
+                .map(|(n, d)| InputDecl {
+                    name: n.to_string(),
+                    required: false,
+                    input_type: InputType::String,
+                    default: d.map(str::to_string),
+                    description: None,
+                })
+                .collect(),
+            body: nodes,
+            always: vec![],
+            source_path: String::new(),
+            schedule: None,
+        }
+    }
+
+    fn script(env: &[(&str, &str)]) -> ScriptNode {
+        ScriptNode {
+            name: "s".to_string(),
+            run: "x.sh".to_string(),
+            env: env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            timeout: None,
+            retries: 0,
+            on_fail: None,
+            as_identity: None,
+        }
+    }
+
+    #[test]
+    fn env_scan_reports_only_declared_inputs_without_a_value() {
+        let wf = env_wf(
+            vec![("opt", None), ("dflt", Some("v"))],
+            vec![WorkflowNode::Script(script(&[
+                ("A", "{{opt}}"),
+                ("B", "{{dflt}}"),
+                ("C", "{{pr_number}}"),
+            ]))],
+        );
+        let inputs = std::collections::HashMap::from([("dflt".to_string(), "x".to_string())]);
+        let got = unresolved_env_inputs(&wf, &inputs);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].input, "opt");
+        assert_eq!(got[0].env_var, "A");
+        assert!(got[0].describe().contains("'opt'"));
+    }
+
+    #[test]
+    fn env_scan_walks_nested_script_steps() {
+        let inner = WorkflowNode::Script(script(&[("A", "{{opt}}")]));
+        let wf = env_wf(
+            vec![("opt", None)],
+            vec![WorkflowNode::If(IfNode {
+                condition: Condition::BoolInput {
+                    input: "opt".to_string(),
+                },
+                body: vec![inner],
+            })],
+        );
+        let got = unresolved_env_inputs(&wf, &std::collections::HashMap::new());
+        assert_eq!(got.len(), 1, "{got:?}");
+    }
+
+    #[test]
+    fn scan_reports_a_stored_run_missing_a_declared_input() {
+        let conn = crate::test_helpers::setup_db();
+        let wf = env_wf(
+            vec![("opt", None)],
+            vec![WorkflowNode::Script(script(&[("A", "{{opt}}")]))],
+        );
+        let snapshot = serde_json::to_string(&wf).unwrap();
+        let parent = crate::agent::AgentManager::new(&conn)
+            .create_run(Some("w1"), "workflow", None)
+            .unwrap();
+        let run = crate::workflow::create_workflow_run(
+            &conn,
+            "wf",
+            Some("w1"),
+            &parent.id,
+            false,
+            "manual",
+            Some(&snapshot),
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        let mut errors = Vec::new();
+        scan_env_inputs(&conn, &run.id, 0, &mut out, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(
+            out[0].describe(),
+            "script step 's' env A uses input 'opt', which has no value"
+        );
+    }
+
+    #[test]
+    fn scan_errors_are_reported_not_swallowed() {
+        let conn = crate::test_helpers::create_test_conn();
+        let mut out = Vec::new();
+        let mut errors = Vec::new();
+        scan_env_inputs(&conn, "no-such-run", 0, &mut out, &mut errors);
+        assert!(out.is_empty());
+        assert!(
+            errors.iter().any(|e| e.contains("no-such-run")),
+            "{errors:?}"
+        );
+    }
+
+    fn insert_run(
+        conn: &rusqlite::Connection,
+        name: &str,
+        snapshot: Option<&str>,
+        parent_wf_run: Option<&str>,
+    ) -> String {
+        let parent = crate::agent::AgentManager::new(conn)
+            .create_run(Some("w1"), "workflow", None)
+            .unwrap();
+        let run = crate::workflow::create_workflow_run(
+            conn,
+            name,
+            Some("w1"),
+            &parent.id,
+            false,
+            "manual",
+            snapshot,
+        )
+        .unwrap();
+        if let Some(p) = parent_wf_run {
+            conn.execute(
+                "UPDATE workflow_runs SET parent_workflow_run_id = ?1 WHERE id = ?2",
+                rusqlite::params![p, run.id],
+            )
+            .unwrap();
+        }
+        run.id.clone()
+    }
+
+    #[test]
+    fn scan_reports_an_unparseable_snapshot() {
+        let conn = crate::test_helpers::setup_db();
+        let id = insert_run(&conn, "wf", Some("{not json"), None);
+        let mut out = Vec::new();
+        let mut errors = Vec::new();
+        scan_env_inputs(&conn, &id, 0, &mut out, &mut errors);
+        assert!(out.is_empty());
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("did not parse") && e.contains(&id)),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn scan_recurses_into_child_runs_and_names_the_child_workflow() {
+        let conn = crate::test_helpers::setup_db();
+        let mut child_wf = env_wf(
+            vec![("opt", None)],
+            vec![WorkflowNode::Script(script(&[("A", "{{opt}}")]))],
+        );
+        child_wf.name = "child-wf".to_string();
+        let parent_snap = serde_json::to_string(&env_wf(vec![], vec![])).unwrap();
+        let child_snap = serde_json::to_string(&child_wf).unwrap();
+        let parent = insert_run(&conn, "wf", Some(&parent_snap), None);
+        insert_run(&conn, "child-wf", Some(&child_snap), Some(&parent));
+        let mut out = Vec::new();
+        let mut errors = Vec::new();
+        scan_env_inputs(&conn, &parent, 0, &mut out, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].workflow, "child-wf");
+        assert_eq!(out[0].input, "opt");
     }
 }

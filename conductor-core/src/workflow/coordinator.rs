@@ -47,13 +47,10 @@ pub(crate) fn fill_workflow_input_defaults(
     }
 }
 
-/// Validate required workflow inputs are present and apply default values.
-///
-/// Returns an error if a required input is missing. Idempotent; also called
-/// by `execute_workflow_standalone`, so every launcher gets defaults.
-pub fn apply_workflow_input_defaults(
+/// Error if a required workflow input is missing from `inputs`.
+pub fn check_required_workflow_inputs(
     workflow: &WorkflowDef,
-    inputs: &mut HashMap<String, String>,
+    inputs: &HashMap<String, String>,
 ) -> Result<()> {
     for input_decl in &workflow.inputs {
         if input_decl.required && !inputs.contains_key(&input_decl.name) {
@@ -63,8 +60,54 @@ pub fn apply_workflow_input_defaults(
             )));
         }
     }
+    Ok(())
+}
+
+/// Validate required workflow inputs are present and apply default values.
+///
+/// Returns an error if a required input is missing. Idempotent; also called
+/// by `execute_workflow_standalone`, so every launcher gets defaults.
+pub fn apply_workflow_input_defaults(
+    workflow: &WorkflowDef,
+    inputs: &mut HashMap<String, String>,
+) -> Result<()> {
+    check_required_workflow_inputs(workflow, inputs)?;
     fill_workflow_input_defaults(workflow, inputs);
     Ok(())
+}
+
+/// Fail when a declared input that must always have a value (it has a
+/// `default =`, or it is `boolean`) is missing from `inputs`.
+///
+/// Deliberately separate from the fill: a future launcher or refactor that
+/// skips or reorders the fill (the #3449 shape) fails loudly here instead of
+/// handing scripts an empty value. A supplied empty string counts as a value.
+pub(crate) fn check_declared_inputs_resolved(
+    workflow: &WorkflowDef,
+    inputs: &HashMap<String, String>,
+) -> Result<()> {
+    use runkon_flow::dsl::InputType;
+    let missing: Vec<String> = workflow
+        .inputs
+        .iter()
+        .filter(|d| d.default.is_some() || d.input_type == InputType::Boolean)
+        .filter(|d| !inputs.contains_key(&d.name))
+        .map(|d| {
+            if d.input_type == InputType::Boolean {
+                format!("'{}' (boolean)", d.name)
+            } else {
+                format!("'{}' (has a default)", d.name)
+            }
+        })
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(ConductorError::Workflow(format!(
+        "workflow '{}': input(s) {} have no value at run start (the default was not applied)",
+        workflow.name,
+        missing.join(", ")
+    )))
 }
 
 /// Validate that all agent definitions, prompt snippets, and output schemas
@@ -704,6 +747,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         // exists, so every launcher (MCP, CLI, web, TUI) gets the same inputs.
         let mut defaulted_inputs = params.inputs.clone();
         apply_workflow_input_defaults(workflow, &mut defaulted_inputs)?;
+        check_declared_inputs_resolved(workflow, &defaulted_inputs)?;
 
         // Snapshot the definition.
         let snapshot_json = serde_json::to_string(workflow).map_err(|e| {
@@ -1472,6 +1516,31 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     // run never becomes unresumable.
     let mut resume_inputs = wf_run.inputs.clone();
     fill_workflow_input_defaults(&rk_def, &mut resume_inputs);
+    if let Err(e) = check_declared_inputs_resolved(&rk_def, &resume_inputs) {
+        // The run is already marked resuming; don't leave it stuck running.
+        let msg = e.to_string();
+        match lock_shared(&shared_conn) {
+            Ok(guard) => {
+                if let Err(update_err) = crate::workflow::update_workflow_status(
+                    &guard,
+                    &wf_run.id,
+                    WorkflowRunStatus::Failed,
+                    Some(&msg),
+                    Some(&msg),
+                ) {
+                    tracing::warn!(
+                        run_id = %wf_run.id,
+                        "failed to mark run failed after an unresolved-input error: {update_err}"
+                    );
+                }
+            }
+            Err(lock_err) => tracing::warn!(
+                run_id = %wf_run.id,
+                "could not lock the database to mark run failed after an unresolved-input error: {lock_err}"
+            ),
+        }
+        return Err(e);
+    }
     if resume_inputs != wf_run.inputs {
         let guard = lock_shared(&shared_conn)?;
         crate::workflow::set_workflow_run_inputs(&guard, &wf_run.id, &resume_inputs)?;
@@ -1831,6 +1900,59 @@ mod tests {
             default: default.map(str::to_string),
             description: None,
         }
+    }
+
+    #[test]
+    fn declared_inputs_check_catches_unapplied_defaults() {
+        let wf = make_wf(vec![
+            input_decl("auto_rereview", false, InputType::String, Some("true")),
+            input_decl("confirm", false, InputType::Boolean, None),
+            input_decl("opt", false, InputType::String, None),
+        ]);
+        let err = check_declared_inputs_resolved(&wf, &HashMap::new()).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("test-wf"), "{msg}");
+        assert!(msg.contains("'auto_rereview'"), "{msg}");
+        assert!(msg.contains("'confirm'"), "{msg}");
+        assert!(!msg.contains("'opt'"), "{msg}");
+    }
+
+    #[test]
+    fn declared_inputs_check_passes_after_fill() {
+        let wf = make_wf(vec![
+            input_decl("auto_rereview", false, InputType::String, Some("true")),
+            input_decl("confirm", false, InputType::Boolean, None),
+        ]);
+        let mut inputs = HashMap::new();
+        apply_workflow_input_defaults(&wf, &mut inputs).unwrap();
+        check_declared_inputs_resolved(&wf, &inputs).expect("filled inputs resolve");
+    }
+
+    #[test]
+    fn declared_inputs_check_accepts_empty_string_and_absent_optional() {
+        let wf = make_wf(vec![
+            input_decl("since", false, InputType::String, Some("")),
+            input_decl("opt", false, InputType::String, None),
+        ]);
+        let inputs = HashMap::from([("since".to_string(), String::new())]);
+        check_declared_inputs_resolved(&wf, &inputs).expect("empty string is a value");
+    }
+
+    #[test]
+    fn check_required_inputs_errors_naming_the_missing_input() {
+        let wf = make_wf(vec![input_decl("ticket", true, InputType::String, None)]);
+        let err = check_required_workflow_inputs(&wf, &HashMap::new()).unwrap_err();
+        assert!(err.to_string().contains("'ticket'"), "{err}");
+    }
+
+    #[test]
+    fn check_required_inputs_accepts_present_or_optional() {
+        let wf = make_wf(vec![
+            input_decl("ticket", true, InputType::String, None),
+            input_decl("opt", false, InputType::String, None),
+        ]);
+        let inputs = HashMap::from([("ticket".to_string(), "1".to_string())]);
+        check_required_workflow_inputs(&wf, &inputs).expect("required present, optional absent");
     }
 
     #[test]

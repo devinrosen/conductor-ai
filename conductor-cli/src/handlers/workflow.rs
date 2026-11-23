@@ -1560,13 +1560,11 @@ fn smoke_one(
             target.ticket_id = Some(tid.clone());
         }
     }
-    if let Err(e) = conductor_core::workflow::apply_workflow_input_defaults(workflow, &mut inputs) {
-        if skip_unfillable {
-            println!("SMOKE SKIP  {}  ({e})", workflow.name);
-            return 0;
-        }
-        println!("SMOKE FAIL  {}  start: {e}", workflow.name);
-        return 1;
+    // Check required inputs only: defaults are filled (and checked) by the shared
+    // run-start path, so the smoke exercises the same path as a real run.
+    if let Some((line, code)) = smoke_required_input_gate(workflow, &inputs, skip_unfillable) {
+        println!("{line}");
+        return code;
     }
 
     let outcome = conductor_core::workflow::smoke_run_workflow(exec_params(
@@ -1586,7 +1584,7 @@ fn smoke_one(
         .as_deref()
         .map(|id| format!("  (run {id})"))
         .unwrap_or_default();
-    match outcome.result {
+    let code = match outcome.result {
         SmokeResult::Passed {
             stopped_at: Some(point),
         } => {
@@ -1614,6 +1612,131 @@ fn smoke_one(
             println!("SMOKE FAIL  {}{at}: {error}{run}", workflow.name);
             1
         }
+    };
+    for line in smoke_warn_lines(
+        &workflow.name,
+        &outcome.env_warnings,
+        &outcome.env_scan_errors,
+    ) {
+        println!("{line}");
+    }
+    code
+}
+
+/// The result line and exit code when a smoke can't start because a required
+/// input has no value: a skip (0) when `skip_unfillable`, else a failure (1).
+/// `None` when every required input is present.
+fn smoke_required_input_gate(
+    workflow: &conductor_core::workflow::WorkflowDef,
+    inputs: &std::collections::HashMap<String, String>,
+    skip_unfillable: bool,
+) -> Option<(String, usize)> {
+    let e = conductor_core::workflow::check_required_workflow_inputs(workflow, inputs).err()?;
+    Some(if skip_unfillable {
+        (format!("SMOKE SKIP  {}  ({e})", workflow.name), 0)
+    } else {
+        (format!("SMOKE FAIL  {}  start: {e}", workflow.name), 1)
+    })
+}
+
+/// The `SMOKE WARN` lines for a smoke outcome: one per unresolved script env
+/// input (with an ` in '<child>'` suffix for a child workflow) and one per
+/// scan error, so an incomplete scan never reads as a clean one.
+fn smoke_warn_lines(
+    workflow_name: &str,
+    warnings: &[conductor_core::workflow::UnresolvedEnvInput],
+    scan_errors: &[String],
+) -> Vec<String> {
+    let mut lines: Vec<String> = warnings
+        .iter()
+        .map(|w| {
+            let child = if w.workflow == workflow_name {
+                String::new()
+            } else {
+                format!(" in '{}'", w.workflow)
+            };
+            format!("SMOKE WARN  {workflow_name}  {}{child}", w.describe())
+        })
+        .collect();
+    lines.extend(
+        scan_errors
+            .iter()
+            .map(|e| format!("SMOKE WARN  {workflow_name}  script env scan incomplete: {e}")),
+    );
+    lines
+}
+
+#[cfg(test)]
+mod smoke_warn_tests {
+    use super::*;
+    use conductor_core::workflow::UnresolvedEnvInput;
+
+    fn warn(workflow: &str) -> UnresolvedEnvInput {
+        UnresolvedEnvInput {
+            workflow: workflow.into(),
+            step: "s".into(),
+            env_var: "E".into(),
+            input: "opt".into(),
+        }
+    }
+
+    #[test]
+    fn warn_line_has_child_suffix_only_for_a_child_workflow() {
+        let lines = smoke_warn_lines("parent", &[warn("parent"), warn("child")], &[]);
+        assert_eq!(
+            lines[0],
+            "SMOKE WARN  parent  script step 's' env E uses input 'opt', which has no value"
+        );
+        assert_eq!(
+            lines[1],
+            "SMOKE WARN  parent  script step 's' env E uses input 'opt', which has no value in 'child'"
+        );
+    }
+
+    #[test]
+    fn scan_errors_become_warn_lines() {
+        let lines = smoke_warn_lines("wf", &[], &["run r1: could not read the run".into()]);
+        assert_eq!(
+            lines,
+            vec!["SMOKE WARN  wf  script env scan incomplete: run r1: could not read the run"]
+        );
+    }
+
+    fn wf_with_required(required: bool) -> conductor_core::workflow::WorkflowDef {
+        let mut w = conductor_core::workflow::parse_workflow_str(
+            "workflow wf {\n meta { trigger = \"manual\" targets = [\"worktree\"] }\n inputs { need }\n call some-agent\n}",
+            "<test>",
+        )
+        .expect("test workflow should parse");
+        // The parser makes a bare input required; only a hand-built def is optional.
+        w.inputs[0].required = required;
+        w
+    }
+
+    #[test]
+    fn missing_required_input_skips_or_fails() {
+        let w = wf_with_required(true);
+        let none = std::collections::HashMap::new();
+        let (line, code) = smoke_required_input_gate(&w, &none, true).unwrap();
+        assert!(
+            line.starts_with("SMOKE SKIP  wf  (") && line.contains("'need'"),
+            "{line}"
+        );
+        assert_eq!(code, 0);
+        let (line, code) = smoke_required_input_gate(&w, &none, false).unwrap();
+        assert!(
+            line.starts_with("SMOKE FAIL  wf  start: ") && line.contains("'need'"),
+            "{line}"
+        );
+        assert_eq!(code, 1);
+    }
+
+    #[test]
+    fn present_or_optional_input_passes_the_gate() {
+        let have = std::collections::HashMap::from([("need".to_string(), "v".to_string())]);
+        assert!(smoke_required_input_gate(&wf_with_required(true), &have, false).is_none());
+        let none = std::collections::HashMap::new();
+        assert!(smoke_required_input_gate(&wf_with_required(false), &none, false).is_none());
     }
 }
 

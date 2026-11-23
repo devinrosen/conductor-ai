@@ -20,9 +20,12 @@ source "$(dirname "$0")/lib-pr-checks.sh"
 refuse() { echo "verify-and-merge: $*" >&2; exit 1; }
 
 clean() { local v="${!1:-}"; [[ "${v}" == *"{{"* ]] && v=""; printf '%s' "${v}"; }
+# pr_number is injected only when the branch has a PR and required_checks is a step
+# output; neither is a declared input, so either can be missing (#3454).
 PR_NUMBER=$(clean PR_NUMBER)
 REQUIRED_CHECKS=$(clean REQUIRED_CHECKS)
-DRY_RUN=$(clean DRY_RUN)
+# dry_run is an engine built-in, always set.
+DRY_RUN="${DRY_RUN:-}"
 # A numeric knob: an unset, empty or unresolved-placeholder value takes the default; any
 # other non-integer is refused, since a non-numeric value would make the `[ -ge ]` timeout
 # test error inside a `&&` list (ignored by errexit) and the loop would never end.

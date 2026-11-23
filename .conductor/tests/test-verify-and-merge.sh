@@ -138,7 +138,7 @@ new_case() {
 set_pr() { jq -c "$1" "$stub/pr.json" > "$stub/pr.new" && mv "$stub/pr.new" "$stub/pr.json"; }
 
 run_ready() {
-  run_script check-pr-ready.sh PATH="$stub/bin:$PATH" GH_STUB_DIR="$stub" GH_RETRY_DELAYS=0 "$@"
+  run_script check-pr-ready.sh PATH="$stub/bin:$PATH" GH_STUB_DIR="$stub" GH_RETRY_DELAYS=0 CONFIRM=false AUTO_REREVIEW=false "$@"
 }
 
 case_begin "ready: emits pr_ready and the same-repo linked issues"
@@ -360,12 +360,27 @@ assert_jq ".head_sha == \"$(git rev-parse HEAD)\" and .head_sha != \"$head\" and
 assert_jq '.required_checks == "Clippy,Test,Docs" and .linked_issues == "1 2"'
 assert_eq "$(git rev-parse HEAD)" "$(git -C "$origin" rev-parse feature)" "pushed head"
 
-case_begin "behind the base, AUTO_REREVIEW=false or an unresolved placeholder: refused as before"
+case_begin "behind the base, AUTO_REREVIEW=false: refused as before"
 new_case
 git checkout -q main && commit_file "$repo" base.txt newer "newer base" && git push -q origin main:release/0.22.2 && git checkout -q feature
-run_ready AUTO_REREVIEW="{{auto_rereview}}"
+run_ready AUTO_REREVIEW=false
 assert_exit 1
 assert_stderr_contains "merged release/0.22.2 into the branch"
+
+case_begin "AUTO_REREVIEW or CONFIRM empty or an unresolved placeholder: refused up front (#3454)"
+new_case
+run_ready AUTO_REREVIEW=
+assert_exit 1
+assert_stderr_contains "AUTO_REREVIEW must be true or false"
+run_ready AUTO_REREVIEW="{{auto_rereview}}"
+assert_exit 1
+assert_stderr_contains "AUTO_REREVIEW must be true or false"
+run_ready CONFIRM=
+assert_exit 1
+assert_stderr_contains "CONFIRM must be true or false"
+run_ready CONFIRM="{{confirm}}"
+assert_exit 1
+assert_stderr_contains "CONFIRM must be true or false"
 
 case_begin "AUTO_REREVIEW=true: a draft, a failing check and a stale review still refuse first"
 new_case
@@ -406,15 +421,12 @@ assert_jq ".head_sha == \"$merged\" and .head_sha != \"$head\" and .pr_number ==
 assert_jq '.required_checks == "Clippy,Test,Docs" and .linked_issues == "1 2"'
 assert_eq "$merged" "$(git rev-parse HEAD)" "local head unchanged"
 
-case_begin "earlier base merge, AUTO_REREVIEW unset, false or a placeholder: still predates head"
+case_begin "earlier base merge, AUTO_REREVIEW=false: still predates head"
 merged_head_case
 run_ready
 assert_exit 1
 assert_stderr_contains "predates head"
 run_ready AUTO_REREVIEW=false
-assert_exit 1
-assert_stderr_contains "predates head"
-run_ready AUTO_REREVIEW="{{auto_rereview}}"
 assert_exit 1
 assert_stderr_contains "predates head"
 
