@@ -604,6 +604,13 @@ assert_exit 1
 assert_stderr_contains "status fail"
 assert_eq "no" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment posted"
 
+case_begin "post-verification: verified true with a non-object criterion is refused without posting"
+new_case
+run_post '{"verified":true,"issues":[1],"criteria":["it works",{"criterion":"x","status":"pass","evidence":"ran"}],"summary":"ok"}'
+assert_exit 1
+assert_stderr_contains "unreadable"
+assert_eq "no" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment posted"
+
 case_begin "post-verification: unreadable report exits 1 without posting"
 new_case
 run_post "not json"

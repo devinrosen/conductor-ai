@@ -20,7 +20,7 @@ refuse() { echo "verify-and-merge: $*" >&2; exit 1; }
 [[ "${HEAD_SHA:-}" =~ ^[0-9a-f]{7,40}$ ]] || refuse "no valid head SHA"
 [[ "${DRY_RUN:-}" == *"{{"* ]] && DRY_RUN=""
 
-echo "${PRIOR_OUTPUT:-}" | jq -e '(.verified | type) == "boolean" and (.criteria | type) == "array"' >/dev/null 2>&1 \
+echo "${PRIOR_OUTPUT:-}" | jq -e '(.verified | type) == "boolean" and (.criteria | type) == "array" and all(.criteria[]; type == "object")' >/dev/null 2>&1 \
   || refuse "verification report unreadable (verify-acceptance gave no verified/criteria)"
 
 # A report claiming verified while a criterion failed must never reach the merge.
