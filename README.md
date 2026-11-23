@@ -166,6 +166,8 @@ Five crates in a Cargo workspace:
 
 Data lives in `~/.conductor/` — a single SQLite database and per-repo worktree directories. No daemon or background process; the CLI and TUI link directly against `conductor-core`.
 
+For the layers, the runkon engine crates and how a workflow run executes, see [docs/architecture.md](docs/architecture.md).
+
 ## License
 
 MIT
