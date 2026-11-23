@@ -22,6 +22,16 @@ workflow review-pr {
     run     = ".conductor/scripts/resolve-pr-base.sh"
     retries = 1
   }
+  // The previous conductor review's findings, exported as {{previous_round}}
+  // for the shared review-diff-scope prompt, so an incremental round doesn't
+  // flag the fix for its own earlier finding (#3465). Never fails the review.
+  script fetch-previous-round {
+    run = ".conductor/scripts/fetch-previous-round.sh"
+    env = {
+      PR_NUMBER           = "{{pr_number}}"
+      TRUSTED_REVIEW_BOTS = "conductor-ai-reviewer[bot]"
+    }
+  }
   // The detect steps decide which conditional reviewers run. An incremental
   // review (scope + since) decides from the commits since the last review,
   // not the whole PR (#3252).
