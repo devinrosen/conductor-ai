@@ -525,3 +525,32 @@ fn smoke_reports_no_env_warning_when_defaults_are_applied() {
     );
     assert!(!ran(&f, "a"));
 }
+
+#[test]
+fn smoke_warns_about_a_declared_input_with_no_value_and_still_passes() {
+    // An optional input without a default, used in a script env, is reported
+    // while the smoke result is unchanged.
+    let f = fixture();
+    let a = script(&f, "a", false);
+    let mut def = parse(&format!(
+        "inputs {{ opt }}\nscript a {{ run = \"{a}\" env = {{ OPT = \"{{{{opt}}}}\" }} }}\ncall some-agent"
+    ));
+    // The parser makes a bare input required; only a hand-built def is optional.
+    def.inputs[0].required = false;
+    let outcome = smoke_run_workflow(params(&f, def));
+    assert!(
+        matches!(outcome.result, SmokeResult::Passed { .. }),
+        "{:?}",
+        outcome.result
+    );
+    assert_eq!(outcome.env_warnings.len(), 1, "{:?}", outcome.env_warnings);
+    assert_eq!(outcome.env_warnings[0].input, "opt");
+    assert_eq!(outcome.env_warnings[0].env_var, "OPT");
+    assert_eq!(outcome.env_warnings[0].workflow, "smoke-wf");
+    assert!(
+        outcome.env_scan_errors.is_empty(),
+        "{:?}",
+        outcome.env_scan_errors
+    );
+    assert!(!ran(&f, "a"));
+}

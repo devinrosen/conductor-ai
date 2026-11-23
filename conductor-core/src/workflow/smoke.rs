@@ -857,4 +857,70 @@ mod tests {
             "{errors:?}"
         );
     }
+
+    fn insert_run(
+        conn: &rusqlite::Connection,
+        name: &str,
+        snapshot: Option<&str>,
+        parent_wf_run: Option<&str>,
+    ) -> String {
+        let parent = crate::agent::AgentManager::new(conn)
+            .create_run(Some("w1"), "workflow", None)
+            .unwrap();
+        let run = crate::workflow::create_workflow_run(
+            conn,
+            name,
+            Some("w1"),
+            &parent.id,
+            false,
+            "manual",
+            snapshot,
+        )
+        .unwrap();
+        if let Some(p) = parent_wf_run {
+            conn.execute(
+                "UPDATE workflow_runs SET parent_workflow_run_id = ?1 WHERE id = ?2",
+                rusqlite::params![p, run.id],
+            )
+            .unwrap();
+        }
+        run.id.clone()
+    }
+
+    #[test]
+    fn scan_reports_an_unparseable_snapshot() {
+        let conn = crate::test_helpers::setup_db();
+        let id = insert_run(&conn, "wf", Some("{not json"), None);
+        let mut out = Vec::new();
+        let mut errors = Vec::new();
+        scan_env_inputs(&conn, &id, 0, &mut out, &mut errors);
+        assert!(out.is_empty());
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("did not parse") && e.contains(&id)),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn scan_recurses_into_child_runs_and_names_the_child_workflow() {
+        let conn = crate::test_helpers::setup_db();
+        let mut child_wf = env_wf(
+            vec![("opt", None)],
+            vec![WorkflowNode::Script(script(&[("A", "{{opt}}")]))],
+        );
+        child_wf.name = "child-wf".to_string();
+        let parent_snap = serde_json::to_string(&env_wf(vec![], vec![])).unwrap();
+        let child_snap = serde_json::to_string(&child_wf).unwrap();
+        let parent = insert_run(&conn, "wf", Some(&parent_snap), None);
+        insert_run(&conn, "child-wf", Some(&child_snap), Some(&parent));
+        let mut out = Vec::new();
+        let mut errors = Vec::new();
+        scan_env_inputs(&conn, &parent, 0, &mut out, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].workflow, "child-wf");
+        assert_eq!(out[0].input, "opt");
+    }
 }
