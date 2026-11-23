@@ -2,7 +2,7 @@
 
 Fixture tests for the decision logic in `.conductor/scripts/`: `aggregate-reviews.sh`,
 `show-plan-decisions.sh`, the `detect-*.sh` scripts (including `detect-engine-doc-changes.sh`) with `lib-diff-range.sh`, `fmt-fix.sh`,
-`submit-review.sh`, `check-pr-ready.sh`, `post-verification.sh` and `squash-merge.sh` (verify-and-merge), `pr-body.sh` (the PR description builder) and `verify.sh` (which checks run), plus
+`submit-review.sh`, `reuse-review.sh` and `review-scope.sh` (who counts as a trusted reviewer, with `lib-trusted-review.sh`), `check-pr-ready.sh`, `post-verification.sh` and `squash-merge.sh` (verify-and-merge), `pr-body.sh` (the PR description builder) and `verify.sh` (which checks run), plus
 `scripts/release/bump.sh` (the release commit).
 Plain bash (3.2 compatible), plus `jq`, `git`, `cargo` and `rustfmt`. CI runs them as the **Pipeline Scripts**
 job when `.conductor/scripts/**`, `.conductor/tests/**` or `scripts/release/**` changes.
@@ -33,7 +33,7 @@ Pass JSON strings with `jq --arg`.
 drive it: `user` (without it `gh api user` fails like a GitHub App token), `author`, `poster`,
 `reviews.json` (one JSON array per page; `gh pr review` appends to the last) and `drop_post`. `test-verify-and-merge.sh` has its own stub, driven by `pr.json`, `reviews.json`, `checks.json` and `issues/N` (the content `FAIL` makes `gh issue view N` fail), which logs `gh pr merge`, `gh pr comment` and `gh issue close` calls.
 It strips `--repo`/`-R` and logs every call that came without it (but `repo view`) to `norepo`, so a case asserts the file is empty; a call without `--repo` fails when the cwd is gone, like real `gh`. `views` logs the number of each `gh issue view`, and an `rm_on_merge` file holding a directory makes `gh pr merge` remove it, to simulate a worktree cleaned up under the run. A call
-the stub doesn't know fails, so a test can't reach the network. Copy it for another script that calls `gh`.
+the stub doesn't know fails, so a test can't reach the network. `test-reuse-review.sh` has a smaller stub (`review.json` for one review, `reviews.json` for the list). Copy one for another script that calls `gh`.
 
 ## Stubbing cargo
 

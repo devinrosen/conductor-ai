@@ -27,7 +27,7 @@ Each is one line, which becomes the step error:
 - a `release/*` PR into the default branch (those are rebase-merged by hand, then `scripts/release/finish.sh`)
 - no `.conductor/verify-recipe.md`
 - the local branch is not the PR head
-- no conductor review by a trusted author (OWNER, MEMBER, COLLABORATOR, or a bot login listed in `TRUSTED_REVIEW_BOTS`, which conductor-ai sets to `conductor-ai-reviewer[bot]`; not dismissed), or the latest one predates the head commit, or it is not All Clear
+- no conductor review by a trusted author (OWNER, MEMBER, COLLABORATOR, or a bot login listed in `TRUSTED_REVIEW_BOTS`, which conductor-ai sets to `conductor-ai-reviewer[bot]`; not dismissed; the rule lives in `lib-trusted-review.sh`), or the latest one predates the head commit, or it is not All Clear
 - the review was posted as a comment because the PR changes the review pipeline, and nobody approved it (approve the PR, or run with `confirm=true`)
 - a required check failing or still running
 - merge conflicts
@@ -46,7 +46,7 @@ It does not delete the worktree or branch, because the run executes in that work
 ## Adopting it in another repo
 
 1. `conductor_instantiate_template verify-and-merge` into the repo.
-2. Copy `check-pr-ready.sh`, `post-verification.sh`, `squash-merge.sh`, `lib-gh-retry.sh` and `lib-git-retry.sh` from conductor-ai's `.conductor/scripts/`, plus `.conductor/agents/verify-acceptance.md` and `.conductor/schemas/verify-acceptance.yaml`.
+2. Copy `check-pr-ready.sh`, `post-verification.sh`, `squash-merge.sh`, `lib-gh-retry.sh`, `lib-git-retry.sh` and `lib-trusted-review.sh` from conductor-ai's `.conductor/scripts/`, plus `.conductor/agents/verify-acceptance.md` and `.conductor/schemas/verify-acceptance.yaml`.
 3. Write `.conductor/verify-recipe.md`, and adapt the `as` identities and, for issues outside GitHub, the issue closing in `squash-merge.sh`.
 4. Smoke it: `conductor workflow validate --dry-run verify-and-merge` from a worktree.
 
