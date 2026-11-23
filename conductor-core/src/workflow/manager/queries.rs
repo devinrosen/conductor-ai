@@ -649,17 +649,16 @@ pub fn list_all_workflow_runs_filtered_paginated(
     let statuses = status.map(|s| [s]);
     query_run_page(
         conn,
-        &WorkflowRunListFilter {
-            statuses: &[],
+        &RunPageQuery {
+            statuses: statuses.as_ref().map(|s| s.as_slice()),
             repo_id: None,
             worktree_id: None,
             include_inactive: flags.include_inactive,
             include_dry_run: flags.include_dry_run,
+            top_level_only: flags.top_level_only,
             limit,
             offset,
         },
-        statuses.as_ref().map(|s| s.as_slice()),
-        flags.top_level_only,
     )
 }
 
@@ -886,24 +885,43 @@ pub fn list_workflow_runs_page(
     conn: &Connection,
     f: &WorkflowRunListFilter,
 ) -> Result<Vec<ConductorWorkflowRun>> {
-    query_run_page(conn, f, Some(effective_statuses(f.statuses)), false)
+    query_run_page(
+        conn,
+        &RunPageQuery {
+            statuses: Some(effective_statuses(f.statuses)),
+            repo_id: f.repo_id,
+            worktree_id: f.worktree_id,
+            include_inactive: f.include_inactive,
+            include_dry_run: f.include_dry_run,
+            top_level_only: false,
+            limit: f.limit,
+            offset: f.offset,
+        },
+    )
+}
+
+/// Everything [`query_run_page`] reads, already resolved by its caller: unlike
+/// [`WorkflowRunListFilter`], `statuses` is not defaulted here.
+struct RunPageQuery<'a> {
+    /// `None` applies no status filter; `Some` is used as given.
+    statuses: Option<&'a [WorkflowRunStatus]>,
+    repo_id: Option<&'a str>,
+    worktree_id: Option<&'a str>,
+    include_inactive: bool,
+    include_dry_run: bool,
+    /// Drop child runs before `limit`/`offset` apply.
+    top_level_only: bool,
+    limit: usize,
+    offset: usize,
 }
 
 /// The one SELECT/JOIN/guard/ORDER BY behind every cross-worktree run list. No
 /// `DISTINCT`: `worktrees.id` is the primary key, so the join yields at most one row
 /// per run.
-///
-/// `statuses` replaces `f.statuses`, which this function does not read: `None` applies no
-/// status filter, `Some` is used as given (callers default it).
-fn query_run_page(
-    conn: &Connection,
-    f: &WorkflowRunListFilter,
-    statuses: Option<&[WorkflowRunStatus]>,
-    top_level_only: bool,
-) -> Result<Vec<ConductorWorkflowRun>> {
+fn query_run_page(conn: &Connection, f: &RunPageQuery) -> Result<Vec<ConductorWorkflowRun>> {
     let mut params: Vec<rusqlite::types::Value> = Vec::new();
     let mut clauses: Vec<String> = Vec::new();
-    if let Some(statuses) = statuses {
+    if let Some(statuses) = f.statuses {
         clauses.push(format!(
             "workflow_runs.status IN ({})",
             sql_placeholders(statuses.len())
@@ -926,7 +944,7 @@ fn query_run_page(
     if !f.include_inactive {
         clauses.push(format!("({ACTIVE_WORKTREE_GUARD})"));
     }
-    if top_level_only {
+    if f.top_level_only {
         clauses.push(top_level_predicate!().to_string());
     }
     if !f.include_dry_run {
