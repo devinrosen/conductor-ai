@@ -15,7 +15,7 @@ entry() {
 # contexts ENTRY... — a PRIOR_CONTEXTS array.
 contexts() { printf '%s\n' "$@" | jq -sc .; }
 
-body() { run_script pr-body.sh "PRIOR_CONTEXTS=$1"; }
+body() { run_script pr-body.sh "PRIOR_CONTEXTS=$1" "${@:2}"; }
 
 case_begin "plan + implement + passing verify lists what verify ran"
 body "$(contexts "$(entry plan x "$PLAN")" "$(entry implement 'Changed the builder.')" "$(entry verify PASS "$VERIFY_PASS")")"
@@ -176,6 +176,59 @@ assert_stdout_contains "- A risk worth reading"
 case "$STDOUT" in
   *"## Verification"*"## Risks and open questions"*) ;;
   *) fail "Verification should come before Risks" ;;
+esac
+
+DPLAN='{"summary":"Plan summary text.","risks":["A risk worth reading"],"tasks":[],"decisions":[{"question":"Fix runkon warnings here?","default":"No, leave them","defers":"prints no failure warnings -> runkon/runkon#209"},{"question":"Rename the flag?","default":"Keep the name"}]}'
+dbody() { body "$(contexts "$(entry plan x "$DPLAN")" "$(entry implement 'Did it.')" "$(entry verify PASS "$VERIFY_PASS")")" "$@"; }
+
+case_begin "decisions + empty feedback: the section lists defaults, Defers and the deferred items"
+dbody "PLAN_GATE_FEEDBACK="
+assert_exit 0
+assert_stdout_contains "## Decisions"
+assert_stdout_contains "The plan gate settled these before implementation:"
+assert_stdout_contains "1. Fix runkon warnings here?"
+assert_stdout_contains "   - Default: No, leave them"
+assert_stdout_contains "   - Defers: prints no failure warnings -> runkon/runkon#209"
+assert_stdout_contains "Answer at the gate: kept the defaults."
+assert_stdout_contains "Deferred acceptance items: prints no failure warnings -> runkon/runkon#209"
+assert_stdout_contains "2. Rename the flag?"
+
+case_begin "decisions + multi-line feedback: the answer is quoted and no deferred-items line"
+dbody "PLAN_GATE_FEEDBACK=Fix them here.
+Keep {braces} as is."
+assert_exit 0
+assert_stdout_contains "> Fix them here."
+assert_stdout_contains "> Keep {braces} as is."
+assert_stdout_contains "Defers (if the default was kept): prints no failure warnings -> runkon/runkon#209"
+assert_stdout_not_contains "Deferred acceptance items:"
+assert_stdout_not_contains "kept the defaults"
+
+case_begin "the gate never ran (literal template or unset): no Decisions section"
+dbody "PLAN_GATE_FEEDBACK={{human_review.feedback}}"
+assert_exit 0
+assert_stdout_not_contains "## Decisions"
+dbody
+assert_exit 0
+assert_stdout_not_contains "## Decisions"
+
+case_begin "no decisions in the plan: no section, even with feedback"
+body "$(contexts "$(entry plan x "$PLAN")" "$(entry implement 'Did it.')")" "PLAN_GATE_FEEDBACK=go"
+assert_exit 0
+assert_stdout_not_contains "## Decisions"
+
+case_begin "decisions: a local path in a default is scrubbed"
+LPLAN='{"summary":"S.","decisions":[{"question":"Q?","default":"See /Users/me/x/PLAN.md. Keep it."}]}'
+body "$(contexts "$(entry plan x "$LPLAN")" "$(entry implement 'Did it.')")" "PLAN_GATE_FEEDBACK="
+assert_exit 0
+assert_stdout_contains "## Decisions"
+assert_stdout_not_contains "/Users/me"
+assert_stdout_contains "Keep it."
+
+case_begin "decisions sit between Implementation and Verification"
+dbody "PLAN_GATE_FEEDBACK="
+case "$STDOUT" in
+  *"## Summary"*"## Implementation"*"## Decisions"*"## Verification"*"## Risks and open questions"*) ;;
+  *) fail "section order should be Summary, Implementation, Decisions, Verification, Risks" ;;
 esac
 
 finish

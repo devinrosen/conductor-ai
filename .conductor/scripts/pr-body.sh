@@ -11,6 +11,12 @@
 #                      verify-loopback fixes), minus sentences claiming the code wasn't
 #                      built, tested, compiled or run: implement writes its summary before
 #                      verify runs and is told not to run cargo (#3333)
+#   ## Decisions       when the plan has decisions and the plan gate ran: each question, its
+#                      default and the acceptance item it defers (the plan's `defers`), then the
+#                      gate's answer from PLAN_GATE_FEEDBACK (the defaults kept when empty, else
+#                      the feedback quoted). verify-acceptance reads it to mark a deferred
+#                      criterion `deferred` instead of `fail` (#3423). PLAN_GATE_FEEDBACK unset or
+#                      the literal {{human_review.feedback}} (the gate never ran) omits it.
 #   ## Verification    what the last verify entry ran, when it passed
 #   ## Risks and open questions
 # Output is empty (exit 0) when there is no plan or implement summary, so the caller falls
@@ -30,7 +36,14 @@ if [ -z "$trimmed" ] || [[ "$trimmed" =~ $tmpl_re ]]; then
   exit 1
 fi
 
-printf '%s' "$contexts" | jq -r '
+gate_ran=true
+gate_feedback="${PLAN_GATE_FEEDBACK-}"
+if [ -z "${PLAN_GATE_FEEDBACK+x}" ] || [ "$gate_feedback" = '{{human_review.feedback}}' ]; then
+  gate_ran=false
+  gate_feedback=""
+fi
+
+printf '%s' "$contexts" | jq -r --argjson gate "$gate_ran" --arg fb "$gate_feedback" '
     def trim: gsub("^\\s+|\\s+$"; "");
     # A sentence that says the code was not built/tested/run (#3333). Keep narrow.
     def untested:
@@ -79,12 +92,35 @@ printf '%s' "$contexts" | jq -r '
             elif $o == null and ($c | test("^PASS")) then $c
             else "" end
         end;
-    plan as $p | impl as $i | verification as $vf
+    def decisions($p):
+      ($p.decisions // [] | map(select(type == "object" and ((.question // "") | length) > 0))) as $d
+      | if $gate != true or ($d | length) == 0 then ""
+        else
+          ($fb | trim) as $f
+          | ($d | map(select((.defers // "") | length > 0))) as $df
+          | "The plan gate settled these before implementation:\n\n"
+            + ( $d | to_entries | map(
+                  "\(.key + 1). \(.value.question | scrubpaths)"
+                  + "\n   - Default: \(.value.default // "none" | scrubpaths)"
+                  + ( if ((.value.defers // "") | length) > 0 then "\n   - Defers: \(.value.defers | scrubpaths)" else "" end )
+                ) | join("\n\n") )
+            + ( if $f == "" then
+                  "\n\nAnswer at the gate: kept the defaults."
+                  + ( if ($df | length) > 0 then
+                        "\n\nDeferred acceptance items: " + ($df | map(.defers | scrubpaths) | join("; "))
+                      else "" end )
+                else
+                  "\n\nAnswer at the gate:\n\n" + ($f | scrubpaths | split("\n") | map("> " + .) | join("\n"))
+                  + ( if ($df | length) > 0 then "\n\nDefers (if the default was kept): " + ($df | map(.defers | scrubpaths) | join("; ")) else "" end )
+                end )
+        end;
+    plan as $p | decisions($p) as $dc | impl as $i | verification as $vf
     | (($p.summary // "") | scrubpaths) as $s
     | ($p.risks // [] | map(select(type == "string" and length > 0))) as $r
     | if $s == "" and $i == "" then empty else
         ( if $s != "" then "## Summary\n\n\($s)" else "## Summary\n\n\($i)" end )
         + ( if $s != "" and $i != "" then "\n\n## Implementation\n\n\($i)" else "" end )
+        + ( if $dc != "" then "\n\n## Decisions\n\n\($dc)" else "" end )
         + ( if $vf != "" then "\n\n## Verification\n\n\($vf)" else "" end )
         + ( if ($r | length) > 0 then "\n\n## Risks and open questions\n\n" + ($r | map("- " + .) | join("\n")) else "" end )
       end
