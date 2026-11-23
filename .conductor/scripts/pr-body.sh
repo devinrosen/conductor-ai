@@ -4,7 +4,9 @@
 # PRIOR_CONTEXTS is the engine's {{prior_contexts}} JSON array of {step, context,
 # structured_output, ...}, one entry per completed step in run order (the engine
 # appends, so a repeated name keeps every occurrence). The body is:
-#   ## Summary         the plan's summary (implement's summary when there is no plan)
+#   ## Summary         the plan's summary (implement's summary when there is no plan), minus
+#                      sentences naming a local path: a /Users/ or /home/ directory, a
+#                      .git/worktrees/ path or a PLAN.md path (#3422)
 #   ## Implementation  the first implement / implement-ticket context (later ones are
 #                      verify-loopback fixes), minus sentences claiming the code wasn't
 #                      built, tested, compiled or run: implement writes its summary before
@@ -46,10 +48,22 @@ printf '%s' "$contexts" | jq -r '
              else (split("(?<=[.!?])\\s+"; null) | map(select(untested | not)) | join(" ")) end )
       | join("\n")
       | gsub("\n{3,}"; "\n\n") | trim;
+    # A sentence naming a machine-local path (#3422): a home directory, a .git/worktrees dir
+    # or a PLAN.md path. Keep narrow so ~/.conductor/... and repo-relative paths survive.
+    def localpath:
+      test("(^|[\\s(`\u0027\"])/(Users|home)/[^\\s/]+/")
+      or test("\\.git/worktrees/")
+      or test("/[^\\s]*PLAN\\.md\\b");
+    def scrubpaths:
+      split("\n")
+      | map( if trim == "" then ""
+             else (split("(?<=[.!?])\\s+"; null) | map(select(localpath | not)) | join(" ")) end )
+      | join("\n")
+      | gsub("\n{3,}"; "\n\n") | trim;
     def plan: [.[] | select(.step == "plan" and .structured_output != null)]
               | last | (.structured_output // "null") | (try fromjson catch null);
     def impl: [.[] | select(.step == "implement" or .step == "implement-ticket")]
-              | first | (.context // "") | scrub;
+              | first | (.context // "") | scrub | scrubpaths;
     def verify: [.[] | select(.step == "verify")] | last;
     def verification:
       verify as $v
@@ -66,7 +80,7 @@ printf '%s' "$contexts" | jq -r '
             else "" end
         end;
     plan as $p | impl as $i | verification as $vf
-    | (($p.summary // "") | trim) as $s
+    | (($p.summary // "") | scrubpaths) as $s
     | ($p.risks // [] | map(select(type == "string" and length > 0))) as $r
     | if $s == "" and $i == "" then empty else
         ( if $s != "" then "## Summary\n\n\($s)" else "## Summary\n\n\($i)" end )

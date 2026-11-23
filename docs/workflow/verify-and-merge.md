@@ -21,7 +21,7 @@ It ships as the embedded template `verify-and-merge` (`conductor_instantiate_tem
 | `verify-acceptance` | An agent reads the linked issue's acceptance criteria and the diff, follows `.conductor/verify-recipe.md`, builds and exercises the branch, and returns a pass / fail / not_verifiable verdict with evidence per criterion. It changes nothing. |
 | `post-verification` | Refuses if the head moved or the agent left changes in the worktree, posts the report as a PR comment, and stops the run when verification failed. |
 | `human_review` | Only with `confirm`: a gate before the merge. |
-| `squash-merge` | Squash-merges with subject `<title> (#PR)` and a body of the PR's Summary, a `Closes #N` line per linked issue and the commits' `Co-Authored-By` trailers. Pins the head with `--match-head-commit`, then closes any linked issue the merge left open (a merge into a release branch does not close them by itself). |
+| `squash-merge` | Squash-merges with subject `<title> (#PR)` and a body of the PR's Summary (minus sentences naming a local path: a `/Users/` or `/home/` directory, a `.git/worktrees/` path or a `PLAN.md` path), a `Closes #N` line per linked issue and the commits' `Co-Authored-By` and `Claude-Session` trailers, deduplicated. Pins the head with `--match-head-commit`, then closes any linked issue the merge left open (a merge into a release branch does not close them by itself). |
 
 ## Refusals
 
