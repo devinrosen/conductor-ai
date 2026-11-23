@@ -383,8 +383,134 @@ echo '[{"name":"Clippy","bucket":"pass"}]' > "$stub/checks.json"
 echo "[$(review 1 MEMBER COMMENTED "abc1234000000000000000000000000000000000" "$(review_body true)")]" > "$stub/reviews.json"
 run_ready AUTO_REREVIEW=true
 assert_exit 1
-assert_stderr_contains "predates head"
+assert_stderr_contains "is not in this checkout"
 assert_eq "$head" "$(git rev-parse HEAD)" "base not merged"
+
+# merged_head_case — new_case, then an earlier run's work: the base moves, is merged into
+# feature and pushed. The review stays on $head, the commit before that merge (#3452).
+merged_head_case() {
+  new_case
+  git checkout -q main && commit_file "$repo" base.txt newer "newer base" && git push -q origin main:release/0.22.2 && git checkout -q feature
+  git fetch -q origin && git merge -q --no-edit origin/release/0.22.2 >/dev/null 2>&1
+  git push -q origin feature
+  merged=$(git rev-parse HEAD)
+  set_pr ".headRefOid = \"$merged\""
+}
+
+case_begin "earlier base merge, AUTO_REREVIEW=true: base_merged for the current head, nothing merged or pushed"
+merged_head_case
+run_ready AUTO_REREVIEW=true
+assert_exit 0
+assert_marker base_merged
+assert_jq ".head_sha == \"$merged\" and .head_sha != \"$head\" and .pr_number == \"7\""
+assert_jq '.required_checks == "Clippy,Test,Docs" and .linked_issues == "1 2"'
+assert_eq "$merged" "$(git rev-parse HEAD)" "local head unchanged"
+
+case_begin "earlier base merge, AUTO_REREVIEW unset, false or a placeholder: still predates head"
+merged_head_case
+run_ready
+assert_exit 1
+assert_stderr_contains "predates head"
+run_ready AUTO_REREVIEW=false
+assert_exit 1
+assert_stderr_contains "predates head"
+run_ready AUTO_REREVIEW="{{auto_rereview}}"
+assert_exit 1
+assert_stderr_contains "predates head"
+
+case_begin "earlier base merge with checks still running: base_merged when auto, predates head otherwise"
+merged_head_case
+echo '[{"name":"Clippy","bucket":"pass"},{"name":"Test","bucket":"pending"}]' > "$stub/checks.json"
+run_ready AUTO_REREVIEW=true
+assert_exit 0
+assert_marker base_merged
+assert_jq ".head_sha == \"$merged\" and .required_checks == \"Clippy,Test\""
+run_ready AUTO_REREVIEW=false
+assert_exit 1
+assert_stderr_contains "predates head"
+
+case_begin "earlier base merge with a failing check: refused"
+merged_head_case
+echo '[{"name":"Clippy","bucket":"pass"},{"name":"Test","bucket":"fail"}]' > "$stub/checks.json"
+run_ready AUTO_REREVIEW=true
+assert_exit 1
+assert_stderr_contains "required check failing: Test"
+
+case_begin "earlier base merge plus a non-merge commit: predates head"
+merged_head_case
+commit_file "$repo" extra.txt more "an extra commit" && git push -q origin feature
+set_pr ".headRefOid = \"$(git rev-parse HEAD)\""
+run_ready AUTO_REREVIEW=true
+assert_exit 1
+assert_stderr_contains "last conductor review (${head:0:7}) predates head $(git rev-parse --short=7 HEAD)"
+
+case_begin "a merge of a branch that is not the base: predates head"
+new_case
+git checkout -q -b side main && commit_file "$repo" side.txt side "side work" && git checkout -q feature
+git merge -q --no-ff --no-edit side >/dev/null 2>&1
+git push -q origin feature
+set_pr ".headRefOid = \"$(git rev-parse HEAD)\""
+run_ready AUTO_REREVIEW=true
+assert_exit 1
+assert_stderr_contains "predates head"
+
+case_begin "earlier base merge, then the base moved again: merged and pushed, base_merged emitted"
+merged_head_case
+git checkout -q main && commit_file "$repo" base2.txt newer2 "newer base again" && git push -q origin main:release/0.22.2 && git checkout -q feature
+run_ready AUTO_REREVIEW=true
+assert_exit 0
+assert_marker base_merged
+assert_jq ".head_sha == \"$(git rev-parse HEAD)\" and .head_sha != \"$head\" and .head_sha != \"$merged\""
+assert_eq "$(git rev-parse HEAD)" "$(git -C "$origin" rev-parse feature)" "pushed head"
+
+case_begin "earlier base merge, old review not All Clear: refused"
+merged_head_case
+echo "[$(review 1 MEMBER COMMENTED "$head" "$(review_body false)")]" > "$stub/reviews.json"
+run_ready AUTO_REREVIEW=true
+assert_exit 1
+assert_stderr_contains "not All Clear"
+
+case_begin "review commit is not an ancestor of the head (rebased branch): predates head"
+merged_head_case
+git checkout -q -b old "$head~1" && commit_file "$repo" old.txt old "old line" && old=$(git rev-parse HEAD) && git checkout -q feature
+echo "[$(review 1 MEMBER COMMENTED "$old" "$(review_body true)")]" > "$stub/reviews.json"
+run_ready AUTO_REREVIEW=true
+assert_exit 1
+assert_stderr_contains "predates head"
+assert_stderr_contains "not an ancestor"
+
+case_begin "review commit missing from the checkout: refused with its own message, not predates head"
+merged_head_case
+echo "[$(review 1 MEMBER COMMENTED "0123456789012345678901234567890123456789" "$(review_body true)")]" > "$stub/reviews.json"
+run_ready AUTO_REREVIEW=true
+assert_exit 1
+assert_stderr_contains "is not in this checkout"
+
+case_begin "review without a commit id: refused with its own message, not predates head"
+merged_head_case
+echo "[$(review 1 MEMBER COMMENTED "" "$(review_body true)")]" > "$stub/reviews.json"
+run_ready AUTO_REREVIEW=true
+assert_exit 1
+assert_stderr_contains "has no commit id"
+
+case_begin "git rev-list fails after the ancestor check: refused with its own message, not predates head"
+merged_head_case
+real_git=$(command -v git)
+printf '#!/bin/sh\ncase "$*" in *"rev-list --first-parent"*) echo "fatal: bad object" >&2; exit 128;; esac\nexec %s "$@"\n' "$real_git" > "$stub/bin/git"
+chmod +x "$stub/bin/git"
+run_ready AUTO_REREVIEW=true
+rm -f "$stub/bin/git"
+assert_exit 1
+assert_stderr_contains "could not list commits"
+assert_stderr_contains "bad object"
+
+case_begin "earlier base merge, base fetch fails: refused with the fetch error, not predates head"
+merged_head_case
+git remote set-url origin "$stub/no-such-remote"
+run_ready AUTO_REREVIEW=true
+assert_exit 1
+assert_stderr_contains "could not fetch origin/release/0.22.2"
+git remote set-url origin "$origin"
 
 case_begin "behind the base with a conflict: merge aborted, refused"
 new_case

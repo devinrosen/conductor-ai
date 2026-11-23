@@ -1,4 +1,4 @@
-// Generated from template: verify-and-merge v1.1.0
+// Generated from template: verify-and-merge v1.2.0
 workflow verify-and-merge {
   meta {
     description = "Check a reviewed PR is ready, verify it live against its issue's acceptance criteria, post the evidence, then squash-merge"
