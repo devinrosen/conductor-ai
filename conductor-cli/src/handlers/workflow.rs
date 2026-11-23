@@ -809,7 +809,16 @@ pub fn handle_workflow(
 
             let (wt_path, repo_path) = if templates_only {
                 let dir = path.clone().unwrap_or_else(|| ".".to_string());
-                (dir.clone(), dir)
+                // Inside a registered worktree, fall back to the main checkout
+                // for scripts. A failed lookup means "unregistered": use the
+                // directory as-is.
+                let registered = std::path::absolute(&dir)
+                    .ok()
+                    .and_then(|abs| resolve_dir_target(conn, config, &abs).ok().flatten());
+                match registered {
+                    Some((wt_path, repo_path, _)) => (wt_path, repo_path),
+                    None => (dir.clone(), dir),
+                }
             } else if let Some(ref dir) = path {
                 let abs = std::path::absolute(dir)?;
                 if let Some((wt_path, repo_path, target)) = resolve_dir_target(conn, config, &abs)?
@@ -912,6 +921,7 @@ pub fn handle_workflow(
             if templates {
                 results.push(conductor_core::workflow::validate_template_sources(
                     &conductor_core::workflow_template::embedded_template_sources(),
+                    &wt_path,
                     &repo_path,
                 ));
             }

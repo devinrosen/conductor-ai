@@ -725,11 +725,12 @@ where
 /// Checks what doesn't depend on a repo: the template parses, its body parses,
 /// cycles, semantic rules, the engine registry checks and unknown variables.
 /// Agent, snippet, schema and script files are not checked: a template's files
-/// are created in the target repo when it is instantiated. `repo_path` is only
-/// used to find the scripts a template runs, to know which variables they
-/// export. Entries are named `template:<name>`.
+/// are created in the target repo when it is instantiated. `wt_path` and
+/// `repo_path` are only used to find the scripts a template runs, to know which
+/// variables they export: `wt_path` first, then `repo_path`. Entries are named `template:<name>`.
 pub fn validate_template_sources(
     sources: &[(String, String)],
+    wt_path: &str,
     repo_path: &str,
 ) -> BatchValidationResult {
     let mut parse_errors = Vec::new();
@@ -757,7 +758,7 @@ pub fn validate_template_sources(
     let registry = super::runkon_bridge::build_rk_validation_registry();
     let ctx = validation_context(&registry);
     let engine = validation_engine();
-    let script_resolver = validation_script_resolver(&[repo_path]);
+    let script_resolver = validation_script_resolver(&[wt_path, repo_path]);
 
     let entries = defs
         .iter()
@@ -1489,7 +1490,7 @@ mod tests {
             meta { trigger = "manual" targets = ["worktree"] }
             gate bogus_gate { prompt = "x" timeout = "1h" on_timeout = fail }
         }"#;
-        let result = validate_template_sources(&[template_source("broken", body)], ".");
+        let result = validate_template_sources(&[template_source("broken", body)], ".", ".");
         assert_eq!(result.failed_count(), 1);
         assert_eq!(result.entries[0].name, "template:broken");
         assert!(
@@ -1505,16 +1506,80 @@ mod tests {
     #[test]
     fn templates_parse_error_reported() {
         let sources = vec![("bad.wft".to_string(), "no frontmatter here".to_string())];
-        let result = validate_template_sources(&sources, ".");
+        let result = validate_template_sources(&sources, ".", ".");
         assert_eq!(result.parse_errors.len(), 1);
         assert_eq!(result.failed_count(), 1);
+    }
+
+    fn new_key_template() -> Vec<(String, String)> {
+        let body = r#"workflow uses_export {
+            meta { trigger = "manual" targets = ["worktree"] }
+            script emit { run = ".conductor/scripts/emit.sh" }
+            script consume {
+                run = ".conductor/scripts/emit.sh"
+                env = { A = "{{new_key}}" }
+            }
+        }"#;
+        vec![template_source("uses_export", body)]
+    }
+
+    fn new_key_warns(result: &BatchValidationResult) -> bool {
+        result
+            .entries
+            .iter()
+            .flat_map(|e| e.warnings.iter())
+            .any(|w| w.message.contains("'{{new_key}}'"))
+    }
+
+    fn write_emit_script(dir: &std::path::Path) {
+        write_script(
+            dir,
+            "emit.sh",
+            "#!/bin/sh\necho '{\"new_key\": \"v\"}'\n",
+        );
+    }
+
+    #[test]
+    fn template_script_export_resolves_from_worktree() {
+        let worktree = tempfile::tempdir().unwrap();
+        let main = tempfile::tempdir().unwrap();
+        write_emit_script(worktree.path());
+        let result = validate_template_sources(
+            &new_key_template(),
+            worktree.path().to_str().unwrap(),
+            main.path().to_str().unwrap(),
+        );
+        assert!(!new_key_warns(&result), "got: {:?}", result.entries);
+    }
+
+    #[test]
+    fn template_script_export_missing_from_main_checkout_warns() {
+        let worktree = tempfile::tempdir().unwrap();
+        let main = tempfile::tempdir().unwrap();
+        write_emit_script(worktree.path());
+        let main_path = main.path().to_str().unwrap();
+        let result = validate_template_sources(&new_key_template(), main_path, main_path);
+        assert!(new_key_warns(&result), "got: {:?}", result.entries);
+    }
+
+    #[test]
+    fn template_script_export_falls_back_to_main_checkout() {
+        let worktree = tempfile::tempdir().unwrap();
+        let main = tempfile::tempdir().unwrap();
+        write_emit_script(main.path());
+        let result = validate_template_sources(
+            &new_key_template(),
+            worktree.path().to_str().unwrap(),
+            main.path().to_str().unwrap(),
+        );
+        assert!(!new_key_warns(&result), "got: {:?}", result.entries);
     }
 
     #[test]
     fn embedded_templates_all_pass() {
         let sources = crate::workflow_template::embedded_template_sources();
         assert!(!sources.is_empty(), "no embedded templates found");
-        let result = validate_template_sources(&sources, ".");
+        let result = validate_template_sources(&sources, ".", ".");
         let failures: Vec<String> = result
             .entries
             .iter()
