@@ -103,6 +103,10 @@ impl SmokeStop {
 }
 
 /// Start of every smoke cancellation reason (see [`SmokeStopPoint::reason`]).
+///
+/// `notify::transitions` matches this prefix on an agent run's result text to
+/// recognise a cancelled smoke driver and skip `agent_run.failed`. The coupling
+/// is pinned by `reason_starts_with_notify_prefix_for_every_kind`.
 pub const SMOKE_REASON_PREFIX: &str = "smoke: reached ";
 
 impl SmokeStopPoint {
@@ -465,6 +469,19 @@ mod tests {
             point("g", SmokeStopKind::Gate).reason(),
             "smoke: reached gate step 'g'"
         );
+    }
+
+    /// `notify` recognises a cancelled smoke driver by this prefix on the agent
+    /// run's result text, so every stop kind's reason must carry it.
+    #[test]
+    fn reason_starts_with_notify_prefix_for_every_kind() {
+        for kind in [SmokeStopKind::Agent, SmokeStopKind::Gate] {
+            let reason = point("s", kind).reason();
+            assert!(
+                reason.starts_with(SMOKE_REASON_PREFIX),
+                "reason {reason:?} must start with {SMOKE_REASON_PREFIX:?}"
+            );
+        }
     }
 
     fn new_run(conn: &rusqlite::Connection) -> String {
