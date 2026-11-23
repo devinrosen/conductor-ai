@@ -5717,6 +5717,87 @@ fn test_list_all_workflow_runs_filtered_paginated_status_and_inactive() {
 }
 
 #[test]
+fn test_list_all_workflow_runs_filtered_paginated_none_returns_every_status() {
+    let conn = setup_db();
+    let all_statuses = [
+        WorkflowRunStatus::Pending,
+        WorkflowRunStatus::Running,
+        WorkflowRunStatus::Completed,
+        WorkflowRunStatus::Failed,
+        WorkflowRunStatus::Cancelled,
+        WorkflowRunStatus::Waiting,
+        WorkflowRunStatus::NeedsResume,
+        WorkflowRunStatus::Cancelling,
+    ];
+    let mut by_status = Vec::new();
+    for status in &all_statuses {
+        let run = create_worktree_run(&conn, "w1");
+        conn.execute(
+            "UPDATE workflow_runs SET status = ?1 WHERE id = ?2",
+            rusqlite::params![status.to_string(), run.id],
+        )
+        .unwrap();
+        by_status.push((status.clone(), run.id.clone()));
+    }
+    let default = crate::workflow::RunListFlags::default();
+
+    let none =
+        crate::workflow::list_all_workflow_runs_filtered_paginated(&conn, None, 50, 0, default)
+            .unwrap();
+    assert_eq!(
+        none.len(),
+        all_statuses.len(),
+        "None applies no status filter"
+    );
+
+    for (status, id) in &by_status {
+        let only = crate::workflow::list_all_workflow_runs_filtered_paginated(
+            &conn,
+            Some(status.clone()),
+            50,
+            0,
+            default,
+        )
+        .unwrap();
+        assert_eq!(
+            ids_of(&only),
+            vec![id.as_str()],
+            "Some({status}) returns only that status"
+        );
+    }
+}
+
+#[test]
+fn test_list_workflow_runs_page_top_level_only_applies_before_limit() {
+    let conn = setup_db();
+    let parent = create_worktree_run(&conn, "w1");
+    set_started_at(&conn, &parent.id, "2024-01-01T00:00:00Z");
+    // Two newer children: without the filter they would fill a limit-2 page.
+    for ts in ["2024-01-02T00:00:00Z", "2024-01-03T00:00:00Z"] {
+        let child = create_worktree_run(&conn, "w1");
+        conn.execute(
+            "UPDATE workflow_runs SET parent_workflow_run_id = ?1 WHERE id = ?2",
+            [&parent.id, &child.id],
+        )
+        .unwrap();
+        set_started_at(&conn, &child.id, ts);
+    }
+
+    let page = |top_level_only| {
+        crate::workflow::list_workflow_runs_page(
+            &conn,
+            &crate::workflow::WorkflowRunListFilter {
+                top_level_only,
+                ..page_filter(&[], false, 2, 0)
+            },
+        )
+        .unwrap()
+    };
+    assert!(!ids_of(&page(false)).contains(&parent.id.as_str()));
+    assert_eq!(ids_of(&page(true)), vec![parent.id.as_str()]);
+}
+
+#[test]
 fn test_list_active_workflow_runs_keeps_dry_runs_and_breaks_ties_by_id() {
     let conn = setup_db();
     let (root, child) = create_dry_run_pair(&conn);
