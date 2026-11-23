@@ -1532,11 +1532,7 @@ mod tests {
     }
 
     fn write_emit_script(dir: &std::path::Path) {
-        write_script(
-            dir,
-            "emit.sh",
-            "#!/bin/sh\necho '{\"new_key\": \"v\"}'\n",
-        );
+        write_script(dir, "emit.sh", "#!/bin/sh\necho '{\"new_key\": \"v\"}'\n");
     }
 
     #[test]
