@@ -27,7 +27,7 @@ Steps:
 
 ## Decisions for the user
 
-Most design choices are yours: make them and record them in the plan. Put a question in `decisions` only when the choice is the user's to make and neither the ticket nor its comments settle it: it changes the ticket's scope, breaks a public API or compatibility the milestone promises, changes or deletes data, or changes behaviour users rely on in a way the ticket doesn't ask for. For each, give the question and the `default` the plan follows if the user approves without answering, and plan the work around that default.
+Most design choices are yours: make them and record them in the plan. Put a question in `decisions` only when the choice is the user's to make and neither the ticket nor its comments settle it: it changes the ticket's scope, breaks a public API or compatibility the milestone promises, changes or deletes data, or changes behaviour users rely on in a way the ticket doesn't ask for. For each, give the question and the `default` the plan follows if the user approves without answering, and plan the work around that default. When the default would leave an acceptance item undone or narrower, set `defers` to that item, worded as the issue words it, and to where it goes (say "a follow-up issue" if none exists yet; you can't file issues).
 
 A non-empty `decisions` list stops the run at a gate before `implement`, so don't list routine choices. List the same questions under a "Decisions for the user" heading in `PLAN.md`.
 
