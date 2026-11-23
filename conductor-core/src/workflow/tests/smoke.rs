@@ -123,7 +123,8 @@ fn assert_drivers_cancelled(f: &Fixture, expected: usize) {
     for (name, status, text) in &drivers {
         assert_eq!(status, "cancelled", "{name} driver: {drivers:?}");
         assert!(
-            text.as_deref().is_some_and(|t| t.starts_with("smoke: reached")),
+            text.as_deref()
+                .is_some_and(|t| t.starts_with("smoke: reached")),
             "{name} driver carries the smoke reason: {drivers:?}"
         );
     }
@@ -210,7 +211,9 @@ fn unknown_gate_type_fails_before_any_step() {
     assert!(!ran(&f, "a"));
     // A failing smoke is not reported as a stop: no driver is marked cancelled.
     assert!(
-        drivers(&f).iter().all(|(_, status, _)| status != "cancelled"),
+        drivers(&f)
+            .iter()
+            .all(|(_, status, _)| status != "cancelled"),
         "{:?}",
         drivers(&f)
     );

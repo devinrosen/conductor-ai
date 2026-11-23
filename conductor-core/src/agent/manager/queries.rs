@@ -414,7 +414,11 @@ impl<'a> AgentManager<'a> {
         }
 
         if !include_dry_run {
-            where_parts.push(not_dry_run_driver(if use_join { "ar" } else { "agent_runs" }));
+            where_parts.push(not_dry_run_driver(if use_join {
+                "ar"
+            } else {
+                "agent_runs"
+            }));
         }
 
         let where_clause = if where_parts.is_empty() {
@@ -779,7 +783,9 @@ mod tests {
         let r1 = mgr.create_run(Some("w1"), "Task in w1", None).unwrap();
         let _r2 = mgr.create_run(Some("w2"), "Task in w2", None).unwrap();
 
-        let runs = mgr.list_agent_runs(Some("w1"), None, None, 50, 0, false).unwrap();
+        let runs = mgr
+            .list_agent_runs(Some("w1"), None, None, 50, 0, false)
+            .unwrap();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].id, r1.id);
     }
@@ -806,13 +812,27 @@ mod tests {
         .unwrap();
 
         let running = mgr
-            .list_agent_runs(Some("w1"), None, Some(&AgentRunStatus::Running), 50, 0, false)
+            .list_agent_runs(
+                Some("w1"),
+                None,
+                Some(&AgentRunStatus::Running),
+                50,
+                0,
+                false,
+            )
             .unwrap();
         assert_eq!(running.len(), 1);
         assert_eq!(running[0].id, r1.id);
 
         let completed = mgr
-            .list_agent_runs(Some("w1"), None, Some(&AgentRunStatus::Completed), 50, 0, false)
+            .list_agent_runs(
+                Some("w1"),
+                None,
+                Some(&AgentRunStatus::Completed),
+                50,
+                0,
+                false,
+            )
             .unwrap();
         assert_eq!(completed.len(), 1);
         assert_eq!(completed[0].id, r2.id);
@@ -838,7 +858,9 @@ mod tests {
         let r1 = mgr.create_run(Some("w1"), "r1 task", None).unwrap();
         let _r3 = mgr.create_run(Some("w3"), "r2 task", None).unwrap();
 
-        let runs = mgr.list_agent_runs(None, Some("r1"), None, 50, 0, false).unwrap();
+        let runs = mgr
+            .list_agent_runs(None, Some("r1"), None, 50, 0, false)
+            .unwrap();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].id, r1.id);
     }
@@ -882,27 +904,55 @@ mod tests {
 
         // repo_id=r1 + status=Running → only r1_running
         let running = mgr
-            .list_agent_runs(None, Some("r1"), Some(&AgentRunStatus::Running), 50, 0, false)
+            .list_agent_runs(
+                None,
+                Some("r1"),
+                Some(&AgentRunStatus::Running),
+                50,
+                0,
+                false,
+            )
             .unwrap();
         assert_eq!(running.len(), 1);
         assert_eq!(running[0].id, r1_running.id);
 
         // repo_id=r1 + status=Completed → only r1_completed
         let completed = mgr
-            .list_agent_runs(None, Some("r1"), Some(&AgentRunStatus::Completed), 50, 0, false)
+            .list_agent_runs(
+                None,
+                Some("r1"),
+                Some(&AgentRunStatus::Completed),
+                50,
+                0,
+                false,
+            )
             .unwrap();
         assert_eq!(completed.len(), 1);
         assert_eq!(completed[0].id, r1_completed.id);
 
         // repo_id=r2 + status=Running → only r2's run (excludes r1 runs)
         let r2_running = mgr
-            .list_agent_runs(None, Some("r2"), Some(&AgentRunStatus::Running), 50, 0, false)
+            .list_agent_runs(
+                None,
+                Some("r2"),
+                Some(&AgentRunStatus::Running),
+                50,
+                0,
+                false,
+            )
             .unwrap();
         assert_eq!(r2_running.len(), 1);
 
         // repo_id=r2 + status=Completed → nothing (r2 has no completed runs)
         let r2_completed = mgr
-            .list_agent_runs(None, Some("r2"), Some(&AgentRunStatus::Completed), 50, 0, false)
+            .list_agent_runs(
+                None,
+                Some("r2"),
+                Some(&AgentRunStatus::Completed),
+                50,
+                0,
+                false,
+            )
             .unwrap();
         assert_eq!(r2_completed.len(), 0);
     }
@@ -979,14 +1029,21 @@ mod tests {
         let ids = |runs: Vec<crate::agent::AgentRun>| -> Vec<String> {
             runs.into_iter().map(|r| r.id).collect()
         };
-        assert_eq!(ids(mgr.list_for_worktree("w1").unwrap()), vec![real.id.clone()]);
+        assert_eq!(
+            ids(mgr.list_for_worktree("w1").unwrap()),
+            vec![real.id.clone()]
+        );
         assert_eq!(ids(mgr.list_for_repo("r1").unwrap()), vec![real.id.clone()]);
         assert_eq!(
-            ids(mgr.list_agent_runs(Some("w1"), None, None, 50, 0, false).unwrap()),
+            ids(mgr
+                .list_agent_runs(Some("w1"), None, None, 50, 0, false)
+                .unwrap()),
             vec![real.id.clone()]
         );
         assert_eq!(
-            ids(mgr.list_agent_runs(None, Some("r1"), None, 50, 0, false).unwrap()),
+            ids(mgr
+                .list_agent_runs(None, Some("r1"), None, 50, 0, false)
+                .unwrap()),
             vec![real.id.clone()]
         );
         assert_eq!(
