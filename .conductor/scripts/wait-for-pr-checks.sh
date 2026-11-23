@@ -23,9 +23,18 @@ clean() { local v="${!1:-}"; [[ "${v}" == *"{{"* ]] && v=""; printf '%s' "${v}";
 PR_NUMBER=$(clean PR_NUMBER)
 REQUIRED_CHECKS=$(clean REQUIRED_CHECKS)
 DRY_RUN=$(clean DRY_RUN)
-WAIT_TIMEOUT="${WAIT_TIMEOUT:-2700}"
-POLL_INTERVAL="${POLL_INTERVAL:-30}"
-EMPTY_GRACE="${EMPTY_GRACE:-300}"
+# A numeric knob: an unset, empty or unresolved-placeholder value takes the default; any
+# other non-integer is refused, since a non-numeric value would make the `[ -ge ]` timeout
+# test error inside a `&&` list (ignored by errexit) and the loop would never end.
+number_or_default() { # NAME DEFAULT
+  local v; v=$(clean "$1")
+  [ -n "${v}" ] || v="$2"
+  [[ "${v}" =~ ^[0-9]+$ ]] || refuse "$1 must be a number of seconds, got '${v}'"
+  printf '%s' "${v}"
+}
+WAIT_TIMEOUT=$(number_or_default WAIT_TIMEOUT 2700)
+POLL_INTERVAL=$(number_or_default POLL_INTERVAL 30)
+EMPTY_GRACE=$(number_or_default EMPTY_GRACE 300)
 
 emit() { # CONTEXT
   jq -n --arg c "$1" '{markers: ["checks_green"], context: $c}' \

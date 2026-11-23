@@ -473,6 +473,28 @@ run_wait EMPTY_GRACE=0
 assert_exit 0
 assert_marker checks_green
 
+case_begin "wait: a non-numeric WAIT_TIMEOUT is refused, not an endless poll"
+new_case
+run_wait WAIT_TIMEOUT=soon
+assert_exit 1
+assert_stderr_contains "WAIT_TIMEOUT must be a number of seconds, got 'soon'"
+
+case_begin "wait: a non-numeric POLL_INTERVAL or EMPTY_GRACE is refused"
+new_case
+run_wait POLL_INTERVAL=1.5
+assert_exit 1
+assert_stderr_contains "POLL_INTERVAL must be a number of seconds, got '1.5'"
+run_wait EMPTY_GRACE=-1
+assert_exit 1
+assert_stderr_contains "EMPTY_GRACE must be a number of seconds, got '-1'"
+
+case_begin "wait: an unresolved placeholder takes the default"
+new_case
+seq 0 "$ALL_PASS"
+run_wait REQUIRED_CHECKS="Clippy,Test" WAIT_TIMEOUT='{{wait_timeout}}'
+assert_exit 0
+assert_marker checks_green
+
 case_begin "wait: unreadable gh output is refused"
 new_case
 : > "$stub/checks.json"
