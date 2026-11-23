@@ -4,7 +4,7 @@
 # Env vars: PRIOR_OUTPUT (verify-acceptance's structured output), PR_NUMBER, HEAD_SHA
 # (from check-pr-ready), DRY_RUN (print the comment instead of posting it).
 #
-# Fails closed: an unreadable report, a head that moved, or a working tree the agent
+# Fails closed: an unreadable report, a verified report with a failed criterion, a head that moved, or a working tree the agent
 # changed exits 1 without posting, so nothing the agent altered can be merged.
 # TRUSTED_REVIEW_BOTS: bot logins whose earlier report counts as already posted.
 set -euo pipefail
@@ -22,6 +22,10 @@ refuse() { echo "verify-and-merge: $*" >&2; exit 1; }
 
 echo "${PRIOR_OUTPUT:-}" | jq -e '(.verified | type) == "boolean" and (.criteria | type) == "array"' >/dev/null 2>&1 \
   || refuse "verification report unreadable (verify-acceptance gave no verified/criteria)"
+
+# A report claiming verified while a criterion failed must never reach the merge.
+echo "${PRIOR_OUTPUT}" | jq -e '.verified == true and ([.criteria[] | select(.status == "fail")] | length) > 0' >/dev/null 2>&1 \
+  && refuse "report says verified but a criterion has status fail; nothing was merged"
 
 [ "$(git rev-parse HEAD)" = "${HEAD_SHA}" ] || refuse "the branch head moved during verification; re-run verify-and-merge"
 [ -z "$(git status --porcelain)" ] || refuse "verify-acceptance left changes in the worktree; nothing was merged"

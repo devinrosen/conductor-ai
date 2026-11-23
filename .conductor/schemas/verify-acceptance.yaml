@@ -1,7 +1,7 @@
 fields:
   verified:
     type: boolean
-    desc: "true only when no criterion is `fail` and every check the recipe requires passed; false when the recipe is missing"
+    desc: "true only when no criterion is `fail` (`deferred` does not count as one) and every check the recipe requires passed; false when the recipe is missing"
   issues:
     type: array
     desc: "Numbers of the issues whose criteria were checked"
@@ -15,7 +15,7 @@ fields:
         desc: "The criterion, as the issue words it"
       status:
         type: string
-        desc: "pass, fail or not_verifiable (only checkable after merge, or not checkable from here)"
+        desc: "pass, fail, deferred (the PR's `## Decisions` records an approved plan-gate decision deferring it) or not_verifiable (only checkable after merge, or not checkable from here)"
       evidence:
         type: string
         desc: "What was run or read, and what it showed"

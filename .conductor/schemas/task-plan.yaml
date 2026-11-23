@@ -24,6 +24,9 @@ fields:
       default:
         type: string
         desc: "What the plan does if the user approves without answering"
+      defers?:
+        type: string
+        desc: "When the default would narrow or defer an acceptance item: the item as the issue words it, and where it goes (for example `runkon/runkon#209`). Omit otherwise."
   estimated_minutes:
     type: number
     desc: "Estimated total minutes to complete the entire plan, including all tasks"

@@ -590,6 +590,20 @@ assert_exit 1
 assert_eq "yes" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment posted"
 assert_eq "yes" "$(grep -q 'Verdict: `fail`' "$stub/comment" && echo yes || echo no)" "fail verdict in the comment"
 
+case_begin "post-verification: a deferred criterion with verified true posts it as deferred and emits verified"
+new_case
+run_post '{"verified":true,"issues":[1],"criteria":[{"criterion":"prints no failure warnings","status":"deferred","evidence":"PR Decisions defers it to runkon/runkon#209"},{"criterion":"it works","status":"pass","evidence":"ran"}],"summary":"ok"}'
+assert_exit 0
+assert_marker verified
+assert_eq "yes" "$(grep -q '| prints no failure warnings | deferred |' "$stub/comment" && echo yes || echo no)" "deferred row in the comment"
+
+case_begin "post-verification: verified true with a fail criterion is refused without posting"
+new_case
+run_post '{"verified":true,"issues":[1],"criteria":[{"criterion":"it works","status":"fail","evidence":"no"}],"summary":"ok"}'
+assert_exit 1
+assert_stderr_contains "status fail"
+assert_eq "no" "$([ -f "$stub/comment" ] && echo yes || echo no)" "comment posted"
+
 case_begin "post-verification: unreadable report exits 1 without posting"
 new_case
 run_post "not json"
