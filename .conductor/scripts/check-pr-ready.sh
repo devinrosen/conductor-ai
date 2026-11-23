@@ -17,6 +17,13 @@
 # unreviewed, so with AUTO_REREVIEW=true it emits base_merged and the workflow re-reviews
 # and waits for CI, and otherwise the run stops).
 #
+# With AUTO_REREVIEW=true a head that an earlier run (or a person) already moved is
+# treated the same way when every commit since the last review is a merge of the base
+# branch: the stale review and still-running required checks don't refuse, and the script
+# emits base_merged for the current head (#3452). Any other commit since the review, a
+# failing check or a review that isn't All Clear still refuses. recheck-pr-ready runs with
+# AUTO_REREVIEW=false and refuses both, so there is only one automatic round.
+#
 # On success emits pr_ready (or base_merged) plus pr_number, pr_title, base_branch,
 # head_sha, linked_issues (space-separated same-repo issue numbers from
 # Closes/Fixes/Resolves) and required_checks (comma-separated names seen before a merge).
@@ -34,6 +41,37 @@ source "$(dirname "$0")/lib-pr-checks.sh"
 refuse() { echo "verify-and-merge: $*" >&2; exit 1; }
 
 is_true() { [ "${1:-}" = "true" ]; }
+
+# base_merge_only REVIEW_COMMIT HEAD BASE: true when REVIEW_COMMIT is an ancestor of HEAD
+# and every first-parent commit after it is a merge whose other parents are all on
+# origin/BASE, i.e. the head differs from the review only by merges of the base.
+base_merge_only() {
+  local r="$1" head="$2" base="$3" line c first p oldest="" oldest_first=""
+  [ -n "${r}" ] || return 1
+  git cat-file -e "${r}^{commit}" 2>/dev/null || return 1
+  git merge-base --is-ancestor "${r}" "${head}" || return 1
+  while read -r -a line; do
+    c="${line[0]}"
+    [ "${#line[@]}" -ge 3 ] || return 1
+    first="${line[1]}"
+    for p in "${line[@]:2}"; do
+      git merge-base --is-ancestor "${p}" "origin/${base}" || return 1
+    done
+    oldest="${c}"
+    oldest_first="${first}"
+  done < <(git rev-list --first-parent --parents "${r}..${head}")
+  [ -n "${oldest}" ] && [ "${oldest_first}" = "${r}" ]
+}
+
+# emit_base_merged SHA CONTEXT: the base_merged result (see the header).
+emit_base_merged() {
+  jq -n --arg n "${PR_NUMBER}" --arg title "${PR_TITLE}" --arg base "${BASE_BRANCH}" \
+    --arg sha "$1" --arg ctx "$2" --arg issues "${LINKED}" --arg req "${REQUIRED_NAMES}" '
+    {markers: ["base_merged"], context: $ctx,
+     pr_number: $n, pr_title: $title, base_branch: $base, head_sha: $sha, linked_issues: $issues, required_checks: $req}' \
+    | { printf '<<<FLOW_OUTPUT>>>\n'; cat; printf '<<<END_FLOW_OUTPUT>>>\n'; }
+}
+STALE_BASE_MERGE=""
 CONFIRM="${CONFIRM:-}"
 DRY_RUN="${DRY_RUN:-}"
 [[ "${CONFIRM}" == *"{{"* ]] && CONFIRM=""
@@ -92,8 +130,16 @@ REVIEW=$(printf '%s' "${REVIEWS}" | jq -c --arg bots "${TRUSTED_REVIEW_BOTS:-}" 
   | sort_by(.submitted_at // "") | last // empty')
 [ -n "${REVIEW}" ] || refuse "no conductor review by a trusted author on PR #${PR_NUMBER}"
 REVIEW_COMMIT=$(printf '%s' "${REVIEW}" | jq -r '.commit_id // ""')
-[ "${REVIEW_COMMIT}" = "${PR_HEAD}" ] \
-  || refuse "last conductor review (${REVIEW_COMMIT:0:7}) predates head ${PR_HEAD:0:7}"
+if [ "${REVIEW_COMMIT}" != "${PR_HEAD}" ]; then
+  # An earlier run that merged the base leaves a head nothing re-reviewed (#3452).
+  if is_true "${AUTO_REREVIEW}" \
+     && git fetch --quiet origin "${BASE_BRANCH}" 2>/dev/null \
+     && base_merge_only "${REVIEW_COMMIT}" "${PR_HEAD}" "${BASE_BRANCH}"; then
+    STALE_BASE_MERGE=1
+  else
+    refuse "last conductor review (${REVIEW_COMMIT:0:7}) predates head ${PR_HEAD:0:7}"
+  fi
+fi
 
 APPROVED=$(printf '%s' "${REVIEW}" | jq -r '
   (.body // "") as $b
@@ -101,7 +147,7 @@ APPROVED=$(printf '%s' "${REVIEW}" | jq -r '
       | .[0] ) as $payload
   | if ($payload | type) == "boolean" then $payload
     else ($b | contains("Conductor Review Swarm — All Clear")) end')
-[ "${APPROVED}" = "true" ] || refuse "last conductor review on head ${PR_HEAD:0:7} is not All Clear"
+[ "${APPROVED}" = "true" ] || refuse "last conductor review (${REVIEW_COMMIT:0:7}) is not All Clear"
 
 # submit-review posts an All Clear as a COMMENT, not an APPROVE, when the PR changes
 # the review pipeline: a person must approve it.
@@ -120,7 +166,10 @@ else
   FAILING=$(printf '%s' "${CHECKS}" | jq -r '[.[] | select(.bucket == "fail" or .bucket == "cancel") | .name] | join(", ")')
   [ -z "${FAILING}" ] || refuse "required check failing: ${FAILING}"
   PENDING=$(printf '%s' "${CHECKS}" | jq -r '[.[] | select(.bucket == "pending") | .name] | join(", ")')
-  [ -z "${PENDING}" ] || refuse "required checks still running: ${PENDING}"
+  if [ -n "${PENDING}" ]; then
+    [ -n "${STALE_BASE_MERGE}" ] || refuse "required checks still running: ${PENDING}"
+    echo "Note: required checks still running (${PENDING}); wait-for-pr-checks waits for them." >&2
+  fi
 fi
 
 # 6. Conflicts.
@@ -153,15 +202,15 @@ if ! git merge-base --is-ancestor "origin/${BASE_BRANCH}" HEAD; then
   if is_true "${AUTO_REREVIEW}"; then
     # Every other check passed: the merge is the only thing wrong. The workflow re-reviews
     # the new head, waits for its checks and checks again (#3436).
-    jq -n --arg n "${PR_NUMBER}" --arg title "${PR_TITLE}" --arg base "${BASE_BRANCH}" \
-      --arg sha "${NEW_HEAD}" --arg issues "${LINKED}" --arg req "${REQUIRED_NAMES}" '
-      {markers: ["base_merged"],
-       context: "merged \($base) into the branch (new head \($sha[0:7])); re-reviewing with iterate-pr",
-       pr_number: $n, pr_title: $title, base_branch: $base, head_sha: $sha, linked_issues: $issues, required_checks: $req}' \
-      | { printf '<<<FLOW_OUTPUT>>>\n'; cat; printf '<<<END_FLOW_OUTPUT>>>\n'; }
+    emit_base_merged "${NEW_HEAD}" "merged ${BASE_BRANCH} into the branch (new head ${NEW_HEAD:0:7}); re-reviewing with iterate-pr"
     exit 0
   fi
   refuse "merged ${BASE_BRANCH} into the branch (new head ${NEW_HEAD:0:7}); re-review with iterate-pr, then re-run verify-and-merge (or leave auto_rereview on)"
+fi
+
+if [ -n "${STALE_BASE_MERGE}" ]; then
+  emit_base_merged "${PR_HEAD}" "head ${PR_HEAD:0:7} differs from the last review (${REVIEW_COMMIT:0:7}) only by merges of ${BASE_BRANCH}; re-reviewing with iterate-pr"
+  exit 0
 fi
 
 jq -n --arg n "${PR_NUMBER}" --arg title "${PR_TITLE}" --arg base "${BASE_BRANCH}" \

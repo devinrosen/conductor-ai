@@ -15,9 +15,9 @@ It ships as the embedded template `verify-and-merge` (`conductor_instantiate_tem
 | Step | What it does |
 | --- | --- |
 | `check-pr-ready` | Refuses unless the PR can be verified and merged (below). Emits `pr_ready` (or `base_merged`, below) with `pr_number`, `pr_title`, `base_branch`, `head_sha`, `linked_issues` and `required_checks`. |
-| `iterate-pr` | Only after a base merge: re-reviews the new head and fixes what it finds. |
-| `wait-for-pr-checks` | Only after a base merge: polls the required checks on the new head until they pass, one fails, or 45 minutes pass. |
-| `recheck-pr-ready` | Only after a base merge: `check-pr-ready` again, with `AUTO_REREVIEW=false`, so it confirms the new review is on the head and All Clear. |
+| `iterate-pr` | Only after a base merge (this run's or an earlier one's): re-reviews the new head and fixes what it finds. |
+| `wait-for-pr-checks` | Only after a base merge (this run's or an earlier one's): polls the required checks on the new head until they pass, one fails, or 45 minutes pass. |
+| `recheck-pr-ready` | Only after a base merge (this run's or an earlier one's): `check-pr-ready` again, with `AUTO_REREVIEW=false`, so it confirms the new review is on the head and All Clear. |
 | `verify-acceptance` | An agent reads the linked issue's acceptance criteria and the diff, follows `.conductor/verify-recipe.md`, builds and exercises the branch, and returns a pass / fail / not_verifiable verdict with evidence per criterion. It changes nothing. |
 | `post-verification` | Refuses if the head moved or the agent left changes in the worktree, posts the report as a PR comment, and stops the run when verification failed. |
 | `human_review` | Only with `confirm`: a gate before the merge. |
@@ -47,6 +47,8 @@ When the branch doesn't contain its base, `check-pr-ready` merges the base in an
 2. `wait-for-pr-checks` polls `gh pr checks --required` every 30 s, up to 45 minutes (`WAIT_TIMEOUT`, `POLL_INTERVAL`). It waits for the PR head to match the local head and for every required check named before the merge to be present and passing.
 3. `recheck-pr-ready` runs the readiness checks once more, with no further auto re-review.
 4. Verification and the merge go on as usual.
+
+**A head an earlier run moved.** If a previous run (or a person) already merged the base and pushed, nothing has reviewed that head, so the review predates it, and CI on the merge commit may still be running. With `auto_rereview=true`, `check-pr-ready` treats such a head like a base merge made in this run when every commit since the last trusted review is a merge whose other parents are on `origin/<base>`: the stale review and still-running required checks don't refuse, and it emits `base_merged` for the current head (#3452). The review must still have been All Clear on its own commit, and a failing check still refuses. A head with any other commit since the review (or a rebased history, or a merge of some other branch) still refuses with "predates head", and `auto_rereview=false` keeps both refusals.
 
 The run stops with a one-line reason, leaving the PR unmerged, when `iterate-pr` fails or hits max iterations, a required check fails, the wait times out, or the re-check refuses (the review is not All Clear, the base moved again, the head doesn't match). Only one automatic round happens. If `iterate-pr` reaches its human gate (a pushback it can't resolve), the run pauses there. A run that hits a base move costs a review (about $2-2.50) and up to 45 minutes of waiting.
 
