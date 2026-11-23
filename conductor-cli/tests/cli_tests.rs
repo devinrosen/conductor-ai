@@ -528,7 +528,10 @@ fn workflow_launch_detached_applies_input_defaults() {
     let script = wt.path().join(".conductor/scripts/record.sh");
     std::fs::write(
         &script,
-        format!("#!/bin/sh\nprintf '%s' \"$AUTO_REREVIEW\" > '{}'\n", out_file.display()),
+        format!(
+            "#!/bin/sh\nprintf '%s' \"$AUTO_REREVIEW\" > '{}'\n",
+            out_file.display()
+        ),
     )
     .unwrap();
     {
@@ -565,9 +568,11 @@ fn workflow_launch_detached_applies_input_defaults() {
         .unwrap();
     assert_eq!(status, "completed");
     assert_eq!(std::fs::read_to_string(&out_file).unwrap(), "true");
-    let inputs: std::collections::HashMap<String, String> =
-        serde_json::from_str(&inputs).unwrap();
-    assert_eq!(inputs.get("auto_rereview").map(String::as_str), Some("true"));
+    let inputs: std::collections::HashMap<String, String> = serde_json::from_str(&inputs).unwrap();
+    assert_eq!(
+        inputs.get("auto_rereview").map(String::as_str),
+        Some("true")
+    );
 }
 
 /// A workflow that does not exist is reported as an `ERROR:` line, not a silent exit.

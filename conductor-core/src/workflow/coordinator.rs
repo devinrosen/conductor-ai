@@ -2739,7 +2739,10 @@ mod tests {
         let params = make_resume_standalone(&run_id, None, false, db_file.path().to_path_buf());
         resume_workflow_standalone(&params).expect("resume must succeed");
         let inputs = stored_inputs(db_file.path()).expect("run row");
-        assert_eq!(inputs.get("auto_rereview").map(String::as_str), Some("true"));
+        assert_eq!(
+            inputs.get("auto_rereview").map(String::as_str),
+            Some("true")
+        );
     }
 
     #[test]
