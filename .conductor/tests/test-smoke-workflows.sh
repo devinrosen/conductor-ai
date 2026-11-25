@@ -50,12 +50,13 @@ detect() {
   EXIT=$?
 }
 
-case_begin "changed child pulls in its direct parent only, not a name that merely starts with it"
+case_begin "changed child pulls in its callers transitively, not a name that merely starts with it"
 new_repo
 detect .conductor/workflows/child.wf
 assert_exit 0
 assert_eq "child changed
-parent calls child" "$STDOUT" "targets"
+parent calls child
+grand calls parent, which calls child" "$STDOUT" "targets"
 
 case_begin "changed child-x does not pull in parent"
 new_repo
@@ -63,11 +64,12 @@ detect .conductor/workflows/child-x.wf
 assert_eq "child-x changed
 other calls child-x" "$STDOUT" "targets"
 
-case_begin "a changed template maps to the same-name workflow and its parent"
+case_begin "a changed template maps to the same-name workflow and its callers"
 new_repo
 detect conductor-core/templates/child.wft
 assert_eq "child changed
-parent calls child" "$STDOUT" "targets"
+parent calls child
+grand calls parent, which calls child" "$STDOUT" "targets"
 
 case_begin "a template with no workflow is skipped by name"
 new_repo
@@ -81,6 +83,51 @@ detect .conductor/workflows/child.wf .conductor/workflows/parent.wf .conductor/w
 assert_eq "child changed
 parent changed
 grand calls parent" "$STDOUT" "targets"
+
+case_begin "a change two levels below the top smokes the top-level workflows"
+new_repo
+commit_file "$repo" .conductor/workflows/top-a.wf "workflow top-a {
+  do {
+    call workflow grand
+  }
+}" topa
+commit_file "$repo" .conductor/workflows/top-b.wf "workflow top-b {
+  do {
+    call workflow grand
+  }
+}" topb
+detect .conductor/workflows/parent.wf
+assert_eq "parent changed
+grand calls parent
+top-a calls grand, which calls parent
+top-b calls grand, which calls parent" "$STDOUT" "targets"
+
+case_begin "a call loop ends and lists each workflow once"
+new_repo
+commit_file "$repo" .conductor/workflows/child.wf "workflow child {
+  do {
+    call workflow grand
+  }
+}" loop
+detect .conductor/workflows/parent.wf
+assert_exit 0
+assert_eq "parent changed
+grand calls parent
+child calls grand, which calls parent" "$STDOUT" "targets"
+
+case_begin "a workflow reached two ways is listed once with the shortest chain"
+new_repo
+commit_file "$repo" .conductor/workflows/top.wf "workflow top {
+  do {
+    call workflow parent
+    call workflow child
+  }
+}" top
+detect .conductor/workflows/child.wf
+assert_eq "child changed
+parent calls child
+top calls child
+grand calls parent, which calls child" "$STDOUT" "targets"
 
 case_begin "non-pipeline changes give no targets"
 new_repo
@@ -143,11 +190,13 @@ new_repo
 stub_reset
 smoke .conductor/workflows/child.wf
 assert_exit 0
-smokes_jq '.smokes | length == 2'
+smokes_jq '.smokes | length == 3'
 smokes_jq '.smokes[0] | .workflow == "child" and .reason == "changed" and .status == "pass" and .run_id == "01RUNchild"'
 smokes_jq '.smokes[1] | .workflow == "parent" and .reason == "calls child" and .status == "pass"'
+smokes_jq '.smokes[2] | .workflow == "grand" and .reason == "calls parent, which calls child" and .status == "pass"'
 assert_eq "workflow validate child --dry-run --json --path .
-workflow validate parent --dry-run --json --path ." "$(cat "$STUB_DIR/calls")" "conductor calls"
+workflow validate parent --dry-run --json --path .
+workflow validate grand --dry-run --json --path ." "$(cat "$STUB_DIR/calls")" "conductor calls"
 
 case_begin "a missing required input is a skip naming the input, not a failure"
 new_repo
@@ -239,9 +288,10 @@ stub_reset
 touch "$STUB_DIR/drain"
 smoke .conductor/workflows/child.wf
 assert_exit 0
-smokes_jq '.smokes | length == 2 and all(.status == "pass")'
+smokes_jq '.smokes | length == 3 and all(.status == "pass")'
 assert_eq "workflow validate child --dry-run --json --path .
-workflow validate parent --dry-run --json --path ." "$(cat "$STUB_DIR/calls")" "conductor calls"
+workflow validate parent --dry-run --json --path .
+workflow validate grand --dry-run --json --path ." "$(cat "$STUB_DIR/calls")" "conductor calls"
 
 # --- the real database (#3469) ------------------------------------------------------
 # smoke_home HOME PATH... — like smoke, with CONDUCTOR_HOME set to HOME.
@@ -298,7 +348,7 @@ home=$(scratch_dir)
 echo junk > "$home/conductor.db"
 smoke_home "$home" .conductor/workflows/child.wf
 assert_exit 0
-smokes_jq '.smokes | length == 2 and all(.status == "skip") and all(.detail | contains("could not read"))'
+smokes_jq '.smokes | length == 3 and all(.status == "skip") and all(.detail | contains("could not read"))'
 [ ! -e "$STUB_DIR/calls" ] || fail "conductor was called against an unreadable database"
 
 # --- update-pr-smokes.sh ------------------------------------------------------------

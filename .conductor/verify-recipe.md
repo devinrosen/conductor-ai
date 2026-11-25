@@ -24,7 +24,7 @@ What `verify-acceptance` runs to check a reviewed PR against its issue. CI alrea
 ## Pipeline changes
 
 - A change under `.conductor/scripts/**`, `.conductor/tests/**` or `scripts/release/**`: run `.conductor/tests/run.sh`.
-- A changed `.conductor/workflows/*.wf` or `conductor-core/templates/*.wft`: run `target/debug/conductor workflow validate --dry-run <name>` for each changed workflow from this worktree (`--input k=v` for required inputs). For a changed child workflow, smoke it and a parent that calls it. Put each run ID in `run_ids`.
+- A changed `.conductor/workflows/*.wf` or `conductor-core/templates/*.wft`: run `target/debug/conductor workflow validate --dry-run <name>` for each changed workflow from this worktree (`--input k=v` for required inputs). For a changed child workflow, smoke it and the workflows that call it, directly or through others, up to the top-level ones. Put each run ID in `run_ids`.
 
 ## Tests
 

@@ -4,7 +4,7 @@
 # CLAUDE.md requires every PR that changes a .conductor/workflows/*.wf file or a
 # conductor-core/templates/*.wft template to carry a passing
 # `conductor workflow validate --dry-run <name>`, and a changed child workflow also
-# needs a smoke of each parent that calls it. verify.sh pipes its changed-file list
+# needs a smoke of the workflows that call it. verify.sh pipes its changed-file list
 # (newline-separated paths) into this script, so the smokes run inside every verify
 # and a failing one goes back to implement like any failed check.
 #
@@ -14,7 +14,9 @@
 #   - each changed conductor-core/templates/<name>.wft maps to the repo workflow of
 #     the same name; with none it is skipped by name (validate --templates covers it);
 #   - every workflow whose file has a `call workflow <name>` line for a changed one
-#     (direct callers only, whole-word match).
+#     (whole-word match), directly or through other workflows: callers of callers
+#     up to the top, each listed once. `reason` gives the shortest chain, for example
+#     "calls iterate-pr, which calls review-pr".
 # Each target runs `$SMOKE_CONDUCTOR workflow validate <name> --dry-run --json --path .`
 # (default: cargo run -q --bin conductor --), from the current directory (the
 # worktree), plus the --input args from the table below. The result comes from the
@@ -94,33 +96,48 @@ done
 
 changed_sorted=$(printf '%s\n' "$changed_names" | sed '/^$/d' | sort -u)
 
-# Parents: workflows with a `call workflow <child>` line for a changed child.
-parents=""  # lines: "<name>\t<child>"
+# Callers, transitively (#3473): breadth-first from the changed workflows, each caller
+# once, first discovery (the shortest chain) wins. A workflow is a caller of C when its
+# file has a `call workflow C` line. The visited set also ends call loops.
+ancestors=""  # lines: "<name>\t<reason>", in discovery order
 if [ -n "$changed_sorted" ]; then
+  callers=""  # lines: "<caller>\t<callee>" for every call line in the repo
   for f in "${wf_dir}"/*.wf; do
     [ -f "$f" ] || continue
     pname=$(workflow_name "$f")
-    while IFS= read -r child; do
-      [ -n "$child" ] || continue
-      [ "$pname" = "$child" ] && continue
-      if grep -qE "^[[:space:]]*call[[:space:]]+workflow[[:space:]]+${child//./\\.}([[:space:]{]|\$)" "$f"; then
-        # A parent that also changed is listed once, as changed.
-        case "${nl}${changed_sorted}${nl}" in *"${nl}${pname}${nl}"*) continue ;; esac
-        case "${nl}${parents}" in *"${nl}${pname}	"*) continue ;; esac
-        parents="${parents:+${parents}${nl}}${pname}	${child}"
-      fi
-    done <<< "$changed_sorted"
+    for callee in $(sed -n -E 's/^[[:space:]]*call[[:space:]]+workflow[[:space:]]+([A-Za-z0-9_.-]+)([[:space:]{].*)?$/\1/p' "$f" | sort -u); do
+      [ "$pname" = "$callee" ] && continue
+      callers="${callers}${pname}	${callee}${nl}"
+    done
   done
-  parents=$(printf '%s\n' "$parents" | sed '/^$/d' | sort -u)
+  visited="$changed_sorted"
+  frontier="$changed_sorted"
+  while [ -n "$frontier" ]; do
+    next=""
+    while IFS= read -r c; do
+      [ -n "$c" ] || continue
+      if [ "$(printf '%s\n' "$changed_sorted" | grep -cxF -- "$c")" -gt 0 ]; then
+        creason="calls ${c}"
+      else
+        prev=$(printf '%s' "$ancestors" | awk -F'\t' -v n="$c" '$1 == n { print $2; exit }')
+        creason="calls ${c}, which ${prev}"
+      fi
+      for p in $(printf '%s' "$callers" | awk -F'\t' -v c="$c" '$2 == c { print $1 }' | sort -u); do
+        case "${nl}${visited}${nl}" in *"${nl}${p}${nl}"*) continue ;; esac
+        visited="${visited}${nl}${p}"
+        ancestors="${ancestors}${p}	${creason}${nl}"
+        next="${next:+${next}${nl}}${p}"
+      done
+    done <<< "$frontier"
+    frontier=$(printf '%s\n' "$next" | sed '/^$/d' | sort -u)
+  done
 fi
 
 targets=""  # lines: "<name>\t<reason>"
 while IFS= read -r n; do
   [ -n "$n" ] && targets="${targets}${n}	changed${nl}"
 done <<< "$changed_sorted"
-while IFS="	" read -r n child; do
-  [ -n "$n" ] && targets="${targets}${n}	calls ${child}${nl}"
-done <<< "$parents"
+targets="${targets}${ancestors}"
 
 if [ "${SMOKE_DETECT_ONLY:-}" = "1" ]; then
   printf '%s' "$targets" | tr '\t' ' '
