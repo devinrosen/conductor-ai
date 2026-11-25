@@ -1032,7 +1032,14 @@ pub fn handle_workflow(
                             continue;
                         }
                         let mut report = SmokeReport::new(&wf.name, SmokeStatus::Fail);
-                        report.error = Some(entry.errors.join("; "));
+                        report.error = Some(
+                            entry
+                                .errors
+                                .iter()
+                                .map(|e| e.to_string())
+                                .collect::<Vec<_>>()
+                                .join("; "),
+                        );
                         report.warnings =
                             entry.warnings.iter().map(|w| w.message.clone()).collect();
                         report
