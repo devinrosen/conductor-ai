@@ -83,6 +83,19 @@ scratch_repo() {
   echo "$d"
 }
 
+# scratch_conductor_home VERSION — a temp conductor home whose conductor.db is at
+# schema VERSION, with a config.toml and a `marker` table holding 'real-data'
+# (needs sqlite3); print its path. For lib-branch-home.sh and verify's tripwire.
+scratch_conductor_home() {
+  local h
+  h=$(scratch_dir)
+  sqlite3 "$h/conductor.db" "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT);
+    INSERT INTO _conductor_meta VALUES ('schema_version', '$1');
+    CREATE TABLE marker (v TEXT); INSERT INTO marker VALUES ('real-data');" || die "sqlite3 failed"
+  echo 'theme = "test"' > "$h/config.toml"
+  echo "$h"
+}
+
 # commit_file REPO PATH CONTENT MSG — write a file and commit it.
 commit_file() {
   mkdir -p "$(dirname "$1/$2")"

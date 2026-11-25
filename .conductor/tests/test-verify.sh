@@ -12,6 +12,11 @@ cat > "$STUB_DIR/bin/cargo" <<'STUB'
 echo "$*" >> "$CARGO_STUB_DIR/calls"
 case "$1" in
   build)
+    # bump_schema: the build "migrates" the real database, like a caller that
+    # ran the branch build without isolation (#3469).
+    if [ -f "$CARGO_STUB_DIR/bump_schema" ]; then
+      sqlite3 "$CONDUCTOR_HOME/conductor.db" "UPDATE _conductor_meta SET value = '90' WHERE key = 'schema_version'"
+    fi
     if [ -f "$CARGO_STUB_DIR/fail_build" ]; then
       echo "error: stub build failure"
       exit 1
@@ -28,7 +33,9 @@ case "$1" in
         fi
         echo "SMOKE PASS  ${name}  stopped at agent step 'a'  (run 01TESTPASS)"
         ;;
-      *) echo "1/1 workflow(s) passed" ;;
+      *)
+        echo "${CONDUCTOR_HOME:-}|${CONDUCTOR_DB_PATH-unset}" > "$CARGO_STUB_DIR/validate_env"
+        echo "1/1 workflow(s) passed" ;;
     esac
     ;;
 esac
@@ -41,7 +48,7 @@ export PATH="$STUB_DIR/bin:$PATH"
 # switches to a feature branch and cd's into the repo.
 new_repo() {
   repo=$(scratch_repo)
-  rm -f "$STUB_DIR/fail_build" "$STUB_DIR/fail_smoke" "$STUB_DIR/calls"
+  rm -f "$STUB_DIR/fail_build" "$STUB_DIR/fail_smoke" "$STUB_DIR/calls" "$STUB_DIR/bump_schema" "$STUB_DIR/validate_env"
   commit_file "$repo" .conductor/tests/run.sh "#!/usr/bin/env bash
 touch \"\$PWD/ran-sentinel\"
 $1" init
@@ -150,5 +157,34 @@ commit_file "$repo" .conductor/workflows/x.wf "workflow x {}" change
 run_script verify.sh FEATURE_BASE_BRANCH=main
 assert_eq "skipped" "$(smoke_status)" "smokes status"
 assert_jq '.smokes == []'
+
+# --- the real database (#3469) -------------------------------------------------
+
+case_begin "static validate runs in a throwaway home, never the caller's"
+new_repo "$PASSING"
+commit_file "$repo" .conductor/workflows/x.wf "workflow x {}" change
+home=$(scratch_conductor_home 89)
+run_script verify.sh FEATURE_BASE_BRANCH=main CONDUCTOR_HOME="$home" CONDUCTOR_DB_PATH="$home/conductor.db"
+assert_jq '[.checks[] | select(.name == "conductor workflow validate") | .status][0] == "pass"'
+vhome=$(cut -d'|' -f1 < "$STUB_DIR/validate_env")
+assert_eq "|" "$( [ -n "$vhome" ] && [ "$vhome" != "$home" ] && echo)|$(cut -d'|' -f2 < "$STUB_DIR/validate_env")" "throwaway home|empty db path"
+[ ! -e "$vhome" ] || fail "the throwaway home was not removed: $vhome"
+
+case_begin "tripwire: verify fails when the real schema changes during the run"
+new_repo "$PASSING"
+commit_file "$repo" .conductor/scripts/foo.sh "echo hi" change
+home=$(scratch_conductor_home 89)
+touch "$STUB_DIR/bump_schema"
+run_script verify.sh FEATURE_BASE_BRANCH=main CONDUCTOR_HOME="$home"
+assert_marker has_failures
+assert_jq '[.checks[] | select(.name == "conductor database schema")][0] | .status == "fail" and (.summary | contains("89 to 90"))'
+assert_context_contains "refuses to open"
+
+case_begin "tripwire: quiet and unrecorded when the schema is unchanged"
+new_repo "$PASSING"
+commit_file "$repo" .conductor/scripts/foo.sh "echo hi" change
+run_script verify.sh FEATURE_BASE_BRANCH=main CONDUCTOR_HOME="$(scratch_conductor_home 89)"
+assert_no_markers
+assert_jq '[.checks[] | select(.name == "conductor database schema")] | length == 0'
 
 finish

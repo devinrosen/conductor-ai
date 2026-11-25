@@ -186,6 +186,9 @@ jobs:
       - name: Install rustfmt
         if: needs.changes.outputs.pipeline_scripts == 'true'
         run: rustup component add rustfmt
+      - name: Ensure sqlite3
+        if: needs.changes.outputs.pipeline_scripts == 'true'
+        run: command -v sqlite3 || (sudo apt-get update -q && sudo apt-get install -y -q sqlite3)
       - name: Run pipeline script tests
         if: needs.changes.outputs.pipeline_scripts == 'true'
         run: .conductor/tests/run.sh

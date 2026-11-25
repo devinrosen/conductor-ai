@@ -13,8 +13,13 @@
 # the PR touches it, else the first changed pipeline file), so submit-review's
 # off-diff filter keeps it.
 #
+# The checks are static, so the branch build runs in a throwaway CONDUCTOR_HOME and
+# never opens (and migrates) the real database (#3469).
+#
 # Env: BASE_BRANCH (from resolve-pr-base).
 set -uo pipefail
+# shellcheck source=lib-branch-home.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib-branch-home.sh"
 
 emit() {
   # $1 = approved (true/false), $2 = summary, $3 = findings JSON
@@ -27,10 +32,12 @@ emit() {
 }
 
 log=$(mktemp)
-trap 'rm -f "${log}"' EXIT
+validate_home=$(throwaway_home)
+trap 'rm -f "${log}"; rm -rf "${validate_home}"' EXIT
 
 status=0
-cargo run -q --bin conductor -- workflow validate --all --templates --path . > "${log}" 2>&1 || status=$?
+CONDUCTOR_HOME="${validate_home}" CONDUCTOR_DB_PATH="" \
+  cargo run -q --bin conductor -- workflow validate --all --templates --path . > "${log}" 2>&1 || status=$?
 if [ "${status}" -eq 0 ]; then
   emit true "Workflow validation passed: $(tail -n 1 "${log}")" '[]'
   exit 0

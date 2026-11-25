@@ -24,8 +24,17 @@
 # skipped and named (a skip is not a failure). Exit 1 when any smoke failed, else 0.
 # No target gives {"smokes": []} and no conductor call.
 #
+# The smokes need the real database (repo, worktree, linked ticket) and record their
+# runs in it, so they run through lib-branch-home.sh (#3469): when this branch adds a
+# migration the real database doesn't have, they run against a copy, and each result
+# carries `db_note` saying so (its run ID exists only in the copy). When the database
+# is newer than the branch, or its version can't be read, every smoke is skipped with
+# the reason instead of letting the branch build open it.
+#
 # Env: SMOKE_CONDUCTOR, SMOKE_DETECT_ONLY=1 (print the targets and stop, for tests).
 set -uo pipefail
+# shellcheck source=lib-branch-home.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib-branch-home.sh"
 
 # Extra `--input k=v` arguments per workflow. ticket_id needs no row: the CLI fills it
 # from the worktree's linked ticket, and a worktree with none is skipped and named.
@@ -117,15 +126,28 @@ if [ "${SMOKE_DETECT_ONLY:-}" = "1" ]; then
 fi
 
 results='[]'
+db_note=""
 add_result() { # WORKFLOW REASON STATUS RUN_ID DETAIL
-  results=$(jq -c --arg w "$1" --arg r "$2" --arg s "$3" --arg id "$4" --arg d "$5" \
-    '. + [{workflow: $w, reason: $r, status: $s, run_id: $id, detail: $d}]' <<< "$results")
+  results=$(jq -c --arg w "$1" --arg r "$2" --arg s "$3" --arg id "$4" --arg d "$5" --arg db "$db_note" \
+    '. + [{workflow: $w, reason: $r, status: $s, run_id: $id, detail: $d} + (if $db != "" then {db_note: $db} else {} end)]' <<< "$results")
 }
 
 any_failed=0
 while IFS="	" read -r n detail; do
   [ -n "$n" ] && add_result "$n" "changed" skip "" "$detail"
 done <<< "$skipped"
+
+if [ -n "$targets" ]; then
+  trap branch_home_cleanup EXIT
+  if ! branch_home_setup; then
+    while IFS="	" read -r name reason; do
+      [ -n "$name" ] && add_result "$name" "$reason" skip "" "not run: ${BRANCH_HOME_NOTE}"
+    done <<< "$targets"
+    targets=""
+  elif [ "$BRANCH_HOME_MODE" = copy ]; then
+    db_note="$BRANCH_HOME_NOTE"
+  fi
+fi
 
 smoke_cmd="${SMOKE_CONDUCTOR:-cargo run -q --bin conductor --}"
 while IFS="	" read -r name reason; do

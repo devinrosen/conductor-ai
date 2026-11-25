@@ -15,6 +15,13 @@ for v in $(env | sed -n 's/^\(\(CONDUCTOR\|FLOW\)_[A-Za-z0-9_]*\)=.*/\1/p'); do
 done
 unset BASE_BRANCH SCOPE SINCE PRIOR_CONTEXTS PRIOR_OUTPUT FMT_FIX_ALLOW_FAILURE
 
+# Scripts that read the conductor database (verify's schema tripwire,
+# lib-branch-home.sh) must never see the real ~/.conductor (#3469). An empty home
+# means "no database"; a case that needs one sets CONDUCTOR_HOME itself.
+CONDUCTOR_HOME=$(mktemp -d "${TMPDIR:-/tmp}/pipeline-test-home.XXXXXX")
+export CONDUCTOR_HOME
+trap 'rm -rf "$CONDUCTOR_HOME"' EXIT
+
 if [ "$#" -gt 0 ]; then
   files=()
   for f in "$@"; do
