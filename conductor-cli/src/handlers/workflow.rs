@@ -1759,7 +1759,7 @@ fn smoke_one(
         report
             .warnings
             .iter()
-            .map(|t| format!("SMOKE WARN  {}  {t}", workflow.name)),
+            .map(|t| smoke_warn_line(&workflow.name, t)),
     );
     report
 }
@@ -1790,6 +1790,11 @@ fn smoke_required_input_gate(
         conductor_core::workflow::missing_required_workflow_inputs(workflow, inputs);
     report.human_lines = vec![line];
     Some(report)
+}
+
+/// The human `SMOKE WARN` line for one warning text.
+fn smoke_warn_line(workflow_name: &str, text: &str) -> String {
+    format!("SMOKE WARN  {workflow_name}  {text}")
 }
 
 /// The warning texts for a smoke outcome: one per unresolved script env
@@ -1840,7 +1845,7 @@ mod smoke_warn_tests {
     ) -> Vec<String> {
         smoke_warnings(name, warnings, scan_errors)
             .into_iter()
-            .map(|t| format!("SMOKE WARN  {name}  {t}"))
+            .map(|t| smoke_warn_line(name, &t))
             .collect()
     }
 
