@@ -421,6 +421,9 @@ pub enum WorkflowCommands {
         /// Input variables for the smoke run (key=value pairs)
         #[arg(long = "input", value_name = "KEY=VALUE", requires = "dry_run")]
         inputs: Vec<String>,
+        /// Print one JSON object per smoke (one per line) instead of the human output
+        #[arg(long, requires = "dry_run", conflicts_with = "templates")]
+        json: bool,
     },
     /// Resume a failed or stalled workflow run
     #[command(
