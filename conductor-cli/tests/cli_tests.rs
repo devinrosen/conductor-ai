@@ -232,6 +232,75 @@ fn workflow_validate_all_pass() {
         .stdout(predicate::str::contains("PASS  hello"));
 }
 
+/// #3470: a static validate never creates the database.
+#[test]
+fn workflow_validate_static_without_database_creates_none() {
+    let fixture = setup_valid_workflow_fixture();
+    let home = tempfile::tempdir().unwrap();
+    conductor_cmd(home.path())
+        .args([
+            "workflow",
+            "validate",
+            "--all",
+            "--templates",
+            "--path",
+            fixture.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("PASS  hello"));
+    assert!(!home.path().join("conductor.db").exists());
+}
+
+/// #3470: a static validate leaves an older or newer database as it found it.
+#[test]
+fn workflow_validate_static_leaves_database_untouched() {
+    let fixture = setup_valid_workflow_fixture();
+    let home = tempfile::tempdir().unwrap();
+    // Any database command creates and migrates the home database.
+    conductor_cmd(home.path())
+        .args(["repo", "list"])
+        .assert()
+        .success();
+    let db = home.path().join("conductor.db");
+    let version = |db: &std::path::Path| -> i64 {
+        let conn = rusqlite::Connection::open(db).unwrap();
+        conn.query_row(
+            "SELECT CAST(value AS INTEGER) FROM _conductor_meta WHERE key = 'schema_version'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    let current = version(&db);
+    for set_to in [current - 1, current + 1] {
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.pragma_update(None, "journal_mode", "delete").unwrap();
+            conn.execute(
+                "UPDATE _conductor_meta SET value = ?1 WHERE key = 'schema_version'",
+                [set_to.to_string()],
+            )
+            .unwrap();
+        }
+        let before = std::fs::read(&db).unwrap();
+        conductor_cmd(home.path())
+            .args([
+                "workflow",
+                "validate",
+                "--all",
+                "--templates",
+                "--path",
+                fixture.path().to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("PASS  hello"));
+        assert_eq!(version(&db), set_to);
+        assert_eq!(std::fs::read(&db).unwrap(), before);
+    }
+}
+
 #[test]
 fn workflow_validate_single_pass() {
     let dir = setup_valid_workflow_fixture();

@@ -11,7 +11,7 @@ mod helpers;
 mod mcp;
 mod setup;
 
-use commands::{AgentCommands, Cli, Commands, SessionCommands};
+use commands::{AgentCommands, Cli, Commands, SessionCommands, WorkflowCommands};
 
 fn main() -> Result<()> {
     conductor_core::build_info::init(conductor_core::git_build_info!());
@@ -30,6 +30,39 @@ fn main() -> Result<()> {
         handlers::session::run_hook_and_exit();
     }
 
+    // A static `workflow validate` needs no database state: dispatch before
+    // `Conductor::open()` so a branch build never migrates the real database
+    // or runs workflow maintenance (#3470). It opens the database read-only.
+    // `--dry-run` records a run, so it takes the normal path.
+    if matches!(
+        cli.command,
+        Commands::Workflow {
+            command: WorkflowCommands::Validate { dry_run: false, .. }
+        }
+    ) {
+        init_tracing();
+        let Commands::Workflow { command } = cli.command else {
+            unreachable!()
+        };
+        return handlers::workflow::handle_static_validate(command);
+    }
+
+    init_tracing();
+
+    // When this process is the child started by `workflow run --background`, a
+    // failure before the run starts must reach the parent through the notify
+    // pipe: this process's stdout and stderr go to /dev/null.
+    #[cfg(unix)]
+    let notify_fd = background::notify_fd(&cli.command);
+    let result = run(cli);
+    #[cfg(unix)]
+    if let (Err(e), Some(fd)) = (&result, notify_fd) {
+        background::report_startup_error(fd, e);
+    }
+    result
+}
+
+fn init_tracing() {
     // Initialize tracing subscriber so workflow engine log events appear on
     // stderr for CLI users.  Respects RUST_LOG; defaults to `info`.  The
     // explicit stderr writer matters: the tracing_subscriber default is
@@ -43,18 +76,6 @@ fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .with_target(false)
         .init();
-
-    // When this process is the child started by `workflow run --background`, a
-    // failure before the run starts must reach the parent through the notify
-    // pipe: this process's stdout and stderr go to /dev/null.
-    #[cfg(unix)]
-    let notify_fd = background::notify_fd(&cli.command);
-    let result = run(cli);
-    #[cfg(unix)]
-    if let (Err(e), Some(fd)) = (&result, notify_fd) {
-        background::report_startup_error(fd, e);
-    }
-    result
 }
 
 fn run(cli: Cli) -> Result<()> {

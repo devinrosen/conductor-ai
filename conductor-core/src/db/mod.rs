@@ -4,7 +4,7 @@ pub(crate) mod trace;
 
 use rusqlite::config::DbConfig;
 use rusqlite::types::ToSql;
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
@@ -43,6 +43,34 @@ pub fn open_database(path: &Path) -> Result<Connection> {
     configure_connection(&conn, BUSY_TIMEOUT)?;
     migrations::run(&conn)?;
     Ok(conn)
+}
+
+/// Open an existing database read-only, without migrating it.
+///
+/// Used by static `workflow validate` (#3470), which must never create, migrate
+/// or write the database. Returns `Ok(None)` when `path` doesn't exist and
+/// `Err(ConductorError::Schema)` when the schema is newer than this binary
+/// supports. An older schema is allowed and left as it is.
+pub fn open_database_read_only(path: &Path) -> Result<Option<Connection>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let mut conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    trace::install(&mut conn);
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+    conn.pragma_update(None, "query_only", "1")?;
+    let version = migrations::read_schema_version(&conn)?;
+    if version > migrations::LATEST_SCHEMA_VERSION as i64 {
+        return Err(crate::error::ConductorError::Schema(format!(
+            "Database schema version ({version}) is newer than this binary supports ({}). \
+             Please rebuild: `cargo build`",
+            migrations::LATEST_SCHEMA_VERSION
+        )));
+    }
+    Ok(Some(conn))
 }
 
 /// Open (or create) the SQLite database in compatibility mode.
@@ -335,5 +363,69 @@ mod tests {
     fn open_database_compat_error_on_bad_path() {
         let bad = std::path::Path::new("/tmp/conductor_no_such_dir_xyz/test.db");
         assert!(open_database_compat(bad).is_err());
+    }
+}
+
+#[cfg(test)]
+mod read_only_tests {
+    use super::*;
+    use crate::error::ConductorError;
+
+    fn set_version(path: &Path, v: i64) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute(
+            "UPDATE _conductor_meta SET value = ?1 WHERE key = 'schema_version'",
+            [v.to_string()],
+        )
+        .unwrap();
+    }
+
+    fn version_of(path: &Path) -> i64 {
+        let conn = Connection::open(path).unwrap();
+        migrations::read_schema_version(&conn).unwrap()
+    }
+
+    #[test]
+    fn missing_file_is_none_and_not_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("conductor.db");
+        assert!(open_database_read_only(&path).unwrap().is_none());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn opens_and_rejects_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("conductor.db");
+        crate::test_helpers::open_test_db_file(&path);
+        let conn = open_database_read_only(&path).unwrap().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM repos", [], |r| r.get::<_, i64>(0))
+            .unwrap();
+        assert!(conn
+            .execute("DELETE FROM _conductor_meta", [])
+            .is_err());
+    }
+
+    #[test]
+    fn newer_schema_is_an_error_and_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("conductor.db");
+        crate::test_helpers::open_test_db_file(&path);
+        let newer = migrations::LATEST_SCHEMA_VERSION as i64 + 1;
+        set_version(&path, newer);
+        let err = open_database_read_only(&path).unwrap_err();
+        assert!(matches!(err, ConductorError::Schema(_)));
+        assert_eq!(version_of(&path), newer);
+    }
+
+    #[test]
+    fn older_schema_opens_and_is_not_migrated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("conductor.db");
+        crate::test_helpers::open_test_db_file(&path);
+        let older = migrations::LATEST_SCHEMA_VERSION as i64 - 1;
+        set_version(&path, older);
+        assert!(open_database_read_only(&path).unwrap().is_some());
+        assert_eq!(version_of(&path), older);
     }
 }

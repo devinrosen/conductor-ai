@@ -126,6 +126,23 @@ fn migrate_repo_columns_to_config(conn: &Connection) {
     }
 }
 
+/// Read the schema version without writing anything: 0 when `_conductor_meta`
+/// or its `schema_version` row is missing. Safe on a read-only connection.
+pub(crate) fn read_schema_version(conn: &Connection) -> Result<i64> {
+    if !table_exists(conn, "_conductor_meta")? {
+        return Ok(0);
+    }
+    conn.query_row(
+        "SELECT COALESCE(
+                (SELECT CAST(value AS INTEGER) FROM _conductor_meta WHERE key = 'schema_version'),
+                0
+            )",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
 /// Run all schema migrations. Uses a simple version counter in a meta table.
 pub fn run(conn: &Connection) -> Result<()> {
     conn.execute_batch(
