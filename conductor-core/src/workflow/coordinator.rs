@@ -47,18 +47,29 @@ pub(crate) fn fill_workflow_input_defaults(
     }
 }
 
+/// Names of the required workflow inputs that have no value in `inputs`, in
+/// declaration order.
+pub fn missing_required_workflow_inputs(
+    workflow: &WorkflowDef,
+    inputs: &HashMap<String, String>,
+) -> Vec<String> {
+    workflow
+        .inputs
+        .iter()
+        .filter(|d| d.required && !inputs.contains_key(&d.name))
+        .map(|d| d.name.clone())
+        .collect()
+}
+
 /// Error if a required workflow input is missing from `inputs`.
 pub fn check_required_workflow_inputs(
     workflow: &WorkflowDef,
     inputs: &HashMap<String, String>,
 ) -> Result<()> {
-    for input_decl in &workflow.inputs {
-        if input_decl.required && !inputs.contains_key(&input_decl.name) {
-            return Err(ConductorError::Workflow(format!(
-                "Missing required input: '{}'. Use --input {}=<value>.",
-                input_decl.name, input_decl.name
-            )));
-        }
+    if let Some(name) = missing_required_workflow_inputs(workflow, inputs).first() {
+        return Err(ConductorError::Workflow(format!(
+            "Missing required input: '{name}'. Use --input {name}=<value>."
+        )));
     }
     Ok(())
 }
@@ -1943,6 +1954,18 @@ mod tests {
         let wf = make_wf(vec![input_decl("ticket", true, InputType::String, None)]);
         let err = check_required_workflow_inputs(&wf, &HashMap::new()).unwrap_err();
         assert!(err.to_string().contains("'ticket'"), "{err}");
+    }
+
+    #[test]
+    fn missing_required_inputs_lists_every_missing_name_in_order() {
+        let wf = make_wf(vec![
+            input_decl("a", true, InputType::String, None),
+            input_decl("opt", false, InputType::String, None),
+            input_decl("b", true, InputType::String, None),
+            input_decl("c", true, InputType::String, None),
+        ]);
+        let inputs = HashMap::from([("b".to_string(), "1".to_string())]);
+        assert_eq!(missing_required_workflow_inputs(&wf, &inputs), ["a", "c"]);
     }
 
     #[test]

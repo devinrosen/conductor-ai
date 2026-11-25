@@ -61,8 +61,9 @@ pub fn injected_variable_keys() -> &'static [&'static str] {
 
 pub use coordinator::{
     apply_workflow_input_defaults, check_required_workflow_inputs, execute_workflow_standalone,
-    resume_workflow, resume_workflow_standalone, spawn_claimed_runs, spawn_heartbeat_resume,
-    spawn_workflow_resume, validate_resume_preconditions,
+    missing_required_workflow_inputs, resume_workflow, resume_workflow_standalone,
+    spawn_claimed_runs, spawn_heartbeat_resume, spawn_workflow_resume,
+    validate_resume_preconditions,
 };
 pub use estimation::{Confidence, Estimate, LiveEstimate, StepEstimates};
 pub use manager::definitions::{
