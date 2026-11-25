@@ -20,8 +20,25 @@ It ships as the embedded template `verify-and-merge` (`conductor_instantiate_tem
 | `recheck-pr-ready` | Only after a base merge (this run's or an earlier one's): `check-pr-ready` again, with `AUTO_REREVIEW=false`, so it confirms the new review is on the head and All Clear. |
 | `verify-acceptance` | An agent reads the linked issue's acceptance criteria and the diff, follows `.conductor/verify-recipe.md`, builds and exercises the branch, and returns a pass / fail / not_verifiable verdict with evidence per criterion. It changes nothing. |
 | `post-verification` | Refuses if the head moved or the agent left changes in the worktree, posts the report as a PR comment, and stops the run when verification failed. |
+| `check-summary` | Decides whether the PR's `## Summary` may be stale (see "The Summary"). Emits `summary_stale` or `summary_current`; with no `## Summary` section it is current. |
+| `refresh-summary` | Only on `summary_stale`: an agent (Sonnet) checks the Summary against `origin/<base>...HEAD` and the commits since the PR opened, and returns "still accurate" or a rewrite in the same style. It edits nothing. |
+| `update-pr-summary` | Only on `summary_stale`: writes the rewrite into the PR body and sets the head marker. A failed edit stops the run before the merge. |
 | `human_review` | Only with `confirm`: a gate before the merge. |
-| `squash-merge` | Squash-merges with subject `<title> (#PR)` and a body of the PR's Summary (minus sentences naming a local path: a `/Users/` or `/home/` directory, a `.git/worktrees/` path or a `PLAN.md` path), a `Closes #N` line per linked issue and the commits' `Co-Authored-By` and `Claude-Session` trailers, deduplicated. Pins the head with `--match-head-commit`, then closes any linked issue the merge left open (a merge into a release branch does not close them by itself). |
+| `squash-merge` | Squash-merges with subject `<title> (#PR)` and a body of the PR's Summary (minus HTML comments and sentences naming a local path: a `/Users/` or `/home/` directory, a `.git/worktrees/` path or a `PLAN.md` path), a `Closes #N` line per linked issue and the commits' `Co-Authored-By` and `Claude-Session` trailers, deduplicated. Pins the head with `--match-head-commit`, then closes any linked issue the merge left open (a merge into a release branch does not close them by itself). |
+
+## The Summary
+
+The squash commit's body comes from the PR's `## Summary`, which `pr-body.sh` writes when the PR opens. Review rounds and hand fixes can change the code afterwards (#3471), so the run refreshes it before the merge, after `post-verification` and before the `human_review` gate, so whoever approves sees the final text.
+
+`push-and-pr.sh` ends the body with a hidden `<!-- conductor-summary-head: SHA -->` comment, the head the Summary was written for. `check-summary` reads it:
+
+- marker equals the head: `summary_current`, so the run goes straight to the merge with no model call
+- marker is an ancestor and only merge commits followed (a base merge): `summary_current`
+- a non-merge commit followed, or the marker is not an ancestor (rebased, force-pushed): `summary_stale`
+- no marker (a hand-opened or `--fill` PR, or one from before this): `summary_stale` when a non-merge commit on `origin/<base>..HEAD` is dated after the PR's `createdAt`
+- no `## Summary` section: `summary_current`; `squash-merge` uses the first paragraph as before
+
+`update-pr-summary` moves the marker to the head even when the Summary was still accurate, so a re-run at the same head skips the agent. `squash-merge` re-reads the body and strips HTML comments, so the commit and the PR agree and the marker never reaches a commit.
 
 ## Refusals
 
@@ -37,7 +54,7 @@ Each is one line, which becomes the step error:
 - merge conflicts
 - the branch does not contain its base, with `auto_rereview=false`: the base is merged in and pushed, then the run stops so the new head gets reviewed (`iterate-pr`), and you re-run verify-and-merge. With the default, see below; the same refusal applies if the base moves again during the re-review
 
-A `dry_run` of the workflow skips every script step (the engine records "dry-run: script not executed", `runkon-flow` `src/executors/script.rs`), so `check-pr-ready`, `post-verification` and `squash-merge` never run and nothing is posted, merged or pushed. Their `DRY_RUN=true` branches apply only when you run a script by hand, where it prints what it would do.
+A `dry_run` of the workflow skips every script step (the engine records "dry-run: script not executed", `runkon-flow` `src/executors/script.rs`), so `check-pr-ready`, `post-verification`, `check-summary` and `squash-merge` never run and nothing is posted, merged or pushed. Their `DRY_RUN=true` branches apply only when you run a script by hand, where it prints what it would do.
 
 ## After a base merge
 
@@ -65,9 +82,9 @@ It does not delete the worktree or branch, because the run executes in that work
 ## Adopting it in another repo
 
 1. `conductor_instantiate_template verify-and-merge` into the repo.
-2. Copy `check-pr-ready.sh`, `post-verification.sh`, `squash-merge.sh`, `lib-gh-retry.sh`, `wait-for-pr-checks.sh`, `lib-git-retry.sh`, `lib-pr-checks.sh` and `lib-trusted-review.sh` from conductor-ai's `.conductor/scripts/`, plus `.conductor/agents/verify-acceptance.md` and `.conductor/schemas/verify-acceptance.yaml`.
+2. Copy `check-pr-ready.sh`, `post-verification.sh`, `check-summary.sh`, `update-pr-summary.sh`, `squash-merge.sh`, `lib-gh-retry.sh`, `wait-for-pr-checks.sh`, `lib-git-retry.sh`, `lib-pr-checks.sh` and `lib-trusted-review.sh` from conductor-ai's `.conductor/scripts/`, plus `.conductor/agents/verify-acceptance.md`, `.conductor/agents/refresh-summary.md`, `.conductor/schemas/verify-acceptance.yaml` and `.conductor/schemas/refresh-summary.yaml`. For the marker, take the summary-head lines of `push-and-pr.sh` too; without it `check-summary` uses the `createdAt` fallback.
 3. The base-merge path calls the `iterate-pr` workflow (the `iterate-pr` template). Without one, drop the `if check-pr-ready.base_merged` block and set the `auto_rereview` default to `"false"`.
 4. Write `.conductor/verify-recipe.md`, and adapt the `as` identities and, for issues outside GitHub, the issue closing in `squash-merge.sh`.
 5. Smoke it: `conductor workflow validate --dry-run verify-and-merge` from a worktree.
 
-The decision logic of the four scripts is covered by `.conductor/tests/test-verify-and-merge.sh`.
+The decision logic of the scripts is covered by `.conductor/tests/test-verify-and-merge.sh`.

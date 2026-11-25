@@ -1,0 +1,16 @@
+fields:
+  changed:
+    type: boolean
+    desc: "true when the Summary needed a rewrite; false when it still matches the diff"
+  summary:
+    type: string
+    desc: "The Summary text without its `## Summary` heading: the rewrite when changed, else the existing text unchanged"
+  reason:
+    type: string
+    desc: "One sentence naming what was stale (a symbol, file or behaviour), or why it still holds"
+  context:
+    type: string
+    desc: "One sentence: rewritten, or still accurate"
+
+markers:
+  summary_rewritten: "changed == true"

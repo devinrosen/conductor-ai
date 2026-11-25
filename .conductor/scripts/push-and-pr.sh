@@ -73,6 +73,9 @@ pr_body_file=$(mktemp)
 trap 'rm -f "$pr_body_file"' EXIT
 if [ -n "$pr_body" ]; then
   printf '%s\n' "$pr_body" > "$pr_body_file"
+  # The head the Summary describes: verify-and-merge refreshes the Summary when the head
+  # has moved past it (#3471). The comment is hidden on GitHub; squash-merge strips it.
+  printf '\n<!-- conductor-summary-head: %s -->\n' "$(git rev-parse HEAD)" >> "$pr_body_file"
   pr_args=(--base "$base" --body-file "$pr_body_file")
 else
   pr_args=(--fill --base "$base")
