@@ -33,8 +33,9 @@
 #                               Returns 0 for real and copy, 1 otherwise.
 #   branch_home_cleanup       — removes the copy (call it from an EXIT trap).
 #   real_schema_version       — prints the real database's schema_version, "none"
-#                               when there is no database; returns 1 when it can't
-#                               be read. Read-only.
+#                               when there is no database; when it can't be read,
+#                               prints why (sqlite3's first error line) and
+#                               returns 1. Read-only.
 #
 # The real database is $CONDUCTOR_DB_PATH when set and non-empty, else
 # ${CONDUCTOR_HOME:-$HOME/.conductor}/conductor.db, as conductor itself resolves it.
@@ -57,7 +58,8 @@ real_db_path() {
   fi
 }
 
-# real_schema_version — read-only; "none" when the database doesn't exist.
+# real_schema_version — read-only; "none" when the database doesn't exist. On
+# failure it prints the reason instead of a version.
 real_schema_version() {
   local db v
   db=$(real_db_path)
@@ -65,10 +67,19 @@ real_schema_version() {
     echo none
     return 0
   fi
-  command -v sqlite3 > /dev/null 2>&1 || return 1
-  v=$(sqlite3 -readonly "${db}" "SELECT value FROM _conductor_meta WHERE key = 'schema_version'" 2> /dev/null) || return 1
+  if ! command -v sqlite3 > /dev/null 2>&1; then
+    echo "sqlite3 is not installed"
+    return 1
+  fi
+  if ! v=$(sqlite3 -readonly "${db}" "SELECT value FROM _conductor_meta WHERE key = 'schema_version'" 2>&1); then
+    printf '%s\n' "${v}" | head -n 1
+    return 1
+  fi
   case "${v}" in
-    '' | *[!0-9]*) return 1 ;;
+    '' | *[!0-9]*)
+      echo "no numeric schema_version in _conductor_meta (got '${v}')"
+      return 1
+      ;;
   esac
   echo "${v}"
 }
@@ -92,11 +103,11 @@ throwaway_home() {
 
 # shellcheck disable=SC2034  # BRANCH_HOME_MODE/NOTE are read by the caller
 branch_home_setup() {
-  local real branch db
+  local real branch db err
   BRANCH_HOME_DIR=""
   if ! real=$(real_schema_version); then
     BRANCH_HOME_MODE=unknown
-    BRANCH_HOME_NOTE="could not read the schema version of the conductor database at $(real_db_path); not running this branch's build against it"
+    BRANCH_HOME_NOTE="could not read the schema version of the conductor database at $(real_db_path) (${real}); not running this branch's build against it"
     return 1
   fi
   if ! branch=$(branch_schema_version); then
@@ -122,15 +133,20 @@ branch_home_setup() {
   }
   # A plain connection: VACUUM INTO reads the source and writes only the new file
   # (under -readonly sqlite3 can't create the output).
-  if ! sqlite3 "${db}" "VACUUM INTO '${BRANCH_HOME_DIR}/conductor.db'" 2> /dev/null; then
+  if ! err=$(sqlite3 "${db}" "VACUUM INTO '${BRANCH_HOME_DIR}/conductor.db'" 2>&1 > /dev/null); then
     branch_home_cleanup
     BRANCH_HOME_MODE=unknown
-    BRANCH_HOME_NOTE="could not copy the conductor database at ${db}; not running this branch's build (schema ${branch}) against it (schema ${real})"
+    BRANCH_HOME_NOTE="could not copy the conductor database at ${db} ($(printf '%s\n' "${err}" | head -n 1)); not running this branch's build (schema ${branch}) against it (schema ${real})"
     return 1
   fi
   local cfg
   cfg="${CONDUCTOR_HOME:-${HOME}/.conductor}/config.toml"
-  [ -f "${cfg}" ] && cp "${cfg}" "${BRANCH_HOME_DIR}/config.toml"
+  if [ -f "${cfg}" ] && ! err=$(cp "${cfg}" "${BRANCH_HOME_DIR}/config.toml" 2>&1); then
+    branch_home_cleanup
+    BRANCH_HOME_MODE=unknown
+    BRANCH_HOME_NOTE="could not copy ${cfg} next to the database copy (${err}); not running this branch's build"
+    return 1
+  fi
   export CONDUCTOR_HOME="${BRANCH_HOME_DIR}"
   unset CONDUCTOR_DB_PATH
   BRANCH_HOME_MODE=copy

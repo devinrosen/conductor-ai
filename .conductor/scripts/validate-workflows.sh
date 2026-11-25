@@ -32,8 +32,15 @@ emit() {
 }
 
 log=$(mktemp)
-validate_home=$(throwaway_home)
-trap 'rm -f "${log}"; rm -rf "${validate_home}"' EXIT
+validate_home=""
+trap 'rm -f "${log}"; [ -z "${validate_home}" ] || rm -rf "${validate_home}"' EXIT
+if ! validate_home=$(throwaway_home) || [ -z "${validate_home}" ]; then
+  # Never fall back to the real home: fail closed, on a file in the diff when there is one.
+  file=$(git diff --name-only "origin/${BASE_BRANCH:-main}...HEAD" 2>/dev/null | grep -E '^(\.conductor/|conductor-core/templates/)' | head -n 1)
+  emit false "Workflow validation could not run: no throwaway CONDUCTOR_HOME." \
+    "$(jq -cn --arg file "${file:-.conductor/workflows}" '[{file: $file, line: 1, severity: "critical", message: "could not create a throwaway CONDUCTOR_HOME (mktemp failed), so the validator was not run; it must never run against the real database"}]')"
+  exit 0
+fi
 
 status=0
 CONDUCTOR_HOME="${validate_home}" CONDUCTOR_DB_PATH="" \

@@ -80,6 +80,7 @@ home=$(scratch_dir)
 echo "not a database" > "$home/conductor.db"
 setup "$home" "$(make_checkout 89)"
 assert_eq "1|unknown|$home" "$(field 1)|$(field 2)|$(field 3)" "rc|mode|home"
+case "$(note)" in *"not a database"*) ;; *) fail "note lacks sqlite3's error: $(note)" ;; esac
 
 case_begin "an unparseable migrations.rs is unknown"
 home=$(make_home 89)
@@ -93,6 +94,15 @@ setup "$(scratch_dir)" "$(make_checkout 90)"
 assert_eq "0|real" "$(field 1)|$(field 2)" "no database"
 setup "$(make_home 89)" "$(make_checkout "")"
 assert_eq "0|real" "$(field 1)|$(field 2)" "no migrations.rs"
+
+case_begin "a config.toml that can't be copied is unknown, and the copy is removed"
+home=$(make_home 89)
+chmod 000 "$home/config.toml"
+setup "$home" "$(make_checkout 90)"
+chmod 644 "$home/config.toml"
+assert_eq "1|unknown|$home" "$(field 1)|$(field 2)|$(field 3)" "rc|mode|home"
+case "$(note)" in *"config.toml"*) ;; *) fail "note: $(note)" ;; esac
+assert_eq "" "$(cat "$CLEANUP_LIST")" "copy dir left behind"
 
 case_begin "branch_home_cleanup removes the copy"
 home=$(make_home 89)

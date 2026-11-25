@@ -151,8 +151,8 @@ trap 'rm -rf "${logs}"; [ -z "${validate_home}" ] || rm -rf "${validate_home}"' 
 # Tripwire: the real database's schema version before the checks (read-only).
 schema_before=""
 if ! schema_before=$(real_schema_version); then
+  echo "WARNING: could not read the schema version of $(real_db_path) (${schema_before}); the schema tripwire is off" >&2
   schema_before=""
-  echo "WARNING: could not read the schema version of $(real_db_path); the schema tripwire is off" >&2
 fi
 
 # first_errors LOG — the first compiler or clippy errors, else the log's tail.
@@ -220,8 +220,10 @@ fi
 if [ "${validate_pipeline}" -eq 1 ]; then
   if [ "${build_ok}" -eq 0 ]; then
     record "conductor workflow validate" skipped "not run: cargo build failed"
-  elif validate_home=$(throwaway_home) \
-    && CONDUCTOR_HOME="${validate_home}" CONDUCTOR_DB_PATH="" cargo run -q --bin conductor -- workflow validate --all --templates --path . > "${logs}/validate.log" 2>&1; then
+  elif ! validate_home=$(throwaway_home) || [ -z "${validate_home}" ]; then
+    validate_home=""
+    record "conductor workflow validate" fail "could not create a throwaway CONDUCTOR_HOME (mktemp failed); not running the branch build against the real database"
+  elif CONDUCTOR_HOME="${validate_home}" CONDUCTOR_DB_PATH="" cargo run -q --bin conductor -- workflow validate --all --templates --path . > "${logs}/validate.log" 2>&1; then
     record "conductor workflow validate" pass "$(tail -n 1 "${logs}/validate.log")"
   else
     record "conductor workflow validate" fail "workflow or template validation failed" "$(grep -E '^(FAIL|\s*✗)' "${logs}/validate.log" | head -n 40)"

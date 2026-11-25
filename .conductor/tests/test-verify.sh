@@ -167,8 +167,12 @@ home=$(scratch_conductor_home 89)
 run_script verify.sh FEATURE_BASE_BRANCH=main CONDUCTOR_HOME="$home" CONDUCTOR_DB_PATH="$home/conductor.db"
 assert_jq '[.checks[] | select(.name == "conductor workflow validate") | .status][0] == "pass"'
 vhome=$(cut -d'|' -f1 < "$STUB_DIR/validate_env")
-assert_eq "|" "$( [ -n "$vhome" ] && [ "$vhome" != "$home" ] && echo)|$(cut -d'|' -f2 < "$STUB_DIR/validate_env")" "throwaway home|empty db path"
-[ ! -e "$vhome" ] || fail "the throwaway home was not removed: $vhome"
+if [ -z "$vhome" ] || [ "$vhome" = "$home" ]; then
+  fail "validate ran in '$vhome', not a throwaway home"
+elif [ -e "$vhome" ]; then
+  fail "the throwaway home was not removed: $vhome"
+fi
+assert_eq "" "$(cut -d'|' -f2 < "$STUB_DIR/validate_env")" "CONDUCTOR_DB_PATH for validate"
 
 case_begin "tripwire: verify fails when the real schema changes during the run"
 new_repo "$PASSING"
@@ -186,5 +190,31 @@ commit_file "$repo" .conductor/scripts/foo.sh "echo hi" change
 run_script verify.sh FEATURE_BASE_BRANCH=main CONDUCTOR_HOME="$(scratch_conductor_home 89)"
 assert_no_markers
 assert_jq '[.checks[] | select(.name == "conductor database schema")] | length == 0'
+
+# mktemp that fails for the throwaway home only (lib-branch-home.sh's template).
+MKTEMP_DIR=$(scratch_dir)
+cat > "$MKTEMP_DIR/mktemp" <<'STUB'
+#!/usr/bin/env bash
+case "$*" in *conductor-home*) echo "mktemp: stub failure" >&2; exit 1 ;; esac
+exec /usr/bin/mktemp "$@"
+STUB
+chmod +x "$MKTEMP_DIR/mktemp"
+
+case_begin "verify: no throwaway home fails validate with the cause and never runs it"
+new_repo "$PASSING"
+commit_file "$repo" .conductor/workflows/x.wf "workflow x {}" change
+run_script verify.sh FEATURE_BASE_BRANCH=main PATH="$MKTEMP_DIR:$PATH"
+assert_marker has_failures
+assert_jq '[.checks[] | select(.name == "conductor workflow validate")][0] | .status == "fail" and (.summary | contains("throwaway CONDUCTOR_HOME"))'
+[ ! -e "$STUB_DIR/validate_env" ] || fail "validate ran without a throwaway home"
+
+case_begin "validate-workflows: no throwaway home is a blocking finding, and cargo is not run"
+new_repo "$PASSING"
+commit_file "$repo" .conductor/workflows/x.wf "workflow x {}" change
+run_script validate-workflows.sh BASE_BRANCH=main PATH="$MKTEMP_DIR:$PATH"
+assert_exit 0
+assert_marker has_review_issues
+assert_jq '.approved == false and (.findings[0].message | contains("throwaway CONDUCTOR_HOME"))'
+[ ! -e "$STUB_DIR/calls" ] || fail "cargo was called: $(cat "$STUB_DIR/calls")"
 
 finish
