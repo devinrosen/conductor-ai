@@ -332,8 +332,8 @@ fn validate(command: WorkflowCommands, conn: Option<&Connection>, config: &Confi
         );
     } else {
         let cwd = std::env::current_dir()?;
-        let (wt_path, repo_path, target) = resolve_dir_target(conn, config, &cwd)?
-            .ok_or_else(|| {
+        let (wt_path, repo_path, target) =
+            resolve_dir_target(conn, config, &cwd)?.ok_or_else(|| {
                 anyhow::anyhow!(
                     "Could not detect a registered repo or worktree from the current \
                      directory. Run from inside a registered repo's checkout or a \
@@ -491,8 +491,7 @@ fn validate(command: WorkflowCommands, conn: Option<&Connection>, config: &Confi
                         .collect::<Vec<_>>()
                         .join("; "),
                 );
-                report.warnings =
-                    entry.warnings.iter().map(|w| w.message.clone()).collect();
+                report.warnings = entry.warnings.iter().map(|w| w.message.clone()).collect();
                 report
             } else if target.is_repo_level() && !wf.targets.iter().any(|t| t == "repo") {
                 let reason = format!(
@@ -562,7 +561,6 @@ pub fn handle_static_validate(command: WorkflowCommands) -> Result<()> {
     crate::helpers::check_prerequisites();
     validate(command, conn.as_ref(), &config)
 }
-
 
 pub fn handle_workflow(
     command: WorkflowCommands,
@@ -2021,7 +2019,10 @@ mod script_dirs_tests {
         );
         assert_eq!(
             template_script_dirs(None, &config, "/tmp/sd-wt/feat-x".into()),
-            ("/tmp/sd-wt/feat-x".to_string(), "/tmp/sd-wt/feat-x".to_string())
+            (
+                "/tmp/sd-wt/feat-x".to_string(),
+                "/tmp/sd-wt/feat-x".to_string()
+            )
         );
     }
 }

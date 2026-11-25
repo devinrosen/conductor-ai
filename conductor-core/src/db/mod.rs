@@ -401,9 +401,7 @@ mod read_only_tests {
         let conn = open_database_read_only(&path).unwrap().unwrap();
         conn.query_row("SELECT COUNT(*) FROM repos", [], |r| r.get::<_, i64>(0))
             .unwrap();
-        assert!(conn
-            .execute("DELETE FROM _conductor_meta", [])
-            .is_err());
+        assert!(conn.execute("DELETE FROM _conductor_meta", []).is_err());
     }
 
     #[test]
