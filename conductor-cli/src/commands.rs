@@ -407,7 +407,7 @@ pub enum WorkflowCommands {
         /// Worktree slug, branch or path (optional; auto-detected from CWD when omitted)
         worktree: Option<String>,
         /// Directory to validate against: inside a registered worktree or repo checkout it
-        /// resolves to that target; any other directory is used as-is without the database
+        /// resolves to that target; any other directory, or any directory when no database is available, is used as-is
         #[arg(long, conflicts_with_all = &["repo", "worktree"])]
         path: Option<String>,
         /// Also validate the embedded workflow templates (.wft)

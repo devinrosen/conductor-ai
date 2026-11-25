@@ -62,10 +62,13 @@ impl ExecTarget {
 /// registered repo whose checkout contains it. Returns the workflow lookup
 /// paths `(wt_path, repo_path)` and the target. `None` when `dir` is in neither.
 fn resolve_dir_target(
-    conn: &rusqlite::Connection,
+    conn: Option<&Connection>,
     config: &Config,
     dir: &std::path::Path,
 ) -> anyhow::Result<Option<(String, String, ExecTarget)>> {
+    let Some(conn) = conn else {
+        return Ok(None);
+    };
     let repo_mgr = RepoManager::new(conn, config);
     if let Some(wt) = WorktreeManager::new(conn, config).find_by_cwd(dir)? {
         let r = repo_mgr.get_by_id(&wt.repo_id)?;
@@ -83,7 +86,11 @@ fn resolve_dir_target(
 /// checkout second; otherwise `dir` is used as-is. A failed lookup also falls
 /// back to `dir`, with a warning, so the user knows why a variable may be
 /// reported as unknown.
-fn template_script_dirs(conn: &Connection, config: &Config, dir: String) -> (String, String) {
+fn template_script_dirs(
+    conn: Option<&Connection>,
+    config: &Config,
+    dir: String,
+) -> (String, String) {
     let lookup = std::path::absolute(&dir)
         .map_err(anyhow::Error::from)
         .and_then(|abs| resolve_dir_target(conn, config, &abs))
@@ -227,6 +234,334 @@ fn launch_detached(config: &Config, notify_fd: i32) -> Result<()> {
 
 use crate::commands::WorkflowCommands;
 use crate::helpers::{report_workflow_result, truncate_str};
+
+/// `workflow validate`. `conn` is `None` for a static validate with no usable
+/// database (#3470); `--dry-run` always has one.
+fn validate(command: WorkflowCommands, conn: Option<&Connection>, config: &Config) -> Result<()> {
+    let WorkflowCommands::Validate {
+        repo,
+        worktree,
+        name,
+        all,
+        path,
+        templates,
+        dry_run,
+        inputs,
+        json,
+    } = command
+    else {
+        unreachable!("validate is only called with WorkflowCommands::Validate");
+    };
+    if !all && name.is_none() && !templates {
+        anyhow::bail!(
+            "either <NAME>, --all or --templates must be provided. \
+             Use --all to validate every workflow."
+        );
+    }
+    // `--templates` alone checks only the embedded templates: no repo
+    // or worktree to resolve.
+    let templates_only = templates && !all && name.is_none();
+    if dry_run && templates_only {
+        anyhow::bail!(
+            "--dry-run starts a workflow, and templates can't be started. \
+             Pass <NAME> or --all."
+        );
+    }
+
+    // Where a smoke run executes (only set when --dry-run resolves one).
+    let mut smoke_target: Option<ExecTarget> = None;
+
+    let (wt_path, repo_path) = if templates_only {
+        let dir = path.clone().unwrap_or_else(|| ".".to_string());
+        template_script_dirs(conn, config, dir)
+    } else if let Some(ref dir) = path {
+        let abs = std::path::absolute(dir)?;
+        // A static validate must not fail on a database it only reads
+        // optionally: warn and use the directory as-is.
+        let found = match resolve_dir_target(conn, config, &abs) {
+            Ok(found) => found,
+            Err(e) if !dry_run => {
+                eprintln!(
+                    "warning: could not resolve {dir} as a registered worktree, \
+                     using it as-is: {e}"
+                );
+                None
+            }
+            Err(e) => return Err(e),
+        };
+        if let Some((wt_path, repo_path, target)) = found {
+            smoke_target = Some(target);
+            (wt_path, repo_path)
+        } else {
+            // Unregistered directory: used as-is, no database ids.
+            smoke_target = Some(ExecTarget {
+                worktree_id: None,
+                working_dir: dir.clone(),
+                repo_path: dir.clone(),
+                ticket_id: None,
+                repo_id: None,
+                target_label: Some(dir.clone()),
+            });
+            (dir.clone(), dir.clone())
+        }
+    } else if repo.is_some() && worktree.is_some() {
+        let Some(conn) = conn else {
+            anyhow::bail!(
+                "looking up <repo> <worktree> needs the conductor database, which was not \
+                 found or not readable at {}; pass --path <dir> instead.",
+                conductor_core::config::db_path().display()
+            );
+        };
+        let repo_mgr = RepoManager::new(conn, config);
+        // SAFETY: guarded by `repo.is_some()` above
+        let r = repo_mgr.get_by_slug(repo.as_deref().unwrap())?;
+        let wt_mgr = WorktreeManager::new(conn, config);
+        // SAFETY: guarded by `worktree.is_some()` above
+        let wt = wt_mgr.get_by_slug_or_branch(&r.id, worktree.as_deref().unwrap())?;
+        smoke_target = Some(ExecTarget::for_worktree(&wt, &r));
+        (wt.path, r.local_path)
+    } else if repo.is_some() || worktree.is_some() {
+        anyhow::bail!(
+            "--repo and --worktree must be supplied together; \
+             got only {}. Pass both or omit both to auto-detect from CWD.",
+            if repo.is_some() {
+                "--repo"
+            } else {
+                "--worktree"
+            }
+        );
+    } else {
+        let cwd = std::env::current_dir()?;
+        let (wt_path, repo_path, target) =
+            resolve_dir_target(conn, config, &cwd)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Could not detect a registered repo or worktree from the current \
+                     directory. Run from inside a registered repo's checkout or a \
+                     conductor worktree, pass <repo> <worktree>, or pass --path <dir>.{}",
+                    if conn.is_none() {
+                        " (The conductor database was not available.)"
+                    } else {
+                        ""
+                    }
+                )
+            })?;
+        smoke_target = Some(target);
+        (wt_path, repo_path)
+    };
+
+    // Collect workflows to validate.
+    let workflows: Vec<conductor_core::workflow::WorkflowDef>;
+    let mut parse_errors: Vec<String> = Vec::new();
+    let mut parse_error_pairs: Vec<(String, String)> = Vec::new();
+
+    if templates_only {
+        workflows = Vec::new();
+    } else if all {
+        let (defs, warnings) = conductor_core::workflow::list_defs(&wt_path, &repo_path)?;
+        for w in &warnings {
+            parse_errors.push(format!("{}: {}", w.file, w.message));
+            parse_error_pairs.push((w.file.clone(), w.message.clone()));
+        }
+        workflows = defs;
+        if workflows.is_empty() && parse_errors.is_empty() && !templates {
+            if !json {
+                println!("No workflow files found.");
+            }
+            return Ok(());
+        }
+    } else {
+        // SAFETY: the `!all && name.is_none()` guard above ensures `name` is `Some` here.
+        let wf_name = name
+            .as_deref()
+            .expect("name must be Some when --all is not set");
+        match conductor_core::workflow::load_def_by_name(&wt_path, &repo_path, wf_name) {
+            Ok(def) => workflows = vec![def],
+            Err(e) if json => {
+                // A named target that can't load is still one report.
+                print_smoke_json(&SmokeReport::failed(wf_name, e.to_string()));
+                std::process::exit(1);
+            }
+            Err(e) => return Err(e.into()),
+        }
+    };
+
+    let known_bots: std::collections::HashSet<String> =
+        config.github.apps.keys().cloned().collect();
+    let wt_ref = wt_path.clone();
+    let repo_ref = repo_path.clone();
+    // TODO(#2349-followup): replace with DirectoryWorkflowResolver from runkon-flow once
+    // conductor-core re-exports runkon_flow::dsl::WorkflowDef (currently the two types are
+    // structurally identical but distinct Rust types — a From impl or re-export is required
+    // before validate_workflows_batch can accept the runkon-flow resolver directly).
+    let loader = |name: &str| {
+        conductor_core::workflow::load_def_by_name(&wt_ref, &repo_ref, name)
+            .map_err(|e| e.to_string())
+    };
+    let result = conductor_core::workflow::validate_workflows_batch(
+        &workflows,
+        &parse_errors,
+        &wt_path,
+        &repo_path,
+        &known_bots,
+        &loader,
+    );
+
+    let mut results = vec![result];
+    if templates {
+        results.push(conductor_core::workflow::validate_template_sources(
+            &conductor_core::workflow_template::embedded_template_sources(),
+            &wt_path,
+            &repo_path,
+        ));
+    }
+
+    let mut total = 0;
+    let mut failed = 0;
+    for result in &results {
+        if json {
+            total += result.total();
+            failed += result.failed_count();
+            continue;
+        }
+        // Report parse failures first.
+        for err in &result.parse_errors {
+            println!("FAIL  {err}");
+        }
+
+        // Report per-workflow results.
+        for entry in &result.entries {
+            if entry.errors.is_empty() {
+                println!("PASS  {}", entry.name);
+            } else {
+                println!("FAIL  {}", entry.name);
+                for e in &entry.errors {
+                    println!("      \u{2717} {e}");
+                }
+            }
+            for w in &entry.warnings {
+                println!("      ~ warning: {}", w.message);
+            }
+        }
+        total += result.total();
+        failed += result.failed_count();
+    }
+
+    // Summary when validating multiple workflows.
+    if (all || templates) && !json {
+        println!("\n{}/{total} workflow(s) passed.", total - failed);
+    }
+
+    // Smoke-start each workflow that passed the static checks.
+    let mut smoke_failed = 0;
+    if dry_run {
+        let conn = conn.expect("--dry-run always opens the database");
+        let mut base_inputs = std::collections::HashMap::new();
+        for input_str in &inputs {
+            match input_str.split_once('=') {
+                Some((k, v)) => {
+                    base_inputs.insert(k.to_string(), v.to_string());
+                }
+                None => {
+                    anyhow::bail!("Invalid input format: '{input_str}'. Use key=value.")
+                }
+            }
+        }
+        let target = smoke_target
+            .clone()
+            .expect("--dry-run resolves a target unless templates-only");
+        if json {
+            for (file, message) in &parse_error_pairs {
+                print_smoke_json(&SmokeReport::failed(file, message.clone()));
+            }
+        } else {
+            println!();
+        }
+        for wf in &workflows {
+            let static_failure = static_failure_entry(&results[0], wf);
+            let report = if let Some(entry) = static_failure {
+                // Failed the static checks: no smoke.
+                if !json {
+                    continue;
+                }
+                let mut report = SmokeReport::failed(
+                    &wf.name,
+                    entry
+                        .errors
+                        .iter()
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                );
+                report.warnings = entry.warnings.iter().map(|w| w.message.clone()).collect();
+                report
+            } else if target.is_repo_level() && !wf.targets.iter().any(|t| t == "repo") {
+                let reason = format!(
+                    "targets {:?}; a smoke run needs a worktree: pass <repo> <worktree>, \
+                     or --path <worktree dir>",
+                    wf.targets
+                );
+                let status = if all {
+                    SmokeStatus::Skip
+                } else {
+                    SmokeStatus::Fail
+                };
+                let mut report = SmokeReport::new(&wf.name, status);
+                report.human_lines = vec![format!(
+                    "SMOKE {}  {}  {reason}",
+                    if all { "SKIP" } else { "FAIL" },
+                    wf.name
+                )];
+                report.error = Some(reason);
+                report
+            } else {
+                smoke_one(
+                    conn,
+                    config,
+                    wf,
+                    &target,
+                    &base_inputs,
+                    /* skip_unfillable */ all,
+                )
+            };
+            if report.status == SmokeStatus::Fail && static_failure.is_none() {
+                smoke_failed += 1;
+            }
+            if json {
+                print_smoke_json(&report);
+            } else {
+                for line in &report.human_lines {
+                    println!("{line}");
+                }
+            }
+        }
+    }
+
+    if failed > 0 || smoke_failed > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Static `workflow validate` (no `--dry-run`), dispatched from `main()` before
+/// `Conductor::open()` so a branch build never migrates the real database or
+/// runs workflow maintenance (#3470). The database is opened read-only, only
+/// when it exists and its schema isn't newer than this binary's.
+pub fn handle_static_validate(command: WorkflowCommands) -> Result<()> {
+    let config = conductor_core::config::load_config()?;
+    let db_path = conductor_core::config::db_path();
+    let conn = match conductor_core::db::open_database_read_only(&db_path) {
+        Ok(conn) => conn,
+        Err(e) => {
+            eprintln!(
+                "warning: not using the conductor database at {}: {e}",
+                db_path.display()
+            );
+            None
+        }
+    };
+    crate::helpers::check_prerequisites();
+    validate(command, conn.as_ref(), &config)
+}
 
 pub fn handle_workflow(
     command: WorkflowCommands,
@@ -807,281 +1142,7 @@ pub fn handle_workflow(
                 }
             }
         }
-        WorkflowCommands::Validate {
-            repo,
-            worktree,
-            name,
-            all,
-            path,
-            templates,
-            dry_run,
-            inputs,
-            json,
-        } => {
-            if !all && name.is_none() && !templates {
-                anyhow::bail!(
-                    "either <NAME>, --all or --templates must be provided. \
-                     Use --all to validate every workflow."
-                );
-            }
-            // `--templates` alone checks only the embedded templates: no repo
-            // or worktree to resolve.
-            let templates_only = templates && !all && name.is_none();
-            if dry_run && templates_only {
-                anyhow::bail!(
-                    "--dry-run starts a workflow, and templates can't be started. \
-                     Pass <NAME> or --all."
-                );
-            }
-
-            // Where a smoke run executes (only set when --dry-run resolves one).
-            let mut smoke_target: Option<ExecTarget> = None;
-
-            let (wt_path, repo_path) = if templates_only {
-                let dir = path.clone().unwrap_or_else(|| ".".to_string());
-                template_script_dirs(conn, config, dir)
-            } else if let Some(ref dir) = path {
-                let abs = std::path::absolute(dir)?;
-                if let Some((wt_path, repo_path, target)) = resolve_dir_target(conn, config, &abs)?
-                {
-                    smoke_target = Some(target);
-                    (wt_path, repo_path)
-                } else {
-                    // Unregistered directory: used as-is, no database ids.
-                    smoke_target = Some(ExecTarget {
-                        worktree_id: None,
-                        working_dir: dir.clone(),
-                        repo_path: dir.clone(),
-                        ticket_id: None,
-                        repo_id: None,
-                        target_label: Some(dir.clone()),
-                    });
-                    (dir.clone(), dir.clone())
-                }
-            } else if repo.is_some() && worktree.is_some() {
-                let repo_mgr = RepoManager::new(conn, config);
-                // SAFETY: guarded by `repo.is_some()` above
-                let r = repo_mgr.get_by_slug(repo.as_deref().unwrap())?;
-                let wt_mgr = WorktreeManager::new(conn, config);
-                // SAFETY: guarded by `worktree.is_some()` above
-                let wt = wt_mgr.get_by_slug_or_branch(&r.id, worktree.as_deref().unwrap())?;
-                smoke_target = Some(ExecTarget::for_worktree(&wt, &r));
-                (wt.path, r.local_path)
-            } else if repo.is_some() || worktree.is_some() {
-                anyhow::bail!(
-                    "--repo and --worktree must be supplied together; \
-                     got only {}. Pass both or omit both to auto-detect from CWD.",
-                    if repo.is_some() {
-                        "--repo"
-                    } else {
-                        "--worktree"
-                    }
-                );
-            } else {
-                let cwd = std::env::current_dir()?;
-                let (wt_path, repo_path, target) = resolve_dir_target(conn, config, &cwd)?
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Could not detect a registered repo or worktree from the current \
-                             directory. Run from inside a registered repo's checkout or a \
-                             conductor worktree, pass <repo> <worktree>, or pass --path <dir>."
-                        )
-                    })?;
-                smoke_target = Some(target);
-                (wt_path, repo_path)
-            };
-
-            // Collect workflows to validate.
-            let workflows: Vec<conductor_core::workflow::WorkflowDef>;
-            let mut parse_errors: Vec<String> = Vec::new();
-            let mut parse_error_pairs: Vec<(String, String)> = Vec::new();
-
-            if templates_only {
-                workflows = Vec::new();
-            } else if all {
-                let (defs, warnings) = conductor_core::workflow::list_defs(&wt_path, &repo_path)?;
-                for w in &warnings {
-                    parse_errors.push(format!("{}: {}", w.file, w.message));
-                    parse_error_pairs.push((w.file.clone(), w.message.clone()));
-                }
-                workflows = defs;
-                if workflows.is_empty() && parse_errors.is_empty() && !templates {
-                    if !json {
-                        println!("No workflow files found.");
-                    }
-                    return Ok(());
-                }
-            } else {
-                // SAFETY: the `!all && name.is_none()` guard above ensures `name` is `Some` here.
-                let wf_name = name
-                    .as_deref()
-                    .expect("name must be Some when --all is not set");
-                match conductor_core::workflow::load_def_by_name(&wt_path, &repo_path, wf_name) {
-                    Ok(def) => workflows = vec![def],
-                    Err(e) if json => {
-                        // A named target that can't load is still one report.
-                        print_smoke_json(&SmokeReport::failed(wf_name, e.to_string()));
-                        std::process::exit(1);
-                    }
-                    Err(e) => return Err(e.into()),
-                }
-            };
-
-            let known_bots: std::collections::HashSet<String> =
-                config.github.apps.keys().cloned().collect();
-            let wt_ref = wt_path.clone();
-            let repo_ref = repo_path.clone();
-            // TODO(#2349-followup): replace with DirectoryWorkflowResolver from runkon-flow once
-            // conductor-core re-exports runkon_flow::dsl::WorkflowDef (currently the two types are
-            // structurally identical but distinct Rust types — a From impl or re-export is required
-            // before validate_workflows_batch can accept the runkon-flow resolver directly).
-            let loader = |name: &str| {
-                conductor_core::workflow::load_def_by_name(&wt_ref, &repo_ref, name)
-                    .map_err(|e| e.to_string())
-            };
-            let result = conductor_core::workflow::validate_workflows_batch(
-                &workflows,
-                &parse_errors,
-                &wt_path,
-                &repo_path,
-                &known_bots,
-                &loader,
-            );
-
-            let mut results = vec![result];
-            if templates {
-                results.push(conductor_core::workflow::validate_template_sources(
-                    &conductor_core::workflow_template::embedded_template_sources(),
-                    &wt_path,
-                    &repo_path,
-                ));
-            }
-
-            let mut total = 0;
-            let mut failed = 0;
-            for result in &results {
-                if json {
-                    total += result.total();
-                    failed += result.failed_count();
-                    continue;
-                }
-                // Report parse failures first.
-                for err in &result.parse_errors {
-                    println!("FAIL  {err}");
-                }
-
-                // Report per-workflow results.
-                for entry in &result.entries {
-                    if entry.errors.is_empty() {
-                        println!("PASS  {}", entry.name);
-                    } else {
-                        println!("FAIL  {}", entry.name);
-                        for e in &entry.errors {
-                            println!("      \u{2717} {e}");
-                        }
-                    }
-                    for w in &entry.warnings {
-                        println!("      ~ warning: {}", w.message);
-                    }
-                }
-                total += result.total();
-                failed += result.failed_count();
-            }
-
-            // Summary when validating multiple workflows.
-            if (all || templates) && !json {
-                println!("\n{}/{total} workflow(s) passed.", total - failed);
-            }
-
-            // Smoke-start each workflow that passed the static checks.
-            let mut smoke_failed = 0;
-            if dry_run {
-                let mut base_inputs = std::collections::HashMap::new();
-                for input_str in &inputs {
-                    match input_str.split_once('=') {
-                        Some((k, v)) => {
-                            base_inputs.insert(k.to_string(), v.to_string());
-                        }
-                        None => {
-                            anyhow::bail!("Invalid input format: '{input_str}'. Use key=value.")
-                        }
-                    }
-                }
-                let target = smoke_target
-                    .clone()
-                    .expect("--dry-run resolves a target unless templates-only");
-                if json {
-                    for (file, message) in &parse_error_pairs {
-                        print_smoke_json(&SmokeReport::failed(file, message.clone()));
-                    }
-                } else {
-                    println!();
-                }
-                for wf in &workflows {
-                    let static_failure = static_failure_entry(&results[0], wf);
-                    let report = if let Some(entry) = static_failure {
-                        // Failed the static checks: no smoke.
-                        if !json {
-                            continue;
-                        }
-                        let mut report = SmokeReport::failed(
-                            &wf.name,
-                            entry
-                                .errors
-                                .iter()
-                                .map(|e| e.to_string())
-                                .collect::<Vec<_>>()
-                                .join("; "),
-                        );
-                        report.warnings =
-                            entry.warnings.iter().map(|w| w.message.clone()).collect();
-                        report
-                    } else if target.is_repo_level() && !wf.targets.iter().any(|t| t == "repo") {
-                        let reason = format!(
-                            "targets {:?}; a smoke run needs a worktree: pass <repo> <worktree>, \
-                             or --path <worktree dir>",
-                            wf.targets
-                        );
-                        let status = if all {
-                            SmokeStatus::Skip
-                        } else {
-                            SmokeStatus::Fail
-                        };
-                        let mut report = SmokeReport::new(&wf.name, status);
-                        report.human_lines = vec![format!(
-                            "SMOKE {}  {}  {reason}",
-                            if all { "SKIP" } else { "FAIL" },
-                            wf.name
-                        )];
-                        report.error = Some(reason);
-                        report
-                    } else {
-                        smoke_one(
-                            conn,
-                            config,
-                            wf,
-                            &target,
-                            &base_inputs,
-                            /* skip_unfillable */ all,
-                        )
-                    };
-                    if report.status == SmokeStatus::Fail && static_failure.is_none() {
-                        smoke_failed += 1;
-                    }
-                    if json {
-                        print_smoke_json(&report);
-                    } else {
-                        for line in &report.human_lines {
-                            println!("{line}");
-                        }
-                    }
-                }
-            }
-
-            if failed > 0 || smoke_failed > 0 {
-                std::process::exit(1);
-            }
-        }
+        cmd @ WorkflowCommands::Validate { .. } => validate(cmd, Some(conn), config)?,
         WorkflowCommands::Resume {
             id,
             from_step,
@@ -1950,12 +2011,19 @@ mod script_dirs_tests {
             "/tmp/sd-wt/feat-x",
         );
         assert_eq!(
-            template_script_dirs(&conn, &config, "/tmp/sd-wt/feat-x".into()),
+            template_script_dirs(Some(&conn), &config, "/tmp/sd-wt/feat-x".into()),
             ("/tmp/sd-wt/feat-x".to_string(), "/tmp/sd-main".to_string())
         );
         assert_eq!(
-            template_script_dirs(&conn, &config, "/tmp/sd-other".into()),
+            template_script_dirs(Some(&conn), &config, "/tmp/sd-other".into()),
             ("/tmp/sd-other".to_string(), "/tmp/sd-other".to_string())
+        );
+        assert_eq!(
+            template_script_dirs(None, &config, "/tmp/sd-wt/feat-x".into()),
+            (
+                "/tmp/sd-wt/feat-x".to_string(),
+                "/tmp/sd-wt/feat-x".to_string()
+            )
         );
     }
 }
