@@ -454,6 +454,7 @@ fn validate(command: WorkflowCommands, conn: Option<&Connection>, config: &Confi
     // Smoke-start each workflow that passed the static checks.
     let mut smoke_failed = 0;
     if dry_run {
+        let conn = conn.expect("--dry-run always opens the database");
         let mut base_inputs = std::collections::HashMap::new();
         for input_str in &inputs {
             match input_str.split_once('=') {
