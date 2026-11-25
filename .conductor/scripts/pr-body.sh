@@ -21,7 +21,8 @@
 #   ## Smokes          the last verify entry's `smokes` (#3453): each workflow whose dry-run smoke
 #                      verify ran (changed, or calling a changed child), its result and run ID.
 #                      A failing smoke is listed as FAIL, never dropped. Omitted when verify ran
-#                      no smokes (no .wf/.wft change)
+#                      no smokes (no .wf/.wft change). When the smokes ran against a copy of the
+#                      database (the branch adds a migration, #3469), a closing line says so
 #   ## Risks and open questions
 # PR_BODY_SECTION=smokes prints only the ## Smokes section (empty when there is none), for
 # update-pr-smokes.sh. Output is empty (exit 0) when there is no plan or implement summary, so the caller falls
@@ -113,6 +114,7 @@ printf '%s' "$contexts" | jq -r --arg section "$section" --argjson gate "$gate_r
                         elif .status == "skip" then "skipped, " + (.detail // "" | split("\n") | first // "")
                         else "FAIL" + (if ((.run_id // "") | length) > 0 then ", run `\(.run_id)`" else "" end) end )
                   ) | join("\n") )
+              + ( [$sm[] | .db_note // "" | select(length > 0)][0] // "" | if . == "" then "" else "\n\nRun against " + . + "." end )
             end
         end;
     def decisions($p):

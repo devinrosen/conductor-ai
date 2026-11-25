@@ -264,4 +264,12 @@ assert_stdout_not_contains "## Summary"
 body "$(contexts "$(entry verify PASS "$VERIFY_PASS")")" PR_BODY_SECTION=smokes
 assert_eq "" "$STDOUT" "section-only output without smokes"
 
+case_begin "smokes: a run against a database copy says so under the list (#3469)"
+COPYSM=$(printf '%s' "$SMOKES" | jq -c '.smokes |= map(. + {db_note: "a copy of the conductor database: this branch migrates it from schema 89 to 90"})')
+body "$(contexts "$(entry plan x "$PLAN")" "$(entry verify PASS "$COPYSM")")" PR_BODY_SECTION=smokes
+assert_stdout_contains '- `child` (changed): pass, run `01RUNCHILD`'
+assert_stdout_contains "Run against a copy of the conductor database: this branch migrates it from schema 89 to 90."
+body "$(contexts "$(entry plan x "$PLAN")" "$(entry verify PASS "$SMOKES")")" PR_BODY_SECTION=smokes
+assert_stdout_not_contains "Run against"
+
 finish

@@ -21,6 +21,13 @@
 # of each changed workflow and of each workflow that calls one. Anything else (.md,
 # frontend files) skips the checks.
 #
+# The branch build must not migrate the real conductor database (#3469): the static
+# validate runs in a throwaway CONDUCTOR_HOME, the smokes go through
+# lib-branch-home.sh (a copy when this branch adds a migration), and a tripwire reads
+# the real database's schema_version (read-only) before and after the checks. When it
+# changed, verify fails: every installed binary older than this branch now refuses
+# to open the database.
+#
 # Emits has_failures when any check failed or couldn't run, with a context
 # that names the failing checks, test names and the first compiler or clippy
 # errors (or the failing script test cases), which implement reads as its prior
@@ -37,6 +44,8 @@
 # sub-workflow would hide verify's markers behind the call's name, which the
 # callers' `if verify.has_failures` and fail-verify's resume guidance rely on.
 set -uo pipefail
+# shellcheck source=lib-branch-home.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib-branch-home.sh"
 
 base="${FEATURE_BASE_BRANCH:-main}"
 
@@ -136,7 +145,15 @@ else
 fi
 
 logs=$(mktemp -d)
-trap 'rm -rf "${logs}"' EXIT
+validate_home=""
+trap 'rm -rf "${logs}"; [ -z "${validate_home}" ] || rm -rf "${validate_home}"' EXIT
+
+# Tripwire: the real database's schema version before the checks (read-only).
+schema_before=""
+if ! schema_before=$(real_schema_version); then
+  echo "WARNING: could not read the schema version of $(real_db_path) (${schema_before}); the schema tripwire is off" >&2
+  schema_before=""
+fi
 
 # first_errors LOG — the first compiler or clippy errors, else the log's tail.
 first_errors() {
@@ -198,11 +215,15 @@ fi
 
 # --- conductor workflow validate ------------------------------------------------
 # Uses the conductor built above from this worktree, so a change to the
-# validator itself is checked by the new code.
+# validator itself is checked by the new code. Static checks need no data, so it
+# runs in a throwaway home (--templates resolves scripts from the worktree, #3455).
 if [ "${validate_pipeline}" -eq 1 ]; then
   if [ "${build_ok}" -eq 0 ]; then
     record "conductor workflow validate" skipped "not run: cargo build failed"
-  elif cargo run -q --bin conductor -- workflow validate --all --templates --path . > "${logs}/validate.log" 2>&1; then
+  elif ! validate_home=$(throwaway_home) || [ -z "${validate_home}" ]; then
+    validate_home=""
+    record "conductor workflow validate" fail "could not create a throwaway CONDUCTOR_HOME (mktemp failed); not running the branch build against the real database"
+  elif CONDUCTOR_HOME="${validate_home}" CONDUCTOR_DB_PATH="" cargo run -q --bin conductor -- workflow validate --all --templates --path . > "${logs}/validate.log" 2>&1; then
     record "conductor workflow validate" pass "$(tail -n 1 "${logs}/validate.log")"
   else
     record "conductor workflow validate" fail "workflow or template validation failed" "$(grep -E '^(FAIL|\s*✗)' "${logs}/validate.log" | head -n 40)"
@@ -266,6 +287,18 @@ if cargo fmt --all --check -- --color never > "${logs}/fmt.log" 2>&1; then
   record "cargo fmt" pass "ok"
 else
   record "cargo fmt" fail "cargo fmt --all --check failed after fmt-fix (rustfmt couldn't format the code, usually a parse error)" "$(head -n 30 "${logs}/fmt.log")"
+fi
+
+# --- schema tripwire -----------------------------------------------------------
+# Recorded only when it trips.
+if [ -n "${schema_before}" ]; then
+  if ! schema_after=$(real_schema_version); then
+    schema_after="unreadable"
+  fi
+  if [ "${schema_after}" != "${schema_before}" ]; then
+    record "conductor database schema" fail "the real conductor database went from schema ${schema_before} to ${schema_after} during verify" \
+      "Something in this verify opened $(real_db_path) with this branch's build and migrated it. Every installed conductor older than this branch (the MCP server, TUI, web, and the conductor that running workflows' script steps call) now refuses to open it. Find the caller that ran without a throwaway home or lib-branch-home.sh, and tell the user: they must install this branch's build or restore the database."
+  fi
 fi
 
 if [ "${failed}" -eq 0 ]; then

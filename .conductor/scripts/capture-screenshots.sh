@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
+# capture-screenshots.sh — mobile-ux-audit's screenshots of conductor-web, built from
+# this checkout, showing the real repos and runs. When this branch adds a migration the
+# real database doesn't have, conductor-web runs on a copy of it (lib-branch-home.sh,
+# #3469), so the branch build never migrates the real database.
 set -euo pipefail
+# shellcheck source=lib-branch-home.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib-branch-home.sh"
 
 PORT=3000
 SCREENSHOT_DIR="conductor-web/frontend/e2e/screenshots/$(date +%Y-%m-%d)"
@@ -11,8 +17,17 @@ cleanup() {
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
   fi
+  branch_home_cleanup
 }
 trap cleanup EXIT
+
+if ! branch_home_setup; then
+  echo "ERROR: ${BRANCH_HOME_NOTE}"
+  jq -cn --arg c "Failed: ${BRANCH_HOME_NOTE}" '{markers: [], context: $c}' \
+    | { echo "<<<FLOW_OUTPUT>>>"; cat; echo "<<<END_FLOW_OUTPUT>>>"; }
+  exit 1
+fi
+echo "conductor-web database: ${BRANCH_HOME_NOTE}"
 
 mkdir -p "$SCREENSHOT_DIR"
 

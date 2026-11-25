@@ -108,6 +108,8 @@ export SMOKE_STUB_DIR="$STUB_DIR"
 cat > "$STUB_DIR/conductor" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "$SMOKE_STUB_DIR/calls"
+echo "${CONDUCTOR_HOME:-}|${CONDUCTOR_DB_PATH-unset}" > "$SMOKE_STUB_DIR/env"
+[ -f "$CONDUCTOR_HOME/conductor.db" ] && sqlite3 -readonly "$CONDUCTOR_HOME/conductor.db" "SELECT v FROM marker" > "$SMOKE_STUB_DIR/marker"
 name="$3"
 [ -f "$SMOKE_STUB_DIR/drain" ] && cat > /dev/null
 if [ -f "$SMOKE_STUB_DIR/$name.out" ]; then cat "$SMOKE_STUB_DIR/$name.out"; else
@@ -120,7 +122,7 @@ chmod +x "$STUB_DIR/conductor"
 
 # stub_reset — forget calls and canned output from the previous case.
 stub_reset() {
-  find "$STUB_DIR" -maxdepth 1 \( -name calls -o -name drain -o -name '*.out' -o -name '*.rc' \) -type f -delete
+  find "$STUB_DIR" -maxdepth 1 \( -name calls -o -name drain -o -name env -o -name marker -o -name '*.out' -o -name '*.rc' \) -type f -delete
 }
 
 # stub_result WORKFLOW RC LINE — canned conductor output and exit code for one workflow.
@@ -206,6 +208,64 @@ assert_exit 0
 smokes_jq '.smokes | length == 2 and all(.status == "pass")'
 assert_eq "workflow validate child --dry-run --path .
 workflow validate parent --dry-run --path ." "$(cat "$STUB_DIR/calls")" "conductor calls"
+
+# --- the real database (#3469) ------------------------------------------------------
+# smoke_home HOME PATH... — like smoke, with CONDUCTOR_HOME set to HOME.
+smoke_home() {
+  local h="$1"
+  shift
+  STDOUT=$(printf '%s\n' "$@" | CONDUCTOR_HOME="$h" SMOKE_CONDUCTOR="$STUB_DIR/conductor" bash "$SCRIPTS/smoke-workflows.sh" 2>/dev/null)
+  EXIT=$?
+}
+# with_schema N — commit a migrations.rs declaring LATEST_SCHEMA_VERSION = N to $repo.
+with_schema() {
+  commit_file "$repo" conductor-core/src/db/migrations.rs "pub const LATEST_SCHEMA_VERSION: u32 = $1;" schema
+}
+
+case_begin "same schema: smokes run on the real home with no db_note"
+new_repo
+stub_reset
+with_schema 89
+home=$(scratch_conductor_home 89)
+smoke_home "$home" .conductor/workflows/child-x.wf
+assert_exit 0
+assert_eq "$home|unset" "$(cat "$STUB_DIR/env")" "conductor env"
+smokes_jq '.smokes | length == 2 and all(.status == "pass") and all(has("db_note") | not)'
+
+case_begin "branch adds a migration: smokes run on a copy, say so, and the real database is untouched"
+new_repo
+stub_reset
+with_schema 90
+home=$(scratch_conductor_home 89)
+before=$(cksum < "$home/conductor.db")
+smoke_home "$home" .conductor/workflows/child-x.wf
+assert_exit 0
+env_home=$(cut -d'|' -f1 < "$STUB_DIR/env")
+[ "$env_home" != "$home" ] || fail "the smoke ran on the real home"
+assert_eq "real-data" "$(cat "$STUB_DIR/marker" 2>/dev/null)" "copy holds the real data"
+[ ! -e "$env_home" ] || fail "the copy was not removed: $env_home"
+assert_eq "$before" "$(cksum < "$home/conductor.db")" "real database bytes"
+smokes_jq '.smokes | length == 2 and all(.status == "pass") and all(.db_note | contains("89 to 90"))'
+
+case_begin "real database newer than the branch: every smoke skipped with the reason, no call"
+new_repo
+stub_reset
+with_schema 88
+smoke_home "$(scratch_conductor_home 89)" .conductor/workflows/child-x.wf
+assert_exit 0
+smokes_jq '.smokes | length == 2 and all(.status == "skip") and all(.detail | contains("merge the base"))'
+[ ! -e "$STUB_DIR/calls" ] || fail "conductor was called against a newer database"
+
+case_begin "unreadable database: every smoke skipped, no call"
+new_repo
+stub_reset
+with_schema 89
+home=$(scratch_dir)
+echo junk > "$home/conductor.db"
+smoke_home "$home" .conductor/workflows/child.wf
+assert_exit 0
+smokes_jq '.smokes | length == 2 and all(.status == "skip") and all(.detail | contains("could not read"))'
+[ ! -e "$STUB_DIR/calls" ] || fail "conductor was called against an unreadable database"
 
 # --- update-pr-smokes.sh ------------------------------------------------------------
 GH_DIR=$(scratch_dir)
