@@ -1527,6 +1527,157 @@ fn workflow_validate_dry_run_all_exits_nonzero_when_one_workflow_fails() {
         .stdout(predicate::str::contains("bogus_gate"));
 }
 
+/// Every stdout line must be a JSON object: proves no human text leaks into `--json`.
+fn json_lines(stdout: &[u8]) -> Vec<serde_json::Value> {
+    let text = String::from_utf8_lossy(stdout);
+    text.lines()
+        .map(|l| {
+            let v: serde_json::Value = serde_json::from_str(l)
+                .unwrap_or_else(|e| panic!("stdout line is not JSON ({e}): {l:?}"));
+            assert!(v.is_object(), "{l}");
+            v
+        })
+        .collect()
+}
+
+fn find_report<'a>(reports: &'a [serde_json::Value], name: &str) -> &'a serde_json::Value {
+    reports
+        .iter()
+        .find(|r| r["workflow"] == name)
+        .unwrap_or_else(|| panic!("no report for {name}: {reports:?}"))
+}
+
+#[test]
+fn workflow_validate_dry_run_json_named_pass() {
+    let dir = setup_smoke_fixture(
+        "  script quiet {\n    run = \".conductor/scripts/quiet.sh\"\n  }\n  call some-agent\n",
+    );
+    let out = conductor_cmd(dir.path())
+        .args(smoke_args(&dir, &["smoke", "--dry-run", "--json"]))
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let reports = json_lines(&out.stdout);
+    assert_eq!(reports.len(), 1);
+    let r = &reports[0];
+    assert_eq!(r["workflow"], "smoke");
+    assert_eq!(r["status"], "pass");
+    assert!(r["run_id"].is_string(), "{r}");
+    assert_eq!(r["stopped_at"]["workflow"], "smoke");
+    assert_eq!(r["stopped_at"]["step"], "some-agent");
+    assert_eq!(r["stopped_at"]["kind"], "agent");
+    assert_eq!(r["warnings"], serde_json::json!([]));
+    assert!(r["error"].is_null());
+    assert_eq!(r["missing_inputs"], serde_json::json!([]));
+}
+
+#[test]
+fn workflow_validate_dry_run_json_named_fail() {
+    let dir = setup_smoke_fixture(
+        "  gate bogus_gate {\n    prompt = \"ok?\"\n    timeout = \"1h\"\n    on_timeout = fail\n  }\n",
+    );
+    let out = conductor_cmd(dir.path())
+        .args(smoke_args(&dir, &["smoke", "--dry-run", "--json"]))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let reports = json_lines(&out.stdout);
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0]["status"], "fail");
+    assert!(reports[0]["error"].as_str().unwrap().contains("bogus_gate"));
+    assert!(reports[0]["run_id"].is_null());
+}
+
+#[test]
+fn workflow_validate_dry_run_json_named_missing_input_is_a_failure_with_the_input_listed() {
+    let dir = setup_smoke_fixture("  inputs {\n    target required\n  }\n  call some-agent\n");
+    let out = conductor_cmd(dir.path())
+        .args(smoke_args(&dir, &["smoke", "--dry-run", "--json"]))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let reports = json_lines(&out.stdout);
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0]["status"], "fail");
+    assert_eq!(reports[0]["missing_inputs"], serde_json::json!(["target"]));
+    assert!(reports[0]["error"]
+        .as_str()
+        .unwrap()
+        .contains("Missing required input"));
+}
+
+#[test]
+fn workflow_validate_dry_run_json_all_skips_a_missing_input() {
+    let dir = setup_smoke_fixture("  call some-agent\n");
+    add_smoke_workflow(
+        dir.path(),
+        "needs-input",
+        "  inputs {\n    x required\n  }\n",
+    );
+    let out = conductor_cmd(dir.path())
+        .args(smoke_args(&dir, &["--all", "--dry-run", "--json"]))
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let reports = json_lines(&out.stdout);
+    assert_eq!(reports.len(), 2);
+    let skipped = find_report(&reports, "needs-input");
+    assert_eq!(skipped["status"], "skip");
+    assert_eq!(skipped["missing_inputs"], serde_json::json!(["x"]));
+    assert_eq!(find_report(&reports, "smoke")["status"], "pass");
+}
+
+#[test]
+fn workflow_validate_dry_run_json_all_skips_a_worktree_workflow_from_the_main_checkout() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = setup_smoke_fixture("  call some-agent\n");
+    add_repo_targeted_workflow(repo.path(), "repo-wf");
+    register_repo_and_worktree_fixture(home.path(), repo.path(), None);
+    let out = conductor_cmd(home.path())
+        .current_dir(repo.path())
+        .args(["workflow", "validate", "--all", "--dry-run", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let reports = json_lines(&out.stdout);
+    let skipped = find_report(&reports, "smoke");
+    assert_eq!(skipped["status"], "skip");
+    assert!(skipped["error"]
+        .as_str()
+        .unwrap()
+        .contains("needs a worktree"));
+    assert_eq!(find_report(&reports, "repo-wf")["status"], "pass");
+}
+
+#[test]
+fn workflow_validate_dry_run_json_all_reports_a_static_failure() {
+    let dir = setup_smoke_fixture("  call some-agent\n");
+    add_smoke_workflow(
+        dir.path(),
+        "bad-gate",
+        "  gate bogus_gate {\n    prompt = \"ok?\"\n    timeout = \"1h\"\n    on_timeout = fail\n  }\n",
+    );
+    let out = conductor_cmd(dir.path())
+        .args(smoke_args(&dir, &["--all", "--dry-run", "--json"]))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let reports = json_lines(&out.stdout);
+    assert_eq!(reports.len(), 2);
+    assert_eq!(find_report(&reports, "smoke")["status"], "pass");
+    assert_eq!(find_report(&reports, "bad-gate")["status"], "fail");
+}
+
+#[test]
+fn workflow_validate_json_requires_dry_run() {
+    let dir = setup_smoke_fixture("  call some-agent\n");
+    conductor_cmd(dir.path())
+        .args(smoke_args(&dir, &["smoke", "--json"]))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--dry-run"));
+}
+
 #[test]
 fn notify_events_json_lists_every_event_with_fields() {
     let dir = tempfile::tempdir().unwrap();

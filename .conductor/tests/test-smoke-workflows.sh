@@ -102,7 +102,7 @@ assert_eq "real-name changed" "$STDOUT" "targets"
 
 # --- stub conductor -----------------------------------------------------------------
 # The stub logs its args and prints the contents of $SMOKE_STUB_DIR/<workflow>.out
-# (default: a pass line), exiting with <workflow>.rc (default 0).
+# (default: a JSON pass object), exiting with <workflow>.rc (default 0).
 STUB_DIR=$(scratch_dir)
 export SMOKE_STUB_DIR="$STUB_DIR"
 cat > "$STUB_DIR/conductor" <<'STUB'
@@ -113,7 +113,7 @@ echo "${CONDUCTOR_HOME:-}|${CONDUCTOR_DB_PATH-unset}" > "$SMOKE_STUB_DIR/env"
 name="$3"
 [ -f "$SMOKE_STUB_DIR/drain" ] && cat > /dev/null
 if [ -f "$SMOKE_STUB_DIR/$name.out" ]; then cat "$SMOKE_STUB_DIR/$name.out"; else
-  echo "SMOKE PASS  $name  stopped at agent step 'a'  (run 01RUN$name)"
+  echo "{\"workflow\":\"$name\",\"status\":\"pass\",\"run_id\":\"01RUN$name\",\"stopped_at\":{\"workflow\":\"$name\",\"step\":\"a\",\"kind\":\"agent\"},\"warnings\":[],\"error\":null,\"missing_inputs\":[]}"
 fi
 [ -f "$SMOKE_STUB_DIR/$name.rc" ] && exit "$(cat "$SMOKE_STUB_DIR/$name.rc")"
 exit 0
@@ -146,33 +146,67 @@ assert_exit 0
 smokes_jq '.smokes | length == 2'
 smokes_jq '.smokes[0] | .workflow == "child" and .reason == "changed" and .status == "pass" and .run_id == "01RUNchild"'
 smokes_jq '.smokes[1] | .workflow == "parent" and .reason == "calls child" and .status == "pass"'
-assert_eq "workflow validate child --dry-run --path .
-workflow validate parent --dry-run --path ." "$(cat "$STUB_DIR/calls")" "conductor calls"
+assert_eq "workflow validate child --dry-run --json --path .
+workflow validate parent --dry-run --json --path ." "$(cat "$STUB_DIR/calls")" "conductor calls"
 
 case_begin "a missing required input is a skip naming the input, not a failure"
 new_repo
 stub_reset
-stub_result parent 1 "SMOKE FAIL  parent  start: Missing required input: 'ticket_id' (no ticket linked)"
+stub_result parent 1 '{"workflow":"parent","status":"fail","run_id":null,"stopped_at":null,"warnings":[],"error":"Missing required input: '"'ticket_id'"' (no ticket linked)","missing_inputs":["ticket_id"]}'
 smoke .conductor/workflows/parent.wf
 assert_exit 0
 smokes_jq '.smokes[0] | .workflow == "parent" and .status == "skip" and (.detail | contains("ticket_id"))'
 
-case_begin "any other SMOKE FAIL fails the script and keeps the run ID and line"
+case_begin "any other failed status fails the script and keeps the run ID and error"
 new_repo
 stub_reset
-stub_result child 1 "SMOKE FAIL  child at step 's': boom  (run 01RUNBAD)"
+stub_result child 1 '{"workflow":"child","status":"fail","run_id":"01RUNBAD","stopped_at":{"workflow":"child","step":"s","kind":"failed"},"warnings":[],"error":"boom","missing_inputs":[]}'
 smoke .conductor/workflows/child.wf
 assert_exit 1
 smokes_jq '.smokes[0] | .status == "fail" and .run_id == "01RUNBAD" and (.detail | contains("boom"))'
 smokes_jq '.smokes[1].status == "pass"'
 
-case_begin "a non-zero exit with no SMOKE line (a static failure) fails"
+case_begin "a static failure object fails"
 new_repo
 stub_reset
-stub_result child 1 "FAIL  child: unknown agent"
+stub_result child 1 '{"workflow":"child","status":"fail","run_id":null,"stopped_at":null,"warnings":[],"error":"unknown agent","missing_inputs":[]}'
 smoke .conductor/workflows/child-x.wf .conductor/workflows/child.wf
 assert_exit 1
 smokes_jq '[.smokes[] | select(.workflow == "child")][0] | .status == "fail" and (.detail | contains("unknown agent"))'
+
+case_begin "output with no JSON fails and keeps the text"
+new_repo
+stub_reset
+stub_result child 1 "error: could not compile"
+smoke .conductor/workflows/child.wf
+assert_exit 1
+smokes_jq '.smokes[0] | .status == "fail" and (.detail | contains("could not compile"))'
+
+case_begin "a status skip object is a skip with its error as the detail"
+new_repo
+stub_reset
+stub_result child 0 '{"workflow":"child","status":"skip","run_id":null,"stopped_at":null,"warnings":[],"error":"needs a worktree","missing_inputs":[]}'
+smoke .conductor/workflows/child-x.wf
+assert_exit 0
+smokes_jq '[.smokes[] | select(.workflow == "child-x")][0] | .status == "pass"'
+smoke .conductor/workflows/child.wf
+smokes_jq '.smokes[0] | .status == "skip" and (.detail | contains("needs a worktree"))'
+
+case_begin "a pass with warnings puts them in the detail"
+new_repo
+stub_reset
+stub_result child 0 '{"workflow":"child","status":"pass","run_id":"01RUNW","stopped_at":null,"warnings":["env E uses input opt"],"error":null,"missing_inputs":[]}'
+smoke .conductor/workflows/child.wf
+assert_exit 0
+smokes_jq '.smokes[0] | .status == "pass" and .run_id == "01RUNW" and (.detail | contains("ran to completion") and contains("env E uses input opt"))'
+
+case_begin "a human SMOKE PASS line alone is not read: it fails"
+new_repo
+stub_reset
+stub_result child 0 "SMOKE PASS  child  stopped at agent step 'a'  (run 01RUNTXT)"
+smoke .conductor/workflows/child.wf
+assert_exit 1
+smokes_jq '.smokes[0] | .status == "fail"'
 
 case_begin "no pipeline change: empty list, exit 0, no conductor call"
 new_repo
@@ -189,7 +223,7 @@ commit_file "$repo" .conductor/workflows/analyze-ux.wf "workflow analyze-ux {
 }" ux
 smoke .conductor/workflows/analyze-ux.wf
 assert_exit 0
-assert_eq "workflow validate analyze-ux --dry-run --path . --input repo=conductor-ai" "$(cat "$STUB_DIR/calls")" "conductor calls"
+assert_eq "workflow validate analyze-ux --dry-run --json --path . --input repo=conductor-ai" "$(cat "$STUB_DIR/calls")" "conductor calls"
 
 case_begin "an orphan template is a named skip and makes no call"
 new_repo
@@ -206,8 +240,8 @@ touch "$STUB_DIR/drain"
 smoke .conductor/workflows/child.wf
 assert_exit 0
 smokes_jq '.smokes | length == 2 and all(.status == "pass")'
-assert_eq "workflow validate child --dry-run --path .
-workflow validate parent --dry-run --path ." "$(cat "$STUB_DIR/calls")" "conductor calls"
+assert_eq "workflow validate child --dry-run --json --path .
+workflow validate parent --dry-run --json --path ." "$(cat "$STUB_DIR/calls")" "conductor calls"
 
 # --- the real database (#3469) ------------------------------------------------------
 # smoke_home HOME PATH... — like smoke, with CONDUCTOR_HOME set to HOME.

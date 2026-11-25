@@ -15,9 +15,12 @@
 #     the same name; with none it is skipped by name (validate --templates covers it);
 #   - every workflow whose file has a `call workflow <name>` line for a changed one
 #     (direct callers only, whole-word match).
-# Each target runs `$SMOKE_CONDUCTOR workflow validate <name> --dry-run --path .`
+# Each target runs `$SMOKE_CONDUCTOR workflow validate <name> --dry-run --json --path .`
 # (default: cargo run -q --bin conductor --), from the current directory (the
-# worktree), plus the --input args from the table below.
+# worktree), plus the --input args from the table below. The result comes from the
+# JSON object the CLI prints ({workflow, status, run_id, stopped_at, warnings, error,
+# missing_inputs}) and nothing else: no `SMOKE` text is read. Output with no such
+# object (a build failure, a crash) is a failure.
 #
 # Output: one JSON object on stdout, {"smokes": [{workflow, reason, status, run_id,
 # detail}]}, status pass | fail | skip. A smoke whose required input has no value is
@@ -155,29 +158,35 @@ while IFS="	" read -r name reason; do
   args=()
   extra=$(extra_inputs "$name")
   for kv in $extra; do args+=(--input "$kv"); done
-  out=$(${smoke_cmd} workflow validate "$name" --dry-run --path . ${args[@]+"${args[@]}"} 2>&1 < /dev/null)
+  errf=$(mktemp)
+  out=$(${smoke_cmd} workflow validate "$name" --dry-run --json --path . ${args[@]+"${args[@]}"} 2>"$errf" < /dev/null)
   rc=$?
-  run_id=$(printf '%s\n' "$out" | grep -E '^SMOKE (PASS|FAIL)' | sed -n -E 's/.*\(run ([0-9A-Za-z]+)\).*/\1/p' | head -n 1)
-  result_line=$(printf '%s\n' "$out" | grep -E '^SMOKE (PASS|FAIL|SKIP)  ' | head -n 1)
-  warns=$(printf '%s\n' "$out" | grep -E '^SMOKE WARN' || true)
-  case "$result_line" in
-    "SMOKE PASS"*)
-      add_result "$name" "$reason" pass "$run_id" "$(printf '%s\n%s' "${result_line#SMOKE PASS  }" "$warns" | sed '/^$/d')"
-      ;;
-    "SMOKE FAIL"*"Missing required input"*)
-      missing=$(printf '%s' "$result_line" | sed -n -E "s/.*Missing required input: '?([A-Za-z0-9_.-]+).*/\1/p")
-      add_result "$name" "$reason" skip "" "no value for required input ${missing:-?}"
-      ;;
-    "SMOKE SKIP"*)
-      add_result "$name" "$reason" skip "" "${result_line#SMOKE SKIP  }"
-      ;;
-    *)
-      any_failed=1
-      fail_lines=$(printf '%s\n' "$out" | grep -E '^(SMOKE FAIL|FAIL|[[:space:]]*✗)' | head -n 10)
-      [ -n "$fail_lines" ] || fail_lines=$(printf '%s\n' "$out" | tail -n 10)
-      add_result "$name" "$reason" fail "$run_id" "${fail_lines:-exit ${rc} with no output}"
-      ;;
-  esac
+  err=$(cat "$errf"); rm -f "$errf"
+  obj=$(printf '%s\n' "$out" | grep -E '^\{' | tail -n 1)
+  if [ -z "$obj" ] || ! jq -e 'type == "object" and has("status")' <<< "$obj" > /dev/null 2>&1; then
+    any_failed=1
+    tail_lines=$(printf '%s\n%s\n' "$err" "$out" | sed '/^$/d' | tail -n 10)
+    add_result "$name" "$reason" fail "" "${tail_lines:-exit ${rc} with no output}"
+    continue
+  fi
+  status=$(jq -r '.status' <<< "$obj")
+  run_id=$(jq -r '.run_id // ""' <<< "$obj")
+  missing=$(jq -r '(.missing_inputs // []) | join(", ")' <<< "$obj")
+  warns=$(jq -r '(.warnings // [])[]' <<< "$obj")
+  if [ -n "$missing" ]; then
+    add_result "$name" "$reason" skip "" "no value for required input ${missing}"
+  elif [ "$status" = pass ]; then
+    stop=$(jq -r 'if .stopped_at == null then "ran to completion, no agent step"
+      else "stopped at \(.stopped_at.kind) step \u0027\(.stopped_at.step)\u0027" + (if .stopped_at.workflow != .workflow then " in \u0027\(.stopped_at.workflow)\u0027" else "" end) end' <<< "$obj")
+    add_result "$name" "$reason" pass "$run_id" "$(printf '%s\n%s' "$stop" "$warns" | sed '/^$/d')"
+  elif [ "$status" = skip ]; then
+    add_result "$name" "$reason" skip "" "$(jq -r '.error // ""' <<< "$obj")"
+  else
+    any_failed=1
+    at=$(jq -r 'if .stopped_at.kind == "failed" then "at step \u0027\(.stopped_at.step)\u0027: " else "" end' <<< "$obj")
+    errtext=$(jq -r '.error // ""' <<< "$obj")
+    add_result "$name" "$reason" fail "$run_id" "$(printf '%s%s\n%s' "$at" "$errtext" "$warns" | sed '/^$/d')"
+  fi
 done <<< "$targets"
 
 jq -c -n --argjson smokes "$results" '{smokes: $smokes}'
