@@ -352,6 +352,7 @@ The scan takes each `{{` and the first `}}` after it as one placeholder, whateve
 
 `conductor workflow run <name> --dry-run`, or `conductor workflow validate --dry-run <name>` for a recorded smoke run.
 
+- A static `conductor workflow validate` (no `--dry-run`) opens the conductor database read-only, never migrates it and skips workflow maintenance; with no usable database it checks a `--path` directory as-is (#3470). `--dry-run` opens it normally.
 - Every gate except `quality_gate` is auto-approved and recorded Completed; `quality_gate` is still evaluated.
 - Every script step is skipped and recorded as success with no markers or exports.
 - A `call` with `can_commit = true` is told not to commit or push; `{{dry_run}}` is `"true"` for agents; a script sees `DRY_RUN` only through its `env`.
