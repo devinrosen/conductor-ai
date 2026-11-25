@@ -13,8 +13,13 @@
 # the PR touches it, else the first changed pipeline file), so submit-review's
 # off-diff filter keeps it.
 #
+# The checks are static, so the branch build runs in a throwaway CONDUCTOR_HOME and
+# never opens (and migrates) the real database (#3469).
+#
 # Env: BASE_BRANCH (from resolve-pr-base).
 set -uo pipefail
+# shellcheck source=lib-branch-home.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib-branch-home.sh"
 
 emit() {
   # $1 = approved (true/false), $2 = summary, $3 = findings JSON
@@ -27,10 +32,19 @@ emit() {
 }
 
 log=$(mktemp)
-trap 'rm -f "${log}"' EXIT
+validate_home=""
+trap 'rm -f "${log}"; [ -z "${validate_home}" ] || rm -rf "${validate_home}"' EXIT
+if ! validate_home=$(throwaway_home) || [ -z "${validate_home}" ]; then
+  # Never fall back to the real home: fail closed, on a file in the diff when there is one.
+  file=$(git diff --name-only "origin/${BASE_BRANCH:-main}...HEAD" 2>/dev/null | grep -E '^(\.conductor/|conductor-core/templates/)' | head -n 1)
+  emit false "Workflow validation could not run: no throwaway CONDUCTOR_HOME." \
+    "$(jq -cn --arg file "${file:-.conductor/workflows}" '[{file: $file, line: 1, severity: "critical", message: "could not create a throwaway CONDUCTOR_HOME (mktemp failed), so the validator was not run; it must never run against the real database"}]')"
+  exit 0
+fi
 
 status=0
-cargo run -q --bin conductor -- workflow validate --all --templates --path . > "${log}" 2>&1 || status=$?
+CONDUCTOR_HOME="${validate_home}" CONDUCTOR_DB_PATH="" \
+  cargo run -q --bin conductor -- workflow validate --all --templates --path . > "${log}" 2>&1 || status=$?
 if [ "${status}" -eq 0 ]; then
   emit true "Workflow validation passed: $(tail -n 1 "${log}")" '[]'
   exit 0

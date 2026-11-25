@@ -3,8 +3,8 @@
 Fixture tests for the decision logic in `.conductor/scripts/`: `aggregate-reviews.sh`,
 `show-plan-decisions.sh`, the `detect-*.sh` scripts (including `detect-engine-doc-changes.sh`) with `lib-diff-range.sh`, `fmt-fix.sh`,
 `submit-review.sh`, `reuse-review.sh`, `review-scope.sh` and `fetch-previous-round.sh` (who counts as a trusted reviewer, with `lib-trusted-review.sh`), `check-pr-ready.sh`, `wait-for-pr-checks.sh`, `post-verification.sh` and `squash-merge.sh` (verify-and-merge), `pr-body.sh` (the PR description builder) and `verify.sh` (which checks run), plus
-`scripts/release/bump.sh` (the release commit).
-Plain bash (3.2 compatible), plus `jq`, `git`, `cargo` and `rustfmt`. CI runs them as the **Pipeline Scripts**
+`scripts/release/bump.sh` (the release commit), and `lib-branch-home.sh` (when a branch build may open the real conductor database, #3469).
+Plain bash (3.2 compatible), plus `jq`, `git`, `cargo`, `rustfmt` and `sqlite3`. CI runs them as the **Pipeline Scripts**
 job when `.conductor/scripts/**`, `.conductor/tests/**` or `scripts/release/**` changes.
 
 ```bash
@@ -12,7 +12,10 @@ job when `.conductor/scripts/**`, `.conductor/tests/**` or `scripts/release/**` 
 .conductor/tests/run.sh test-fmt-fix.sh      # one file
 ```
 
-The runner unsets `CONDUCTOR_*` and `FLOW_*`, and the scratch repos ignore your git config, so
+The runner unsets `CONDUCTOR_*` and `FLOW_*`, then points `CONDUCTOR_HOME` at an empty temp dir,
+so no case reads your real `~/.conductor`; a case that needs a database makes one with
+`scratch_conductor_home VERSION` (a `conductor.db` at that schema, with a `marker` row and a
+`config.toml`) and passes it as `CONDUCTOR_HOME`. The scratch repos ignore your git config, so
 results don't depend on where you run them. The tests assert markers and decisions
 (approval, which finding moved), not summary wording.
 
