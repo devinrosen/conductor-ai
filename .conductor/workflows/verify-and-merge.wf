@@ -1,4 +1,4 @@
-// Generated from template: verify-and-merge v1.2.0
+// Generated from template: verify-and-merge v1.3.0
 workflow verify-and-merge {
   meta {
     description = "Check a reviewed PR is ready, verify it live against its issue's acceptance criteria, post the evidence, then squash-merge"
@@ -48,9 +48,30 @@ workflow verify-and-merge {
     env = { PRIOR_OUTPUT = "{{prior_output}}" PR_NUMBER = "{{pr_number}}" HEAD_SHA = "{{head_sha}}" DRY_RUN = "{{dry_run}}" TRUSTED_REVIEW_BOTS = "conductor-ai-reviewer[bot]" }
   }
 
+  script check-summary {
+    run = ".conductor/scripts/check-summary.sh"
+    env = { PR_NUMBER = "{{pr_number}}" HEAD_SHA = "{{head_sha}}" BASE_BRANCH = "{{base_branch}}" DRY_RUN = "{{dry_run}}" }
+  }
+
+  // Review rounds and hand fixes can leave the PR's Summary describing code that is gone,
+  // and the squash commit is built from it (#3471). Refresh it only when the head moved.
+  if check-summary.summary_stale {
+    call refresh-summary {
+      output  = "refresh-summary"
+      as      = "developer"
+      retries = 1
+    }
+
+    script update-pr-summary {
+      run = ".conductor/scripts/update-pr-summary.sh"
+      as  = "developer"
+      env = { PRIOR_OUTPUT = "{{prior_output}}" PR_NUMBER = "{{pr_number}}" HEAD_SHA = "{{head_sha}}" DRY_RUN = "{{dry_run}}" }
+    }
+  }
+
   if confirm {
     gate human_review {
-      prompt     = "verify-and-merge posted its verification report on the PR (see the post-verification step). Approve to squash-merge, or reject to leave the PR open."
+      prompt     = "verify-and-merge posted its verification report on the PR (see the post-verification step). The Summary may have been refreshed from the final diff. Approve to squash-merge, or reject to leave the PR open."
       timeout    = "72h"
       on_timeout = fail
     }

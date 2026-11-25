@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# check-pr-ready.sh, wait-for-pr-checks.sh, post-verification.sh and squash-merge.sh end to end against a stub gh (#3407).
+# check-pr-ready.sh, wait-for-pr-checks.sh, post-verification.sh, check-summary.sh, update-pr-summary.sh and squash-merge.sh end to end against a stub gh (#3407).
 set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
@@ -11,6 +11,7 @@ source "$(dirname "$0")/lib.sh"
 #   issues/N      the state of issue N (OPEN unless the file says CLOSED)
 #   comments.json existing PR comments (default [])
 #   comment       written: the body of `gh pr comment`
+#   edited        written: the body file of `gh pr edit` (edit_fail makes it fail)
 #   merge         written: the arguments of `gh pr merge`; merge.body is its body file
 #   closed        written: one line per `gh issue close`
 #   norepo        written: one line per call (but `repo view`) that came without --repo
@@ -73,6 +74,10 @@ case "$1 $2" in
       *issues/*/comments*) cat "$d/comments.json" 2>/dev/null || echo '[]' ;;
       *) cat "$d/reviews.json" ;;
     esac
+    exit 0 ;;
+  "pr edit")
+    [ -f "$d/edit_fail" ] && { echo "gh stub: edit failed" >&2; exit 1; }
+    while [ $# -gt 0 ]; do [ "$1" = "--body-file" ] && cp "$2" "$d/edited"; shift; done
     exit 0 ;;
   "pr comment")
     while [ $# -gt 0 ]; do [ "$1" = "--body-file" ] && cp "$2" "$d/comment"; shift; done
@@ -894,5 +899,140 @@ assert_exit 0
 assert_stdout_contains "Subject: fix: a thing (#7)"
 assert_stdout_contains "Closes #1"
 assert_eq "no" "$([ -f "$stub/merge" ] && echo yes || echo no)" "merge called"
+
+# --- check-summary.sh / update-pr-summary.sh (#3471) ---
+
+run_summary() {
+  run_script check-summary.sh PATH="$stub/bin:$PATH" GH_STUB_DIR="$stub" GH_RETRY_DELAYS=0 \
+    PR_NUMBER=7 HEAD_SHA="$(git rev-parse HEAD)" BASE_BRANCH=release/0.22.2 "$@"
+}
+
+# pr_marker SHA — put the summary-head marker (and createdAt) in pr.json's body.
+pr_marker() {
+  set_pr ".body = \"## Summary\\n\\nDoes a thing.\\n\\n## Test plan\\n\\nnone\\n\\n<!-- conductor-summary-head: $1 -->\""
+}
+set_created() { set_pr ".createdAt = \"$1\""; }
+
+case_begin "check-summary: the marker is the head: current, no refresh"
+new_case
+pr_marker "$head"
+run_summary
+assert_exit 0
+assert_marker summary_current
+assert_eq "no" "$(echo "$STDOUT" | grep -q summary_stale && echo yes || echo no)" "stale marker"
+
+case_begin "check-summary: a commit after the marker: stale, the context lists it"
+new_case
+pr_marker "$head"
+commit_file "$repo" a.txt a "fix: later change"
+run_summary
+assert_exit 0
+assert_marker summary_stale
+assert_context_contains "fix: later change"
+assert_context_contains "Does a thing."
+
+case_begin "check-summary: only a base merge after the marker: current"
+new_case
+pr_marker "$head"
+git checkout -q main && commit_file "$repo" base.txt newer "newer base" && git push -q origin main:release/0.22.2 && git checkout -q feature
+git fetch -q origin && git merge -q --no-edit origin/release/0.22.2 >/dev/null 2>&1
+run_summary
+assert_exit 0
+assert_marker summary_current
+
+case_begin "check-summary: a marker not in the checkout: stale"
+new_case
+pr_marker "0123456789abcdef0123456789abcdef01234567"
+run_summary
+assert_exit 0
+assert_marker summary_stale
+
+case_begin "check-summary: no marker, every commit older than createdAt: current"
+new_case
+set_created "2099-01-01T00:00:00Z"
+run_summary
+assert_exit 0
+assert_marker summary_current
+
+case_begin "check-summary: no marker, a commit newer than createdAt: stale"
+new_case
+set_created "2000-01-01T00:00:00Z"
+run_summary
+assert_exit 0
+assert_marker summary_stale
+
+case_begin "check-summary: no Summary section: current"
+new_case
+set_pr '.body = "Just a hand-written description."'
+commit_file "$repo" a.txt a "later"
+run_summary
+assert_exit 0
+assert_marker summary_current
+
+run_update() {
+  run_script update-pr-summary.sh PATH="$stub/bin:$PATH" GH_STUB_DIR="$stub" GH_RETRY_DELAYS=0 \
+    PR_NUMBER=7 HEAD_SHA="$(git rev-parse HEAD)" "$@"
+}
+OUT_CHANGED='{"changed":true,"summary":"Does a different thing, in a new place.","reason":"old symbol removed"}'
+OUT_SAME='{"changed":false,"summary":"Does a thing.","reason":"fine"}'
+
+case_begin "update-pr-summary: changed: new Summary, other sections kept, marker at the head"
+new_case
+pr_marker "0123456789abcdef0123456789abcdef01234567"
+run_update PRIOR_OUTPUT="$OUT_CHANGED"
+assert_exit 0
+assert_eq "yes" "$(grep -q '^Does a different thing, in a new place\.$' "$stub/edited" && echo yes || echo no)" "new summary"
+assert_eq "no" "$(grep -q '^Does a thing\.$' "$stub/edited" && echo yes || echo no)" "old summary"
+assert_eq "yes" "$(grep -q '^## Test plan$' "$stub/edited" && echo yes || echo no)" "other section kept"
+assert_eq "1" "$(grep -c 'conductor-summary-head' "$stub/edited")" "one marker"
+assert_eq "yes" "$(grep -q "conductor-summary-head: $head -->" "$stub/edited" && echo yes || echo no)" "marker at the head"
+
+case_begin "update-pr-summary: unchanged: same text, only the marker moves"
+new_case
+pr_marker "0123456789abcdef0123456789abcdef01234567"
+run_update PRIOR_OUTPUT="$OUT_SAME"
+assert_exit 0
+assert_eq "yes" "$(grep -q '^Does a thing\.$' "$stub/edited" && echo yes || echo no)" "summary kept"
+assert_eq "yes" "$(grep -q "conductor-summary-head: $head -->" "$stub/edited" && echo yes || echo no)" "marker at the head"
+
+case_begin "update-pr-summary: unreadable output is refused"
+new_case
+run_update PRIOR_OUTPUT="not json"
+assert_exit 1
+assert_eq "no" "$([ -f "$stub/edited" ] && echo yes || echo no)" "edited"
+
+case_begin "update-pr-summary: a failed edit is refused"
+new_case
+touch "$stub/edit_fail"
+run_update PRIOR_OUTPUT="$OUT_CHANGED"
+assert_exit 1
+assert_stderr_contains "could not update"
+
+case_begin "update-pr-summary: dry run edits nothing"
+new_case
+run_update PRIOR_OUTPUT="$OUT_CHANGED" DRY_RUN=true
+assert_exit 0
+assert_eq "no" "$([ -f "$stub/edited" ] && echo yes || echo no)" "edited"
+
+case_begin "update-pr-summary then squash-merge: the commit holds the rewrite, no marker"
+new_case
+echo CLOSED > "$stub/issues/1"; echo CLOSED > "$stub/issues/2"
+pr_marker "0123456789abcdef0123456789abcdef01234567"
+run_update PRIOR_OUTPUT="$OUT_CHANGED"
+assert_exit 0
+jq -c --rawfile b "$stub/edited" '.body = $b' "$stub/pr.json" > "$stub/pr.new" && mv "$stub/pr.new" "$stub/pr.json"
+run_merge
+assert_exit 0
+assert_eq "yes" "$(grep -q '^Does a different thing, in a new place\.$' "$stub/merge.body" && echo yes || echo no)" "rewrite in the commit"
+assert_eq "no" "$(grep -q 'conductor-summary-head' "$stub/merge.body" && echo yes || echo no)" "marker in the commit"
+
+case_begin "squash-merge: a trailing marker comment is not in the commit"
+new_case
+echo CLOSED > "$stub/issues/1"; echo CLOSED > "$stub/issues/2"
+set_pr '.body = "## Summary\n\nDoes a thing. <!-- conductor-summary-head: abcdef1 -->\n\n<!-- conductor-summary-head: abcdef1 -->"'
+run_merge
+assert_exit 0
+assert_eq "yes" "$(grep -q '^Does a thing\.$' "$stub/merge.body" && echo yes || echo no)" "summary kept"
+assert_eq "no" "$(grep -q '<!--' "$stub/merge.body" && echo yes || echo no)" "comment in the commit"
 
 finish
