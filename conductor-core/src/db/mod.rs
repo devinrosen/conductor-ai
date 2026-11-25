@@ -63,13 +63,7 @@ pub fn open_database_read_only(path: &Path) -> Result<Option<Connection>> {
     conn.busy_timeout(BUSY_TIMEOUT)?;
     conn.pragma_update(None, "query_only", "1")?;
     let version = migrations::read_schema_version(&conn)?;
-    if version > migrations::LATEST_SCHEMA_VERSION as i64 {
-        return Err(crate::error::ConductorError::Schema(format!(
-            "Database schema version ({version}) is newer than this binary supports ({}). \
-             Please rebuild: `cargo build`",
-            migrations::LATEST_SCHEMA_VERSION
-        )));
-    }
+    migrations::check_not_newer(version)?;
     Ok(Some(conn))
 }
 

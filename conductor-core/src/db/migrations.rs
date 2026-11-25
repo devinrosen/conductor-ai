@@ -143,6 +143,17 @@ pub(crate) fn read_schema_version(conn: &Connection) -> Result<i64> {
     .map_err(Into::into)
 }
 
+/// Fail when the database schema is newer than this binary supports.
+pub(crate) fn check_not_newer(version: i64) -> Result<()> {
+    if version > LATEST_SCHEMA_VERSION as i64 {
+        return Err(ConductorError::Schema(format!(
+            "Database schema version ({version}) is newer than this binary supports ({LATEST_SCHEMA_VERSION}). \
+             Please rebuild: `cargo build`"
+        )));
+    }
+    Ok(())
+}
+
 /// Run all schema migrations. Uses a simple version counter in a meta table.
 pub fn run(conn: &Connection) -> Result<()> {
     conn.execute_batch(
@@ -152,14 +163,7 @@ pub fn run(conn: &Connection) -> Result<()> {
         );",
     )?;
 
-    let version: i64 = conn.query_row(
-        "SELECT COALESCE(
-                (SELECT CAST(value AS INTEGER) FROM _conductor_meta WHERE key = 'schema_version'),
-                0
-            )",
-        [],
-        |row| row.get(0),
-    )?;
+    let version = read_schema_version(conn)?;
 
     // Stale-binary check: if the DB schema version is newer than what this
     // binary understands, another (newer) binary already migrated the DB.
@@ -167,12 +171,7 @@ pub fn run(conn: &Connection) -> Result<()> {
     // We check here (before running migrations) because if version >
     // LATEST_SCHEMA_VERSION, none of the `version < N` guards below will
     // fire, so `version` still equals the on-disk schema version.
-    if version > LATEST_SCHEMA_VERSION as i64 {
-        return Err(ConductorError::Schema(format!(
-            "Database schema version ({version}) is newer than this binary supports ({LATEST_SCHEMA_VERSION}). \
-             Please rebuild: `cargo build`"
-        )));
-    }
+    check_not_newer(version)?;
 
     if version < 1 {
         conn.execute_batch(include_str!("migrations/001_initial.sql"))?;
@@ -1464,14 +1463,7 @@ pub fn run_compat(conn: &Connection) -> Result<()> {
         );",
     )?;
 
-    let version: i64 = conn.query_row(
-        "SELECT COALESCE(
-                (SELECT CAST(value AS INTEGER) FROM _conductor_meta WHERE key = 'schema_version'),
-                0
-            )",
-        [],
-        |row| row.get(0),
-    )?;
+    let version = read_schema_version(conn)?;
 
     if version > LATEST_SCHEMA_VERSION as i64 {
         tracing::warn!(
