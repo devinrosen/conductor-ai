@@ -1584,10 +1584,7 @@ fn workflow_validate_dry_run_json_named_fail() {
     let reports = json_lines(&out.stdout);
     assert_eq!(reports.len(), 1);
     assert_eq!(reports[0]["status"], "fail");
-    assert!(reports[0]["error"]
-        .as_str()
-        .unwrap()
-        .contains("bogus_gate"));
+    assert!(reports[0]["error"].as_str().unwrap().contains("bogus_gate"));
     assert!(reports[0]["run_id"].is_null());
 }
 

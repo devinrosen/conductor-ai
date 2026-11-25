@@ -1033,7 +1033,8 @@ pub fn handle_workflow(
                         }
                         let mut report = SmokeReport::new(&wf.name, SmokeStatus::Fail);
                         report.error = Some(entry.errors.join("; "));
-                        report.warnings = entry.warnings.iter().map(|w| w.message.clone()).collect();
+                        report.warnings =
+                            entry.warnings.iter().map(|w| w.message.clone()).collect();
                         report
                     } else if target.is_repo_level() && !wf.targets.iter().any(|t| t == "repo") {
                         let reason = format!(
