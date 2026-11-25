@@ -9,7 +9,7 @@
 #
 # The commit subject is "<title> (#PR)"; the body is the PR's Summary section minus
 # sentences naming a local path (a /Users/ or /home/ directory, a .git/worktrees/ path or
-# a PLAN.md path, #3422), a Closes line per linked issue and the commits' Co-Authored-By
+# a PLAN.md path, #3422) and HTML comments (the summary-head marker, #3471), a Closes line per linked issue and the commits' Co-Authored-By
 # and Claude-Session trailers, deduplicated.
 # --match-head-commit means a push after verification is never merged. The branch is
 # not deleted (it is checked out by this worktree), and neither is the worktree: the
@@ -53,7 +53,8 @@ fi
 
 SUBJECT="$(echo "${PR}" | jq -r '.title') (#${PR_NUMBER})"
 
-# The "## Summary" section pr-body.sh writes, else the first paragraph.
+# The "## Summary" section pr-body.sh writes, else the first paragraph. update-pr-summary.sh
+# refreshes it before this step when review or hand fixes changed the code (#3471).
 SUMMARY=$(echo "${PR}" | jq -r '.body // ""' | tr -d '\r' | awk '
   /^## Summary[[:space:]]*$/ { s = 1; next }
   s && /^## / { exit }
@@ -61,6 +62,8 @@ SUMMARY=$(echo "${PR}" | jq -r '.body // ""' | tr -d '\r' | awk '
 if [ -z "${SUMMARY}" ]; then
   SUMMARY=$(echo "${PR}" | jq -r '.body // ""' | tr -d '\r' | awk 'NF { p = 1 } p && !NF { exit } p { print }')
 fi
+# Drop single-line HTML comments, such as the <!-- conductor-summary-head: SHA --> marker.
+SUMMARY=$(printf '%s\n' "${SUMMARY}" | sed -e 's/<!--.*-->//g' | sed -e '/./,$!d')
 # Drop sentences that name a machine-local path (POSIX awk: BSD awk has no \s or gensub).
 SUMMARY=$(printf '%s\n' "${SUMMARY}" | awk '
   function names_local_path(t) {
