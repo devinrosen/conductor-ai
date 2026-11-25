@@ -107,6 +107,8 @@ Validation runs the same checks a run starts with: the DSL parses, agents, schem
 
 `--dry-run` then starts each workflow that passed, so registries, gate resolvers and input defaults are exercised for real. It reports `SMOKE PASS` with the agent step it stopped at and the run ID, or `SMOKE FAIL` with the failing step, and exits non-zero on a failure. With `--all`, a workflow whose required inputs have no default is skipped. No script step runs, so it's safe on any worktree. A smoke's run and its child runs end `cancelled`, and run lists hide them (`conductor_list_runs` and `GET /api/workflows/runs` take `include_dry_run` to show them). The agent runs that drive a smoke are cancelled and hidden from agent-run lists too (`conductor_list_agent_runs` takes `include_dry_run`), so a smoke sends no `agent_run.*` notification.
 
+Add `--json` (with `--dry-run`, not with `--templates`) for scripts: stdout then carries only JSON, one object per smoke target per line, with `workflow`, `status` (`pass`, `fail` or `skip`), `run_id`, `stopped_at` (`{workflow, step, kind}`), `warnings`, `error` and `missing_inputs`. A workflow that fails the static checks or can't be loaded is a `fail` object. The human output and the exit code are unchanged; a named workflow with a missing required input is a `fail` with `missing_inputs` set.
+
 `--path` inside a registered worktree behaves like `<repo> <worktree>`; inside a registered repo's checkout it gives a repo-level target; any other directory is used as-is without the database. A repo-level `--dry-run` (from the main checkout) only smokes workflows whose `targets` include `repo`: a named workflow that doesn't fails and says which worktree argument is missing, and `--all` skips it.
 
 ## Monitoring runs

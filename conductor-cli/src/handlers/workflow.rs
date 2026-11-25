@@ -816,6 +816,7 @@ pub fn handle_workflow(
             templates,
             dry_run,
             inputs,
+            json,
         } => {
             if !all && name.is_none() && !templates {
                 anyhow::bail!(
@@ -893,6 +894,7 @@ pub fn handle_workflow(
             // Collect workflows to validate.
             let workflows: Vec<conductor_core::workflow::WorkflowDef>;
             let mut parse_errors: Vec<String> = Vec::new();
+            let mut parse_error_pairs: Vec<(String, String)> = Vec::new();
 
             if templates_only {
                 workflows = Vec::new();
@@ -900,10 +902,13 @@ pub fn handle_workflow(
                 let (defs, warnings) = conductor_core::workflow::list_defs(&wt_path, &repo_path)?;
                 for w in &warnings {
                     parse_errors.push(format!("{}: {}", w.file, w.message));
+                    parse_error_pairs.push((w.file.clone(), w.message.clone()));
                 }
                 workflows = defs;
                 if workflows.is_empty() && parse_errors.is_empty() && !templates {
-                    println!("No workflow files found.");
+                    if !json {
+                        println!("No workflow files found.");
+                    }
                     return Ok(());
                 }
             } else {
@@ -911,9 +916,17 @@ pub fn handle_workflow(
                 let wf_name = name
                     .as_deref()
                     .expect("name must be Some when --all is not set");
-                workflows = vec![conductor_core::workflow::load_def_by_name(
-                    &wt_path, &repo_path, wf_name,
-                )?];
+                match conductor_core::workflow::load_def_by_name(&wt_path, &repo_path, wf_name) {
+                    Ok(def) => workflows = vec![def],
+                    Err(e) if json => {
+                        // A named target that can't load is still one report.
+                        let mut report = SmokeReport::new(wf_name, SmokeStatus::Fail);
+                        report.error = Some(e.to_string());
+                        print_smoke_json(&report);
+                        std::process::exit(1);
+                    }
+                    Err(e) => return Err(e.into()),
+                }
             };
 
             let known_bots: std::collections::HashSet<String> =
@@ -949,6 +962,11 @@ pub fn handle_workflow(
             let mut total = 0;
             let mut failed = 0;
             for result in &results {
+                if json {
+                    total += result.total();
+                    failed += result.failed_count();
+                    continue;
+                }
                 // Report parse failures first.
                 for err in &result.parse_errors {
                     println!("FAIL  {err}");
@@ -973,7 +991,7 @@ pub fn handle_workflow(
             }
 
             // Summary when validating multiple workflows.
-            if all || templates {
+            if (all || templates) && !json {
                 println!("\n{}/{total} workflow(s) passed.", total - failed);
             }
 
@@ -994,39 +1012,68 @@ pub fn handle_workflow(
                 let target = smoke_target
                     .clone()
                     .expect("--dry-run resolves a target unless templates-only");
-                let statically_failed: std::collections::HashSet<&str> = results[0]
-                    .entries
-                    .iter()
-                    .filter(|e| !e.errors.is_empty())
-                    .map(|e| e.name.as_str())
-                    .collect();
-                println!();
-                for wf in workflows
-                    .iter()
-                    .filter(|w| !statically_failed.contains(w.name.as_str()))
-                {
-                    if target.is_repo_level() && !wf.targets.iter().any(|t| t == "repo") {
+                if json {
+                    for (file, message) in &parse_error_pairs {
+                        let mut report = SmokeReport::new(file, SmokeStatus::Fail);
+                        report.error = Some(message.clone());
+                        print_smoke_json(&report);
+                    }
+                } else {
+                    println!();
+                }
+                for wf in &workflows {
+                    let report = if let Some(entry) = results[0]
+                        .entries
+                        .iter()
+                        .find(|e| e.name == wf.name && !e.errors.is_empty())
+                    {
+                        // Failed the static checks: no smoke.
+                        if !json {
+                            continue;
+                        }
+                        let mut report = SmokeReport::new(&wf.name, SmokeStatus::Fail);
+                        report.error = Some(entry.errors.join("; "));
+                        report.warnings = entry.warnings.iter().map(|w| w.message.clone()).collect();
+                        report
+                    } else if target.is_repo_level() && !wf.targets.iter().any(|t| t == "repo") {
                         let reason = format!(
                             "targets {:?}; a smoke run needs a worktree: pass <repo> <worktree>, \
                              or --path <worktree dir>",
                             wf.targets
                         );
-                        if all {
-                            println!("SMOKE SKIP  {}  {reason}", wf.name);
+                        let status = if all {
+                            SmokeStatus::Skip
                         } else {
-                            println!("SMOKE FAIL  {}  {reason}", wf.name);
-                            smoke_failed += 1;
-                        }
-                        continue;
+                            SmokeStatus::Fail
+                        };
+                        let mut report = SmokeReport::new(&wf.name, status);
+                        report.human_lines = vec![format!(
+                            "SMOKE {}  {}  {reason}",
+                            if all { "SKIP" } else { "FAIL" },
+                            wf.name
+                        )];
+                        report.error = Some(reason);
+                        report
+                    } else {
+                        smoke_one(
+                            conn,
+                            config,
+                            wf,
+                            &target,
+                            &base_inputs,
+                            /* skip_unfillable */ all,
+                        )
+                    };
+                    if report.status == SmokeStatus::Fail && !statically_failed(&results[0], wf) {
+                        smoke_failed += 1;
                     }
-                    smoke_failed += smoke_one(
-                        conn,
-                        config,
-                        wf,
-                        &target,
-                        &base_inputs,
-                        /* skip_unfillable */ all,
-                    );
+                    if json {
+                        print_smoke_json(&report);
+                    } else {
+                        for line in &report.human_lines {
+                            println!("{line}");
+                        }
+                    }
                 }
             }
 
@@ -1537,8 +1584,73 @@ mod step_log_cli_tests {
     }
 }
 
-/// Smoke-start one workflow and print its result line. Returns 1 for a
-/// failure, 0 for a pass or a skip.
+/// One smoke target's result: printed as the human lines or, with `--json`,
+/// as one JSON object.
+#[derive(serde::Serialize)]
+struct SmokeReport {
+    workflow: String,
+    status: SmokeStatus,
+    run_id: Option<String>,
+    stopped_at: Option<SmokeStopJson>,
+    warnings: Vec<String>,
+    error: Option<String>,
+    missing_inputs: Vec<String>,
+    /// The human result line and the `SMOKE WARN` lines, exactly as printed
+    /// without `--json`.
+    #[serde(skip)]
+    human_lines: Vec<String>,
+}
+
+#[derive(serde::Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
+enum SmokeStatus {
+    Pass,
+    Fail,
+    Skip,
+}
+
+#[derive(serde::Serialize)]
+struct SmokeStopJson {
+    workflow: String,
+    step: String,
+    kind: String,
+}
+
+impl SmokeReport {
+    fn new(workflow: &str, status: SmokeStatus) -> Self {
+        Self {
+            workflow: workflow.to_string(),
+            status,
+            run_id: None,
+            stopped_at: None,
+            warnings: Vec::new(),
+            error: None,
+            missing_inputs: Vec::new(),
+            human_lines: Vec::new(),
+        }
+    }
+}
+
+fn print_smoke_json(report: &SmokeReport) {
+    match serde_json::to_string(report) {
+        Ok(line) => println!("{line}"),
+        Err(e) => eprintln!("could not serialize smoke report: {e}"),
+    }
+}
+
+/// Whether the workflow failed the static checks (so its failure is already
+/// counted and it has no smoke).
+fn statically_failed(
+    result: &conductor_core::workflow::BatchValidationResult,
+    wf: &conductor_core::workflow::WorkflowDef,
+) -> bool {
+    result
+        .entries
+        .iter()
+        .any(|e| e.name == wf.name && !e.errors.is_empty())
+}
+
+/// Smoke-start one workflow and build its report.
 fn smoke_one(
     conn: &Connection,
     config: &Config,
@@ -1546,7 +1658,7 @@ fn smoke_one(
     target: &ExecTarget,
     base_inputs: &std::collections::HashMap<String, String>,
     skip_unfillable: bool,
-) -> usize {
+) -> SmokeReport {
     use conductor_core::workflow::SmokeResult;
 
     let mut target = target.clone();
@@ -1562,9 +1674,14 @@ fn smoke_one(
     }
     // Check required inputs only: defaults are filled (and checked) by the shared
     // run-start path, so the smoke exercises the same path as a real run.
-    if let Some((line, code)) = smoke_required_input_gate(workflow, &inputs, skip_unfillable) {
-        println!("{line}");
-        return code;
+    if let Some((line, status, missing, error)) =
+        smoke_required_input_gate(workflow, &inputs, skip_unfillable)
+    {
+        let mut report = SmokeReport::new(&workflow.name, status);
+        report.error = Some(error);
+        report.missing_inputs = missing;
+        report.human_lines = vec![line];
+        return report;
     }
 
     let outcome = conductor_core::workflow::smoke_run_workflow(exec_params(
@@ -1584,7 +1701,9 @@ fn smoke_one(
         .as_deref()
         .map(|id| format!("  (run {id})"))
         .unwrap_or_default();
-    let code = match outcome.result {
+    let mut report = SmokeReport::new(&workflow.name, SmokeStatus::Pass);
+    report.run_id = outcome.run_id.clone();
+    match outcome.result {
         SmokeResult::Passed {
             stopped_at: Some(point),
         } => {
@@ -1594,60 +1713,93 @@ fn smoke_one(
             } else {
                 format!(" in '{}'", point.workflow)
             };
-            println!(
+            report.human_lines.push(format!(
                 "SMOKE PASS  {}  stopped at {kind} step '{}'{child}{run}",
                 workflow.name, point.step
-            );
-            0
+            ));
+            report.stopped_at = Some(SmokeStopJson {
+                workflow: point.workflow.clone(),
+                step: point.step.clone(),
+                kind: kind.to_string(),
+            });
         }
         SmokeResult::Passed { stopped_at: None } => {
-            println!(
+            report.human_lines.push(format!(
                 "SMOKE PASS  {}  ran to completion, no agent step{run}",
                 workflow.name
-            );
-            0
+            ));
         }
         SmokeResult::Failed { step, error } => {
-            let at = step.map(|s| format!(" at step '{s}'")).unwrap_or_default();
-            println!("SMOKE FAIL  {}{at}: {error}{run}", workflow.name);
-            1
+            let at = step
+                .as_ref()
+                .map(|s| format!(" at step '{s}'"))
+                .unwrap_or_default();
+            report
+                .human_lines
+                .push(format!("SMOKE FAIL  {}{at}: {error}{run}", workflow.name));
+            report.status = SmokeStatus::Fail;
+            report.stopped_at = step.map(|s| SmokeStopJson {
+                workflow: workflow.name.clone(),
+                step: s,
+                kind: "failed".to_string(),
+            });
+            report.error = Some(error.to_string());
         }
-    };
-    for line in smoke_warn_lines(
+    }
+    report.warnings = smoke_warnings(
         &workflow.name,
         &outcome.env_warnings,
         &outcome.env_scan_errors,
-    ) {
-        println!("{line}");
-    }
-    code
+    );
+    report.human_lines.extend(smoke_warn_lines(
+        &workflow.name,
+        &outcome.env_warnings,
+        &outcome.env_scan_errors,
+    ));
+    report
 }
 
-/// The result line and exit code when a smoke can't start because a required
-/// input has no value: a skip (0) when `skip_unfillable`, else a failure (1).
-/// `None` when every required input is present.
+/// The result line, status and every missing required input when a smoke can't
+/// start because a required input has no value: a skip when `skip_unfillable`,
+/// else a failure. `None` when every required input is present.
 fn smoke_required_input_gate(
     workflow: &conductor_core::workflow::WorkflowDef,
     inputs: &std::collections::HashMap<String, String>,
     skip_unfillable: bool,
-) -> Option<(String, usize)> {
+) -> Option<(String, SmokeStatus, Vec<String>, String)> {
     let e = conductor_core::workflow::check_required_workflow_inputs(workflow, inputs).err()?;
+    let missing: Vec<String> = workflow
+        .inputs
+        .iter()
+        .filter(|i| i.required && !inputs.contains_key(&i.name))
+        .map(|i| i.name.clone())
+        .collect();
     Some(if skip_unfillable {
-        (format!("SMOKE SKIP  {}  ({e})", workflow.name), 0)
+        (
+            format!("SMOKE SKIP  {}  ({e})", workflow.name),
+            SmokeStatus::Skip,
+            missing,
+            e.to_string(),
+        )
     } else {
-        (format!("SMOKE FAIL  {}  start: {e}", workflow.name), 1)
+        (
+            format!("SMOKE FAIL  {}  start: {e}", workflow.name),
+            SmokeStatus::Fail,
+            missing,
+            e.to_string(),
+        )
     })
 }
 
-/// The `SMOKE WARN` lines for a smoke outcome: one per unresolved script env
+/// The warning texts for a smoke outcome: one per unresolved script env
 /// input (with an ` in '<child>'` suffix for a child workflow) and one per
 /// scan error, so an incomplete scan never reads as a clean one.
-fn smoke_warn_lines(
+fn smoke_warnings(
     workflow_name: &str,
     warnings: &[conductor_core::workflow::UnresolvedEnvInput],
     scan_errors: &[String],
 ) -> Vec<String> {
-    let mut lines: Vec<String> = warnings
+    let mut texts: Vec<String> = warnings
         .iter()
         .map(|w| {
             let child = if w.workflow == workflow_name {
@@ -1655,15 +1807,27 @@ fn smoke_warn_lines(
             } else {
                 format!(" in '{}'", w.workflow)
             };
-            format!("SMOKE WARN  {workflow_name}  {}{child}", w.describe())
+            format!("{}{child}", w.describe())
         })
         .collect();
-    lines.extend(
+    texts.extend(
         scan_errors
             .iter()
-            .map(|e| format!("SMOKE WARN  {workflow_name}  script env scan incomplete: {e}")),
+            .map(|e| format!("script env scan incomplete: {e}")),
     );
-    lines
+    texts
+}
+
+/// The `SMOKE WARN` lines for a smoke outcome.
+fn smoke_warn_lines(
+    workflow_name: &str,
+    warnings: &[conductor_core::workflow::UnresolvedEnvInput],
+    scan_errors: &[String],
+) -> Vec<String> {
+    smoke_warnings(workflow_name, warnings, scan_errors)
+        .into_iter()
+        .map(|t| format!("SMOKE WARN  {workflow_name}  {t}"))
+        .collect()
 }
 
 #[cfg(test)]
@@ -1717,18 +1881,20 @@ mod smoke_warn_tests {
     fn missing_required_input_skips_or_fails() {
         let w = wf_with_required(true);
         let none = std::collections::HashMap::new();
-        let (line, code) = smoke_required_input_gate(&w, &none, true).unwrap();
+        let (line, status, missing, _) = smoke_required_input_gate(&w, &none, true).unwrap();
         assert!(
             line.starts_with("SMOKE SKIP  wf  (") && line.contains("'need'"),
             "{line}"
         );
-        assert_eq!(code, 0);
-        let (line, code) = smoke_required_input_gate(&w, &none, false).unwrap();
+        assert_eq!(status, SmokeStatus::Skip);
+        assert_eq!(missing, vec!["need".to_string()]);
+        let (line, status, missing, _) = smoke_required_input_gate(&w, &none, false).unwrap();
         assert!(
             line.starts_with("SMOKE FAIL  wf  start: ") && line.contains("'need'"),
             "{line}"
         );
-        assert_eq!(code, 1);
+        assert_eq!(status, SmokeStatus::Fail);
+        assert_eq!(missing, vec!["need".to_string()]);
     }
 
     #[test]

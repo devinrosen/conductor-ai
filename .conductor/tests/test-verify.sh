@@ -28,10 +28,10 @@ case "$1" in
         # workflow validate <name> --dry-run: the smoke call from smoke-workflows.sh
         name=$(printf '%s\n' "$*" | sed -n -E 's/.* validate ([^ ]+) --dry-run.*/\1/p')
         if [ -f "$CARGO_STUB_DIR/fail_smoke" ]; then
-          echo "SMOKE FAIL  ${name} at step 's': stub smoke failure  (run 01TESTFAIL)"
+          echo "{\"workflow\":\"${name}\",\"status\":\"fail\",\"run_id\":\"01TESTFAIL\",\"stopped_at\":{\"workflow\":\"${name}\",\"step\":\"s\",\"kind\":\"failed\"},\"warnings\":[],\"error\":\"stub smoke failure\",\"missing_inputs\":[]}"
           exit 1
         fi
-        echo "SMOKE PASS  ${name}  stopped at agent step 'a'  (run 01TESTPASS)"
+        echo "{\"workflow\":\"${name}\",\"status\":\"pass\",\"run_id\":\"01TESTPASS\",\"stopped_at\":{\"workflow\":\"${name}\",\"step\":\"a\",\"kind\":\"agent\"},\"warnings\":[],\"error\":null,\"missing_inputs\":[]}"
         ;;
       *)
         echo "${CONDUCTOR_HOME:-}|${CONDUCTOR_DB_PATH-unset}" > "$CARGO_STUB_DIR/validate_env"
