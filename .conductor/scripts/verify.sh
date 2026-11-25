@@ -18,7 +18,7 @@
 # runs even when the build fails. A change to a .conductor/workflows/*.wf file or a
 # conductor-core/templates/*.wft template also runs the dry-run smokes CLAUDE.md
 # requires, through smoke-workflows.sh (#3453): `conductor workflow validate --dry-run`
-# of each changed workflow and of each workflow that calls one. Anything else (.md,
+# of each changed workflow and of each workflow that calls one, directly or through others. Anything else (.md,
 # frontend files) skips the checks.
 #
 # The branch build must not migrate the real conductor database (#3469): the static

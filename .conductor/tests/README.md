@@ -47,7 +47,7 @@ never recurses into itself. The stub's `run` branch also answers the smoke call
 `workflow validate <name> --dry-run` (from `smoke-workflows.sh`) with a JSON pass object (run ID `01TESTPASS`),
 or a JSON fail object (`01TESTFAIL`) while a `fail_smoke` file exists.
 
-`test-smoke-workflows.sh` covers `smoke-workflows.sh` (changed-file and parent detection with
+`test-smoke-workflows.sh` covers `smoke-workflows.sh` (changed-file and caller detection (transitive) with
 `SMOKE_DETECT_ONLY=1`; result classification with a stub `conductor` set through `SMOKE_CONDUCTOR`, driven by
 `$SMOKE_STUB_DIR/<workflow>.out` (the JSON the real CLI prints with `--json`) and `.rc`, logging its arguments to `calls`) and `update-pr-smokes.sh`
 (a stub `gh` driven by `body.md` and `fail_edit`, writing the edited body to `edited.md`).

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # update-pr-smokes.sh — put the cycle's workflow smokes in the PR description (#3453).
 #
-# iterate-pr runs this after push. verify.sh ran the dry-run smokes for a .wf/.wft change
+# iterate-pr and quick-fix-pr run this after push. verify.sh ran the dry-run smokes for a .wf/.wft change
 # in this cycle and recorded them in its structured output; pr-body.sh (PR_BODY_SECTION=smokes)
 # renders them as the `## Smokes` section. This replaces that section in the PR body, or
 # inserts it before `## Risks and open questions`, else before a trailing `Closes #N` line,

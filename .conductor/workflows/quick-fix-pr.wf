@@ -179,6 +179,16 @@ workflow quick-fix-pr {
           as  = "developer"
         }
 
+        // verify ran the dry-run smokes when the review fix's branch changes a .wf/.wft file:
+        // refresh the PR body's ## Smokes section with this head's run IDs (#3473). A no-op otherwise.
+        script update-pr-smokes {
+          run = ".conductor/scripts/update-pr-smokes.sh"
+          env = {
+            PR_NUMBER      = "{{pr_number}}"
+            PRIOR_CONTEXTS = "{{prior_contexts}}"
+          }
+        }
+
         // The one re-review. Fixes were pushed, so recompute the scope.
         script review-scope-rereview {
           run = ".conductor/scripts/review-scope.sh"
