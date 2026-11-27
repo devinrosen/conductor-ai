@@ -18,8 +18,20 @@ case "$1" in
       sqlite3 "$CONDUCTOR_HOME/conductor.db" "UPDATE _conductor_meta SET value = '90' WHERE key = 'schema_version'"
     fi
     if [ -f "$CARGO_STUB_DIR/fail_build" ]; then
-      echo "error: stub build failure"
+      # build_errors: the file's content is the compiler output (several errors)
+      if [ -f "$CARGO_STUB_DIR/build_errors" ]; then
+        cat "$CARGO_STUB_DIR/build_errors"
+      else
+        echo "error: stub build failure"
+      fi
       exit 1
+    fi
+    ;;
+  nextest)
+    # fail_nextest: the file's content is the nextest output; exit non-zero
+    if [ -f "$CARGO_STUB_DIR/fail_nextest" ]; then
+      cat "$CARGO_STUB_DIR/fail_nextest"
+      exit 100
     fi
     ;;
   run)
@@ -53,7 +65,7 @@ export PATH="$STUB_DIR/bin:$PATH"
 # switches to a feature branch and cd's into the repo.
 new_repo() {
   repo=$(scratch_repo)
-  rm -f "$STUB_DIR/fail_build" "$STUB_DIR/fail_smoke" "$STUB_DIR/calls" "$STUB_DIR/bump_schema" "$STUB_DIR/validate_env" "$STUB_DIR/validate_fail"
+  rm -f "$STUB_DIR/fail_build" "$STUB_DIR/fail_smoke" "$STUB_DIR/calls" "$STUB_DIR/bump_schema" "$STUB_DIR/validate_env" "$STUB_DIR/validate_fail" "$STUB_DIR/build_errors" "$STUB_DIR/fail_nextest"
   commit_file "$repo" .conductor/tests/run.sh "#!/usr/bin/env bash
 touch \"\$PWD/ran-sentinel\"
 $1" init
@@ -222,5 +234,60 @@ commit_file "$repo" .conductor/scripts/foo.sh "echo hi" change
 run_script verify.sh FEATURE_BASE_BRANCH=main CONDUCTOR_HOME="$(scratch_conductor_home 89)"
 assert_no_markers
 assert_jq '[.checks[] | select(.name == "conductor database schema")] | length == 0'
+
+case_begin "signature: several compile errors count one each, and nothing else runs"
+new_repo "$PASSING"
+commit_file "$repo" conductor-core/src/lib.rs "pub fn f() {}" change
+touch "$STUB_DIR/fail_build"
+cat > "$STUB_DIR/build_errors" <<'ERR'
+error[E0382]: borrow of moved value: `a`
+  --> conductor-core/src/x.rs:10:5
+error[E0382]: borrow of moved value: `b`
+  --> conductor-core/src/x.rs:20:5
+error[E0382]: borrow of moved value: `a`
+  --> conductor-core/src/y.rs:30:9
+error: aborting due to 3 previous errors
+error: could not compile `conductor-core` (lib) due to 3 previous errors
+ERR
+run_script verify.sh FEATURE_BASE_BRANCH=main VERIFY_CRATES=conductor-core
+assert_marker has_failures
+assert_jq '.failure_count == 3 and (.failures | length) == 3'
+assert_jq '.failures | all(startswith("cargo build: error[E0382]"))'
+assert_jq '.failures | any(contains("conductor-core/src/y.rs:30:9"))'
+
+case_begin "signature: failing tests count one each"
+new_repo "$PASSING"
+commit_file "$repo" conductor-core/src/lib.rs "pub fn f() {}" change
+printf '        FAIL [   0.1s] conductor-core mod::test_a\n        FAIL [   0.1s] conductor-core mod::test_b\n     Summary [   1s] 5 tests run: 3 passed, 2 failed\n' > "$STUB_DIR/fail_nextest"
+run_script verify.sh FEATURE_BASE_BRANCH=main VERIFY_CRATES=conductor-core
+assert_marker has_failures
+assert_jq '.failure_count == 2'
+assert_jq '.failures == ["cargo nextest -p conductor-core: conductor-core mod::test_a", "cargo nextest -p conductor-core: conductor-core mod::test_b"]'
+
+case_begin "signature: a pass is empty"
+new_repo "$PASSING"
+commit_file "$repo" .conductor/scripts/foo.sh "echo hi" change
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_no_markers
+assert_jq '.failures == [] and .failure_count == 0'
+
+case_begin "signature: a skipped run is empty"
+new_repo "$PASSING"
+commit_file "$repo" README.md "hi" change
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_jq '.failures == [] and .failure_count == 0'
+
+case_begin "signature: a failing script test case is one entry"
+new_repo "$FAILING"
+commit_file "$repo" .conductor/scripts/foo.sh "echo hi" change
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_jq '.failures == ["pipeline script tests: some case name"] and .failure_count == 1'
+
+case_begin "signature: a failure with nothing to parse is the check name"
+new_repo "$PASSING"
+commit_file "$repo" .conductor/workflows/x.wf "workflow x {}" change
+printf 'Error: something odd\n' > "$STUB_DIR/validate_fail"
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_jq '.failures == ["conductor workflow validate"]'
 
 finish

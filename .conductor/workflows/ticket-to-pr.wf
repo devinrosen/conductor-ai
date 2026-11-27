@@ -105,12 +105,44 @@ workflow ticket-to-pr {
       env = { FEATURE_BASE_BRANCH = "{{feature_base_branch}}" }
     }
 
-    // Still failing after the retry: stop before lint-fix and push-and-pr
-    // can open a PR with failing checks (#3216).
+    // Still failing after the retry. verify-progress compares the last two
+    // verify signatures (#3486): when they differ and the failures shrank, the
+    // retry made progress, so one more attempt goes to fix-verify (a dedicated
+    // agent, for the same occurrence-matching reason as fix-precheck) and a
+    // third, final verify. That caps the run at three fix attempts: implement,
+    // the implement retry and fix-verify. An unchanged or larger failure list
+    // stops below as before.
     if verify.has_failures {
-      script fail-verify {
-        run = ".conductor/scripts/fail-verify.sh"
-        env = { VERIFY_CONTEXT = "{{prior_context}}" }
+      script verify-progress {
+        run = ".conductor/scripts/verify-progress.sh"
+        env = { PRIOR_CONTEXTS = "{{prior_contexts}}" }
+      }
+
+      if verify-progress.failures_shrank {
+        call fix-verify {
+          retries = 1
+          as      = "developer"
+        }
+        script fmt-fix-pre-final-verify {
+          run = ".conductor/scripts/fmt-fix.sh"
+          env = {
+            FMT_FIX_ALLOW_FAILURE = "1"
+          }
+        }
+        script verify {
+          run = ".conductor/scripts/verify.sh"
+          env = { FEATURE_BASE_BRANCH = "{{feature_base_branch}}" }
+        }
+      }
+
+      // Still failing: stop before lint-fix and push-and-pr can open a PR with
+      // failing checks (#3216). verify.has_failures reads the latest verify,
+      // the third if it ran, else the second.
+      if verify.has_failures {
+        script fail-verify {
+          run = ".conductor/scripts/fail-verify.sh"
+          env = { VERIFY_CONTEXT = "{{prior_context}}" }
+        }
       }
     }
   }

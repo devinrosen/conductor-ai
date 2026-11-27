@@ -2,7 +2,7 @@
 
 Fixture tests for the decision logic in `.conductor/scripts/`: `aggregate-reviews.sh`,
 `show-plan-decisions.sh`, the `detect-*.sh` scripts (including `detect-engine-doc-changes.sh`) with `lib-diff-range.sh`, `fmt-fix.sh`,
-`submit-review.sh`, `reuse-review.sh`, `review-scope.sh` and `fetch-previous-round.sh` (who counts as a trusted reviewer, with `lib-trusted-review.sh`), `check-pr-ready.sh`, `wait-for-pr-checks.sh`, `post-verification.sh`, `check-summary.sh`, `update-pr-summary.sh` and `squash-merge.sh` (verify-and-merge), `pr-body.sh` (the PR description builder) and `verify.sh` (which checks run), plus
+`submit-review.sh`, `reuse-review.sh`, `review-scope.sh` and `fetch-previous-round.sh` (who counts as a trusted reviewer, with `lib-trusted-review.sh`), `check-pr-ready.sh`, `wait-for-pr-checks.sh`, `post-verification.sh`, `check-summary.sh`, `update-pr-summary.sh` and `squash-merge.sh` (verify-and-merge), `pr-body.sh` (the PR description builder) `verify.sh` (which checks run, and its failure signature) and `verify-progress.sh` (whether the implement retry shrank the failures, #3486), plus
 `scripts/release/bump.sh` (the release commit), and `lib-branch-home.sh` (when a branch build may open the real conductor database, #3469).
 Plain bash (3.2 compatible), plus `jq`, `git`, `cargo`, `rustfmt` and `sqlite3`. CI runs them as the **Pipeline Scripts**
 job when `.conductor/scripts/**`, `.conductor/tests/**` or `scripts/release/**` changes.
