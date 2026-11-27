@@ -119,7 +119,7 @@ script review-scope {
 | Option | Meaning |
 |---|---|
 | `run` | Script path, `{{variable}}` allowed. Validate-time resolution is worktree, then repo, then `~/.claude/skills/`; at run time the step is `sh -c <run>` with the worktree as cwd |
-| `env = { K = "v" }` | Environment for the script; values substitute `{{variable}}` from the raw (not shell-quoted) variable map. Security-sensitive names are ignored |
+| `env = { K = "v" }` | Environment for the script; values substitute `{{variable}}` from the raw (not shell-quoted) variable map. A value that uses a required, defaulted or boolean input missing at start fails the run at start (conductor's check first, then the engine's). Security-sensitive names are ignored |
 | `timeout = N` | **Seconds** (a number, unlike a `call`'s `"5m"`). The script is killed and the step is recorded `Failed` ("timed out after Ns") |
 | `retries = N` | A failing script (non-zero exit, timeout or unparseable FLOW_OUTPUT) is retried up to N more times; each attempt is its own step row. A retried script repeats its side effects. `review-pr.wf`'s `resolve-pr-base { retries = 1 }` retries |
 | `on_fail` | After the last failed attempt, `on_fail = <agent>` runs with `{{failed_step}}`, `{{failure_reason}}` and `{{retry_count}}`. `on_fail = continue` skips the failed step without failing the run |
@@ -162,6 +162,7 @@ There are five types:
 - Feedback entered on approval becomes `{{gate_feedback}}`, which is always the **most recent** gate's value. A gate decided without feedback (an approval, a rejection, a dry-run approval, or a timeout with `on_timeout = continue`) clears it, so an earlier gate's feedback does not reach steps after a later gate. When options are picked, the value is the selected option keys joined with ", ", replacing any feedback. It is stored on the gate's step row, and a resume restores it per gate, with the gate's selections.
 - `{{<gate-name>.feedback}}` (for example `{{human_review.feedback}}`) reads one gate's feedback, or its joined selections, and is empty when that gate had neither. Use it when a gate's answer must survive a later gate. The gate name is its type, so two gates of the same type share it.
 - A gate's `prompt` substitutes `{{name}}` variables when the gate starts: inputs, engine variables, earlier steps' FLOW_OUTPUT fields (such as `{{plan_path}}`) and gate feedback. The stored prompt and what hosts show are the resolved text. An unknown `{{name}}` stays literal.
+- While a gate waits, its run's status is `waiting` and `blocked_on` describes the gate (`human_approval`, `human_review`, `pr_approval`, `pr_checks`, or `gate` for any other type). It returns to `running`, or to a terminal status, after approve, reject or timeout, with `blocked_on` cleared. Only the run that holds the gate is `waiting`; a parent that runs it through `call workflow` stays `running`. A live engine owns the gate's timeout, so the orphan reaper only cancels a waiting run whose engine lease has expired. `conductor workflow wait` exits 4 for a gate anywhere in the run tree.
 - `options = analyze-mobile-ux.findings` takes a `step.field` reference to a JSON object of labels keyed by value, from a step with a schema, and offers it to the approver as choices. The step must already have a result, or the gate fails before it is created.
 - A rejected gate fails the run.
 - In a [dry run](#dry-run) every gate except `quality_gate` is auto-approved and recorded Completed; `quality_gate` is still evaluated.
@@ -234,6 +235,7 @@ parallel { output = "review-findings"  fail_fast = false  call review-security  
 - The block's markers are the **union** of every completed call's markers, stored under a synthetic `parallel:<ulid>` name that no condition can reference. Conditions read each call's own name. Skipped calls add none and count as successes.
 - Only `call` nodes are allowed inside; use `do` or separate steps for scripts.
 - Skipped steps are re-evaluated on resume; they are not treated as completed.
+- A user cancel inside a branch (including a smoke stop) cancels the run: siblings stop before their next attempt and the run ends `cancelled`, not `failed`.
 
 ## foreach
 
@@ -307,9 +309,17 @@ The block a step prints to hand markers, context and extra fields to the engine.
 
 ## Template variables
 
-`{{name}}` is substituted in agent prompts, in `script` `run` and `env` values, in `call workflow` `inputs`, and in `foreach` `inputs`. An unknown name is stripped in agent prompts and in script `run`/`env`; it stays literal only in `call workflow` inputs.
+`{{name}}` is substituted in agent prompts, in `script` `run` and `env` values, in gate prompts, in `call workflow` `inputs`, and in `foreach` `inputs`. An unknown name is stripped in agent prompts and in script `run`/`env`; it stays literal in `call workflow`/`foreach` inputs and gate prompts.
 
-The scan takes each `{{` and the first `}}` after it as one placeholder, whatever is between them. So in an agent brief or snippet a literal `{{` in prose ("if it still shows a literal `{{`") followed later by a real `{{name}}` is read as one unknown placeholder, and the whole span between them is stripped from the prompt (#3339). `conductor workflow validate` warns about such a span in agent briefs and snippets, and the actor step records a `Prompt warning:` event on its agent run. Describe the literal in words instead ("an unsubstituted placeholder"). `conductor workflow step-log <run> <step> --mode prompt` shows the stored prompt with its length.
+A `{{` is a placeholder only when the text up to the next `}}`, with spaces and tabs trimmed, is a variable name: `[A-Za-z_][A-Za-z0-9_.-]*`. So `{{ name }}` resolves, and anything else (`{{...}}`, `{{<gate>.feedback}}`, a lone `{{`) is kept literally, in every path above. A literal `{{` in prose therefore no longer swallows the text up to the next `}}` (it did before runkon 0.11, #3339), and `conductor workflow validate` has no warning for it. `conductor workflow step-log <run> <step> --mode prompt` shows the stored prompt with its length.
+
+`{{#if name}} … {{else}} … {{/if}}` is a conditional block in every path. It nests; the first part shows when the variable is set and non-empty, the `{{else}}` part (optional) otherwise. An unknown name is false, and unbalanced tags are kept literally. For example, in an agent brief:
+
+```
+{{#if gate_feedback}}
+The user answered at the gate: {{gate_feedback}}
+{{/if}}
+```
 
 | Variable | Holds |
 |---|---|
@@ -334,7 +344,7 @@ The scan takes each `{{` and the first `}}` after it as one placeholder, whateve
 - For `repo_path`, `worktree_id`, `ticket_id` and `repo_id` the engine value overrides a workflow input of the same name; other injected defaults are overridden by an input. Exports can overwrite everything except the protected names listed under [script](#script).
 - `prior_context`/`prior_output` are about *the previous step*, which in a loop or after a skipped step may not be the one you mean. Read a specific step through `prior_contexts` or have the step write a file.
 - A script reads `{{prior_output}}` through `env = { PRIOR_OUTPUT = "{{prior_output}}" }`; it isn't set in the environment otherwise.
-- Don't write `{{variable}}` inside instructional prose of an agent brief ("if `{{gate_feedback}}` is present…"); after substitution the sentence breaks. Use plain English and one dedicated section containing the variable.
+- Don't write `{{variable}}` inside instructional prose of an agent brief ("if `{{gate_feedback}}` is present…"); after substitution the sentence breaks. Use plain English and one dedicated section containing the variable, or wrap that section in `{{#if name}} … {{/if}}` so it shows only when the value exists.
 
 ## Resume
 

@@ -1,50 +1,37 @@
+//! Placeholder substitution for host-side prompt text. Delegates to runkon's
+//! rule so conductor and the engine agree: a `{{` is a placeholder only when the
+//! text up to `}}` (spaces and tabs trimmed) is a variable name, `{{#if name}} …
+//! {{else}} … {{/if}}` blocks are conditionals, and anything else is kept literally.
 use std::collections::HashMap;
+
+use runkon_flow::prompt_builder::{substitute_with, Unresolved};
 
 fn substitute_variables_impl(
     template: &str,
     vars: &HashMap<&str, &str>,
-    strip_unresolved: bool,
+    unresolved: Unresolved,
 ) -> String {
-    // Single-pass scan: one output allocation regardless of variable count.
-    let mut result = String::with_capacity(template.len());
-    let mut remaining = template;
-    while let Some(open) = remaining.find("{{") {
-        result.push_str(&remaining[..open]);
-        remaining = &remaining[open + 2..];
-        if let Some(close) = remaining.find("}}") {
-            let key = &remaining[..close];
-            remaining = &remaining[close + 2..];
-            if let Some(val) = vars.get(key) {
-                result.push_str(val);
-            } else if !strip_unresolved {
-                result.push_str("{{");
-                result.push_str(key);
-                result.push_str("}}");
-            }
-            // strip_unresolved: just drop the placeholder — push nothing
-        } else {
-            // Unclosed `{{` — emit it literally and stop scanning.
-            result.push_str("{{");
-            break;
-        }
-    }
-    result.push_str(remaining);
-    result
+    substitute_with(
+        template,
+        |k| vars.get(k).copied(),
+        |v, out| out.push_str(v),
+        unresolved,
+    )
 }
 
-/// For agent prompts: substitutes variables AND strips unresolved `{{…}}` placeholders.
+/// For agent prompts: substitutes variables AND strips unresolved `{{name}}` placeholders.
 #[allow(dead_code)]
 pub(super) fn substitute_variables(prompt: &str, vars: &HashMap<&str, &str>) -> String {
-    substitute_variables_impl(prompt, vars, true)
+    substitute_variables_impl(prompt, vars, Unresolved::Strip)
 }
 
-/// For data contexts: substitutes variables but preserves any `{{…}}` text that was not a variable.
+/// For data contexts: substitutes variables but keeps any `{{…}}` text that was not a resolvable variable.
 #[allow(dead_code)]
 pub(super) fn substitute_variables_keep_literal(
     template: &str,
     vars: &HashMap<&str, &str>,
 ) -> String {
-    substitute_variables_impl(template, vars, false)
+    substitute_variables_impl(template, vars, Unresolved::KeepLiteral)
 }
 
 #[cfg(test)]
@@ -90,5 +77,44 @@ mod tests {
         vars.insert("prior_output", "result: {{some_json_key}}");
         let result = substitute_variables("Output: {{prior_output}}", &vars);
         assert_eq!(result, "Output: result: {{some_json_key}}");
+    }
+
+    #[test]
+    fn literal_open_braces_survive_and_branch_substitutes() {
+        // runkon#205 acceptance case.
+        let mut vars = HashMap::new();
+        vars.insert("feature_base_branch", "release/x");
+        let t = "intro\nstill shows a literal `{{`, dry run.\nmore\nfetch {{feature_base_branch}} now\n";
+        let want = "intro\nstill shows a literal `{{`, dry run.\nmore\nfetch release/x now\n";
+        assert_eq!(substitute_variables(t, &vars), want);
+        assert_eq!(substitute_variables_keep_literal(t, &vars), want);
+    }
+
+    #[test]
+    fn spaced_name_resolves() {
+        let mut vars = HashMap::new();
+        vars.insert("name", "world");
+        assert_eq!(substitute_variables("hi {{ name }}", &vars), "hi world");
+    }
+
+    #[test]
+    fn if_else_blocks() {
+        let mut vars = HashMap::new();
+        vars.insert("x", "yes");
+        vars.insert("empty", "");
+        let t = "{{#if x}}A{{else}}B{{/if}}";
+        assert_eq!(substitute_variables(t, &vars), "A");
+        let t = "{{#if empty}}A{{else}}B{{/if}}";
+        assert_eq!(substitute_variables(t, &vars), "B");
+        let t = "{{#if unset}}A{{else}}B{{/if}}";
+        assert_eq!(substitute_variables(t, &vars), "B");
+    }
+
+    #[test]
+    fn non_names_are_kept_in_both_modes() {
+        let vars = HashMap::new();
+        let t = "a {{...}} b {{<gate>.feedback}} c";
+        assert_eq!(substitute_variables(t, &vars), t);
+        assert_eq!(substitute_variables_keep_literal(t, &vars), t);
     }
 }

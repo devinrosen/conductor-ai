@@ -449,6 +449,16 @@ fn format_run_detail(
     if run.dry_run {
         out.push_str("dry_run: true\n");
     }
+    if run.status == conductor_core::workflow::WorkflowRunStatus::Waiting {
+        if let Some(blocked) = run.blocked_on.as_ref() {
+            let (line, prompt) = conductor_core::workflow::format_blocked_on(blocked);
+            out.push_str(&format!("blocked_on: {line}\n"));
+            if let Some(first) = prompt.as_deref().and_then(|p| p.lines().next()) {
+                let first: String = first.chars().take(200).collect();
+                out.push_str(&format!("blocked_prompt: {first}\n"));
+            }
+        }
+    }
     let run_chain = conductor_core::workflow::run_chain_if_failed(conn, run);
     if let Some(cause) = conductor_core::workflow::format_failure_cause(&run_chain) {
         out.push_str(&format!("cause: {cause}\n"));
@@ -767,6 +777,26 @@ mod tests {
             !out.contains("step_error:"),
             "identical step_error is not repeated"
         );
+    }
+
+    #[test]
+    fn test_format_run_detail_shows_blocked_on_for_waiting_run() {
+        let (_f, conductor) = make_test_conductor();
+        let conn = &conductor.conn;
+        insert_test_wf_run(conn, "r1", "wf", "waiting", None);
+        conn.execute(
+            "UPDATE workflow_runs SET blocked_on = :b WHERE id = 'r1'",
+            rusqlite::named_params! { ":b": r#"{"type":"human_review","gate_name":"plan-review","prompt":"Review the plan\nsecond line","options":[]}"# },
+        )
+        .unwrap();
+        let out = run_detail(conn, "r1");
+        assert!(out.contains("status: waiting\n"), "{out}");
+        assert!(
+            out.contains("blocked_on: human_review gate 'plan-review'\n"),
+            "{out}"
+        );
+        assert!(out.contains("blocked_prompt: Review the plan\n"), "{out}");
+        assert!(!out.contains("second line"), "{out}");
     }
 
     #[test]

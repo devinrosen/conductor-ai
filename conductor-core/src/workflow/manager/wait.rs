@@ -1328,6 +1328,32 @@ mod tests {
     }
 
     #[test]
+    fn waiting_child_under_running_parent_returns_gate_waiting() {
+        // Since runkon 0.11 only the run that holds the gate is `waiting`; its
+        // parent stays `running`. The wait must still exit 4 (#3483).
+        let conn = setup();
+        live_run(&conn, "root");
+        insert_run(
+            &conn,
+            "kid",
+            Some("root"),
+            "waiting",
+            Some("+20 seconds"),
+            "-1 hours",
+        );
+        conn.execute(
+            "UPDATE workflow_runs SET blocked_on = :b WHERE id = 'kid'",
+            named_params![":b": r#"{"type":"human_review","gate_name":"human_review","prompt":null,"options":[]}"#],
+        )
+        .unwrap();
+        insert_gate_step(&conn, "g", "kid", "human_review", 1, "waiting", None, false);
+        let s = eval(&conn, "root").unwrap();
+        assert_eq!(s.outcome, WaitOutcome::GateWaiting);
+        assert_eq!(s.outcome.exit_code(), 4);
+        assert_eq!(s.gates[0].run_id, "kid");
+    }
+
+    #[test]
     fn through_gates_keeps_polling() {
         let conn = setup();
         live_run(&conn, "r");

@@ -4,9 +4,7 @@ use std::collections::{HashMap, HashSet};
 use crate::agent_config::{self, AgentSpec};
 use crate::prompt_config;
 use crate::schema_config;
-use crate::workflow::placeholder_scan::{
-    is_variable_name, placeholder_spans, runaway_placeholders,
-};
+use crate::workflow::placeholder_scan::placeholder_names;
 use runkon_flow::dsl::{
     default_skills_dir, detect_workflow_cycles, make_script_resolver, validate_script_steps,
     validate_workflow_semantics, AgentRef, ScriptNode, ValidationContext, ValidationError,
@@ -244,14 +242,14 @@ struct ScriptExports {
     by_agent: HashMap<String, HashSet<String>>,
 }
 
-/// Read a script step's file. `None` for a `run` with a `{{…}}` placeholder
+/// Read a script step's file. `None` for a `run` with a `{{name}}` placeholder
 /// (can't be resolved statically) and for a script that can't be resolved or
 /// read: `validate_script_steps` already reports missing ones.
 fn read_script_text<F>(run: &str, resolver: &F) -> Option<(std::path::PathBuf, String)>
 where
     F: Fn(&str) -> std::result::Result<std::path::PathBuf, String>,
 {
-    if run.contains("{{") {
+    if !placeholder_names(run).is_empty() {
         return None;
     }
     let path = resolver(run).ok()?;
@@ -314,8 +312,8 @@ enum TextKind {
 /// a key a script that can run before it exports: the engine leaves such a reference
 /// unsubstituted in a `.wf` source and removes it from an agent brief or
 /// snippet. `texts` are `(file label, text, kind)` triples. Each (key, file) is
-/// reported once. In briefs and snippets a `{{` whose span isn't a variable
-/// name is reported too, since the engine drops the whole span.
+/// reported once. Only `{{name}}` spans count: the engine keeps any other `{{`
+/// text literally, so it isn't reported.
 fn unknown_variable_warnings(
     workflow: &WorkflowDef,
     texts: &[(String, String, TextKind)],
@@ -333,8 +331,7 @@ fn unknown_variable_warnings(
             Some(keys) => keys.contains(key),
             None => exports.all.contains(key),
         };
-        if key == "else"
-            || workflow.inputs.iter().any(|i| i.name == key)
+        if workflow.inputs.iter().any(|i| i.name == key)
             || ENGINE_BUILTIN_VARIABLES.contains(&key)
             || super::coordinator::CONDUCTOR_INJECTED_VARIABLES.contains(&key)
             || exported
@@ -348,9 +345,8 @@ fn unknown_variable_warnings(
     let mut warnings = Vec::new();
     for (file, text, kind) in texts {
         let mut seen: HashSet<&str> = HashSet::new();
-        for span in placeholder_spans(text) {
-            let key = span.key;
-            if is_variable_name(key) && !is_known(key, file) && seen.insert(key) {
+        for key in placeholder_names(text) {
+            if !is_known(key, file) && seen.insert(key) {
                 let fate = match kind {
                     TextKind::Source => "it is left unsubstituted at run time",
                     TextKind::Prompt => "it is removed from the prompt at run time",
@@ -360,13 +356,6 @@ fn unknown_variable_warnings(
                         "unknown variable '{{{{{key}}}}}' in {file} (not an input, built-in or \
                          script export); {fate}"
                     ),
-                });
-            }
-        }
-        if *kind == TextKind::Prompt {
-            for hit in runaway_placeholders(text) {
-                warnings.push(BatchValidationWarning {
-                    message: format!("{file}: {}", hit.describe()),
                 });
             }
         }
@@ -1460,32 +1449,27 @@ mod tests {
     }
 
     #[test]
-    fn batch_runaway_placeholder_in_agent_warns() {
+    fn batch_literal_open_braces_in_agent_do_not_warn() {
+        // Since runkon 0.11 the engine keeps a literal `{{`, so nothing is reported.
         let dir = tempfile::tempdir().unwrap();
         write_file(
             dir.path(),
-            ".conductor/agents/runaway.md",
+            ".conductor/agents/literal.md",
             "---\nrole: actor\n---\nIf it shows a literal `{{`, stop.\nThen fetch {{ticket_id}}.\n",
-        );
-        write_file(
-            dir.path(),
-            ".conductor/agents/clean.md",
-            "---\nrole: actor\n---\nFetch {{ticket_id}}.\n",
         );
         let src = r#"workflow rp {
             meta { trigger = "manual" targets = ["worktree"] }
-            call runaway {}
-            call clean {}
+            call literal {}
         }"#;
         let wf_path = dir.path().join(".conductor/workflows/rp.wf");
         write_file(dir.path(), ".conductor/workflows/rp.wf", src);
         let wf = parse_workflow_str(src, wf_path.to_str().unwrap()).unwrap();
         let entry = run_batch(dir.path(), wf);
         let msgs: Vec<&str> = entry.warnings.iter().map(|w| w.message.as_str()).collect();
-        let hits: Vec<_> = msgs.iter().filter(|m| m.contains("lines 1-2")).collect();
-        assert_eq!(hits.len(), 1, "got: {msgs:?}");
-        assert!(hits[0].contains("agent runaway"), "got: {msgs:?}");
-        assert!(!msgs.iter().any(|m| m.contains("agent clean")), "{msgs:?}");
+        assert!(
+            !msgs.iter().any(|m| m.contains("agent literal")),
+            "got: {msgs:?}"
+        );
     }
 
     fn template_source(name: &str, body: &str) -> (String, String) {
