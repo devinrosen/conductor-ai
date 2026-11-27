@@ -34,6 +34,11 @@ case "$1" in
         echo "{\"workflow\":\"${name}\",\"status\":\"pass\",\"run_id\":\"01TESTPASS\",\"stopped_at\":{\"workflow\":\"${name}\",\"step\":\"a\",\"kind\":\"agent\"},\"warnings\":[],\"error\":null,\"missing_inputs\":[]}"
         ;;
       *)
+        # validate_fail: the file's content is the validate output; exit non-zero
+        if [ -f "$CARGO_STUB_DIR/validate_fail" ]; then
+          cat "$CARGO_STUB_DIR/validate_fail"
+          exit 1
+        fi
         echo "${CONDUCTOR_HOME:-}|${CONDUCTOR_DB_PATH-unset}" > "$CARGO_STUB_DIR/validate_env"
         echo "1/1 workflow(s) passed" ;;
     esac
@@ -48,7 +53,7 @@ export PATH="$STUB_DIR/bin:$PATH"
 # switches to a feature branch and cd's into the repo.
 new_repo() {
   repo=$(scratch_repo)
-  rm -f "$STUB_DIR/fail_build" "$STUB_DIR/fail_smoke" "$STUB_DIR/calls" "$STUB_DIR/bump_schema" "$STUB_DIR/validate_env"
+  rm -f "$STUB_DIR/fail_build" "$STUB_DIR/fail_smoke" "$STUB_DIR/calls" "$STUB_DIR/bump_schema" "$STUB_DIR/validate_env" "$STUB_DIR/validate_fail"
   commit_file "$repo" .conductor/tests/run.sh "#!/usr/bin/env bash
 touch \"\$PWD/ran-sentinel\"
 $1" init
@@ -173,6 +178,24 @@ assert_eq "$home/conductor.db" "$(cut -d'|' -f2 < "$STUB_DIR/validate_env")" "CO
 assert_eq "89" "$(sqlite3 -readonly "$home/conductor.db" "SELECT value FROM _conductor_meta WHERE key = 'schema_version'")" "schema_version"
 assert_eq "$before" "$(cksum < "$home/conductor.db")" "database file checksum"
 assert_jq '[.checks[] | select(.name == "conductor database schema")] | length == 0'
+
+case_begin "validate failure with no FAIL line shows the log tail (schema newer than the build)"
+new_repo "$PASSING"
+commit_file "$repo" .conductor/workflows/x.wf "workflow x {}" change
+printf 'Error: database schema version 91 is newer than this binary supports (90)\n' > "$STUB_DIR/validate_fail"
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_marker has_failures
+assert_jq '[.checks[] | select(.name == "conductor workflow validate")][0].status == "fail"'
+assert_context_contains "schema version 91 is newer than this binary"
+
+case_begin "validate failure with FAIL lines shows them, not the log tail"
+new_repo "$PASSING"
+commit_file "$repo" .conductor/workflows/x.wf "workflow x {}" change
+printf 'FAIL  x: bad step\nnoise-tail-line\n' > "$STUB_DIR/validate_fail"
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_marker has_failures
+assert_context_contains "FAIL  x: bad step"
+assert_jq '(.context | contains("noise-tail-line")) | not'
 
 case_begin "validate-workflows runs validate in the caller's home"
 new_repo "$PASSING"
