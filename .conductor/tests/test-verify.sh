@@ -34,6 +34,11 @@ case "$1" in
         echo "{\"workflow\":\"${name}\",\"status\":\"pass\",\"run_id\":\"01TESTPASS\",\"stopped_at\":{\"workflow\":\"${name}\",\"step\":\"a\",\"kind\":\"agent\"},\"warnings\":[],\"error\":null,\"missing_inputs\":[]}"
         ;;
       *)
+        # validate_fail: the file's content is the validate output; exit non-zero
+        if [ -f "$CARGO_STUB_DIR/validate_fail" ]; then
+          cat "$CARGO_STUB_DIR/validate_fail"
+          exit 1
+        fi
         echo "${CONDUCTOR_HOME:-}|${CONDUCTOR_DB_PATH-unset}" > "$CARGO_STUB_DIR/validate_env"
         echo "1/1 workflow(s) passed" ;;
     esac
@@ -48,7 +53,7 @@ export PATH="$STUB_DIR/bin:$PATH"
 # switches to a feature branch and cd's into the repo.
 new_repo() {
   repo=$(scratch_repo)
-  rm -f "$STUB_DIR/fail_build" "$STUB_DIR/fail_smoke" "$STUB_DIR/calls" "$STUB_DIR/bump_schema" "$STUB_DIR/validate_env"
+  rm -f "$STUB_DIR/fail_build" "$STUB_DIR/fail_smoke" "$STUB_DIR/calls" "$STUB_DIR/bump_schema" "$STUB_DIR/validate_env" "$STUB_DIR/validate_fail"
   commit_file "$repo" .conductor/tests/run.sh "#!/usr/bin/env bash
 touch \"\$PWD/ran-sentinel\"
 $1" init
@@ -160,19 +165,46 @@ assert_jq '.smokes == []'
 
 # --- the real database (#3469) -------------------------------------------------
 
-case_begin "static validate runs in a throwaway home, never the caller's"
+case_begin "static validate runs in the caller's home and leaves an older-schema database unchanged"
+new_repo "$PASSING"
+commit_file "$repo" conductor-core/src/db/migrations.rs "pub const LATEST_SCHEMA_VERSION: u32 = 90;" migration
+commit_file "$repo" .conductor/workflows/x.wf "workflow x {}" change
+home=$(scratch_conductor_home 89)
+before=$(cksum < "$home/conductor.db")
+run_script verify.sh FEATURE_BASE_BRANCH=main CONDUCTOR_HOME="$home" CONDUCTOR_DB_PATH="$home/conductor.db"
+assert_jq '[.checks[] | select(.name == "conductor workflow validate") | .status][0] == "pass"'
+assert_eq "$home" "$(cut -d'|' -f1 < "$STUB_DIR/validate_env")" "CONDUCTOR_HOME for validate"
+assert_eq "$home/conductor.db" "$(cut -d'|' -f2 < "$STUB_DIR/validate_env")" "CONDUCTOR_DB_PATH for validate"
+assert_eq "89" "$(sqlite3 -readonly "$home/conductor.db" "SELECT value FROM _conductor_meta WHERE key = 'schema_version'")" "schema_version"
+assert_eq "$before" "$(cksum < "$home/conductor.db")" "database file checksum"
+assert_jq '[.checks[] | select(.name == "conductor database schema")] | length == 0'
+
+case_begin "validate failure with no FAIL line shows the log tail (schema newer than the build)"
+new_repo "$PASSING"
+commit_file "$repo" .conductor/workflows/x.wf "workflow x {}" change
+printf 'Error: database schema version 91 is newer than this binary supports (90)\n' > "$STUB_DIR/validate_fail"
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_marker has_failures
+assert_jq '[.checks[] | select(.name == "conductor workflow validate")][0].status == "fail"'
+assert_context_contains "schema version 91 is newer than this binary"
+
+case_begin "validate failure with FAIL lines shows them, not the log tail"
+new_repo "$PASSING"
+commit_file "$repo" .conductor/workflows/x.wf "workflow x {}" change
+printf 'FAIL  x: bad step\nnoise-tail-line\n' > "$STUB_DIR/validate_fail"
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_marker has_failures
+assert_context_contains "FAIL  x: bad step"
+assert_jq '(.context | contains("noise-tail-line")) | not'
+
+case_begin "validate-workflows runs validate in the caller's home"
 new_repo "$PASSING"
 commit_file "$repo" .conductor/workflows/x.wf "workflow x {}" change
 home=$(scratch_conductor_home 89)
-run_script verify.sh FEATURE_BASE_BRANCH=main CONDUCTOR_HOME="$home" CONDUCTOR_DB_PATH="$home/conductor.db"
-assert_jq '[.checks[] | select(.name == "conductor workflow validate") | .status][0] == "pass"'
-vhome=$(cut -d'|' -f1 < "$STUB_DIR/validate_env")
-if [ -z "$vhome" ] || [ "$vhome" = "$home" ]; then
-  fail "validate ran in '$vhome', not a throwaway home"
-elif [ -e "$vhome" ]; then
-  fail "the throwaway home was not removed: $vhome"
-fi
-assert_eq "" "$(cut -d'|' -f2 < "$STUB_DIR/validate_env")" "CONDUCTOR_DB_PATH for validate"
+run_script validate-workflows.sh BASE_BRANCH=main CONDUCTOR_HOME="$home"
+assert_exit 0
+assert_jq '.approved == true'
+assert_eq "$home" "$(cut -d'|' -f1 < "$STUB_DIR/validate_env")" "CONDUCTOR_HOME for validate"
 
 case_begin "tripwire: verify fails when the real schema changes during the run"
 new_repo "$PASSING"
@@ -190,31 +222,5 @@ commit_file "$repo" .conductor/scripts/foo.sh "echo hi" change
 run_script verify.sh FEATURE_BASE_BRANCH=main CONDUCTOR_HOME="$(scratch_conductor_home 89)"
 assert_no_markers
 assert_jq '[.checks[] | select(.name == "conductor database schema")] | length == 0'
-
-# mktemp that fails for the throwaway home only (lib-branch-home.sh's template).
-MKTEMP_DIR=$(scratch_dir)
-cat > "$MKTEMP_DIR/mktemp" <<'STUB'
-#!/usr/bin/env bash
-case "$*" in *conductor-home*) echo "mktemp: stub failure" >&2; exit 1 ;; esac
-exec /usr/bin/mktemp "$@"
-STUB
-chmod +x "$MKTEMP_DIR/mktemp"
-
-case_begin "verify: no throwaway home fails validate with the cause and never runs it"
-new_repo "$PASSING"
-commit_file "$repo" .conductor/workflows/x.wf "workflow x {}" change
-run_script verify.sh FEATURE_BASE_BRANCH=main PATH="$MKTEMP_DIR:$PATH"
-assert_marker has_failures
-assert_jq '[.checks[] | select(.name == "conductor workflow validate")][0] | .status == "fail" and (.summary | contains("throwaway CONDUCTOR_HOME"))'
-[ ! -e "$STUB_DIR/validate_env" ] || fail "validate ran without a throwaway home"
-
-case_begin "validate-workflows: no throwaway home is a blocking finding, and cargo is not run"
-new_repo "$PASSING"
-commit_file "$repo" .conductor/workflows/x.wf "workflow x {}" change
-run_script validate-workflows.sh BASE_BRANCH=main PATH="$MKTEMP_DIR:$PATH"
-assert_exit 0
-assert_marker has_review_issues
-assert_jq '.approved == false and (.findings[0].message | contains("throwaway CONDUCTOR_HOME"))'
-[ ! -e "$STUB_DIR/calls" ] || fail "cargo was called: $(cat "$STUB_DIR/calls")"
 
 finish

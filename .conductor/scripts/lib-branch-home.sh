@@ -9,10 +9,9 @@
 #
 # Pipeline scripts that run the branch build source this file:
 #
-#   throwaway_home            — prints a new empty temp dir, for checks that need
-#                               no data (static `workflow validate`). Run the
-#                               command with CONDUCTOR_HOME=<dir> CONDUCTOR_DB_PATH=
-#                               and remove the dir afterwards.
+#   throwaway_home            — prints a new empty temp dir; branch_home_setup
+#                               copies the real home into it. Static `workflow
+#                               validate` needs no isolation (read-only, #3470).
 #   branch_home_setup         — for checks that need the real data (dry-run smokes,
 #                               screenshots of real runs). Compares the branch's
 #                               LATEST_SCHEMA_VERSION with the real database's
