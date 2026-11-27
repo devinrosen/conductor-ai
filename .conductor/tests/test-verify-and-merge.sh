@@ -143,7 +143,7 @@ new_case() {
 set_pr() { jq -c "$1" "$stub/pr.json" > "$stub/pr.new" && mv "$stub/pr.new" "$stub/pr.json"; }
 
 run_ready() {
-  run_script check-pr-ready.sh PATH="$stub/bin:$PATH" GH_STUB_DIR="$stub" GH_RETRY_DELAYS=0 CONFIRM=false AUTO_REREVIEW=false "$@"
+  run_script check-pr-ready.sh PATH="$stub/bin:$PATH" GH_STUB_DIR="$stub" GH_RETRY_DELAYS=0 CONFIRM=false AUTO_REREVIEW=false WAIT_FOR_CHECKS=true "$@"
 }
 
 case_begin "ready: emits pr_ready and the same-repo linked issues"
@@ -291,12 +291,32 @@ run_ready
 assert_exit 1
 assert_stderr_contains "required check failing: Clippy"
 
-case_begin "a pending required check is refused"
+case_begin "a pending required check: checks_pending, not a refusal (#3480)"
 new_case
 echo '[{"name":"Clippy","bucket":"pass"},{"name":"Test","bucket":"pending"}]' > "$stub/checks.json"
+before=$(git -C "$origin" rev-parse feature 2>/dev/null || echo none)
 run_ready
+assert_exit 0
+assert_marker checks_pending
+assert_no_marker pr_ready
+assert_jq ".head_sha == \"$head\" and .pr_number == \"7\" and .base_branch == \"release/0.22.2\""
+assert_jq '.required_checks == "Clippy,Test" and .linked_issues == "1 2"'
+assert_context_contains "Test"
+assert_eq "$before" "$(git -C "$origin" rev-parse feature 2>/dev/null || echo none)" "origin feature ref"
+
+case_begin "a pending required check with WAIT_FOR_CHECKS=false is refused"
+new_case
+echo '[{"name":"Clippy","bucket":"pass"},{"name":"Test","bucket":"pending"}]' > "$stub/checks.json"
+run_ready WAIT_FOR_CHECKS=false
 assert_exit 1
 assert_stderr_contains "required checks still running: Test"
+
+case_begin "a failing check alongside a pending one is refused by name"
+new_case
+echo '[{"name":"Clippy","bucket":"fail"},{"name":"Test","bucket":"pending"}]' > "$stub/checks.json"
+run_ready
+assert_exit 1
+assert_stderr_contains "required check failing: Clippy"
 
 case_begin "a failing required check with gh exit 1 is still refused by name"
 new_case
@@ -306,11 +326,14 @@ run_ready
 assert_exit 1
 assert_stderr_contains "required check failing: Clippy"
 
-case_begin "a pending required check with gh exit 8 is refused"
+case_begin "a pending required check with gh exit 8: checks_pending, or refused with WAIT_FOR_CHECKS=false"
 new_case
 echo '[{"name":"Test","bucket":"pending"}]' > "$stub/checks.json"
 echo 8 > "$stub/checks.rc"
 run_ready
+assert_exit 0
+assert_marker checks_pending
+run_ready WAIT_FOR_CHECKS=false
 assert_exit 1
 assert_stderr_contains "required checks still running: Test"
 
@@ -386,6 +409,33 @@ assert_stderr_contains "CONFIRM must be true or false"
 run_ready CONFIRM="{{confirm}}"
 assert_exit 1
 assert_stderr_contains "CONFIRM must be true or false"
+
+case_begin "WAIT_FOR_CHECKS empty or an unresolved placeholder: refused up front (#3480)"
+new_case
+run_ready WAIT_FOR_CHECKS=
+assert_exit 1
+assert_stderr_contains "WAIT_FOR_CHECKS must be true or false"
+run_ready WAIT_FOR_CHECKS="{{wait_for_checks}}"
+assert_exit 1
+assert_stderr_contains "WAIT_FOR_CHECKS must be true or false"
+
+case_begin "pending checks and behind the base, AUTO_REREVIEW=true: base_merged wins over checks_pending"
+new_case
+echo '[{"name":"Clippy","bucket":"pass"},{"name":"Test","bucket":"pending"}]' > "$stub/checks.json"
+git checkout -q main && commit_file "$repo" base.txt newer "newer base" && git push -q origin main:release/0.22.2 && git checkout -q feature
+run_ready AUTO_REREVIEW=true
+assert_exit 0
+assert_marker base_merged
+assert_no_marker checks_pending
+
+case_begin "pending checks and a stale review still refuse (predates head)"
+new_case
+git commit -q --allow-empty -m "unreviewed" && git push -q origin feature
+set_pr ".headRefOid = \"$(git rev-parse HEAD)\""
+echo '[{"name":"Clippy","bucket":"pass"},{"name":"Test","bucket":"pending"}]' > "$stub/checks.json"
+run_ready
+assert_exit 1
+assert_stderr_contains "predates head"
 
 case_begin "AUTO_REREVIEW=true: a draft, a failing check and a stale review still refuse first"
 new_case

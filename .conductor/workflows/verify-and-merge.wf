@@ -1,4 +1,4 @@
-// Generated from template: verify-and-merge v1.3.0
+// Generated from template: verify-and-merge v1.4.0
 workflow verify-and-merge {
   meta {
     description = "Check a reviewed PR is ready, verify it live against its issue's acceptance criteria, post the evidence, then squash-merge"
@@ -11,11 +11,13 @@ workflow verify-and-merge {
     confirm boolean
     // "false" restores the old stop after a base merge: merge, push, refuse (#3436).
     auto_rereview default = "true"
+    // "false" restores the refusal when required checks are still running (#3480).
+    wait_for_checks default = "true"
   }
 
   script check-pr-ready {
     run = ".conductor/scripts/check-pr-ready.sh"
-    env = { CONFIRM = "{{confirm}}" DRY_RUN = "{{dry_run}}" TICKET_SOURCE_ID = "{{ticket_source_id}}" TRUSTED_REVIEW_BOTS = "conductor-ai-reviewer[bot]" AUTO_REREVIEW = "{{auto_rereview}}" }
+    env = { CONFIRM = "{{confirm}}" DRY_RUN = "{{dry_run}}" TICKET_SOURCE_ID = "{{ticket_source_id}}" TRUSTED_REVIEW_BOTS = "conductor-ai-reviewer[bot]" AUTO_REREVIEW = "{{auto_rereview}}" WAIT_FOR_CHECKS = "{{wait_for_checks}}" }
   }
 
   // The base was merged in and pushed: the new head has no review and no CI yet (#3436).
@@ -32,7 +34,23 @@ workflow verify-and-merge {
 
     script recheck-pr-ready {
       run = ".conductor/scripts/check-pr-ready.sh"
-      env = { CONFIRM = "{{confirm}}" DRY_RUN = "{{dry_run}}" TICKET_SOURCE_ID = "{{ticket_source_id}}" TRUSTED_REVIEW_BOTS = "conductor-ai-reviewer[bot]" AUTO_REREVIEW = "false" }
+      env = { CONFIRM = "{{confirm}}" DRY_RUN = "{{dry_run}}" TICKET_SOURCE_ID = "{{ticket_source_id}}" TRUSTED_REVIEW_BOTS = "conductor-ai-reviewer[bot]" AUTO_REREVIEW = "false" WAIT_FOR_CHECKS = "false" }
+    }
+  }
+
+  // Approved head, CI still running: wait for it, then check again (#3480). The recheck
+  // runs with AUTO_REREVIEW and WAIT_FOR_CHECKS off, so anything that changed during the
+  // wait refuses rather than starting a second round.
+  if check-pr-ready.checks_pending {
+    script wait-for-pending-checks {
+      run     = ".conductor/scripts/wait-for-pr-checks.sh"
+      env     = { PR_NUMBER = "{{pr_number}}" REQUIRED_CHECKS = "{{required_checks}}" DRY_RUN = "{{dry_run}}" }
+      timeout = 3000
+    }
+
+    script recheck-after-checks {
+      run = ".conductor/scripts/check-pr-ready.sh"
+      env = { CONFIRM = "{{confirm}}" DRY_RUN = "{{dry_run}}" TICKET_SOURCE_ID = "{{ticket_source_id}}" TRUSTED_REVIEW_BOTS = "conductor-ai-reviewer[bot]" AUTO_REREVIEW = "false" WAIT_FOR_CHECKS = "false" }
     }
   }
 
