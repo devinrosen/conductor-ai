@@ -22,8 +22,8 @@
 # frontend files) skips the checks.
 #
 # The branch build must not migrate the real conductor database (#3469): the static
-# validate runs in a throwaway CONDUCTOR_HOME, the smokes go through
-# lib-branch-home.sh (a copy when this branch adds a migration), and a tripwire reads
+# validate opens the database read-only and never migrates it (#3470), so it needs
+# no isolation, the smokes go through lib-branch-home.sh (a copy when this branch adds a migration), and a tripwire reads
 # the real database's schema_version (read-only) before and after the checks. When it
 # changed, verify fails: every installed binary older than this branch now refuses
 # to open the database.
@@ -145,8 +145,7 @@ else
 fi
 
 logs=$(mktemp -d)
-validate_home=""
-trap 'rm -rf "${logs}"; [ -z "${validate_home}" ] || rm -rf "${validate_home}"' EXIT
+trap 'rm -rf "${logs}"' EXIT
 
 # Tripwire: the real database's schema version before the checks (read-only).
 schema_before=""
@@ -215,15 +214,13 @@ fi
 
 # --- conductor workflow validate ------------------------------------------------
 # Uses the conductor built above from this worktree, so a change to the
-# validator itself is checked by the new code. Static checks need no data, so it
-# runs in a throwaway home (--templates resolves scripts from the worktree, #3455).
+# validator itself is checked by the new code. Static validate is read-only and
+# never migrates the database (#3470), so it runs in the caller's environment
+# (--templates resolves scripts from the worktree, #3455).
 if [ "${validate_pipeline}" -eq 1 ]; then
   if [ "${build_ok}" -eq 0 ]; then
     record "conductor workflow validate" skipped "not run: cargo build failed"
-  elif ! validate_home=$(throwaway_home) || [ -z "${validate_home}" ]; then
-    validate_home=""
-    record "conductor workflow validate" fail "could not create a throwaway CONDUCTOR_HOME (mktemp failed); not running the branch build against the real database"
-  elif CONDUCTOR_HOME="${validate_home}" CONDUCTOR_DB_PATH="" cargo run -q --bin conductor -- workflow validate --all --templates --path . > "${logs}/validate.log" 2>&1; then
+  elif cargo run -q --bin conductor -- workflow validate --all --templates --path . > "${logs}/validate.log" 2>&1; then
     record "conductor workflow validate" pass "$(tail -n 1 "${logs}/validate.log")"
   else
     record "conductor workflow validate" fail "workflow or template validation failed" "$(grep -E '^(FAIL|\s*✗)' "${logs}/validate.log" | head -n 40)"
@@ -297,7 +294,7 @@ if [ -n "${schema_before}" ]; then
   fi
   if [ "${schema_after}" != "${schema_before}" ]; then
     record "conductor database schema" fail "the real conductor database went from schema ${schema_before} to ${schema_after} during verify" \
-      "Something in this verify opened $(real_db_path) with this branch's build and migrated it. Every installed conductor older than this branch (the MCP server, TUI, web, and the conductor that running workflows' script steps call) now refuses to open it. Find the caller that ran without a throwaway home or lib-branch-home.sh, and tell the user: they must install this branch's build or restore the database."
+      "Something in this verify opened $(real_db_path) with this branch's build and migrated it. Every installed conductor older than this branch (the MCP server, TUI, web, and the conductor that running workflows' script steps call) now refuses to open it. Find the caller that ran this branch's build outside lib-branch-home.sh, and tell the user: they must install this branch's build or restore the database."
   fi
 fi
 

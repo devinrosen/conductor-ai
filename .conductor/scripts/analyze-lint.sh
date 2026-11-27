@@ -9,12 +9,7 @@ FAILURE_DETAILS=""
 # same command instead of a broader one that may pass (per-crate clippy without
 # features can fail where workspace clippy, with unified features, does not).
 LOG_DIR=$(mktemp -d)
-VALIDATE_HOME=""
-cleanup() {
-  rm -rf "$LOG_DIR"
-  if [ -n "$VALIDATE_HOME" ]; then rm -rf "$VALIDATE_HOME"; fi
-}
-trap cleanup EXIT
+trap 'rm -rf "$LOG_DIR"' EXIT
 
 # run_check <name> <command...>
 # Runs the command, echoes its output, and on failure records <name>, the
@@ -83,19 +78,16 @@ run_check "fmt" cargo fmt --all --check
 
 # Validate changed or new .wf files.
 #
-# Every conductor command opens the database (Conductor::open) before it runs,
-# even `workflow validate --path`, and the `cargo run` fallback is this branch's
-# own build: against the real ~/.conductor it would apply the branch's
-# migrations and lock out every installed binary (#3182). Validation needs no
-# real state, so both commands run with a throwaway CONDUCTOR_HOME.
+# Static validate opens the database read-only and never migrates it (#3470), so
+# the installed binary and the branch build's `cargo run` fallback can both run
+# against the real home.
 validate_wf() {
-  CONDUCTOR_HOME="$VALIDATE_HOME" conductor workflow validate "$1" --path . \
-    || CONDUCTOR_HOME="$VALIDATE_HOME" cargo run --bin conductor -- workflow validate "$1" --path .
+  conductor workflow validate "$1" --path . \
+    || cargo run --bin conductor -- workflow validate "$1" --path .
 }
 for f in $(git diff --name-only "$DIFF_TARGET" -- '*.wf') $(git ls-files --others --exclude-standard -- '*.wf'); do
   [ -f "$f" ] || continue
   name=$(basename "$f" .wf)
-  [ -n "$VALIDATE_HOME" ] || VALIDATE_HOME=$(mktemp -d)
   CHECK_DISPLAY="conductor workflow validate $name --path ." run_check "wf:$name" validate_wf "$name"
 done
 
