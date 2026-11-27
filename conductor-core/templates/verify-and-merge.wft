@@ -1,14 +1,14 @@
 ---
 name: verify-and-merge
 description: Check a conductor-reviewed PR is ready, verify it live against its issue's acceptance criteria, post the evidence as a PR comment, then squash-merge it
-version: "1.3.0"
+version: "1.4.0"
 target_types:
   - worktree
 hints:
   - "The scripts (check-pr-ready.sh, wait-for-pr-checks.sh, post-verification.sh, check-summary.sh, update-pr-summary.sh, squash-merge.sh), the briefs (.conductor/agents/verify-acceptance.md, .conductor/agents/refresh-summary.md) and the output schemas (.conductor/schemas/verify-acceptance.yaml, .conductor/schemas/refresh-summary.yaml) are generic: copy them from conductor-ai as the reference implementation, together with lib-gh-retry.sh, lib-git-retry.sh, lib-pr-checks.sh and lib-trusted-review.sh, which they source. The base-merge path calls the iterate-pr workflow (the iterate-pr template): without one in the repo, drop the `if check-pr-ready.base_merged` block and set the auto_rereview default to \"false\". Adapt the `as` identities to the ones the repo has (developer, reviewer, merger)"
   - "The repo must supply .conductor/verify-recipe.md: how to build the branch, how to exercise each kind of change (CLI, API, UI), what never to touch (production data, real config homes) and which pipeline checks to run. check-pr-ready refuses without it, and the verify-acceptance brief fails clearly on its own"
   - "check-pr-ready trusts only the latest <!-- conductor-review --> review on the head commit that is not dismissed, from an OWNER, MEMBER or COLLABORATOR author or from a bot named in TRUSTED_REVIEW_BOTS (set it in the check-pr-ready env to the repo's reviewer GitHub App login, e.g. conductor-ai-reviewer[bot]: GitHub reports app reviewers as author_association NONE, so without it their reviews never count), and reads approval from the conductor-review-data:v1 payload. If the repo's submit-review differs, keep those checks. A review posted as a COMMENT because the PR changed the review pipeline (withheld approval) needs reviewDecision APPROVED or the confirm input"
-  - "Every refusal is a one-line reason on stderr and exit 1, which becomes the step error: a release PR into the default branch, a draft, a stale or missing review, a failing or pending required check, a conflict, a branch that does not contain its base. The base is merged in and pushed; with auto_rereview (default true) the run then calls iterate-pr on the new head, waits for the required checks with wait-for-pr-checks.sh, re-runs check-pr-ready and verifies. The same round covers a head that an earlier run or a person already moved by merging the base: when every commit since the last review is a merge of the base, a stale review or still-running required checks do not refuse; a head with any other commit since the review still refuses. With auto_rereview=false it stops there so the new head gets reviewed by hand"
+  - "Every refusal is a one-line reason on stderr and exit 1, which becomes the step error: a release PR into the default branch, a draft, a stale or missing review, a failing required check (or a pending one with wait_for_checks=false), a conflict, a branch that does not contain its base. The base is merged in and pushed; with auto_rereview (default true) the run then calls iterate-pr on the new head, waits for the required checks with wait-for-pr-checks.sh, re-runs check-pr-ready and verifies. The same round covers a head that an earlier run or a person already moved by merging the base: when every commit since the last review is a merge of the base, a stale review or still-running required checks do not refuse; a head with any other commit since the review still refuses. With auto_rereview=false it stops there so the new head gets reviewed by hand. An approved head whose only blocker is still-running required checks emits checks_pending: the run waits with wait-for-pr-checks.sh (the same script, so it is needed even without iterate-pr) and re-runs check-pr-ready with auto_rereview and wait_for_checks off before verifying; wait_for_checks=false refuses instead"
   - "Head pinning: check-pr-ready captures head_sha once, post-verification refuses if the head or working tree changed, and squash-merge passes --match-head-commit, so a push during verification is never merged unverified"
   - "If the repo uses release branches, the recipe confirms the PR targets the open release branch, and a release to default-branch PR stays a manual rebase-merge"
   - "check-summary decides whether the head moved past the commit the PR's `## Summary` describes: push-and-pr.sh records that head as a hidden `<!-- conductor-summary-head: SHA -->` comment at the end of the body, and a PR without it falls back to commits dated after its createdAt; merge commits never count. Unchanged: no model call. Changed: refresh-summary (Sonnet) checks the Summary against the diff and update-pr-summary.sh writes the rewrite and the new marker into the PR body, failing the run if the edit fails. squash-merge builds the commit body from the PR's `## Summary` section, drops HTML comments, drops sentences naming a local path (a home directory, a .git/worktrees directory or a PLAN.md path), adds a Closes line per linked issue and carries over the commits' Co-Authored-By and Claude-Session trailers, deduplicated. Adapt it if the repo's PR bodies use another section name"
@@ -26,11 +26,13 @@ workflow verify-and-merge {
     confirm boolean
     // "false" restores the old stop after a base merge: merge, push, refuse (#3436).
     auto_rereview default = "true"
+    // "false" restores the refusal when required checks are still running (#3480).
+    wait_for_checks default = "true"
   }
 
   script check-pr-ready {
     run = ".conductor/scripts/check-pr-ready.sh"
-    env = { CONFIRM = "{{confirm}}" DRY_RUN = "{{dry_run}}" TICKET_SOURCE_ID = "{{ticket_source_id}}" AUTO_REREVIEW = "{{auto_rereview}}" }
+    env = { CONFIRM = "{{confirm}}" DRY_RUN = "{{dry_run}}" TICKET_SOURCE_ID = "{{ticket_source_id}}" AUTO_REREVIEW = "{{auto_rereview}}" WAIT_FOR_CHECKS = "{{wait_for_checks}}" }
   }
 
   // The base was merged in and pushed: the new head has no review and no CI yet (#3436).
@@ -47,7 +49,23 @@ workflow verify-and-merge {
 
     script recheck-pr-ready {
       run = ".conductor/scripts/check-pr-ready.sh"
-      env = { CONFIRM = "{{confirm}}" DRY_RUN = "{{dry_run}}" TICKET_SOURCE_ID = "{{ticket_source_id}}" AUTO_REREVIEW = "false" }
+      env = { CONFIRM = "{{confirm}}" DRY_RUN = "{{dry_run}}" TICKET_SOURCE_ID = "{{ticket_source_id}}" AUTO_REREVIEW = "false" WAIT_FOR_CHECKS = "false" }
+    }
+  }
+
+  // Approved head, CI still running: wait for it, then check again (#3480). The recheck
+  // runs with AUTO_REREVIEW and WAIT_FOR_CHECKS off, so anything that changed during the
+  // wait refuses rather than starting a second round.
+  if check-pr-ready.checks_pending {
+    script wait-for-pending-checks {
+      run     = ".conductor/scripts/wait-for-pr-checks.sh"
+      env     = { PR_NUMBER = "{{pr_number}}" REQUIRED_CHECKS = "{{required_checks}}" DRY_RUN = "{{dry_run}}" }
+      timeout = 3000
+    }
+
+    script recheck-after-checks {
+      run = ".conductor/scripts/check-pr-ready.sh"
+      env = { CONFIRM = "{{confirm}}" DRY_RUN = "{{dry_run}}" TICKET_SOURCE_ID = "{{ticket_source_id}}" AUTO_REREVIEW = "false" WAIT_FOR_CHECKS = "false" }
     }
   }
 

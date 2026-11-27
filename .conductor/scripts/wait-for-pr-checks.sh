@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wait-for-pr-checks.sh — verify-and-merge, after a base merge (#3436). Polls the PR's
+# wait-for-pr-checks.sh — verify-and-merge, after a base merge (#3436) or a checks_pending result (#3480). Polls the PR's
 # required checks until they are green on the local HEAD. Refuses, with a one-line reason
 # on stderr and exit 1, on a failing check, unreadable gh output or the timeout.
 # Env vars: PR_NUMBER (required), REQUIRED_CHECKS (comma-separated names that must be

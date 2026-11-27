@@ -5,6 +5,8 @@
 # Env vars: CONFIRM (the workflow's confirm input; must be true or false), DRY_RUN, TICKET_SOURCE_ID (fallback
 # for the linked issue), RECIPE_PATH (default .conductor/verify-recipe.md),
 # AUTO_REREVIEW (must be true or false; "true" turns on the base-merge path below),
+# WAIT_FOR_CHECKS (must be true or false; "true" emits checks_pending instead of refusing
+# when required checks are still running, #3480),
 # TRUSTED_REVIEW_BOTS (comma-separated bot logins whose reviews are trusted, e.g. the
 # repo's conductor reviewer GitHub App; GitHub reports such a bot as author_association
 # NONE, so without this its reviews never count).
@@ -24,7 +26,12 @@
 # failing check or a review that isn't All Clear still refuses. recheck-pr-ready runs with
 # AUTO_REREVIEW=false and refuses both, so there is only one automatic round.
 #
-# On success emits pr_ready (or base_merged) plus pr_number, pr_title, base_branch,
+# With WAIT_FOR_CHECKS=true an approved head whose only blocker is still-running required
+# checks emits checks_pending: the workflow waits with wait-for-pr-checks.sh and runs this
+# script again with WAIT_FOR_CHECKS=false (and AUTO_REREVIEW=false), so a check that is still
+# pending then refuses. A base merge takes priority over checks_pending: it replaces the head.
+#
+# On success emits pr_ready (or base_merged or checks_pending) plus pr_number, pr_title, base_branch,
 # head_sha, linked_issues (space-separated same-repo issue numbers from
 # Closes/Fixes/Resolves) and required_checks (comma-separated names seen before a merge).
 set -euo pipefail
@@ -68,23 +75,27 @@ base_merge_only() {
   [ -n "${oldest}" ] && [ "${oldest_first}" = "${r}" ]
 }
 
-# emit_base_merged SHA CONTEXT: the base_merged result (see the header).
-emit_base_merged() {
+# emit MARKER SHA CONTEXT: the base_merged / checks_pending result (see the header).
+emit() {
   jq -n --arg n "${PR_NUMBER}" --arg title "${PR_TITLE}" --arg base "${BASE_BRANCH}" \
-    --arg sha "$1" --arg ctx "$2" --arg issues "${LINKED}" --arg req "${REQUIRED_NAMES}" '
-    {markers: ["base_merged"], context: $ctx,
+    --arg marker "$1" --arg sha "$2" --arg ctx "$3" --arg issues "${LINKED}" --arg req "${REQUIRED_NAMES}" '
+    {markers: [$marker], context: $ctx,
      pr_number: $n, pr_title: $title, base_branch: $base, head_sha: $sha, linked_issues: $issues, required_checks: $req}' \
     | { printf '<<<FLOW_OUTPUT>>>\n'; cat; printf '<<<END_FLOW_OUTPUT>>>\n'; }
 }
 STALE_BASE_MERGE=""
+CHECKS_PENDING=""
+PENDING=""
 # CONFIRM (a boolean input) and AUTO_REREVIEW (an input with a default) always have a
 # value when the workflow's inputs resolve. The engine turns an unresolved placeholder
 # into an empty string, so an empty value means the input wasn't passed: refuse rather
 # than read it as "off" (#3449, #3454).
 CONFIRM="${CONFIRM:-}"
 AUTO_REREVIEW="${AUTO_REREVIEW:-}"
+WAIT_FOR_CHECKS="${WAIT_FOR_CHECKS:-}"
 case "${CONFIRM}" in true | false) ;; *) refuse "CONFIRM must be true or false, got '${CONFIRM}' (the workflow's confirm input has no value)" ;; esac
 case "${AUTO_REREVIEW}" in true | false) ;; *) refuse "AUTO_REREVIEW must be true or false, got '${AUTO_REREVIEW}' (the workflow's auto_rereview input has no value)" ;; esac
+case "${WAIT_FOR_CHECKS}" in true | false) ;; *) refuse "WAIT_FOR_CHECKS must be true or false, got '${WAIT_FOR_CHECKS}' (the workflow's wait_for_checks input has no value)" ;; esac
 # dry_run is an engine built-in, always set when run by the workflow engine.
 DRY_RUN="${DRY_RUN:-}"
 # ticket_source_id is injected only when the run has a ticket; it isn't a declared input.
@@ -180,8 +191,14 @@ else
   [ -z "${FAILING}" ] || refuse "required check failing: ${FAILING}"
   PENDING=$(printf '%s' "${CHECKS}" | jq -r '[.[] | select(.bucket == "pending") | .name] | join(", ")')
   if [ -n "${PENDING}" ]; then
-    [ -n "${STALE_BASE_MERGE}" ] || refuse "required checks still running: ${PENDING}"
-    echo "Note: required checks still running (${PENDING}); wait-for-pr-checks waits for them." >&2
+    if [ -n "${STALE_BASE_MERGE}" ]; then
+      echo "Note: required checks still running (${PENDING}); wait-for-pr-checks waits for them." >&2
+    elif is_true "${WAIT_FOR_CHECKS}"; then
+      CHECKS_PENDING=1
+      echo "Note: required checks still running (${PENDING}); wait-for-pending-checks waits for them." >&2
+    else
+      refuse "required checks still running: ${PENDING}"
+    fi
   fi
 fi
 
@@ -215,14 +232,19 @@ if ! git merge-base --is-ancestor "origin/${BASE_BRANCH}" HEAD; then
   if is_true "${AUTO_REREVIEW}"; then
     # Every other check passed: the merge is the only thing wrong. The workflow re-reviews
     # the new head, waits for its checks and checks again (#3436).
-    emit_base_merged "${NEW_HEAD}" "merged ${BASE_BRANCH} into the branch (new head ${NEW_HEAD:0:7}); re-reviewing with iterate-pr"
+    emit base_merged "${NEW_HEAD}" "merged ${BASE_BRANCH} into the branch (new head ${NEW_HEAD:0:7}); re-reviewing with iterate-pr"
     exit 0
   fi
   refuse "merged ${BASE_BRANCH} into the branch (new head ${NEW_HEAD:0:7}); re-review with iterate-pr, then re-run verify-and-merge (or leave auto_rereview on)"
 fi
 
 if [ -n "${STALE_BASE_MERGE}" ]; then
-  emit_base_merged "${PR_HEAD}" "head ${PR_HEAD:0:7} differs from the last review (${REVIEW_COMMIT:0:7}) only by merges of ${BASE_BRANCH}; re-reviewing with iterate-pr"
+  emit base_merged "${PR_HEAD}" "head ${PR_HEAD:0:7} differs from the last review (${REVIEW_COMMIT:0:7}) only by merges of ${BASE_BRANCH}; re-reviewing with iterate-pr"
+  exit 0
+fi
+
+if [ -n "${CHECKS_PENDING}" ]; then
+  emit checks_pending "${PR_HEAD}" "PR #${PR_NUMBER} is reviewed on ${PR_HEAD:0:7}; waiting for required checks: ${PENDING}"
   exit 0
 fi
 
