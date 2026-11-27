@@ -216,14 +216,18 @@ fi
 # Uses the conductor built above from this worktree, so a change to the
 # validator itself is checked by the new code. Static validate is read-only and
 # never migrates the database (#3470), so it runs in the caller's environment
-# (--templates resolves scripts from the worktree, #3455).
+# (--templates resolves scripts from the worktree, #3455). One failure mode remains:
+# the real database's schema newer than this build (another branch's build or a newer
+# installed conductor migrated it) makes the read-only open fail with a schema error
+# unrelated to the change. That error has no FAIL/✗ line, so the detail below falls
+# back to the log's tail; the fix is to rebuild from a branch with that migration.
 if [ "${validate_pipeline}" -eq 1 ]; then
   if [ "${build_ok}" -eq 0 ]; then
     record "conductor workflow validate" skipped "not run: cargo build failed"
   elif cargo run -q --bin conductor -- workflow validate --all --templates --path . > "${logs}/validate.log" 2>&1; then
     record "conductor workflow validate" pass "$(tail -n 1 "${logs}/validate.log")"
   else
-    record "conductor workflow validate" fail "workflow or template validation failed" "$(grep -E '^(FAIL|\s*✗)' "${logs}/validate.log" | head -n 40)"
+    record "conductor workflow validate" fail "workflow or template validation failed" "$(grep -E '^(FAIL|\s*✗)' "${logs}/validate.log" | head -n 40 | grep . || tail -n 5 "${logs}/validate.log")"
   fi
 fi
 

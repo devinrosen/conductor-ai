@@ -80,7 +80,8 @@ run_check "fmt" cargo fmt --all --check
 #
 # Static validate opens the database read-only and never migrates it (#3470), so
 # the installed binary and the branch build's `cargo run` fallback can both run
-# against the real home.
+# against the real home. A real database whose schema is newer than the binary makes
+# validate fail with a schema error (not a validation error), shown in the check output.
 validate_wf() {
   conductor workflow validate "$1" --path . \
     || cargo run --bin conductor -- workflow validate "$1" --path .

@@ -32,6 +32,9 @@ emit() {
 log=$(mktemp)
 trap 'rm -f "${log}"' EXIT
 
+# Static validate runs against the caller's real home (read-only, #3470). If that
+# database's schema is newer than this build, validate fails with a schema error and
+# no FAIL line; the fail-closed finding below then carries the log's tail, which names it.
 status=0
 cargo run -q --bin conductor -- workflow validate --all --templates --path . > "${log}" 2>&1 || status=$?
 if [ "${status}" -eq 0 ]; then
