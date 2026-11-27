@@ -33,6 +33,14 @@
 # errors (or the failing script test cases), which implement reads as its prior
 # context. The FLOW_OUTPUT also
 # carries `passed` and `checks` ({name, status, summary}) as structured output.
+# It also carries a failure signature (#3486): `failures`, a sorted, unique list
+# of `<check>: <item>` entries (one per compiler or clippy error and location,
+# failing test, validate FAIL line, failed smoke or failing script test case; the
+# check name alone for fmt, the schema tripwire and any failure whose log yields
+# no item), capped at 200 entries, and `failure_count`, the full entry count.
+# Skipped checks add nothing, and a pass emits [] and 0. verify-progress.sh reads
+# the last two verifies' signatures to decide whether ticket-to-pr gets one more
+# fix attempt.
 #
 # Env: FEATURE_BASE_BRANCH (default main). VERIFY_CRATES overrides the crate
 # list (space-separated), for testing.
@@ -67,23 +75,48 @@ max_context=6000
 checks_json='[]'
 smokes_json='[]'
 failed=0
+sig_entries=""
 fail_details=""
 pass_names=""
 
 emit() {
   # $1 = markers JSON, $2 = context, $3 = passed (true/false)
   echo "<<<FLOW_OUTPUT>>>"
-  jq -cn --argjson markers "$1" --arg ctx "$2" --argjson passed "$3" --argjson checks "${checks_json}" --argjson smokes "${smokes_json}" \
-    '{markers: $markers, context: $ctx, passed: $passed, checks: $checks, smokes: $smokes}'
+  jq -cn --argjson markers "$1" --arg ctx "$2" --argjson passed "$3" --argjson checks "${checks_json}" --argjson smokes "${smokes_json}" --arg sig "${sig_entries}" \
+    '($sig | split("\n") | map(select(. != "")) | unique) as $f
+     | {markers: $markers, context: $ctx, passed: $passed, checks: $checks, smokes: $smokes, failures: $f[0:200], failure_count: ($f | length)}'
   echo "<<<END_FLOW_OUTPUT>>>"
 }
 
-# record NAME STATUS SUMMARY [DETAIL]
+# error_sig LOG — one `header file:line:col` line per distinct compiler or clippy
+# error, excluding the "could not compile" and "aborting" summary lines.
+error_sig() {
+  awk '
+    /^error(\[E[0-9]+\])?:/ {
+      if (hdr != "") print hdr
+      if ($0 ~ /^error: (could not compile|aborting due to)/) { hdr = ""; next }
+      hdr = $0; next
+    }
+    hdr != "" && /^[[:space:]]*-->/ { sub(/^[[:space:]]*--> */, ""); print hdr " @ " $0; hdr = "" }
+    END { if (hdr != "") print hdr }
+  ' "$1" | sort -u
+}
+
+# record NAME STATUS SUMMARY [DETAIL [ITEMS]]
+# ITEMS (newline-separated) are the failure signature entries of a failing check;
+# without any, the check name alone is the entry.
 record() {
   checks_json=$(jq -c --arg n "$1" --arg s "$2" --arg m "$3" '. + [{name: $n, status: $s, summary: $m}]' <<< "${checks_json}")
   case "$2" in
     fail)
       failed=1
+      if [ -n "${5:-}" ]; then
+        sig_entries="${sig_entries}
+$(printf '%s\n' "$5" | grep . | sed "s|^|$1: |")"
+      else
+        sig_entries="${sig_entries}
+$1"
+      fi
       fail_details="${fail_details}
 [$1] $3${4:+
 $4}"
@@ -169,7 +202,7 @@ if cargo build > "${logs}/build.log" 2>&1; then
   build_ok=1
   record "cargo build" pass "ok"
 else
-  record "cargo build" fail "build failed" "$(first_errors "${logs}/build.log")"
+  record "cargo build" fail "build failed" "$(first_errors "${logs}/build.log")" "$(error_sig "${logs}/build.log")"
   for crate in ${crates[@]+"${crates[@]}"}; do
     record "cargo nextest -p ${crate}" skipped "not run: cargo build failed"
     record "cargo clippy -p ${crate}" skipped "not run: cargo build failed"
@@ -188,15 +221,16 @@ if [ "${failed}" -eq 0 ]; then
     if [ "${nextest_status}" -eq 0 ]; then
       record "cargo nextest -p ${crate}" pass "${summary:-passed}"
     else
-      failing=$(grep -E '^\s*(FAIL|TIMEOUT|SIGSEGV|SIGABRT) \[' "${log}" | sed -E 's/^[[:space:]]*[A-Z]+ \[[^]]*\][[:space:]]*(\([0-9]+\/[0-9]+\)[[:space:]]*)?//' | sort -u | head -n 20)
+      all_failing=$(grep -E '^\s*(FAIL|TIMEOUT|SIGSEGV|SIGABRT) \[' "${log}" | sed -E 's/^[[:space:]]*[A-Z]+ \[[^]]*\][[:space:]]*(\([0-9]+\/[0-9]+\)[[:space:]]*)?//' | sort -u)
+      failing=$(printf '%s\n' "${all_failing}" | head -n 20 | grep . || true)
       if [ -n "${failing}" ]; then
         panics=$(grep -E "panicked at|assertion .* failed|left: |right: " "${log}" | head -n 20)
         record "cargo nextest -p ${crate}" fail "${summary:-tests failed}" "Failing tests:
 ${failing}${panics:+
-${panics}}"
+${panics}}" "${all_failing}"
       else
         # No test failed, so it didn't compile or nextest couldn't run.
-        record "cargo nextest -p ${crate}" fail "nextest exited ${nextest_status} without a test result" "$(first_errors "${log}")"
+        record "cargo nextest -p ${crate}" fail "nextest exited ${nextest_status} without a test result" "$(first_errors "${log}")" "$(error_sig "${log}")"
       fi
     fi
   done
@@ -207,7 +241,7 @@ ${panics}}"
     if cargo clippy -p "${crate}" --all-targets -- -D warnings > "${log}" 2>&1; then
       record "cargo clippy -p ${crate}" pass "no warnings"
     else
-      record "cargo clippy -p ${crate}" fail "clippy reported errors" "$(first_errors "${log}")"
+      record "cargo clippy -p ${crate}" fail "clippy reported errors" "$(first_errors "${log}")" "$(error_sig "${log}")"
     fi
   done
 fi
@@ -227,7 +261,7 @@ if [ "${validate_pipeline}" -eq 1 ]; then
   elif cargo run -q --bin conductor -- workflow validate --all --templates --path . > "${logs}/validate.log" 2>&1; then
     record "conductor workflow validate" pass "$(tail -n 1 "${logs}/validate.log")"
   else
-    record "conductor workflow validate" fail "workflow or template validation failed" "$(grep -E '^(FAIL|\s*✗)' "${logs}/validate.log" | head -n 40 | grep . || tail -n 5 "${logs}/validate.log")"
+    record "conductor workflow validate" fail "workflow or template validation failed" "$(grep -E '^(FAIL|\s*✗)' "${logs}/validate.log" | head -n 40 | grep . || tail -n 5 "${logs}/validate.log")" "$(grep -E '^(FAIL|\s*✗)' "${logs}/validate.log" | sed -E 's/^[[:space:]]+//' | sort -u)"
   fi
 fi
 
@@ -252,7 +286,7 @@ if [ "${smoke_workflows}" -eq 1 ] || { [ "${smoke_unknown}" -eq 1 ] && [ "${vali
       if [ "${smoke_status}" -eq 0 ]; then
         record "workflow smokes" pass "${counts}"
       else
-        record "workflow smokes" fail "${counts}" "$(jq -r '.[] | select(.status == "fail") | "\(.workflow) (\(.reason))\(if .run_id != "" then " run " + .run_id else "" end):\n\(.detail)"' <<< "${smokes_json}" | head -n 40)"
+        record "workflow smokes" fail "${counts}" "$(jq -r '.[] | select(.status == "fail") | "\(.workflow) (\(.reason))\(if .run_id != "" then " run " + .run_id else "" end):\n\(.detail)"' <<< "${smokes_json}" | head -n 40)" "$(jq -r '.[] | select(.status == "fail") | .workflow' <<< "${smokes_json}")"
       fi
     else
       record "workflow smokes" fail "smoke-workflows.sh exited ${smoke_status} without a result" "$(tail -n 20 "${logs}/smokes.err")"
@@ -276,7 +310,7 @@ if [ "${script_tests}" -eq 1 ]; then
       detail=$(grep -E -A3 '^FAIL  ' "${log}" | head -n 60)
       [ -n "${detail}" ] || detail=$(tail -n 30 "${log}")
       record "pipeline script tests" fail "${summary:-run.sh exited ${script_status}}" "Failing cases:
-${detail}"
+${detail}" "$(grep -E '^FAIL  ' "${log}" | sed -E 's/^FAIL  +//' | sort -u)"
     fi
   fi
 fi
