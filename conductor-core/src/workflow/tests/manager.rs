@@ -2014,7 +2014,13 @@ fn test_waiting_run_with_live_lease_shows_blocked_on_and_is_not_reaped() {
     // a live lease, and the reaper must leave it alone.
     let conn = setup_db();
     let run_id = "run-at-gate";
-    insert_waiting_run_with_gate(&conn, run_id, "failed", Some("1s"), Some("2020-01-01T00:00:00Z"));
+    insert_waiting_run_with_gate(
+        &conn,
+        run_id,
+        "failed",
+        Some("1s"),
+        Some("2020-01-01T00:00:00Z"),
+    );
     let blocked = crate::workflow::BlockedOn::HumanApproval {
         gate_name: "approval-gate".into(),
         prompt: Some("ok?".into()),
@@ -2036,7 +2042,10 @@ fn test_waiting_run_with_live_lease_shows_blocked_on_and_is_not_reaped() {
         Some(crate::workflow::BlockedOn::HumanApproval { ref gate_name, .. })
             if gate_name == "approval-gate"
     ));
-    assert_eq!(crate::workflow::reap_orphaned_workflow_runs(&conn).unwrap(), 0);
+    assert_eq!(
+        crate::workflow::reap_orphaned_workflow_runs(&conn).unwrap(),
+        0
+    );
     assert_eq!(get_run_status(&conn, run_id), "waiting");
 }
 

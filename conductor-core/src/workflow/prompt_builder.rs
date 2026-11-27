@@ -85,8 +85,7 @@ mod tests {
         let mut vars = HashMap::new();
         vars.insert("feature_base_branch", "release/x");
         let t = "intro\nstill shows a literal `{{`, dry run.\nmore\nfetch {{feature_base_branch}} now\n";
-        let want =
-            "intro\nstill shows a literal `{{`, dry run.\nmore\nfetch release/x now\n";
+        let want = "intro\nstill shows a literal `{{`, dry run.\nmore\nfetch release/x now\n";
         assert_eq!(substitute_variables(t, &vars), want);
         assert_eq!(substitute_variables_keep_literal(t, &vars), want);
     }
