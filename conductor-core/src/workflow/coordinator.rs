@@ -93,6 +93,11 @@ pub fn apply_workflow_input_defaults(
 /// Deliberately separate from the fill: a future launcher or refactor that
 /// skips or reorders the fill (the #3449 shape) fails loudly here instead of
 /// handing scripts an empty value. A supplied empty string counts as a value.
+///
+/// runkon's engine also fails a run at start when a script `env` value uses an
+/// unresolved input (runkon#210). This check stays as the earlier, friendlier
+/// message: it runs before any run row exists and covers every defaulted or
+/// boolean input, not just those used in `env`. The engine's check is the backstop.
 pub(crate) fn check_declared_inputs_resolved(
     workflow: &WorkflowDef,
     inputs: &HashMap<String, String>,

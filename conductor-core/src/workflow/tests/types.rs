@@ -103,6 +103,33 @@ fn test_blocked_on_pr_checks_roundtrip() {
     }
 }
 
+#[test]
+fn test_blocked_on_gate_roundtrip() {
+    let val = BlockedOn::Gate {
+        gate_name: "custom".into(),
+        gate_type: "slack_ack".into(),
+        prompt: Some("ack?".into()),
+        options: vec!["yes".into()],
+    };
+    let json = serde_json::to_string(&val).unwrap();
+    assert!(json.contains(r#""type":"gate""#));
+    let deser: BlockedOn = serde_json::from_str(&json).unwrap();
+    match deser {
+        BlockedOn::Gate {
+            gate_name,
+            gate_type,
+            prompt,
+            options,
+        } => {
+            assert_eq!(gate_name, "custom");
+            assert_eq!(gate_type, "slack_ack");
+            assert_eq!(prompt.as_deref(), Some("ack?"));
+            assert_eq!(options, vec!["yes".to_string()]);
+        }
+        _ => panic!("wrong variant"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // WorkflowRunStatus serde roundtrip
 // ---------------------------------------------------------------------------

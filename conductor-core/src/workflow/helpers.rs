@@ -1,5 +1,7 @@
 use runkon_flow::dsl::QUALITY_GATE_TYPE;
 
+use super::BlockedOn;
+
 /// Whether a step is a gate. Rows written before runkon-flow 0.8.0 (conductor
 /// < 0.18.0) have NULL `gate_type`, so a `gate` role also counts. Quality gates complete immediately and
 /// never wait, so they are excluded when the type is unset.
@@ -92,6 +94,54 @@ pub fn parse_gate_options(json: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// One-line description of what a `waiting` run is blocked on, plus the gate's
+/// prompt (if any). The match is exhaustive so a new `BlockedOn` variant fails to
+/// compile here instead of going unshown.
+pub fn format_blocked_on(blocked: &BlockedOn) -> (String, Option<String>) {
+    fn with_options(base: String, options: &[String]) -> String {
+        if options.is_empty() {
+            base
+        } else {
+            format!("{base} (options: {})", options.join(", "))
+        }
+    }
+    match blocked {
+        BlockedOn::HumanApproval {
+            gate_name,
+            prompt,
+            options,
+        } => (
+            with_options(format!("human_approval gate '{gate_name}'"), options),
+            prompt.clone(),
+        ),
+        BlockedOn::HumanReview {
+            gate_name,
+            prompt,
+            options,
+        } => (
+            with_options(format!("human_review gate '{gate_name}'"), options),
+            prompt.clone(),
+        ),
+        BlockedOn::PrApproval {
+            gate_name,
+            approvals_needed,
+        } => (
+            format!("pr_approval gate '{gate_name}' ({approvals_needed} approval(s) needed)"),
+            None,
+        ),
+        BlockedOn::PrChecks { gate_name } => (format!("pr_checks gate '{gate_name}'"), None),
+        BlockedOn::Gate {
+            gate_name,
+            gate_type,
+            prompt,
+            options,
+        } => (
+            with_options(format!("{gate_type} gate '{gate_name}'"), options),
+            prompt.clone(),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,6 +154,28 @@ mod tests {
             gate_type: gate_type.map(String::from),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn format_blocked_on_gate_and_pr_approval() {
+        let (line, prompt) = format_blocked_on(&BlockedOn::Gate {
+            gate_name: "ack".into(),
+            gate_type: "slack_ack".into(),
+            prompt: Some("go?".into()),
+            options: vec!["yes".into(), "no".into()],
+        });
+        assert_eq!(line, "slack_ack gate 'ack' (options: yes, no)");
+        assert_eq!(prompt.as_deref(), Some("go?"));
+        let (line, prompt) = format_blocked_on(&BlockedOn::PrApproval {
+            gate_name: "pr".into(),
+            approvals_needed: 2,
+        });
+        assert_eq!(line, "pr_approval gate 'pr' (2 approval(s) needed)");
+        assert!(prompt.is_none());
+        let (line, _) = format_blocked_on(&BlockedOn::PrChecks {
+            gate_name: "ci".into(),
+        });
+        assert_eq!(line, "pr_checks gate 'ci'");
     }
 
     #[test]

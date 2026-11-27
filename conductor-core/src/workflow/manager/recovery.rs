@@ -248,12 +248,24 @@ pub fn recover_stuck_steps_from_db(read_conn: &Connection, db_path: &Path) -> Re
     recover_stuck_steps(read_conn, &persistence)
 }
 
+/// Cancel root runs left `waiting` at a gate by an executor that died.
+///
+/// Since runkon 0.11 the engine sets a run `waiting` while it polls a gate. A
+/// live engine refreshes `lease_until` every ~10s, so the lease is the liveness
+/// signal (same reasoning as #3435 in [`detect_stuck_workflow_run_ids`]): only a
+/// waiting run whose lease is expired or unset is considered. A live engine owns
+/// its gate timeout, including `on_timeout = continue`, so the reaper must never
+/// cancel it. For a run with a dead engine, a dead parent agent run or an elapsed
+/// gate timeout marks it orphaned.
 pub fn reap_orphaned_workflow_runs(conn: &Connection) -> Result<usize> {
-    // Query all root runs in 'waiting' status.
+    // Query root runs in 'waiting' status whose engine no longer holds a lease.
     let waiting_runs: Vec<(String, String)> = query_collect(
         conn,
-        "SELECT id, parent_run_id FROM workflow_runs \
-             WHERE status = 'waiting' AND parent_workflow_run_id IS NULL",
+        &format!(
+            "SELECT id, parent_run_id FROM workflow_runs \
+             WHERE status = 'waiting' AND parent_workflow_run_id IS NULL \
+               AND {LEASE_EXPIRED_SQL}"
+        ),
         [],
         |row| Ok((row.get("id")?, row.get("parent_run_id")?)),
     )?;

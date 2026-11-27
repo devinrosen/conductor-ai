@@ -11,14 +11,18 @@
 //! ever polls a gate in a dry run.
 //!
 //! A smoke that stops on purpose ends with no `failed` run row. The root is set
-//! `cancelled`, and so is every descendant run the engine left `failed`: runkon-flow's
-//! parallel executor counts the stop as a branch failure, so a child run holding a
-//! `parallel` block (e.g. `review-pr`) would otherwise be recorded as failed.
+//! `cancelled`. Since runkon 0.11 the engine ends a `parallel` branch's smoke stop
+//! `cancelled` too (runkon#209), so a child run holding a `parallel` block (e.g.
+//! `review-pr`) is no longer left `failed`. [`cancel_smoke_descendants`] still
+//! finalizes the driver agent runs, which conductor owns, and stays as a guarded
+//! fallback for run rows: it logs a warning for any descendant it has to fix.
 //!
 //! Input defaults are filled only by the shared start path (the caller must not
 //! pre-fill them), so a launcher that skips the fill fails the smoke through the
-//! run-start check. After the run, each started run's script steps are scanned
-//! for an `env` value that uses a declared input with no value; those come back
+//! run-start check. A required, defaulted or boolean input missing for a script
+//! `env` value fails the run at start (conductor's check first, then the engine's,
+//! runkon#210). After the run, each started run's script steps are scanned for an
+//! `env` value that uses a declared optional input with no value; those come back
 //! as [`SmokeOutcome::env_warnings`] and don't change the result (#3454).
 //!
 //! The pieces:
@@ -277,15 +281,14 @@ pub(crate) fn unresolved_env_inputs(
     inputs: &std::collections::HashMap<String, String>,
 ) -> Vec<UnresolvedEnvInput> {
     use crate::workflow::batch_validate::script_nodes;
-    use crate::workflow::placeholder_scan::placeholder_spans;
+    use crate::workflow::placeholder_scan::placeholder_names;
 
     let mut out = Vec::new();
     for node in script_nodes(workflow) {
         let mut vars: Vec<_> = node.env.iter().collect();
         vars.sort();
         for (var, value) in vars {
-            for span in placeholder_spans(value) {
-                let name = span.key.trim();
+            for name in placeholder_names(value) {
                 let declared = workflow.inputs.iter().any(|d| d.name == name);
                 let entry = UnresolvedEnvInput {
                     workflow: workflow.name.clone(),
@@ -421,14 +424,14 @@ pub(super) fn cancel_driver(
 
 /// Make the smoke run's tree end the way a passing smoke must: the agent run
 /// driving `run_id` and each descendant's driver end `cancelled` with the smoke
-/// reason, and every descendant run that isn't `completed` or `cancelled` does too.
-///
-/// The engine's parallel executor counts a branch's smoke stop as a branch failure,
-/// and the fail-fast path then records the child run `failed` (runkon-flow logs
-/// "finished with failures" for it). A passing smoke must leave no `failed` run or
-/// agent run. A `completed` run or driver ran to the end before the stop and stays
-/// as it is. Step rows are left as the engine wrote them. `run_id` itself is handled
+/// reason. A `completed` run or driver ran to the end before the stop and stays as
+/// it is. Step rows are left as the engine wrote them. `run_id` itself is handled
 /// by `ensure_cancelled`; only its driver is finalized here.
+///
+/// Before runkon 0.11 the parallel executor recorded a branch's smoke stop as a
+/// failure, so this also had to turn child runs `cancelled`. runkon#209 fixed that;
+/// the run-row flip remains a safety net and warns when it finds a child that is
+/// neither `completed` nor `cancelled`, so a regression is visible.
 fn cancel_smoke_descendants(
     conn: &rusqlite::Connection,
     run_id: &str,
@@ -455,6 +458,11 @@ fn cancel_smoke_descendants(
             child.status,
             WorkflowRunStatus::Completed | WorkflowRunStatus::Cancelled
         ) {
+            tracing::warn!(
+                "engine left smoke child run {} {}; runkon#209 should have cancelled it",
+                child.id,
+                child.status
+            );
             ensure_cancelled(conn, &child.id, reason)?;
         }
         cancel_smoke_descendants(conn, &child.id, reason, depth + 1)?;

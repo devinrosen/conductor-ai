@@ -1961,6 +1961,85 @@ fn test_reap_orphaned_workflow_runs_multiple_dead_parents() {
     );
 }
 
+#[test]
+fn test_reap_orphaned_workflow_runs_skips_live_lease() {
+    // A live engine at a gate (live lease) owns its gate timeout, so the reaper
+    // leaves it alone even with a dead parent agent run and an elapsed timeout.
+    let conn = setup_db();
+    let run_id = "run-live-lease";
+    let step_id = insert_waiting_run_with_gate(
+        &conn,
+        run_id,
+        "failed",
+        Some("1s"),
+        Some("2020-01-01T00:00:00Z"),
+    );
+    conn.execute(
+        "UPDATE workflow_runs SET lease_until = datetime('now', '+60 seconds') WHERE id = :id",
+        named_params! { ":id": run_id },
+    )
+    .unwrap();
+    let reaped = crate::workflow::reap_orphaned_workflow_runs(&conn).unwrap();
+    assert_eq!(reaped, 0, "a run with a live lease must not be reaped");
+    assert_eq!(get_run_status(&conn, run_id), "waiting");
+    assert_eq!(get_step_status(&conn, &step_id), "waiting");
+}
+
+#[test]
+fn test_reap_orphaned_workflow_runs_reaps_expired_lease() {
+    let conn = setup_db();
+    let run_id = "run-expired-lease";
+    let step_id = insert_waiting_run_with_gate(
+        &conn,
+        run_id,
+        "failed",
+        Some("1s"),
+        Some("2020-01-01T00:00:00Z"),
+    );
+    conn.execute(
+        "UPDATE workflow_runs SET lease_until = datetime('now', '-60 seconds') WHERE id = :id",
+        named_params! { ":id": run_id },
+    )
+    .unwrap();
+    let reaped = crate::workflow::reap_orphaned_workflow_runs(&conn).unwrap();
+    assert_eq!(reaped, 1);
+    assert_eq!(get_run_status(&conn, run_id), "cancelled");
+    assert_eq!(get_step_status(&conn, &step_id), "timed_out");
+}
+
+#[test]
+fn test_waiting_run_with_live_lease_shows_blocked_on_and_is_not_reaped() {
+    // Simulates runkon 0.11's `set_run_waiting` (an engine-driven gate in-process
+    // is impractical here): a run at a gate is `waiting` with `blocked_on`, holds
+    // a live lease, and the reaper must leave it alone.
+    let conn = setup_db();
+    let run_id = "run-at-gate";
+    insert_waiting_run_with_gate(&conn, run_id, "failed", Some("1s"), Some("2020-01-01T00:00:00Z"));
+    let blocked = crate::workflow::BlockedOn::HumanApproval {
+        gate_name: "approval-gate".into(),
+        prompt: Some("ok?".into()),
+        options: vec![],
+    };
+    conn.execute(
+        "UPDATE workflow_runs SET blocked_on = :b, lease_until = datetime('now', '+60 seconds') \
+         WHERE id = :id",
+        named_params! { ":b": serde_json::to_string(&blocked).unwrap(), ":id": run_id },
+    )
+    .unwrap();
+
+    let run = crate::workflow::get_workflow_run(&conn, run_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(run.status, crate::workflow::WorkflowRunStatus::Waiting);
+    assert!(matches!(
+        run.blocked_on,
+        Some(crate::workflow::BlockedOn::HumanApproval { ref gate_name, .. })
+            if gate_name == "approval-gate"
+    ));
+    assert_eq!(crate::workflow::reap_orphaned_workflow_runs(&conn).unwrap(), 0);
+    assert_eq!(get_run_status(&conn, run_id), "waiting");
+}
+
 // ---------------------------------------------------------------------------
 // reap_orphaned_script_steps tests
 // ---------------------------------------------------------------------------
