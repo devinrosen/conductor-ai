@@ -24,12 +24,12 @@ assert_context_contains "Failures shrank: 4 → 1"
 assert_context_contains "FAIL: test t1"
 
 case_begin "identical signatures stop"
-pc=$({ v "a" 4 "$FOUR"; v "b" 4 "$FOUR"; } | arr)
+pc=$({ v "FAIL: build first" 4 "$FOUR"; v "FAIL: build second" 4 "$FOUR"; } | arr)
 run_script verify-progress.sh PRIOR_CONTEXTS="$pc"
 assert_exit 0
 assert_no_markers
 assert_context_contains "stopping"
-assert_context_contains "b"
+assert_context_contains "FAIL: build second"
 
 case_begin "different signature, same count stops"
 pc=$({ v "a" 1 '["x"]'; v "b" 1 '["y"]'; } | arr)
@@ -76,9 +76,9 @@ run_script verify-progress.sh PRIOR_CONTEXTS="$pc"
 assert_no_markers
 
 case_begin "other steps between and after the verifies are ignored"
-pc=$({ other plan; v "a" 4 "$FOUR"; other implement; other fmt-fix-pre-reverify; v "b" 1 "$ONE"; other fix-precheck; } | arr)
+pc=$({ other plan; v "a" 4 "$FOUR"; other implement; other fmt-fix-pre-reverify; v "FAIL: test last" 1 "$ONE"; other fix-precheck; } | arr)
 run_script verify-progress.sh PRIOR_CONTEXTS="$pc"
 assert_marker failures_shrank
-assert_context_contains "b"
+assert_context_contains "FAIL: test last"
 
 finish
