@@ -20,7 +20,8 @@
 #   from anyone but a repo owner, member or collaborator or an installed app.
 # - A finding a reviewer tagged with `decision: N` only disputes decision N the user made at
 #   the plan gate (#3484). When N is within 1..decision_count of the last fetch-plan-decisions
-#   entry, it moves to decided_findings and doesn't block, for any severity or reviewer.
+#   entry, it moves to decided_findings and doesn't block, except Security findings and
+#   critical findings, which keep blocking (the tag is model output), as with answered_findings.
 #   Without that entry, or with N out of range, it blocks as before. The "did not approve but
 #   listed no finding" check still counts it.
 # - Off-diff findings are deduplicated by (file, line), keeping the higher
