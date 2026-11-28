@@ -231,4 +231,54 @@ agg "$( { rev review-architecture false "[$(finding src/a.rs 10 warning)]"
           answered_entry review-architecture src/a.rs 10 owner; } | arr)"
 assert_blocked
 
+# --- decisions made at the plan gate (#3484) ---------------------------------
+# dfinding FILE LINE SEVERITY DECISION — a finding tagged with a decision number.
+dfinding() {
+  jq -cn --arg f "$1" --argjson l "$2" --arg s "$3" --argjson d "$4" '{file: $f, line: $l, severity: $s, message: "m", decision: $d}'
+}
+# decisions_entry COUNT — the fetch-plan-decisions entry.
+decisions_entry() {
+  jq -cn --argjson n "$1" '{step: "fetch-plan-decisions", iteration: 0, context: "", markers: [],
+    structured_output: ({markers: [], context: "", user_decisions: "x", decision_count: $n, decisions_source: "input"} | tojson)}'
+}
+
+case_begin "decision: a tagged warning with an in-range number is decided, not blocking"
+agg "$( { decisions_entry 1; rev review-architecture false "[$(dfinding src/a.rs 10 warning 1)]"; rev review-security true '[]'; } | arr)"
+assert_exit 0
+assert_marker approved; assert_no_marker has_review_issues
+assert_jq '.overall_approved == true and (.blocking_findings | length) == 0'
+assert_jq '(.decided_findings | length) == 1 and .decided_findings[0].decision == 1 and .decided_findings[0].reviewer == "Architecture"'
+assert_jq '.summary | contains("1 finding(s) dispute a decision")'
+
+case_begin "decision: a tagged critical Security finding is decided too"
+agg "$( { decisions_entry 2; rev review-security false "[$(dfinding src/a.rs 10 critical 2)]"; } | arr)"
+assert_jq '.overall_approved == true and (.decided_findings | length) == 1'
+
+case_begin "decision: no fetch-plan-decisions entry means the tagged finding blocks"
+agg "$( { rev review-architecture false "[$(dfinding src/a.rs 10 warning 1)]"; } | arr)"
+assert_marker has_review_issues
+assert_jq '.overall_approved == false and (.blocking_findings | length) == 1 and (.decided_findings | length) == 0'
+assert_jq '.blocking_findings[0] | has("decision") | not'
+
+case_begin "decision: an out-of-range number blocks"
+agg "$( { decisions_entry 1; rev review-architecture false "[$(dfinding src/a.rs 10 warning 3)]"; } | arr)"
+assert_jq '.overall_approved == false and (.blocking_findings | length) == 1 and (.decided_findings | length) == 0'
+
+case_begin "decision: zero decisions listed means a tagged finding blocks"
+agg "$( { decisions_entry 0; rev review-architecture false "[$(dfinding src/a.rs 10 warning 1)]"; } | arr)"
+assert_jq '.overall_approved == false and (.blocking_findings | length) == 1'
+
+case_begin "decision: a reviewer whose only finding is decided gets no synthetic finding"
+agg "$( { decisions_entry 1; rev review-architecture false "[$(dfinding src/a.rs 10 warning 1)]"; } | arr)"
+assert_jq '.overall_approved == true and (.blocking_findings | length) == 0'
+
+case_begin "decision: tagged and untagged findings together, only the untagged block"
+agg "$( { decisions_entry 1; rev review-architecture false "[$(dfinding src/a.rs 10 warning 1), $(finding src/b.rs 20 warning)]"; } | arr)"
+assert_jq '.overall_approved == false and (.blocking_findings | length) == 1 and .blocking_findings[0].file == "src/b.rs"'
+assert_jq '(.decided_findings | length) == 1 and .decided_findings[0].file == "src/a.rs"'
+
+case_begin "decision: a non-integer or string tag is ignored"
+agg "$( { decisions_entry 2; rev review-architecture false "[$(dfinding src/a.rs 10 warning 1.5), $(dfinding src/b.rs 20 warning '"1"')]"; } | arr)"
+assert_jq '(.blocking_findings | length) == 2 and (.decided_findings | length) == 0'
+
 finish

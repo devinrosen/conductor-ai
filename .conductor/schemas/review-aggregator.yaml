@@ -36,6 +36,16 @@ fields:
       message: string
       answered_by: string
       reply: string
+  decided_findings?:
+    type: array
+    desc: "Findings that only dispute a decision the user made at the plan gate; shown but not blocking"
+    items:
+      reviewer: string
+      file: string
+      line: number
+      severity: enum(critical, warning)
+      message: string
+      decision: number
 
 markers:
   has_review_issues: "overall_approved == false"

@@ -70,6 +70,28 @@ Rules for findings that touch the previous round (these apply to every scope):
   don't raise it again in other words. A finding that wasn't addressed may be raised
   again, with the same wording.
 
+## Decided by the user
+
+The decisions the user made at this PR's plan gate, numbered as the PR's `## Decisions`
+section numbers them. Each was settled with the default shown or the answer quoted:
+
+{{user_decisions}}
+
+Rules for findings that touch a decision above:
+
+- **Treat a listed decision as settled.** Don't ask for the other option.
+- **A finding whose whole point is that the decision was wrong is not blocking.**
+  Examples: "this shouldn't be a breaking change", "this item should not have been
+  deferred". Raising one is optional. If you raise it, set `decision` to the decision's
+  number, keep the severity you would give it, and expect it to be shown as a
+  non-blocking note.
+- **A defect in how the decision was carried out is a normal finding, without
+  `decision`.** Examples: the break is only half done, the rename missed a caller. So is
+  anything the decision doesn't cover. Never tag such a finding.
+- **Don't flag a deferred acceptance item as missing** when a decision lists it under
+  `Defers` and the default was kept.
+- If the list says None, there are no decisions; leave `decision` out.
+
 ## Path verification (required for every finding)
 
 Before emitting any entry in `findings`, verify that the cited `file` path
@@ -119,7 +141,8 @@ Your `FLOW_OUTPUT` `context` field must be a **JSON object** (not plain text) so
       "line": 42,
       "severity": "warning",
       "message": "One-line description",
-      "suggestion": "How to fix it"
+      "suggestion": "How to fix it",
+      "decision": 1
     }
   ],
   "off_diff_findings": [
@@ -136,6 +159,7 @@ Your `FLOW_OUTPUT` `context` field must be a **JSON object** (not plain text) so
 ```
 
 - `findings`: issues in code **added or modified by this PR** — set `approved: false` if any are `critical` or `warning`
+- `decision` (optional): only on a finding that just disputes a listed decision; omit it otherwise
 - `off_diff_findings`: issues in **unchanged/removed code** — never affect `approved`, filed as separate GitHub issues; only include `critical` or `warning` severity
 - Omit `off_diff_findings` entirely if there are none
 

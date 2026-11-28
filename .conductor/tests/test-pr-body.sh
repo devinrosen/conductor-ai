@@ -272,4 +272,23 @@ assert_stdout_contains "Run against a copy of the conductor database: this branc
 body "$(contexts "$(entry plan x "$PLAN")" "$(entry verify PASS "$SMOKES")")" PR_BODY_SECTION=smokes
 assert_stdout_not_contains "Run against"
 
+case_begin "decisions mode: prints the section body without the heading (#3484)"
+dbody "PR_BODY_SECTION=decisions" "PLAN_GATE_FEEDBACK=Fix them here."
+assert_exit 0
+assert_stdout_contains "The plan gate settled these before implementation:"
+assert_stdout_contains "1. Fix runkon warnings here?"
+assert_stdout_contains "> Fix them here."
+assert_stdout_not_contains "## Decisions"
+assert_stdout_not_contains "## Summary"
+
+case_begin "decisions mode: the gate never ran prints nothing"
+dbody "PR_BODY_SECTION=decisions" "PLAN_GATE_FEEDBACK={{human_review.feedback}}"
+assert_exit 0
+assert_eq "" "$STDOUT" "decisions output when the gate never ran"
+
+case_begin "decisions mode: no decisions in the plan prints nothing"
+body "$(contexts "$(entry plan x "$PLAN")" "$(entry implement 'Did it.')")" PR_BODY_SECTION=decisions "PLAN_GATE_FEEDBACK=go"
+assert_exit 0
+assert_eq "" "$STDOUT" "decisions output without decisions"
+
 finish

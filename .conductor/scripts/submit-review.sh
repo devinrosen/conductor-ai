@@ -122,6 +122,8 @@ if [ "${DRY_RUN:-false}" = "true" ]; then
   echo "${PRIOR_OUTPUT}" | jq '.blocking_findings // []'
   echo "answered_findings:"
   echo "${PRIOR_OUTPUT}" | jq '.answered_findings // []'
+  echo "decided_findings:"
+  echo "${PRIOR_OUTPUT}" | jq '.decided_findings // []'
   echo "off_diff_findings:"
   echo "${PRIOR_OUTPUT}" | jq '.off_diff_findings // []'
   exit 0
@@ -401,6 +403,17 @@ if [ "$(echo "${PRIOR_OUTPUT}" | jq '.answered_findings // [] | length')" -gt 0 
 ${ANSWERED_SECTION}"
 fi
 
+# Findings that only dispute a decision the user made at the plan gate (#3484). No Security
+# re-promotion as for answered findings: a gate decision is the user's, a PR reply is untrusted.
+if [ "$(echo "${PRIOR_OUTPUT}" | jq '.decided_findings // [] | length')" -gt 0 ]; then
+  DECIDED_SECTION=$(echo "${PRIOR_OUTPUT}" | jq -r '
+    "\n### Disputes a decision made at the plan gate (\(.decided_findings | length), not blocking)\n",
+    ((.decided_findings)[] | "- **\(.severity)** `\(.file):\(.line)` (\(.reviewer), decision \(.decision)) — \(.message)")
+  ')
+  REVIEW_BODY="${REVIEW_BODY}
+${DECIDED_SECTION}"
+fi
+
 REVIEW_BODY="${REVIEW_BODY}
 
 <!-- conductor-review -->"
@@ -432,7 +445,8 @@ if REVIEW_PAYLOAD=$(echo "${PRIOR_OUTPUT}" | jq -r \
   {v: 1, scope: $scope, since: $since, overall_approved: $approved,
    reviewed_by: (.reviewed_by // ""), summary: (.summary // ""),
    blocking_findings: (.blocking_findings // []),
-   answered_findings: (.answered_findings // [])}
+   answered_findings: (.answered_findings // []),
+   decided_findings: (.decided_findings // [])}
   | tojson | @base64' 2>/dev/null) && [ -n "${REVIEW_PAYLOAD}" ]; then
   PAYLOAD_LINE="<!-- conductor-review-data:v1 ${REVIEW_PAYLOAD} -->"
   if [ $(( ${#REVIEW_BODY} + ${#PAYLOAD_LINE} )) -gt 60000 ]; then

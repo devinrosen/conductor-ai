@@ -139,4 +139,22 @@ assert_exit 0
 assert_jq '.review_id == 5000'
 assert_jq '.review_url | endswith("pullrequestreview-5000")'
 
+case_begin "decided findings are listed as not blocking and carried in the review data (#3484)"
+new_case
+OLD_PRIOR="$PRIOR"
+PRIOR='{"overall_approved":true,"reviewed_by":"Architecture","summary":"s",
+  "blocking_findings":[],"off_diff_findings":[],
+  "decided_findings":[{"file":"src/a.txt","line":1,"severity":"warning","reviewer":"Architecture","decision":1,"message":"should not be a breaking change"}]}'
+run_submit
+PRIOR="$OLD_PRIOR"
+assert_exit 0
+posted_body=$(jq -r '.[-1].body' "$stub/reviews.json" 2>/dev/null || jq -r '.[-1][-1].body' "$stub/reviews.json")
+case "$posted_body" in
+  *"### Disputes a decision made at the plan gate (1, not blocking)"*"(Architecture, decision 1) — should not be a breaking change"*) ;;
+  *) fail "decided finding not listed in the review body: $posted_body" ;;
+esac
+payload=$(printf '%s' "$posted_body" | sed -n 's/.*conductor-review-data:v1 \([A-Za-z0-9+\/=]*\) -->.*/\1/p' | base64 -d 2>/dev/null)
+assert_eq "1" "$(printf '%s' "$payload" | jq '.decided_findings | length' 2>/dev/null)" "decided_findings in the payload"
+assert_eq "true" "$(printf '%s' "$payload" | jq '.overall_approved' 2>/dev/null)" "approved in the payload"
+
 finish

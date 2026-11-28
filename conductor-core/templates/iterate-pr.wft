@@ -20,6 +20,10 @@ workflow iterate-pr {
     group       = "Development"
   }
 
+  inputs {
+    plan_decisions default = ""
+  }
+
   do {
     max_iterations = 10
     on_max_iter    = fail
@@ -39,6 +43,7 @@ workflow iterate-pr {
       inputs {
         scope = "{{review_scope}}"
         since = "{{review_since}}"
+        plan_decisions = "{{plan_decisions}}"
       }
     }
 

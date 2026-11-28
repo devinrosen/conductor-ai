@@ -18,11 +18,16 @@
 #   to answered_findings, except: Security findings and critical findings,
 #   which block until fixed (submit-review enforces Security too), and answers
 #   from anyone but a repo owner, member or collaborator or an installed app.
+# - A finding a reviewer tagged with `decision: N` only disputes decision N the user made at
+#   the plan gate (#3484). When N is within 1..decision_count of the last fetch-plan-decisions
+#   entry, it moves to decided_findings and doesn't block, for any severity or reviewer.
+#   Without that entry, or with N out of range, it blocks as before. The "did not approve but
+#   listed no finding" check still counts it.
 # - Off-diff findings are deduplicated by (file, line), keeping the higher
 #   severity, and labelled by reviewer (plus `bug` for critical).
 #
 # Emits the review-aggregator schema fields (reviewed_by, blocking_findings,
-# answered_findings, off_diff_findings, overall_approved, summary) and, since a
+# answered_findings, decided_findings, off_diff_findings, overall_approved, summary) and, since a
 # script step can't derive schema markers, the markers themselves: approved,
 # has_review_issues, has_blocking_findings, has_warnings.
 set -euo pipefail
@@ -36,7 +41,7 @@ emit_error() {
     reviewed_by: "",
     blocking_findings: [{reviewer: "Aggregator", file: "", line: 0, severity: "warning",
       message: ("The review could not be aggregated: " + $msg)}],
-    answered_findings: [], off_diff_findings: [], overall_approved: false,
+    answered_findings: [], decided_findings: [], off_diff_findings: [], overall_approved: false,
     summary: ("Review aggregation failed: " + $msg)
   }' | { printf '<<<FLOW_OUTPUT>>>\n'; cat; printf '<<<END_FLOW_OUTPUT>>>\n'; }
   exit 1
@@ -75,6 +80,9 @@ if ! result=$(jq -c '
      | map(select((.approved | type) == "boolean")) | first) // null;
 
   . as $all
+  # Number of decisions fetch-plan-decisions listed (the last entry wins; 0 when absent).
+  | ([ $all[] | select(.step == "fetch-plan-decisions") ] | last // null
+     | if . == null then 0 else ((parsed // {}) | .decision_count // 0 | tonumber? // 0) end) as $decision_count
   | [ $all[] | select(reviewers[.step] != null) ]
     # A retried or repeated reviewer: keep its last entry.
     | group_by(.step) | map(last) as $entries
@@ -94,13 +102,17 @@ if ! result=$(jq -c '
               | select((.severity // "") | IN("critical", "warning"))
               | {reviewer: $v.name, file: ((.file // "") | tostring), line: ((.line // 0) | tonumber? // 0),
                  severity: .severity,
+                 decision: (.decision | if type == "number" and . == floor and . >= 1 then . else null end),
                  message: ((.message // "") + (if (.suggestion // "") != "" then " Suggested fix: " + .suggestion else "" end))} ] ) as $f
           | if ($f | length) == 0 and ($v.marker_blocks or ($v.out.approved == false)) then
               [{reviewer: $v.name, file: "", line: 0, severity: "warning",
                 message: ("The " + $v.name + " reviewer did not approve but listed no finding: " + (($v.out.summary // "") | tostring))}]
             else $f end
         end
-    ] | add // [] | . as $blocking_all
+    ] | add // [] | . as $reviewer_findings
+  # Findings that only dispute an in-range decision do not block (#3484).
+  | [ $reviewer_findings[] | select(.decision != null and .decision <= $decision_count) ] as $decided
+  | [ $reviewer_findings[] | select(.decision == null or .decision > $decision_count) | del(.decision) ] as $blocking_all
 
   # Replies that answered a finding (review-reply-check), matched by reviewer, file and line.
   | ([ $all[] | select(.step == "review-reply-check") ] | last // null | if . == null then [] else (parsed // {} | .answered // []) end) as $answers
@@ -151,14 +163,17 @@ if ! result=$(jq -c '
       reviewed_by: ([ $revs[].name ] | join(", ")),
       blocking_findings: $blocking,
       answered_findings: $answered,
+      decided_findings: $decided,
       off_diff_findings: $off_diff,
       overall_approved: $approved,
       summary: (
         if ($revs | length) == 0 then "No reviewer output found."
         elif $approved then "All reviewers approved."
           + (if ($answered | length) > 0 then " \($answered | length) finding(s) were already answered on the PR." else "" end)
+          + (if ($decided | length) > 0 then " \($decided | length) finding(s) dispute a decision the user made; not blocking." else "" end)
         else "\($blocking | length) blocking finding(s) from \([ $blocking[].reviewer ] | unique | join(", "))."
           + (if ($answered | length) > 0 then " \($answered | length) already answered." else "" end)
+          + (if ($decided | length) > 0 then " \($decided | length) finding(s) dispute a decision the user made; not blocking." else "" end)
         end)
     }
   | .context = .summary

@@ -10,6 +10,9 @@ workflow iterate-pr {
   inputs {
     // "true" re-reviews even when HEAD is the commit the last conductor review covered (#3307).
     force_review default = "false"
+    // The plan-gate decisions from ticket-to-pr, passed on to review-pr (#3484). Empty when
+    // run by hand: review-pr then reads the PR body's ## Decisions section.
+    plan_decisions default = ""
   }
 
   do {
@@ -68,6 +71,7 @@ workflow iterate-pr {
         inputs {
           scope = "{{review_scope}}"
           since = "{{review_since}}"
+          plan_decisions = "{{plan_decisions}}"
         }
       }
     }
@@ -138,6 +142,7 @@ workflow iterate-pr {
             inputs {
               scope = "{{review_scope}}"
               since = "{{review_since}}"
+              plan_decisions = "{{plan_decisions}}"
             }
           }
 

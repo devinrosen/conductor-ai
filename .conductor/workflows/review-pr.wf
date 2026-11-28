@@ -12,6 +12,9 @@ workflow review-pr {
     since default = ""
     // "false" lists off-diff findings in the review body without filing issues (#3090).
     file_off_diff default = "true"
+    // The decisions the user made at ticket-to-pr's plan gate (push-and-pr's
+    // plan_decisions export). Empty falls back to the PR body's ## Decisions section (#3484).
+    plan_decisions default = ""
   }
 
   // Resolve the PR's base branch once at workflow start. Exposes it to all
@@ -28,6 +31,17 @@ workflow review-pr {
   script fetch-previous-round {
     run = ".conductor/scripts/fetch-previous-round.sh"
     env = {
+      PR_NUMBER           = "{{pr_number}}"
+      TRUSTED_REVIEW_BOTS = "conductor-ai-reviewer[bot]"
+    }
+  }
+  // The user's plan-gate decisions, exported as {{user_decisions}} and decision_count for
+  // the shared review-diff-scope prompt and the aggregator (#3484). From the plan_decisions
+  // input, else the PR body when its author is trusted. Never fails the review.
+  script fetch-plan-decisions {
+    run = ".conductor/scripts/fetch-plan-decisions.sh"
+    env = {
+      PLAN_DECISIONS      = "{{plan_decisions}}"
       PR_NUMBER           = "{{pr_number}}"
       TRUSTED_REVIEW_BOTS = "conductor-ai-reviewer[bot]"
     }
