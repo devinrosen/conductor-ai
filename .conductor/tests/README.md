@@ -2,7 +2,7 @@
 
 Fixture tests for the decision logic in `.conductor/scripts/`: `aggregate-reviews.sh`,
 `show-plan-decisions.sh`, the `detect-*.sh` scripts (including `detect-engine-doc-changes.sh`) with `lib-diff-range.sh`, `fmt-fix.sh`,
-`submit-review.sh`, `reuse-review.sh`, `review-scope.sh` and `fetch-previous-round.sh` (who counts as a trusted reviewer, with `lib-trusted-review.sh`), `check-pr-ready.sh`, `wait-for-pr-checks.sh`, `post-verification.sh`, `check-summary.sh`, `update-pr-summary.sh` and `squash-merge.sh` (verify-and-merge), `pr-body.sh` (the PR description builder) `verify.sh` (which checks run, and its failure signature) and `verify-progress.sh` (whether the implement retry shrank the failures, #3486), plus
+`submit-review.sh`, `reuse-review.sh`, `review-scope.sh` and `fetch-previous-round.sh` (who counts as a trusted reviewer, with `lib-trusted-review.sh`), `check-pr-ready.sh`, `wait-for-pr-checks.sh`, `post-verification.sh`, `check-summary.sh`, `update-pr-summary.sh` and `squash-merge.sh` (verify-and-merge), `pr-body.sh` (the PR description builder) `verify.sh` (which checks run, its failure signature, and the reruns of changed tests, #3485) and `verify-progress.sh` (whether the implement retry shrank the failures, #3486), plus
 `scripts/release/bump.sh` (the release commit), and `lib-branch-home.sh` (when a branch build may open the real conductor database, #3469).
 Plain bash (3.2 compatible), plus `jq`, `git`, `cargo`, `rustfmt` and `sqlite3`. CI runs them as the **Pipeline Scripts**
 job when `.conductor/scripts/**`, `.conductor/tests/**` or `scripts/release/**` changes.
@@ -46,6 +46,8 @@ scratch repo commits a **fake** `.conductor/tests/run.sh`, which is what verify 
 never recurses into itself. The stub's `run` branch also answers the smoke call
 `workflow validate <name> --dry-run` (from `smoke-workflows.sh`) with a JSON pass object (run ID `01TESTPASS`),
 or a JSON fail object (`01TESTFAIL`) while a `fail_smoke` file exists.
+A `nextest` call with `-E` is a rerun of changed tests (#3485): the stub counts it in `rerun_count` and fails
+it when `flaky_on` holds that number (naming the test in `flaky_name`).
 
 `test-smoke-workflows.sh` covers `smoke-workflows.sh` (changed-file and caller detection (transitive) with
 `SMOKE_DETECT_ONLY=1`; result classification with a stub `conductor` set through `SMOKE_CONDUCTOR`, driven by

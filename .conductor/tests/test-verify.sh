@@ -28,6 +28,25 @@ case "$1" in
     fi
     ;;
   nextest)
+    # A call with -E is a rerun of changed tests (#3485): count it, and fail on the
+    # rerun numbered in flaky_on, naming the test in flaky_name.
+    case "$*" in
+      *" -E "*)
+        n=$(( $(cat "$CARGO_STUB_DIR/rerun_count" 2>/dev/null || echo 0) + 1 ))
+        echo "$n" > "$CARGO_STUB_DIR/rerun_count"
+        if [ -f "$CARGO_STUB_DIR/flaky_on" ] && [ "$(cat "$CARGO_STUB_DIR/flaky_on")" = "$n" ]; then
+          echo "        FAIL [   0.1s] conductor-core m::tests::$(cat "$CARGO_STUB_DIR/flaky_name" 2>/dev/null || echo new_test)"
+          echo "assertion \`left == right\` failed"
+          exit 100
+        fi
+        if [ -f "$CARGO_STUB_DIR/empty_filter" ]; then
+          case "$*" in *--no-tests=pass*) exit 0 ;; esac
+          echo "error: no tests to run"
+          exit 4
+        fi
+        exit 0
+        ;;
+    esac
     # fail_nextest: the file's content is the nextest output; exit non-zero
     if [ -f "$CARGO_STUB_DIR/fail_nextest" ]; then
       cat "$CARGO_STUB_DIR/fail_nextest"
@@ -65,7 +84,7 @@ export PATH="$STUB_DIR/bin:$PATH"
 # switches to a feature branch and cd's into the repo.
 new_repo() {
   repo=$(scratch_repo)
-  rm -f "$STUB_DIR/fail_build" "$STUB_DIR/fail_smoke" "$STUB_DIR/calls" "$STUB_DIR/bump_schema" "$STUB_DIR/validate_env" "$STUB_DIR/validate_fail" "$STUB_DIR/build_errors" "$STUB_DIR/fail_nextest"
+  rm -f "$STUB_DIR/fail_build" "$STUB_DIR/fail_smoke" "$STUB_DIR/calls" "$STUB_DIR/bump_schema" "$STUB_DIR/validate_env" "$STUB_DIR/validate_fail" "$STUB_DIR/build_errors" "$STUB_DIR/fail_nextest" "$STUB_DIR/rerun_count" "$STUB_DIR/flaky_on" "$STUB_DIR/flaky_name" "$STUB_DIR/empty_filter"
   commit_file "$repo" .conductor/tests/run.sh "#!/usr/bin/env bash
 touch \"\$PWD/ran-sentinel\"
 $1" init
@@ -289,5 +308,219 @@ commit_file "$repo" .conductor/workflows/x.wf "workflow x {}" change
 printf 'Error: something odd\n' > "$STUB_DIR/validate_fail"
 run_script verify.sh FEATURE_BASE_BRANCH=main
 assert_jq '.failures == ["conductor workflow validate"]'
+
+# --- flaky-test rerun (#3485) --------------------------------------------------
+
+flaky_status() { # status of the flaky tests check, or "none"
+  flow_output | jq -r '[.checks[] | select(.name == "flaky tests") | .status][0] // "none"'
+}
+base_on_main() { git -C "$repo" branch -f main HEAD; } # the "base" commit belongs to main, not the diff
+rerun_calls() { grep -c -- ' -E ' "$STUB_DIR/calls" 2>/dev/null || true; }
+rerun_call_list() { grep -- ' -E ' "$STUB_DIR/calls" 2>/dev/null || true; }
+
+case_begin "flaky: a new test reruns 5 times and passes"
+new_repo "$PASSING"
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}" base
+base_on_main
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}
+
+#[test]
+fn new_test() {
+    assert!(true);
+}" change
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_exit 0
+assert_no_markers
+assert_eq "pass" "$(flaky_status)" "flaky status"
+assert_eq "5" "$(rerun_calls)" "rerun calls"
+rerun_call_list | grep -q 'new_test' || fail "rerun expression does not name new_test"
+[ "$(rerun_call_list | grep -c -- '--retries 0')" = "5" ] || fail "reruns must pass --retries 0"
+assert_jq '[.checks[] | select(.name == "flaky tests") | .summary][0] | contains("passed 5 reruns")'
+
+case_begin "flaky: a test that fails on rerun 3 of 5 fails verify with the test named"
+new_repo "$PASSING"
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}" base
+base_on_main
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}
+
+#[test]
+fn new_test() {
+    assert!(true);
+}" change
+echo 3 > "$STUB_DIR/flaky_on"
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_marker has_failures
+assert_eq "fail" "$(flaky_status)" "flaky status"
+assert_context_contains "new_test"
+assert_jq '[.checks[] | select(.name == "flaky tests") | .summary][0] | contains("rerun 3 of 5")'
+assert_jq '.failures | index("flaky tests: conductor-core m::tests::new_test") != null'
+assert_eq "3" "$(rerun_calls)" "the loop stops at the failing rerun"
+
+case_begin "flaky: an edited line inside an existing test selects only that test"
+new_repo "$PASSING"
+commit_file "$repo" conductor-core/src/x.rs "#[test]
+fn first_test() {
+    assert_eq!(1, 1);
+}
+
+#[test]
+fn second_test() {
+    assert_eq!(2, 2);
+}" base
+base_on_main
+commit_file "$repo" conductor-core/src/x.rs "#[test]
+fn first_test() {
+    assert_eq!(1, 1);
+}
+
+#[test]
+fn second_test() {
+    assert_eq!(2, 3 - 1);
+}" change
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_eq "pass" "$(flaky_status)" "flaky status"
+rerun_call_list | grep -q 'second_test' || fail "second_test not selected"
+rerun_call_list | grep -q 'first_test' && fail "first_test must not be selected"
+
+case_begin "flaky: #[tokio::test] with a following attribute is found"
+new_repo "$PASSING"
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}" base
+base_on_main
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}
+
+#[tokio::test(flavor = \"multi_thread\")]
+#[ignore]
+async fn async_test() {
+    assert!(true);
+}" change
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_eq "pass" "$(flaky_status)" "flaky status"
+rerun_call_list | head -n 1 | grep -q 'async_test' || fail "async_test not selected"
+
+case_begin "flaky: a Rust change with no test changes records no check"
+new_repo "$PASSING"
+commit_file "$repo" conductor-core/src/x.rs "#[test]
+fn some_test() {
+    assert!(true);
+}
+
+fn helper() {}" base
+base_on_main
+commit_file "$repo" conductor-core/src/x.rs "#[test]
+fn some_test() {
+    assert!(true);
+}
+
+fn helper() { let _ = 1; }" change
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_exit 0
+assert_eq "none" "$(flaky_status)" "flaky status"
+assert_eq "0" "$(rerun_calls)" "rerun calls"
+
+case_begin "flaky: more changed tests than the limit is skipped"
+new_repo "$PASSING"
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}" base
+base_on_main
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}
+
+#[test]
+fn test_a() {
+    assert!(true);
+}
+
+#[test]
+fn test_b() {
+    assert!(true);
+}" change
+run_script verify.sh FEATURE_BASE_BRANCH=main VERIFY_RERUN_MAX_TESTS=1
+assert_exit 0
+assert_no_markers
+assert_eq "skipped" "$(flaky_status)" "flaky status"
+assert_eq "0" "$(rerun_calls)" "rerun calls"
+
+case_begin "flaky: the time cap stops new reruns and still passes"
+new_repo "$PASSING"
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}" base
+base_on_main
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}
+
+#[test]
+fn new_test() {
+    assert!(true);
+}" change
+run_script verify.sh FEATURE_BASE_BRANCH=main VERIFY_RERUN_BUDGET=0
+assert_exit 0
+assert_eq "pass" "$(flaky_status)" "flaky status"
+assert_eq "1" "$(rerun_calls)" "rerun calls"
+assert_jq '[.checks[] | select(.name == "flaky tests") | .summary][0] | contains("time cap")'
+
+case_begin "flaky: a failing main nextest run skips the reruns"
+new_repo "$PASSING"
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}" base
+base_on_main
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}
+
+#[test]
+fn new_test() {
+    assert!(true);
+}" change
+printf '        FAIL [   0.1s] conductor-core mod::test_a\n     Summary [   1s] 1 tests run: 0 passed, 1 failed\n' > "$STUB_DIR/fail_nextest"
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_marker has_failures
+assert_eq "none" "$(flaky_status)" "flaky status"
+
+case_begin "flaky: a rerun filter that matches no tests fails instead of passing"
+new_repo "$PASSING"
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}" base
+base_on_main
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}
+
+#[test]
+fn new_test() {
+    assert!(true);
+}" change
+touch "$STUB_DIR/empty_filter"
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_marker has_failures
+assert_eq "fail" "$(flaky_status)" "flaky status"
+assert_context_contains "matched no tests"
+
+case_begin "flaky: a failing git diff skips the check with a reason, not silently"
+new_repo "$PASSING"
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}" base
+base_on_main
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}
+
+#[test]
+fn new_test() {
+    assert!(true);
+}" change
+GIT_SHIM=$(scratch_dir)
+REAL_GIT=$(command -v git)
+cat > "$GIT_SHIM/git" <<SHIM
+#!/usr/bin/env bash
+case "\$*" in *"diff -U0"*) echo "fatal: simulated diff failure" >&2; exit 128 ;; esac
+exec "$REAL_GIT" "\$@"
+SHIM
+chmod +x "$GIT_SHIM/git"
+run_script verify.sh FEATURE_BASE_BRANCH=main "PATH=$GIT_SHIM:$PATH"
+assert_eq "skipped" "$(flaky_status)" "flaky status"
+assert_jq '[.checks[] | select(.name == "flaky tests") | .summary][0] | contains("git diff failed")'
+assert_eq "0" "$(rerun_calls)" "no reruns after a diff failure"
+
+case_begin "flaky: an empty merge base skips the check with a reason, not silently"
+new_repo "$PASSING"
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}" base
+base_on_main
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}
+
+#[test]
+fn new_test() {
+    assert!(true);
+}" change
+run_script verify.sh FEATURE_BASE_BRANCH=main VERIFY_CRATES=conductor-core
+assert_eq "skipped" "$(flaky_status)" "flaky status"
+assert_jq '[.checks[] | select(.name == "flaky tests") | .summary][0] | contains("no merge base")'
+assert_eq "0" "$(rerun_calls)" "no reruns without a merge base"
 
 finish
