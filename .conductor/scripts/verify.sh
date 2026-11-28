@@ -211,12 +211,18 @@ first_errors() {
 # file counts as wholly changed). A test starts at its #[test]-style attribute and ends
 # at the closing brace at the fn's indentation, or at the next test attribute or EOF.
 changed_tests() {
-  local crate="$1" f ranges
+  local crate="$1" f ranges diff_out
   while IFS= read -r f; do
     case "${f}" in "${crate}/"*.rs) ;; *) continue ;; esac
     [ -f "${f}" ] || continue
     if git ls-files --error-unmatch -- "${f}" > /dev/null 2>&1; then
-      ranges=$(git diff -U0 "${merge_base:-HEAD}" -- "${f}" | sed -n -E 's/^@@ -[0-9,]+ \+([0-9]+)(,([0-9]+))? @@.*/\1 \3/p' |
+      if ! diff_out=$(git diff -U0 "${merge_base:-HEAD}" -- "${f}" 2>&1); then
+        # Not "no tests changed": say so, so the caller records a skipped check.
+        echo "WARNING: git diff failed for ${f}; its changed tests can't be selected" >&2
+        printf '%s\n' "${f}" >> "${logs}/changed-tests-diff-failed"
+        continue
+      fi
+      ranges=$(printf '%s\n' "${diff_out}" | sed -n -E 's/^@@ -[0-9,]+ \+([0-9]+)(,([0-9]+))? @@.*/\1 \3/p' |
         awk '{ d = ($2 == "" ? 1 : $2); if (d == 0) d = 1; printf "%s %s;", $1, $1 + d - 1 }')
     else
       ranges="1 999999999;"
@@ -291,6 +297,7 @@ ${panics}}" "${all_failing}"
   rerun_crates=()
   rerun_exprs=()
   rerun_total=0
+  rm -f "${logs}/changed-tests-diff-failed"
   for crate in ${nextest_passed}; do
     names=$(changed_tests "${crate}")
     [ -n "${names}" ] || continue
@@ -298,7 +305,9 @@ ${panics}}" "${all_failing}"
     rerun_crates+=("${crate}")
     rerun_exprs+=("test(/(^|::)($(printf '%s\n' "${names}" | paste -sd'|' -))\$/)")
   done
-  if [ "${rerun_total}" -gt "${rerun_max}" ]; then
+  if [ -s "${logs}/changed-tests-diff-failed" ]; then
+    record "flaky tests" skipped "not run: git diff failed for $(paste -sd' ' "${logs}/changed-tests-diff-failed"); changed tests can't be selected"
+  elif [ "${rerun_total}" -gt "${rerun_max}" ]; then
     record "flaky tests" skipped "not run: ${rerun_total} tests changed (limit ${rerun_max})"
   elif [ "${rerun_total}" -gt 0 ]; then
     rerun_start=${SECONDS}
@@ -319,7 +328,7 @@ ${panics}}" "${all_failing}"
         [ "${crate}" = "conductor-core" ] && features=(--features test-helpers)
         log="${logs}/rerun-${crate}-${i}.log"
         rerun_status=0
-        cargo nextest run -p "${crate}" --no-fail-fast --no-tests=pass --retries 0 "${features[@]+"${features[@]}"}" -E "${rerun_exprs[${idx}]}" > "${log}" 2>&1 || rerun_status=$?
+        cargo nextest run -p "${crate}" --no-fail-fast --retries 0 "${features[@]+"${features[@]}"}" -E "${rerun_exprs[${idx}]}" > "${log}" 2>&1 || rerun_status=$?
         [ "${rerun_status}" -eq 0 ] && continue
         rerun_fail_at=${i}
         failing=$(grep -E '^\s*(FAIL|TIMEOUT|SIGSEGV|SIGABRT) \[' "${log}" | sed -E 's/^[[:space:]]*[A-Z]+ \[[^]]*\][[:space:]]*(\([0-9]+\/[0-9]+\)[[:space:]]*)?//' | sort -u | grep . || true)
@@ -327,6 +336,13 @@ ${panics}}" "${all_failing}"
           rerun_fail_names="${rerun_fail_names:+${rerun_fail_names}
 }${failing}"
           rerun_fail_detail="${rerun_fail_detail}$(grep -E "panicked at|assertion .* failed|left: |right: " "${log}" | head -n 10)
+"
+        elif grep -q 'no tests to run' "${log}"; then
+          # Without --no-tests=pass nextest fails an empty selection: the filter
+          # named tests that were not built or not found, so nothing was rerun.
+          rerun_fail_names="${rerun_fail_names:+${rerun_fail_names}
+}${crate} (the rerun filter matched no tests)"
+          rerun_fail_detail="${rerun_fail_detail}$(tail -n 5 "${log}")
 "
         else
           rerun_fail_names="${rerun_fail_names:+${rerun_fail_names}

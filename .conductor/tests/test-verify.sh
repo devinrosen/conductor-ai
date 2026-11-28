@@ -39,6 +39,11 @@ case "$1" in
           echo "assertion \`left == right\` failed"
           exit 100
         fi
+        if [ -f "$CARGO_STUB_DIR/empty_filter" ]; then
+          case "$*" in *--no-tests=pass*) exit 0 ;; esac
+          echo "error: no tests to run"
+          exit 4
+        fi
         exit 0
         ;;
     esac
@@ -79,7 +84,7 @@ export PATH="$STUB_DIR/bin:$PATH"
 # switches to a feature branch and cd's into the repo.
 new_repo() {
   repo=$(scratch_repo)
-  rm -f "$STUB_DIR/fail_build" "$STUB_DIR/fail_smoke" "$STUB_DIR/calls" "$STUB_DIR/bump_schema" "$STUB_DIR/validate_env" "$STUB_DIR/validate_fail" "$STUB_DIR/build_errors" "$STUB_DIR/fail_nextest" "$STUB_DIR/rerun_count" "$STUB_DIR/flaky_on" "$STUB_DIR/flaky_name"
+  rm -f "$STUB_DIR/fail_build" "$STUB_DIR/fail_smoke" "$STUB_DIR/calls" "$STUB_DIR/bump_schema" "$STUB_DIR/validate_env" "$STUB_DIR/validate_fail" "$STUB_DIR/build_errors" "$STUB_DIR/fail_nextest" "$STUB_DIR/rerun_count" "$STUB_DIR/flaky_on" "$STUB_DIR/flaky_name" "$STUB_DIR/empty_filter"
   commit_file "$repo" .conductor/tests/run.sh "#!/usr/bin/env bash
 touch \"\$PWD/ran-sentinel\"
 $1" init
@@ -463,5 +468,44 @@ printf '        FAIL [   0.1s] conductor-core mod::test_a\n     Summary [   1s] 
 run_script verify.sh FEATURE_BASE_BRANCH=main
 assert_marker has_failures
 assert_eq "none" "$(flaky_status)" "flaky status"
+
+case_begin "flaky: a rerun filter that matches no tests fails instead of passing"
+new_repo "$PASSING"
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}" base
+base_on_main
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}
+
+#[test]
+fn new_test() {
+    assert!(true);
+}" change
+touch "$STUB_DIR/empty_filter"
+run_script verify.sh FEATURE_BASE_BRANCH=main
+assert_marker has_failures
+assert_eq "fail" "$(flaky_status)" "flaky status"
+assert_context_contains "matched no tests"
+
+case_begin "flaky: a failing git diff skips the check with a reason, not silently"
+new_repo "$PASSING"
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}" base
+base_on_main
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}
+
+#[test]
+fn new_test() {
+    assert!(true);
+}" change
+GIT_SHIM=$(scratch_dir)
+REAL_GIT=$(command -v git)
+cat > "$GIT_SHIM/git" <<SHIM
+#!/usr/bin/env bash
+case "\$*" in *"diff -U0"*) echo "fatal: simulated diff failure" >&2; exit 128 ;; esac
+exec "$REAL_GIT" "\$@"
+SHIM
+chmod +x "$GIT_SHIM/git"
+run_script verify.sh FEATURE_BASE_BRANCH=main "PATH=$GIT_SHIM:$PATH"
+assert_eq "skipped" "$(flaky_status)" "flaky status"
+assert_jq '[.checks[] | select(.name == "flaky tests") | .summary][0] | contains("git diff failed")'
+assert_eq "0" "$(rerun_calls)" "no reruns after a diff failure"
 
 finish
