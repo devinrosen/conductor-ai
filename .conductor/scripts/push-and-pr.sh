@@ -73,6 +73,7 @@ rm -f "$pr_body_err"
 # reviewer (#3484). Same text as the PR body's ## Decisions section. Never fails the step.
 plan_decisions=""
 if ! plan_decisions=$(PR_BODY_SECTION=decisions bash "$(dirname "$0")/pr-body.sh" 2>/dev/null); then
+  echo "WARNING: could not build the plan decisions for review-pr; reviewers will not see them" >&2
   plan_decisions=""
 fi
 

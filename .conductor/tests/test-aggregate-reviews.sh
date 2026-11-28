@@ -250,9 +250,9 @@ assert_jq '.overall_approved == true and (.blocking_findings | length) == 0'
 assert_jq '(.decided_findings | length) == 1 and .decided_findings[0].decision == 1 and .decided_findings[0].reviewer == "Architecture"'
 assert_jq '.summary | contains("1 finding(s) dispute a decision")'
 
-case_begin "decision: a tagged critical Security finding is decided too"
-agg "$( { decisions_entry 2; rev review-security false "[$(dfinding src/a.rs 10 critical 2)]"; } | arr)"
-assert_jq '.overall_approved == true and (.decided_findings | length) == 1'
+case_begin "decision: a tagged Security or critical finding still blocks"
+agg "$( { decisions_entry 2; rev review-security false "[$(dfinding src/a.rs 10 warning 2)]"; rev review-architecture false "[$(dfinding src/b.rs 5 critical 1)]"; } | arr)"
+assert_jq '.overall_approved == false and (.blocking_findings | length) == 2 and (.decided_findings | length) == 0'
 
 case_begin "decision: no fetch-plan-decisions entry means the tagged finding blocks"
 agg "$( { rev review-architecture false "[$(dfinding src/a.rs 10 warning 1)]"; } | arr)"

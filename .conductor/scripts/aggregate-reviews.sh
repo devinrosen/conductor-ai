@@ -110,9 +110,12 @@ if ! result=$(jq -c '
             else $f end
         end
     ] | add // [] | . as $reviewer_findings
-  # Findings that only dispute an in-range decision do not block (#3484).
-  | [ $reviewer_findings[] | select(.decision != null and .decision <= $decision_count) ] as $decided
-  | [ $reviewer_findings[] | select(.decision == null or .decision > $decision_count) | del(.decision) ] as $blocking_all
+  # Findings that only dispute an in-range decision do not block (#3484). The tag is model
+  # output, so it never sets aside a Security or critical finding, as with answered findings.
+  | [ $reviewer_findings[] | . + {decidable: (.decision != null and .decision <= $decision_count
+                                              and .reviewer != "Security" and .severity != "critical")} ] as $tagged
+  | [ $tagged[] | select(.decidable) | del(.decidable) ] as $decided
+  | [ $tagged[] | select(.decidable | not) | del(.decidable, .decision) ] as $blocking_all
 
   # Replies that answered a finding (review-reply-check), matched by reviewer, file and line.
   | ([ $all[] | select(.step == "review-reply-check") ] | last // null | if . == null then [] else (parsed // {} | .answered // []) end) as $answers

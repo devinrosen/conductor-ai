@@ -73,6 +73,9 @@ if ! PR=$(gh api "repos/${OWNER_REPO}/pulls/${PR_NUMBER}" 2>/dev/null) || ! jq -
 fi
 
 # The section body, up to the next `## ` heading, only from a trusted author.
+JQ_ERR=$(mktemp)
+trap 'rm -f "${JQ_ERR}"' EXIT
+JQ_RC=0
 SECTION=$(jq -r --arg bots "${TRUSTED_REVIEW_BOTS:-}" "$(trusted_author_jq)"'
   if trusted_author($bots) then
     ((.body // "") | split("\n")
@@ -80,7 +83,11 @@ SECTION=$(jq -r --arg bots "${TRUSTED_REVIEW_BOTS:-}" "$(trusted_author_jq)"'
           if ($l | test("^## ")) then .on = ($l | test("^## Decisions\\s*$"))
           elif .on then .out += [$l] else . end)
       | .out | join("\n") | gsub("^\\s+|\\s+$"; ""))
-  else "" end' <<< "${PR}" 2>/dev/null || true)
+  else "" end' <<< "${PR}" 2>"${JQ_ERR}") || JQ_RC=$?
+if [ "${JQ_RC}" -ne 0 ]; then
+  echo "fetch-plan-decisions: could not parse the PR body for decisions: $(head -c 500 "${JQ_ERR}")" >&2
+  SECTION=""
+fi
 if [ -z "${SECTION}" ]; then
   emit "No plan decisions on PR #${PR_NUMBER}." "${NONE}" 0 "none"
   exit 0
