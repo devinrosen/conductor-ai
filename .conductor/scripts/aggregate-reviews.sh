@@ -24,6 +24,13 @@
 #   critical findings, which keep blocking (the tag is model output), as with answered_findings.
 #   Without that entry, or with N out of range, it blocks as before. The "did not approve but
 #   listed no finding" check still counts it.
+# - Blocking on-diff findings that different reviewers raise about one problem merge into
+#   one finding (#3482). Two link when they are in the same file and within 10 lines and
+#   their suggested fixes name a common code identifier (snake_case, CamelCase or a :: path);
+#   findings at the same (file, line) always link. Links chain (single linkage). A group keeps
+#   its highest severity, lists the other reviewers in `also_raised_by` and appends their
+#   messages. Security leads a group it is in, so its rules still apply. File-less
+#   synthetic findings never merge.
 # - Off-diff findings are deduplicated by (file, line), keeping the higher
 #   severity, and labelled by reviewer (plus `bug` for critical).
 #
@@ -68,6 +75,36 @@ if ! result=$(jq -c '
     "validate-workflows":        {name: "Workflow Validation", labels: ["bug"]}
   };
   def sev_rank: if . == "critical" then 2 elif . == "warning" then 1 else 0 end;
+  # Code identifiers in a suggestion: tokens with _, :: or a camelCase boundary, plus the last
+  # segment of a :: path. English words are dropped.
+  def code_symbols:
+    [ scan("[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*")
+      | select(length >= 4 and test("_|::|[a-z][A-Z]")) ] as $t
+    | ($t + [ $t[] | select(contains("::")) | split("::") | last ])
+    | map(select(length >= 4)) | unique;
+  def merge_window: 10;
+  def linked($a; $b):
+    $a.file == $b.file and $a.file != ""
+    and ($a.line == $b.line
+         or ($a.reviewer != $b.reviewer
+             and (($a.line - $b.line) | if . < 0 then -. else . end) <= merge_window
+             and ((($a._symbols // []) - (($a._symbols // []) - ($b._symbols // []))) | length) > 0));
+  # Single-linkage groups of findings, each emitted as one finding.
+  def merge_findings:
+    [ to_entries[] | .value + {_i: .key} ] as $items
+    | reduce $items[] as $x ([]; . as $groups
+        | ([ $groups[] | select(any(.[]; linked(.; $x))) ] | add // []) as $joined
+        | [ $groups[] | select(any(.[]; linked(.; $x)) | not) ] + [ $joined + [$x] ])
+    | map(sort_by(._i)) | sort_by(.[0]._i)
+    | map(. as $g
+        | ($g | sort_by([(.reviewer != "Security"), -(.severity | sev_rank), ._i]) | first) as $p
+        | [ $g[] | select(._i != $p._i) ] as $others
+        | ([ $others[].reviewer ] | unique | map(select(. != $p.reviewer))) as $also
+        | $p
+          + {severity: (if any($g[]; .severity == "critical") then "critical" else "warning" end),
+             message: ($p.message + ([ $others[] | " Also raised by \(.reviewer) at \(.file):\(.line): \(.message)" ] | join("")))}
+          + (if ($also | length) > 0 then {also_raised_by: $also} else {} end)
+        | del(._i, ._symbols));
   # structured_output first, then the context string, as JSON objects.
   def json_obj: strings | try fromjson catch empty | objects;
   def parsed:
@@ -104,6 +141,7 @@ if ! result=$(jq -c '
               | {reviewer: $v.name, file: ((.file // "") | tostring), line: ((.line // 0) | tonumber? // 0),
                  severity: .severity,
                  decision: (.decision | if type == "number" and . == floor and . >= 1 then . else null end),
+                 _symbols: ((.suggestion // "") | tostring | code_symbols),
                  message: ((.message // "") + (if (.suggestion // "") != "" then " Suggested fix: " + .suggestion else "" end))} ] ) as $f
           | if ($f | length) == 0 and ($v.marker_blocks or ($v.out.approved == false)) then
               [{reviewer: $v.name, file: "", line: 0, severity: "warning",
@@ -115,7 +153,7 @@ if ! result=$(jq -c '
   # output, so it never sets aside a Security or critical finding, as with answered findings.
   | [ $reviewer_findings[] | . + {decidable: (.decision != null and .decision <= $decision_count
                                               and .reviewer != "Security" and .severity != "critical")} ] as $tagged
-  | [ $tagged[] | select(.decidable) | del(.decidable) ] as $decided
+  | [ $tagged[] | select(.decidable) | del(.decidable, ._symbols) ] as $decided
   | [ $tagged[] | select(.decidable | not) | del(.decidable, .decision) ] as $blocking_all
 
   # Replies that answered a finding (review-reply-check), matched by reviewer, file and line.
@@ -146,8 +184,8 @@ if ! result=$(jq -c '
         then $b + {answered: true, answered_by: (($a.answered_by // "") | tostring), reply: (($a.reply // "") | tostring)}
         else $b + {answered: false} end
     ] as $marked
-  | [ $marked[] | select(.answered | not) | del(.answered) ] as $blocking
-  | [ $marked[] | select(.answered) | del(.answered) ] as $answered
+  | [ $marked[] | select(.answered | not) | del(.answered) ] | merge_findings as $blocking
+  | [ $marked[] | select(.answered) | del(.answered, ._symbols) ] as $answered
 
   # Off-diff findings: dedupe by (file, line), keep the higher severity.
   | [ $revs[] | . as $v | ($v.out.off_diff_findings // [])[]? | objects
@@ -175,7 +213,7 @@ if ! result=$(jq -c '
         elif $approved then "All reviewers approved."
           + (if ($answered | length) > 0 then " \($answered | length) finding(s) were already answered on the PR." else "" end)
           + (if ($decided | length) > 0 then " \($decided | length) finding(s) dispute a decision the user made; not blocking." else "" end)
-        else "\($blocking | length) blocking finding(s) from \([ $blocking[].reviewer ] | unique | join(", "))."
+        else "\($blocking | length) blocking finding(s) from \([ $blocking[] | .reviewer, (.also_raised_by // [])[] ] | unique | join(", "))."
           + (if ($answered | length) > 0 then " \($answered | length) already answered." else "" end)
           + (if ($decided | length) > 0 then " \($decided | length) finding(s) dispute a decision the user made; not blocking." else "" end)
         end)

@@ -40,6 +40,7 @@ Find the latest `review-aggregator` entry in `{{prior_contexts}}`. Parse its `st
 - `message` — full finding text
 - `reviewer` — display name (e.g. `"Architecture"`, `"Security"`, `"DRY & Abstraction"`)
 - `labels` — array of strings (e.g. `["security", "bug"]`)
+- `also_raised_by` — optional array of other reviewers that raised the same problem (#3482); their text follows "Also raised by" in `message`. Triage the finding once, under `reviewer`. Name the other reviewers in any pushback or clarify comment, so a later reply-check can match it.
 
 ### Change requests from trusted authors
 

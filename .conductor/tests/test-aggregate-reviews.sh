@@ -16,8 +16,9 @@ rev() {
     {step: $step, iteration: 0, context: "", markers: (if $ap then [] else ["has_review_issues"] end),
      structured_output: ({approved: $ap, findings: $f, off_diff_findings: $off, summary: "s"} | tojson)}'
 }
-finding() { # FILE LINE SEVERITY
-  jq -cn --arg f "$1" --argjson l "$2" --arg s "$3" '{file: $f, line: $l, severity: $s, message: "m"}'
+finding() { # FILE LINE SEVERITY [SUGGESTION]
+  jq -cn --arg f "$1" --argjson l "$2" --arg s "$3" --arg sg "${4:-}" \
+    '{file: $f, line: $l, severity: $s, message: "m"} + (if $sg != "" then {suggestion: $sg} else {} end)'
 }
 # replies_entry REPLIES_JSON — the fetch-pr-replies entry.
 replies_entry() {
@@ -47,7 +48,8 @@ for f in "$FIX"/recorded-*.json; do
   exp="${f%.json}.expect.json"
   want=$(jq -S . "$exp")
   got=$(flow_output | jq -S '{markers, overall_approved, reviewed_by,
-    blocking: [.blocking_findings[] | {reviewer, file, line, severity}],
+    blocking: [.blocking_findings[] | {reviewer, file, line, severity}
+                                  + (if .also_raised_by then {also_raised_by} else {} end)],
     answered: (.answered_findings | length),
     off_diff: [.off_diff_findings[] | {file, line, severity, reviewer}]}')
   assert_eq "$want" "$got" "key fields of $name"
@@ -129,6 +131,75 @@ case_begin "no reviewer entries fails closed"
 agg "$(jq -cn '[{step: "detect-file-types", iteration: 0, context: "", markers: [], structured_output: null}]')"
 assert_exit 1; assert_marker has_review_issues
 assert_jq '.overall_approved == false'
+
+# --- merging duplicate findings (#3482) ------------------------------------
+# merge2 ARCH_FINDING DRY_FINDING — Architecture and DRY Abstraction each raise one finding.
+merge2() {
+  agg "$( { rev review-architecture false "[$1]"; rev review-dry-abstraction false "[$2]"; } | arr)"
+}
+A=src/a.rs
+
+case_begin "merge: near findings sharing a snake_case symbol become one"
+merge2 "$(finding $A 100 warning 'Add check_inputs() in core')" "$(finding $A 104 warning 'Use check_inputs instead')"
+assert_exit 0; assert_marker has_blocking_findings
+assert_jq '(.blocking_findings | length) == 1 and .blocking_findings[0].reviewer == "Architecture"'
+assert_jq '.blocking_findings[0].also_raised_by == ["DRY Abstraction"]'
+assert_jq '.blocking_findings[0].message | contains("Also raised by DRY Abstraction at src/a.rs:104")'
+assert_jq '[.. | objects | has("_symbols")] | any | not'
+
+case_begin "merge: a warning and a critical merge to critical"
+merge2 "$(finding $A 100 warning 'use check_inputs')" "$(finding $A 103 critical 'use check_inputs')"
+assert_exit 0; assert_marker has_blocking_findings; assert_no_marker has_warnings
+assert_jq '(.blocking_findings | length) == 1 and .blocking_findings[0].severity == "critical"'
+assert_jq '.blocking_findings[0].reviewer == "DRY Abstraction" and .blocking_findings[0].also_raised_by == ["Architecture"]'
+
+case_begin "merge: CamelCase and :: path symbols link"
+merge2 "$(finding $A 100 warning 'Add RequiredInputs')" "$(finding $A 101 warning 'Make RequiredInputs public')"
+assert_exit 0; assert_jq '(.blocking_findings | length) == 1'
+merge2 "$(finding $A 100 warning 'Call core::check_inputs')" "$(finding $A 101 warning 'Add check_inputs helper')"
+assert_exit 0; assert_jq '(.blocking_findings | length) == 1'
+
+case_begin "merge: different symbols in the same file stay separate"
+merge2 "$(finding $A 100 warning 'use check_inputs')" "$(finding $A 104 warning 'rename build_report')"
+assert_exit 0; assert_jq '(.blocking_findings | length) == 2'
+assert_jq 'all(.blocking_findings[]; has("also_raised_by") | not)'
+
+case_begin "merge: a shared symbol far apart stays separate"
+merge2 "$(finding $A 100 warning 'use check_inputs')" "$(finding $A 130 warning 'use check_inputs')"
+assert_exit 0; assert_jq '(.blocking_findings | length) == 2'
+
+case_begin "merge: different files stay separate"
+merge2 "$(finding src/a.rs 100 warning 'use check_inputs')" "$(finding src/b.rs 100 warning 'use check_inputs')"
+assert_exit 0; assert_jq '(.blocking_findings | length) == 2'
+
+case_begin "merge: the same (file, line) merges without suggestions"
+merge2 "$(finding $A 100 warning)" "$(finding $A 100 warning)"
+assert_exit 0; assert_jq '(.blocking_findings | length) == 1 and .blocking_findings[0].also_raised_by == ["DRY Abstraction"]'
+
+case_begin "merge: one reviewer's own near findings stay separate"
+agg "$( { rev review-architecture false "[$(finding $A 100 warning 'use check_inputs'),$(finding $A 103 warning 'use check_inputs')]"; } | arr)"
+assert_exit 0; assert_jq '(.blocking_findings | length) == 2'
+
+case_begin "merge: Security leads its group"
+agg "$( { rev review-architecture false "[$(finding $A 100 critical 'use check_inputs')]"; rev review-security false "[$(finding $A 102 warning 'use check_inputs')]"; } | arr)"
+assert_exit 0
+assert_jq '(.blocking_findings | length) == 1 and .blocking_findings[0].reviewer == "Security"'
+assert_jq '.blocking_findings[0].also_raised_by == ["Architecture"] and .blocking_findings[0].severity == "critical"'
+
+case_begin "merge: a chain of links is one group"
+agg "$( { rev review-architecture false "[$(finding $A 100 warning 'use check_inputs'),$(finding $A 118 warning 'use build_report')]"
+          rev review-dry-abstraction false "[$(finding $A 109 warning 'use check_inputs and build_report')]"; } | arr)"
+assert_exit 0
+assert_jq '(.blocking_findings | length) == 1 and .blocking_findings[0].also_raised_by == ["DRY Abstraction"]'
+
+case_begin "merge: file-less synthetic findings never merge"
+agg "$( { rev review-architecture false '[]'; rev review-dry-abstraction false '[]'; } | arr)"
+assert_exit 0; assert_jq '(.blocking_findings | length) == 2'
+
+case_begin "merge: the summary names every reviewer in a group"
+merge2 "$(finding $A 100 warning 'use check_inputs')" "$(finding $A 101 warning 'use check_inputs')"
+assert_exit 0
+assert_jq '.summary | contains("Architecture") and contains("DRY Abstraction")'
 
 # --- reply trust (#3278) ---------------------------------------------------
 # One warning from Architecture on src/a.rs:10, answered_by $1, replies $2.

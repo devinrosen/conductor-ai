@@ -1,0 +1,69 @@
+[
+  {
+    "step": "validate-workflows",
+    "iteration": 0,
+    "context": "Workflow validation passed: 41/41 workflow(s) passed.",
+    "markers": [],
+    "structured_output": "{\"markers\":[],\"context\":\"Workflow validation passed: 41/41 workflow(s) passed.\",\"off_diff_findings\":[],\"approved\":true,\"summary\":\"Workflow validation passed: 41/41 workflow(s) passed.\",\"findings\":[]}"
+  },
+  {
+    "step": "review-architecture",
+    "iteration": 0,
+    "context": "The change keeps the CLI a thin consumer of core. One warning: `missing_inputs` is computed in the CLI by copying core's required-input predicate instead of asking core for it.",
+    "markers": [
+      "has_review_issues"
+    ],
+    "structured_output": "{\"approved\":false,\"findings\":[{\"file\":\"conductor-cli/src/handlers/workflow.rs\",\"line\":1783,\"message\":\"smoke_required_input_gate recomputes the missing required inputs in the CLI (`i.required && !inputs.contains_key(&i.name)`) after calling conductor_core's check_required_workflow_inputs. That duplicates core's required-input rule in a thin consumer. The `missing_inputs[]` field that smoke-workflows.sh now relies on can drift from the error text core produces if core's rule changes, for example if an empty value counts as missing.\",\"severity\":\"warning\",\"suggestion\":\"Have conductor-core expose the missing names, for example a `missing_required_workflow_inputs(workflow, inputs) -> Vec<String>` that check_required_workflow_inputs also uses. Then the CLI only reads the list.\"}],\"summary\":\"The change keeps the CLI a thin consumer of core. One warning: `missing_inputs` is computed in the CLI by copying core's required-input predicate instead of asking core for it.\"}"
+  },
+  {
+    "step": "review-dry-abstraction",
+    "iteration": 0,
+    "context": "Three DRY/abstraction warnings in conductor-cli/src/handlers/workflow.rs: a duplicated required-input predicate that can drift from core, warnings computed twice, and a duplicated static-failure check with repeated report construction. The cli_tests.rs helpers and smoke-workflows.sh changes raise nothing.",
+    "markers": [
+      "has_review_issues"
+    ],
+    "structured_output": "{\"approved\":false,\"findings\":[{\"file\":\"conductor-cli/src/handlers/workflow.rs\",\"line\":1779,\"message\":\"missing_inputs re-derives core's required-input check, so JSON missing_inputs and the error text can drift apart. The CLI's filter (required && !inputs.contains_key) duplicates the predicate in check_required_workflow_inputs (conductor-core/src/workflow/coordinator.rs:51-64), which builds the error. If core changes what counts as missing, missing_inputs silently disagrees with error and status.\",\"severity\":\"warning\",\"suggestion\":\"Add a core helper that returns the missing required input names (e.g. missing_required_workflow_inputs(workflow, inputs) -> Vec<&str>). Have check_required_workflow_inputs build its error from it, and call it from smoke_required_input_gate for missing_inputs.\"},{\"file\":\"conductor-cli/src/handlers/workflow.rs\",\"line\":1762,\"message\":\"smoke_one computes the warning texts twice: smoke_warnings fills report.warnings, then smoke_warn_lines runs the same scan again for the human SMOKE WARN lines. The two outputs stay in sync only by convention.\",\"severity\":\"warning\",\"suggestion\":\"Build the human lines from report.warnings: report.human_lines.extend(report.warnings.iter().map(|t| format!(\\\"SMOKE WARN  {}  {t}\\\", workflow.name))). Then delete smoke_warn_lines and move its tests (around lines 1857 and 1870) to assert on the prefixed output.\"},{\"file\":\"conductor-cli/src/handlers/workflow.rs\",\"line\":1028,\"message\":\"The static-failure predicate (e.name == wf.name && !e.errors.is_empty()) is written inline in the loop, and the statically_failed helper repeats it at line 1075. Both run per workflow. The SmokeReport error-building pattern (new(..., Fail) then error = Some(...)) is also repeated at lines 923, 1017, 1034 and 1688.\",\"severity\":\"warning\",\"suggestion\":\"Make one lookup return the matching entry (e.g. static_entry: Option<&ValidationEntry>) and reuse it for both the report and the failure count. Add SmokeReport::failed(name: &str, error: String) to cover the repeated constructions. Also consider having smoke_required_input_gate return a SmokeReport directly instead of a four-tuple.\"}],\"summary\":\"Three DRY/abstraction warnings in conductor-cli/src/handlers/workflow.rs: a duplicated required-input predicate that can drift from core, warnings computed twice, and a duplicated static-failure check with repeated report construction. The cli_tests.rs helpers and smoke-workflows.sh changes raise nothing.\"}"
+  },
+  {
+    "step": "review-security",
+    "iteration": 0,
+    "context": "No security issues: the smoke script quotes its arguments and reads only JSON through jq, no new subprocess, SQL or path handling is added, and no secrets are exposed.",
+    "markers": [],
+    "structured_output": "{\"approved\":true,\"findings\":[],\"summary\":\"No security issues: the smoke script quotes its arguments and reads only JSON through jq, no new subprocess, SQL or path handling is added, and no secrets are exposed.\"}"
+  },
+  {
+    "step": "review-performance",
+    "iteration": 0,
+    "context": "No performance issues in the #3472 diff: the --json smoke output adds only trivial per-workflow linear scans over about 41 workflows and small string duplication, all negligible.",
+    "markers": [],
+    "structured_output": "{\"approved\":true,\"findings\":[],\"summary\":\"No performance issues in the #3472 diff: the --json smoke output adds only trivial per-workflow linear scans over about 41 workflows and small string duplication, all negligible.\"}"
+  },
+  {
+    "step": "review-error-handling",
+    "iteration": 0,
+    "context": "No critical or warning error-handling issues in the diff: validation errors are formatted before joining, serialization and load failures surface in the report or stderr, and smoke-workflows.sh treats malformed CLI output as a failure.",
+    "markers": [],
+    "structured_output": "{\"approved\":true,\"findings\":[],\"summary\":\"No critical or warning error-handling issues in the diff: validation errors are formatted before joining, serialization and load failures surface in the report or stderr, and smoke-workflows.sh treats malformed CLI output as a failure.\"}"
+  },
+  {
+    "step": "review-test-coverage",
+    "iteration": 0,
+    "context": "Test coverage is adequate: CLI tests cover pass, fail, skip, a missing input, a static failure and the --json-requires-dry-run guard, and the smoke-workflows.sh fixtures are updated for --json.",
+    "markers": [],
+    "structured_output": "{\"approved\":true,\"findings\":[],\"summary\":\"Test coverage is adequate: CLI tests cover pass, fail, skip, a missing input, a static failure and the --json-requires-dry-run guard, and the smoke-workflows.sh fixtures are updated for --json.\"}"
+  },
+  {
+    "step": "review-workflow-semantics",
+    "iteration": 0,
+    "context": "smoke-workflows.sh now reads only the CLI's JSON object, and its fixtures and test stubs match the new contract; no blocking pipeline issues.",
+    "markers": [],
+    "structured_output": "{\"approved\":true,\"findings\":[],\"off_diff_findings\":[],\"summary\":\"smoke-workflows.sh now reads only the CLI's JSON object, and its fixtures and test stubs match the new contract; no blocking pipeline issues.\"}"
+  },
+  {
+    "step": "fetch-pr-replies",
+    "iteration": 0,
+    "context": "No earlier conductor review on PR #3475; no replies to consider.",
+    "markers": [],
+    "structured_output": "{\"markers\":[],\"context\":\"No earlier conductor review on PR #3475; no replies to consider.\",\"replies\":[]}"
+  }
+]
