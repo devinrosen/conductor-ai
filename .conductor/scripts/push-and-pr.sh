@@ -30,11 +30,11 @@ git fetch origin "$base" --quiet
 # Early exit if no commits ahead of base
 ahead=$(git rev-list --count "origin/$base..HEAD")
 if [ "$ahead" -eq 0 ]; then
-  cat <<EOF
-<<<FLOW_OUTPUT>>>
-{"markers": ["no_changes"], "context": "No commits ahead of $base — nothing to push or PR"}
-<<<END_FLOW_OUTPUT>>>
-EOF
+  # plan_decisions is always emitted (#3484), so {{plan_decisions}} is never left literal.
+  echo "<<<FLOW_OUTPUT>>>"
+  jq -cn --arg ctx "No commits ahead of $base — nothing to push or PR" \
+    '{markers: ["no_changes"], context: $ctx, plan_decisions: ""}'
+  echo "<<<END_FLOW_OUTPUT>>>"
   exit 0
 fi
 
@@ -68,6 +68,14 @@ elif [ -z "$pr_body" ]; then
   echo "WARNING: no plan or implement summary in PRIOR_CONTEXTS; using the commit bodies for the PR description" >&2
 fi
 rm -f "$pr_body_err"
+
+# The plan gate's decisions, exported as plan_decisions so review-pr shows them to every
+# reviewer (#3484). Same text as the PR body's ## Decisions section. Never fails the step.
+plan_decisions=""
+if ! plan_decisions=$(PR_BODY_SECTION=decisions bash "$(dirname "$0")/pr-body.sh" 2>/dev/null); then
+  echo "WARNING: could not build the plan decisions for review-pr; reviewers will not see them" >&2
+  plan_decisions=""
+fi
 
 pr_body_file=$(mktemp)
 trap 'rm -f "$pr_body_file"' EXIT
@@ -132,8 +140,7 @@ if [ "$created" -eq 1 ] && [ -n "$ticket_id" ]; then
   fi
 fi
 
-cat <<EOF
-<<<FLOW_OUTPUT>>>
-{"markers": [], "context": "PR is open at $pr_url$link_warning"}
-<<<END_FLOW_OUTPUT>>>
-EOF
+echo "<<<FLOW_OUTPUT>>>"
+jq -cn --arg ctx "PR is open at $pr_url$link_warning" --arg pd "$plan_decisions" \
+  '{markers: [], context: $ctx, plan_decisions: $pd}'
+echo "<<<END_FLOW_OUTPUT>>>"

@@ -165,8 +165,14 @@ workflow ticket-to-pr {
     }
   }
 
+  // push-and-pr exports plan_decisions, the PR body's ## Decisions text, and iterate-pr
+  // passes it to review-pr so the reviewers see what the user decided at the plan gate (#3484).
   unless push-and-pr.no_changes {
-    call workflow iterate-pr
+    call workflow iterate-pr {
+      inputs {
+        plan_decisions = "{{plan_decisions}}"
+      }
+    }
 
     if auto_merge {
       gate pr_checks {
@@ -184,7 +190,11 @@ workflow ticket-to-pr {
       call workflow rebase-worktree
 
       if rebase-worktree.has_conflicts {
-        call workflow iterate-pr
+        call workflow iterate-pr {
+          inputs {
+            plan_decisions = "{{plan_decisions}}"
+          }
+        }
       }
 
       gate pr_checks {

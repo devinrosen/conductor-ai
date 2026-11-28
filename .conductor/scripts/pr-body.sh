@@ -25,7 +25,9 @@
 #                      database (the branch adds a migration, #3469), a closing line says so
 #   ## Risks and open questions
 # PR_BODY_SECTION=smokes prints only the ## Smokes section (empty when there is none), for
-# update-pr-smokes.sh. Output is empty (exit 0) when there is no plan or implement summary, so the caller falls
+# update-pr-smokes.sh. PR_BODY_SECTION=decisions prints the body of the ## Decisions section
+# without its heading (empty when there is none), for push-and-pr.sh's plan_decisions export,
+# which reaches the reviewers (#3484). Output is empty (exit 0) when there is no plan or implement summary, so the caller falls
 # back to the commit bodies. Exit 1 with no stderr when PRIOR_CONTEXTS is unset, empty or
 # itself a bare {{...}} template; any other value goes to jq, which exits non-zero with its
 # error on stderr when it can't be parsed.
@@ -141,6 +143,8 @@ printf '%s' "$contexts" | jq -r --arg section "$section" --argjson gate "$gate_r
         end;
     if $section == "smokes" then
       smokes_section | if . == "" then empty else "## Smokes\n\n" + . end
+    elif $section == "decisions" then
+      decisions(plan) | if . == "" then empty else . end
     else
     plan as $p | decisions($p) as $dc | impl as $i | verification as $vf | smokes_section as $sm
     | (($p.summary // "") | scrubpaths) as $s

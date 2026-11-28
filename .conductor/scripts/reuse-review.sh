@@ -54,6 +54,7 @@ echo "${PAYLOAD}" | jq -c --arg id "${REVIEW_ID}" --arg sha "${HEAD_SHA:0:8}" '
       reviewed_by: (.reviewed_by // ""),
       blocking_findings: $blocking,
       answered_findings: (.answered_findings // []),
+      decided_findings: (.decided_findings // []),
       off_diff_findings: [],
       overall_approved: $approved,
       summary: (.summary // "")

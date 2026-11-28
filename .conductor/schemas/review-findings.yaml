@@ -9,6 +9,9 @@ fields:
       suggestion?:
         type: string
         desc: "Suggested fix or remediation"
+      decision?:
+        type: number
+        desc: "The number of the user's decision this finding only disputes; see Decided by the user"
   off_diff_findings?:
     type: array
     desc: "Issues found in unchanged/removed code — filed as separate issues, do not affect approval"
