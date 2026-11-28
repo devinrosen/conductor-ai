@@ -11,6 +11,10 @@ fields:
       line: number
       severity: enum(critical, warning)
       message: string
+      also_raised_by?:
+        type: array
+        desc: "Other reviewers that raised the same problem; the finding counts once"
+        items: string
   overall_approved: boolean
   summary: string
   off_diff_findings:

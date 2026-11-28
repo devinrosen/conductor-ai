@@ -73,4 +73,8 @@ jq '[.[] | .markers = ((.markers // "[]") | fromjson)
        else . end | del(.result_text)]' > fixtures/aggregate/recorded-<name>.json
 ```
 
+`recorded-merged-duplicates` (#3482) is #3475's round 1 (review-pr run `01M89SQ351P6261W28Z6PB73YG`):
+the old script reported 4 blocking findings, and the merge makes it 3. The loop projects
+`also_raised_by` when a finding has one.
+
 Trim reply bodies, and skim for anything private before committing. Only record runs of this repo.
