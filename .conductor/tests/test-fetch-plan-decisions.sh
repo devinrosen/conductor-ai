@@ -72,6 +72,16 @@ run_fetch PR_NUMBER=7 PLAN_DECISIONS=
 assert_exit 0
 assert_jq '.decisions_source == "none" and .decision_count == 0 and (.user_decisions | startswith("None"))'
 
+case_begin "a listed bot author is trusted although GitHub reports it as CONTRIBUTOR"
+new_case "$(jq -nc --arg body "$BODY" '{author_association: "CONTRIBUTOR", user: {login: "conductor-ai-coder[bot]", type: "Bot"}, body: $body}')"
+run_fetch PR_NUMBER=7 PLAN_DECISIONS= TRUSTED_REVIEW_BOTS='conductor-ai-reviewer[bot],conductor-ai-coder[bot]'
+assert_exit 0
+assert_jq '.decisions_source == "pr_body" and .decision_count == 2'
+
+case_begin "the same bot author is not trusted when it isn't listed"
+run_fetch PR_NUMBER=7 PLAN_DECISIONS=
+assert_jq '.decisions_source == "none" and .decision_count == 0'
+
 case_begin "a body with no Decisions section gives None, count 0"
 new_case "$(pr_json OWNER $'## Summary\n\nS.\n')"
 run_fetch PR_NUMBER=7 PLAN_DECISIONS=
