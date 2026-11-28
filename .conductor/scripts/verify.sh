@@ -216,7 +216,7 @@ changed_tests() {
     case "${f}" in "${crate}/"*.rs) ;; *) continue ;; esac
     [ -f "${f}" ] || continue
     if git ls-files --error-unmatch -- "${f}" > /dev/null 2>&1; then
-      if ! diff_out=$(git diff -U0 "${merge_base:-HEAD}" -- "${f}" 2>&1); then
+      if ! diff_out=$(git diff -U0 "${merge_base}" -- "${f}" 2>&1); then
         # Not "no tests changed": say so, so the caller records a skipped check.
         echo "WARNING: git diff failed for ${f}; its changed tests can't be selected" >&2
         printf '%s\n' "${f}" >> "${logs}/changed-tests-diff-failed"
@@ -298,6 +298,14 @@ ${panics}}" "${all_failing}"
   rerun_exprs=()
   rerun_total=0
   rm -f "${logs}/changed-tests-diff-failed"
+  if [ -z "${merge_base:-}" ]; then
+    # Diffing against HEAD would list only uncommitted changes and select no tests.
+    if [ -n "${nextest_passed}" ]; then
+      echo "WARNING: no merge base with ${base}; changed tests can't be selected for the flaky rerun" >&2
+      record "flaky tests" skipped "not run: no merge base with the base branch; changed tests can't be selected"
+    fi
+    nextest_passed=""
+  fi
   for crate in ${nextest_passed}; do
     names=$(changed_tests "${crate}")
     [ -n "${names}" ] || continue

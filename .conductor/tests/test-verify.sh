@@ -508,4 +508,19 @@ assert_eq "skipped" "$(flaky_status)" "flaky status"
 assert_jq '[.checks[] | select(.name == "flaky tests") | .summary][0] | contains("git diff failed")'
 assert_eq "0" "$(rerun_calls)" "no reruns after a diff failure"
 
+case_begin "flaky: an empty merge base skips the check with a reason, not silently"
+new_repo "$PASSING"
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}" base
+base_on_main
+commit_file "$repo" conductor-core/src/x.rs "fn helper() {}
+
+#[test]
+fn new_test() {
+    assert!(true);
+}" change
+run_script verify.sh FEATURE_BASE_BRANCH=main VERIFY_CRATES=conductor-core
+assert_eq "skipped" "$(flaky_status)" "flaky status"
+assert_jq '[.checks[] | select(.name == "flaky tests") | .summary][0] | contains("no merge base")'
+assert_eq "0" "$(rerun_calls)" "no reruns without a merge base"
+
 finish
