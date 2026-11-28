@@ -42,8 +42,19 @@
 # the last two verifies' signatures to decide whether ticket-to-pr gets one more
 # fix attempt.
 #
+# Flaky-test rerun (#3485): after the per-crate nextest pass, the test fns the diff
+# adds or changes (#[test]/#[tokio::test] fns whose lines overlap a changed hunk) are
+# rerun VERIFY_RERUNS more times with --retries 0, for the crates whose main nextest
+# run passed. A failure on any rerun fails the `flaky tests` check, which names the
+# test and the rerun, with one signature entry per failing test. The check is skipped
+# above VERIFY_RERUN_MAX_TESTS changed tests and starts no new rerun after
+# VERIFY_RERUN_BUDGET seconds. It records nothing when no test changed, and needs the
+# diff (it is off under VERIFY_CRATES).
+#
 # Env: FEATURE_BASE_BRANCH (default main). VERIFY_CRATES overrides the crate
-# list (space-separated), for testing.
+# list (space-separated), for testing. VERIFY_RERUNS (default 5),
+# VERIFY_RERUN_MAX_TESTS (default 50) and VERIFY_RERUN_BUDGET (default 120, seconds)
+# bound the flaky-test rerun.
 #
 # Call sites: ticket-to-pr.wf, iterate-pr.wf and quick-fix-pr.wf call this as
 # `script verify` with FEATURE_BASE_BRANCH = {{feature_base_branch}} (twice in
@@ -195,6 +206,39 @@ first_errors() {
   printf '%s' "${out}"
 }
 
+# changed_tests CRATE — the sorted, unique names of the test fns under CRATE/ whose
+# lines overlap a changed line range of the diff against the merge base (an untracked
+# file counts as wholly changed). A test starts at its #[test]-style attribute and ends
+# at the closing brace at the fn's indentation, or at the next test attribute or EOF.
+changed_tests() {
+  local crate="$1" f ranges
+  while IFS= read -r f; do
+    case "${f}" in "${crate}/"*.rs) ;; *) continue ;; esac
+    [ -f "${f}" ] || continue
+    if git ls-files --error-unmatch -- "${f}" > /dev/null 2>&1; then
+      ranges=$(git diff -U0 "${merge_base:-HEAD}" -- "${f}" | sed -n -E 's/^@@ -[0-9,]+ \+([0-9]+)(,([0-9]+))? @@.*/\1 \3/p' |
+        awk '{ d = ($2 == "" ? 1 : $2); if (d == 0) d = 1; printf "%s %s;", $1, $1 + d - 1 }')
+    else
+      ranges="1 999999999;"
+    fi
+    [ -n "${ranges}" ] || continue
+    awk -v r="${ranges}" '
+      BEGIN { n = split(r, rs, ";"); for (i = 1; i <= n; i++) { split(rs[i], p, " "); lo[i] = p[1]; hi[i] = p[2] } }
+      function flush(endl,   i) {
+        if (name != "") for (i = 1; i <= n; i++) if (lo[i] != "" && lo[i] + 0 <= endl && hi[i] + 0 >= start) { print name; break }
+        name = ""; inbody = 0
+      }
+      /^[[:space:]]*#\[([A-Za-z_]+::)*test(\(.*\))?\]/ { if (inbody) flush(NR - 1); pending = 1; start = NR; next }
+      pending && /(^|[[:space:]])fn[[:space:]]+[A-Za-z_]/ {
+        l = " " $0; sub(/^.*[[:space:]]fn[[:space:]]+/, "", l); match(l, /^[A-Za-z0-9_]+/); name = substr(l, 1, RLENGTH)
+        match($0, /^[[:space:]]*/); ind = substr($0, 1, RLENGTH); inbody = 1; pending = 0; next
+      }
+      inbody && $0 == ind "}" { flush(NR); next }
+      END { if (inbody) flush(NR) }
+    ' "${f}"
+  done <<< "${all_changed}" | sort -u
+}
+
 # --- cargo build -------------------------------------------------------------
 # The other checks would only repeat a build failure, so they're skipped then.
 build_ok=0
@@ -211,6 +255,7 @@ fi
 
 if [ "${failed}" -eq 0 ]; then
   # --- cargo nextest, per crate ----------------------------------------------
+  nextest_passed=""
   for crate in ${crates[@]+"${crates[@]}"}; do
     features=()
     [ "${crate}" = "conductor-core" ] && features=(--features test-helpers)
@@ -220,6 +265,7 @@ if [ "${failed}" -eq 0 ]; then
     summary=$(grep -E '^\s*Summary \[' "${log}" | tail -n 1 | sed -E 's/^[[:space:]]*Summary \[[^]]*\][[:space:]]*//')
     if [ "${nextest_status}" -eq 0 ]; then
       record "cargo nextest -p ${crate}" pass "${summary:-passed}"
+      nextest_passed="${nextest_passed} ${crate}"
     else
       all_failing=$(grep -E '^\s*(FAIL|TIMEOUT|SIGSEGV|SIGABRT) \[' "${log}" | sed -E 's/^[[:space:]]*[A-Z]+ \[[^]]*\][[:space:]]*(\([0-9]+\/[0-9]+\)[[:space:]]*)?//' | sort -u)
       failing=$(printf '%s\n' "${all_failing}" | head -n 20 | grep . || true)
@@ -234,6 +280,75 @@ ${panics}}" "${all_failing}"
       fi
     fi
   done
+
+  # --- flaky-test rerun (#3485) ----------------------------------------------
+  # The tests this diff adds or changes ran once above. Rerun just those, so a
+  # timing-dependent new test fails here and not in CI. Only crates whose main run
+  # passed take part: a failing crate goes back to implement first.
+  rerun_n="${VERIFY_RERUNS:-5}"
+  rerun_max="${VERIFY_RERUN_MAX_TESTS:-50}"
+  rerun_budget="${VERIFY_RERUN_BUDGET:-120}"
+  rerun_crates=()
+  rerun_exprs=()
+  rerun_total=0
+  for crate in ${nextest_passed}; do
+    names=$(changed_tests "${crate}")
+    [ -n "${names}" ] || continue
+    rerun_total=$((rerun_total + $(printf '%s\n' "${names}" | grep -c .)))
+    rerun_crates+=("${crate}")
+    rerun_exprs+=("test(/(^|::)($(printf '%s\n' "${names}" | paste -sd'|' -))\$/)")
+  done
+  if [ "${rerun_total}" -gt "${rerun_max}" ]; then
+    record "flaky tests" skipped "not run: ${rerun_total} tests changed (limit ${rerun_max})"
+  elif [ "${rerun_total}" -gt 0 ]; then
+    rerun_start=${SECONDS}
+    rerun_done=0
+    rerun_capped=0
+    rerun_fail_at=0
+    rerun_fail_names=""
+    rerun_fail_detail=""
+    i=1
+    while [ "${i}" -le "${rerun_n}" ]; do
+      if [ "${i}" -gt 1 ] && [ $((SECONDS - rerun_start)) -ge "${rerun_budget}" ]; then
+        rerun_capped=1
+        break
+      fi
+      for idx in "${!rerun_crates[@]}"; do
+        crate="${rerun_crates[${idx}]}"
+        features=()
+        [ "${crate}" = "conductor-core" ] && features=(--features test-helpers)
+        log="${logs}/rerun-${crate}-${i}.log"
+        rerun_status=0
+        cargo nextest run -p "${crate}" --no-fail-fast --no-tests=pass --retries 0 "${features[@]+"${features[@]}"}" -E "${rerun_exprs[${idx}]}" > "${log}" 2>&1 || rerun_status=$?
+        [ "${rerun_status}" -eq 0 ] && continue
+        rerun_fail_at=${i}
+        failing=$(grep -E '^\s*(FAIL|TIMEOUT|SIGSEGV|SIGABRT) \[' "${log}" | sed -E 's/^[[:space:]]*[A-Z]+ \[[^]]*\][[:space:]]*(\([0-9]+\/[0-9]+\)[[:space:]]*)?//' | sort -u | grep . || true)
+        if [ -n "${failing}" ]; then
+          rerun_fail_names="${rerun_fail_names:+${rerun_fail_names}
+}${failing}"
+          rerun_fail_detail="${rerun_fail_detail}$(grep -E "panicked at|assertion .* failed|left: |right: " "${log}" | head -n 10)
+"
+        else
+          rerun_fail_names="${rerun_fail_names:+${rerun_fail_names}
+}${crate} (nextest exited ${rerun_status} without a test result)"
+          rerun_fail_detail="${rerun_fail_detail}$(first_errors "${log}")
+"
+        fi
+      done
+      [ "${rerun_fail_at}" -eq 0 ] || break
+      rerun_done=${i}
+      i=$((i + 1))
+    done
+    if [ "${rerun_fail_at}" -eq 0 ]; then
+      cap_note=""
+      [ "${rerun_capped}" -eq 1 ] && cap_note=" (stopped at the ${rerun_budget}s time cap)"
+      record "flaky tests" pass "${rerun_total} changed tests passed ${rerun_done} reruns${cap_note}"
+    else
+      record "flaky tests" fail "$(printf '%s\n' "${rerun_fail_names}" | grep -c .) of ${rerun_total} changed tests failed rerun ${rerun_fail_at} of ${rerun_n}" "Flaky tests (passed the first run, failed a rerun):
+${rerun_fail_names}
+${rerun_fail_detail}" "${rerun_fail_names}"
+    fi
+  fi
 
   # --- cargo clippy, per crate -----------------------------------------------
   for crate in ${crates[@]+"${crates[@]}"}; do
